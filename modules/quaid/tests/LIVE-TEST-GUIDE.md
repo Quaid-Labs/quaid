@@ -907,7 +907,12 @@ Run:
 
 ```bash
 # Dry-run must complete in ≤60s — hang here = regression in dry-run LLM/checkpoint bypass
-ssh example.local 'timeout 60 bash -c "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1"; ec=$?; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || echo "FAIL: dry-run exit=$ec (124=timeout=hang)"'
+# Uses shell-based timeout (portable — macOS does not have the `timeout` binary)
+ssh example.local '{ cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1; } & pid=$!; (sleep 60 && kill $pid 2>/dev/null) & watcher=$!; wait $pid; ec=$?; kill $watcher 2>/dev/null; wait $watcher 2>/dev/null; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || { [ $ec -gt 128 ] && echo "FAIL: dry-run exit=$ec (killed=hang)" || echo "FAIL: dry-run exit=$ec"; }'
+# Apply — first run can take 15–30 minutes (LLM review of accumulated memories + snippets).
+# Repeated "vec_nodes upsert recovered" and "snippet remap" lines are normal — not a hang.
+# Long silent periods (up to 10 min) are LLM calls in progress.
+# If still running after 45 minutes, report to claude-dev as a potential hang.
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
 ```
 
