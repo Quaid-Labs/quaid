@@ -960,11 +960,26 @@ Fail: "All docs up-to-date" with no indexing = regression in new-doc detection.
 
 **Session CLI** (tests that extracted sessions are accessible via CLI):
 
+Session logs are stored by the Python extraction daemon when it processes
+compaction/reset signals. If M1–M4 ran before a daemon restart or before
+the session_end fix (be9a5e0c), the session_logs table may be empty. Trigger
+a fresh extraction first to ensure at least one session is stored.
+
 ```bash
-# Should show sessions from M1–M4 extractions
+# Step 1: Restart OC daemon so it has the latest code
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+
+# Step 2: In the OC TUI, do a quick exchange and /new to trigger extraction.
+#   Tell OC: "The session test keyword is zephyr-delta-nine."
+#   Then send /new (or /reset). Wait ~30s for daemon to process.
+
+# Step 3: Check daemon log to confirm session_logs ingest ran
+ssh example.local 'tail -20 ~/quaid/openclaw-main/logs/daemon.log 2>/dev/null || tail -20 ~/quaid/logs/daemon.log 2>/dev/null | grep -i "session_logs\|ingest\|session_end" || echo "log not found"'
+
+# Step 4: Check session list — should now include the freshly extracted session
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session list --limit 3 2>&1'
 
-# Load the most recent session
+# Step 5: Load the most recent session
 SESSION_ID=$(ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session list --limit 1 --json 2>&1' | python3 -c "import sys,json; rows=json.load(sys.stdin); print(rows[0]['id'] if rows else '')" 2>/dev/null)
 [ -n "$SESSION_ID" ] && ssh example.local "QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session load --session-id $SESSION_ID 2>&1 | head -40" || echo "WARN: no session ID returned"
 ```
@@ -974,7 +989,7 @@ Pass:
 - stats are sensible
 - docs commands run successfully
 - `docs update --apply` indexes newly registered doc without `janitor --task rag`
-- `session list` returns at least one session from M1–M4
+- `session list` returns at least one session (after daemon restart + fresh extraction)
 - `session load` returns a readable transcript
 
 ### M11: Snippet, Journal, and Project Log Generation
