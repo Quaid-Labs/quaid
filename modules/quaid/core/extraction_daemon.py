@@ -418,6 +418,28 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     if not new_lines:
         logger.info("[%s] session %s: no new content past cursor (offset=%d)",
                      label, session_id, cursor_offset)
+        # Still index the session at session_end even if no new content to extract.
+        # The cursor may have been advanced by a prior signal — the session is
+        # complete and must be reachable via 'quaid session list/load'.
+        if signal_type == "session_end":
+            try:
+                from core.ingest_runtime import run_session_logs_ingest
+                sl_result = run_session_logs_ingest(
+                    session_id=session_id,
+                    owner_id=owner,
+                    label=label,
+                    transcript_path=str(transcript_path),
+                    message_count=0,
+                    topic_hint="",
+                )
+                sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
+                sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
+                logger.info("[%s] session %s: session_logs ingest (no-new-content path): %s%s",
+                            label, session_id, sl_status,
+                            f" ({sl_reason})" if sl_reason else "")
+            except Exception as e:
+                logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
+                               label, session_id, e)
         mark_signal_processed(signal_data)
         return
 

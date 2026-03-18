@@ -176,7 +176,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
             print("  project-path   Path to the Claude Code project root")
             print("  name           Short label for the instance (e.g. 'myapp')")
             print("  --token        API-scoped OAuth token for daemon LLM calls")
-            print("  --deep-model   Deep reasoning model ID (default: claude-opus-4-6)")
+            print("  --deep-model   Deep reasoning model ID (default: claude-sonnet-4-6)")
             print("  --fast-model   Fast reasoning model ID (default: claude-haiku-4-5-20251001)")
             print("  --dry-run      Preview without making changes")
             return

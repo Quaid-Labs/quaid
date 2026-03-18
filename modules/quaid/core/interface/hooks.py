@@ -104,17 +104,12 @@ def hook_inject(args):
 
     try:
         from core.interface.api import recall_fast
-        from datastore.memorydb.memory_graph import plan_tool_hint
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor
 
         owner = _get_owner_id()
 
-        # Run recall and tool hint in parallel — both are fast-tier, independent calls.
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            recall_future = pool.submit(recall_fast, query=query, owner_id=owner, limit=10)
-            hint_future = pool.submit(plan_tool_hint, query)
-            memories = recall_future.result()
-            tool_hint = hint_future.result()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            memories = pool.submit(recall_fast, query=query, owner_id=owner, limit=10).result()
 
         context_parts = []
 
@@ -123,11 +118,15 @@ def hook_inject(args):
 
         if memories:
             context_parts.append(_format_memories(memories))
-        elif tool_hint:
-            # Only show tool hint when no memories were found — if memories are
-            # already injected, the hint to "use quaid recall" contradicts them
-            # and causes the model to distrust the injected context.
-            context_parts.append(tool_hint)
+            # Memories are pre-injected as a convenience — the model should treat
+            # them as guidance, not ground truth. Only nudge toward explicit recall
+            # when memories are actually present; if pre-inject returned nothing
+            # (deliberate bailout when the query has nothing to extract), do not
+            # encourage recall where there is likely nothing useful to find.
+            context_parts.append(
+                "Note: Treat the above memories as guidance. "
+                "If a specific fact you need is not here, use `quaid recall` to search."
+            )
 
         if not context_parts:
             return

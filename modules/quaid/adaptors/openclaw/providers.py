@@ -26,7 +26,7 @@ class GatewayLLMProvider(LLMProvider):
         self._token = (token or "").strip() or self._resolve_gateway_token()
         self._fallback_models = {
             "fast": "claude-haiku-4-5",
-            "deep": "claude-opus-4-6",
+            "deep": "claude-sonnet-4-6",
         }
 
     @staticmethod

@@ -316,7 +316,7 @@ class ClaudeCodeCLIProvider(LLMProvider):
     def get_profiles(self):
         available = bool(self._claude_bin)
         return {
-            "deep": {"model": "claude-opus-4-6", "available": available},
+            "deep": {"model": "claude-sonnet-4-6", "available": available},
             "fast": {"model": "claude-haiku-4-5", "available": available},
         }
 

@@ -27,7 +27,7 @@ class ClaudeCodeInstanceManager(InstanceManager):
 
     # Default model IDs written during installation.
     # OAuth tokens with CC identity headers can access all model tiers.
-    DEFAULT_DEEP_MODEL = "claude-opus-4-6"
+    DEFAULT_DEEP_MODEL = "claude-sonnet-4-6"
     DEFAULT_FAST_MODEL = "claude-haiku-4-5-20251001"
 
     def make_instance(
