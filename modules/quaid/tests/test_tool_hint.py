@@ -35,7 +35,7 @@ _COMMANDS = [
     {
         "id": "recall",
         "description": "Searching or recalling memories, facts, preferences, past conversations",
-        "hint": 'Search memories: quaid recall "your query"',
+        "hint": 'Search memories: quaid recall "<query>"',
     },
     {
         "id": "store",
@@ -58,6 +58,13 @@ def _llm_returns_null(*args, **kwargs):
 
 def _llm_raises(*args, **kwargs):
     raise RuntimeError("LLM unavailable")
+
+
+def _llm_returns_payload(payload: dict):
+    """Return a mock that simulates call_fast_reasoning returning a full payload dict."""
+    def _call(*args, **kwargs):
+        return json.dumps(payload), {}
+    return _call
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +153,33 @@ class TestPlanToolHint:
             )
         assert result is not None
         assert "recall" in result.lower()
+        assert result == '<tool_hint>Search memories: quaid recall "What do you remember about my diet preferences?"</tool_hint>'
+
+    def test_docs_recall_query_stays_generic(self):
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            _llm_returns_payload({
+                "command_id": "recall",
+                "stores": ["docs"],
+                "project": "recipe-app",
+                "domain_boost": ["technical", "project"],
+            }),
+        ):
+            result = plan_tool_hint(
+                "How does the recipe app authenticate users?",
+                commands=_COMMANDS,
+            )
+        assert result is not None
+        assert result == '<tool_hint>Search memories: quaid recall "How does the recipe app authenticate users?"</tool_hint>'
+
+    def test_recall_query_heuristics_fill_defaults_when_router_omits_options(self):
+        with patch("lib.llm_clients.call_fast_reasoning", _llm_returns("recall")):
+            result = plan_tool_hint(
+                "How is Maya related to Linda?",
+                commands=_COMMANDS,
+            )
+        assert result is not None
+        assert result == '<tool_hint>Search memories: quaid recall "How is Maya related to Linda?"</tool_hint>'
 
     def test_store_query_returns_hint(self):
         """A memory store request should hint at quaid store."""
@@ -202,6 +236,7 @@ class TestPlanToolHint:
         assert "misc_project" in captured.get("prompt", "")
         assert "create_project" in captured.get("prompt", "")
         assert "recall" in captured.get("prompt", "")
+        assert 'Format: {"command_id": "<id>"} or {"command_id": null}' in captured.get("prompt", "")
 
 
 class TestResolveCommandRegistry:

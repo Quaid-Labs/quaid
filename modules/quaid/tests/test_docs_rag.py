@@ -258,6 +258,101 @@ class TestDocsSearchFiltering:
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.70)
+    def test_search_docs_skips_context_files_even_if_indexed(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("tools:0", "/tmp/workspace/projects/recipe-app/TOOLS.md", 0, "tool reference", "# Tools", b"e"),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("readme:0", "/tmp/workspace/projects/recipe-app/README.md", 0, "real docs", "# Readme", b"e"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        results = rag.search_docs("recipe app tools", limit=10)
+        assert len(results) == 1
+        assert results[0]["source"].endswith("README.md")
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.70)
+    def test_search_docs_reranks_specific_impl_files_above_overview_docs(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("project:0", "/tmp/workspace/projects/recipe-app/PROJECT.md", 0, "overview", "# Project: Recipe App", b"e"),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("test:0", "/tmp/workspace/projects/recipe-app/tests/graphql.test.js", 0, "describe('graphql tests')", "# GraphQL Tests", b"e"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/recipe-app",
+                "source_roots": ["/tmp/workspace/projects/recipe-app"],
+            },
+        ):
+            results = rag.search_docs("recipe app tests testing", limit=10, project="recipe-app")
+
+        assert len(results) == 2
+        assert results[0]["source"].endswith("tests/graphql.test.js")
+        assert results[0]["similarity"] > results[1]["similarity"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_matches_relocated_project_paths_by_suffix(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "relocated:0",
+                    "/tmp/old-run/benchrunner/projects/recipe-app/src/middleware/errorHandler.js",
+                    0,
+                    "error middleware uses AppError",
+                    "# Error Handler",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        current_workspace = tmp_path / "new-run" / "benchrunner"
+        current_workspace.mkdir(parents=True, exist_ok=True)
+
+        with patch("datastore.docsdb.rag._workspace", return_value=current_workspace), \
+             patch.object(
+                 rag,
+                 "_get_project_paths",
+                 return_value={
+                     "home_dir": str(current_workspace / "projects" / "recipe-app"),
+                     "source_roots": [str(current_workspace / "projects" / "recipe-app")],
+                 },
+             ):
+            results = rag.search_docs("error handling", limit=10, project="recipe-app")
+
+        assert len(results) == 1
+        assert results[0]["source"].endswith("/projects/recipe-app/src/middleware/errorHandler.js")
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_docs_filter_escapes_like_wildcards(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)

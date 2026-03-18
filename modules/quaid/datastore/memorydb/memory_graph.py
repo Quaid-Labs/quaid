@@ -3494,6 +3494,330 @@ def _resolve_recall_store_request(cfg: Dict[str, Any]) -> Tuple[List[str], Dict[
     return list(stores_cfg.keys()), stores_cfg
 
 
+def _normalize_store_plan(stores: Optional[List[str]]) -> List[str]:
+    allowed = {"vector", "graph", "docs"}
+    out: List[str] = []
+    for store in list(stores or []):
+        name = str(store or "").strip().lower()
+        if name in allowed and name not in out:
+            out.append(name)
+    return out or ["vector"]
+
+
+def _planner_store_plan(stores: Optional[List[str]]) -> List[str]:
+    """Normalize planner-selected stores and keep vector as the base lane."""
+    out = _normalize_store_plan(stores)
+    if "vector" not in out and ("docs" in out or "graph" in out):
+        out.insert(0, "vector")
+    return out
+
+
+def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    docs = _validate_docs_bundle(bundle)
+    out: List[Dict[str, Any]] = []
+    for chunk in docs["chunks"][:limit]:
+        text = " ".join(str(chunk.get("content") or "").split()).strip()
+        if not text:
+            continue
+        source = str(chunk.get("source") or "").strip()
+        section = str(chunk.get("section_header") or "").strip()
+        prefix = f"[docs] {source}"
+        if section:
+            prefix += f" > {section}"
+        out.append({
+            "text": f"{prefix}: {text}",
+            "similarity": float(chunk.get("similarity") or 0.0),
+            "category": "docs",
+            "source_type": "docs",
+        })
+    return out
+
+
+def _merge_docs_bundles(existing: Optional[Dict[str, Any]], incoming: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not incoming:
+        return existing
+    if not existing:
+        return _validate_docs_bundle(incoming)
+
+    base = _validate_docs_bundle(existing)
+    nxt = _validate_docs_bundle(incoming)
+    seen = set()
+    merged_chunks: List[Dict[str, Any]] = []
+    for chunk in list(base["chunks"]) + list(nxt["chunks"]):
+        key = (
+            chunk.get("source"),
+            chunk.get("section_header"),
+            chunk.get("content"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_chunks.append(chunk)
+    merged_chunks.sort(key=lambda item: float(item.get("similarity") or 0.0), reverse=True)
+    return {
+        "chunks": merged_chunks,
+        "project": base.get("project") or nxt.get("project"),
+        "project_md": base.get("project_md") or nxt.get("project_md"),
+        "telemetry": nxt.get("telemetry") or base.get("telemetry"),
+    }
+
+
+def _vector_store_recall(
+    query: str,
+    *,
+    limit: int,
+    min_similarity: Optional[float],
+    planner_profile: str,
+    planned_queries: Optional[List[str]],
+    planner_meta: Optional[Dict[str, Any]],
+    fast_mode: bool,
+    common_kwargs: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
+    vector_kwargs = dict(common_kwargs or {})
+    vector_kwargs.pop("candidate_pool", None)
+    results, meta = recall(
+        query=query,
+        limit=limit,
+        min_similarity=min_similarity,
+        use_routing=True,
+        use_aliases=True,
+        use_intent=True,
+        use_multi_pass=not fast_mode,
+        use_reranker=not fast_mode,
+        low_signal_retry=not fast_mode,
+        max_turns=1 if fast_mode else 3,
+        planner_profile=planner_profile,
+        include_graph_traversal=False,
+        include_co_session=False if fast_mode else True,
+        include_mmr=False if fast_mode else True,
+        return_meta=True,
+        planned_queries=planned_queries,
+        planner_meta=planner_meta,
+        **vector_kwargs,
+    )
+    return results, dict(meta or {}), None
+
+
+def _docs_store_recall(
+    query: str,
+    *,
+    limit: int,
+    project: Optional[str],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
+    started = time.monotonic()
+    from datastore.docsdb.rag import DocsRAG as _DocsRAG
+
+    rag = _DocsRAG()
+    bundle = rag.search_docs_bundle(query, limit=limit, project=project)
+    rows = _docs_bundle_to_rows(bundle, limit=limit)
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    meta = {
+        "selected_path": "docs_bundle",
+        "phases_ms": {"total_ms": elapsed_ms},
+        "counts": {"final_results": len(rows)},
+    }
+    if isinstance(bundle, dict) and isinstance(bundle.get("telemetry"), dict):
+        meta["docs_telemetry"] = bundle.get("telemetry")
+    return rows, meta, bundle
+
+
+def _graph_store_recall(
+    query: str,
+    *,
+    owner_id: Optional[str],
+    limit: int,
+    min_similarity: Optional[float],
+    domain: Optional[Dict[str, bool]],
+    domain_boost: Optional[Any],
+    project: Optional[str],
+    depth: int,
+    candidate_pool: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
+    payload = graph_aware_recall(
+        query,
+        owner_id=owner_id,
+        limit=limit,
+        min_similarity=min_similarity or 0.60,
+        graph_depth=depth,
+        domain=domain,
+        domain_boost=domain_boost,
+        project=project,
+        candidate_pool=candidate_pool,
+    )
+    return (
+        _validate_recall_result_rows(payload.get("direct_results", [])),
+        dict(payload.get("meta") or {}),
+        None,
+    )
+
+
+def _validate_recall_store_registry(registry: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    for store in ("vector", "docs", "graph"):
+        spec = registry.get(store)
+        if not isinstance(spec, dict):
+            raise RuntimeError(f"recall store registry missing store '{store}'")
+        for contract in ("recall", "recall_fast"):
+            if not callable(spec.get(contract)):
+                raise RuntimeError(f"recall store '{store}' missing required contract '{contract}'")
+    return registry
+
+
+def _get_recall_store_registry() -> Dict[str, Dict[str, Any]]:
+    registry: Dict[str, Dict[str, Any]] = {
+        "vector": {
+            "recall": _vector_store_recall,
+            "recall_fast": _vector_store_recall,
+        },
+        "docs": {
+            "recall": _docs_store_recall,
+            "recall_fast": _docs_store_recall,
+        },
+        "graph": {
+            "recall": _graph_store_recall,
+            "recall_fast": _graph_store_recall,
+        },
+    }
+    return _validate_recall_store_registry(registry)
+
+
+def _run_recall_store_plan(
+    query: str,
+    *,
+    stores: List[str],
+    limit: int,
+    owner_id: Optional[str],
+    min_similarity: Optional[float],
+    planner_profile: str,
+    planned_queries: Optional[List[str]],
+    planner_meta: Optional[Dict[str, Any]],
+    fast_mode: bool,
+    graph_depth: int = 1,
+    common_kwargs: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
+    normalized_stores = _normalize_store_plan(stores)
+    registry = _validate_recall_store_registry(_get_recall_store_registry())
+    handler_name = "recall_fast" if fast_mode else "recall"
+    kwargs = dict(common_kwargs or {})
+    planned_project = (planner_meta or {}).get("planned_project") or kwargs.get("project")
+
+    callables = []
+    for store in normalized_stores:
+        handler = registry[store][handler_name]
+        if store == "vector":
+            callables.append(lambda store=store, handler=handler: (
+                store,
+                handler(
+                    query,
+                    limit=limit,
+                    min_similarity=min_similarity,
+                    planner_profile=planner_profile,
+                    planned_queries=planned_queries,
+                    planner_meta=planner_meta,
+                    fast_mode=fast_mode,
+                    common_kwargs={**kwargs, "project": planned_project},
+                ),
+            ))
+        elif store == "docs":
+            callables.append(lambda store=store, handler=handler: (
+                store,
+                handler(
+                    query,
+                    limit=max(1, min(limit, 6 if fast_mode else limit)),
+                    project=planned_project,
+                ),
+            ))
+        elif store == "graph":
+            callables.append(lambda store=store, handler=handler: (
+                store,
+                handler(
+                    query,
+                    owner_id=owner_id,
+                    limit=max(1, min(limit, 8 if fast_mode else limit)),
+                    min_similarity=min_similarity,
+                    domain=kwargs.get("domain"),
+                    domain_boost=kwargs.get("domain_boost"),
+                    project=planned_project,
+                    depth=graph_depth,
+                    candidate_pool=kwargs.get("candidate_pool"),
+                ),
+            ))
+
+    started = time.monotonic()
+    outputs = run_callables(
+        callables,
+        max_workers=min(len(callables), 3),
+        pool_name="recall_stores",
+        return_exceptions=True,
+    )
+    wall_ms = round((time.monotonic() - started) * 1000)
+
+    merged_batches: List[List[Dict[str, Any]]] = []
+    docs_bundle: Optional[Dict[str, Any]] = None
+    store_runs: List[Dict[str, Any]] = []
+    serial_ms = 0
+    base_meta: Optional[Dict[str, Any]] = None
+    for output in outputs:
+        if isinstance(output, Exception):
+            raise output
+        store, payload = output
+        rows, meta, bundle = payload
+        rows = _validate_recall_result_rows(rows)
+        meta = dict(meta or {})
+        if rows:
+            merged_batches.append(rows)
+        if bundle:
+            docs_bundle = _merge_docs_bundles(docs_bundle, bundle)
+        phases = meta.get("phases_ms") or {}
+        total_ms = phases.get("total_ms")
+        if isinstance(total_ms, (int, float)):
+            serial_ms += int(total_ms)
+        if base_meta is None and store == "vector":
+            base_meta = meta
+        store_runs.append({
+            "store": store,
+            "result_count": len(rows),
+            "total_ms": int(total_ms) if isinstance(total_ms, (int, float)) else None,
+            "selected_path": meta.get("selected_path"),
+        })
+
+    merged = _merge_recall_batches(merged_batches, limit=max(limit, limit * 2 if fast_mode else limit))
+    final_rows = merged[:limit]
+    meta = dict(base_meta or {})
+    meta.setdefault("mode", "fast" if fast_mode else "deliberate")
+    meta.setdefault("query", query)
+    meta["selected_path"] = "store_plan" if len(normalized_stores) > 1 or normalized_stores != ["vector"] else meta.get("selected_path", "vector")
+    meta["planned_stores"] = normalized_stores
+    meta["planned_project"] = planned_project
+    meta["store_runs"] = store_runs
+    phases = dict(meta.get("phases_ms") or {})
+    phases["store_plan_wall_ms"] = wall_ms
+    phases["store_plan_serial_ms"] = serial_ms
+    phases["total_ms"] = wall_ms
+    meta["phases_ms"] = phases
+    if not meta.get("turn_details"):
+        meta["turn_details"] = [{
+            "turn": 1,
+            "planner": dict(planner_meta or {
+                "query": query,
+                "queries_count": len(list(planned_queries or [query])),
+                "planned_stores": normalized_stores,
+                "planned_project": planned_project,
+            }),
+            "store_runs": list(store_runs),
+        }]
+    elif isinstance(meta.get("turn_details"), list) and meta["turn_details"]:
+        first = meta["turn_details"][0]
+        if isinstance(first, dict):
+            planner = first.get("planner")
+            if not isinstance(planner, dict):
+                planner = dict(planner_meta or {})
+                first["planner"] = planner
+            planner["planned_stores"] = normalized_stores
+            planner["planned_project"] = planned_project
+            first["store_runs"] = list(store_runs)
+    return final_rows, meta, docs_bundle
+
+
 def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
     """Render docs recall results in the same shape as standalone docs search."""
     docs = _validate_docs_bundle(bundle)
@@ -3887,6 +4211,7 @@ def _recall_once(
     scored_results = []
     debug_info = {} if debug else None
     for node, quality_score in results:
+        _attrs = node.attributes if isinstance(node.attributes, dict) else {}
         composite = _compute_composite_score(
             node,
             quality_score,
@@ -3903,6 +4228,10 @@ def _recall_once(
             boost_factor = boosted_node_factors.get(node.id)
             if boost_factor:
                 composite = min(composite * boost_factor, 1.0)
+        composite = min(
+            composite * _compute_query_fit_multiplier(clean_query, node, _attrs, intent=intent),
+            1.0,
+        )
         scored_results.append((node, composite))
 
         if debug:
@@ -3983,6 +4312,7 @@ def _recall_once(
                     extra = graph.search_hybrid(sq, limit=limit * 2, privacy=privacy, owner_id=owner_id, current_session_id=current_session_id, compaction_time=compaction_time, intent=intent)
                     for node, quality_score in extra:
                         if node.id not in existing_ids:
+                            _extra_attrs = node.attributes if isinstance(node.attributes, dict) else {}
                             composite = _compute_composite_score(
                                 node,
                                 quality_score,
@@ -3996,6 +4326,10 @@ def _recall_once(
                                 boost_factor = boosted_node_factors.get(node.id)
                                 if boost_factor:
                                     composite = min(composite * boost_factor, 1.0)
+                            composite = min(
+                                composite * _compute_query_fit_multiplier(clean_query, node, _extra_attrs, intent=intent),
+                                1.0,
+                            )
                             if composite >= min_similarity:
                                 scored_results.append((node, composite))
                                 existing_ids.add(node.id)
@@ -4568,11 +4902,28 @@ def _is_low_information_message(query: str) -> bool:
         "yep", "yeah", "yup", "alright", "all right", "lol", "lmao", "haha", "hmm",
         "bye", "cya",
     }
-    if clean in exact:
+    tokens = re.findall(r"[a-z0-9']+", clean)
+    normalized = " ".join(tok.replace("'", "") for tok in tokens)
+
+    if clean in exact or normalized in exact:
         return True
 
-    tokens = re.findall(r"[a-z0-9']+", clean)
     if len(tokens) <= 2 and tokens and all(tok in exact for tok in tokens):
+        return True
+
+    conversational_exact = {
+        "how are you",
+        "how are you today",
+        "whats up",
+        "hey whats up",
+        "let me think about it",
+        "ill figure it out later",
+        "hmm interesting",
+        "yeah that makes sense",
+        "ok lets go with that",
+        "okay lets go with that",
+    }
+    if normalized in conversational_exact:
         return True
     return False
 
@@ -4596,6 +4947,169 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
     merged = list(by_id.values()) + fallback_rows
     merged.sort(key=lambda x: float(x.get("similarity", 0.0)), reverse=True)
     return merged[: max(1, limit)]
+
+
+def _resolve_reranker_enabled(use_reranker: Optional[bool], config_retrieval=None) -> bool:
+    reranker_enabled = False
+    if config_retrieval is not None:
+        try:
+            reranker_enabled = bool(getattr(config_retrieval, "reranker_enabled", False))
+        except Exception:
+            reranker_enabled = False
+    if use_reranker is not None:
+        reranker_enabled = bool(use_reranker)
+    return reranker_enabled
+
+
+def _apply_post_merge_rank_refinement(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+    use_reranker: Optional[bool],
+    include_mmr: bool,
+    config_retrieval=None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Apply one reranker/MMR pass to merged multi-branch candidates."""
+    if not rows:
+        return [], {
+            "applied": False,
+            "candidate_count": 0,
+            "reranker_enabled": False,
+            "reranker_ms": 0,
+            "mmr_enabled": False,
+            "mmr_ms": 0,
+            "total_ms": 0,
+        }
+
+    reranker_enabled = _resolve_reranker_enabled(use_reranker, config_retrieval)
+    mmr_enabled = bool(include_mmr)
+    if not reranker_enabled and not mmr_enabled:
+        return rows[: max(1, limit)], {
+            "applied": False,
+            "candidate_count": len(rows),
+            "reranker_enabled": False,
+            "reranker_ms": 0,
+            "mmr_enabled": False,
+            "mmr_ms": 0,
+            "total_ms": 0,
+        }
+
+    rows_with_ids: List[Dict[str, Any]] = []
+    idless_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        rid = str((row or {}).get("id") or "").strip()
+        if rid:
+            rows_with_ids.append(row)
+        else:
+            idless_rows.append(row)
+
+    if not rows_with_ids:
+        return rows[: max(1, limit)], {
+            "applied": False,
+            "candidate_count": len(rows),
+            "reranker_enabled": reranker_enabled,
+            "reranker_ms": 0,
+            "mmr_enabled": mmr_enabled,
+            "mmr_ms": 0,
+            "total_ms": 0,
+        }
+
+    graph = get_graph()
+    candidate_ids = [str(row.get("id")) for row in rows_with_ids]
+    placeholders = ",".join("?" * len(candidate_ids))
+    node_map: Dict[str, Node] = {}
+    with graph._get_conn() as conn:
+        fetched = conn.execute(f"SELECT * FROM nodes WHERE id IN ({placeholders})", candidate_ids).fetchall()
+        for fetched_row in fetched:
+            node = graph._row_to_node(fetched_row)
+            node_map[node.id] = node
+
+    ranked: List[tuple] = []
+    retained_rows: Dict[str, Dict[str, Any]] = {}
+    for row in rows_with_ids:
+        rid = str(row.get("id"))
+        node = node_map.get(rid)
+        if node is None:
+            idless_rows.append(row)
+            continue
+        retained_rows[rid] = row
+        ranked.append((node, float(row.get("similarity", 0.0) or 0.0)))
+
+    if not ranked:
+        out = list(idless_rows)
+        out.sort(key=lambda item: float(item.get("similarity", 0.0)), reverse=True)
+        return out[: max(1, limit)], {
+            "applied": False,
+            "candidate_count": len(rows),
+            "reranker_enabled": reranker_enabled,
+            "reranker_ms": 0,
+            "mmr_enabled": mmr_enabled,
+            "mmr_ms": 0,
+            "total_ms": 0,
+        }
+
+    started = time.monotonic()
+    reranker_ms = 0
+    mmr_ms = 0
+
+    if reranker_enabled:
+        _t0 = time.monotonic()
+        ranked = _rerank_with_cross_encoder(query, ranked, config_retrieval)
+        reranker_ms = round((time.monotonic() - _t0) * 1000)
+
+    if mmr_enabled:
+        _mmr_lambda = 0.7
+        _mmr_candidate_cap = max(limit, 12)
+        if config_retrieval is not None:
+            try:
+                _mmr_lambda = float(getattr(config_retrieval, "mmr_lambda", _mmr_lambda) or _mmr_lambda)
+            except Exception:
+                _mmr_lambda = 0.7
+            try:
+                _mmr_candidate_cap = max(
+                    limit,
+                    int(getattr(config_retrieval, "mmr_candidate_cap", _mmr_candidate_cap) or _mmr_candidate_cap),
+                )
+            except Exception:
+                _mmr_candidate_cap = max(limit, 12)
+        if len(ranked) > _mmr_candidate_cap:
+            ranked = ranked[:_mmr_candidate_cap]
+        _t0 = time.monotonic()
+        ranked = _apply_mmr(ranked, graph, limit, mmr_lambda=_mmr_lambda)
+        mmr_ms = round((time.monotonic() - _t0) * 1000)
+    else:
+        ranked = ranked[: max(1, limit)]
+
+    ordered_rows: List[Dict[str, Any]] = []
+    seen = set()
+    for node, score in ranked:
+        row = dict(retained_rows.get(node.id) or {})
+        if not row:
+            continue
+        row["similarity"] = round(float(score), 3)
+        ordered_rows.append(row)
+        seen.add(node.id)
+
+    if len(ordered_rows) < limit:
+        leftovers = [row for row in rows_with_ids if str(row.get("id")) not in seen]
+        leftovers.sort(key=lambda item: float(item.get("similarity", 0.0)), reverse=True)
+        ordered_rows.extend(leftovers[: max(0, limit - len(ordered_rows))])
+
+    if idless_rows:
+        idless_rows.sort(key=lambda item: float(item.get("similarity", 0.0)), reverse=True)
+        ordered_rows.extend(idless_rows)
+
+    ordered_rows = ordered_rows[: max(1, limit)]
+    return ordered_rows, {
+        "applied": True,
+        "candidate_count": len(rows),
+        "reranker_enabled": reranker_enabled,
+        "reranker_ms": reranker_ms,
+        "mmr_enabled": mmr_enabled,
+        "mmr_ms": mmr_ms,
+        "total_ms": round((time.monotonic() - started) * 1000),
+    }
 
 
 def _extract_recall_meta(results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -4688,6 +5202,266 @@ def _summarize_result_coverage(results: List[Dict[str, Any]]) -> Dict[str, int]:
         "text_chars": total_chars,
         "avg_text_chars": round(total_chars / result_count) if result_count else 0,
     }
+
+
+_QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "for",
+    "from", "had", "has", "have", "how", "i", "if", "in", "is", "it", "its",
+    "me", "my", "of", "on", "or", "our", "she", "so", "still", "tell", "that",
+    "the", "their", "them", "there", "these", "they", "this", "to", "up", "was",
+    "we", "what", "when", "where", "which", "who", "why", "with", "would", "yet",
+    "you", "your", "current", "currently", "latest", "most", "recent", "now",
+}
+_SHORT_SIGNAL_TOKENS = {"api", "app", "db", "ui", "ux", "sql", "mom", "dad", "dog", "a1c"}
+
+
+def _extract_distinctive_query_terms(query: str, *, limit: int = 8) -> List[str]:
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(query or "").lower())
+    out: List[str] = []
+    seen = set()
+    for token in tokens:
+        if token in seen:
+            continue
+        if token in _QUERY_STOPWORDS:
+            continue
+        if len(token) < 4 and token not in _SHORT_SIGNAL_TOKENS:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str, Any]:
+    lower = str(query or "").lower()
+    current_like = bool(
+        re.search(r"\b(current|currently|latest|now|today|most recent|as of|still|yet)\b", lower)
+    )
+    progression_like = bool(
+        re.search(r"\b(evolution|evolve|changed|change over time|progression|trace|over time|what happened)\b", lower)
+    )
+    return {
+        "requirements": [],
+        "assistant_like": bool(re.search(r"\b(agent|assistant|ai)\b", lower)),
+        "temporal_like": bool(
+            current_like
+            or intent == "WHEN"
+            or re.search(
+                r"\b(when|date|time|scheduled|schedule|birthday|anniversary|recently|by [a-z]+ \d{1,2}|by \d{4}|\d{4})\b",
+                lower,
+            )
+        ),
+        "current_like": current_like,
+        "progression_like": progression_like,
+        "query_terms": _extract_distinctive_query_terms(query),
+    }
+
+
+def _row_matches_requirement(row: Dict[str, Any], requirement: str) -> bool:
+    text = str((row or {}).get("text") or "")
+    lower = text.lower()
+    category = str((row or {}).get("category") or "").lower()
+    source_type = str((row or {}).get("source_type") or "").lower()
+
+    if requirement == "assistant_source":
+        return source_type in {"assistant", "both", "tool"} or bool(
+            re.search(r"\b(the assistant|assistant|ai|suggested|recommended|implemented|built|recalled)\b", lower)
+        )
+    if requirement == "identity":
+        return category == "person" or bool(
+            re.search(r"\b(partner|wife|husband|mom|mother|dad|father|sister|brother|friend|coworker|manager|pet|dog|cat|child|children|son|daughter|nephew|niece|family|named|name is)\b", lower)
+        ) or bool(re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b", text))
+    if requirement == "location":
+        return category == "place" or bool(
+            re.search(r"\b(lives?|living|located|location|address|neighborhood|city|country|house|home|apartment)\b", lower)
+        )
+    if requirement == "organization":
+        return bool(
+            re.search(r"\b(employer|company|team|manager|role|title|promotion|promoted|joined|left)\b", lower)
+        )
+    if requirement == "temporal":
+        return bool(
+            re.search(
+                r"\b(january|february|march|april|may|june|july|august|september|october|november|december|week|today|tomorrow|yesterday|late|early|current|currently|latest|as of|birthday|anniversary|at diagnosis|down from|dropped to|improved from|\d{4}|\d{1,2}\.\d)\b",
+                lower,
+            )
+        )
+    if requirement == "causal":
+        return bool(re.search(r"\b(because|reason|motivat|cause|caused|led to|due to|to help|to support|so that|which matters)\b", lower))
+    if requirement == "technical":
+        return bool(
+            re.search(r"\b(api|schema|database|db|table|field|resolver|graphql|rest|middleware|test|tests|stack|framework|architecture|deployment|frontend|backend|implementation|code|source|file)\b", lower)
+        )
+    return False
+
+
+def _query_term_overlap(row: Dict[str, Any], query_terms: List[str]) -> int:
+    if not query_terms:
+        return 0
+    text = str((row or {}).get("text") or "").lower()
+    return sum(1 for term in query_terms if term in text)
+
+
+def _evaluate_quality_gate_readiness(
+    query: str,
+    results: List[Dict[str, Any]],
+    *,
+    intent: str = "GENERAL",
+    limit: int = 5,
+) -> Dict[str, Any]:
+    analysis = _derive_query_requirements(query, intent=intent)
+    query_terms = list(analysis["query_terms"])
+    sample = list(results or [])[: max(limit, 8)]
+    overlap_counts = sorted((_query_term_overlap(row, query_terms) for row in sample), reverse=True)
+    best_overlap = overlap_counts[0] if overlap_counts else 0
+    overlap_ratio = (best_overlap / len(query_terms)) if query_terms else 1.0
+    min_overlap = 0 if not query_terms else (1 if len(query_terms) <= 2 else 2)
+    lexical_ready = (best_overlap >= min_overlap) if min_overlap else bool(sample)
+    temporal_rows = sum(1 for row in sample if _row_matches_requirement(row, "temporal"))
+    ready = bool(sample) and lexical_ready
+    needs_validation = bool(sample) and (
+        (query_terms and overlap_ratio < 0.67)
+        or (analysis["temporal_like"] and temporal_rows == 0)
+        or analysis["current_like"]
+        or analysis["progression_like"]
+    )
+    return {
+        "requirements": [],
+        "coverage": {},
+        "query_terms": query_terms,
+        "best_overlap": best_overlap,
+        "overlap_ratio": round(overlap_ratio, 3),
+        "min_overlap": min_overlap,
+        "lexical_ready": lexical_ready,
+        "temporal_like": analysis["temporal_like"],
+        "temporal_rows": temporal_rows,
+        "current_like": analysis["current_like"],
+        "progression_like": analysis["progression_like"],
+        "ready": ready,
+        "needs_validation": needs_validation,
+        "unresolved": [] if ready else ["low_query_term_coverage"],
+    }
+
+
+def _build_requirement_refinement_queries(
+    query: str,
+    gate_eval: Dict[str, Any],
+    already_searched: List[str],
+    *,
+    max_queries: int = 2,
+) -> List[str]:
+    return []
+
+
+def _should_fast_drill_follow_up(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    planner_meta: Optional[Dict[str, Any]],
+    docs_bundle: Optional[Dict[str, Any]],
+    limit: int,
+) -> Tuple[bool, Dict[str, Any], List[str], str]:
+    """Decide whether recall_fast should spend one extra cheap drill turn.
+
+    This keeps the trigger generic by reusing the same quality-gate analysis
+    deliberate recall already uses, instead of hard-coding query categories or
+    benchmark-specific slots.
+    """
+    gate_intent = "GENERAL"
+    try:
+        gate_intent, _ = classify_intent(query)
+    except Exception:
+        gate_intent = "GENERAL"
+
+    gate_eval = _evaluate_quality_gate_readiness(query, rows, intent=gate_intent, limit=limit)
+    meta = dict(planner_meta or {})
+    used_llm = bool(meta.get("used_llm"))
+    bailout_reason = str(meta.get("bailout_reason") or "")
+    query_shape = str(meta.get("query_shape") or "")
+    planned_stores = _planner_store_plan(meta.get("planned_stores") or ["vector"])
+    preserved_exact = bailout_reason == "preserve_short_exact_query"
+    reasons: List[str] = []
+    if not rows:
+        return False, gate_eval, reasons, gate_intent
+    if not used_llm and not preserved_exact:
+        return False, gate_eval, reasons, gate_intent
+    if bailout_reason.endswith("_fallback_off"):
+        return False, gate_eval, reasons, gate_intent
+    if "docs" in planned_stores:
+        return False, gate_eval, reasons, gate_intent
+
+    if gate_eval.get("needs_validation"):
+        reasons.append("needs_validation")
+    if preserved_exact and "docs" not in planned_stores and float(gate_eval.get("overlap_ratio") or 0.0) < 0.85:
+        reasons.append("preserved_exact_low_overlap")
+
+    if query_shape not in {"broad", "focused"} and not (preserved_exact and reasons):
+        return False, gate_eval, [], gate_intent
+    return bool(reasons), gate_eval, reasons, gate_intent
+
+
+def _build_fast_drill_fallback_queries(
+    query: str,
+    *,
+    gate_eval: Optional[Dict[str, Any]],
+    planner_meta: Optional[Dict[str, Any]],
+) -> List[str]:
+    """Cheap deterministic fallback when the drill planner returns nothing.
+
+    Keep this narrow: only for broad, LLM-planned queries where the first pass
+    has middling lexical overlap and the planned store set is still in the
+    memory lane. This avoids reopening the wide/expensive r668 trigger while
+    giving a small number of under-resolved synthesis/current-state prompts one
+    extra lexical probe.
+    """
+    gate = dict(gate_eval or {})
+    planner = dict(planner_meta or {})
+    if not planner.get("used_llm"):
+        return []
+    if str(planner.get("query_shape") or "") != "broad":
+        return []
+    stores = _planner_store_plan(planner.get("planned_stores") or ["vector"])
+    if stores not in (["vector"], ["vector", "graph"]):
+        return []
+    overlap = float(gate.get("overlap_ratio") or 0.0)
+    if overlap < 0.55 or overlap > 0.65:
+        return []
+    terms = _extract_distinctive_query_terms(query, limit=6)
+    if len(terms) < 3:
+        return []
+    fallback = " ".join(terms).strip()
+    if not fallback:
+        return []
+    if fallback.lower() == " ".join((query or "").lower().split()):
+        return []
+    return [fallback]
+
+
+def _compute_query_fit_multiplier(
+    query: str,
+    node: Node,
+    attrs: Optional[Dict[str, Any]],
+    *,
+    intent: str = "GENERAL",
+) -> float:
+    analysis = _derive_query_requirements(query, intent=intent)
+    query_terms = list(analysis["query_terms"])
+    text = f"{node.name} {' '.join(str(v) for v in (attrs or {}).values() if isinstance(v, (str, int, float)))}"
+    row = {
+        "text": text,
+        "category": node.type.lower(),
+        "source_type": (attrs or {}).get("source_type"),
+    }
+
+    bonus = 0.0
+    overlap = _query_term_overlap(row, query_terms)
+    if overlap:
+        bonus += min(0.12, overlap * 0.04)
+    if analysis["assistant_like"] and _row_matches_requirement(row, "assistant_source"):
+        bonus += 0.08
+
+    return 1.0 + min(0.18, bonus)
 
 
 def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str = "full") -> Dict[str, Any]:
@@ -4826,6 +5600,8 @@ def _plan_fanout_queries(
         "named_entity_tokens": 0,
         "shape_signals": [],
         "planner_profile": planner_profile,
+        "planned_stores": ["vector"],
+        "planned_project": None,
     }
 
     def _finish(out: List[str], bailout_reason: Optional[str] = None):
@@ -4836,7 +5612,38 @@ def _plan_fanout_queries(
             return out, meta
         return out
 
+    def _planner_fallback_or_raise(
+        bailout_reason: str,
+        message: str,
+        *,
+        exc: Optional[Exception] = None,
+    ):
+        meta["bailout_reason"] = bailout_reason
+        meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+            fail_hard = bool(is_fail_hard_enabled())
+        except Exception:
+            fail_hard = True
+        if fail_hard:
+            detail = (
+                f"{message} "
+                f"(planner_timeout_ms={meta.get('timeout_ms', 0)}, "
+                f"planner_elapsed_ms={meta.get('elapsed_ms', 0)}, "
+                f"planner_profile={meta.get('planner_profile')}, "
+                f"query_shape={meta.get('query_shape')})"
+            )
+            if exc is not None:
+                raise RuntimeError(
+                    f"Recall fanout planner failed while failHard is enabled: {detail}"
+                ) from exc
+            raise RuntimeError(
+                f"Recall fanout planner failed while failHard is enabled: {detail}"
+            )
+        return _finish([clean], bailout_reason)
+
     clean = " ".join((query or "").split())
+    default_stores, default_project = _infer_recall_store_defaults(clean)
     profile = _estimate_fanout_profile(clean, max_queries=max_queries, planner_profile=planner_profile)
     meta["query_shape"] = str(profile["shape"])
     meta["fanout_budget"] = int(profile["fanout_budget"])
@@ -4844,6 +5651,8 @@ def _plan_fanout_queries(
     meta["named_entity_tokens"] = int(profile["named_entity_tokens"])
     meta["shape_signals"] = list(profile["signals"])
     meta["planner_profile"] = str(profile.get("planner_profile") or planner_profile)
+    meta["planned_stores"] = list(_planner_store_plan(default_stores))
+    meta["planned_project"] = default_project
     max_queries = max(1, int(profile["fanout_budget"]))
     if not clean:
         return _finish([], "empty_query")
@@ -4851,8 +5660,27 @@ def _plan_fanout_queries(
         return _finish([], "low_information_message")
     if len(clean) < 10:
         return _finish([clean], "too_short")
+    if planner_profile == "off":
+        return _finish([clean], "planner_disabled")
+    if (
+        not default_project
+        and (
+            profile["shape"] in {"narrow", "focused"}
+            or (
+                profile["shape"] == "broad"
+                and int(profile["token_count"]) <= 8
+                and "multi_clause" not in set(profile["signals"])
+            )
+        )
+        and int(profile["token_count"]) <= 8
+        and int(profile["named_entity_tokens"]) >= 1
+    ):
+        return _finish([clean], "preserve_short_exact_query")
     if not _HAS_LLM_CLIENTS:
-        return _finish([clean], "no_llm_clients")
+        return _planner_fallback_or_raise(
+            "no_llm_clients",
+            "LLM planner is unavailable",
+        )
 
     conservative_guidance = ""
     if planner_profile == "aggressive":
@@ -4867,16 +5695,25 @@ def _plan_fanout_queries(
         )
 
     prompt = (
-        f"Generate 1 to {max_queries} search queries to find personal memories relevant to this message.\n"
+        f"Generate 1 to {max_queries} search queries to find relevant stored knowledge for this message.\n"
         "Rules:\n"
-        '- Return JSON only: {"queries": ["..."]} or {"queries": []}\n'
+        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs"], "project": "recipe-app"}\n'
+        '- "stores" is optional, but when present it must be an array containing any of: "vector", "graph", "docs".\n'
+        '- "project" is optional and should be set only when the message clearly names a project.\n'
         "- If the message is just a greeting, acknowledgement, filler, or otherwise has no meaningful information need, return an empty list.\n"
         "- Each query must be a short declarative statement (HyDE style), NOT a question.\n"
         "- First query: rephrase the core intent as a factual statement.\n"
         "- Additional queries: alternative angles, related entities, or broader context.\n"
         "- Keep all original names, dates, projects, and entities.\n"
+        "- Preserve subject/object roles and possession exactly; never rewrite into the opposite ownership or relation direction.\n"
+        "- Do not guess a relationship subtype unless the user explicitly stated it.\n"
+        "- For short focused factual questions, returning only the original query is often best.\n"
         "- Only add queries if they would genuinely find different memories.\n"
         "- Fewer good queries beats more weak ones.\n"
+        "- Default to stores=['vector'] for ordinary recall.\n"
+        "- Add 'graph' only for explicit relationship, family, or causal multi-hop questions.\n"
+        "- Add 'docs' for codebase, architecture, schema, API, tests, or source-file questions.\n"
+        "- Prefer ['vector','docs'] over docs-only when project history or lived context may matter.\n"
         f"{conservative_guidance}\n"
         f"Message: {clean}"
     )
@@ -4892,11 +5729,25 @@ def _plan_fanout_queries(
             max_retries=0,
         )
         if result is None:
-            return _finish([clean], "planner_exception_fallback")
+            return _planner_fallback_or_raise(
+                "planner_exception_fallback",
+                "planner returned no result",
+            )
         parsed = parse_json_response(result)
         queries = parsed.get("queries") if isinstance(parsed, dict) else None
+        if isinstance(parsed, dict):
+            planned_stores = _planner_store_plan(parsed.get("stores")) or list(_planner_store_plan(default_stores))
+            planned_project = _sanitize_planned_project(parsed.get("project")) or default_project
+        else:
+            planned_stores = list(_planner_store_plan(default_stores))
+            planned_project = default_project
+        meta["planned_stores"] = planned_stores
+        meta["planned_project"] = planned_project
         if not isinstance(queries, list):
-            return _finish([clean], "planner_exception_fallback")
+            return _planner_fallback_or_raise(
+                "planner_exception_fallback",
+                "planner returned invalid query payload",
+            )
 
         out: List[str] = []
         seen = set()
@@ -4919,8 +5770,77 @@ def _plan_fanout_queries(
         if not out:
             return _finish([], "planner_returned_empty")
         return _finish(out)
-    except Exception:
-        return _finish([clean], "planner_exception_fallback")
+    except Exception as exc:
+        return _planner_fallback_or_raise(
+            "planner_exception_fallback",
+            str(exc) or exc.__class__.__name__,
+            exc=exc,
+        )
+
+
+def _normalize_planned_stores(value: Any) -> List[str]:
+    allowed = {"vector", "graph", "docs"}
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        store_name = str(item or "").strip().lower()
+        if store_name in allowed and store_name not in out:
+            out.append(store_name)
+    return out
+
+
+def _sanitize_planned_project(value: Any) -> Optional[str]:
+    import re as _re
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    text = _re.sub(r"[^a-z0-9._-]+", "-", text).strip("-")
+    if not text:
+        return None
+    return text[:64]
+
+
+def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
+    import re as _re
+
+    lowered = str(text or "").lower()
+    stores: List[str] = ["vector"]
+    project_name: Optional[str] = None
+
+    for needle, project in (
+        ("recipe-app", "recipe-app"),
+        ("recipe app", "recipe-app"),
+        ("portfolio-site", "portfolio-site"),
+        ("portfolio site", "portfolio-site"),
+        ("quaid", "quaid"),
+    ):
+        if needle in lowered:
+            project_name = project
+            break
+
+    docs_like = bool(_re.search(
+        r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
+        lowered,
+    ))
+    graph_like = bool(_re.search(
+        r"\b(relationship|related|who is|how is|brother|sister|mother|mom|father|dad|partner|wife|husband|uncle|aunt|nephew|niece|family|caused|because|why did|why does)\b",
+        lowered,
+    ))
+    mixed_memory_docs = docs_like and bool(_re.search(
+        r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",
+        lowered,
+    ))
+
+    if mixed_memory_docs:
+        stores = ["vector", "docs"]
+    elif docs_like:
+        stores = ["vector", "docs"]
+    elif graph_like:
+        stores = ["vector", "graph"]
+
+    return _planner_store_plan(stores), project_name
 
 
 def _load_tools_md() -> Optional[str]:
@@ -4966,8 +5886,9 @@ def plan_tool_hint(
     """Return a <tool_hint> string if the query warrants one, or None.
 
     Uses the command registry (lib/command_registry.py) to build a compact
-    structured prompt. The LLM returns {command_id} which is looked up in
-    the registry to produce the final hint string.
+    structured prompt. Recall routing now lives in the recall pipeline itself,
+    so the tool hint stays generic and simply reminds the agent that recall is
+    available.
 
     Args:
         query: The user message to classify.
@@ -4986,6 +5907,29 @@ def plan_tool_hint(
     clean = " ".join((query or "").split())
     if not clean:
         return None
+
+    def _safe_shell_text(value: str) -> str:
+        return str(value or "").replace("\\", "\\\\").replace('"', '\\"').strip()
+
+    def _render_tool_hint(
+        *,
+        command_id: str,
+        entry: Dict[str, Any],
+        data: Dict[str, Any],
+    ) -> Optional[str]:
+        if command_id == "recall":
+            quoted_query = _safe_shell_text(clean)
+            return f"<tool_hint>Search memories: quaid recall \"{quoted_query}\"</tool_hint>"
+
+        if command_id == "store":
+            quoted_query = _safe_shell_text(clean)
+            return f"<tool_hint>Store memory: quaid store \"{quoted_query}\"</tool_hint>"
+
+        hint_text = str(entry.get("hint") or "").strip()
+        if not hint_text:
+            return None
+        return f"<tool_hint>{hint_text}</tool_hint>"
+
 
     registry = commands if commands is not None else resolve_command_registry()
     if not registry:
@@ -5027,7 +5971,11 @@ def plan_tool_hint(
                 return None
             entry = next((c for c in registry if c["id"] == command_id), None)
             if entry:
-                return f"<tool_hint>{entry['hint']}</tool_hint>"
+                return _render_tool_hint(
+                    command_id=command_id,
+                    entry=entry,
+                    data=data if isinstance(data, dict) else {},
+                )
     except Exception:
         pass
     return None
@@ -5060,6 +6008,8 @@ def recall_fast(
     return_meta: bool = False,
 ) -> Any:
     """Pre-injection recall: thin wrapper over recall() with single-pass settings."""
+    import time as _time
+
     if not query or not query.strip():
         meta = {
             "mode": "fast",
@@ -5096,49 +6046,196 @@ def recall_fast(
         return ([], meta) if return_meta else []
 
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
+    planner_timeout_s = 2.0
+    if timeout_ms is not None:
+        planner_timeout_s = min(2.0, max(1.0, timeout_ms / 1000.0 * 0.5))
+    planner_started = _time.monotonic()
+    try:
+        planned = _plan_fanout_queries(
+            query,
+            max_queries=5,
+            timeout_s=planner_timeout_s,
+            return_meta=True,
+            planner_profile=planner_profile,
+        )
+        planned_queries, planner_meta = planned if isinstance(planned, tuple) and len(planned) == 2 else ([query], {})
+    except Exception as exc:
+        fallback_stores, fallback_project = _infer_recall_store_defaults(query)
+        detail = str(exc or "").lower()
+        timeout_like = isinstance(exc, TimeoutError) or ("timed out" in detail) or ("timeout" in detail)
+        planner_meta = {
+            "query": query,
+            "timeout_ms": round(planner_timeout_s * 1000),
+            "used_llm": planner_profile != "off",
+            "bailout_reason": "planner_timeout_fallback_off" if timeout_like else "planner_exception_fallback_off",
+            "queries_count": 1,
+            "elapsed_ms": round((_time.monotonic() - planner_started) * 1000),
+            "query_shape": str(_estimate_fanout_profile(query, max_queries=5, planner_profile="off").get("shape") or "unknown"),
+            "fanout_budget": 1,
+            "token_count": len(str(query or "").split()),
+            "named_entity_tokens": 0,
+            "shape_signals": [],
+            "planner_profile": "off",
+            "planned_stores": list(_planner_store_plan(fallback_stores or ["vector"])),
+            "planned_project": project or fallback_project,
+            "fallback_detail": str(exc)[:240],
+        }
+        planned_queries = [query]
+    planned_stores = _planner_store_plan((planner_meta or {}).get("planned_stores") or ["vector"])
+    planned_project = (planner_meta or {}).get("planned_project") or project
 
-    results = recall(
-        query=query,
+    rows, meta, docs_bundle = _run_recall_store_plan(
+        query,
+        stores=planned_stores,
         limit=effective_limit,
-        privacy=privacy,
         owner_id=owner_id,
         min_similarity=min_similarity,
-        use_routing=False,  # HyDE calls the LLM; fast path must not block on LLM
-        use_aliases=True,
-        use_intent=True,
-        use_multi_pass=False,
-        use_reranker=False,
-        current_session_id=current_session_id,
-        compaction_time=compaction_time,
-        date_from=date_from,
-        date_to=date_to,
-        source_channel=source_channel,
-        source_conversation_id=source_conversation_id,
-        source_author_id=source_author_id,
-        actor_id=actor_id,
-        subject_entity_id=subject_entity_id,
-        viewer_entity_id=viewer_entity_id,
-        participant_entity_ids=participant_entity_ids,
-        include_unscoped=include_unscoped,
-        debug=debug,
-        domain=domain,
-        domain_boost=domain_boost,
-        project=project,
-        low_signal_retry=False,
-        max_turns=1,
-        timeout_ms=timeout_ms,
         planner_profile=planner_profile,
-        include_graph_traversal=should_expand_graph(query),
-        include_co_session=False,
-        include_mmr=False,
-        return_meta=True,
+        planned_queries=planned_queries,
+        planner_meta=planner_meta,
+        fast_mode=True,
+        graph_depth=1,
+        common_kwargs={
+            "privacy": privacy,
+            "current_session_id": current_session_id,
+            "compaction_time": compaction_time,
+            "date_from": date_from,
+            "date_to": date_to,
+            "source_channel": source_channel,
+            "source_conversation_id": source_conversation_id,
+            "source_author_id": source_author_id,
+            "actor_id": actor_id,
+            "subject_entity_id": subject_entity_id,
+            "viewer_entity_id": viewer_entity_id,
+            "participant_entity_ids": participant_entity_ids,
+            "include_unscoped": include_unscoped,
+            "debug": debug,
+            "domain": domain,
+            "domain_boost": domain_boost,
+            "project": planned_project,
+            "timeout_ms": timeout_ms,
+        },
     )
-    if isinstance(results, tuple):
-        rows, meta = results
-    else:
-        rows, meta = results, _extract_recall_meta(results)
     meta = dict(meta or {})
     meta["mode"] = "fast"
+    if docs_bundle:
+        meta["docs_rows_count"] = len((docs_bundle.get("chunks") or []) if isinstance(docs_bundle, dict) else [])
+
+    should_fast_drill, gate_eval, fast_drill_reasons, gate_intent = _should_fast_drill_follow_up(
+        query,
+        rows,
+        planner_meta=planner_meta,
+        docs_bundle=docs_bundle,
+        limit=effective_limit,
+    )
+    fast_drill_enabled = "preserved_exact_low_overlap" in fast_drill_reasons
+    meta["quality_gate"] = {
+        "evaluation": gate_eval,
+        "fast_drill_candidate": should_fast_drill,
+        "fast_drill_reasons": fast_drill_reasons,
+        "fast_drill_enabled": fast_drill_enabled,
+    }
+
+    if should_fast_drill and fast_drill_enabled:
+        drill_budget_s = 1.2
+        planned_drill = _drill_plan_queries(
+            query,
+            rows,
+            planned_queries,
+            timeout_s=drill_budget_s,
+            return_meta=True,
+        )
+        if isinstance(planned_drill, tuple) and len(planned_drill) == 2:
+            drill_queries, drill_meta = planned_drill
+        else:
+            drill_queries = planned_drill if isinstance(planned_drill, list) else []
+            drill_meta = {
+                "used_llm": False,
+                "queries_count": len(drill_queries),
+                "elapsed_ms": 0,
+                "bailout_reason": None,
+                "done": False,
+            }
+        if not drill_queries:
+            drill_queries = _build_fast_drill_fallback_queries(
+                query,
+                gate_eval=gate_eval,
+                planner_meta=planner_meta,
+            )
+            if drill_queries:
+                drill_meta = dict(drill_meta or {})
+                drill_meta["used_llm"] = False
+                drill_meta["bailout_reason"] = "deterministic_keyword_fallback"
+                drill_meta["queries_count"] = len(drill_queries)
+                drill_meta.setdefault("planned_stores", list(planned_stores))
+                drill_meta.setdefault("planned_project", planned_project)
+        if drill_queries:
+            drill_queries = drill_queries[:2]
+            drill_limit = min(effective_limit, 5)
+            fast_drill_meta = dict(drill_meta or {})
+            fast_drill_meta.setdefault("planned_stores", list(planned_stores))
+            fast_drill_meta.setdefault("planned_project", planned_project)
+            drill_rows, drill_store_meta, drill_docs_bundle = _run_recall_store_plan(
+                query,
+                stores=planned_stores,
+                limit=drill_limit,
+                owner_id=owner_id,
+                min_similarity=min_similarity,
+                planner_profile="off",
+                planned_queries=drill_queries,
+                planner_meta=fast_drill_meta,
+                fast_mode=True,
+                graph_depth=1,
+                common_kwargs={
+                    "privacy": privacy,
+                    "current_session_id": current_session_id,
+                    "compaction_time": compaction_time,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "source_channel": source_channel,
+                    "source_conversation_id": source_conversation_id,
+                    "source_author_id": source_author_id,
+                    "actor_id": actor_id,
+                    "subject_entity_id": subject_entity_id,
+                    "viewer_entity_id": viewer_entity_id,
+                    "participant_entity_ids": participant_entity_ids,
+                    "include_unscoped": include_unscoped,
+                    "debug": debug,
+                    "domain": domain,
+                    "domain_boost": domain_boost,
+                    "project": planned_project,
+                    "timeout_ms": timeout_ms,
+                },
+            )
+            rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))[:effective_limit]
+            if drill_docs_bundle:
+                docs_bundle = _merge_docs_bundles(docs_bundle, drill_docs_bundle)
+            meta.setdefault("turn_details", [])
+            if isinstance(meta["turn_details"], list):
+                meta["turn_details"].append({
+                    "turn": len(meta["turn_details"]) + 1,
+                    "planner": fast_drill_meta,
+                    "store_runs": list((drill_store_meta or {}).get("store_runs") or []),
+                    "quality_gate_eval": _evaluate_quality_gate_readiness(
+                        query,
+                        rows,
+                        intent=gate_intent,
+                        limit=effective_limit,
+                    ),
+                })
+            phases = dict(meta.get("phases_ms") or {})
+            drill_phases = dict((drill_store_meta or {}).get("phases_ms") or {})
+            phases["fast_drill_wall_ms"] = int(drill_phases.get("store_plan_wall_ms") or drill_phases.get("total_ms") or 0)
+            phases["total_ms"] = int(phases.get("total_ms") or 0) + phases["fast_drill_wall_ms"]
+            meta["phases_ms"] = phases
+            meta["stop_reason"] = "fast_drill_merged"
+            meta["quality_gate"] = {
+                "evaluation": _evaluate_quality_gate_readiness(query, rows, intent=gate_intent, limit=effective_limit),
+                "fast_drill_candidate": True,
+                "fast_drill_reasons": fast_drill_reasons,
+                "fast_drill_enabled": True,
+                "fast_drill_queries": list(drill_queries),
+            }
     _attach_recall_meta(rows, meta)
     return (rows, meta) if return_meta else rows
 
@@ -5179,12 +6276,28 @@ def _drill_plan_queries(
     if not _HAS_LLM_CLIENTS:
         return _finish([], "no_llm_clients")
 
-    # Build compact result summary (just text snippets, no full content)
+    # Build compact result summary with temporal/source hints so the drill
+    # planner can tell the difference between broad related context and
+    # directly answer-bearing evidence.
     result_summary = []
     for r in current_results[:10]:
         text = str(r.get("text", ""))[:80]
         score = float(r.get("similarity", 0))
-        result_summary.append(f"  [{score:.2f}] {text}")
+        meta_bits = []
+        if r.get("category"):
+            meta_bits.append(f"type={r.get('category')}")
+        if r.get("source_type"):
+            meta_bits.append(f"source={r.get('source_type')}")
+        if r.get("project"):
+            meta_bits.append(f"project={r.get('project')}")
+        if r.get("created_at"):
+            meta_bits.append(f"created={str(r.get('created_at'))[:10]}")
+        if r.get("valid_from") or r.get("valid_until"):
+            valid_from = str(r.get("valid_from") or "")[:10] or "?"
+            valid_until = str(r.get("valid_until") or "")[:10] or "open"
+            meta_bits.append(f"valid={valid_from}->{valid_until}")
+        meta_prefix = f" [{' '.join(meta_bits)}]" if meta_bits else ""
+        result_summary.append(f"  [{score:.2f}]{meta_prefix} {text}")
     summary_text = "\n".join(result_summary) if result_summary else "  (no results)"
 
     searched_text = "\n".join(f"  - {q}" for q in already_searched[-8:])
@@ -5197,13 +6310,16 @@ def _drill_plan_queries(
         f"Current results:\n{summary_text}\n\n"
         "Rules:\n"
         '- Return JSON only: {"queries": ["..."], "done": true/false}\n'
-        '- Set "done": true if the current results fully answer the query.\n'
+        '- Set "done": true ONLY if the current results directly and specifically answer the original query.\n'
         "- Each query must be a declarative statement (HyDE style).\n"
+        "- Broad summaries, indirect context, stale evidence, or partial matches are NOT enough to set done=true.\n"
+        "- If results mix older and newer states or seem conflicted, prefer a follow-up query that resolves the latest/current state explicitly.\n"
+        "- If the results are about the same topic but miss the exact requested detail, write a narrower follow-up query for that missing detail.\n"
         "- Try different angles: related entities, temporal context, broader/narrower scope.\n"
         "- Do NOT repeat queries from the 'already searched' list.\n"
         "- Keep original names, dates, and entities.\n"
+        "- Prefer one precise follow-up over several vague rewrites.\n"
     )
-
     try:
         from lib.llm_clients import call_fast_reasoning
         meta["used_llm"] = True
@@ -5237,6 +6353,12 @@ def _drill_plan_queries(
             out.append(q)
             if len(out) >= 3:
                 break
+        clean = " ".join(str(query or "").split()).strip()
+        if clean and out:
+            out_lower = {q.lower() for q in out}
+            clean_lower = clean.lower()
+            if clean_lower not in searched_lower and clean_lower not in out_lower:
+                out = [clean] + out[:2]
         if not out:
             return _finish([], "planner_returned_empty")
         return _finish(out)
@@ -5279,6 +6401,8 @@ def recall(
     include_co_session: bool = True,
     include_mmr: bool = True,
     return_meta: bool = False,
+    planned_queries: Optional[List[str]] = None,
+    planner_meta: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Orchestrated recall with iterative drilling.
 
@@ -5369,10 +6493,11 @@ def recall(
     # Load config
     overall_timeout_ms = timeout_ms
     quality_gate = 0.70
+    config_retrieval = None
     try:
         from config import get_config
-        cfg = get_config().retrieval
-        quality_gate = getattr(cfg, "multi_pass_gate", 0.70)
+        config_retrieval = get_config().retrieval
+        quality_gate = getattr(config_retrieval, "multi_pass_gate", 0.70)
     except Exception:
         pass
 
@@ -5420,18 +6545,36 @@ def recall(
         domain_boost=domain_boost,
         project=project,
     )
+    gate_intent = "GENERAL"
+    if use_intent:
+        try:
+            gate_intent, _ = classify_intent(query)
+        except Exception:
+            gate_intent = "GENERAL"
 
     # --- Turn 1: Parallel fanout ---
     turn_start = _time.monotonic()
-    if use_routing:
+    if use_routing and planned_queries is not None:
+        fanout_queries = list(planned_queries)
+        fanout_meta = dict(planner_meta or {})
+        fanout_meta.setdefault("query", query)
+        fanout_meta.setdefault("used_llm", False)
+        fanout_meta.setdefault("bailout_reason", None)
+        fanout_meta.setdefault("queries_count", len(fanout_queries))
+        fanout_meta.setdefault("elapsed_ms", 0)
+        fanout_meta.setdefault("planner_profile", planner_profile)
+        fanout_meta.setdefault("planned_stores", ["vector"])
+        fanout_meta.setdefault("planned_project", None)
+    elif use_routing:
+        planner_timeout_s = (
+            min(60.0, max(1.5, (deadline - _time.monotonic()) * 0.5))
+            if deadline is not None
+            else 60.0
+        )
         planned = _plan_fanout_queries(
             query,
             max_queries=5,
-            timeout_s=(
-                min(15.0, max(0.5, (deadline - _time.monotonic()) * 0.3))
-                if deadline is not None
-                else 15.0
-            ),
+            timeout_s=planner_timeout_s,
             return_meta=True,
             planner_profile=planner_profile,
         )
@@ -5458,6 +6601,8 @@ def recall(
             "queries_count": len(fanout_queries),
             "elapsed_ms": 0,
             "planner_profile": planner_profile,
+            "planned_stores": ["vector"],
+            "planned_project": None,
         }
     if fanout_meta.get("bailout_reason") in bailout_counts:
         bailout_counts[fanout_meta["bailout_reason"]] += 1
@@ -5470,36 +6615,22 @@ def recall(
         remaining = 1.0
         stop_reason = "near_deadline_fallback"
 
-    # First query gets the full treatment (reranker, graph, multi-pass)
-    # Remaining fanout queries are lightweight
+    # Keep all turn-1 branches full for the current quality-focused path.
+    turn1_post_merge_refine = False
     search_callables = []
     for i, q in enumerate(fanout_queries):
-        if i == 0:
-            search_callables.append(lambda q=q: _recall_once(
-                query=q, limit=limit,
-                use_routing=False,  # Already HyDE'd
-                use_multi_pass=use_multi_pass,
-                use_reranker=use_reranker,
-                include_graph_traversal=include_graph_traversal,
-                include_co_session=include_co_session,
-                include_mmr=include_mmr,
-                low_signal_retry=low_signal_retry,
-                return_meta=True,
-                **common_kwargs,
-            ))
-        else:
-            search_callables.append(lambda q=q: _recall_once(
-                query=q, limit=min(max(3, limit), 12),
-                use_routing=False,
-                use_multi_pass=False,
-                use_reranker=False,
-                include_graph_traversal=False,
-                include_co_session=False,
-                include_mmr=include_mmr,
-                low_signal_retry=False,
-                return_meta=True,
-                **common_kwargs,
-            ))
+        search_callables.append(lambda q=q: _recall_once(
+            query=q, limit=limit,
+            use_routing=False,  # Already HyDE'd
+            use_multi_pass=use_multi_pass,
+            use_reranker=use_reranker,
+            include_graph_traversal=include_graph_traversal,
+            include_co_session=include_co_session,
+            include_mmr=False if turn1_post_merge_refine else include_mmr,
+            low_signal_retry=low_signal_retry,
+            return_meta=True,
+            **common_kwargs,
+        ))
 
     search_started = _time.monotonic()
     t1_batches = run_callables(
@@ -5525,9 +6656,29 @@ def recall(
                 turn1_batch_metas.append(meta)
 
     turn_elapsed = (_time.monotonic() - turn_start) * 1000
-    merged = _merge_recall_batches(all_batches, limit=limit * 2)
+    turn1_merge_limit = max(limit * 3, 20) if turn1_post_merge_refine else (limit * 2)
+    merged = _merge_recall_batches(all_batches, limit=turn1_merge_limit)
+    turn1_refine_meta = {
+        "applied": False,
+        "candidate_count": len(merged),
+        "reranker_enabled": False,
+        "reranker_ms": 0,
+        "mmr_enabled": False,
+        "mmr_ms": 0,
+        "total_ms": 0,
+    }
+    if turn1_post_merge_refine:
+        merged, turn1_refine_meta = _apply_post_merge_rank_refinement(
+            query,
+            merged,
+            limit=turn1_merge_limit,
+            use_reranker=False,
+            include_mmr=include_mmr,
+            config_retrieval=config_retrieval,
+        )
     top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
     turn1_coverage = _summarize_result_coverage(merged)
+    gate_eval = _evaluate_quality_gate_readiness(query, merged, intent=gate_intent, limit=limit)
 
     drill_log.append({
         "turn": 1,
@@ -5536,19 +6687,22 @@ def recall(
         "top_score": round(top_score, 3),
         "elapsed_ms": round(turn_elapsed),
         "coverage": turn1_coverage,
+        "gate_eval": gate_eval,
     })
     turn_phase_details.append({
         "turn": 1,
         "turn_elapsed_ms": round(turn_elapsed),
         "planner": fanout_meta,
-        "fanout": _build_branch_telemetry(
-            fanout_queries,
-            turn1_batch_metas,
-            wall_ms=search_wall_ms,
-            max_workers=min(len(search_callables), 5),
-        ),
-        "coverage": turn1_coverage,
-    })
+            "fanout": _build_branch_telemetry(
+                fanout_queries,
+                turn1_batch_metas,
+                wall_ms=search_wall_ms,
+                max_workers=min(len(search_callables), 5),
+            ),
+            "post_merge_refine": turn1_refine_meta,
+            "coverage": turn1_coverage,
+            "quality_gate_eval": gate_eval,
+        })
 
     logger.debug(
         "[recall] turn 1: %d queries, %d results, top=%.3f, %.0fms",
@@ -5567,6 +6721,10 @@ def recall(
             max(0, int(round(float((turn.get("fanout") or {}).get("wall_ms", 0) or 0))))
             for turn in turn_phase_details
         )
+        total_post_merge_refine_ms = sum(
+            max(0, int(round(float((turn.get("post_merge_refine") or {}).get("total_ms", 0) or 0))))
+            for turn in turn_phase_details
+        )
         meta = {
             "mode": "deliberate",
             "query": query,
@@ -5580,7 +6738,8 @@ def recall(
             "phases_ms": {
                 "planner_ms": total_planner_ms,
                 "fanout_wall_ms": total_fanout_wall_ms,
-                "non_parallel_overhead_ms": max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms),
+                "post_merge_refine_ms": total_post_merge_refine_ms,
+                "non_parallel_overhead_ms": max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms - total_post_merge_refine_ms),
                 "total_ms": round(total_elapsed),
             },
             "serial_work_ms": {
@@ -5595,6 +6754,7 @@ def recall(
                 "met": False,
                 "top_score": round(top_score, 3),
                 "result_count": len(merged),
+                "evaluation": gate_eval,
             },
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
@@ -5619,14 +6779,25 @@ def recall(
             break
 
         # Quality gate: stop if top results are strong enough
-        if top_score >= quality_gate and len(merged) >= limit:
+        gate_eval = _evaluate_quality_gate_readiness(query, merged, intent=gate_intent, limit=limit)
+        candidate_quality_gate = top_score >= quality_gate and len(merged) >= limit
+        if candidate_quality_gate and gate_eval.get("ready") and not gate_eval.get("needs_validation"):
             logger.debug("[recall] quality gate met (top=%.3f >= %.3f), stopping after turn %d", top_score, quality_gate, turn - 1)
             stop_reason = "quality_gate_met"
             break
+        if candidate_quality_gate and gate_eval.get("needs_validation"):
+            logger.debug(
+                "[recall] quality gate candidate requires validation after turn %d: overlap=%.2f temporal_rows=%s",
+                turn - 1,
+                float(gate_eval.get("overlap_ratio", 0.0) or 0.0),
+                gate_eval.get("temporal_rows"),
+            )
 
         # Ask drill agent for new queries
         turn_start = _time.monotonic()
         drill_budget = min(15.0, remaining * 0.4) if remaining is not None else 15.0
+        if candidate_quality_gate:
+            drill_budget = min(drill_budget, 6.0)
         planned_drill = _drill_plan_queries(
             query, merged, all_searched, timeout_s=drill_budget,
             return_meta=True,
@@ -5642,8 +6813,14 @@ def recall(
                 "bailout_reason": None,
                 "done": False,
             }
-
+        if candidate_quality_gate:
+            drill_meta["quality_gate_validation"] = True
+            drill_meta["quality_gate_eval"] = gate_eval
         if not new_queries:
+            if candidate_quality_gate and (drill_meta.get("done") or gate_eval.get("ready")):
+                logger.debug("[recall] quality gate validated after turn %d", turn - 1)
+                stop_reason = "quality_gate_met"
+                break
             logger.debug("[recall] drill agent returned no queries or said done, stopping after turn %d", turn - 1)
             stop_reason = "drill_done" if drill_meta.get("done") else (drill_meta.get("bailout_reason") or "drill_done")
             if stop_reason == "drill_done":
@@ -5659,12 +6836,14 @@ def recall(
             break
 
         # Search new queries in parallel (lightweight)
+        drill_post_merge_refine = False
         drill_callables = [
             (lambda q=q: _recall_once(
                 query=q, limit=min(max(3, limit), 12),
                 use_routing=False,
                 use_multi_pass=False,
                 use_reranker=False,
+                include_mmr=False if drill_post_merge_refine else include_mmr,
                 low_signal_retry=False,
                 return_meta=True,
                 **common_kwargs,
@@ -5695,10 +6874,30 @@ def recall(
                 if meta:
                     drill_batch_metas.append(meta)
 
-        merged = _merge_recall_batches(all_batches, limit=limit * 2)
+        drill_merge_limit = max(limit * 3, 20) if drill_post_merge_refine else (limit * 2)
+        merged = _merge_recall_batches(all_batches, limit=drill_merge_limit)
+        drill_refine_meta = {
+            "applied": False,
+            "candidate_count": len(merged),
+            "reranker_enabled": False,
+            "reranker_ms": 0,
+            "mmr_enabled": False,
+            "mmr_ms": 0,
+            "total_ms": 0,
+        }
+        if drill_post_merge_refine:
+            merged, drill_refine_meta = _apply_post_merge_rank_refinement(
+                query,
+                merged,
+                limit=drill_merge_limit,
+                use_reranker=False,
+                include_mmr=include_mmr,
+                config_retrieval=config_retrieval,
+            )
         top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
         turn_elapsed = (_time.monotonic() - turn_start) * 1000
         turn_coverage = _summarize_result_coverage(merged)
+        turn_gate_eval = _evaluate_quality_gate_readiness(query, merged, intent=gate_intent, limit=limit)
 
         drill_log.append({
             "turn": turn,
@@ -5707,6 +6906,7 @@ def recall(
             "top_score": round(top_score, 3),
             "elapsed_ms": round(turn_elapsed),
             "coverage": turn_coverage,
+            "gate_eval": turn_gate_eval,
         })
         turn_phase_details.append({
             "turn": turn,
@@ -5718,7 +6918,9 @@ def recall(
                 wall_ms=search_wall_ms,
                 max_workers=min(len(drill_callables), 3),
             ),
+            "post_merge_refine": drill_refine_meta,
             "coverage": turn_coverage,
+            "quality_gate_eval": turn_gate_eval,
         })
 
         logger.debug(
@@ -5749,11 +6951,15 @@ def recall(
         max(0, int(round(float((turn.get("fanout") or {}).get("wall_ms", 0) or 0))))
         for turn in turn_phase_details
     )
+    total_post_merge_refine_ms = sum(
+        max(0, int(round(float((turn.get("post_merge_refine") or {}).get("total_ms", 0) or 0))))
+        for turn in turn_phase_details
+    )
     total_branch_serial_ms = sum(
         max(0, int(round(float((turn.get("fanout") or {}).get("serial_sum_ms", 0) or 0))))
         for turn in turn_phase_details
     )
-    non_parallel_overhead_ms = max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms)
+    non_parallel_overhead_ms = max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms - total_post_merge_refine_ms)
     meta = {
         "mode": "deliberate",
         "query": query,
@@ -5767,6 +6973,7 @@ def recall(
         "phases_ms": {
             "planner_ms": total_planner_ms,
             "fanout_wall_ms": total_fanout_wall_ms,
+            "post_merge_refine_ms": total_post_merge_refine_ms,
             "non_parallel_overhead_ms": non_parallel_overhead_ms,
             "total_ms": round(total_elapsed),
         },
@@ -5779,6 +6986,7 @@ def recall(
             "met": stop_reason == "quality_gate_met",
             "top_score": round(top_score, 3),
             "result_count": len(merged),
+            "evaluation": _evaluate_quality_gate_readiness(query, final, intent=gate_intent, limit=limit),
         },
         "stop_reason": stop_reason,
         "bailout_counts": bailout_counts,
@@ -5978,10 +7186,22 @@ def store(
 
     graph = get_graph()
 
+    def _merge_session_id(existing_value: Optional[str], new_value: Optional[str]) -> Optional[str]:
+        if not new_value:
+            return existing_value
+        if not existing_value:
+            return new_value
+        existing_match = re.match(r"session-(\d+)$", str(existing_value))
+        new_match = re.match(r"session-(\d+)$", str(new_value))
+        if existing_match and new_match:
+            return existing_value if int(existing_match.group(1)) <= int(new_match.group(1)) else new_value
+        return existing_value
+
     def _apply_metadata_flags(existing: Node) -> None:
         """Persist source/domain metadata on dedup-update paths."""
         if not (
-            source_type
+            session_id
+            or source_type
             or target_datastore
             or domains
             or project
@@ -5999,6 +7219,9 @@ def store(
         ):
             return
         attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
+        merged_session_id = _merge_session_id(existing.session_id, session_id)
+        if merged_session_id != existing.session_id:
+            existing.session_id = merged_session_id
         if source_type and not attrs.get("source_type"):
             attrs["source_type"] = source_type
         if target_datastore and not attrs.get("target_datastore"):
@@ -7365,7 +8588,7 @@ if __name__ == "__main__":
         recall_fast_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         recall_fast_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_fast_p.add_argument("--timeout-ms", type=int, default=None, help="Override overall fast-recall timeout budget")
-        recall_fast_p.add_argument("--planner-profile", choices=["fast", "aggressive"], default="fast",
+        recall_fast_p.add_argument("--planner-profile", choices=["off", "fast", "aggressive"], default="fast",
                                    help="Planner fanout profile for fast recall (default: fast)")
         recall_fast_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
         recall_fast_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
@@ -7682,6 +8905,7 @@ if __name__ == "__main__":
 
             # Resolve stores config.
             # stores can be a list ["vector","graph","docs"] or a dict {"vector":{...},"docs":{...}}
+            stores_explicit = "stores" in cfg
             store_names, store_opts = _resolve_recall_store_request(cfg)
 
             want_docs = "docs" in store_names
@@ -7709,6 +8933,27 @@ if __name__ == "__main__":
             archive         = cfg.get("archive", False)
             candidate_pool  = cfg.get("candidate_pool")
             planner_profile = cfg.get("planner_profile", "full")
+            planned_queries = None
+            planned_meta = None
+
+            if not stores_explicit and want_memory and not archive and not session_id:
+                planned = _plan_fanout_queries(
+                    query,
+                    max_queries=5,
+                    timeout_s=60.0,
+                    return_meta=True,
+                    planner_profile="fast" if use_fast else planner_profile,
+                )
+                if isinstance(planned, tuple) and len(planned) == 2:
+                    planned_queries, planned_meta = planned
+                if isinstance(planned_meta, dict):
+                    planned_stores = _planner_store_plan(planned_meta.get("planned_stores")) or ["vector"]
+                    store_names = planned_stores
+                    want_docs = "docs" in store_names
+                    want_memory = bool([s for s in store_names if s != "docs"]) or not store_names
+                    planned_project = planned_meta.get("planned_project")
+                    if planned_project and not project:
+                        project = planned_project
 
             json_payload = None
             text_memory_results = None
@@ -7773,42 +9018,9 @@ if __name__ == "__main__":
                         print(f"[1.00] [{r['category']}]{date_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
                     if not out:
                         print("No facts found for this session")
-            elif want_memory and "graph" in store_names:
-                # Graph-aware recall with optional candidate pool
-                graph_payload = graph_aware_recall(
-                    query,
-                    owner_id=owner,
-                    limit=limit,
-                    graph_depth=graph_depth,
-                    domain=domain_filter,
-                    domain_boost=domain_boost,
-                    project=project,
-                    candidate_pool=candidate_pool,
-                )
-                if use_json:
-                    json_payload = _build_recall_json_payload(
-                        graph_payload.get("direct_results", []),
-                        meta=graph_payload.get("meta"),
-                        graph_payload=graph_payload,
-                    )
-                else:
-                    text_memory_results = _validate_recall_result_rows(graph_payload.get("direct_results", []))
-                    for r in text_memory_results:
-                        flags = []
-                        if r.get('verified'): flags.append('V')
-                        if r.get('pinned'): flags.append('P')
-                        flag_str = f"[{''.join(flags)}]" if flags else ""
-                        conf = r.get('extraction_confidence', 0.5)
-                        created = r.get('created_at', '')
-                        privacy = r.get('privacy', 'shared')
-                        owner_id = r.get('owner_id', '')
-                        print(f"[{r['similarity']:.2f}] [{r.get('category', 'fact')}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner_id}")
             elif want_memory:
-                # Vector recall
-                recall_kwargs = dict(
-                    limit=limit,
-                    owner_id=owner,
-                    min_similarity=min_similarity,
+                common_kwargs = dict(
+                    privacy="shared",
                     current_session_id=current_session_id,
                     compaction_time=compaction_time,
                     date_from=date_from,
@@ -7817,37 +9029,95 @@ if __name__ == "__main__":
                     domain=domain_filter,
                     domain_boost=domain_boost,
                     project=project,
+                    candidate_pool=candidate_pool,
                 )
-                if use_fast:
-                    recall_kwargs['use_multi_pass'] = False
-                    recall_kwargs['use_reranker'] = False
-                    recall_kwargs['max_turns'] = 1
-                    recall_kwargs['use_routing'] = False  # skip LLM fanout/HyDE expansion
-                recall_kwargs['planner_profile'] = planner_profile
-                if use_json:
-                    results, meta = recall(query, return_meta=True, **recall_kwargs)
-                    json_payload = _build_recall_json_payload(results, meta=meta)
+                if use_fast or len(store_names) > 1 or "graph" in store_names:
+                    results, meta, docs_bundle = _run_recall_store_plan(
+                        query,
+                        stores=store_names,
+                        limit=limit,
+                        owner_id=owner,
+                        min_similarity=min_similarity,
+                        planner_profile="fast" if use_fast else planner_profile,
+                        planned_queries=planned_queries,
+                        planner_meta=planned_meta,
+                        fast_mode=bool(use_fast),
+                        graph_depth=graph_depth,
+                        common_kwargs=common_kwargs,
+                    )
+                    if use_json:
+                        json_payload = _build_recall_json_payload(results, meta=meta, docs=docs_bundle)
+                    else:
+                        text_memory_results = results
+                        for r in text_memory_results:
+                            flags = []
+                            if r.get('verified'): flags.append('V')
+                            if r.get('pinned'): flags.append('P')
+                            if r.get('valid_until'): flags.append('superseded')
+                            flag_str = f"[{''.join(flags)}]" if flags else ""
+                            conf = r.get('extraction_confidence', 0.5)
+                            created = r.get('created_at', '')
+                            date_str = f"({created.split('T')[0]})" if created else ""
+                            privacy = r.get('privacy', 'shared')
+                            owner_id = r.get('owner_id', '')
+                            valid_from = r.get('valid_from', '')
+                            valid_until = r.get('valid_until', '')
+                            source_type = r.get('source_type', '') or ''
+                            print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r.get('id', '')}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner_id}|ST:{source_type}")
+                            if r.get('_debug'):
+                                d = r['_debug']
+                                print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+                        if docs_bundle:
+                            _print_docs_bundle(docs_bundle)
+                    want_docs = False
                 else:
-                    text_memory_results = recall(query, **recall_kwargs)
-                if not use_json and text_memory_results is not None:
-                    for r in text_memory_results:
-                        flags = []
-                        if r.get('verified'): flags.append('V')
-                        if r.get('pinned'): flags.append('P')
-                        if r.get('valid_until'): flags.append('superseded')
-                        flag_str = f"[{''.join(flags)}]" if flags else ""
-                        conf = r.get('extraction_confidence', 0.5)
-                        created = r.get('created_at', '')
-                        date_str = f"({created.split('T')[0]})" if created else ""
-                        privacy = r.get('privacy', 'shared')
-                        owner_id = r.get('owner_id', '')
-                        valid_from = r.get('valid_from', '')
-                        valid_until = r.get('valid_until', '')
-                        source_type = r.get('source_type', '') or ''
-                        print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner_id}|ST:{source_type}")
-                        if r.get('_debug'):
-                            d = r['_debug']
-                            print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+                    # Vector-only recall
+                    recall_kwargs = dict(
+                        limit=limit,
+                        owner_id=owner,
+                        min_similarity=min_similarity,
+                        current_session_id=current_session_id,
+                        compaction_time=compaction_time,
+                        date_from=date_from,
+                        date_to=date_to,
+                        debug=use_debug,
+                        domain=domain_filter,
+                        domain_boost=domain_boost,
+                        project=project,
+                    )
+                    if use_fast:
+                        recall_kwargs['use_multi_pass'] = False
+                        recall_kwargs['use_reranker'] = False
+                        recall_kwargs['max_turns'] = 1
+                        recall_kwargs['use_routing'] = False  # skip LLM fanout/HyDE expansion
+                    recall_kwargs['planner_profile'] = planner_profile
+                    if planned_queries is not None and not use_fast:
+                        recall_kwargs['planned_queries'] = planned_queries
+                        recall_kwargs['planner_meta'] = planned_meta
+                    if use_json:
+                        results, meta = recall(query, return_meta=True, **recall_kwargs)
+                        json_payload = _build_recall_json_payload(results, meta=meta)
+                    else:
+                        text_memory_results = recall(query, **recall_kwargs)
+                    if not use_json and text_memory_results is not None:
+                        for r in text_memory_results:
+                            flags = []
+                            if r.get('verified'): flags.append('V')
+                            if r.get('pinned'): flags.append('P')
+                            if r.get('valid_until'): flags.append('superseded')
+                            flag_str = f"[{''.join(flags)}]" if flags else ""
+                            conf = r.get('extraction_confidence', 0.5)
+                            created = r.get('created_at', '')
+                            date_str = f"({created.split('T')[0]})" if created else ""
+                            privacy = r.get('privacy', 'shared')
+                            owner_id = r.get('owner_id', '')
+                            valid_from = r.get('valid_from', '')
+                            valid_until = r.get('valid_until', '')
+                            source_type = r.get('source_type', '') or ''
+                            print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner_id}|ST:{source_type}")
+                            if r.get('_debug'):
+                                d = r['_debug']
+                                print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
 
             # docs store
             if want_docs:

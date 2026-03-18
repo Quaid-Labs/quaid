@@ -34,8 +34,8 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     id: "recall",
     description:
-      "Searching or recalling memories, facts, preferences, past conversations, or anything the user wants to look up from stored knowledge",
-    hint: 'Search memories: quaid recall "your query"',
+      "Searching or recalling memories, facts, preferences, relationships, project history, codebase details, architecture, tests, schemas, or anything the user wants to look up from stored knowledge.",
+    hint: 'Search memories: quaid recall "<query>"',
   },
   {
     id: "store",

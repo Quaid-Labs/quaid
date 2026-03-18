@@ -312,6 +312,28 @@ class TestHookInjectRecallResilience:
 
         assert out.strip() == "", f"Expected no stdout, got: {out!r}"
 
+    def test_memory_context_still_injected_without_tool_hint_round_trip(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        with patch("core.interface.api.recall_fast", return_value=[{"text": "Maya lives in South Austin", "similarity": 0.9, "category": "fact"}]):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Where does Maya live?",
+                    "session_id": "sess-memory",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "South Austin" in context
+        assert "<tool_hint>" not in context
+
+
 
 # ===========================================================================
 # hook_session_init — registry augmentation

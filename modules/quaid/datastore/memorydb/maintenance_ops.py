@@ -237,6 +237,27 @@ def _merge_nodes_into(
     # Use the earliest created_at
     created_dates = [n.created_at for n in originals if n.created_at]
     earliest_created = min(created_dates) if created_dates else None
+    session_ids = [n.session_id for n in originals if n.session_id]
+
+    def _earliest_session_id(values: List[str]) -> Optional[str]:
+        best: Optional[str] = None
+        best_num: Optional[int] = None
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            match = re.match(r"session-(\d+)$", text)
+            if match:
+                num = int(match.group(1))
+                if best_num is None or num < best_num:
+                    best = text
+                    best_num = num
+                continue
+            if best is None:
+                best = text
+        return best
+
+    earliest_session = _earliest_session_id(session_ids)
     # Inherit owner from first original
     owner = originals[0].owner_id if originals else _default_owner_id()
     # Inherit category from first original (not hardcoded "fact")
@@ -254,6 +275,7 @@ def _merge_nodes_into(
         skip_dedup=True,
         status="active",
         created_at=earliest_created,
+        session_id=earliest_session,
     )
     merged_id = result.get("id")
     if not merged_id:

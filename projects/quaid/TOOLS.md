@@ -149,13 +149,14 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 
 - Treat auto-injected memory as hints — verify concrete claims (names, dates, versions) with explicit `recall`.
 - For codebase/architecture questions, include `"docs"` in stores: `recall "query" '{"stores":["docs"]}'`.
-- Use `domain_boost` in config before broadening to full recall.
+- Do not upgrade a planned, offered, interviewing, or job-searching state into a completed current state unless the retrieved evidence explicitly says the change already happened.
+- For questions about what the agent or assistant found, suggested, or recommended, answer the suggestion itself rather than the currently implemented feature.
 
 ## Quick Playbooks
 
-**Personal/relationship question:** `recall "query"` → if low confidence, add `'{"domain_boost": ["personal"]}'`
+**Personal/relationship question:** `recall "query"` → if the first pass feels adjacent rather than decisive, run one narrower follow-up `recall`
 
-**Technical/project question:** `recall "query" '{"domain_boost": ["technical","project"]}'` → if still unclear, add `"docs"` to stores
+**Technical/project question:** `recall "query"` → if the answer depends on implementation, schema, API shape, tests, or UI details, add `"docs"` to stores
 
 **Memory + docs in one pass:** `recall "query" '{"stores": ["vector","graph","docs"]}'`
 

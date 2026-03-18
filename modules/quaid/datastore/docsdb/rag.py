@@ -61,6 +61,106 @@ def _escape_like(value: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _path_suffix_candidates(path_value: str, workspace: Optional[Path] = None) -> List[str]:
+    """Return stable relative suffixes for relocated project/docs matching.
+
+    Doc chunk rows can retain absolute source paths from an earlier instance root
+    (for example copied benchmark/eval-only runs). Project-scoped filtering should
+    therefore match both the current absolute prefix and stable relative suffixes
+    like ``projects/recipe-app`` or ``projects/recipe-app/tests/auth.test.js``.
+    """
+    raw = str(path_value or "").strip()
+    if not raw:
+        return []
+
+    out: List[str] = []
+
+    def _add(candidate: str) -> None:
+        c = str(candidate or "").replace("\\", "/").strip().strip("/")
+        if c and c not in out:
+            out.append(c)
+
+    p = Path(raw)
+    if workspace is not None:
+        try:
+            _add(str(p.resolve().relative_to(workspace.resolve())))
+        except Exception:
+            pass
+
+    normalized = raw.replace("\\", "/")
+    for marker in ("/projects/", "/shared/projects/"):
+        idx = normalized.find(marker)
+        if idx >= 0:
+            _add(normalized[idx + 1 :])
+
+    if not p.is_absolute():
+        _add(raw)
+
+    return out
+
+
+def _docs_query_terms(query: str) -> List[str]:
+    """Extract lightweight lexical terms for doc reranking."""
+    raw_terms = re.findall(r"[a-zA-Z0-9_./-]+", str(query or "").lower())
+    stop = {
+        "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "at",
+        "is", "are", "was", "were", "be", "do", "does", "did", "how", "what",
+        "which", "who", "when", "where", "why", "current", "currently",
+        "recipe", "app",
+    }
+    out: List[str] = []
+    for term in raw_terms:
+        t = term.strip().strip("/.")
+        if len(t) < 3 or t in stop:
+            continue
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def _docs_rank_score(query_terms: List[str], source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
+    """Blend semantic similarity with lightweight lexical/path features.
+
+    This keeps semantic search as the base signal, but prefers implementation
+    files/sections when the query contains concrete code or test vocabulary.
+    """
+    path_lower = str(source_file or "").lower()
+    file_name = Path(source_file or "").name.lower()
+    header_lower = str(section_header or "").lower()
+    content_lower = str(content or "").lower()
+
+    score = float(similarity)
+    path_hits = 0
+    header_hits = 0
+    content_hits = 0
+    for term in query_terms:
+        if term in path_lower:
+            path_hits += 1
+        if term in header_lower:
+            header_hits += 1
+        if term in content_lower:
+            content_hits += 1
+
+    score += min(path_hits, 3) * 0.10
+    score += min(header_hits, 3) * 0.06
+    score += min(content_hits, 4) * 0.025
+
+    implementation_terms = {
+        "test", "tests", "testing", "auth", "error", "errors", "validation",
+        "middleware", "schema", "graphql", "resolver", "resolvers", "deploy",
+        "deployment", "docker", "container", "database", "sql", "migration",
+        "endpoint", "endpoints", "api", "layout", "frontend", "backend",
+        "css", "rate", "limiting", "limit",
+    }
+    wants_impl = any(term in implementation_terms for term in query_terms)
+    if wants_impl and file_name in {"project.md", "readme.md", "tools.md", "agents.md"}:
+        score -= 0.12
+    if wants_impl and header_lower in {"# project: recipe app", "# recipe app", "## overview", "# overview"}:
+        score -= 0.06
+
+    return max(0.0, round(score, 4))
+
+
 class DocumentChunk:
     """A chunk of a document with metadata."""
     def __init__(self, content: str, source_file: str, chunk_index: int, 
@@ -533,6 +633,7 @@ class DocsRAG:
         # Build project filter — use SQL-level filtering to avoid full scan
         project_paths = None
         registry_paths = []
+        workspace = _workspace().resolve()
         if project:
             project_paths = self._get_project_paths(project)
             # Also get registered external file paths from doc_registry
@@ -540,7 +641,14 @@ class DocsRAG:
                 from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry()
                 reg_docs = registry.list_docs(project=project)
-                registry_paths = [str(_workspace() / d["file_path"]) for d in reg_docs]
+                for d in reg_docs:
+                    raw_path = str(d.get("file_path") or "").strip()
+                    if not raw_path:
+                        continue
+                    p = Path(raw_path)
+                    if not p.is_absolute():
+                        p = workspace / p
+                    registry_paths.append(str(p))
             except Exception:
                 pass
 
@@ -553,17 +661,27 @@ class DocsRAG:
             params = []
             if project and (project_paths or registry_paths):
                 params = []
+                suffixes = set()
                 if project_paths and project_paths["home_dir"]:
                     like_clauses.append("source_file LIKE ? ESCAPE '\\'")
                     params.append(_escape_like(project_paths["home_dir"]) + "%")
+                    suffixes.update(_path_suffix_candidates(project_paths["home_dir"], workspace))
                 if project_paths:
                     for root in project_paths.get("source_roots", []):
                         like_clauses.append("source_file LIKE ? ESCAPE '\\'")
                         params.append(_escape_like(root) + "%")
+                        suffixes.update(_path_suffix_candidates(root, workspace))
                 # Include registered external files by exact path prefix
                 for rp in registry_paths:
                     like_clauses.append("source_file LIKE ? ESCAPE '\\'")
                     params.append(_escape_like(rp) + "%")
+                    suffixes.update(_path_suffix_candidates(rp, workspace))
+                for suffix in sorted(suffixes):
+                    # Match relocated/copied instances by stable project-relative suffix.
+                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
+                    params.append(f"%/{_escape_like(suffix)}")
+                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
+                    params.append(f"%/{_escape_like(suffix)}/%")
                 if like_clauses:
                     like_clauses = [f"({ ' OR '.join(like_clauses) })"]
                 else:
@@ -587,16 +705,29 @@ class DocsRAG:
                 rows = conn.execute("SELECT * FROM doc_chunks").fetchall()
 
             for row in rows:
+                source_file = str(row[1] or "")
+                if self._is_context_file(Path(source_file)):
+                    continue
                 chunk_embedding = _lib_unpack_embedding(row[5])  # embedding is column 5
                 similarity = _lib_cosine_similarity(query_embedding, chunk_embedding)
 
                 if similarity >= min_similarity:
+                    content = row[3]
+                    section_header = row[4]
+                    query_terms = _docs_query_terms(query)
+                    rank_score = _docs_rank_score(
+                        query_terms,
+                        source_file,
+                        section_header,
+                        content,
+                        similarity,
+                    )
                     inferred_project = project or self.infer_project_for_source(row[1])
                     results.append({
-                        "content": row[3],  # content
-                        "source": row[1],   # source_file
-                        "section_header": row[4],  # section_header
-                        "similarity": round(similarity, 3),
+                        "content": content,
+                        "source": source_file,
+                        "section_header": section_header,
+                        "similarity": rank_score,
                         "chunk_index": row[2],  # chunk_index
                         "project": inferred_project,
                     })

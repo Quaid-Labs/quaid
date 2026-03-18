@@ -164,6 +164,36 @@ class TestStoreBasic:
             assert r2["status"] == "created"
             assert r1["id"] != r2["id"]
 
+    def test_dedup_update_preserves_session_provenance(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        text = "Maya and David have a dog named Biscuit"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(text, owner_id="quaid", skip_dedup=False)
+            second = store(text, owner_id="quaid", session_id="session-4", created_at="2026-03-10T23:59:59")
+
+        node = graph.get_node(first["id"])
+        assert second["status"] in {"duplicate", "updated"}
+        assert node is not None
+        assert node.session_id == "session-4"
+
+    def test_dedup_update_keeps_earliest_session_id(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        text = "Maya's husband is named David and she lives with him"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(text, owner_id="quaid", session_id="session-5", created_at="2026-03-24T23:59:59")
+            second = store(text, owner_id="quaid", session_id="session-1", created_at="2026-03-01T23:59:59")
+
+        node = graph.get_node(first["id"])
+        assert second["status"] in {"duplicate", "updated"}
+        assert node is not None
+        assert node.session_id == "session-1"
+
     def test_category_to_type_mapping_preference(self, tmp_path):
         """category='preference' maps to type 'Preference'."""
         from datastore.memorydb.memory_graph import store
@@ -199,6 +229,7 @@ class TestStoreBasic:
 
         with patch.object(mg, "_recall_once", side_effect=fake_once), \
              patch.object(mg, "_plan_fanout_queries", return_value=["Where does Maya work?", "Maya employer workplace"]), \
+             patch.object(mg, "_apply_post_merge_rank_refinement", side_effect=lambda query, rows, **kwargs: (rows, {"applied": True, "total_ms": 0})), \
              patch.object(mg, "_drill_plan_queries", return_value=[]):
             out = mg.recall("Where does Maya work?", owner_id="quaid", limit=5, use_routing=True)
 
@@ -233,12 +264,68 @@ class TestStoreBasic:
         assert out[0]["text"] == "v2"
         assert out[0]["similarity"] == 0.89
 
+    def test_recall_fanout_keeps_all_branches_full_in_quality_path(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        def fake_once(query, **kwargs):
+            calls.append({"query": query, **kwargs})
+            return [{"id": query, "text": query, "category": "fact", "similarity": 0.7}]
+
+        planned = [
+            "Where does Maya work now?",
+            "Maya current employer at Stripe",
+            "Maya current role and team",
+        ]
+
+        with patch.object(mg, "_recall_once", side_effect=fake_once), \
+             patch.object(mg, "_plan_fanout_queries", return_value=(planned, {"planned_stores": ["vector"]})), \
+             patch.object(mg, "_drill_plan_queries", return_value=[]):
+            out = mg.recall(
+                "Where does Maya work now?",
+                owner_id="quaid",
+                limit=7,
+                use_routing=True,
+                use_multi_pass=True,
+                use_reranker=True,
+                include_graph_traversal=True,
+                include_co_session=True,
+                include_mmr=True,
+                low_signal_retry=True,
+            )
+
+        assert len(out) == 3
+        assert len(calls) == 3
+        for call in calls:
+            assert call["limit"] == 7
+            assert call["use_multi_pass"] is True
+            assert call["use_reranker"] is True
+            assert call["include_graph_traversal"] is True
+            assert call["include_co_session"] is True
+            assert call["include_mmr"] is True
+            assert call["low_signal_retry"] is True
+
     def test_plan_fanout_queries_bails_for_low_information_message(self):
         import datastore.memorydb.memory_graph as mg
 
         assert mg._plan_fanout_queries("ok") == []
         assert mg._plan_fanout_queries("hi") == []
         assert mg._plan_fanout_queries("sounds good") == []
+        assert mg._plan_fanout_queries("How are you today?") == []
+        assert mg._plan_fanout_queries("Hey what's up") == []
+        assert mg._plan_fanout_queries("Let me think about it") == []
+        assert mg._plan_fanout_queries("Yeah that makes sense") == []
+        assert mg._plan_fanout_queries("I'll figure it out later") == []
+
+    def test_plan_fanout_queries_keeps_broad_summary_requests(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", False):
+            assert mg._plan_fanout_queries("What's new?") == ["What's new?"]
+            assert mg._plan_fanout_queries("Tell me something interesting") == ["Tell me something interesting"]
+            assert mg._plan_fanout_queries("Catch me up on everything") == ["Catch me up on everything"]
+            assert mg._plan_fanout_queries("What do you know about me?") == ["What do you know about me?"]
 
     def test_plan_fanout_queries_allows_explicit_empty_result(self):
         import datastore.memorydb.memory_graph as mg
@@ -927,10 +1014,455 @@ class TestRecallTelemetry:
         assert fast_meta["fanout_budget"] == 5
         assert aggressive_meta["fanout_budget"] == 5
 
+    def test_plan_fanout_queries_preserves_short_exact_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                "Who is Linda in relation to Maya?",
+                return_meta=True,
+            )
+
+        assert queries == ["Who is Linda in relation to Maya?"]
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "graph"]
+
+    def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_defaults(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                "What tables exist in the recipe app database?",
+                return_meta=True,
+                planner_profile="off",
+            )
+
+        assert queries == ["What tables exist in the recipe app database?"]
+        assert meta["used_llm"] is False
+        assert meta["bailout_reason"] == "planner_disabled"
+        assert meta["planned_stores"] == ["vector", "docs"]
+        assert meta["planned_project"] == "recipe-app"
+
+    def test_recall_fast_uses_two_second_planner_budget(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_plan(query, *, max_queries, timeout_s, return_meta, planner_profile):
+            captured["timeout_s"] = timeout_s
+            captured["planner_profile"] = planner_profile
+            return [query], {
+                "query": query,
+                "timeout_ms": round(timeout_s * 1000),
+                "used_llm": False,
+                "bailout_reason": "planner_disabled",
+                "queries_count": 1,
+                "elapsed_ms": 0,
+                "planner_profile": planner_profile,
+                "planned_stores": ["vector"],
+                "planned_project": None,
+            }
+
+        with patch.object(mg, "_plan_fanout_queries", side_effect=_fake_plan), \
+             patch.object(mg, "_run_recall_store_plan", return_value=([], {"phases_ms": {"total_ms": 0}}, None)):
+            mg.recall_fast("What is Maya's role?", return_meta=True)
+
+        assert captured["timeout_s"] == 2.0
+        assert captured["planner_profile"] == "fast"
+
+    def test_recall_fast_falls_back_to_off_when_planner_times_out(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            captured["stores"] = stores
+            captured["planned_queries"] = planned_queries
+            captured["planner_meta"] = planner_meta
+            return [], {"phases_ms": {"total_ms": 0}}, None
+
+        with patch.object(mg, "_plan_fanout_queries", side_effect=RuntimeError("Anthropic API error: The read operation timed out")), \
+             patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run):
+            rows, meta = mg.recall_fast("What tables exist in the recipe app database?", return_meta=True)
+
+        assert rows == []
+        assert meta["mode"] == "fast"
+        assert captured["planned_queries"] == ["What tables exist in the recipe app database?"]
+        assert captured["planner_meta"]["planner_profile"] == "off"
+        assert captured["planner_meta"]["bailout_reason"] == "planner_timeout_fallback_off"
+        assert captured["planner_meta"]["used_llm"] is True
+        assert captured["stores"] == ["vector", "docs"]
+        assert captured["planner_meta"]["planned_project"] == "recipe-app"
+
+    def test_should_fast_drill_follow_up_skips_planner_timeout_fallback(self):
+        import datastore.memorydb.memory_graph as mg
+
+        should_drill, gate_eval, reasons, gate_intent = mg._should_fast_drill_follow_up(
+            "Which API has dietary label filtering for the recipe app?",
+            rows=[{"text": "recipe app includes dietary restriction filtering", "category": "fact", "similarity": 0.9}],
+            planner_meta={
+                "used_llm": True,
+                "bailout_reason": "planner_timeout_fallback_off",
+                "planned_stores": ["vector", "docs"],
+                "query_shape": "broad",
+            },
+            docs_bundle={"chunks": []},
+            limit=6,
+        )
+
+        assert should_drill is False
+        assert reasons == []
+        assert gate_intent
+        assert isinstance(gate_eval, dict)
+
+    def test_should_fast_drill_follow_up_requires_validation_signal(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={"ready": True, "needs_validation": False},
+        ), patch.object(
+            mg,
+            "classify_intent",
+            return_value=("GENERAL", {}),
+        ):
+            should_drill, gate_eval, reasons, gate_intent = mg._should_fast_drill_follow_up(
+                "What dietary restriction labels does the recipe app support?",
+                rows=[{"text": "recipe app supports vegetarian, vegan", "category": "fact", "similarity": 0.9}],
+                planner_meta={
+                    "used_llm": True,
+                    "bailout_reason": None,
+                    "planned_stores": ["vector", "docs"],
+                    "query_shape": "focused",
+                },
+                docs_bundle={"chunks": []},
+                limit=6,
+            )
+
+        assert should_drill is False
+        assert reasons == []
+        assert gate_eval["needs_validation"] is False
+        assert gate_intent == "GENERAL"
+
+    def test_should_fast_drill_follow_up_skips_docs_lane(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={"ready": True, "needs_validation": True},
+        ), patch.object(
+            mg,
+            "classify_intent",
+            return_value=("GENERAL", {}),
+        ):
+            should_drill, gate_eval, reasons, gate_intent = mg._should_fast_drill_follow_up(
+                "What dietary restriction labels does the recipe app support?",
+                rows=[{"text": "recipe app supports vegetarian, vegan", "category": "fact", "similarity": 0.9}],
+                planner_meta={
+                    "used_llm": True,
+                    "bailout_reason": None,
+                    "planned_stores": ["vector", "docs"],
+                    "query_shape": "focused",
+                },
+                docs_bundle={"chunks": []},
+                limit=6,
+            )
+
+        assert should_drill is False
+        assert reasons == []
+        assert gate_eval["needs_validation"] is True
+        assert gate_intent == "GENERAL"
+
+    def test_should_fast_drill_follow_up_allows_preserved_exact_low_overlap(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={
+                "ready": True,
+                "needs_validation": False,
+                "overlap_ratio": 0.5,
+            },
+        ), patch.object(
+            mg,
+            "classify_intent",
+            return_value=("GENERAL", {}),
+        ):
+            should_drill, gate_eval, reasons, gate_intent = mg._should_fast_drill_follow_up(
+                "What restaurant do Maya and David like on South Congress?",
+                rows=[{"text": "Maya and David go out together often", "category": "fact", "similarity": 0.9}],
+                planner_meta={
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "planned_stores": ["vector"],
+                    "query_shape": "narrow",
+                },
+                docs_bundle=None,
+                limit=6,
+            )
+
+        assert should_drill is True
+        assert reasons == ["preserved_exact_low_overlap"]
+        assert gate_eval["overlap_ratio"] == 0.5
+        assert gate_intent == "GENERAL"
+
+    def test_should_fast_drill_follow_up_preserved_exact_skips_docs_lane(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={
+                "ready": True,
+                "needs_validation": False,
+                "overlap_ratio": 0.4,
+            },
+        ), patch.object(
+            mg,
+            "classify_intent",
+            return_value=("GENERAL", {}),
+        ):
+            should_drill, gate_eval, reasons, gate_intent = mg._should_fast_drill_follow_up(
+                "What projects are on Maya's portfolio site?",
+                rows=[{"text": "portfolio site exists", "category": "fact", "similarity": 0.9}],
+                planner_meta={
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "planned_stores": ["vector", "docs"],
+                    "query_shape": "narrow",
+                },
+                docs_bundle={"chunks": []},
+                limit=6,
+            )
+
+        assert should_drill is False
+        assert reasons == []
+        assert gate_eval["overlap_ratio"] == 0.4
+        assert gate_intent == "GENERAL"
+
+    def test_recall_fast_records_candidate_without_running_second_store_plan(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "stores": list(stores or []),
+            })
+            if len(run_calls) == 1:
+                return (
+                    [{"id": "a", "text": "Broad recipe schema context", "category": "fact", "similarity": 0.72}],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [{"id": "b", "text": "Specific missing schema field detail", "category": "fact", "similarity": 0.88}],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["What new fields were added to the recipe database?"],
+                {
+                    "query": "What new fields were added to the recipe database?",
+                    "used_llm": True,
+                    "bailout_reason": None,
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector", "docs"],
+                    "planned_project": "recipe-app",
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(True, {"ready": False, "needs_validation": True}, ["needs_validation"], "GENERAL"),
+        ), patch.object(
+            mg,
+            "_drill_plan_queries",
+            return_value=(
+                [
+                    "What new fields were added to the recipe database?",
+                    "recipe database image_url prep_time fields",
+                    "recipe database safe migration add column helper",
+                ],
+                {"used_llm": True, "queries_count": 3, "elapsed_ms": 80, "bailout_reason": None},
+            ),
+        ):
+            rows, meta = mg.recall_fast("What new fields were added to the recipe database?", return_meta=True)
+
+        assert len(run_calls) == 1
+        assert run_calls[0]["planner_profile"] == "fast"
+        assert rows[0]["text"] == "Broad recipe schema context"
+        assert meta["quality_gate"]["fast_drill_candidate"] is True
+        assert meta["quality_gate"]["fast_drill_enabled"] is False
+        assert "fast_drill_queries" not in meta["quality_gate"]
+        assert "fast_drill_wall_ms" not in meta.get("phases_ms", {})
+
+    def test_recall_fast_runs_second_store_plan_for_preserved_exact_candidate(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "stores": list(stores or []),
+            })
+            if len(run_calls) == 1:
+                return (
+                    [{"id": "a", "text": "Maya and David train a lot", "category": "fact", "similarity": 0.72}],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [{"id": "b", "text": "Maya and David ran races together", "category": "fact", "similarity": 0.88}],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["Have Maya and David done any races together?"],
+                {
+                    "query": "Have Maya and David done any races together?",
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                {"ready": True, "needs_validation": True, "overlap_ratio": 0.5},
+                ["preserved_exact_low_overlap"],
+                "GENERAL",
+            ),
+        ), patch.object(
+            mg,
+            "_drill_plan_queries",
+            return_value=(
+                [
+                    "Have Maya and David done any races together?",
+                    "Maya and David ran races together",
+                ],
+                {"used_llm": True, "queries_count": 2, "elapsed_ms": 80, "bailout_reason": None},
+            ),
+        ):
+            rows, meta = mg.recall_fast("Have Maya and David done any races together?", return_meta=True)
+
+        assert len(run_calls) == 2
+        assert run_calls[0]["planner_profile"] == "fast"
+        assert run_calls[1]["planner_profile"] == "off"
+        assert run_calls[1]["planned_queries"] == [
+            "Have Maya and David done any races together?",
+            "Maya and David ran races together",
+        ]
+        assert rows[0]["text"] == "Maya and David ran races together"
+        assert meta["quality_gate"]["fast_drill_candidate"] is True
+        assert meta["quality_gate"]["fast_drill_enabled"] is True
+        assert meta["quality_gate"]["fast_drill_queries"] == [
+            "Have Maya and David done any races together?",
+            "Maya and David ran races together",
+        ]
+        assert meta["phases_ms"]["fast_drill_wall_ms"] == 90
+
+    def test_recall_fast_does_not_use_keyword_fallback_when_fast_drill_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "stores": list(stores or []),
+            })
+            if len(run_calls) == 1:
+                return (
+                    [{"id": "a", "text": "Maya and David have trained a lot", "category": "fact", "similarity": 0.72}],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [{"id": "b", "text": "Maya and David completed the 10K together", "category": "fact", "similarity": 0.88}],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["Have Maya and David done any races together?"],
+                {
+                    "query": "Have Maya and David done any races together?",
+                    "used_llm": True,
+                    "bailout_reason": None,
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "broad",
+                    "planned_stores": ["vector", "graph"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                {"ready": True, "needs_validation": True, "overlap_ratio": 0.6},
+                ["needs_validation"],
+                "GENERAL",
+            ),
+        ), patch.object(
+            mg,
+            "_drill_plan_queries",
+            return_value=([], {"used_llm": True, "queries_count": 0, "elapsed_ms": 80, "bailout_reason": "planner_returned_empty"}),
+        ):
+            rows, meta = mg.recall_fast("Have Maya and David done any races together?", return_meta=True)
+
+        assert len(run_calls) == 1
+        assert rows[0]["text"] == "Maya and David have trained a lot"
+        assert meta["quality_gate"]["fast_drill_candidate"] is True
+        assert meta["quality_gate"]["fast_drill_enabled"] is False
+        assert "fast_drill_queries" not in meta["quality_gate"]
+
     def test_plan_fanout_queries_fast_profile_prompt_is_conservative(self):
         import datastore.memorydb.memory_graph as mg
 
         captured = {}
+        query = "Walk me through how Maya's career changed from TechFlow to Stripe over time"
 
         def _fake_call_fast_reasoning(*, prompt, **kwargs):
             captured["prompt"] = prompt
@@ -939,29 +1471,101 @@ class TestRecallTelemetry:
         with patch.object(mg, "parse_json_response", return_value={"queries": ["Maya career timeline"]}), \
              patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
             queries, meta = mg._plan_fanout_queries(
-                "Trace Maya's career arc from TechFlow to Stripe",
+                query,
                 return_meta=True,
                 planner_profile="aggressive",
             )
 
-        assert queries[0] == "Trace Maya's career arc from TechFlow to Stripe"
+        assert queries[0] == query
         assert "Default to exactly 1 query" in captured["prompt"]
         assert meta["planner_profile"] == "aggressive"
+
+    def test_plan_fanout_queries_raises_without_llm_when_failhard_enabled(self):
+        import datastore.memorydb.memory_graph as mg
+        query = "Walk me through how Maya's career changed from TechFlow to Stripe over time"
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", False), \
+             patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="LLM planner is unavailable") as exc:
+                mg._plan_fanout_queries(
+                    query,
+                    return_meta=True,
+                )
+        assert "planner_timeout_ms=" in str(exc.value)
+        assert "planner_elapsed_ms=" in str(exc.value)
+
+    def test_plan_fanout_queries_raises_on_planner_exception_when_failhard_enabled(self):
+        import datastore.memorydb.memory_graph as mg
+        query = "Walk me through how Maya's career changed from TechFlow to Stripe over time"
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=RuntimeError("planner boom")), \
+             patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="planner boom") as exc:
+                mg._plan_fanout_queries(
+                    query,
+                    return_meta=True,
+                )
+        assert "planner_timeout_ms=" in str(exc.value)
+        assert "planner_elapsed_ms=" in str(exc.value)
+
+    def test_drill_plan_queries_keeps_original_query_as_anchor(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "What restaurants did the AI suggest for Linda's birthday dinner?"
+        current_results = [
+            {
+                "id": "a",
+                "text": "Maya planned Linda's birthday dinner and considered dietary needs",
+                "similarity": 0.84,
+                "category": "fact",
+            }
+        ]
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={
+                "queries": [
+                    "assistant suggestions Linda birthday dinner restaurants",
+                    "Linda birthday dinner restaurant recommendations",
+                    "best restaurants for Linda birthday dinner",
+                ],
+                "done": False,
+            },
+        ), patch("lib.llm_clients.call_fast_reasoning", return_value=('{"queries":[]}', {})):
+            queries, meta = mg._drill_plan_queries(
+                query,
+                current_results,
+                already_searched=["Linda birthday dinner"],
+                return_meta=True,
+            )
+
+        assert queries[0] == query
+        assert queries == [
+            query,
+            "assistant suggestions Linda birthday dinner restaurants",
+            "Linda birthday dinner restaurant recommendations",
+        ]
+        assert meta["queries_count"] == len(queries)
+        assert meta["done"] is False
 
     def test_recall_fast_always_uses_planner(self):
         import datastore.memorydb.memory_graph as mg
 
         captured = {}
 
-        def _fake_recall(query, **kwargs):
+        def _fake_run_plan(query, **kwargs):
+            captured["query"] = query
             captured["kwargs"] = kwargs
-            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+            return [], {"mode": "fast", "stop_reason": "planner_returned_empty"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             mg.recall_fast("Where does Maya work?", planner_profile="aggressive", return_meta=True)
 
-        assert captured["kwargs"]["use_routing"] is True
+        assert captured["query"] == "Where does Maya work?"
+        assert captured["kwargs"]["fast_mode"] is True
         assert captured["kwargs"]["planner_profile"] == "aggressive"
+        assert captured["kwargs"]["stores"] == ["vector"]
 
     def test_recall_fast_returns_list_by_default(self):
         """Regression: return_meta=False (default) must return List[Dict], not tuple.
@@ -972,10 +1576,10 @@ class TestRecallTelemetry:
         """
         import datastore.memorydb.memory_graph as mg
 
-        def _fake_recall(query, **kwargs):
-            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+        def _fake_run_plan(query, **kwargs):
+            return [], {"mode": "fast", "stop_reason": "planner_returned_empty"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             result = mg.recall_fast("Where does Maya work?")
 
         assert isinstance(result, list), (
@@ -986,10 +1590,10 @@ class TestRecallTelemetry:
         """return_meta=True returns (rows, meta) tuple."""
         import datastore.memorydb.memory_graph as mg
 
-        def _fake_recall(query, **kwargs):
-            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+        def _fake_run_plan(query, **kwargs):
+            return [], {"mode": "fast", "stop_reason": "planner_returned_empty"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             result = mg.recall_fast("Where does Maya work?", return_meta=True)
 
         assert isinstance(result, tuple)
@@ -1042,10 +1646,10 @@ class TestRecallFastHookInjectContract:
             {"text": "Maya joined in 2023", "category": "fact", "similarity": 0.8, "id": "def"},
         ]
 
-        def _fake_recall(query, **kwargs):
-            return fake_rows, {"mode": "full", "stop_reason": "max_turns"}
+        def _fake_run_plan(query, **kwargs):
+            return fake_rows, {"mode": "fast", "stop_reason": "max_turns"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             result = mg.recall_fast("Where does Maya work?")
 
         assert isinstance(result, list)
@@ -1061,10 +1665,10 @@ class TestRecallFastHookInjectContract:
             {"text": "Maya works at Stripe", "category": "fact", "similarity": 0.85, "id": "abc"},
         ]
 
-        def _fake_recall(query, **kwargs):
-            return fake_rows, {"mode": "full", "stop_reason": "max_turns"}
+        def _fake_run_plan(query, **kwargs):
+            return fake_rows, {"mode": "fast", "stop_reason": "max_turns"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             result = mg.recall_fast("Where does Maya work?")
 
         assert len(result) >= 1
@@ -1081,10 +1685,10 @@ class TestRecallFastHookInjectContract:
         """
         import datastore.memorydb.memory_graph as mg
 
-        def _fake_recall(query, **kwargs):
-            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+        def _fake_run_plan(query, **kwargs):
+            return [], {"mode": "fast", "stop_reason": "planner_returned_empty"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             result = mg.recall_fast("Some query about nothing stored")
 
         assert result is not None, "recall_fast() must not return None; use []"
@@ -1100,10 +1704,10 @@ class TestRecallFastHookInjectContract:
         """
         import datastore.memorydb.memory_graph as mg
 
-        def _fake_recall(query, **kwargs):
-            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+        def _fake_run_plan(query, **kwargs):
+            return [], {"mode": "fast", "stop_reason": "planner_returned_empty"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             result = mg.recall_fast("Some query about nothing stored")
 
         assert not isinstance(result, tuple), (
@@ -1124,10 +1728,10 @@ class TestRecallFastHookInjectContract:
             {"text": "fact two", "category": "fact", "similarity": 0.8, "id": "2"},
         ]
 
-        def _fake_recall(query, **kwargs):
-            return fake_rows, {"mode": "full", "stop_reason": "max_turns"}
+        def _fake_run_plan(query, **kwargs):
+            return fake_rows, {"mode": "fast", "stop_reason": "max_turns"}, None
 
-        with patch.object(mg, "recall", side_effect=_fake_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run_plan):
             result = mg.recall_fast("Any substantive query here")
 
         for i, item in enumerate(result):
@@ -1152,12 +1756,214 @@ class TestRecallFastHookInjectContract:
         """
         import datastore.memorydb.memory_graph as mg
 
-        def _failing_recall(query, **kwargs):
+        def _failing_run_plan(query, **kwargs):
             raise RuntimeError("Simulated embedding provider failure")
 
-        with patch.object(mg, "recall", side_effect=_failing_recall):
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_failing_run_plan):
             with pytest.raises(RuntimeError, match="Simulated embedding provider failure"):
                 mg.recall_fast("What is Maya's role?")
+
+    def test_recall_fast_docs_plan_uses_vector_and_docs_store_contracts(self):
+        import datastore.memorydb.memory_graph as mg
+
+        seen = {"vector": 0, "docs": 0}
+
+        def _fake_vector(query, **kwargs):
+            seen["vector"] += 1
+            return (
+                [{"text": "Maya discussed the recipe schema", "category": "fact", "similarity": 0.81, "id": "n1"}],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 18}},
+                None,
+            )
+
+        def _fake_docs(query, **kwargs):
+            seen["docs"] += 1
+            return (
+                [{"text": "[docs] schema.js: recipe schema", "category": "docs", "similarity": 0.92}],
+                {"selected_path": "docs_bundle", "phases_ms": {"total_ms": 12}},
+                {"chunks": [{"source": "schema.js", "section_header": "", "content": "recipe schema", "similarity": 0.92}]},
+            )
+
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(["recipe app schema"], {"planned_stores": ["docs"], "planned_project": "recipe-app"}),
+        ), patch.object(mg, "_vector_store_recall", side_effect=_fake_vector), patch.object(
+            mg, "_docs_store_recall", side_effect=_fake_docs
+        ):
+            rows, meta = mg.recall_fast("What does the recipe schema look like?", return_meta=True)
+
+        assert rows
+        assert seen == {"vector": 1, "docs": 1}
+        assert meta["planned_stores"] == ["vector", "docs"]
+
+    def test_store_registry_requires_recall_fast_contract(self):
+        import datastore.memorydb.memory_graph as mg
+
+        bad_registry = {
+            "vector": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
+            "docs": {"recall": lambda *a, **k: None},
+            "graph": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=bad_registry):
+            with pytest.raises(RuntimeError, match="missing required contract 'recall_fast'"):
+                mg._run_recall_store_plan(
+                    "test",
+                    stores=["docs"],
+                    limit=3,
+                    owner_id="maya",
+                    min_similarity=0.6,
+                    planner_profile="fast",
+                    planned_queries=["test"],
+                    planner_meta={"planned_stores": ["docs"]},
+                    fast_mode=True,
+                    common_kwargs={},
+                )
+
+    def test_vector_store_recall_strips_candidate_pool_before_calling_recall(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall(query, **kwargs):
+            captured["kwargs"] = kwargs
+            return [], {"selected_path": "vector"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            mg._vector_store_recall(
+                "Where does Maya work?",
+                limit=5,
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["Maya work"],
+                planner_meta={"planned_stores": ["vector"]},
+                fast_mode=True,
+                common_kwargs={"project": "recipe-app", "candidate_pool": [{"id": "n1"}]},
+            )
+
+        assert "candidate_pool" not in captured["kwargs"]
+
+    def test_quality_gate_requires_query_term_overlap_for_specific_fact_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        gate = mg._evaluate_quality_gate_readiness(
+            "Where does Maya work now?",
+            [
+                {
+                    "text": "Maya's work situation is currently bad ('work being garbage')",
+                    "category": "fact",
+                    "similarity": 0.93,
+                }
+            ],
+            intent="WHERE",
+            limit=1,
+        )
+
+        assert gate["ready"] is True
+        assert gate["needs_validation"] is True
+
+    def test_quality_gate_marks_low_overlap_temporal_queries_unready(self):
+        import datastore.memorydb.memory_graph as mg
+
+        gate = mg._evaluate_quality_gate_readiness(
+            "When does Maya think the half marathon is?",
+            [
+                {
+                    "text": "The assistant recommended easy runs should be at an embarrassingly slow pace",
+                    "category": "event",
+                    "similarity": 1.0,
+                }
+            ],
+            intent="WHEN",
+            limit=1,
+        )
+
+        assert gate["ready"] is False
+        assert gate["needs_validation"] is True
+
+    def test_requirement_refinement_queries_are_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        queries = mg._build_requirement_refinement_queries(
+            "Where does Maya work now?",
+            {"unresolved": ["low_query_term_coverage"], "current_like": True},
+            already_searched=["Where does Maya work now?"],
+        )
+
+        assert queries == []
+
+    def test_recall_validates_quality_gate_with_drill_planner_before_stopping(self):
+        import datastore.memorydb.memory_graph as mg
+
+        broad_row = {
+            "id": "a",
+            "text": "Maya's work situation is currently bad ('work being garbage')",
+            "category": "fact",
+            "similarity": 0.93,
+        }
+        exact_row = {
+            "id": "b",
+            "text": "Maya left TechFlow and joined Stripe as a senior PM",
+            "category": "fact",
+            "similarity": 0.96,
+        }
+        calls = []
+
+        def _fake_recall_once(query, **kwargs):
+            calls.append(query)
+            if "stripe" in query.lower():
+                return [exact_row], {"mode": "deliberate", "query": query}
+            return [broad_row], {"mode": "deliberate", "query": query}
+
+        with patch.object(mg, "_recall_once", side_effect=_fake_recall_once), \
+             patch.object(mg, "_plan_fanout_queries", return_value=["Where does Maya work now?"]), \
+             patch.object(
+                 mg,
+                 "_drill_plan_queries",
+                 return_value=(
+                     ["Maya current employer Stripe"],
+                     {
+                         "used_llm": True,
+                         "queries_count": 1,
+                         "elapsed_ms": 12,
+                         "bailout_reason": None,
+                         "done": False,
+                     },
+                 ),
+             ):
+            out, meta = mg.recall(
+                "Where does Maya work now?",
+                owner_id="quaid",
+                limit=1,
+                use_routing=True,
+                max_turns=2,
+                return_meta=True,
+            )
+
+        assert calls == ["Where does Maya work now?", "Maya current employer Stripe"]
+        assert out[0]["id"] == "b"
+        assert meta["turns"] == 2
+        assert meta["drill_log"][1]["queries"] == ["Maya current employer Stripe"]
+
+    def test_query_fit_multiplier_boosts_assistant_rows_for_agent_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node(
+            id="n1",
+            type="Fact",
+            name="The assistant explained that FoodData Central provides raw nutrition data",
+            attributes={"source_type": "assistant"},
+        )
+
+        mult = mg._compute_query_fit_multiplier(
+            "What API did the AI agent find for the recipe app, and what alternative was suggested?",
+            node,
+            node.attributes,
+            intent="PROJECT",
+        )
+
+        assert mult >= 1.08
 
 
 # ---------------------------------------------------------------------------

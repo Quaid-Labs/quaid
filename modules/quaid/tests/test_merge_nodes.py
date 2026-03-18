@@ -211,6 +211,37 @@ class TestMergeConfidenceInheritance:
         assert merged.confidence == pytest.approx(0.85, abs=0.01)
 
 
+class TestMergeProvenanceInheritance:
+    """Merged node preserves the earliest available session provenance."""
+
+    def test_inherits_earliest_session_id(self, tmp_path):
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
+
+        graph, _ = _make_graph(tmp_path)
+        node_a = _store_and_get(graph, "Maya's mother is Linda and lives in Houston, Texas")
+        node_b = _store_and_get(graph, "Linda is Maya's mother")
+        node_c = _store_and_get(graph, "Maya's mom lives in Houston")
+        node_a.session_id = "session-4"
+        node_b.session_id = "session-1"
+        node_c.session_id = "session-8"
+        graph.update_node(node_a)
+        graph.update_node(node_b)
+        graph.update_node(node_c)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
+            result = _merge_nodes_into(
+                graph,
+                "Maya's mother is Linda and lives in Houston, Texas",
+                [node_a.id, node_b.id, node_c.id],
+                source="dedup_merge",
+            )
+
+        merged = graph.get_node(result["id"])
+        assert merged.session_id == "session-1"
+
+
 # ===========================================================================
 # 2. Confirmation Count Accumulation
 # ===========================================================================
