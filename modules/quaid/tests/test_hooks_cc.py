@@ -5,6 +5,7 @@ Covers:
 - hook_session_init registry augmentation (projects_dir, registry extra, no duplicate)
 - hook_session_init TOOLS.md / AGENTS.md presence in output
 - hook_inject silent-fail on recall_fast exception
+- hook_inject project-doc injection via projects_search_docs
 - hook_inject no crash on empty recall_fast result
 """
 import io
@@ -332,6 +333,68 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "South Austin" in context
         assert "<tool_hint>" not in context
+
+    def test_project_docs_context_is_injected_when_docs_search_returns_chunks(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        docs_bundle = {
+            "project": "recipe-app",
+            "chunks": [
+                {
+                    "content": "Authentication uses JWTs and refresh tokens.",
+                    "source": "/tmp/recipe-app/docs/api.md",
+                    "similarity": 0.91,
+                }
+            ],
+        }
+
+        with patch("core.interface.api.recall_fast", return_value=[]), patch(
+            "core.interface.api.projects_search_docs", return_value=docs_bundle
+        ):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "How does the recipe app authenticate users?",
+                    "session_id": "sess-docs",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid Project Docs: recipe-app]" in context
+        assert "Authentication uses JWTs and refresh tokens." in context
+        assert "api.md" in context
+
+    def test_project_docs_failure_does_not_drop_memory_context(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        with patch(
+            "core.interface.api.recall_fast",
+            return_value=[{"text": "Maya lives in South Austin", "similarity": 0.9, "category": "fact"}],
+        ), patch(
+            "core.interface.api.projects_search_docs",
+            side_effect=RuntimeError("docs down"),
+        ):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Where does Maya live?",
+                    "session_id": "sess-docs-fail",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "South Austin" in context
+        assert "[Quaid Project Docs" not in context
 
 
 
