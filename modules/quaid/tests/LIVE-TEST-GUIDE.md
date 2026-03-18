@@ -182,6 +182,43 @@ cd ~/quaid/dev && git branch --show-current && git rev-parse --short HEAD
 
 Pass only if the branch is exactly `canary`.
 
+### Hot-deploy during a live run (mid-test fix)
+
+When a fix is committed during a live run and you need to deploy without a
+full reinstall, use `scp` from the **local machine** directly to the OC
+runtime path. Do NOT use `ssh alfie 'cp ...'` — it copies alfie's own
+(stale) files and silently does nothing.
+
+**OC adapter.js runtime path** (where OC actually loads from):
+```
+~/.openclaw/extensions/quaid/adapter.js
+```
+This is the installed copy. The source at `~/quaid/plugins/quaid/adapter.js`
+is only read by the installer — changing it does NOT update the running code.
+
+Deploy adapter.js hotfix:
+```bash
+# 1. Build fresh artifact on the local machine
+cd ~/quaid/dev/modules/quaid && npm run build:runtime
+
+# 2. scp directly to OC runtime path (NOT the source path)
+scp ~/quaid/dev/modules/quaid/adaptors/openclaw/adapter.js \
+    example.local:~/.openclaw/extensions/quaid/adapter.js
+
+# 3. Restart OC gateway
+ssh example.local 'pkill -f openclaw-gateway; sleep 2; nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &'
+
+# 4. Verify new code loaded — send a test message and check gateway.log
+# Look for the correct datastores/scrubQuery behavior in [quaid][recall] lines
+```
+
+Deploy Python hotfix (hooks.py or other CC modules):
+```bash
+scp ~/quaid/dev/modules/quaid/core/interface/hooks.py \
+    example.local:~/.openclaw/extensions/quaid/core/interface/hooks.py
+# No restart needed for Python — hooks.py is imported fresh per-call
+```
+
 ### OpenClaw on example.local
 
 Preview first:
