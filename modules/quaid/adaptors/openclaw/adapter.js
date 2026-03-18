@@ -1407,7 +1407,7 @@ notify_user(${JSON.stringify(message)})
                 query,
                 limit: injectLimit,
                 expandGraph: false,
-                datastores: ["vector_basic"],
+                datastores: ["vector_basic", "project"],
                 routeStores: false,
                 intent: injectIntent,
                 domain: injectDomain,
