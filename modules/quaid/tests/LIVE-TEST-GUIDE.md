@@ -885,6 +885,8 @@ Pass criteria:
 
 Note: Phase 1 and Phase 4 are new hard requirements. If they fail, report to claude-dev before continuing.
 
+**Expected noise — not a failure:** The session watcher writes `[quaid][daemon-signal] reset signal` entries for stale sessions when a new session key appears (normal fanout behavior). Seeing these signals before the agent responds is expected and is NOT a fail criterion for M8. Only an unrecoverable injection loop (agent never responds) would be a failure.
+
 ### M9: Janitor
 
 Before running, capture the pre-janitor artifact state:
