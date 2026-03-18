@@ -191,19 +191,21 @@ runtime path. Do NOT use `ssh alfie 'cp ...'` — it copies alfie's own
 
 **OC adapter.js runtime path** (where OC actually loads from):
 ```
-~/.openclaw/extensions/quaid/adapter.js
+~/.openclaw/extensions/quaid/adaptors/openclaw/adapter.js
 ```
-This is the installed copy. The source at `~/quaid/plugins/quaid/adapter.js`
-is only read by the installer — changing it does NOT update the running code.
+OC uses the **full module-tree path**, not the flat root. There are two
+`adapter.js` files installed — flat root (`~/.openclaw/extensions/quaid/adapter.js`)
+and full-tree (`~/.openclaw/extensions/quaid/adaptors/openclaw/adapter.js`).
+OC loads the full-tree one. Deploying to the flat root does nothing.
 
 Deploy adapter.js hotfix:
 ```bash
 # 1. Build fresh artifact on the local machine
 cd ~/quaid/dev/modules/quaid && npm run build:runtime
 
-# 2. scp directly to OC runtime path (NOT the source path)
+# 2. scp to the FULL-TREE runtime path (NOT the flat root)
 scp ~/quaid/dev/modules/quaid/adaptors/openclaw/adapter.js \
-    example.local:~/.openclaw/extensions/quaid/adapter.js
+    example.local:~/.openclaw/extensions/quaid/adaptors/openclaw/adapter.js
 
 # 3. Restart OC gateway
 ssh example.local 'pkill -f openclaw-gateway; sleep 2; nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &'
