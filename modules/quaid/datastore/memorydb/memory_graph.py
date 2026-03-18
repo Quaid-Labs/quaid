@@ -5103,7 +5103,7 @@ def recall_fast(
         privacy=privacy,
         owner_id=owner_id,
         min_similarity=min_similarity,
-        use_routing=True,
+        use_routing=False,  # HyDE calls the LLM; fast path must not block on LLM
         use_aliases=True,
         use_intent=True,
         use_multi_pass=False,
