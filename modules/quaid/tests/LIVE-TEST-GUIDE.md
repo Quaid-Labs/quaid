@@ -868,6 +868,11 @@ This is a capability test. **Do not tell the agent the exact command names or th
 The goal is that the agent proactively creates a project in response to natural work requests —
 not just when told to. Test all three trigger categories below.
 
+> **Model requirement:** M8 Phase1 requires policy-following to create a project before writing
+> any files. Haiku does not reliably comply with the file-placement rules even when they are
+> injected. **Use Sonnet or better for M8.** If currently on Haiku, run `/model` and switch
+> before starting Phase1.
+
 Prepare a source root first:
 
 ```bash
