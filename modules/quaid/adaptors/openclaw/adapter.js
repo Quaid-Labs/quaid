@@ -1315,7 +1315,7 @@ notify_user(${JSON.stringify(message)})
         return withDocs({ prependContext: event.prependContext });
       }
       try {
-        const scrubQuery = (raw) => raw.replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").trim();
+        const scrubQuery = (raw) => raw.replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
         const extractFromOCPromptJson = (raw) => {
           try {
             const m = raw.match(/^```[\w]*\r?\n([\s\S]+?)\r?\n```/m);

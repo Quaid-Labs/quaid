@@ -1667,13 +1667,16 @@ notify_user(${JSON.stringify(message)})
           // Strip our own prior injections that OC persists back into future turns
           .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
           .replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "")
+          // Strip OC metadata block BEFORE bracket-strip so that when rawPrompt starts
+          // with "Sender (untrusted metadata):...json...[Wed...] message", the [Wed...]
+          // prefix becomes leading after metadata removal and is caught by the bracket step.
+          .replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
           // Strip leading code fence blocks (OC JSON metadata wrapper)
           .replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "")
-          // Strip OC metadata prefix patterns
+          // Strip OC metadata prefix patterns (timestamp brackets, separators)
           .replace(/^System:\s*/i, "")
           .replace(/^\s*(\[.*?\]\s*)+/s, "")
           .replace(/^---\s*/m, "")
-          .replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
           .trim();
 
         // Try to extract the last user message from OC's JSON-wrapped event.prompt.
