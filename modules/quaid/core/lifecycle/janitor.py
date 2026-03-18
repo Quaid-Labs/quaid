@@ -1256,38 +1256,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             return _can_apply_scope("project_docs_writes", f"project docs {action}: {doc_path}")
 
         parallel_lifecycle_results = {}
-        if task == "all" and dry_run:
-            try:
-                parallel_cfg = getattr(getattr(_cfg, "core", None), "parallel", None)
-                if parallel_cfg is None:
-                    raise RuntimeError("Missing required config: core.parallel")
-                prepass_workers = int(getattr(parallel_cfg, "lifecycle_prepass_workers", 3) or 3)
-                prepass_workers = max(1, prepass_workers)
-                # Only include non-LLM routines in the dry-run prepass.
-                # workspace/snippets/journal all call the LLM (Opus) and will hang
-                # if the provider is slow in a non-hook context (e.g. CC OAuth).
-                # They fall back to sequential execution in their own sections below
-                # via `parallel_lifecycle_results.get(...) or _lifecycle_registry().run(...)`.
-                parallel_lifecycle_results = _lifecycle_registry().run_many(
-                    [
-                        ("docs_staleness", RoutineContext(
-                            cfg=_cfg,
-                            dry_run=True,
-                            workspace=_workspace(),
-                            allow_doc_apply=_allow_doc_apply,
-                        )),
-                        ("docs_cleanup", RoutineContext(
-                            cfg=_cfg,
-                            dry_run=True,
-                            workspace=_workspace(),
-                            allow_doc_apply=_allow_doc_apply,
-                        )),
-                    ],
-                    max_workers=prepass_workers,
-                )
-                print("[lifecycle] Parallel dry-run prepass completed for workspace/docs/snippets/journal")
-            except Exception as e:
-                print(f"[lifecycle] Parallel prepass unavailable, falling back to sequential: {e}")
+        # Parallel prepass removed: docs_staleness and docs_cleanup spawn subprocesses
+        # that block on poll() in the CC OAuth context, causing the dry-run to hang
+        # before printing any output. All routines run sequentially below via the
+        # `parallel_lifecycle_results.get(...) or _lifecycle_registry().run(...)` fallback.
 
         # --- Task 1: Workspace Audit (Opus API) ---
         # (Runs after memory pipeline — memory tasks are higher priority under time budget)
