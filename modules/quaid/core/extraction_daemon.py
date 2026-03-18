@@ -426,7 +426,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 from core.ingest_runtime import run_session_logs_ingest
                 sl_result = run_session_logs_ingest(
                     session_id=session_id,
-                    owner_id=owner,
+                    owner_id=_get_owner_id(),
                     label=label,
                     transcript_path=str(transcript_path),
                     message_count=0,
