@@ -3844,6 +3844,16 @@ function setupClaudeCodeHooks() {
     }
   }
 
+  // Also write QUAID_HOME and QUAID_INSTANCE to the env block so the CC
+  // session inherits them. Without this, Bash tool calls to quaid run
+  // without instance context and fall back to an unpredictable default.
+  if (!settings.env) settings.env = {};
+  if (settings.env.QUAID_HOME !== WORKSPACE || settings.env.QUAID_INSTANCE !== instanceId) {
+    settings.env.QUAID_HOME = WORKSPACE;
+    settings.env.QUAID_INSTANCE = instanceId;
+    changed = true;
+  }
+
   if (changed) {
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");

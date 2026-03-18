@@ -257,6 +257,10 @@ installer or inject manually.
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid health 2>&1'
 ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
+# Verify env block has QUAID_HOME and QUAID_INSTANCE — without this the CC agent shell
+# has no instance context and quaid CLI calls fall back to an unpredictable default.
+ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE:\",e.get(\"QUAID_INSTANCE\",\"MISSING\"))"'
+# Expected: QUAID_HOME: /Users/owner/quaid   QUAID_INSTANCE: claude-code-main
 ssh example.local 'ls -l ~/quaid/openclaw-main/identity/SOUL.md ~/quaid/claude-code-main/identity/SOUL.md 2>/dev/null || true'
 ```
 
