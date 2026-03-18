@@ -33,6 +33,12 @@ from typing import Dict, List, Optional
 from lib.fail_policy import is_fail_hard_enabled
 logger = logging.getLogger(__name__)
 
+_ANTHROPIC_OAUTH_IDENTITY_TEXT = (
+    "You are Claude Code, Anthropic's official CLI for Claude."
+)
+_ANTHROPIC_OAUTH_USER_AGENT = "claude-cli/2.1.2 (external, cli)"
+_ANTHROPIC_OAUTH_CLAUDE_CODE_BETA = "claude-code-20250219"
+
 
 def _sanitize_url_for_logs(url: str) -> str:
     """Redact credentials/query fragments from URLs before logging."""
@@ -58,11 +64,35 @@ def _anthropic_headers(credential: str) -> dict:
     betas = ["prompt-caching-2024-07-31"]
     if _is_anthropic_oauth_token(credential):
         headers["Authorization"] = f"Bearer {credential}"
+        headers["Accept"] = "application/json"
+        headers["user-agent"] = _ANTHROPIC_OAUTH_USER_AGENT
+        headers["x-app"] = "cli"
+        betas.append(_ANTHROPIC_OAUTH_CLAUDE_CODE_BETA)
         betas.append("oauth-2025-04-20")
     else:
         headers["x-api-key"] = credential
     headers["anthropic-beta"] = ",".join(betas)
     return headers
+
+
+def _anthropic_system_blocks(system_prompt: str, credential: str) -> list:
+    blocks = []
+    if _is_anthropic_oauth_token(credential):
+        blocks.append(
+            {
+                "type": "text",
+                "text": _ANTHROPIC_OAUTH_IDENTITY_TEXT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    blocks.append(
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    )
+    return blocks
 
 
 def _summarize_error_text(text: str, max_len: int = 300) -> str:
@@ -201,16 +231,9 @@ class AnthropicLLMProvider(LLMProvider):
         body: dict = {
             "model": model,
             "max_tokens": max_tokens,
+            "system": _anthropic_system_blocks(system_prompt, self._api_key),
             "messages": [{"role": "user", "content": user_message}],
         }
-        if system_prompt:
-            body["system"] = [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ]
 
         retry_attempts = max(1, int(os.environ.get("ANTHROPIC_RETRY_ATTEMPTS", "1") or "1"))
         backoff_s = max(0.0, float(os.environ.get("ANTHROPIC_RETRY_BACKOFF_S", "2") or "2"))

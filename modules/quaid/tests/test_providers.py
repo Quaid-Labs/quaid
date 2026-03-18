@@ -148,7 +148,14 @@ class TestAnthropicLLMProvider:
             req = mock_open.call_args[0][0]
             assert req.get_header("Authorization") == "Bearer sk-ant-oat01-test-oauth-token"
             assert req.get_header("X-api-key") is None
+            assert req.get_header("Accept") == "application/json"
+            assert req.get_header("User-agent") == "claude-cli/2.1.2 (external, cli)"
+            assert req.get_header("X-app") == "cli"
+            assert "claude-code-20250219" in (req.get_header("Anthropic-beta") or "")
             assert "oauth-2025-04-20" in (req.get_header("Anthropic-beta") or "")
+            body = json.loads(mock_open.call_args[0][0].data.decode())
+            assert body["system"][0]["text"] == "You are Claude Code, Anthropic's official CLI for Claude."
+            assert body["system"][1]["text"] == "sys"
 
     def test_llm_call_raises_on_error(self):
         """API errors should propagate."""
