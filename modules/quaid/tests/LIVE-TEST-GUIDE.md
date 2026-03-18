@@ -493,7 +493,11 @@ Procedure:
      command". That's OK — adapter detects it via message event and fires
      ResetSignal immediately. No follow-up message needed.
 4. Wait 30–60 seconds for extraction.
-5. Check DB for the distinctive keyword.
+5. Check DB for the distinctive keyword:
+
+```bash
+ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
+```
 
 Hook trace markers to confirm:
 - **OC < 2026.3.13:** `session_index.new_key_detected` → `session_index.signal_queued` (source=new-key)
@@ -501,7 +505,10 @@ Hook trace markers to confirm:
 
 Pass:
 - the fact is stored after the lifecycle boundary
-- DB or recall output surfaces the distinctive detail
+- FTS or DB check finds the distinctive keyword
+
+Note: `quaid recall-fast` is vector-only and will not find nonsense keywords by exact match.
+Use FTS direct check (step 5) as the primary verification. `quaid recall "<natural query>"` (e.g. "what do I know about my neighbor") is also valid if recall is healthy.
 
 ### M2: Extraction via `/reset`
 
