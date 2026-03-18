@@ -1263,9 +1263,13 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     raise RuntimeError("Missing required config: core.parallel")
                 prepass_workers = int(getattr(parallel_cfg, "lifecycle_prepass_workers", 3) or 3)
                 prepass_workers = max(1, prepass_workers)
+                # Only include non-LLM routines in the dry-run prepass.
+                # workspace/snippets/journal all call the LLM (Opus) and will hang
+                # if the provider is slow in a non-hook context (e.g. CC OAuth).
+                # They fall back to sequential execution in their own sections below
+                # via `parallel_lifecycle_results.get(...) or _lifecycle_registry().run(...)`.
                 parallel_lifecycle_results = _lifecycle_registry().run_many(
                     [
-                        ("workspace", RoutineContext(cfg=_cfg, dry_run=True, workspace=_workspace())),
                         ("docs_staleness", RoutineContext(
                             cfg=_cfg,
                             dry_run=True,
@@ -1277,13 +1281,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                             dry_run=True,
                             workspace=_workspace(),
                             allow_doc_apply=_allow_doc_apply,
-                        )),
-                        ("snippets", RoutineContext(cfg=_cfg, dry_run=True, workspace=_workspace())),
-                        ("journal", RoutineContext(
-                            cfg=_cfg,
-                            dry_run=True,
-                            workspace=_workspace(),
-                            force_distill=force_distill,
                         )),
                     ],
                     max_workers=prepass_workers,
