@@ -566,7 +566,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         # Run after notification so a failure here doesn't block the main path.
         try:
             from core.ingest_runtime import run_session_logs_ingest
-            run_session_logs_ingest(
+            sl_result = run_session_logs_ingest(
                 session_id=session_id,
                 owner_id=owner,
                 label=label,
@@ -574,6 +574,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 message_count=len(new_lines),
                 topic_hint=result.get("topic_hint", ""),
             )
+            sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
+            sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
+            logger.info("[%s] session %s: session_logs ingest: %s%s",
+                        label, session_id, sl_status,
+                        f" ({sl_reason})" if sl_reason else "")
         except Exception as e:
             logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
 
