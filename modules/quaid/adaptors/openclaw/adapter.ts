@@ -1738,7 +1738,7 @@ notify_user(${JSON.stringify(message)})
         // prior slash command (e.g. /new) as the last user message even though the
         // actual current message is a real user query. When the skip pattern fires,
         // try to recover the true current query from the JSON blob in event.prompt.
-        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/;
+        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
         if (STARTUP_SKIP_RE.test(query)) {
           // event.messages is stale — try two recovery paths:
           // 1. JSON blob inside event.prompt (OC JSON-wrapped format)
