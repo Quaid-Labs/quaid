@@ -2199,7 +2199,7 @@ JSON array only:"""
             type(parsed).__name__,
             str(response)[:200],
         )
-        metrics.add_error("Batch edge response was not a list")
+        metrics.add_warning("Batch edge response was not a list")
         return [[] for _ in facts]
 
     # Map results back to facts by index
