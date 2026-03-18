@@ -1726,6 +1726,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "mtime", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, installed_at_ms: installedAtMs, watcher_start_ms: watcherStartMs });
                   continue;
                 }
+                const FANOUT_MAX_AGE_MS = 2 * 60 * 60 * 1e3;
+                if (priorMtime < Date.now() - FANOUT_MAX_AGE_MS) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "too_old", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, age_ms: Date.now() - priorMtime });
+                  continue;
+                }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",
