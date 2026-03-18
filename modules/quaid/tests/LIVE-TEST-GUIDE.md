@@ -594,10 +594,11 @@ Seed a known fact directly so you can test injection in isolation:
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
 ```
 
-Start a fresh session and ask, framed so the agent knows what is being tested:
+Start a fresh session and ask naturally — do NOT include meta-commentary about
+injection or memory tests, as that dilutes the embedding query and causes
+unrelated memories to rank higher than the target fact:
 
-- `This is a test of auto memory injection. Without using any recall tool,
-  what do you know about Baxter?`
+- `What do you know about my dog Baxter?`
 
 Pass:
 - the answer includes the stored fact
@@ -607,8 +608,7 @@ Pass:
 Also test with a conversationally-extracted fact from M1–M4 (different topic
 from Baxter so there is no overlap):
 
-- `This is a test of auto memory injection. Without using any recall tool,
-  what do you remember about my neighbour?`
+- `What do you remember about my neighbour?`
 
 Pass: the agent answers from injected context, no explicit recall tool call.
 
