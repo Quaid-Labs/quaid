@@ -143,9 +143,18 @@ Valid install sources for a live run are:
 - GitHub `openclaw` when that is the target under test
 - Quaid `canary`
 
-When using the local dev tree, sync the full tree from this machine to alfie
-before running the installer. `setup-quaid.mjs` and `lib/` are at the root of
-`~/quaid/dev`, not inside `modules/quaid/`:
+When using the local dev tree, build the runtime artifacts first, then sync
+to alfie. `adapter.js` is a build artifact — rsync copies it as-is, so it
+must be built before sync or it will be stale on alfie.
+
+**Build first (required before every sync):**
+
+```bash
+cd ~/quaid/dev/modules/quaid && npm run build:runtime
+```
+
+Then sync the full tree from this machine to alfie. `setup-quaid.mjs` and
+`lib/` are at the root of `~/quaid/dev`, not inside `modules/quaid/`:
 
 ```bash
 rsync -av --checksum \
