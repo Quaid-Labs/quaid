@@ -46,6 +46,26 @@ def _format_memories(memories: List[Dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_project_docs(docs_bundle: Dict) -> str:
+    """Format injected project-doc search hits as readable context text."""
+    chunks = list((docs_bundle or {}).get("chunks") or [])
+    if not chunks:
+        return ""
+
+    project = str((docs_bundle or {}).get("project") or "").strip()
+    heading = f"[Quaid Project Docs: {project}]" if project else "[Quaid Project Docs]"
+    lines = [heading]
+    for i, chunk in enumerate(chunks, 1):
+        text = str(chunk.get("text") or chunk.get("content") or "").strip()
+        if not text:
+            continue
+        source = Path(str(chunk.get("source") or "")).name
+        sim = float(chunk.get("similarity") or 0.0)
+        label = f" (from {source})" if source else ""
+        lines.append(f"  {i}. {text}{label} (relevance: {sim:.2f})")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def hook_inject(args):
     """Recall memories for each user message and inject as context.
 
@@ -103,13 +123,23 @@ def hook_inject(args):
     pending_context = _get_pending_context()
 
     try:
-        from core.interface.api import recall_fast
+        from concurrent.futures import ThreadPoolExecutor
+        from core.interface.api import projects_search_docs, recall_fast
 
         owner = _get_owner_id()
-        try:
-            memories = recall_fast(query=query, owner_id=owner, limit=10)
-        except Exception:
-            memories = []
+        memories = []
+        docs_bundle = None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            mem_future = pool.submit(recall_fast, query=query, owner_id=owner, limit=10)
+            docs_future = pool.submit(projects_search_docs, query=query, limit=3)
+            try:
+                memories = mem_future.result()
+            except Exception:
+                memories = []
+            try:
+                docs_bundle = docs_future.result()
+            except Exception:
+                docs_bundle = None
 
         context_parts = []
 
@@ -118,16 +148,9 @@ def hook_inject(args):
 
         if memories:
             context_parts.append(_format_memories(memories))
-            # Memories are pre-injected as a convenience — the model should treat
-            # them as guidance, not ground truth. Only nudge toward explicit recall
-            # when memories are actually present; if pre-inject returned nothing
-            # (deliberate bailout when the query has nothing to extract), do not
-            # encourage recall where there is likely nothing useful to find.
-            context_parts.append(
-                "Note: Treat the above memories as guidance. "
-                "If a specific fact you need is not here, use `quaid recall` to search memories "
-                "or `quaid docs search \"<topic>\"` to search project documentation."
-            )
+        docs_context = _format_project_docs(docs_bundle or {})
+        if docs_context:
+            context_parts.append(docs_context)
 
         if not context_parts:
             return
