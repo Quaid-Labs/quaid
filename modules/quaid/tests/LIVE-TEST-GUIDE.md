@@ -1399,6 +1399,27 @@ Pass:
 - CC can use the existing project rather than needing a new one
 - CC can add a doc and Quaid can recall it
 
+### Sync docs across instances before Phase 3
+
+Each adapter maintains its own docs index. After both docs are registered, run
+`docs update --apply` on both instances so each side has both docs indexed:
+
+```bash
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
+```
+
+Verify cross-instance CLI recall before asking agents conversationally:
+
+```bash
+# CC must find beacon (OC-added doc)
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+# OC must find Ember Glass (CC-added doc)
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+```
+
+If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the docs sync is not working and conversational Phase 3 will also fail.
+
 ### Phase 3: Cross-recall both directions
 
 Ask CC:

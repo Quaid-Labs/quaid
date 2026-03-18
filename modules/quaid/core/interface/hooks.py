@@ -103,13 +103,16 @@ def hook_inject(args):
     pending_context = _get_pending_context()
 
     try:
-        from core.interface.api import recall_fast
+        from core.interface.api import recall_fast, projects_search_docs
         from concurrent.futures import ThreadPoolExecutor
 
         owner = _get_owner_id()
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            memories = pool.submit(recall_fast, query=query, owner_id=owner, limit=10).result()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            mem_future = pool.submit(recall_fast, query=query, owner_id=owner, limit=10)
+            docs_future = pool.submit(projects_search_docs, query=query, limit=3)
+            memories = mem_future.result()
+            docs_bundle = docs_future.result()
 
         context_parts = []
 
@@ -127,6 +130,18 @@ def hook_inject(args):
                 "Note: Treat the above memories as guidance. "
                 "If a specific fact you need is not here, use `quaid recall` to search."
             )
+
+        doc_chunks = docs_bundle.get("chunks", []) if isinstance(docs_bundle, dict) else []
+        doc_project = docs_bundle.get("project", "") if isinstance(docs_bundle, dict) else ""
+        if doc_chunks:
+            lines = [f"[Quaid Project Docs{': ' + doc_project if doc_project else ''}]"]
+            for i, chunk in enumerate(doc_chunks, 1):
+                text = chunk.get("text", "")
+                source = chunk.get("source", "")
+                sim = chunk.get("similarity", 0)
+                label = f" (from {source})" if source else ""
+                lines.append(f"  {i}. {text}{label} (relevance: {sim:.2f})")
+            context_parts.append("\n".join(lines))
 
         if not context_parts:
             return
