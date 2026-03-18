@@ -118,14 +118,16 @@ def hook_inject(args):
 
         context_parts = []
 
-        if tool_hint:
-            context_parts.append(tool_hint)
-
         if pending_context:
             context_parts.append(pending_context)
 
         if memories:
             context_parts.append(_format_memories(memories))
+        elif tool_hint:
+            # Only show tool hint when no memories were found — if memories are
+            # already injected, the hint to "use quaid recall" contradicts them
+            # and causes the model to distrust the injected context.
+            context_parts.append(tool_hint)
 
         if not context_parts:
             return
