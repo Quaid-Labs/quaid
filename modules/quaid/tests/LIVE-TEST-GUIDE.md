@@ -1422,9 +1422,13 @@ If either CLI recall fails after `docs update --apply`, stop and report to claud
 
 ### Phase 3: Cross-recall both directions
 
-Ask CC:
+Ask CC (use content-specific phrasing so the model matches the doc, not just PROJECT.md):
 
-- `What did the cross-live-test project say about the beacon?`
+- `Can you search the cross-live-test project docs for anything about the north pier beacon?`
+
+If that still returns nothing, try the explicit fallback:
+
+- `Run: quaid docs search "north pier beacon" --project cross-live-test`
 
 Ask OC:
 
@@ -1433,6 +1437,11 @@ Ask OC:
 Optional provenance follow-up if needed:
 
 - `How did you know that?`
+
+Note: The query framing "What did the project say about X?" semantically matches PROJECT.md
+files in the vector index, not content docs. Content-specific or explicit tool-call prompts
+reliably surface the right doc. If the agent answers correctly via explicit docs search that
+is still a PASS (grounded in Quaid, not disk browsing).
 
 Pass:
 - CC can answer from the OC-added doc
