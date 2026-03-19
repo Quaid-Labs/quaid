@@ -302,7 +302,7 @@ class JournalConfig:
     mode: str = "distilled"  # "distilled" or "full"
     inject_full: bool = False  # EXPERIMENTAL: inject full journal into context every turn (uncapped size — use with caution)
     journal_dir: str = "journal"  # relative to workspace
-    target_files: List[str] = field(default_factory=lambda: ["SOUL.md", "USER.md", "MEMORY.md"])
+    target_files: List[str] = field(default_factory=lambda: ["SOUL.md", "USER.md", "ENVIRONMENT.md"])
     max_entries_per_file: int = 0  # 0 disables active journal capping (unlimited)
     max_tokens: int = 8192
     generated_markdown_line_limit: int = 0  # 0 disables soft target
@@ -1186,7 +1186,7 @@ def _load_config_inner() -> MemoryConfig:
 
     # Parse journal config — use raw_config to preserve camelCase keys
     raw_journal = raw_config.get('docs', {}).get('journal', {})
-    _default_targets = ["SOUL.md", "USER.md", "MEMORY.md"]
+    _default_targets = ["SOUL.md", "USER.md", "ENVIRONMENT.md"]
     journal = JournalConfig(
         enabled=raw_journal.get('enabled', True),
         snippets_enabled=raw_journal.get('snippetsEnabled', True),

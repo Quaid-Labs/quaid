@@ -126,7 +126,7 @@ class OpenClawAdapter(QuaidAdapter):
         for name, purpose, max_lines in [
             ("SOUL.md", "Personality, vibe, interaction style", 80),
             ("USER.md", "About the user", 150),
-            ("MEMORY.md", "Core memories loaded every session", 100),
+            ("ENVIRONMENT.md", "Environmental context and shared history", 100),
             ("IDENTITY.md", "Name, avatar, minimal identity", 20),
             ("HEARTBEAT.md", "Periodic task instructions", 50),
             ("TODO.md", "Planning and task list", 150),

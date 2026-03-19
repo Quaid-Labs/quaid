@@ -74,7 +74,7 @@ class TestInstanceManagerBase:
         assert (silo / "logs").is_dir()
         assert (silo / "identity" / "SOUL.md").is_file()
         assert (silo / "identity" / "USER.md").is_file()
-        assert (silo / "identity" / "MEMORY.md").is_file()
+        assert (silo / "identity" / "ENVIRONMENT.md").is_file()
         assert (silo / "PROJECT.md").is_file()
         config = json.loads((silo / "config" / "memory.json").read_text())
         assert config["adapter"]["type"] == adapter.adapter_id()

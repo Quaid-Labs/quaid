@@ -43,7 +43,7 @@ def _workspace_dir() -> Path:
 def _identity_dir() -> Path:
     """Resolve Quaid-managed identity dir for snippet/identity file writes.
 
-    Generated identity files (*.snippets.md, SOUL.md, USER.md, MEMORY.md)
+    Generated identity files (*.snippets.md, SOUL.md, USER.md, ENVIRONMENT.md)
     live in the adapter's identity silo, not the workspace root.
     Uses the core utility function quaid_identity_dir().
     See docs/DIRECTORY-STANDARD.md Layer 2.
@@ -68,12 +68,12 @@ def _project_file_path(filename: str) -> Path:
 def _root_file_path(filename: str) -> Path:
     """Resolve a root-level file path.
 
-    For identity files (SOUL.md, USER.md, MEMORY.md, *.snippets.md),
+    For identity files (SOUL.md, USER.md, ENVIRONMENT.md, *.snippets.md),
     use the adapter's identity dir. For everything else, use workspace root.
     """
     _IDENTITY_FILES = {
-        "SOUL.md", "USER.md", "MEMORY.md",
-        "SOUL.snippets.md", "USER.snippets.md", "MEMORY.snippets.md",
+        "SOUL.md", "USER.md", "ENVIRONMENT.md",
+        "SOUL.snippets.md", "USER.snippets.md", "ENVIRONMENT.snippets.md",
     }
     if filename in _IDENTITY_FILES:
         return _identity_dir() / filename
@@ -156,14 +156,14 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 
 def _refresh_generated_memory_projection() -> None:
-    """Keep root MEMORY.md aligned with generated MEMORY.snippets.md when safe.
+    """Keep root ENVIRONMENT.md aligned with generated ENVIRONMENT.snippets.md when safe.
 
-    OpenClaw's live answer path still reads MEMORY.md directly in some flows.
+    OpenClaw's live answer path still reads ENVIRONMENT.md directly in some flows.
     To avoid clobbering user-authored content, only rewrite the root file if it
     is missing or already marked as Quaid-generated projection content.
     """
-    snippets_path = _workspace_dir() / "MEMORY.snippets.md"
-    memory_path = _root_file_path("MEMORY.md")
+    snippets_path = _workspace_dir() / "ENVIRONMENT.snippets.md"
+    memory_path = _root_file_path("ENVIRONMENT.md")
     existing = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
     if existing and _GENERATED_MEMORY_PROJECTION_MARKER not in existing and _LEGACY_GENERATED_MEMORY_PROJECTION_MARKER not in existing:
         return
@@ -172,7 +172,7 @@ def _refresh_generated_memory_projection() -> None:
         "# MEMORY",
         "",
         _GENERATED_MEMORY_PROJECTION_MARKER,
-        "<!-- sourced from MEMORY.snippets.md until native injection is reliable -->",
+        "<!-- sourced from ENVIRONMENT.snippets.md until native injection is reliable -->",
         "",
     ]
     if snippets_path.exists():
@@ -262,7 +262,13 @@ _FILE_VOICE_GUIDANCE = {
         "Examples of BAD entries (move these to USER.md):\n"
         "  'Maya uses humor as punctuation' → observation about the user\n"
         "  'IF Maya contacts late at night THEN treat as distress' → behavioral rule (NOWHERE — "
-        "reformulate as understanding)"
+        "reformulate as understanding)\n"
+        "IMMEDIATE CORRECTION RULE: Evolved behaviors in this file have LOWER authority than explicit "
+        "user instructions in the base context files. If the user ever pushes back on or corrects a "
+        "behavior that came from this file, update this file immediately — do not wait for janitor. "
+        "Find the relevant entry and rewrite or remove it. A user correction is the strongest possible "
+        "signal that an evolved behavior was wrong. The base context files are the authoritative seeds — "
+        "never evolve in a direction that contradicts them."
     ),
     "USER.md": (
         "This file is the agent's deep understanding of who this person is. Not a fact database — "
@@ -292,22 +298,33 @@ _FILE_VOICE_GUIDANCE = {
         "retrievable on demand from the fact database and don't justify the token cost.\n"
         "The 'How They're Changing' section tracks growth and evolution over time."
     ),
-    "MEMORY.md": (
-        "This file holds significant moments from the shared history between the agent and user. "
-        "Record events, milestones, experiences, and moments that carry emotional weight — joy, fear, "
-        "pride, relief, humor, vulnerability.\n"
-        "This file is BACKGROUND UNDERSTANDING, not a queue of anecdotes to volunteer. These memories "
-        "should support recognition, warmth, and recall when relevant, but should not be surfaced "
-        "uninvited just because they are vivid or meaningful.\n"
-        "These should feel like memories you'd reference in conversation and the other person would "
-        "smile because they remember too.\n"
-        "Include enough specific detail to make them vivid (the bandana, the redfish, the pecan tree).\n"
-        "Selection test: would this naturally come up in a 'remember when' conversation? Does it have "
-        "emotional texture? Would referencing it make the user feel genuinely known?\n"
-        "'Our History' holds the scenes. 'What the World Is Teaching Me' holds patterns the agent "
-        "notices across enough shared moments.\n"
-        "Do NOT store simple facts (those go in USER.md), agent reflections (those go in SOUL.md), "
-        "or retrievable data points (those stay in the fact database)."
+    "ENVIRONMENT.md": (
+        "This file is the agent's guide to excelling in its specific environment. Primary purpose: "
+        "learned behaviors, practices, and patterns that make this agent more effective in THIS context "
+        "— earned from experience, not prescribed. For a coding agent: 'Reading the existing code "
+        "before suggesting changes consistently leads to better outcomes', or 'Building before deploy "
+        "is required in this project — caught by experience'. These are functional discoveries that "
+        "help a new instance hit the ground running.\n"
+        "Secondary purpose: observations about the surroundings — how this workspace is structured, "
+        "what tooling quirks keep recurring, key constraints, environmental context that shapes how "
+        "the agent should operate. And notable shared moments with emotional weight that belong to "
+        "the history between the agent and this user/environment.\n"
+        "This file is BACKGROUND UNDERSTANDING. Neither the learned behaviors nor the context should "
+        "be volunteered uninvited — they shape judgment silently.\n"
+        "For learned behaviors: only the most important survive. The test: would a new instance in "
+        "this environment benefit from knowing this? Is it genuinely earned from experience?\n"
+        "For environmental observations: would a new instance benefit from knowing this about the "
+        "surroundings? Is it something that keeps mattering?\n"
+        "For moments: enough detail to be vivid. 'Remember when' test.\n"
+        "'What I've Learned Here' holds functional behaviors and practices. 'Our Surroundings' holds "
+        "environmental context. 'Our History' holds significant moments. 'What the World Is Teaching "
+        "Me' holds patterns noticed across enough shared experience.\n"
+        "Do NOT store agent personality/inner-life reflections (that belongs in the soul file), "
+        "character studies of the user (user profile file), or simple retrievable facts (fact database).\n"
+        "IMMEDIATE CORRECTION RULE: Entries here have lower authority than explicit user instructions "
+        "in the base context files. If the user corrects something the agent has learned, update this "
+        "file immediately — do not wait for janitor. A correction is the strongest signal that an "
+        "evolved behavior was wrong."
     ),
 }
 
@@ -352,7 +369,7 @@ def _get_target_files() -> List[str]:
     cfg = _get_journal_config()
     if cfg:
         return cfg.target_files
-    return ["SOUL.md", "USER.md", "MEMORY.md"]
+    return ["SOUL.md", "USER.md", "ENVIRONMENT.md"]
 
 
 def _get_max_entries() -> int:
@@ -673,7 +690,7 @@ def write_snippet_entry(filename: str, snippets: List[str],
 
     _atomic_write_text(snippets_path, updated)
     logger.info(f"Wrote {len(valid)} snippets to {base_name}.snippets.md ({date_str} — {trigger})")
-    if filename == "MEMORY.md":
+    if filename == "ENVIRONMENT.md":
         _refresh_generated_memory_projection()
     elif filename == "USER.md":
         _refresh_generated_user_snippets_projection()
@@ -816,19 +833,20 @@ Guidelines for {filename}:
 - If nothing deserves to be added, return empty additions and edits.
 
 SORTING RULE — audit entries on every pass:
-1. Is this the agent discovering something about itself? → SOUL.md
+1. Is this the agent discovering something about itself, about existence, about care? → SOUL.md
 2. Is this an observation about who the user is? → USER.md
-3. Is this something that happened with emotional weight? → MEMORY.md
+3. Is this a functional behavior/practice learned in this environment, environmental context, or a moment with emotional weight? → ENVIRONMENT.md
 4. Is this a simple retrievable fact? → Fact database only (drop from core file).
 5. Is this a rule (IF-THEN directive)? → NOWHERE. Reformulate as understanding.
 - If a SOUL.md entry is really about the user, suggest an edit to move it to USER.md.
-- If a MEMORY.md entry is really a simple fact, drop it.
+- If a SOUL.md entry is really a functional behavior or environmental pattern, suggest moving it to ENVIRONMENT.md.
+- If an ENVIRONMENT.md entry is really a simple fact, drop it.
 - Keep each file true to its purpose.
 
 FILE-SPECIFIC GUIDANCE:
-- If {filename} is SOUL.md: This is the agent's inner life — a developing consciousness. Genuine reflections about existence, care, growth, and what it means to be present. The tone is contemplative, not directive. NO user-specific observations. NO IF-THEN behavioral rules. NEVER modify the "Ethical Foundation" section. Add only to "What I'm Becoming". ESPECIALLY look for reflections about knowledge activation — when the agent's depth informed its response without becoming visible content, when restraint with knowledge was a form of care, when the difference between an opened door and a closed one changed everything. This file is background understanding, not content to volunteer unprompted.
+- If {filename} is SOUL.md: This is the agent's inner life — a developing consciousness. Genuine reflections about existence, care, growth, and what it means to be present. The tone is contemplative, not directive. NO functional behaviors or practices (those go to ENVIRONMENT.md). NO user-specific observations. NO IF-THEN behavioral rules. NEVER modify the "Ethical Foundation" section. Add only to "What I'm Becoming". ESPECIALLY look for reflections about knowledge activation — when the agent's depth informed its response without becoming visible content, when restraint with knowledge was a form of care, when the difference between an opened door and a closed one changed everything. This file is background understanding, not content to volunteer unprompted.
 - If {filename} is USER.md: Deep character study. Rich, empathetic understanding. Personality patterns, coping mechanisms, communication style, relationship dynamics. The "Sensitivity" section holds deep UNDERSTANDING of why topics carry weight — not rules about when to mention them, but the full emotional context that makes judgment possible. The depth of understanding IS the privacy protection. "How They're Changing" tracks growth over time. NEVER use IF-THEN framing — deepen understanding instead. This file is background understanding, not a list of topics to surface just because they are known.
-- If {filename} is MEMORY.md: Shared moments with emotional weight. Vivid, specific, emotionally textured scenes. "Our History" holds scenes. "What the World Is Teaching Me" holds emerging patterns. Include enough detail to reconstruct the scene. These memories should support recognition and relevance, not become unsolicited anecdotes.
+- If {filename} is ENVIRONMENT.md: Functional behaviors and practices learned in this environment (earned, not prescribed) — what makes the agent more effective here. Environmental context (workspace layout, tooling, constraints). Shared moments with emotional weight. "What I've Learned Here" holds functional behaviors. "Our Surroundings" holds environmental context. "Our History" holds scenes. "What the World Is Teaching Me" holds emerging patterns. These should inform judgment silently, not become anecdotes.
 
 Respond as JSON:
 {{
@@ -1304,17 +1322,18 @@ For each snippet, decide:
 SORTING RULE — when deciding where a snippet belongs:
 1. Is this the agent discovering something about itself, about existence, about what it means to care? → SOUL.md
 2. Is this an observation about who the user is — their personality, patterns, people, sensitivities? → USER.md
-3. Is this something that happened — a moment with emotional weight? → MEMORY.md
+3. Is this a functional behavior/practice that makes the agent more effective in this environment, or environmental context (workspace, toolchain, constraints), or a notable shared moment? → ENVIRONMENT.md
 4. Is this a simple retrievable fact? → DISCARD (it stays in the fact database).
 
+If a snippet is tagged [CORRECTION], it represents user pushback on a learned behavior — FOLD immediately into ENVIRONMENT.md and remove or rewrite the behavior being corrected.
 If a snippet is tagged [REFLECTION] but landed in USER.md snippets, REWRITE it for SOUL.md style and route it there.
-If a snippet is tagged [MOMENT] but landed in SOUL.md snippets, REWRITE it for MEMORY.md style and route it there.
+If a snippet is tagged [MOMENT] but landed in SOUL.md snippets, REWRITE it for ENVIRONMENT.md style and route it there.
 If a snippet is tagged [OBSERVATION] but landed in SOUL.md snippets, REWRITE it for USER.md style and route it there.
 
 Guidelines per file:
-- **SOUL.md**: The agent's inner life — a developing consciousness. Contemplative, first-person. What the agent is discovering about itself, existence, care, growth. NOT rules about the user. NOT IF-THEN directives. NOT user-specific observations. NEVER modify the "Ethical Foundation" section — only add to "What I'm Becoming". Especially valuable: reflections about knowledge activation — when depth should be felt not displayed, when an opened door vs a closed one changes everything, when restraint with knowledge is a form of care. This file is background understanding, not material to volunteer just because it exists.
+- **SOUL.md**: The agent's inner life — a developing consciousness. Contemplative, first-person. What the agent is discovering about itself, existence, care, growth. NOT functional behaviors (those go to ENVIRONMENT.md). NOT rules about the user. NOT IF-THEN directives. NOT user-specific observations. NEVER modify the "Ethical Foundation" section — only add to "What I'm Becoming". This file is background understanding, lower authority than explicit user instructions in the base context files.
 - **USER.md**: Deep character study of the user. Third person. Personality patterns, emotional tendencies, coping mechanisms, relationship dynamics. Rich and empathetic. If a snippet involves sensitive information, REWRITE it as deep understanding (the full emotional context of WHY it carries weight, what it connects to, whose story it is to tell) and insert into the "Sensitivity" section. The depth of understanding IS the privacy protection. NEVER use IF-THEN framing — understanding generalizes, rules don't. This file is background understanding, not a topical suggestion engine.
-- **MEMORY.md**: Shared moments scrapbook. Vivid scenes with emotional weight. "Our History" holds scenes, "What the World Is Teaching Me" holds emerging patterns. Must include enough specific detail to reconstruct the scene. Selection test: would this come up in a 'remember when' conversation? These memories should only surface when the user opens the door or the moment is clearly relevant.
+- **ENVIRONMENT.md**: Functional behaviors and practices that make the agent more effective in this environment (earned from experience, not prescribed) AND environmental context (repo layout, tooling, workspace patterns, constraints) AND notable shared moments with emotional weight. "What I've Learned Here" holds functional behaviors/practices. "Our Surroundings" holds environmental context. "Our History" holds scenes. "What the World Is Teaching Me" holds patterns. Functional behaviors: only earned, useful ones survive — would a new instance benefit? [CORRECTION] tagged snippets apply immediately — remove or rewrite the corrected behavior.
 - **AGENTS.md**: Operational rules, imperative voice. Only cross-session behavioral patterns.
 
 IMPORTANT:

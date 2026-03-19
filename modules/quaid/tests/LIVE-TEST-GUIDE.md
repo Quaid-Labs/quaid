@@ -497,7 +497,7 @@ PY'
 
 Pass only if `~/.claude/rules/quaid-projects.md` includes project sections like
 `--- quaid/TOOLS.md ---` and `--- quaid/AGENTS.md ---`. If it only contains
-`USER.md` / `MEMORY.md` projections, CC project CRUD is not being tested
+`USER.md` / `ENVIRONMENT.md` projections, CC project CRUD is not being tested
 against a valid shared-project bootstrap state yet. Also verify the global
 registry entry for `quaid` points at `$QUAID_HOME/shared/projects/quaid`, not
 an instance-local path such as `$QUAID_HOME/openclaw-main/projects/quaid`.
@@ -1571,7 +1571,7 @@ ssh alfie.local 'find /Users/clawdbot/quaid/openclaw-main/projects /Users/clawdb
 ```
 
 Pass criteria:
-- per-instance identity files (`identity/SOUL.md`, `identity/USER.md`, `identity/MEMORY.md`) are present for both OC and CC; not empty placeholders
+- per-instance identity files (`identity/SOUL.md`, `identity/USER.md`, `identity/ENVIRONMENT.md`) are present for both OC and CC; not empty placeholders
 - quaid project docs (`projects/quaid/PROJECT.md`, `TOOLS.md`, `AGENTS.md`) exist for both instances
 - live-test project docs are coherent and point at correct paths
 - OC snippets (`SOUL.snippets.md`, `USER.snippets.md`) are present and building; CC snippets may be absent on first install and build naturally over time

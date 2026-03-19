@@ -109,7 +109,7 @@ class QuaidAdapter(abc.ABC):
         """Per-instance Quaid-managed identity directory.
 
         Lives at instance_root/identity/. This is where Quaid writes
-        generated identity (SOUL.md, USER.md, MEMORY.md, *.snippets.md).
+        generated identity (SOUL.md, USER.md, ENVIRONMENT.md, *.snippets.md).
         NOT where platform-native context lives (that's get_base_context_files).
         """
         return self.instance_root() / "identity"
@@ -219,7 +219,7 @@ class QuaidAdapter(abc.ABC):
         """Return platform-native context files for janitor monitoring.
 
         These are the platform's own personality/instruction files (e.g.
-        CLAUDE.md for CC, SOUL.md/USER.md/MEMORY.md for OC). Quaid does
+        CLAUDE.md for CC, SOUL.md/USER.md/ENVIRONMENT.md for OC). Quaid does
         NOT create or manage these — only trims them during maintenance.
 
         Returns dict mapping file paths to monitoring config::

@@ -31,7 +31,7 @@ QUAID_HOME/
 │   ├── identity/
 │   │   ├── USER.md
 │   │   ├── SOUL.md
-│   │   └── MEMORY.md
+│   │   └── ENVIRONMENT.md
 │   ├── journal/
 │   ├── logs/
 │   ├── *.snippets.md
