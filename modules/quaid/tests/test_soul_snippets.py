@@ -1010,7 +1010,7 @@ class TestMemoryProjectionFromSnippets:
 
         assert first is True
         assert second is True
-        snippets_content = (workspace_dir / "MEMORY.snippets.md").read_text(encoding="utf-8")
+        snippets_content = (workspace_dir / "ENVIRONMENT.snippets.md").read_text(encoding="utf-8")
         assert "Peregrine North is Solomon's test granduncle." in snippets_content
         assert "Cedric Morn is Solomon's test godfather." in snippets_content
 
