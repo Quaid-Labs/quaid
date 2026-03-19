@@ -1964,7 +1964,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const edgesCreated = Number(extracted?.edges_created || 0);
     const snippetDetails = {};
     const journalDetails = {};
-    const targetFiles = journalConfig.targetFiles || ["SOUL.md", "USER.md", "MEMORY.md"];
+    const targetFiles = journalConfig.targetFiles || ["SOUL.md", "USER.md", "ENVIRONMENT.md"];
     const snippetsRaw = extracted?.snippets;
     if (snippetsRaw && typeof snippetsRaw === "object" && !Array.isArray(snippetsRaw)) {
       for (const [filename, snippets] of Object.entries(snippetsRaw)) {
@@ -2431,7 +2431,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
     try {
       const sections = [];
       const identityDir = path.join(deps.instanceRoot || deps.workspace, "identity");
-      for (const idFile of ["USER.md", "SOUL.md", "MEMORY.md"]) {
+      for (const idFile of ["USER.md", "SOUL.md", "ENVIRONMENT.md"]) {
         const filePath = path.join(identityDir, idFile);
         if (fs.existsSync(filePath)) {
           try {

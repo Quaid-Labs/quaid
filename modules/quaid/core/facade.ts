@@ -2608,7 +2608,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
     const snippetDetails: Record<string, string[]> = {};
     const journalDetails: Record<string, string[]> = {};
-    const targetFiles: string[] = journalConfig.targetFiles || ["SOUL.md", "USER.md", "MEMORY.md"];
+    const targetFiles: string[] = journalConfig.targetFiles || ["SOUL.md", "USER.md", "ENVIRONMENT.md"];
     const snippetsRaw = extracted?.snippets;
     if (snippetsRaw && typeof snippetsRaw === "object" && !Array.isArray(snippetsRaw)) {
       for (const [filename, snippets] of Object.entries(snippetsRaw)) {
@@ -3197,9 +3197,9 @@ ${lines.join("\n")}
     try {
       const sections: string[] = [];
 
-      // Identity files: USER.md, SOUL.md, MEMORY.md from the instance identity dir.
+      // Identity files: USER.md, SOUL.md, ENVIRONMENT.md from the instance identity dir.
       const identityDir = path.join(deps.instanceRoot || deps.workspace, "identity");
-      for (const idFile of ["USER.md", "SOUL.md", "MEMORY.md"]) {
+      for (const idFile of ["USER.md", "SOUL.md", "ENVIRONMENT.md"]) {
         const filePath = path.join(identityDir, idFile);
         if (fs.existsSync(filePath)) {
           try {

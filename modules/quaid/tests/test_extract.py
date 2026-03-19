@@ -45,7 +45,7 @@ def workspace_dir(tmp_path):
             "journal": {
                 "enabled": True,
                 "snippetsEnabled": True,
-                "targetFiles": ["SOUL.md", "USER.md", "MEMORY.md"],
+                "targetFiles": ["SOUL.md", "USER.md", "ENVIRONMENT.md"],
                 "journalDir": "journal",
                 "maxEntriesPerFile": 50,
             }
@@ -91,12 +91,12 @@ def mock_opus_response():
         "soul_snippets": {
             "SOUL.md": ["Noticed the user values brevity"],
             "USER.md": [],
-            "MEMORY.md": [],
+            "ENVIRONMENT.md": [],
         },
         "journal_entries": {
             "SOUL.md": "A quiet conversation today.",
             "USER.md": "",
-            "MEMORY.md": "",
+            "ENVIRONMENT.md": "",
         },
     })
 
@@ -596,7 +596,7 @@ class TestExtractFromTranscript:
                 journal=SimpleNamespace(
                     enabled=True,
                     snippets_enabled=True,
-                    target_files=["SOUL.md", "USER.md", "MEMORY.md"],
+                    target_files=["SOUL.md", "USER.md", "ENVIRONMENT.md"],
                     journal_dir="journal",
                     max_entries_per_file=50,
                 )

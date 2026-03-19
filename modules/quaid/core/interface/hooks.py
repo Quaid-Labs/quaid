@@ -367,7 +367,7 @@ def hook_session_init(args):
     ephemeral and lost on compaction).
 
     Scans projects/<name>/ subdirectories for TOOLS.md and AGENTS.md.
-    Collects identity files (USER.md, SOUL.md, MEMORY.md) from the adapter's
+    Collects identity files (USER.md, SOUL.md, ENVIRONMENT.md) from the adapter's
     per-instance identity directory (not the shared project dir).
     Writes the combined content to .claude/rules/quaid-projects.md.
 
@@ -444,9 +444,9 @@ def hook_session_init(args):
 
     sections: List[str] = []
 
-    # 1. Collect identity files (SOUL.md, USER.md, MEMORY.md) from instance silo
+    # 1. Collect identity files (SOUL.md, USER.md, ENVIRONMENT.md) from instance silo
     identity_dir = _get_identity_dir()
-    for special_file in ("USER.md", "SOUL.md", "MEMORY.md"):
+    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
         fpath = identity_dir / special_file
         if fpath.is_file():
             content = fpath.read_text(encoding="utf-8").strip()
@@ -501,7 +501,22 @@ def hook_session_init(args):
                 if content:
                     sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
 
-    # 2b. Append adapter CLI tools snippet (registered by the active adapter)
+    # 2b. Append base context file names so guidance can refer to them generically.
+    #     These are the adapter's authoritative instruction files (e.g. CLAUDE.md for CC).
+    try:
+        from lib.adapter import get_adapter
+        base_files = get_adapter().get_base_context_files()
+        if base_files:
+            names = [str(Path(p).name) for p in base_files]
+            sections.append(
+                f"--- base-context-files ---\n"
+                f"Your authoritative base context files are: {', '.join(names)}\n"
+                f"These have higher authority than any evolved guidance."
+            )
+    except Exception as e:
+        print(f"[quaid][session-init] base context files error: {e}", file=sys.stderr)
+
+    # 2c. Append adapter CLI tools snippet (registered by the active adapter)
     try:
         from lib.adapter import get_adapter
         cli_snippet = get_adapter().get_cli_tools_snippet()

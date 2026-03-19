@@ -342,7 +342,7 @@ def mock_config():
         snippets_enabled=True,
         mode="distilled",
         journal_dir="journal",
-        target_files=["SOUL.md", "USER.md", "MEMORY.md"],
+        target_files=["SOUL.md", "USER.md", "ENVIRONMENT.md"],
         max_entries_per_file=50,
         max_tokens=8192,
         distillation_interval_days=7,
@@ -351,7 +351,7 @@ def mock_config():
     mock_cfg.docs.core_markdown.files = {
         "SOUL.md": {"purpose": "Personality and identity", "maxLines": 80},
         "USER.md": {"purpose": "About the user", "maxLines": 150},
-        "MEMORY.md": {"purpose": "Core memories", "maxLines": 100},
+        "ENVIRONMENT.md": {"purpose": "Core memories", "maxLines": 100},
     }
     return mock_cfg
 

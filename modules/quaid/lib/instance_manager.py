@@ -105,7 +105,7 @@ class InstanceManager:
                 db_path.chmod(0o600)
 
         # Identity stubs
-        for fname in ("SOUL.md", "USER.md", "MEMORY.md"):
+        for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
             fpath = silo_root / "identity" / fname
             if not fpath.exists():
                 fpath.write_text(f"# {fname[:-3]}\n", encoding="utf-8")
@@ -119,7 +119,7 @@ class InstanceManager:
                 "## Identity\n"
                 "- `identity/SOUL.md` — Agent personality and interaction style\n"
                 "- `identity/USER.md` — About the user\n"
-                "- `identity/MEMORY.md` — Core facts loaded every session\n\n"
+                "- `identity/ENVIRONMENT.md` — Environmental context and learned behaviors\n\n"
                 "## Structure\n"
                 "- `data/` — Memory database (SQLite)\n"
                 "- `journal/` — Journal entries\n"

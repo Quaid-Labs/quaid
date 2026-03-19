@@ -96,7 +96,7 @@ class TestGetMonitoredFiles:
             assert "SOUL.md" in result
             assert "TOOLS.md" in result
             assert "USER.md" in result
-            assert "MEMORY.md" in result
+            assert "ENVIRONMENT.md" in result
             assert "IDENTITY.md" in result
             assert "HEARTBEAT.md" in result
             assert "TODO.md" in result

@@ -426,13 +426,13 @@ describe("QuaidFacade", () => {
   it("getDocsStalenessWarning formats stale docs warning", async () => {
     const execDocsUpdater = vi.fn(async () => JSON.stringify({
       alpha: { gap_hours: 7, stale_sources: ["PROJECT.log", "SOUL.md"] },
-      beta: { gap_hours: 2, stale_sources: ["MEMORY.md"] },
+      beta: { gap_hours: 2, stale_sources: ["ENVIRONMENT.md"] },
     }));
     const facade = createQuaidFacade(makeMockDeps({ execDocsUpdater }));
     const warning = await facade.getDocsStalenessWarning();
     expect(warning).toContain("STALENESS WARNING");
     expect(warning).toContain("alpha (7h behind: PROJECT.log, SOUL.md)");
-    expect(warning).toContain("beta (2h behind: MEMORY.md)");
+    expect(warning).toContain("beta (2h behind: ENVIRONMENT.md)");
     expect(execDocsUpdater).toHaveBeenCalledWith("check", ["--json"]);
   });
 

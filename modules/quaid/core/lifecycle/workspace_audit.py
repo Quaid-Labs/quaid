@@ -188,7 +188,7 @@ _BOOTSTRAP_MONITORED_FILENAMES = {
     "SOUL.md",
     "TOOLS.md",
     "USER.md",
-    "MEMORY.md",
+    "ENVIRONMENT.md",
     "IDENTITY.md",
     "HEARTBEAT.md",
     "TODO.md",
@@ -257,7 +257,7 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
             "SOUL.md": {"purpose": "Personality, vibe, values, interaction style", "maxLines": 80},
             "TOOLS.md": {"purpose": "API docs, tool definitions, credentials, configs", "maxLines": 350},
             "USER.md": {"purpose": "Biography and soul of users", "maxLines": 150},
-            "MEMORY.md": {"purpose": "Core memories loaded every session", "maxLines": 100},
+            "ENVIRONMENT.md": {"purpose": "Environmental context and shared history", "maxLines": 100},
             "IDENTITY.md": {"purpose": "Name, avatar, minimal identity", "maxLines": 20},
             "HEARTBEAT.md": {"purpose": "Periodic task instructions", "maxLines": 50},
             "TODO.md": {"purpose": "Planning and task list", "maxLines": 150},
@@ -302,7 +302,7 @@ These files load on EVERY API call, EVERY turn. Tokens are precious. Keep them f
 
 3. **MISPLACED CONTENT** - Content in wrong file
    - Personality stuff in TOOLS.md → should be in SOUL.md
-   - Facts about the user in AGENTS.md → should be in USER.md or MEMORY.md
+   - Facts about the user in AGENTS.md → should be in USER.md or ENVIRONMENT.md
    - Project specs in TOOLS.md or AGENTS.md → should be in projects/ (MOVE_TO_PROJECT)
 
 ## Actions
@@ -344,7 +344,7 @@ Respond with JSON only, no markdown fencing:
       "reason": "Queryable fact, not biographical"
     }},
     {{
-      "file": "MEMORY.md",
+      "file": "ENVIRONMENT.md",
       "section": "Old Project Status",
       "action": "TRIM",
       "reason": "Outdated, project completed"

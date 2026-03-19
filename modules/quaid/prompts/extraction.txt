@@ -143,12 +143,12 @@ Respond with JSON only:
   "soul_snippets": {
     "SOUL.md": ["bullet point observation 1", "bullet point observation 2"],
     "USER.md": [],
-    "MEMORY.md": []
+    "ENVIRONMENT.md": []
   },
   "journal_entries": {
     "SOUL.md": "paragraph text or empty string",
     "USER.md": "",
-    "MEMORY.md": ""
+    "ENVIRONMENT.md": ""
   },
   "project_logs": {
     "recipe-app": ["short note 1", "short note 2"],
@@ -167,14 +167,15 @@ Extract quick, factual bullet-point observations about each target file. These a
 
 For each target file, include an array of short bullet strings (1 sentence each). Empty array means nothing for that file.
 
-- **SOUL.md snippets**: Observations about the assistant's personality, reactions, emerging patterns. Factual, not flowery.
+- **SOUL.md snippets**: Observations about the assistant's inner life — personality, reactions, emerging patterns of self-discovery. Contemplative, not directive. No functional behaviors (those go to ENVIRONMENT.md).
   Examples: ["Noticed I default to technical explanations when emotional support might be more appropriate", "I genuinely enjoy the creative problem-solving in infrastructure work"]
 
 - **USER.md snippets**: New biographical facts or character observations about the user. Concrete, not vague.
   Examples: ["User prefers to debug methodically rather than guess-and-check", "They mentioned their sister lives in Portland"]
 
-- **MEMORY.md snippets**: Critical facts that must be remembered. Very high bar.
-  Examples: ["User's partner is immunocompromised — affects health suggestions", "User's birthday is March 15"]
+- **ENVIRONMENT.md snippets**: Functional behaviors and practices the agent has learned work well in THIS environment (earned from experience — for a coding agent: "Always build before deploying in this project", "Reading existing code before suggesting changes avoids costly mismatches") — AND environmental context about the surroundings (repo layout, tooling quirks, workspace constraints) — AND notable shared moments with emotional weight. High bar: only what a new instance would genuinely benefit from knowing.
+  Examples: ["Tests must be run with pytest not npm test in this repo", "User's partner is immunocompromised — affects health suggestions", "Building before deploy is required here — skipping it has caused silent failures"]
+  Tag corrections to evolved behaviors as [CORRECTION] — these get immediate FOLD priority in review.
 
 Include a "soul_snippets" object. Each key is a filename, each value is an array of strings. Empty array means no snippets for that file.
 
@@ -194,8 +195,8 @@ For each target file, write an entry ONLY if genuinely warranted:
 - **USER.md journal**: Third person about the user. What you learned about who they are as a person. Not queryable facts — deeper understanding of character and values.
   Example: "They approach debugging the same way they approach relationships — patient, methodical, never giving up on something that matters."
 
-- **MEMORY.md journal**: Things about the world important enough that forgetting them would be embarrassing. Health conditions, critical preferences, safety info.
-  Example: "Learned today about their partner's health condition. This isn't just a medical fact — it changes how I should think about any health-related suggestion."
+- **ENVIRONMENT.md journal**: The agent's surroundings and shared history. Environmental context discovered (how this codebase is structured, what tooling patterns matter, what keeps recurring), and notable moments with emotional weight.
+  Example: "Learned today that the test suite requires a specific env setup before running — this isn't obvious and cost real time. Worth carrying forward."
 
 Include a "journal_entries" object in your response. Each key is a filename, each value is a string (paragraphs, not arrays). Empty string means no entry for that file.
 

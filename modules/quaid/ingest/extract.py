@@ -316,8 +316,8 @@ def _repair_non_json_extraction_payload(
         '      "edges": [{"subject": string, "relation": string, "object": string}]\n'
         "    }\n"
         "  ],\n"
-        '  "soul_snippets": {"SOUL.md": [string], "USER.md": [string], "MEMORY.md": [string]},\n'
-        '  "journal_entries": {"SOUL.md": string, "USER.md": string, "MEMORY.md": string},\n'
+        '  "soul_snippets": {"SOUL.md": [string], "USER.md": [string], "ENVIRONMENT.md": [string]},\n'
+        '  "journal_entries": {"SOUL.md": string, "USER.md": string, "ENVIRONMENT.md": string},\n'
         '  "project_logs": {string: [string]}\n'
         "}\n"
         "Rules:\n"
