@@ -1500,6 +1500,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             void 0,
             []
           ) || String(update?.sessionId || "").trim();
+          if (sessionId && sessionId !== trackSessionId) {
+            sessionTranscriptPaths.set(sessionId, sessionFile);
+          }
           const sessionKey = String(
             update?.sessionKey || update?.targetSessionKey || resolveSessionKeyForSessionId(sessionId) || ""
           ).trim();
