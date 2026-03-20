@@ -1844,6 +1844,86 @@ class TestRecallFastHookInjectContract:
 
         assert "candidate_pool" not in captured["kwargs"]
 
+    def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [],
+                {
+                    "selected_path": "vector",
+                    "stop_reason": "no_initial_results",
+                    "counts": {
+                        "initial_candidates": 0,
+                        "post_threshold_candidates": 0,
+                        "diverse_results": 0,
+                        "final_results": 0,
+                    },
+                    "bailout_counts": {"no_initial_results": 1},
+                    "phases_ms": {"total_ms": 10},
+                },
+                None,
+            )
+
+        def _fake_graph(*args, **kwargs):
+            return (
+                [
+                    {
+                        "id": "fact-1",
+                        "text": "Diana has a daughter named Alice",
+                        "category": "fact",
+                        "similarity": 0.81,
+                    },
+                    {
+                        "id": "fact-2",
+                        "text": "Solomon has a sister named Diana",
+                        "category": "fact",
+                        "similarity": 0.76,
+                    },
+                ],
+                {
+                    "selected_path": "graph_aware",
+                    "counts": {
+                        "initial_candidates": 2,
+                        "post_threshold_candidates": 2,
+                        "diverse_results": 2,
+                        "final_results": 2,
+                    },
+                    "phases_ms": {"total_ms": 12},
+                },
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "my family",
+                stores=["vector", "graph"],
+                limit=4,
+                owner_id="solomon",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["my family"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=True,
+                common_kwargs={},
+            )
+
+        assert len(rows) == 2
+        assert meta["selected_path"] == "store_plan"
+        assert meta["counts"]["final_results"] == 2
+        assert meta["counts"]["initial_candidates"] == 2
+        assert meta.get("stop_reason") != "no_initial_results"
+        if "bailout_counts" in meta:
+            assert meta["bailout_counts"].get("no_initial_results", 0) == 0
+        assert meta["store_runs"][0]["store"] == "vector"
+        assert meta["store_runs"][1]["store"] == "graph"
+
     def test_quality_gate_requires_query_term_overlap_for_specific_fact_queries(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -2413,6 +2493,70 @@ class TestRecallLimitEdgeCases:
             rows, meta = result
             assert isinstance(rows, list)
             assert isinstance(meta, dict)
+
+    def test_recall_telemetry_captures_threshold_gate_samples(self, tmp_path, monkeypatch):
+        """Opt-in recall telemetry should record pre-threshold and rejected candidates."""
+        from datastore.memorydb import memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        logs_dir = tmp_path / "logs"
+        monkeypatch.setenv("QUAID_RECALL_TELEMETRY", "1")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph.get_logs_dir", return_value=logs_dir), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            created = [
+                mg.store("User has a sister named Diana", owner_id="quaid"),
+                mg.store("User's sister Diana has a daughter named Alice", owner_id="quaid"),
+            ]
+
+            with graph._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM nodes WHERE id IN (?, ?) ORDER BY created_at ASC",
+                    (created[0]["id"], created[1]["id"]),
+                ).fetchall()
+            nodes = [graph._row_to_node(row) for row in rows]
+            score_map = {
+                nodes[0].id: 0.55,
+                nodes[1].id: 0.79,
+            }
+
+            monkeypatch.setattr(graph, "search_hybrid", lambda *a, **k: [(nodes[0], 0.61), (nodes[1], 0.66)])
+            monkeypatch.setattr(
+                mg,
+                "_compute_composite_score",
+                lambda node, quality_score, *_args, **_kwargs: score_map[node.id],
+            )
+            monkeypatch.setattr(mg, "_compute_query_fit_multiplier", lambda *a, **k: 1.0)
+
+            results, meta = mg.recall(
+                "my niece",
+                owner_id="quaid",
+                use_routing=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                debug=True,
+                min_similarity=0.60,
+                return_meta=True,
+            )
+
+        assert len(results) == 1
+        branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
+        assert branches
+        telemetry = branches[0].get("telemetry") or {}
+        assert telemetry["filters"]["threshold_basis"] == "composite_score"
+        samples = telemetry["samples"]
+        assert len(samples["pre_threshold_candidates"]) == 2
+        assert samples["pre_threshold_candidates"][0]["passes_threshold"] is True
+        assert any(item["passes_threshold"] is False for item in samples["threshold_rejected"])
+
+        trace_path = logs_dir / "recall-telemetry.jsonl"
+        assert trace_path.exists()
+        payload = json.loads(trace_path.read_text().splitlines()[-1])
+        assert payload["telemetry"]["filters"]["threshold_basis"] == "composite_score"
+        assert len(payload["telemetry"]["samples"]["threshold_rejected"]) >= 1
 
     def test_normalize_doc_chunk_contract_accepts_docs_rag_shape(self):
         from datastore.memorydb.memory_graph import _normalize_doc_chunk_contract

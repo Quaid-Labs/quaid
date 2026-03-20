@@ -49,7 +49,7 @@ import urllib.error
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -75,7 +75,7 @@ from lib.tokens import (
     texts_are_near_identical,
     STOPWORDS as _LIB_STOPWORDS,
 )
-from lib.runtime_context import get_workspace_dir, get_adapter_instance
+from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_logs_dir
 
 logger = logging.getLogger(__name__)
 
@@ -3337,6 +3337,50 @@ def _sample_recall_rows(rows: List[Dict[str, Any]], limit: int = 5) -> List[Dict
     return sample
 
 
+def _sample_candidate_tuples(
+    rows: List[Tuple["Node", float]],
+    *,
+    debug_info: Optional[Dict[str, Dict[str, Any]]] = None,
+    limit: int = 8,
+    threshold: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Return a compact sample of internal candidate tuples for telemetry."""
+    sample: List[Dict[str, Any]] = []
+    for node, score in rows[: max(0, limit)]:
+        attrs = node.attributes if isinstance(node.attributes, dict) else {}
+        item = {
+            "id": node.id,
+            "category": node.type.lower(),
+            "score": round(float(score), 4),
+            "source_type": attrs.get("source_type"),
+            "project": attrs.get("project"),
+            "text_preview": str(node.name or "")[:120],
+        }
+        dbg = (debug_info or {}).get(node.id)
+        if isinstance(dbg, dict):
+            item["raw_quality_score"] = dbg.get("raw_quality_score")
+            item["composite_score"] = dbg.get("composite_score")
+        if threshold is not None:
+            item["passes_threshold"] = bool(float(score) >= float(threshold))
+        sample.append(item)
+    return sample
+
+
+def _append_recall_telemetry_trace(payload: Dict[str, Any]) -> None:
+    """Write a per-call recall telemetry event to the workspace logs."""
+    try:
+        path = get_logs_dir() / "recall-telemetry.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            **dict(payload or {}),
+        }
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception:
+        logger.exception("Failed writing recall telemetry trace")
+
+
 def _validate_recall_result_rows(rows: Any) -> List[Dict[str, Any]]:
     """Validate/normalize recall rows before returning them to callers."""
     if rows is None:
@@ -3509,6 +3553,83 @@ def _planner_store_plan(stores: Optional[List[str]]) -> List[str]:
     out = _normalize_store_plan(stores)
     if "vector" not in out and ("docs" in out or "graph" in out):
         out.insert(0, "vector")
+    return out
+
+
+def _infer_edge_entity_type(name: str, relation: str, is_subject: bool) -> str:
+    rel_lower = str(relation or "").lower().replace("-", "_")
+    relation_object_types = {
+        "works_at": "Organization", "employed_by": "Organization",
+        "member_of": "Organization", "founded": "Organization",
+        "lives_in": "Place", "lives_at": "Place", "located_in": "Place",
+        "born_in": "Place", "moved_to": "Place", "visited": "Place",
+        "has_pet": "Pet", "owns_pet": "Pet",
+        "has_feature": "Feature", "uses_tool": "Tool",
+        "works_on": "Project", "contributes_to": "Project",
+        "manages": "Project",
+    }
+    relation_subject_types = {
+        "subsidiary_of": "Organization", "part_of": "Organization",
+        "feature_of": "Project", "component_of": "Project",
+        "works_at": "Person", "employed_by": "Person",
+        "lives_in": "Person", "lives_at": "Person", "visited": "Person", "moved_to": "Person",
+        "has_pet": "Person", "owns_pet": "Person", "owns": "Person",
+        "works_on": "Person", "contributes_to": "Person", "manages": "Person",
+        "wants_to_visit": "Person",
+    }
+    person_relations = {
+        "parent_of", "child_of", "sibling_of", "spouse_of", "partner_of",
+        "friend_of", "colleague_of", "family_of", "related_to", "neighbor_of", "knows",
+        "aunt_of", "uncle_of", "cousin_of", "grandparent_of",
+        "has_manager", "managed_by", "mentored_by", "mentors",
+        "married_to", "dating", "roommate_of", "has_employee",
+    }
+
+    if is_subject and rel_lower in relation_subject_types:
+        return relation_subject_types[rel_lower]
+    if not is_subject and rel_lower in relation_object_types:
+        return relation_object_types[rel_lower]
+    if rel_lower in person_relations:
+        return "Person"
+    return "Fact"
+
+
+def _store_meta_result_count(meta: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(meta, dict):
+        return 0
+    counts = meta.get("counts")
+    if isinstance(counts, dict):
+        for key in ("final_results", "diverse_results", "post_threshold_candidates", "initial_candidates"):
+            value = counts.get(key)
+            if isinstance(value, (int, float)):
+                return max(0, int(value))
+    return 0
+
+
+def _harmonize_store_plan_meta(
+    meta: Optional[Dict[str, Any]],
+    *,
+    final_rows: List[Dict[str, Any]],
+    store_runs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    out = dict(meta or {})
+    final_count = len(final_rows)
+    counts = dict(out.get("counts") or {})
+    if final_count > 0:
+        for key in ("initial_candidates", "post_threshold_candidates", "diverse_results", "final_results"):
+            current = counts.get(key)
+            current_i = int(current) if isinstance(current, (int, float)) else 0
+            if current_i < final_count:
+                counts[key] = final_count
+        out["counts"] = counts
+        if str(out.get("stop_reason") or "") == "no_initial_results":
+            out["stop_reason"] = "store_plan_results"
+        bailout_counts = dict(out.get("bailout_counts") or {})
+        if isinstance(bailout_counts.get("no_initial_results"), (int, float)):
+            bailout_counts["no_initial_results"] = 0
+            out["bailout_counts"] = bailout_counts
+    elif store_runs and "stop_reason" not in out:
+        out["stop_reason"] = "no_initial_results"
     return out
 
 
@@ -3756,6 +3877,7 @@ def _run_recall_store_plan(
     store_runs: List[Dict[str, Any]] = []
     serial_ms = 0
     base_meta: Optional[Dict[str, Any]] = None
+    store_meta_entries: List[Tuple[str, Dict[str, Any]]] = []
     for output in outputs:
         if isinstance(output, Exception):
             raise output
@@ -3763,6 +3885,7 @@ def _run_recall_store_plan(
         rows, meta, bundle = payload
         rows = _validate_recall_result_rows(rows)
         meta = dict(meta or {})
+        store_meta_entries.append((store, meta))
         if rows:
             merged_batches.append(rows)
         if bundle:
@@ -3782,7 +3905,14 @@ def _run_recall_store_plan(
 
     merged = _merge_recall_batches(merged_batches, limit=max(limit, limit * 2 if fast_mode else limit))
     final_rows = merged[:limit]
-    meta = dict(base_meta or {})
+    if _store_meta_result_count(base_meta) <= 0:
+        for _, candidate_meta in store_meta_entries:
+            if _store_meta_result_count(candidate_meta) > 0:
+                base_meta = candidate_meta
+                break
+    if base_meta is None and store_meta_entries:
+        base_meta = store_meta_entries[0][1]
+    meta = _harmonize_store_plan_meta(base_meta, final_rows=final_rows, store_runs=store_runs)
     meta.setdefault("mode", "fast" if fast_mode else "deliberate")
     meta.setdefault("query", query)
     meta["selected_path"] = "store_plan" if len(normalized_stores) > 1 or normalized_stores != ["vector"] else meta.get("selected_path", "vector")
@@ -4278,14 +4408,19 @@ def _recall_once(
             pass  # Reranking is best-effort; fall back to original scoring
         _phase_ms["reranker_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
-    # Filter by composite score threshold
-    scored_results = [
-        (node, score) for node, score in scored_results
-        if score >= min_similarity
+    # Sort by composite score before thresholding so telemetry can see near-misses.
+    scored_results.sort(key=lambda x: x[1], reverse=True)
+    _pre_threshold_scored_results = list(scored_results)
+    _threshold_rejected_results = [
+        (node, score) for node, score in _pre_threshold_scored_results
+        if score < min_similarity
     ]
 
-    # Sort by composite score
-    scored_results.sort(key=lambda x: x[1], reverse=True)
+    # Filter by composite score threshold
+    scored_results = [
+        (node, score) for node, score in _pre_threshold_scored_results
+        if score >= min_similarity
+    ]
 
     # Multi-pass retrieval: if top results are low quality, try broader search
     _multi_pass_gate = 0.70
@@ -4778,11 +4913,36 @@ def _recall_once(
                 "boosted_node_hits": len(boosted_node_factors),
                 "prefer_fresh": prefer_fresh,
                 "ollama_healthy": bool(_ollama_up),
+                "threshold_basis": "composite_score",
             },
             "samples": {
+                "initial_candidates": _sample_candidate_tuples(results, limit=8),
+                "pre_threshold_candidates": _sample_candidate_tuples(
+                    _pre_threshold_scored_results,
+                    debug_info=debug_info,
+                    limit=8,
+                    threshold=min_similarity,
+                ),
+                "threshold_rejected": _sample_candidate_tuples(
+                    _threshold_rejected_results,
+                    debug_info=debug_info,
+                    limit=8,
+                    threshold=min_similarity,
+                ),
+                "graph_seed_candidates": _sample_candidate_tuples(
+                    diverse_results,
+                    debug_info=debug_info,
+                    limit=3,
+                    threshold=min_similarity,
+                ),
+                "graph_results": _sample_recall_rows(
+                    [row for row in final_output if row.get("via_relation")],
+                    limit=5,
+                ),
                 "final_results": _sample_recall_rows(final_output, limit=5),
             },
         }
+        _append_recall_telemetry_trace(recall_once_meta)
 
     if low_signal_retry:
         low_info_count = sum(1 for r in final_output if _is_low_information_entity_result(r))
@@ -5536,6 +5696,7 @@ def _build_branch_telemetry(
             },
             "intent": meta.get("intent"),
             "search_query": meta.get("search_query"),
+            "telemetry": meta.get("telemetry") if isinstance(meta.get("telemetry"), dict) else None,
         }
         branches.append(branch)
 
@@ -7705,43 +7866,6 @@ def create_edge(
     if relation in symmetric_relations and subject_name.strip().lower() > object_name.strip().lower():
         subject_name, object_name = object_name, subject_name
 
-    # Infer entity type from relation name
-    _RELATION_OBJECT_TYPES = {
-        "works_at": "Organization", "employed_by": "Organization",
-        "member_of": "Organization", "founded": "Organization",
-        "lives_in": "Place", "lives_at": "Place", "located_in": "Place",
-        "born_in": "Place", "moved_to": "Place", "visited": "Place",
-        "has_pet": "Pet", "owns_pet": "Pet",
-        "has_feature": "Feature", "uses_tool": "Tool",
-        "works_on": "Project", "contributes_to": "Project",
-        "manages": "Project",
-    }
-    _RELATION_SUBJECT_TYPES = {
-        "subsidiary_of": "Organization", "part_of": "Organization",
-        "feature_of": "Project", "component_of": "Project",
-    }
-
-    # Relations that always indicate the other entity is a person
-    _PERSON_RELATIONS = {
-        "parent_of", "child_of", "sibling_of", "spouse_of", "partner_of",
-        "friend_of", "aunt_of", "uncle_of", "cousin_of", "grandparent_of",
-        "has_manager", "managed_by", "mentored_by", "mentors",
-        "married_to", "dating", "roommate_of", "has_employee",
-    }
-
-    def _infer_entity_type(name: str, relation: str, is_subject: bool) -> str:
-        """Infer entity type from relation and name heuristics."""
-        rel_lower = relation.lower().replace("-", "_")
-        if is_subject and rel_lower in _RELATION_SUBJECT_TYPES:
-            return _RELATION_SUBJECT_TYPES[rel_lower]
-        if not is_subject and rel_lower in _RELATION_OBJECT_TYPES:
-            return _RELATION_OBJECT_TYPES[rel_lower]
-        # Relationship edges → Person
-        if rel_lower in _PERSON_RELATIONS:
-            return "Person"
-        # Fallback: unknown relation → Fact (not Person)
-        return "Fact"
-
     def _find_entity(conn: sqlite3.Connection, name: str) -> Optional[Node]:
         """Find entity by exact name, then fuzzy match using SQL patterns.
 
@@ -7865,7 +7989,7 @@ def create_edge(
         subject_created = False
         if not subject and create_missing_entities:
             p0 = time.perf_counter() if telemetry_enabled else 0.0
-            inferred_type = _infer_entity_type(subject_name, relation, is_subject=True)
+            inferred_type = _infer_edge_entity_type(subject_name, relation, is_subject=True)
             subject = Node.create(type=inferred_type, name=subject_name)
             subject.owner_id = owner_id
             subject.status = "active"  # Entity nodes are structural, not claims needing review
@@ -7882,7 +8006,7 @@ def create_edge(
         object_created = False
         if not obj and create_missing_entities:
             p0 = time.perf_counter() if telemetry_enabled else 0.0
-            inferred_type = _infer_entity_type(object_name, relation, is_subject=False)
+            inferred_type = _infer_edge_entity_type(object_name, relation, is_subject=False)
             obj = Node.create(type=inferred_type, name=object_name)
             obj.owner_id = owner_id
             obj.status = "active"  # Entity nodes are structural, not claims needing review
