@@ -589,12 +589,15 @@ def extract_from_transcript(
             all_facts.extend(valid_facts)
             carry_facts.extend(valid_facts)
 
+        _FILE_COMPAT = {"MEMORY.md": "ENVIRONMENT.md"}
         for file, snips in (parsed.get("soul_snippets", {}) or {}).items():
+            file = _FILE_COMPAT.get(file, file)
             if isinstance(snips, list):
                 combined = [s for s in (all_snippets.get(file, []) + snips) if isinstance(s, str)]
                 all_snippets[file] = list(dict.fromkeys(combined))
 
         for file, entry in (parsed.get("journal_entries", {}) or {}).items():
+            file = _FILE_COMPAT.get(file, file)
             if isinstance(entry, list):
                 entry = "\n\n".join(s for s in entry if isinstance(s, str))
             if isinstance(entry, str) and entry.strip():
