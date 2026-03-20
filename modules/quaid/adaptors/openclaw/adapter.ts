@@ -2266,8 +2266,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",
-                  signature: `session_index:new_key:${key}`,
-                })) continue;
+                  // Key on priorSid, not the triggering new key. This ensures each
+                  // prior session is fanout-signaled at most once per gateway lifetime
+                  // regardless of how many new keys are subsequently created.
+                  signature: `session_index:fanout:${priorSid}`,
+                }, 10 * 60 * 1000)) continue;
                 facade.markLifecycleSignalFromHook(priorSid, "ResetSignal");
                 writeDaemonSignal(priorSid, "reset", {
                   source: "session_index_new_key",
