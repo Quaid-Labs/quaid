@@ -43,14 +43,24 @@ def _normalize_session_id(session_id: str) -> str:
 def _with_session_lock(session_id: str) -> tuple[int, str]:
     lock_path = f"{_lib_get_db_path()}.session-{session_id}.lock"
     last_err: Optional[Exception] = None
-    for _ in range(50):
+    for attempt in range(51):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
             return fd, lock_path
         except FileExistsError as exc:
             last_err = exc
+            if attempt == 50:
+                # All retries exhausted — remove stale lock if older than 30s and retry once.
+                try:
+                    age = time.time() - os.path.getmtime(lock_path)
+                    if age > 30:
+                        os.unlink(lock_path)
+                        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                        return fd, lock_path
+                except Exception:
+                    pass
+                raise RuntimeError(f"failed to acquire session log lock for {session_id}: {last_err}")
             time.sleep(0.01)
-    raise RuntimeError(f"failed to acquire session log lock for {session_id}: {last_err}")
 
 
 def _estimate_tokens(text: str) -> int:
