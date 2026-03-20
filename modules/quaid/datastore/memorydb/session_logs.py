@@ -40,25 +40,40 @@ def _normalize_session_id(session_id: str) -> str:
     return sid
 
 
+def _is_stale_lock(lock_path: str) -> bool:
+    """Return True if the lock file is orphaned (owning process is dead or file is old)."""
+    try:
+        with open(lock_path, "r") as f:
+            pid = int(f.read().strip())
+        # Lock is stale if the recorded PID is no longer running.
+        os.kill(pid, 0)
+        return False  # Process is alive — lock is live.
+    except (ValueError, FileNotFoundError):
+        # No PID or file gone — treat as stale.
+        return True
+    except OSError:
+        # kill(pid, 0) raises OSError(ESRCH) if process is dead.
+        return True
+
+
 def _with_session_lock(session_id: str) -> tuple[int, str]:
     lock_path = f"{_lib_get_db_path()}.session-{session_id}.lock"
     last_err: Optional[Exception] = None
     for attempt in range(51):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+            # Write our PID so staleness can be detected if we crash.
+            os.write(fd, str(os.getpid()).encode())
             return fd, lock_path
         except FileExistsError as exc:
             last_err = exc
-            if attempt == 50:
-                # All retries exhausted — remove stale lock if older than 30s and retry once.
+            if _is_stale_lock(lock_path):
                 try:
-                    age = time.time() - os.path.getmtime(lock_path)
-                    if age > 30:
-                        os.unlink(lock_path)
-                        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
-                        return fd, lock_path
-                except Exception:
+                    os.unlink(lock_path)
+                except FileNotFoundError:
                     pass
+                continue  # Retry immediately after clearing stale lock.
+            if attempt == 50:
                 raise RuntimeError(f"failed to acquire session log lock for {session_id}: {last_err}")
             time.sleep(0.01)
 
