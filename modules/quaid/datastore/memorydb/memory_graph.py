@@ -5781,19 +5781,14 @@ def _plan_fanout_queries(
     ):
         meta["bailout_reason"] = bailout_reason
         meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
-        # Bad LLM output (invalid/missing payload) is not an infrastructure failure —
-        # fall back to the raw query regardless of failHard so recall is not erased.
-        # failHard still raises for true infrastructure failures (provider down, etc.)
-        # which arrive via other code paths, not this planner-output bailout.
-        _SOFT_BAILOUTS = {"planner_exception_fallback", "too_short", "no_entities"}
-        if bailout_reason in _SOFT_BAILOUTS:
-            return _finish([clean], bailout_reason)
         try:
             from lib.fail_policy import is_fail_hard_enabled
             fail_hard = bool(is_fail_hard_enabled())
         except Exception:
             fail_hard = True
         if fail_hard:
+            # failHard=true means dev: surface planner failures loudly rather than
+            # silently degrading. Fallback only happens when failHard=false (prod).
             detail = (
                 f"{message} "
                 f"(planner_timeout_ms={meta.get('timeout_ms', 0)}, "

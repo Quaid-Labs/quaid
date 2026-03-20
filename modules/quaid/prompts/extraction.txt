@@ -178,6 +178,7 @@ For each target file, include an array of short bullet strings (1 sentence each)
   Tag corrections to evolved behaviors as [CORRECTION] — these get immediate FOLD priority in review.
 
 Include a "soul_snippets" object. Each key is a filename, each value is an array of strings. Empty array means no snippets for that file.
+CRITICAL: The third key is "ENVIRONMENT.md" — do NOT write "MEMORY.md". There is no MEMORY.md.
 
 IMPORTANT: Snippets are OPTIONAL. Most conversations warrant ZERO snippets. Only include genuinely new, factual observations. When in doubt, leave arrays empty.
 

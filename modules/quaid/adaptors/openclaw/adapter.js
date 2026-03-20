@@ -1620,6 +1620,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       console.log("[quaid] Registered runtime.events.onSessionTranscriptUpdate lifecycle fallback");
     }
     const sessionIndexMessageCounts = /* @__PURE__ */ new Map();
+    const sessionLastFanoutSizeMap = /* @__PURE__ */ new Map();
     const seenSessionIndexCommandKeys = /* @__PURE__ */ new Set();
     const sessionKeyLastSeen = /* @__PURE__ */ new Map();
     const sessionLastActivityMs = /* @__PURE__ */ new Map();
@@ -1734,15 +1735,18 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "too_old", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, age_ms: Date.now() - priorMtime });
                   continue;
                 }
+                const lastFanoutSize = sessionLastFanoutSizeMap.get(priorSid) ?? -1;
+                if (priorSize <= lastFanoutSize) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "no_new_content", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize, last_fanout_size: lastFanoutSize });
+                  continue;
+                }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",
-                  // Key on priorSid, not the triggering new key. This ensures each
-                  // prior session is fanout-signaled at most once per gateway lifetime
-                  // regardless of how many new keys are subsequently created.
-                  signature: `session_index:fanout:${priorSid}`
-                }, 10 * 60 * 1e3)) continue;
+                  signature: `session_index:new_key:${key}`
+                })) continue;
                 facade.markLifecycleSignalFromHook(priorSid, "ResetSignal");
+                sessionLastFanoutSizeMap.set(priorSid, priorSize);
                 writeDaemonSignal(priorSid, "reset", {
                   source: "session_index_new_key",
                   new_key: key,

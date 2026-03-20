@@ -2083,6 +2083,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     }
 
     const sessionIndexMessageCounts = new Map<string, number>();
+    // Tracks the transcript byte-size at the time each prior session was last
+    // fanout-signaled. A session is only re-signaled when its transcript has
+    // grown past this size, meaning there is actually new content to extract.
+    const sessionLastFanoutSizeMap = new Map<string, number>();
     const seenSessionIndexCommandKeys = new Set<string>();
     // Per-key last-seen sessionId. Transition detected when a key's value changes.
     // This replaces the single-"active"-session model with per-key tracking so that
@@ -2263,15 +2267,21 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "too_old", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, age_ms: Date.now() - priorMtime });
                   continue;
                 }
+                // Content-based dedup: only signal if the transcript has grown since
+                // the last time we signaled this session. This replaces the time-based
+                // suppress window — no data loss risk from rapid /new usage.
+                const lastFanoutSize = sessionLastFanoutSizeMap.get(priorSid) ?? -1;
+                if (priorSize <= lastFanoutSize) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "no_new_content", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize, last_fanout_size: lastFanoutSize });
+                  continue;
+                }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",
-                  // Key on priorSid, not the triggering new key. This ensures each
-                  // prior session is fanout-signaled at most once per gateway lifetime
-                  // regardless of how many new keys are subsequently created.
-                  signature: `session_index:fanout:${priorSid}`,
-                }, 10 * 60 * 1000)) continue;
+                  signature: `session_index:new_key:${key}`,
+                })) continue;
                 facade.markLifecycleSignalFromHook(priorSid, "ResetSignal");
+                sessionLastFanoutSizeMap.set(priorSid, priorSize);
                 writeDaemonSignal(priorSid, "reset", {
                   source: "session_index_new_key",
                   new_key: key,
