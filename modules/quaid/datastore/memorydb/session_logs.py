@@ -59,7 +59,7 @@ def _is_stale_lock(lock_path: str) -> bool:
 def _with_session_lock(session_id: str) -> tuple[int, str]:
     lock_path = f"{_lib_get_db_path()}.session-{session_id}.lock"
     last_err: Optional[Exception] = None
-    for attempt in range(51):
+    for attempt in range(300):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
             # Write our PID so staleness can be detected if we crash.
@@ -73,9 +73,9 @@ def _with_session_lock(session_id: str) -> tuple[int, str]:
                 except FileNotFoundError:
                     pass
                 continue  # Retry immediately after clearing stale lock.
-            if attempt == 50:
+            if attempt == 299:
                 raise RuntimeError(f"failed to acquire session log lock for {session_id}: {last_err}")
-            time.sleep(0.01)
+            time.sleep(0.2)
 
 
 def _estimate_tokens(text: str) -> int:

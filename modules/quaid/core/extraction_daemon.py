@@ -484,6 +484,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             return
 
+        # Guard against post-compaction status lines or other metadata-only content
+        # (e.g. "Compacted (17k -> 2.1k)") that aren't extractable conversations.
+        # 200 chars is safely below any real conversation with facts worth extracting.
+        _MIN_EXTRACTABLE_CHARS = 200
+        if len(transcript_text.strip()) < _MIN_EXTRACTABLE_CHARS:
+            logger.info(
+                "[%s] session %s: transcript too short to extract (%d chars < %d min), skipping",
+                label, session_id, len(transcript_text.strip()), _MIN_EXTRACTABLE_CHARS,
+            )
+            write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+            mark_signal_processed(signal_data)
+            return
+
         # Merge harvestable subagent transcripts into parent extraction.
         # B010: Per-child size is advisory (chunker handles large transcripts).
         # MAX_MERGED_CHARS bounds the total injected into this extraction pass.
