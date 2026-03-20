@@ -23,5 +23,11 @@ const COMMAND_REGISTRY = [
       "Explicitly storing or saving a new fact, preference, decision, or memory for future recall",
     hint: 'Store memory: quaid store "the fact"',
   },
+  {
+    id: "delete_project",
+    description:
+      "Deleting, removing, or cleaning up a tracked project by name",
+    hint: "Delete project: quaid registry delete <project-name>",
+  },
 ];
 export { COMMAND_REGISTRY };
