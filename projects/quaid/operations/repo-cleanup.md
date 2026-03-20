@@ -5,7 +5,7 @@ Tracks repository hygiene actions while separating Quaid source from OpenClaw ru
 ## Completed
 
 - Removed OpenClaw root markdown artifacts from repo root:
-  - `AGENTS.md`, `HEARTBEAT.md`, `IDENTITY.md`, `MEMORY.md`, `SOUL.md`, `TOOLS.md`, `USER.md`
+  - `AGENTS.md`, `HEARTBEAT.md`, `IDENTITY.md`, `ENVIRONMENT.md`, `SOUL.md`, `TOOLS.md`, `USER.md`
 - Removed deprecated docs pointer file:
   - `docs/quaid/README.md`
 - Removed artifact files that are not part of Quaid runtime or release templates:

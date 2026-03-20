@@ -108,7 +108,7 @@ Cleans bloated docs based on churn heuristics (not time-based):
 ### Task 1d-snippets: Soul Snippets Review (Opus)
 Reviews pending soul snippets (from `.snippets.md` files) and decides whether to fold them into core markdown files:
 - **Source:** `*.snippets.md` files written by extraction hook during compaction/reset
-- **Target files:** default is SOUL.md, USER.md, MEMORY.md (AGENTS.md can be added via `docs.journal.targetFiles`)
+- **Target files:** default is SOUL.md, USER.md, ENVIRONMENT.md (AGENTS.md can be added via `docs.journal.targetFiles`)
 - **Decisions per snippet:** FOLD (add as-is), REWRITE (rephrase then add), DISCARD (remove)
 - **Backups:** Created before any parent file modification
 - **Config:** `docs.journal` in memory.json (`snippetsEnabled`, `targetFiles`, `maxEntriesPerFile`; legacy fallback `maxSnippetsPerFile`). Note: config key was renamed from `docs.soulSnippets` to `docs.journal` for the unified journal system; snippets are controlled by the `snippetsEnabled` sub-key.
@@ -117,7 +117,7 @@ Reviews pending soul snippets (from `.snippets.md` files) and decides whether to
 ### Task 1d-journal: Journal Distillation (Opus)
 Distills journal diary entries into core markdown themes and archives processed entries:
 - **Source:** `journal/*.journal.md` files written by extraction hook during compaction/reset
-- **Target files:** SOUL.md, USER.md, MEMORY.md (core markdown updated with distilled themes)
+- **Target files:** SOUL.md, USER.md, ENVIRONMENT.md (core markdown updated with distilled themes)
 - **Archive:** Processed entries moved to `journal/archive/{FILE}-{YYYY-MM}.md`
 - **Dedup:** One entry per date+trigger per file (e.g., one Compaction and one Reset per day)
 - **State tracking:** `journal/.distillation-state.json` tracks last distillation per file

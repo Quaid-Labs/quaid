@@ -14,7 +14,7 @@ Supports multiple adapters (OpenClaw, Claude Code) sharing a single `QUAID_HOME`
 | `TOOLS.md` | CLI reference: all commands, flags, domains, playbooks |
 | `SOUL.md` | Quaid's reflective journaling guidance |
 | `USER.md` | User-understanding journaling: patterns, tone, sensitivity |
-| `MEMORY.md` | Shared-moment and world-understanding journaling |
+| `ENVIRONMENT.md` | Functional behaviors, environmental context, and shared history |
 
 ---
 

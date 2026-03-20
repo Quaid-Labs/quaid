@@ -375,7 +375,7 @@ After all chunks are processed, snippets and journal entries collected across al
 are written:
 
 - **Soul snippets** (`write_snippets=True`): Written to `data/soul-snippets/`.
-  The nightly janitor FOLD/REWRITE/DISCARDs them into core files (SOUL.md, USER.md, MEMORY.md).
+  The nightly janitor FOLD/REWRITE/DISCARDs them into core files (SOUL.md, USER.md, ENVIRONMENT.md).
 - **Journal entries** (`write_journal=True`): Written to `journal/*.journal.md`.
   Opus distills themes from these into core markdown. Old entries are archived monthly.
 
@@ -509,7 +509,7 @@ the signal asynchronously.
 1. Calls `ensure_alive()` to start the daemon if not running.
 2. Calls `sweep_orphaned_sessions()` to queue any un-extracted previous sessions.
 3. Seeds a cursor for the current session (so the daemon can find it for timeout extraction).
-4. Collects identity files (`USER.md`, `SOUL.md`, `MEMORY.md`) from the per-instance
+4. Collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from the per-instance
    identity directory.
 5. Collects `TOOLS.md` and `AGENTS.md` from all project subdirectories under `projects/`.
    The `quaid` project is sorted first.

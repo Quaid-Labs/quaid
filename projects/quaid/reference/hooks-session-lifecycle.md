@@ -165,7 +165,7 @@ and is picked up when the daemon next starts.
    the transcript path via `adapter.get_sessions_dir()` + recursive glob on
    `{session_id}.jsonl`.
 
-4. **Collect identity files** — reads `USER.md`, `SOUL.md`, `MEMORY.md` from
+4. **Collect identity files** — reads `USER.md`, `SOUL.md`, `ENVIRONMENT.md` from
    the adapter's per-instance identity directory
    (`adapter.identity_dir()`). Each file is prefixed as:
    ```

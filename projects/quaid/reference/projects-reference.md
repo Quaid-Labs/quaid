@@ -663,7 +663,7 @@ Tested on OC 2026.3.7 (Node 25.6.1):
 ```python
 SYNCABLE_NAMES = frozenset({
     "TOOLS.md", "AGENTS.md", "SOUL.md", "USER.md",
-    "MEMORY.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md",
+    "ENVIRONMENT.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md",
 })
 
 def sync_project(canonical_dir: Path, target_dir: Path, project_name: str) -> SyncResult:
@@ -1217,7 +1217,7 @@ class QuaidAdapter:
 ```
 
 ClaudeCode adapter monitors `CLAUDE.md` (`maxLines: 500`).
-OpenClaw adapter monitors `SOUL.md` (80), `USER.md` (150), `MEMORY.md` (100),
+OpenClaw adapter monitors `SOUL.md` (80), `USER.md` (150), `ENVIRONMENT.md` (100),
 `IDENTITY.md` (20), `HEARTBEAT.md` (50), `TODO.md` (150) from `~/.openclaw/workspace/`.
 
 ---

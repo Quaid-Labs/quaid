@@ -87,7 +87,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - **Extraction priority:** user facts first, agent-action memories second, technical/project state third. Agent extraction must never displace user-memory coverage.
 - **Edges** are created at extraction time and linked to source facts.
 - **Janitor** runs nightly: reviews pending, merges duplicates (Ebbinghaus decay), monitors core files.
-- **Soul snippets** (fast path) — bullet observations distilled into SOUL.md, USER.md, MEMORY.md by janitor.
+- **Soul snippets** (fast path) — bullet observations distilled into SOUL.md, USER.md, ENVIRONMENT.md by janitor.
 - **Journal** (slow path) — diary paragraphs distilled by Opus monthly.
 
 ---
@@ -132,4 +132,4 @@ All files go inside a tracked quaid project. `/tmp/` is never acceptable, even f
 | `PROJECT.md` | Doc index and architecture map |
 | `SOUL.md` | Quaid's reflective identity |
 | `USER.md` | User understanding and patterns |
-| `MEMORY.md` | Shared-moment and world-understanding context |
+| `ENVIRONMENT.md` | Functional behaviors, environmental context, and shared history |

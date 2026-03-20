@@ -31,7 +31,7 @@ The system uses three tiers with distinct purposes:
 
 | Layer | Storage | Loaded When | Purpose | Examples |
 |-------|---------|-------------|---------|----------|
-| **Markdown** | SOUL.md, USER.md, MEMORY.md, AGENTS.md, TOOLS.md, CONSTITUTION.md, PROJECT.md | Every context (always injected) | Core instructions, identity, system pointers | "Alfie's personality", "Quaid's core facts", "System tool locations" |
+| **Markdown** | SOUL.md, USER.md, ENVIRONMENT.md, AGENTS.md, TOOLS.md, CONSTITUTION.md, PROJECT.md | Every context (always injected) | Core instructions, identity, system pointers | "Alfie's personality", "Quaid's core facts", "System tool locations" |
 | **RAG** | `projects/<project>/` docs | Searched when topically relevant | Reference documentation, system architecture | "Knowledge layer design", "Janitor pipeline reference", "Spark agent planning" |
 | **Memory DB** | `data/memory.db` | Searched per-message via recall pipeline | Personal facts from conversations | "Quaid prefers dark mode", "Melina's birthday is Oct 12", "Quaid chose SQLite for simplicity" |
 
@@ -98,7 +98,7 @@ Agent receives results with similarity %, extraction_confidence
                                        → journal_entries → journal/*.journal.md diary files
 ```
 
-> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env). Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via Opus with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
+> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env). Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via Opus with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
 
 ### Privacy Tiers
 
@@ -433,7 +433,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 **Hooks:**
 - `before_agent_start` — optional auto-injection pipeline (gated by config/env)
 - `agent_end` — inactivity-timeout extraction (per-message classifier deprecated)
-- `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Combined fact+edge extraction runs across transcript chunks with carry-forward context.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
+- `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Combined fact+edge extraction runs across transcript chunks with carry-forward context.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
 - `before_reset` — same extraction as compaction, triggered on `/new` or `/reset`
 
 **LLM timeouts:**
@@ -642,7 +642,7 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 ### 2.15 Soul Snippets and Journal
 
 **`datastore/notedb/soul_snippets.py`:** Dual extraction system producing both fast-path snippets and slow-path journal entries at compaction/reset.
-- **Snippets (fast path):** Bullet-point observations written to `*.snippets.md` staging files in the identity dir. Nightly janitor reviews each snippet with `FOLD` (integrate into core file), `REWRITE` (synthesize), or `DISCARD` decisions. Keeps `SOUL.md`, `USER.md`, `MEMORY.md` current day-to-day. Target files configurable; `AGENTS.md` is optional via config.
+- **Snippets (fast path):** Bullet-point observations written to `*.snippets.md` staging files in the identity dir. Nightly janitor reviews each snippet with `FOLD` (integrate into core file), `REWRITE` (synthesize), or `DISCARD` decisions. Keeps `SOUL.md`, `USER.md`, `ENVIRONMENT.md` current day-to-day. Target files configurable; `AGENTS.md` is optional via config.
 - **Journal (slow path):** Diary-style paragraphs written to `journal/*.journal.md`. Opus distillation runs weekly, synthesizing themes into core markdown. Old journal entries archived monthly.
 - Entry points: `run_soul_snippets_review()` — nightly snippet FOLD/REWRITE/DISCARD (janitor Task 1d-snippets); `run_journal_distillation()` — weekly Opus distillation (janitor Task 1d-journal).
 - Protected regions in core markdown files are skipped during writes (via `lib/markdown.strip_protected_regions`).
@@ -1516,7 +1516,7 @@ Dynamic K scaling is runtime logic in the adapter (not a config block): retrieva
 
 ### 4.10 Bootstrap File Monitoring
 
-Workspace monitoring uses a built-in bootstrap file set (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, `MEMORY.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TODO.md`, `PROJECT.md`) plus adapter-provided additions. There is no `janitor.bootstrapFiles` config key.
+Workspace monitoring uses a built-in bootstrap file set (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, `ENVIRONMENT.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TODO.md`, `PROJECT.md`) plus adapter-provided additions. There is no `janitor.bootstrapFiles` config key.
 
 ### 4.11 Logging Config
 

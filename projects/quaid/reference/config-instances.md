@@ -323,7 +323,7 @@ Everything under `QUAID_HOME/<instance>/`:
 | `data/extraction-signals/` | Signal files for async extraction daemon |
 | `data/cc-pending-notifications.jsonl` | Deferred notifications queue (Claude Code adapter) |
 | `logs/` | Janitor stats, extraction logs (retention per `logging.retentionDays`) |
-| `identity/` | Quaid-managed identity files (SOUL.md, USER.md, MEMORY.md, *.snippets.md) |
+| `identity/` | Quaid-managed identity files (SOUL.md, USER.md, ENVIRONMENT.md, *.snippets.md) |
 | `journal/` | Journal entries awaiting distillation into core markdown |
 
 The `data_dir()`, `config_dir()`, `logs_dir()`, and `identity_dir()` methods
