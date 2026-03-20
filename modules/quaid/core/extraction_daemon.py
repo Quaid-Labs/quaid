@@ -163,6 +163,25 @@ def _validate_session_id(session_id: str) -> str:
 # PID file management (B001: flock for atomicity)
 # ---------------------------------------------------------------------------
 
+def _is_daemon_process(pid: int) -> bool:
+    """Return True if the given PID is actually running the extraction daemon."""
+    try:
+        cmdline_path = Path(f"/proc/{pid}/cmdline")
+        if cmdline_path.exists():
+            cmdline = cmdline_path.read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+            return "extraction_daemon" in cmdline
+        # macOS / BSD: fall back to ps
+        import subprocess
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True, text=True, timeout=2,
+        )
+        return "extraction_daemon" in result.stdout
+    except Exception:
+        # If we can't verify, assume it's valid to avoid false negatives
+        return True
+
+
 def read_pid() -> Optional[int]:
     """Read daemon PID from file. Returns None if not found or stale."""
     pid_file = _pid_path()
@@ -172,9 +191,13 @@ def read_pid() -> Optional[int]:
         pid = int(pid_file.read_text().strip())
         # Check if process is alive
         os.kill(pid, 0)
+        # Verify it's actually our daemon (PID reuse guard)
+        if not _is_daemon_process(pid):
+            logger.warning("PID %d in pid file is alive but is not the extraction daemon (PID reused) — treating as stale", pid)
+            raise OSError("PID reused by unrelated process")
         return pid
     except (ValueError, OSError):
-        # PID file exists but process is dead
+        # PID file exists but process is dead or stale
         try:
             pid_file.unlink()
         except OSError:
