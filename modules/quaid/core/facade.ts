@@ -2845,9 +2845,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       ]);
       return mergeRecallResults(primary, secondary, limit);
     } catch (err) {
-      console.warn(
-        `[quaid][facade][recall] retry bailed: ${String((err as Error)?.message || err)}; returning primary`,
-      );
+      const msg = String((err as Error)?.message || err);
+      if (msg.includes("failHard") || msg.includes("fail_hard")) {
+        throw err;
+      }
+      console.warn(`[quaid][facade][recall] retry bailed: ${msg}; returning primary`);
       return primary;
     }
   }

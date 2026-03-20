@@ -134,10 +134,14 @@ def hook_inject(args):
             docs_future = pool.submit(projects_search_docs, query=query, limit=3)
             try:
                 memories = mem_future.result()
+            except RuntimeError:
+                raise
             except Exception:
                 memories = []
             try:
                 docs_bundle = docs_future.result()
+            except RuntimeError:
+                raise
             except Exception:
                 docs_bundle = None
 
@@ -163,6 +167,8 @@ def hook_inject(args):
             }
         }))
 
+    except RuntimeError:
+        raise
     except Exception as e:
         # Still try to surface pending context even if recall fails
         if pending_context:
@@ -218,6 +224,8 @@ def hook_inject_compact(args):
         )
         if memories:
             print(_format_memories(memories))
+    except RuntimeError:
+        raise
     except Exception as e:
         print(f"[quaid][hook-inject-compact] error: {e}", file=sys.stderr)
 
