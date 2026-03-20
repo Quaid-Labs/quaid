@@ -1938,6 +1938,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               [],
             ) ||
             String(update?.sessionId || "").trim();
+          // Also register the path-derived sessionId so writeDaemonSignal can find
+          // the transcript even when update.sessionId is missing (e.g. openresponses sessions).
+          if (sessionId && sessionId !== trackSessionId) {
+            sessionTranscriptPaths.set(sessionId, sessionFile);
+          }
           const sessionKey = String(
             update?.sessionKey
             || update?.targetSessionKey
