@@ -6957,6 +6957,24 @@ def recall(
             logger.debug("[recall] quality gate met (top=%.3f >= %.3f), stopping after turn %d", top_score, quality_gate, turn - 1)
             stop_reason = "quality_gate_met"
             break
+        # High-confidence early-stop for non-stateful queries (relational, personal, direct-answer).
+        # The standard gate blocks on `needs_validation` when lexical overlap is low — expected
+        # for indirect relational matches ("niece" → "daughter of sister", "dog" → "Baxter is a Lab").
+        # These are not uncertain results; they just use different vocabulary. When the query is
+        # not temporal/current/progression (those genuinely need deeper search), a strong score
+        # is sufficient to stop drilling rather than exhausting the budget.
+        _is_stateful_query = (
+            gate_eval.get("temporal_like")
+            or gate_eval.get("current_like")
+            or gate_eval.get("progression_like")
+        )
+        if merged and not _is_stateful_query and top_score >= quality_gate:
+            logger.debug(
+                "[recall] high-confidence non-stateful early stop (top=%.3f >= %.3f), stopping after turn %d",
+                top_score, quality_gate, turn - 1,
+            )
+            stop_reason = "quality_gate_met"
+            break
         if candidate_quality_gate and gate_eval.get("needs_validation"):
             logger.debug(
                 "[recall] quality gate candidate requires validation after turn %d: overlap=%.2f temporal_rows=%s",
