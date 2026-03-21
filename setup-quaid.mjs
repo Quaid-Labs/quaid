@@ -1574,7 +1574,7 @@ async function step1_preflight() {
   const _existingFiles = [
     "SOUL.md",
     "USER.md",
-    "MEMORY.md",
+    "ENVIRONMENT.md",
     "TOOLS.md",
     "AGENTS.md",
     "IDENTITY.md",
@@ -1874,7 +1874,7 @@ async function step1_preflight() {
       const backupDir = path.join(WORKSPACE, `.quaid-backup-${ts}`);
       fs.mkdirSync(backupDir, { recursive: true });
       let count = 0;
-      for (const f of ["SOUL.md", "USER.md", "MEMORY.md", "TOOLS.md", "AGENTS.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md"]) {
+      for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md", "TOOLS.md", "AGENTS.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md"]) {
         const src = path.join(WORKSPACE, f);
         if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(backupDir, f)); count++; }
       }
@@ -2908,7 +2908,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
-  // Create per-instance identity directory for SOUL.md, USER.md, MEMORY.md.
+  // Create per-instance identity directory for SOUL.md, USER.md, ENVIRONMENT.md.
   // Required by the janitor's snippet processor for all adapter types.
   // Use the resolved QUAID_INSTANCE so the directory matches the actual silo path.
   const resolvedInstanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
@@ -2918,7 +2918,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       fs.mkdirSync(identityDir, { recursive: true });
       log.info(`Created identity directory: ${identityDir}`);
     }
-    for (const f of ["SOUL.md", "USER.md", "MEMORY.md"]) {
+    for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
       const fp = path.join(identityDir, f);
       if (!fs.existsSync(fp)) {
         fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
@@ -3047,7 +3047,7 @@ print('[+] Datastore init hooks complete')
   }
 
   // Create workspace files
-  for (const f of ["SOUL.md", "USER.md", "MEMORY.md"]) {
+  for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
     const fp = path.join(WORKSPACE, f);
     if (!fs.existsSync(fp)) {
       fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
@@ -3153,7 +3153,7 @@ except Exception as e:
 
   // Migration
   let migrationCompleted = false;
-  const mdFiles = ["SOUL.md", "USER.md", "TOOLS.md", "MEMORY.md", "AGENTS.md"]
+  const mdFiles = ["SOUL.md", "USER.md", "TOOLS.md", "ENVIRONMENT.md", "AGENTS.md"]
     .filter(f => {
       const fp = path.join(WORKSPACE, f);
       if (!fs.existsSync(fp)) return false;
@@ -3327,7 +3327,7 @@ print(total_docs)
     const quaidProjDir = path.join(WORKSPACE, "shared", "projects", "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
-    for (const f of ["TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "MEMORY.md", "ARCHITECTURE.md", "project_onboarding.md"]) {
+    for (const f of ["TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "ENVIRONMENT.md", "ARCHITECTURE.md", "project_onboarding.md"]) {
       const src = path.join(quaidProjSrc, f);
       const dst = path.join(quaidProjDir, f);
       if (fs.existsSync(src) && !fs.existsSync(dst)) {
@@ -3347,7 +3347,7 @@ print(total_docs)
         "- `AGENTS.md` — Project behavior rules and operating guidance",
         "- `USER.md` — Journaling guidance for user-understanding entries",
         "- `SOUL.md` — Journaling guidance for agent self-reflection entries",
-        "- `MEMORY.md` — Journaling guidance for shared-moment entries",
+        "- `ENVIRONMENT.md` — Learned behaviors, environment observations, and shared history",
         "- `ARCHITECTURE.md` — Full system architecture and design",
         "- `project_onboarding.md` — Guide for discovering and registering projects",
         "",
@@ -4055,7 +4055,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
         files: {
           "SOUL.md": { purpose: "Personality and interaction style", maxLines: 80 },
           "USER.md": { purpose: "About the user", maxLines: 150 },
-          "MEMORY.md": { purpose: "Core memories loaded every session", maxLines: 100 },
+          "ENVIRONMENT.md": { purpose: "Learned behaviors, environment observations, and shared history", maxLines: 100 },
         },
       },
       journal: {
@@ -4063,7 +4063,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
         snippetsEnabled: true,
         mode: "distilled",
         journalDir: "journal",
-        targetFiles: ["SOUL.md", "USER.md", "MEMORY.md"],
+        targetFiles: ["SOUL.md", "USER.md", "ENVIRONMENT.md"],
         maxEntriesPerFile: 50,
         maxTokens: 8192,
         distillationIntervalDays: 7,
