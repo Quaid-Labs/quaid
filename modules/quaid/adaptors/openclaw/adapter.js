@@ -1428,13 +1428,15 @@ notify_user(${JSON.stringify(message)})
           allMemories,
           eventMessages: event.messages || [],
           context: ctx,
-          existingPrependContext: event.prependContext,
+          existingPrependContext: void 0,
           injectLimit,
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
         });
         if (!injection) return withDocs({ prependContext: event.prependContext });
-        const { toInject, prependContext } = injection;
-        event.prependContext = prependContext;
+        const { toInject, prependContext: memoriesBlock } = injection;
+        appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${memoriesBlock}` : memoriesBlock;
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
         try {
           if (facade.shouldNotifyFeature("retrieval", "summary")) {

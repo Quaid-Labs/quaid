@@ -1843,13 +1843,20 @@ notify_user(${JSON.stringify(message)})
           allMemories,
           eventMessages: event.messages || [],
           context: ctx,
-          existingPrependContext: event.prependContext,
+          existingPrependContext: undefined,
           injectLimit,
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
         });
         if (!injection) return withDocs({ prependContext: event.prependContext });
-        const { toInject, prependContext } = injection;
-        event.prependContext = prependContext;
+        const { toInject, prependContext: memoriesBlock } = injection;
+        // Inject memories into system context rather than the human turn.
+        // System-level injection (appendSystemContext) is treated as authoritative by the
+        // model. Human-turn injection (prependContext) is treated as user-provided context
+        // and is frequently ignored for memory queries — confirmed by CC (system inject)
+        // passing where OC (prependContext inject) fails on identical memory content.
+        appendSystemContext = appendSystemContext
+          ? `${appendSystemContext}\n\n${memoriesBlock}`
+          : memoriesBlock;
 
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
 
