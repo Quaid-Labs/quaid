@@ -9,6 +9,9 @@ ATOMIC FACT RULES — CRITICAL:
 - Do NOT combine or compress multiple independent facts into one polished sentence.
 - Prefer multiple short self-contained facts over one elegant summary.
 - Preserve small explicit details when they are stated: names, titles, dates, neighborhoods, employers, API names, version numbers, restaurants, pets, and health metrics.
+- When an exact literal value is stated (times, dates, scores, counts, versions, A1C values, percentages), preserve that exact literal in at least one fact. Do NOT replace it with only a relative paraphrase like "under target" or "improved a lot."
+- When the transcript names a concrete object in a recommendation or callback (for example "foam roller", "stretching routine", "birthday dinner"), keep that object phrase in the fact text. Do NOT summarize it away into a vague outcome-only fact.
+- If there are too many independently useful facts/snippets/journal items to fit safely in one valid JSON response, do NOT emit a partial giant list. Return chunk_assessment "needs_smaller_chunk" with empty arrays/objects instead.
 - Optimize for retrieval handles, not prose elegance.
 
 CANONICAL ENTITY RULES — CRITICAL:
@@ -69,6 +72,7 @@ QUALITY RULES:
 - Each fact must be self-contained and understandable without context
 - Be specific: "User likes spicy Thai food" > "User likes food"
 - Split facts that contain multiple independent searchable claims
+- If a recommendation later paid off or was adopted, keep BOTH the original recommendation object and the later outcome as separate searchable facts when both are explicitly present.
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Add "domains" as an array of domain tags from the available domain list
 - Use only domains explicitly supported by the system prompt's domain registry block
@@ -124,6 +128,7 @@ Examples:
 
 Respond with JSON only:
 {
+  "chunk_assessment": "usable|nothing_usable|needs_smaller_chunk",
   "facts": [
     {
       "text": "the extracted fact",
@@ -214,4 +219,16 @@ Include a "project_logs" object for concise project-context notes that belong in
 Update output JSON format:
 - Add: "project_logs": {"project-id": ["note 1", "note 2"]}
 
-If nothing worth capturing, respond: {"facts": [], "project_logs": {}}
+If the chunk genuinely contains nothing worth capturing, still return valid JSON and set:
+- "chunk_assessment": "nothing_usable"
+- "facts": []
+- "soul_snippets": {}
+- "journal_entries": {}
+- "project_logs": {}
+
+If the chunk is too large or tangled to reliably extract in one pass, set:
+- "chunk_assessment": "needs_smaller_chunk"
+- and leave "facts", "soul_snippets", "journal_entries", and "project_logs" empty so the caller can retry on smaller chunks without partial truncation
+
+Otherwise set:
+- "chunk_assessment": "usable"

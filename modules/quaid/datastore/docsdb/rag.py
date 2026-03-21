@@ -118,6 +118,52 @@ def _docs_query_terms(query: str) -> List[str]:
     return out
 
 
+def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
+    """Return a small path-based penalty for low-signal doc sources.
+
+    Keep the penalty query-aware:
+    - fixture/sample/seed/example data should lose to real implementation/docs
+      unless the query explicitly asks about seeds/examples/etc.
+    - archived logs should lose to implementation/docs unless the query is
+      explicitly historical.
+    """
+    path_lower = str(source_file or "").lower()
+    path_parts = {part for part in Path(path_lower).parts if part}
+    file_name = Path(path_lower).name
+    penalty = 0.0
+
+    asks_for_fixture = any(
+        term in {"seed", "seeds", "fixture", "fixtures", "sample", "samples", "example", "examples", "mock", "mocks"}
+        for term in query_terms
+    )
+    asks_for_history = any(
+        term in {"history", "historical", "archive", "archived", "changelog", "timeline", "past"}
+        for term in query_terms
+    )
+
+    fixture_signals = (
+        "seed" in path_parts
+        or "seeds" in path_parts
+        or "fixtures" in path_parts
+        or "fixture" in path_parts
+        or "samples" in path_parts
+        or "sample" in path_parts
+        or "examples" in path_parts
+        or "example" in path_parts
+        or "mocks" in path_parts
+        or "mock" in path_parts
+        or file_name.startswith(("sample-", "seed-", "fixture-", "mock-", "example-"))
+    )
+    if fixture_signals and not asks_for_fixture:
+        penalty += 0.14
+
+    is_history_log = "/log/" in path_lower or file_name.endswith(".log")
+    if is_history_log and not asks_for_history:
+        penalty += 0.10
+
+    return penalty
+
+
 def _docs_rank_score(query_terms: List[str], source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
     """Blend semantic similarity with lightweight lexical/path features.
 
@@ -157,6 +203,8 @@ def _docs_rank_score(query_terms: List[str], source_file: str, section_header: O
         score -= 0.12
     if wants_impl and header_lower in {"# project: recipe app", "# recipe app", "## overview", "# overview"}:
         score -= 0.06
+    if wants_impl:
+        score -= _docs_source_penalty(query_terms, source_file)
 
     return max(0.0, round(score, 4))
 

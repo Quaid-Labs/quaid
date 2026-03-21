@@ -116,7 +116,9 @@ class CaptureConfig:
     skip_patterns: List[str] = field(default_factory=list)
     inactivity_timeout_minutes: int = 60  # Extract after N minutes of inactivity (0 = disabled)
     auto_compaction_on_timeout: bool = True  # Trigger gateway compaction after timeout extraction
-    chunk_size: int = 30_000  # Max chars per extraction chunk (messages never split)
+    chunk_tokens: int = 30_000  # Max tokens per extraction chunk (messages never split)
+    chunk_max_lines: int = 0  # Optional line cap for rolling extraction windows
+    chunk_size: int = 30_000  # Deprecated legacy chars field; retained only for old configs
 
 
 @dataclass
@@ -945,6 +947,14 @@ def _load_config_inner() -> MemoryConfig:
         skip_patterns=capture_data.get('skip_patterns', capture_data.get('skipPatterns', [])),
         inactivity_timeout_minutes=capture_data.get('inactivity_timeout_minutes', capture_data.get('inactivityTimeoutMinutes', 60)),
         auto_compaction_on_timeout=bool(capture_data.get('auto_compaction_on_timeout', capture_data.get('autoCompactionOnTimeout', True))),
+        chunk_tokens=capture_data.get(
+            'chunk_tokens',
+            capture_data.get('chunkTokens', capture_data.get('chunk_size', capture_data.get('chunkSize', 30_000))),
+        ),
+        chunk_max_lines=capture_data.get(
+            'chunk_max_lines',
+            capture_data.get('chunkMaxLines', 0),
+        ),
         chunk_size=capture_data.get('chunk_size', capture_data.get('chunkSize', 30_000)),
     )
     

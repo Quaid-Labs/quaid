@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -32,6 +33,7 @@ def workspace_dir(tmp_path):
     iroot = adapter.instance_root()
 
     os.environ["CLAWDBOT_WORKSPACE"] = str(iroot)
+    os.environ["MOCK_EMBEDDINGS"] = "1"
 
     # Create required directories
     (iroot / "journal").mkdir(exist_ok=True)
@@ -58,12 +60,15 @@ def workspace_dir(tmp_path):
     reset_adapter()
     if "CLAWDBOT_WORKSPACE" in os.environ:
         del os.environ["CLAWDBOT_WORKSPACE"]
+    if "MOCK_EMBEDDINGS" in os.environ:
+        del os.environ["MOCK_EMBEDDINGS"]
 
 
 @pytest.fixture
 def mock_opus_response():
     """Standard Opus extraction response."""
     return json.dumps({
+        "chunk_assessment": "usable",
         "facts": [
             {
                 "text": "Test user likes coffee",
@@ -259,6 +264,34 @@ class TestParseSessionJsonl:
 # ---------------------------------------------------------------------------
 
 class TestExtractFromTranscript:
+    def test_extract_wall_timeout_defaults_to_600(self, monkeypatch):
+        from ingest.extract import _get_extract_wall_timeout_seconds
+
+        monkeypatch.delenv("QUAID_EXTRACT_WALL_TIMEOUT", raising=False)
+        assert _get_extract_wall_timeout_seconds() == 600.0
+
+    def test_extract_wall_timeout_respects_env_override(self, monkeypatch):
+        from ingest.extract import _get_extract_wall_timeout_seconds
+
+        monkeypatch.setenv("QUAID_EXTRACT_WALL_TIMEOUT", "7200")
+        assert _get_extract_wall_timeout_seconds() == 7200.0
+
+    def test_extract_carry_and_parallel_env_helpers(self, monkeypatch):
+        from ingest.extract import (
+            _extract_carry_context_enabled,
+            _get_extract_parallel_root_workers,
+        )
+
+        monkeypatch.delenv("QUAID_EXTRACT_DISABLE_CARRY_CONTEXT", raising=False)
+        monkeypatch.delenv("QUAID_EXTRACT_PARALLEL_ROOT_WORKERS", raising=False)
+        assert _extract_carry_context_enabled() is True
+        assert _get_extract_parallel_root_workers() == 1
+
+        monkeypatch.setenv("QUAID_EXTRACT_DISABLE_CARRY_CONTEXT", "1")
+        monkeypatch.setenv("QUAID_EXTRACT_PARALLEL_ROOT_WORKERS", "4")
+        assert _extract_carry_context_enabled() is False
+        assert _get_extract_parallel_root_workers() == 4
+
     def test_empty_transcript(self):
         from ingest.extract import extract_from_transcript
 
@@ -278,7 +311,7 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_get_config.return_value = SimpleNamespace(
-            capture=SimpleNamespace(enabled=False, chunk_size=30000)
+            capture=SimpleNamespace(enabled=False, chunk_tokens=30000)
         )
         result = extract_from_transcript(
             transcript="User: remember this detail\n\nAssistant: ok",
@@ -295,7 +328,7 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_get_config.return_value = SimpleNamespace(
-            capture=SimpleNamespace(enabled=True, chunk_size=30000, skip_patterns=[r"HEARTBEAT"])
+            capture=SimpleNamespace(enabled=True, chunk_tokens=30000, skip_patterns=[r"HEARTBEAT"])
         )
         result = extract_from_transcript(
             transcript="HEARTBEAT ping\nHEARTBEAT_OK",
@@ -417,6 +450,210 @@ class TestExtractFromTranscript:
         mock_fast.assert_called_once()
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_explicit_nothing_usable_payload_counts_as_processed(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.8)
+
+        result = extract_from_transcript(
+            transcript="User: here is a long filler discussion about generic cooking tips\n\nAssistant: noted",
+            owner_id="test",
+            dry_run=True,
+        )
+
+        assert result["facts_stored"] == 0
+        assert result["chunks_processed"] == 1
+        assert result["chunks_total"] == 1
+        assert result["assessment_nothing_usable"] == 1
+        assert result["assessment_usable"] == 0
+        assert result["assessment_needs_smaller_chunk"] == 0
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_dry_run_exposes_raw_payloads_and_carry_facts(self, mock_llm, mock_opus_response):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (mock_opus_response, 0.9)
+
+        result = extract_from_transcript(
+            transcript="User: I like coffee\n\nAssistant: noted",
+            owner_id="test",
+            dry_run=True,
+        )
+
+        assert len(result["raw_facts"]) == 2
+        assert len(result["carry_facts"]) == 2
+        assert result["raw_snippets"]["SOUL.md"] == ["Noticed the user values brevity"]
+
+    def test_carry_selection_is_bounded_and_persistable(self):
+        from ingest.extract import _select_carry_facts, _persistable_carry_facts
+
+        facts = [
+            {
+                "text": f"Maya fact number {i} with value {i}:00 and project recipe-app",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "high" if i % 5 == 0 else "medium",
+                "project": "recipe-app" if i % 3 == 0 else "",
+            }
+            for i in range(60)
+        ]
+
+        selected = _select_carry_facts(facts, max_items=40, max_chars=4000)
+        persisted = _persistable_carry_facts(selected)
+
+        assert len(selected) <= 40
+        assert len(persisted) == len(selected)
+        assert persisted
+        assert all("_carry_bucket" in fact for fact in selected)
+        assert all("_carry_bucket" not in fact for fact in persisted)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
+    @patch("ingest.extract._memory.create_edge")
+    def test_apply_extracted_payloads_can_publish_prior_dry_run_result(self, mock_edge, mock_store, mock_llm, mock_opus_response):
+        from ingest.extract import apply_extracted_payloads, extract_from_transcript
+
+        mock_llm.return_value = (mock_opus_response, 1.0)
+        mock_store.side_effect = [
+            {
+                "id": "node-1",
+                "status": "created",
+                "dedup_telemetry": {
+                    "hash_exact_hits": 0,
+                    "scanned_rows": 4,
+                    "gray_zone_rows": 2,
+                    "llm_checks": 2,
+                    "llm_same_hits": 1,
+                    "llm_different_hits": 1,
+                    "fallback_reject_hits": 0,
+                    "auto_reject_hits": 0,
+                },
+            },
+            {
+                "id": "node-2",
+                "status": "created",
+                "dedup_telemetry": {
+                    "hash_exact_hits": 1,
+                    "scanned_rows": 3,
+                    "gray_zone_rows": 1,
+                    "llm_checks": 1,
+                    "llm_same_hits": 0,
+                    "llm_different_hits": 1,
+                    "fallback_reject_hits": 0,
+                    "auto_reject_hits": 1,
+                },
+            },
+        ]
+        mock_edge.return_value = {"status": "created"}
+
+        staged = extract_from_transcript(
+            transcript="User: I like coffee\n\nAssistant: noted",
+            owner_id="test",
+            label="stage",
+            session_id="sess-stage",
+            dry_run=True,
+        )
+
+        staged["facts_stored"] = 0
+        staged["facts_skipped"] = 0
+        staged["edges_created"] = 0
+        staged["facts"] = []
+        staged["snippets"] = {}
+        staged["journal"] = {}
+        staged["project_logs"] = {}
+        staged["project_log_metrics"] = {}
+        staged["dry_run"] = False
+
+        applied = apply_extracted_payloads(
+            staged,
+            owner_id="test",
+            label="flush",
+            session_id="sess-stage",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 2
+        assert applied["edges_created"] == 1
+        assert applied["dedup_hash_exact_hits"] == 1
+        assert applied["dedup_scanned_rows"] == 7
+        assert applied["dedup_gray_zone_rows"] == 3
+        assert applied["dedup_llm_checks"] == 3
+        assert applied["dedup_llm_same_hits"] == 1
+        assert applied["dedup_llm_different_hits"] == 2
+        assert applied["dedup_auto_reject_hits"] == 1
+        assert mock_store.call_count == 2
+        first_call = mock_store.call_args_list[0].kwargs
+        second_call = mock_store.call_args_list[1].kwargs
+        assert first_call["confidence"] == pytest.approx(0.9)
+        assert first_call["extraction_confidence"] == pytest.approx(0.9)
+        assert first_call["provenance_confidence"] == pytest.approx(0.9)
+        assert second_call["confidence"] == pytest.approx(0.6)
+        assert second_call["extraction_confidence"] == pytest.approx(0.6)
+        assert second_call["provenance_confidence"] == pytest.approx(0.6)
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_collapses_exact_duplicate_fact_rows(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n1", "status": "created", "dedup_telemetry": {}}
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya's half marathon finish time was 2:14",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "keywords": "half marathon time",
+                },
+                {
+                    "text": "  Maya's half marathon finish time was 2:14  ",
+                    "category": "fact",
+                    "domains": ["health", "personal"],
+                    "extraction_confidence": "high",
+                    "keywords": "running exact time",
+                    "edges": [{"subject": "Maya", "relation": "ran_time", "object": "2:14"}],
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-dupe",
+            dry_run=False,
+        )
+
+        assert applied["payload_duplicate_facts_collapsed"] == 1
+        assert applied["facts_stored"] == 1
+        assert mock_store.call_count == 1
+        call = mock_store.call_args.kwargs
+        assert call["text"] == "  Maya's half marathon finish time was 2:14  " or call["text"] == "Maya's half marathon finish time was 2:14"
+        assert call["confidence"] == pytest.approx(0.9)
+        assert call["extraction_confidence"] == pytest.approx(0.9)
+        assert call["provenance_confidence"] == pytest.approx(0.9)
+        assert sorted(call["domains"]) == ["health", "personal"]
+
+    @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     def test_skips_short_facts(self, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
@@ -459,6 +696,427 @@ class TestExtractFromTranscript:
         calls = mock_store.call_args_list
         assert calls[0].kwargs["confidence"] == 0.9  # high
         assert calls[1].kwargs["confidence"] == 0.3  # low
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_prewarms_embeddings_before_publish(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        warmed = []
+        mock_store.return_value = {"id": "n1", "status": "created", "dedup_telemetry": {}}
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya mentioned dietary tagging for the recipe app",
+                    "category": "fact",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                },
+                {
+                    "text": "Maya's birthday dinner is planned for May 18",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with patch(
+            "ingest.extract._memory.warm_embeddings",
+            side_effect=lambda texts: warmed.append(list(texts)) or {
+                "requested": len(texts),
+                "unique": len(set(texts)),
+                "cache_hits": 0,
+                "warmed": len(set(texts)),
+                "failed": 0,
+            },
+        ):
+            applied = apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-embed",
+                dry_run=False,
+            )
+
+        assert warmed == [[
+            "Maya mentioned dietary tagging for the recipe app",
+            "Maya's birthday dinner is planned for May 18",
+        ]]
+        assert applied["embedding_cache_requested"] == 2
+        assert applied["embedding_cache_unique"] == 2
+        assert applied["embedding_cache_warmed"] == 2
+
+    @patch("ingest.extract._memory.create_edge", return_value={"status": "created"})
+    @patch("ingest.extract._memory.store", return_value={"id": "n1", "status": "created", "dedup_telemetry": {}})
+    def test_apply_extracted_payloads_prewarms_edge_entity_embeddings(self, _mock_store, _mock_edge):
+        from ingest.extract import apply_extracted_payloads
+
+        warmed = []
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "maya currently lives in South Austin",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "edges": [{"subject": "maya", "relation": "lives_at", "object": "Austin"}],
+                },
+                {
+                    "text": "maya works as a product manager at a company called TechFlow",
+                    "category": "fact",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "edges": [{"subject": "maya", "relation": "works_at", "object": "TechFlow"}],
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with patch(
+            "ingest.extract._memory.warm_embeddings",
+            side_effect=lambda texts: warmed.append(list(texts)) or {
+                "requested": len(texts),
+                "unique": len(set(texts)),
+                "cache_hits": 0,
+                "warmed": len(set(texts)),
+                "failed": 0,
+            },
+        ):
+            applied = apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-edge-embed",
+                dry_run=False,
+            )
+
+        assert warmed == [
+            [
+                "maya currently lives in South Austin",
+                "maya works as a product manager at a company called TechFlow",
+            ],
+            [
+                "maya",
+                "Austin",
+                "maya",
+                "TechFlow",
+            ],
+        ]
+        assert applied["embedding_cache_requested"] == 2
+        assert applied["embedding_cache_unique"] == 2
+        assert applied["edge_embedding_cache_requested"] == 4
+        assert applied["edge_embedding_cache_unique"] == 3
+        assert applied["edge_embedding_cache_warmed"] == 3
+
+    @patch("ingest.extract._memory.create_edge")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_uses_shared_batch_write_connection(self, mock_store, mock_edge):
+        from ingest.extract import apply_extracted_payloads
+
+        read_conn = MagicMock()
+        read_conn.execute.return_value.fetchone.return_value = (0,)
+        batch_snapshot_conn = MagicMock()
+        batch_snapshot_conn.execute.return_value.fetchone.return_value = (0,)
+        shared_conn = object()
+        seen_store = []
+        seen_edge = []
+        entered = []
+
+        conns = iter([read_conn, batch_snapshot_conn, shared_conn])
+
+        @contextmanager
+        def fake_batch_write():
+            conn = next(conns)
+            entered.append(conn)
+            yield conn
+
+        def fake_store(**kwargs):
+            seen_store.append(kwargs.get("_conn"))
+            return {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+
+        def fake_edge(**kwargs):
+            seen_edge.append(kwargs.get("_conn"))
+            return {"status": "created"}
+
+        mock_store.side_effect = fake_store
+        mock_edge.side_effect = fake_edge
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya's birthday dinner is planned for May 18",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "edges": [{"subject": "Maya", "relation": "plans", "object": "birthday dinner"}],
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with patch("ingest.extract._memory.batch_write", side_effect=fake_batch_write):
+            applied = apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-batch-write",
+                dry_run=False,
+            )
+
+        assert applied["facts_stored"] == 1
+        assert applied["edges_created"] == 1
+        assert entered == [read_conn, batch_snapshot_conn, shared_conn]
+        assert seen_store == [shared_conn]
+        assert seen_edge == [shared_conn]
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_splits_publish_into_bounded_batches(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        entered = []
+        read_conn = MagicMock()
+        read_conn.execute.return_value.fetchone.return_value = (0,)
+        batch_snapshot_a = MagicMock()
+        batch_snapshot_a.execute.return_value.fetchone.return_value = (0,)
+        batch_snapshot_b = MagicMock()
+        batch_snapshot_b.execute.return_value.fetchone.return_value = (0,)
+        conn_a = object()
+        conn_b = object()
+        conns = iter([read_conn, batch_snapshot_a, conn_a, batch_snapshot_b, conn_b])
+
+        @contextmanager
+        def fake_batch_write():
+            conn = next(conns)
+            entered.append(conn)
+            yield conn
+
+        seen_store = []
+
+        def fake_store(**kwargs):
+            seen_store.append(kwargs.get("_conn"))
+            return {"id": f"fact-{len(seen_store)}", "status": "created", "dedup_telemetry": {}}
+
+        mock_store.side_effect = fake_store
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya's birthday dinner is planned for May 18",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+                {
+                    "text": "Maya wants dietary tagging in the recipe app",
+                    "category": "fact",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with patch("ingest.extract._memory.batch_write", side_effect=fake_batch_write), \
+             patch("ingest.extract._get_extract_publish_batch_size", return_value=1):
+            applied = apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-batched-publish",
+                dry_run=False,
+            )
+
+        assert applied["facts_stored"] == 2
+        assert applied["publish_batches"] == 2
+        assert entered == [read_conn, batch_snapshot_a, conn_a, batch_snapshot_b, conn_b]
+        assert seen_store == [conn_a, conn_b]
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_rechecks_only_new_rows_before_batch_publish(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        initial_snapshot = MagicMock()
+        initial_snapshot.execute.return_value.fetchone.return_value = (10,)
+        delta_snapshot = MagicMock()
+        delta_snapshot.execute.return_value.fetchone.return_value = (12,)
+        write_conn = object()
+        entered = []
+        conns = iter([initial_snapshot, delta_snapshot, write_conn])
+
+        @contextmanager
+        def fake_batch_write():
+            conn = next(conns)
+            entered.append(conn)
+            yield conn
+
+        seen_calls = []
+
+        def fake_store(**kwargs):
+            seen_calls.append(kwargs)
+            if kwargs.get("_dedup_only"):
+                return {
+                    "id": "fact-existing",
+                    "status": "duplicate",
+                    "existing_text": "Maya wants dietary tagging in the recipe app",
+                    "dedup_telemetry": {},
+                }
+            return {"id": "fact-new", "status": "created", "dedup_telemetry": {}}
+
+        mock_store.side_effect = fake_store
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya wants dietary tagging in the recipe app",
+                    "category": "fact",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with patch("ingest.extract._memory.batch_write", side_effect=fake_batch_write):
+            applied = apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-delta-recheck",
+                dry_run=False,
+            )
+
+        assert applied["facts_stored"] == 0
+        assert applied["facts_skipped"] == 1
+        assert entered == [initial_snapshot, delta_snapshot, write_conn]
+        assert len(seen_calls) == 1
+        assert seen_calls[0]["_dedup_only"] is True
+        assert seen_calls[0]["_dedup_rowid_min_exclusive"] == 10
+        assert seen_calls[0]["_dedup_rowid_max"] == 12
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_writes_publish_trace_events(self, mock_store, workspace_dir, monkeypatch):
+        from ingest.extract import apply_extracted_payloads
+
+        initial_snapshot = MagicMock()
+        initial_snapshot.execute.return_value.fetchone.return_value = (0,)
+        batch_snapshot = MagicMock()
+        batch_snapshot.execute.return_value.fetchone.return_value = (0,)
+        write_conn = object()
+        conns = iter([initial_snapshot, batch_snapshot, write_conn])
+
+        @contextmanager
+        def fake_batch_write():
+            yield next(conns)
+
+        mock_store.return_value = {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+        monkeypatch.setenv("QUAID_PUBLISH_TRACE", "1")
+        monkeypatch.setenv("QUAID_INSTANCE", "benchrunner")
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya's birthday dinner is planned for May 18",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with patch("ingest.extract._memory.batch_write", side_effect=fake_batch_write), \
+             patch("ingest.extract._memory.warm_embeddings", return_value={
+                 "requested": 1,
+                 "unique": 1,
+                 "cache_hits": 1,
+                 "warmed": 0,
+                 "failed": 0,
+             }):
+            applied = apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-trace",
+                dry_run=False,
+            )
+
+        assert applied["facts_stored"] == 1
+        trace_path = workspace_dir / "benchrunner" / "logs" / "daemon" / "publish-trace.jsonl"
+        rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        events = [row["event"] for row in rows]
+        assert "publish_start" in events
+        assert "publish_batch_conn_opened" in events
+        assert "publish_store_call_start" in events
+        assert "publish_store_call_done" in events
+        assert "publish_complete" in events
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
@@ -589,7 +1247,7 @@ class TestExtractFromTranscript:
             "facts": [{"text": "User likes jasmine tea in the morning", "category": "fact", "domains": ["personal"]}]
         }), 1.0)
         cfg = SimpleNamespace(
-            capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_size=30000),
+            capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_tokens=30000),
             retrieval=SimpleNamespace(domains={}),
             users=SimpleNamespace(default_owner="test-user"),
             docs=SimpleNamespace(
@@ -771,9 +1429,98 @@ class TestExtractFromTranscript:
         )
 
         assert mock_llm.call_count == 2
+        first_prompt = mock_llm.call_args_list[0].kwargs["prompt"]
         second_prompt = mock_llm.call_args_list[1].kwargs["prompt"]
+        assert "BEGIN TRANSCRIPT CHUNK" in first_prompt
+        assert "END TRANSCRIPT CHUNK" in first_prompt
         assert "EARLIER CHUNK CONTEXT" in second_prompt
+        assert "BEGIN TRANSCRIPT CHUNK" in second_prompt
         assert "Maya changed jobs from TechFlow to Stripe" in second_prompt
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_carry_repeat_facts_are_dropped_before_recarry(self, mock_llm, mock_chunk):
+        from ingest.extract import extract_from_transcript
+
+        mock_chunk.return_value = [
+            "User: Maya changed jobs.",
+            "User: Repeats the same fact.",
+        ]
+        repeated_fact = {
+            "text": "Maya changed jobs from TechFlow to Stripe",
+            "category": "fact",
+            "domains": ["work"],
+            "extraction_confidence": "high",
+        }
+        mock_llm.side_effect = [
+            (json.dumps({"chunk_assessment": "usable", "facts": [repeated_fact]}), 0.8),
+            (json.dumps({"chunk_assessment": "usable", "facts": [repeated_fact]}), 0.7),
+        ]
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="test",
+            dry_run=True,
+        )
+
+        assert len(result["raw_facts"]) == 1
+        assert len(result["carry_facts"]) == 1
+        assert result["carry_duplicate_facts_dropped"] == 1
+        assert result["assessment_nothing_usable"] == 1
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract._repair_non_json_extraction_payload")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
+    def test_recursively_splits_large_unparseable_chunk(
+        self,
+        mock_store,
+        mock_llm,
+        mock_repair,
+        mock_chunk,
+    ):
+        from ingest.extract import extract_from_transcript
+
+        giant_chunk = "User: " + ("large context " * 20000)
+
+        def _chunk_side_effect(text, max_tokens, split_on):
+            if max_tokens == 30000:
+                return [giant_chunk]
+            if max_tokens == 8000:
+                return [
+                    "User: Maya lives in Austin.",
+                    "User: Maya works at Stripe.",
+                ]
+            raise AssertionError(f"unexpected max_tokens={max_tokens}")
+
+        mock_chunk.side_effect = _chunk_side_effect
+        mock_repair.return_value = None
+        mock_llm.side_effect = [
+            ("not valid json", 0.3),
+            (json.dumps({"facts": [{"text": "Maya lives in Austin.", "domains": ["personal"]}]}), 0.2),
+            (json.dumps({"facts": [{"text": "Maya works at Stripe.", "domains": ["personal"]}]}), 0.2),
+        ]
+        mock_store.return_value = {"id": "n1", "status": "created"}
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="split-test",
+        )
+
+        assert mock_llm.call_count == 3
+        assert result["chunks_total"] == 1
+        assert result["root_chunks"] == 1
+        assert result["chunks_processed"] == 2
+        assert result["facts_stored"] == 2
+        assert result["split_events"] == 1
+        assert result["split_child_chunks"] == 2
+        assert result["leaf_chunks"] == 2
+        assert result["max_split_depth"] == 1
+        assert result["deep_calls"] == 3
+        assert result["repair_calls"] == 1
+        assert result["unclassified_empty_payloads"] == 0
 
     @patch("ingest.extract.time.time")
     @patch("lib.batch_utils.chunk_text_by_tokens")
@@ -786,10 +1533,11 @@ class TestExtractFromTranscript:
             "User: second chunk",
         ]
         mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
-        # deadline init, chunk1 remaining check, chunk2 remaining check (expired).
-        # Use an unbounded iterator so incidental logging calls that touch time.time()
-        # cannot exhaust the mock in CI.
-        mock_time.side_effect = itertools.chain([100.0, 100.0, 701.0], itertools.repeat(701.0))
+        # deadline init, outer chunk1 remaining check, inner chunk1 remaining
+        # check, outer chunk2 remaining check (expired). Use an unbounded
+        # iterator so incidental logging calls that touch time.time() cannot
+        # exhaust the mock in CI.
+        mock_time.side_effect = itertools.chain([100.0, 100.0, 100.0, 701.0], itertools.repeat(701.0))
 
         result = extract_from_transcript(
             transcript="dummy",
@@ -799,6 +1547,82 @@ class TestExtractFromTranscript:
 
         assert result["facts_stored"] == 0
         assert mock_llm.call_count == 1
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_processes_all_chunks_without_silent_cap(self, mock_llm, mock_chunk):
+        from ingest.extract import extract_from_transcript
+
+        mock_chunk.return_value = [f"User: chunk {i}" for i in range(12)]
+        mock_llm.side_effect = [
+            (json.dumps({"facts": []}), 0.1)
+            for _ in range(12)
+        ]
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="many-chunks",
+        )
+
+        assert result["chunks_total"] == 12
+        assert mock_llm.call_count == 12
+        assert result["root_chunks"] == 12
+        assert result["split_events"] == 0
+        assert result["leaf_chunks"] == 12
+        assert result["max_split_depth"] == 0
+        assert result["deep_calls"] == 12
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
+    def test_parallel_root_chunk_extraction_requires_disabled_carry(
+        self,
+        mock_store,
+        mock_llm,
+        mock_chunk,
+        monkeypatch,
+    ):
+        from ingest.extract import extract_from_transcript
+
+        root_chunks = [
+            "User: Maya likes coffee.",
+            "User: Maya works at Stripe.",
+            "User: Maya lives in Austin.",
+        ]
+        prompts = []
+
+        def _fake_llm(*, prompt, **_kwargs):
+            prompts.append(prompt)
+            if "likes coffee" in prompt:
+                fact_text = "Maya likes coffee."
+            elif "works at Stripe" in prompt:
+                fact_text = "Maya works at Stripe."
+            elif "lives in Austin" in prompt:
+                fact_text = "Maya lives in Austin."
+            else:
+                raise AssertionError(f"unexpected prompt: {prompt[:120]}")
+            return json.dumps({"facts": [{"text": fact_text, "domains": ["personal"]}]}), 0.1
+
+        mock_chunk.return_value = root_chunks
+        mock_llm.side_effect = _fake_llm
+        mock_store.return_value = {"id": "n1", "status": "created"}
+        monkeypatch.setenv("QUAID_EXTRACT_DISABLE_CARRY_CONTEXT", "1")
+        monkeypatch.setenv("QUAID_EXTRACT_PARALLEL_ROOT_WORKERS", "3")
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="parallel-roots",
+        )
+
+        assert result["carry_context_enabled"] is False
+        assert result["parallel_root_workers"] == 3
+        assert result["root_chunks"] == 3
+        assert result["chunks_processed"] == 3
+        assert result["facts_stored"] == 3
+        assert result["deep_calls"] == 3
+        assert all("EARLIER CHUNK CONTEXT" not in prompt for prompt in prompts)
 
 
 # ---------------------------------------------------------------------------
@@ -862,6 +1686,42 @@ class TestLoadPrompt:
         assert '"text"' in prompt
         assert '"category"' in prompt
 
+    def test_prompt_preserves_exact_literals_and_callback_objects(self):
+        from ingest.extract import _load_extraction_prompt
+
+        prompt = _load_extraction_prompt()
+        assert "When an exact literal value is stated" in prompt
+        assert "foam roller" in prompt
+        assert "birthday dinner" in prompt
+        assert 'Return chunk_assessment "needs_smaller_chunk"' in prompt
+
+    @patch("ingest.extract.call_fast_reasoning")
+    def test_json_repair_prompt_prefers_needs_smaller_chunk_for_truncated_dense_output(self, mock_fast):
+        from ingest.extract import _repair_non_json_extraction_payload
+
+        mock_fast.return_value = (
+            json.dumps(
+                {
+                    "chunk_assessment": "needs_smaller_chunk",
+                    "facts": [],
+                    "soul_snippets": {},
+                    "journal_entries": {},
+                    "project_logs": {},
+                }
+            ),
+            0.3,
+        )
+
+        repaired = _repair_non_json_extraction_payload(
+            response_text="```json\n{\"facts\": [{\"text\": \"truncated",
+            chunk_index=1,
+            label="repair-test",
+        )
+
+        assert repaired["chunk_assessment"] == "needs_smaller_chunk"
+        repair_prompt = mock_fast.call_args.kwargs["prompt"]
+        assert "return chunk_assessment as needs_smaller_chunk" in repair_prompt
+
 
 # ---------------------------------------------------------------------------
 # _get_owner_id tests
@@ -888,18 +1748,90 @@ class TestGetOwnerId:
 
 
 class TestChunkCarryContext:
-    def test_prefers_high_confidence_and_caps_size(self):
+    def test_prefers_recent_tail_and_caps_size(self):
         from ingest.extract import _build_chunk_carry_context
 
         facts = [
-            {"text": "A high confidence technical migration happened", "category": "fact", "source": "user", "extraction_confidence": "high"},
-            {"text": "A medium confidence note about dinner plans", "category": "fact", "source": "user", "extraction_confidence": "medium"},
-            {"text": "A low confidence guess", "category": "fact", "source": "assistant", "extraction_confidence": "low"},
+            {"text": "Old stable fact about Maya's first job", "category": "fact", "speaker": "user", "extraction_confidence": "high"},
+            {"text": "Middle fact about dinner plans next week", "category": "fact", "speaker": "user", "extraction_confidence": "medium"},
+            {"text": "Recent fact about Stripe start date", "category": "fact", "speaker": "user", "extraction_confidence": "high"},
         ]
         ctx = _build_chunk_carry_context(facts, max_items=2, max_chars=300)
-        assert "high" in ctx
-        assert "medium" in ctx
-        assert "low" not in ctx
+        assert "Old stable fact" not in ctx
+        assert "Middle fact" in ctx
+        assert "Recent fact" in ctx
+        assert "Recent carry facts:" in ctx
+        assert "[fact, user, high]" in ctx or "[fact, user, medium]" in ctx
+
+    def test_keeps_sticky_exact_and_agent_facts_in_bounded_context(self):
+        from ingest.extract import _build_chunk_carry_context
+
+        facts = [
+            {
+                "text": "Maya finished her half marathon in 2:14.",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "high",
+            },
+            {
+                "text": "The agent recommended a foam roller routine after Maya's long run.",
+                "category": "decision",
+                "speaker": "agent",
+                "extraction_confidence": "medium",
+                "project": "recipe-app",
+            },
+        ]
+        for idx in range(12):
+            facts.append(
+                {
+                    "text": f"Generic recent project chatter number {idx} with no exact value",
+                    "category": "fact",
+                    "speaker": "user",
+                    "extraction_confidence": "medium",
+                }
+            )
+
+        ctx = _build_chunk_carry_context(facts, max_items=8, max_chars=1600)
+        assert "Anchor carry facts:" in ctx
+        assert "Recent carry facts:" in ctx
+        assert "2:14" in ctx
+        assert "foam roller routine" in ctx
+        assert "project:recipe-app" in ctx
+
+    def test_anchor_facts_survive_char_budget_before_recent_chatter(self):
+        from ingest.extract import _build_chunk_carry_context
+
+        facts = [
+            {
+                "text": "Maya finished her half marathon in 2:14 with a strong last mile.",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "high",
+            },
+            {
+                "text": "The agent recommended a foam roller routine for Maya's knee.",
+                "category": "decision",
+                "speaker": "agent",
+                "extraction_confidence": "medium",
+            },
+        ]
+        for idx in range(20):
+            facts.append(
+                {
+                    "text": (
+                        f"Generic recent project chatter number {idx} about ongoing cleanup "
+                        f"and follow-up tasks with no exact retrieval handle."
+                    ),
+                    "category": "fact",
+                    "speaker": "user",
+                    "extraction_confidence": "medium",
+                }
+            )
+
+        ctx = _build_chunk_carry_context(facts, max_items=10, max_chars=420)
+        assert "Anchor carry facts:" in ctx
+        assert "2:14" in ctx
+        assert "foam roller routine" in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -926,5 +1858,3 @@ class TestCLI:
         )
         assert result.returncode != 0
         assert "not found" in result.stderr.lower() or "error" in result.stderr.lower()
-
-

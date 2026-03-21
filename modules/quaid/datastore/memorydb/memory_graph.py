@@ -33,6 +33,8 @@ __all__ = [
     "classify_intent", "has_owner_pronoun", "resolve_owner_person",
     "graph_aware_recall", "route_query", "extract_entities_from_text",
     "should_expand_graph",
+    "batch_write",
+    "warm_embedding_cache",
 ]
 
 import hashlib
@@ -65,6 +67,8 @@ from datastore.memorydb.domain_registry import (
 from lib.domain_runtime import publish_domains_to_runtime_config
 from lib.embeddings import (
     get_embedding as _lib_get_embedding,
+    get_embeddings as _lib_get_embeddings,
+    get_embeddings_provider as _lib_get_embeddings_provider,
     pack_embedding as _lib_pack_embedding,
     unpack_embedding as _lib_unpack_embedding,
 )
@@ -530,6 +534,17 @@ class MemoryGraph:
         if model != "unknown":
             try:
                 with self._get_conn() as conn:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS embedding_cache (
+                            text_hash TEXT NOT NULL,
+                            embedding BLOB NOT NULL,
+                            model TEXT NOT NULL,
+                            created_at TEXT DEFAULT (datetime('now')),
+                            PRIMARY KEY (text_hash, model)
+                        )
+                        """
+                    )
                     row = conn.execute(
                         "SELECT embedding FROM embedding_cache WHERE text_hash = ? AND model = ?",
                         (text_hash, model)
@@ -551,6 +566,117 @@ class MemoryGraph:
             except Exception:
                 pass  # Cache write failure is non-fatal
         return embedding
+
+    def warm_embedding_cache(
+        self,
+        texts: List[str],
+        *,
+        max_workers: Optional[int] = None,
+        pool_name: str = "embeddings",
+        task_name: str = "embedding_cache",
+    ) -> Dict[str, int]:
+        """Precompute and persist embeddings for a batch of texts.
+
+        This front-loads embedding work so later `store()` calls can reuse the
+        existing cache instead of serially calling the provider again.
+        """
+        stats = {
+            "requested": 0,
+            "unique": 0,
+            "cache_hits": 0,
+            "warmed": 0,
+            "failed": 0,
+            "skipped_empty": 0,
+        }
+        if not texts:
+            return stats
+
+        unique_by_hash: Dict[str, str] = {}
+        for raw_text in texts:
+            text = str(raw_text or "").strip()
+            if not text:
+                stats["skipped_empty"] += 1
+                continue
+            stats["requested"] += 1
+            text_hash = content_hash(text)
+            if text_hash not in unique_by_hash:
+                unique_by_hash[text_hash] = text
+        if not unique_by_hash:
+            return stats
+
+        stats["unique"] = len(unique_by_hash)
+        model = "unknown"
+        try:
+            model = _lib_get_embeddings_provider().model_name
+        except Exception:
+            model = "unknown"
+        if not model or model == "unknown":
+            stats["failed"] = len(unique_by_hash)
+            return stats
+
+        known_hashes: set[str] = set()
+        hash_keys = list(unique_by_hash.keys())
+        with self._get_conn() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS embedding_cache (
+                    text_hash TEXT NOT NULL,
+                    embedding BLOB NOT NULL,
+                    model TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    PRIMARY KEY (text_hash, model)
+                )
+                """
+            )
+            for offset in range(0, len(hash_keys), 400):
+                batch = hash_keys[offset:offset + 400]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT text_hash FROM embedding_cache WHERE model = ? AND text_hash IN ({placeholders})",
+                    [model, *batch],
+                ).fetchall()
+                known_hashes.update(str(row["text_hash"]) for row in rows if row["text_hash"])
+
+        missing_hashes = [text_hash for text_hash in hash_keys if text_hash not in known_hashes]
+        stats["cache_hits"] = len(known_hashes)
+        if not missing_hashes:
+            return stats
+
+        missing_texts = [unique_by_hash[text_hash] for text_hash in missing_hashes]
+        embeddings = _lib_get_embeddings(
+            missing_texts,
+            max_workers=max_workers,
+            pool_name=pool_name,
+            task_name=task_name,
+        )
+
+        writes: List[Tuple[str, bytes]] = []
+        for text_hash, embedding in zip(missing_hashes, embeddings):
+            if not embedding:
+                stats["failed"] += 1
+                continue
+            writes.append((text_hash, self._pack_embedding(embedding)))
+        if not writes:
+            return stats
+
+        with self._get_conn() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS embedding_cache (
+                    text_hash TEXT NOT NULL,
+                    embedding BLOB NOT NULL,
+                    model TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    PRIMARY KEY (text_hash, model)
+                )
+                """
+            )
+            conn.executemany(
+                "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model) VALUES (?, ?, ?)",
+                [(text_hash, packed, model) for text_hash, packed in writes],
+            )
+        stats["warmed"] = len(writes)
+        return stats
 
     def _pack_embedding(self, embedding: List[float]) -> bytes:
         """Pack embedding as binary blob. Delegates to lib.embeddings."""
@@ -600,7 +726,12 @@ class MemoryGraph:
     # Node Operations
     # ==========================================================================
 
-    def add_node(self, node: Node, embed: bool = True) -> str:
+    def add_node(
+        self,
+        node: Node,
+        embed: bool = True,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> str:
         """Add a NEW node to the graph. For updating existing nodes, use update_node().
 
         WARNING: This uses INSERT OR REPLACE which will DELETE then re-INSERT if the
@@ -618,8 +749,9 @@ class MemoryGraph:
         if not node.content_hash:
             node.content_hash = content_hash(node.name)
 
-        with self._get_conn() as conn:
-            conn.execute("""
+        conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
+        with conn_cm as active_conn:
+            active_conn.execute("""
                 INSERT OR REPLACE INTO nodes
                 (id, type, name, attributes, embedding, verified, pinned, confidence,
                  source, source_id, privacy, valid_from, valid_until,
@@ -665,8 +797,8 @@ class MemoryGraph:
             if node.embedding and _lib_has_vec():
                 packed = self._pack_embedding(node.embedding)
                 try:
-                    self._ensure_vec_table(conn, node.embedding)
-                    conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                    self._ensure_vec_table(active_conn, node.embedding)
+                    active_conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                                  (node.id, packed))
                 except Exception as exc:
                     logger.warning(
@@ -678,10 +810,15 @@ class MemoryGraph:
                         raise RuntimeError(
                             "Vector index upsert failed during add_node while fail-hard mode is enabled"
                         ) from exc
-            self._sync_node_domains(conn, node.id, self._extract_domains_from_attrs(node.attributes))
+            self._sync_node_domains(active_conn, node.id, self._extract_domains_from_attrs(node.attributes))
         return node.id
 
-    def update_node(self, node: Node, embed: bool = False) -> bool:
+    def update_node(
+        self,
+        node: Node,
+        embed: bool = False,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> bool:
         """Update an existing node without triggering ON DELETE CASCADE on edges.
 
         Uses UPDATE instead of INSERT OR REPLACE, preserving all edges.
@@ -697,8 +834,9 @@ class MemoryGraph:
         if not node.content_hash:
             node.content_hash = content_hash(node.name)
 
-        with self._get_conn() as conn:
-            result = conn.execute("""
+        conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
+        with conn_cm as active_conn:
+            result = active_conn.execute("""
                 UPDATE nodes SET
                     type = ?, name = ?, attributes = ?, embedding = ?,
                     verified = ?, pinned = ?, confidence = ?,
@@ -752,15 +890,15 @@ class MemoryGraph:
             if node.embedding and _lib_has_vec() and result.rowcount > 0:
                 packed = self._pack_embedding(node.embedding)
                 try:
-                    self._ensure_vec_table(conn, node.embedding)
-                    conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                    self._ensure_vec_table(active_conn, node.embedding)
+                    active_conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                                  (node.id, packed))
                 except Exception as exc:
                     recovered = False
                     # Recover any vec upsert failure via delete-then-insert in the same txn.
                     try:
-                        conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node.id,))
-                        conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, packed))
+                        active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node.id,))
+                        active_conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, packed))
                         recovered = True
                         logger.warning(
                             "update_node vec_nodes upsert recovered via delete+insert for %s: %s",
@@ -782,7 +920,7 @@ class MemoryGraph:
                             node.id,
                         )
             if result.rowcount > 0:
-                self._sync_node_domains(conn, node.id, self._extract_domains_from_attrs(node.attributes))
+                self._sync_node_domains(active_conn, node.id, self._extract_domains_from_attrs(node.attributes))
             return result.rowcount > 0
 
     def get_node(self, node_id: str) -> Optional[Node]:
@@ -2529,6 +2667,11 @@ def get_graph() -> MemoryGraph:
         if _graph is None:
             _graph = MemoryGraph()
         return _graph
+
+
+def batch_write():
+    """Shared write transaction for batched publish work."""
+    return get_graph()._get_conn()
 
 
 def stats() -> Dict[str, Any]:
@@ -5395,26 +5538,71 @@ def _extract_distinctive_query_terms(query: str, *, limit: int = 8) -> List[str]
 
 def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str, Any]:
     lower = str(query or "").lower()
+    query_terms = _extract_distinctive_query_terms(query)
+    assistant_like = bool(re.search(r"\b(agent|assistant|ai)\b", lower))
     current_like = bool(
         re.search(r"\b(current|currently|latest|now|today|most recent|as of|still|yet)\b", lower)
+    )
+    temporal_like = bool(
+        current_like
+        or intent == "WHEN"
+        or re.search(
+            r"\b(when|date|time|scheduled|schedule|birthday|anniversary|recently|by [a-z]+ \d{1,2}|by \d{4}|\d{4})\b",
+            lower,
+        )
     )
     progression_like = bool(
         re.search(r"\b(evolution|evolve|changed|change over time|progression|trace|over time|what happened)\b", lower)
     )
+    plural_query_terms = [term for term in query_terms if len(term) >= 4 and term.endswith("s")]
+    enumeration_like = bool(
+        re.search(r"\b(what|which|list|name)\b", lower)
+        and (
+            re.search(r"\b(all|each|both|several|multiple|available|options?)\b", lower)
+            or re.search(r"\b(exist|exists|include|includes|support|supports|cover|covers|contain|contains|suggest|suggested)\b", lower)
+            or bool(plural_query_terms)
+        )
+    )
+    requirements: List[str] = []
+
+    def _add(requirement: str) -> None:
+        if requirement not in requirements:
+            requirements.append(requirement)
+
+    if assistant_like:
+        _add("assistant_source")
+    if temporal_like:
+        _add("temporal")
+    if intent == "WHO" or re.search(
+        r"\b(who|partner|wife|husband|mom|mother|dad|father|sister|brother|friend|coworker|manager|pet|dog|cat|child|children|son|daughter|nephew|niece|family|name)\b",
+        lower,
+    ):
+        _add("identity")
+    if intent == "WHERE" or re.search(
+        r"\b(where|location|located|live|lives|living|address|neighborhood|city|country|house|home|apartment)\b",
+        lower,
+    ):
+        _add("location")
+    if re.search(r"\b(employer|company|team|role|title|promotion|promoted|joined|left|work|works)\b", lower):
+        _add("organization")
+    if intent == "WHY" or re.search(r"\b(why|reason|motivat|cause|caused|led to|due to|so that)\b", lower):
+        _add("causal")
+    if enumeration_like:
+        _add("enumeration")
+    if intent == "PROJECT" or re.search(
+        r"\b(api|schema|database|db|table|field|resolver|graphql|rest|middleware|test|tests|stack|framework|architecture|deployment|frontend|backend|implementation|code|source|file|version|bug|logging|observability)\b",
+        lower,
+    ):
+        _add("technical")
+
     return {
-        "requirements": [],
-        "assistant_like": bool(re.search(r"\b(agent|assistant|ai)\b", lower)),
-        "temporal_like": bool(
-            current_like
-            or intent == "WHEN"
-            or re.search(
-                r"\b(when|date|time|scheduled|schedule|birthday|anniversary|recently|by [a-z]+ \d{1,2}|by \d{4}|\d{4})\b",
-                lower,
-            )
-        ),
+        "requirements": requirements,
+        "assistant_like": assistant_like,
+        "temporal_like": temporal_like,
         "current_like": current_like,
         "progression_like": progression_like,
-        "query_terms": _extract_distinctive_query_terms(query),
+        "enumeration_like": enumeration_like,
+        "query_terms": query_terms,
     }
 
 
@@ -5449,6 +5637,21 @@ def _row_matches_requirement(row: Dict[str, Any], requirement: str) -> bool:
         )
     if requirement == "causal":
         return bool(re.search(r"\b(because|reason|motivat|cause|caused|led to|due to|to help|to support|so that|which matters)\b", lower))
+    if requirement == "enumeration":
+        comma_count = text.count(",")
+        semicolon_count = text.count(";")
+        if comma_count + semicolon_count >= 2:
+            return True
+        if bool(re.search(r"\b\d+\s+(labels?|fields?|files?|tests?|suites?|restaurants?|projects?|people|names?)\b", lower)):
+            return True
+        if bool(
+            re.search(
+                r"\b(defines?|includes?|supports?|covers?|contains?|lists?|across|such as|options?|allowed|available|checkboxes|presets?)\b",
+                lower,
+            )
+        ):
+            return " and " in lower or ":" in text or "," in text
+        return False
     if requirement == "technical":
         return bool(
             re.search(r"\b(api|schema|database|db|table|field|resolver|graphql|rest|middleware|test|tests|stack|framework|architecture|deployment|frontend|backend|implementation|code|source|file)\b", lower)
@@ -5479,6 +5682,10 @@ def _evaluate_quality_gate_readiness(
     min_overlap = 0 if not query_terms else (1 if len(query_terms) <= 2 else 2)
     lexical_ready = (best_overlap >= min_overlap) if min_overlap else bool(sample)
     temporal_rows = sum(1 for row in sample if _row_matches_requirement(row, "temporal"))
+    requirement_rows = {
+        requirement: sum(1 for row in sample if _row_matches_requirement(row, requirement))
+        for requirement in analysis.get("requirements") or []
+    }
     ready = bool(sample) and lexical_ready
     needs_validation = bool(sample) and (
         (query_terms and overlap_ratio < 0.67)
@@ -5486,9 +5693,12 @@ def _evaluate_quality_gate_readiness(
         or analysis["current_like"]
         or analysis["progression_like"]
     )
+    unresolved: List[str] = []
+    if not ready:
+        unresolved.append("low_query_term_coverage")
     return {
-        "requirements": [],
-        "coverage": {},
+        "requirements": list(analysis.get("requirements") or []),
+        "coverage": requirement_rows,
         "query_terms": query_terms,
         "best_overlap": best_overlap,
         "overlap_ratio": round(overlap_ratio, 3),
@@ -5498,9 +5708,10 @@ def _evaluate_quality_gate_readiness(
         "temporal_rows": temporal_rows,
         "current_like": analysis["current_like"],
         "progression_like": analysis["progression_like"],
+        "enumeration_like": analysis.get("enumeration_like", False),
         "ready": ready,
         "needs_validation": needs_validation,
-        "unresolved": [] if ready else ["low_query_term_coverage"],
+        "unresolved": unresolved,
     }
 
 
@@ -5577,15 +5788,16 @@ def _build_fast_drill_fallback_queries(
     """
     gate = dict(gate_eval or {})
     planner = dict(planner_meta or {})
-    if not planner.get("used_llm"):
+    preserved_exact = str(planner.get("bailout_reason") or "") == "preserve_short_exact_query"
+    if not planner.get("used_llm") and not preserved_exact:
         return []
-    if str(planner.get("query_shape") or "") != "broad":
+    if str(planner.get("query_shape") or "") not in {"broad", "focused", "narrow"}:
         return []
     stores = _planner_store_plan(planner.get("planned_stores") or ["vector"])
     if stores not in (["vector"], ["vector", "graph"]):
         return []
     overlap = float(gate.get("overlap_ratio") or 0.0)
-    if overlap < 0.55 or overlap > 0.65:
+    if overlap < 0.45 or overlap > 0.75:
         return []
     terms = _extract_distinctive_query_terms(query, limit=6)
     if len(terms) < 3:
@@ -5618,10 +5830,24 @@ def _compute_query_fit_multiplier(
     overlap = _query_term_overlap(row, query_terms)
     if overlap:
         bonus += min(0.12, overlap * 0.04)
-    if analysis["assistant_like"] and _row_matches_requirement(row, "assistant_source"):
-        bonus += 0.08
+    requirement_bonus = {
+        "assistant_source": 0.08,
+        "temporal": 0.05,
+        "identity": 0.05,
+        "location": 0.05,
+        "organization": 0.05,
+        "causal": 0.05,
+        "enumeration": 0.05,
+        "technical": 0.04,
+    }
+    structured_enumeration = bool({"technical", "assistant_source"} & set(analysis.get("requirements") or []))
+    for requirement in analysis.get("requirements") or []:
+        if requirement == "enumeration" and not structured_enumeration:
+            continue
+        if _row_matches_requirement(row, requirement):
+            bonus += requirement_bonus.get(requirement, 0.0)
 
-    return 1.0 + min(0.18, bonus)
+    return 1.0 + min(0.24, bonus)
 
 
 def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str = "full") -> Dict[str, Any]:
@@ -5825,19 +6051,48 @@ def _plan_fanout_queries(
         return _finish([clean], "too_short")
     if planner_profile == "off":
         return _finish([clean], "planner_disabled")
+    planned_default_stores = list(_planner_store_plan(default_stores))
     if (
-        not default_project
-        and (
-            profile["shape"] in {"narrow", "focused"}
-            or (
-                profile["shape"] == "broad"
-                and int(profile["token_count"]) <= 8
-                and "multi_clause" not in set(profile["signals"])
-            )
-        )
-        and int(profile["token_count"]) <= 8
-        and int(profile["named_entity_tokens"]) >= 1
+        profile["shape"] == "broad"
+        and int(profile["token_count"]) <= 5
+        and "multi_clause" not in set(profile["signals"])
+        and default_project is None
     ):
+        return _finish([clean], "preserve_short_exact_query")
+    short_causal_lookup = (
+        int(profile["token_count"]) <= 12
+        and "multi_clause" not in set(profile["signals"])
+        and any(
+            marker in clean.lower()
+            for marker in ("why ", "reason ", "because ", "cause ", "how come")
+        )
+        and (
+            default_project is not None
+            or "docs" in planned_default_stores
+            or int(profile["named_entity_tokens"]) >= 1
+        )
+    )
+    exact_short_query = (
+        int(profile["token_count"]) <= 12
+        and (
+            "broad_intent" not in set(profile["signals"])
+            or short_causal_lookup
+        )
+        and (
+            "multi_clause" not in set(profile["signals"])
+            or int(profile["named_entity_tokens"]) >= 2
+        )
+    )
+    preserve_exact_query = (
+        exact_short_query
+        and (
+            default_project is not None
+            or "docs" in planned_default_stores
+            or int(profile["named_entity_tokens"]) >= 1
+            or profile["shape"] in {"narrow", "focused"}
+        )
+    )
+    if preserve_exact_query:
         return _finish([clean], "preserve_short_exact_query")
     if not _HAS_LLM_CLIENTS:
         return _planner_fallback_or_raise(
@@ -5899,10 +6154,10 @@ def _plan_fanout_queries(
         parsed = parse_json_response(result)
         queries = parsed.get("queries") if isinstance(parsed, dict) else None
         if isinstance(parsed, dict):
-            planned_stores = _planner_store_plan(parsed.get("stores")) or list(_planner_store_plan(default_stores))
+            planned_stores = _planner_store_plan(parsed.get("stores")) or planned_default_stores
             planned_project = _sanitize_planned_project(parsed.get("project")) or default_project
         else:
-            planned_stores = list(_planner_store_plan(default_stores))
+            planned_stores = planned_default_stores
             planned_project = default_project
         meta["planned_stores"] = planned_stores
         meta["planned_project"] = planned_project
@@ -6309,25 +6564,57 @@ def recall_fast(
     }
 
     if should_fast_drill and fast_drill_enabled:
-        drill_budget_s = 1.2
-        planned_drill = _drill_plan_queries(
+        preserved_exact_fast_path = str((planner_meta or {}).get("bailout_reason") or "") == "preserve_short_exact_query"
+        drill_queries = _build_fast_drill_fallback_queries(
             query,
-            rows,
-            planned_queries,
-            timeout_s=drill_budget_s,
-            return_meta=True,
+            gate_eval=gate_eval,
+            planner_meta=planner_meta,
         )
-        if isinstance(planned_drill, tuple) and len(planned_drill) == 2:
-            drill_queries, drill_meta = planned_drill
-        else:
-            drill_queries = planned_drill if isinstance(planned_drill, list) else []
+        if drill_queries:
+            lowered_drill = {" ".join(str(item or "").lower().split()) for item in drill_queries}
+            clean_query = " ".join((query or "").split())
+            if clean_query and clean_query.lower() not in lowered_drill:
+                drill_queries.insert(0, clean_query)
             drill_meta = {
                 "used_llm": False,
                 "queries_count": len(drill_queries),
                 "elapsed_ms": 0,
-                "bailout_reason": None,
+                "bailout_reason": "deterministic_keyword_fallback",
                 "done": False,
+                "planned_stores": list(planned_stores),
+                "planned_project": planned_project,
             }
+        elif preserved_exact_fast_path:
+            drill_meta = {
+                "used_llm": False,
+                "queries_count": 0,
+                "elapsed_ms": 0,
+                "bailout_reason": "preserved_exact_skip_llm_drill",
+                "done": False,
+                "planned_stores": list(planned_stores),
+                "planned_project": planned_project,
+            }
+        else:
+            drill_budget_s = 1.2
+            planned_drill = _drill_plan_queries(
+                query,
+                rows,
+                planned_queries,
+                timeout_s=drill_budget_s,
+                return_meta=True,
+                raise_on_error=_is_fail_hard_mode(),
+            )
+            if isinstance(planned_drill, tuple) and len(planned_drill) == 2:
+                drill_queries, drill_meta = planned_drill
+            else:
+                drill_queries = planned_drill if isinstance(planned_drill, list) else []
+                drill_meta = {
+                    "used_llm": False,
+                    "queries_count": len(drill_queries),
+                    "elapsed_ms": 0,
+                    "bailout_reason": None,
+                    "done": False,
+                }
         if not drill_queries:
             drill_queries = _build_fast_drill_fallback_queries(
                 query,
@@ -6418,6 +6705,7 @@ def _drill_plan_queries(
     already_searched: List[str],
     timeout_s: float = 3.0,
     return_meta: bool = False,
+    raise_on_error: bool = False,
 ) -> Any:
     """Given current results, identify gaps and generate new search queries.
 
@@ -6445,8 +6733,34 @@ def _drill_plan_queries(
             return out, meta
         return out
 
+    def _planner_fallback_or_raise(
+        bailout_reason: str,
+        message: str,
+        *,
+        exc: Optional[Exception] = None,
+    ):
+        meta["bailout_reason"] = bailout_reason
+        meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
+        if raise_on_error:
+            detail = (
+                f"{message} "
+                f"(planner_timeout_ms={meta.get('timeout_ms', 0)}, "
+                f"planner_elapsed_ms={meta.get('elapsed_ms', 0)})"
+            )
+            if exc is not None:
+                raise RuntimeError(
+                    f"Recall drill planner failed while failHard is enabled: {detail}"
+                ) from exc
+            raise RuntimeError(
+                f"Recall drill planner failed while failHard is enabled: {detail}"
+            )
+        return _finish([], bailout_reason)
+
     if not _HAS_LLM_CLIENTS:
-        return _finish([], "no_llm_clients")
+        return _planner_fallback_or_raise(
+            "no_llm_clients",
+            "LLM drill planner is unavailable",
+        )
 
     # Build compact result summary with temporal/source hints so the drill
     # planner can tell the difference between broad related context and
@@ -6534,8 +6848,12 @@ def _drill_plan_queries(
         if not out:
             return _finish([], "planner_returned_empty")
         return _finish(out)
-    except Exception:
-        return _finish([], "planner_exception")
+    except Exception as exc:
+        return _planner_fallback_or_raise(
+            "planner_exception",
+            str(exc) or exc.__class__.__name__,
+            exc=exc,
+        )
 
 
 def recall(
@@ -7288,6 +7606,10 @@ def store(
     subject_entity_id: Optional[str] = None,  # canonical subject entity id
     created_at: Optional[str] = None,  # Override created_at timestamp (ISO format)
     accessed_at: Optional[str] = None,  # Override accessed_at timestamp (ISO format)
+    _conn: Optional[sqlite3.Connection] = None,
+    _dedup_rowid_min_exclusive: Optional[int] = None,
+    _dedup_rowid_max: Optional[int] = None,
+    _dedup_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Store a new memory with deduplication.
@@ -7314,7 +7636,7 @@ def store(
         from lib.adapter import get_adapter
         breaker = check_write_allowed(get_adapter().data_dir())
         if not breaker.allows_writes():
-            return {"id": None, "status": "blocked", "reason": f"circuit_breaker:{breaker.status}"}
+            return _with_dedup_telemetry({"id": None, "status": "blocked", "reason": f"circuit_breaker:{breaker.status}"})
     except Exception:
         pass
 
@@ -7375,6 +7697,21 @@ def store(
     node_type = type_map.get(category.lower(), "Fact")
 
     graph = get_graph()
+    dedup_telemetry: Dict[str, int] = {
+        "hash_exact_hits": 0,
+        "scanned_rows": 0,
+        "gray_zone_rows": 0,
+        "llm_checks": 0,
+        "llm_same_hits": 0,
+        "llm_different_hits": 0,
+        "fallback_reject_hits": 0,
+        "auto_reject_hits": 0,
+    }
+
+    def _with_dedup_telemetry(payload: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(payload or {})
+        out["dedup_telemetry"] = dict(dedup_telemetry)
+        return out
 
     def _merge_session_id(existing_value: Optional[str], new_value: Optional[str]) -> Optional[str]:
         if not new_value:
@@ -7456,14 +7793,38 @@ def store(
             existing.provenance_confidence = float(provenance_confidence)
         existing.attributes = attrs
 
+    rowid_filter_parts: List[str] = []
+    rowid_filter_params: List[Any] = []
+    rowid_min = None
+    rowid_max = None
+    if _dedup_rowid_min_exclusive is not None:
+        try:
+            rowid_min = int(_dedup_rowid_min_exclusive)
+        except (TypeError, ValueError):
+            rowid_min = None
+        if rowid_min is not None and rowid_min >= 0:
+            rowid_filter_parts.append(" AND rowid > ?")
+            rowid_filter_params.append(rowid_min)
+    if _dedup_rowid_max is not None:
+        try:
+            rowid_max = int(_dedup_rowid_max)
+        except (TypeError, ValueError):
+            rowid_max = None
+        if rowid_max is not None and rowid_max >= 0:
+            rowid_filter_parts.append(" AND rowid <= ?")
+            rowid_filter_params.append(rowid_max)
+    rowid_filter_sql = "".join(rowid_filter_parts)
+
     # Fast exact-dedup: content hash check (before embedding, saves API calls)
     text_hash = content_hash(text)
     if not skip_dedup:
-        with graph._get_conn() as conn:
+        conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
+        with conn_cm as conn:
             owner_clause = "AND (owner_id = ? OR owner_id IS NULL)" if owner_id else ""
-            params = [text_hash] + ([owner_id] if owner_id else [])
+            params = [text_hash] + rowid_filter_params + ([owner_id] if owner_id else [])
             existing_row = conn.execute(f"""
                 SELECT * FROM nodes WHERE content_hash = ?
+                  {rowid_filter_sql}
                   AND (status IS NULL OR status IN ('approved', 'pending', 'active', 'flagged'))
                   AND deleted_at IS NULL
                   {owner_clause}
@@ -7471,8 +7832,9 @@ def store(
             """, params).fetchone()
             if existing_row:
                 existing = graph._row_to_node(existing_row)
+                dedup_telemetry["hash_exact_hits"] += 1
                 log_dedup_decision(graph, text, existing.id, existing.name,
-                                   1.0, "hash_exact", owner_id=owner_id, source=source)
+                                   1.0, "hash_exact", owner_id=owner_id, source=source, conn=_conn)
                 # Confirmation boosting: re-extraction confirms this fact
                 existing.confirmation_count += 1
                 existing.last_confirmed_at = datetime.now().isoformat()
@@ -7483,22 +7845,22 @@ def store(
                 if update_if_dup and verified and not existing.verified:
                     existing.verified = True
                     existing.confidence = 0.9
-                graph.update_node(existing)
+                graph.update_node(existing, conn=_conn)
                 if update_if_dup and verified:
-                    return {
+                    return _with_dedup_telemetry({
                         "id": existing.id,
                         "status": "updated",
                         "similarity": 1.0,
                         "existing_text": existing.name,
                         "confirmation_count": existing.confirmation_count,
-                    }
-                return {
+                    })
+                return _with_dedup_telemetry({
                     "id": existing.id,
                     "status": "duplicate",
                     "similarity": 1.0,
                     "existing_text": existing.name,
                     "confirmation_count": existing.confirmation_count,
-                }
+                })
 
     # Dedup check: three-zone logic with optional LLM verification
     embedding = graph.get_embedding(text)
@@ -7516,41 +7878,54 @@ def store(
 
         # Search for high-similarity matches using FTS5 token pre-filter
         tokens = _lib_extract_key_tokens(text)
-        with graph._get_conn() as conn:
+        gray_zone_candidates: List[Tuple[Node, float]] = []
+        conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
+        with conn_cm as conn:
             if tokens:
                 fts_query = " OR ".join(f'"{t}"' for t in tokens)
                 try:
+                    rowid_clause = ""
+                    rowid_clause_params: List[Any] = []
+                    if rowid_min is not None and rowid_min >= 0:
+                        rowid_clause += " AND n.rowid > ?"
+                        rowid_clause_params.append(rowid_min)
+                    if rowid_max is not None and rowid_max >= 0:
+                        rowid_clause += " AND n.rowid <= ?"
+                        rowid_clause_params.append(rowid_max)
                     if owner_id:
-                        rows = conn.execute("""
+                        rows = conn.execute(f"""
                             SELECT n.* FROM nodes_fts
                             JOIN nodes n ON n.rowid = nodes_fts.rowid
                             WHERE nodes_fts MATCH ?
+                              {rowid_clause}
                               AND n.embedding IS NOT NULL
                               AND n.superseded_by IS NULL
                               AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
                               AND (n.owner_id = ? OR n.owner_id IS NULL)
                             LIMIT 500
-                        """, (fts_query, owner_id)).fetchall()
+                        """, tuple([fts_query] + rowid_clause_params + [owner_id])).fetchall()
                     else:
-                        rows = conn.execute("""
+                        rows = conn.execute(f"""
                             SELECT n.* FROM nodes_fts
                             JOIN nodes n ON n.rowid = nodes_fts.rowid
                             WHERE nodes_fts MATCH ?
+                              {rowid_clause}
                               AND n.embedding IS NOT NULL
                               AND n.superseded_by IS NULL
                               AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
                             LIMIT 500
-                        """, (fts_query,)).fetchall()
+                        """, tuple([fts_query] + rowid_clause_params)).fetchall()
                 except Exception:
                     # Fallback to bounded scan if FTS5 unavailable (cap at 500 most recent)
                     if owner_id:
                         rows = conn.execute(
-                            "SELECT * FROM nodes WHERE embedding IS NOT NULL AND (owner_id = ? OR owner_id IS NULL) ORDER BY accessed_at DESC LIMIT 500",
-                            (owner_id,)
+                            f"SELECT * FROM nodes WHERE embedding IS NOT NULL{rowid_filter_sql} AND (owner_id = ? OR owner_id IS NULL) ORDER BY accessed_at DESC LIMIT 500",
+                            tuple(rowid_filter_params + [owner_id])
                         ).fetchall()
                     else:
                         rows = conn.execute(
-                            "SELECT * FROM nodes WHERE embedding IS NOT NULL ORDER BY accessed_at DESC LIMIT 500"
+                            f"SELECT * FROM nodes WHERE embedding IS NOT NULL{rowid_filter_sql} ORDER BY accessed_at DESC LIMIT 500",
+                            tuple(rowid_filter_params)
                         ).fetchall()
             else:
                 rows = []  # No tokens = novel fact, no dedup possible
@@ -7558,12 +7933,14 @@ def store(
             for row in rows:
                 existing = graph._row_to_node(row)
                 if existing.embedding:
+                    dedup_telemetry["scanned_rows"] += 1
                     sim = graph.cosine_similarity(embedding, existing.embedding)
 
                     if sim >= auto_reject_thresh and texts_are_near_identical(text, existing.name):
+                        dedup_telemetry["auto_reject_hits"] += 1
                         # Zone 1: Auto-reject (high sim AND texts are near-identical strings)
                         log_dedup_decision(graph, text, existing.id, existing.name,
-                                           sim, "auto_reject", owner_id=owner_id, source=source)
+                                           sim, "auto_reject", owner_id=owner_id, source=source, conn=_conn)
                         # Confirmation boosting: re-extraction confirms this fact
                         existing.confirmation_count += 1
                         existing.last_confirmed_at = datetime.now().isoformat()
@@ -7574,122 +7951,37 @@ def store(
                         if update_if_dup and verified and not existing.verified:
                             existing.verified = True
                             existing.confidence = 0.9
-                        graph.update_node(existing)
+                        graph.update_node(existing, conn=_conn)
                         if update_if_dup and verified:
-                            return {
+                            return _with_dedup_telemetry({
                                 "id": existing.id,
                                 "status": "updated",
                                 "similarity": round(sim, 3),
                                 "existing_text": existing.name,
                                 "confirmation_count": existing.confirmation_count,
-                            }
-                        return {
+                            })
+                        return _with_dedup_telemetry({
                             "id": existing.id,
                             "status": "duplicate",
                             "similarity": round(sim, 3),
                             "existing_text": existing.name,
                             "confirmation_count": existing.confirmation_count,
-                        }
+                        })
 
                     elif sim >= gray_zone_low:
+                        dedup_telemetry["gray_zone_rows"] += 1
                         # Zone 2: Gray zone — LLM verification
                         if llm_verify_enabled:
-                            llm_result = _llm_dedup_check(text, existing.name)
-                            if llm_result is not None:
-                                if llm_result["is_same"]:
-                                    subsumes = llm_result.get("subsumes")
-                                    decision = "llm_reject"
-                                    if subsumes == "a_subsumes_b":
-                                        decision = "llm_subsume_update"
-                                    elif subsumes == "b_subsumes_a":
-                                        decision = "llm_subsume_keep"
-                                    # LLM confirms duplicate or subsumption
-                                    log_dedup_decision(graph, text, existing.id, existing.name,
-                                                       sim, decision,
-                                                       llm_reasoning=llm_result.get("reasoning"),
-                                                       owner_id=owner_id, source=source)
-                                    # Confirmation boosting: re-extraction confirms this fact
-                                    existing.confirmation_count += 1
-                                    existing.last_confirmed_at = datetime.now().isoformat()
-                                    existing.confidence = min(existing.confidence + 0.02, 0.95)
-                                    # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
-                                    existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                                    _apply_metadata_flags(existing)
-                                    if update_if_dup and verified and not existing.verified:
-                                        existing.verified = True
-                                        existing.confidence = 0.9
-                                    # If new fact subsumes existing, upgrade the text
-                                    if subsumes == "a_subsumes_b":
-                                        existing.name = text
-                                        existing.embedding = None  # force re-embed
-                                        existing.content_hash = None
-                                        # Remove stale ANN entry so vec_nodes doesn't return wrong results
-                                        with graph._get_conn() as conn:
-                                            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
-                                    graph.update_node(existing)
-                                    if (update_if_dup and verified) or subsumes == "a_subsumes_b":
-                                        return {
-                                            "id": existing.id,
-                                            "status": "updated",
-                                            "similarity": round(sim, 3),
-                                            "existing_text": existing.name,
-                                            "confirmation_count": existing.confirmation_count,
-                                        }
-                                    return {
-                                        "id": existing.id,
-                                        "status": "duplicate",
-                                        "similarity": round(sim, 3),
-                                        "existing_text": existing.name,
-                                        "confirmation_count": existing.confirmation_count,
-                                    }
-                                else:
-                                    # LLM says different — log and continue checking
-                                    log_dedup_decision(graph, text, existing.id, existing.name,
-                                                       sim, "llm_accept",
-                                                       llm_reasoning=llm_result.get("reasoning"),
-                                                       owner_id=owner_id, source=source)
-                                    continue
-                            else:
-                                # LLM unavailable — use similarity threshold
-                                # But only reject if texts are near-identical strings
-                                # (embeddings can't distinguish proper noun swaps)
-                                if sim >= dedup_threshold and texts_are_near_identical(text, existing.name):
-                                    log_dedup_decision(graph, text, existing.id, existing.name,
-                                                       sim, "fallback_reject",
-                                                       owner_id=owner_id, source=source)
-                                    # Confirmation boosting: re-extraction confirms this fact
-                                    existing.confirmation_count += 1
-                                    existing.last_confirmed_at = datetime.now().isoformat()
-                                    existing.confidence = min(existing.confidence + 0.02, 0.95)
-                                    # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
-                                    existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                                    _apply_metadata_flags(existing)
-                                    if update_if_dup and verified and not existing.verified:
-                                        existing.verified = True
-                                        existing.confidence = 0.9
-                                    graph.update_node(existing)
-                                    if update_if_dup and verified:
-                                        return {
-                                            "id": existing.id,
-                                            "status": "updated",
-                                            "similarity": round(sim, 3),
-                                            "existing_text": existing.name,
-                                            "confirmation_count": existing.confirmation_count,
-                                        }
-                                    return {
-                                        "id": existing.id,
-                                        "status": "duplicate",
-                                        "similarity": round(sim, 3),
-                                        "existing_text": existing.name,
-                                        "confirmation_count": existing.confirmation_count,
-                                    }
+                            gray_zone_candidates.append((existing, sim))
+                            continue
                         else:
                             # LLM verification disabled — use similarity threshold
                             # But only reject if texts are near-identical strings
                             if sim >= dedup_threshold and texts_are_near_identical(text, existing.name):
+                                dedup_telemetry["fallback_reject_hits"] += 1
                                 log_dedup_decision(graph, text, existing.id, existing.name,
                                                    sim, "fallback_reject",
-                                                   owner_id=owner_id, source=source)
+                                                   owner_id=owner_id, source=source, conn=_conn)
                                 # Confirmation boosting: re-extraction confirms this fact
                                 existing.confirmation_count += 1
                                 existing.last_confirmed_at = datetime.now().isoformat()
@@ -7700,25 +7992,118 @@ def store(
                                 if update_if_dup and verified and not existing.verified:
                                     existing.verified = True
                                     existing.confidence = 0.9
-                                graph.update_node(existing)
+                                graph.update_node(existing, conn=_conn)
                                 if update_if_dup and verified:
-                                    return {
+                                    return _with_dedup_telemetry({
                                         "id": existing.id,
                                         "status": "updated",
                                         "similarity": round(sim, 3),
                                         "existing_text": existing.name,
                                         "confirmation_count": existing.confirmation_count,
-                                    }
-                                return {
+                                    })
+                                return _with_dedup_telemetry({
                                     "id": existing.id,
                                     "status": "duplicate",
                                     "similarity": round(sim, 3),
                                     "existing_text": existing.name,
                                     "confirmation_count": existing.confirmation_count,
-                                }
+                                })
 
                     # Zone 3: sim < gray_zone_low — store normally (continue checking)
+
+        if gray_zone_candidates and llm_verify_enabled:
+            # Keep gray-zone dedup batches small enough that Haiku can return
+            # stable JSON quickly; larger batches were truncating under load.
+            batch_size = 4
+            for offset in range(0, len(gray_zone_candidates), batch_size):
+                batch = gray_zone_candidates[offset:offset + batch_size]
+                dedup_telemetry["llm_checks"] += len(batch)
+                llm_results = _llm_dedup_check_many(text, [existing.name for existing, _sim in batch])
+                for idx, (existing, sim) in enumerate(batch, start=1):
+                    llm_result = llm_results.get(idx) if llm_results else None
+                    if llm_result is not None:
+                        if llm_result["is_same"]:
+                            dedup_telemetry["llm_same_hits"] += 1
+                            subsumes = llm_result.get("subsumes")
+                            decision = "llm_reject"
+                            if subsumes == "a_subsumes_b":
+                                decision = "llm_subsume_update"
+                            elif subsumes == "b_subsumes_a":
+                                decision = "llm_subsume_keep"
+                            log_dedup_decision(graph, text, existing.id, existing.name,
+                                               sim, decision,
+                                               llm_reasoning=llm_result.get("reasoning"),
+                                               owner_id=owner_id, source=source, conn=_conn)
+                            existing.confirmation_count += 1
+                            existing.last_confirmed_at = datetime.now().isoformat()
+                            existing.confidence = min(existing.confidence + 0.02, 0.95)
+                            existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                            _apply_metadata_flags(existing)
+                            if update_if_dup and verified and not existing.verified:
+                                existing.verified = True
+                                existing.confidence = 0.9
+                            if subsumes == "a_subsumes_b":
+                                existing.name = text
+                                existing.embedding = None
+                                existing.content_hash = None
+                                conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
+                                with conn_cm as conn:
+                                    conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
+                            graph.update_node(existing, conn=_conn)
+                            if (update_if_dup and verified) or subsumes == "a_subsumes_b":
+                                return _with_dedup_telemetry({
+                                    "id": existing.id,
+                                    "status": "updated",
+                                    "similarity": round(sim, 3),
+                                    "existing_text": existing.name,
+                                    "confirmation_count": existing.confirmation_count,
+                                })
+                            return _with_dedup_telemetry({
+                                "id": existing.id,
+                                "status": "duplicate",
+                                "similarity": round(sim, 3),
+                                "existing_text": existing.name,
+                                "confirmation_count": existing.confirmation_count,
+                            })
+                        dedup_telemetry["llm_different_hits"] += 1
+                        log_dedup_decision(graph, text, existing.id, existing.name,
+                                           sim, "llm_accept",
+                                           llm_reasoning=llm_result.get("reasoning"),
+                                           owner_id=owner_id, source=source, conn=_conn)
+                        continue
+                    if sim >= dedup_threshold and texts_are_near_identical(text, existing.name):
+                        dedup_telemetry["fallback_reject_hits"] += 1
+                        log_dedup_decision(graph, text, existing.id, existing.name,
+                                           sim, "fallback_reject",
+                                           owner_id=owner_id, source=source, conn=_conn)
+                        existing.confirmation_count += 1
+                        existing.last_confirmed_at = datetime.now().isoformat()
+                        existing.confidence = min(existing.confidence + 0.02, 0.95)
+                        existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                        _apply_metadata_flags(existing)
+                        if update_if_dup and verified and not existing.verified:
+                            existing.verified = True
+                            existing.confidence = 0.9
+                        graph.update_node(existing, conn=_conn)
+                        if update_if_dup and verified:
+                            return _with_dedup_telemetry({
+                                "id": existing.id,
+                                "status": "updated",
+                                "similarity": round(sim, 3),
+                                "existing_text": existing.name,
+                                "confirmation_count": existing.confirmation_count,
+                            })
+                        return _with_dedup_telemetry({
+                            "id": existing.id,
+                            "status": "duplicate",
+                            "similarity": round(sim, 3),
+                            "existing_text": existing.name,
+                            "confirmation_count": existing.confirmation_count,
+                        })
     
+    if _dedup_only:
+        return _with_dedup_telemetry({"id": None, "status": "not_found"})
+
     # Confidence adjustment for assistant-inferred facts
     adjusted_confidence = confidence
     if source_type == "assistant":
@@ -7821,7 +8206,7 @@ def store(
     node.embedding = embedding  # Reuse the embedding we already computed
     node.content_hash = text_hash  # Reuse the hash we already computed
     try:
-        node_id = graph.add_node(node, embed=False)  # Don't re-embed
+        node_id = graph.add_node(node, embed=False, conn=_conn)  # Don't re-embed
     except (ValueError, RuntimeError) as exc:
         raise ValueError(f"Failed to store memory due to domain validation: {exc}") from exc
 
@@ -7829,7 +8214,7 @@ def store(
     if node.status == "flagged":
         result["flagged"] = True
         result["flagged_pattern"] = injection_match
-    return result
+    return _with_dedup_telemetry(result)
 
 
 def create_edge(
@@ -8282,12 +8667,14 @@ def log_dedup_decision(
     llm_reasoning: Optional[str] = None,
     owner_id: Optional[str] = None,
     source: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> str:
     """Log a dedup decision to dedup_log table. Returns log entry ID."""
     log_id = str(uuid.uuid4())
+    conn_cm = nullcontext(conn) if conn is not None else graph._get_conn()
     try:
-        with graph._get_conn() as conn:
-            conn.execute("""
+        with conn_cm as active_conn:
+            active_conn.execute("""
                 INSERT INTO dedup_log
                 (id, new_text, existing_node_id, existing_text, similarity,
                  decision, llm_reasoning, owner_id, source)
@@ -8299,8 +8686,8 @@ def log_dedup_decision(
         # the FTS search and this insert (WAL snapshot mismatch). Fall back to
         # NULL existing_node_id — the audit trail is preserved without the link.
         print(f"[dedup_log] WARNING: FK constraint for node {existing_node_id}, inserting with NULL reference", file=sys.stderr)
-        with graph._get_conn() as conn:
-            conn.execute("""
+        with conn_cm as active_conn:
+            active_conn.execute("""
                 INSERT INTO dedup_log
                 (id, new_text, existing_node_id, existing_text, similarity,
                  decision, llm_reasoning, owner_id, source)
@@ -8315,38 +8702,108 @@ def _llm_dedup_check(new_text: str, existing_text: str) -> Optional[Dict[str, An
 
     Returns {"is_same": bool, "reasoning": str} or None on failure.
     """
+    results = _llm_dedup_check_many(new_text, [existing_text])
+    if not results:
+        return None
+    return results.get(1)
+
+
+def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[Dict[int, Dict[str, Any]]]:
+    """Ask the fast-reasoning LLM whether multiple texts duplicate one new fact.
+
+    Returns {pair_index: {"is_same": bool, "subsumes": str|None, "reasoning": str}}
+    using 1-based pair indexes, or None on failure.
+    """
     if not _HAS_LLM_CLIENTS:
         return None
+    candidates = [str(text or "").strip() for text in (existing_texts or []) if str(text or "").strip()]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        prompt = (
+            "Are these two statements the same fact (just reworded), or does one "
+            "SUBSUME the other (contains all the same info plus additional detail)?\n\n"
+            "IMPORTANT RULES:\n"
+            "- Negation flips meaning: 'likes coffee' vs 'doesn't like coffee' are DIFFERENT.\n"
+            "- If Statement A includes ALL info from Statement B plus more detail, "
+            "A subsumes B. Example: 'Maya has a dog named Biscuit' subsumes 'Maya has a dog'.\n"
+            "- If they convey the same info in different words, they are the SAME.\n"
+            "- Only mark as different if they contain genuinely distinct information.\n\n"
+            f'Statement A (new): "{new_text}"\n'
+            f'Statement B (existing): "{candidates[0]}"\n\n'
+            'Respond with JSON only: {"is_same": true/false, "subsumes": "a_subsumes_b" | "b_subsumes_a" | null, "reasoning": "brief reason"}'
+        )
 
+        response, _duration = call_fast_reasoning(prompt, max_tokens=100, timeout=30.0)
+        if not response:
+            return None
+        parsed = parse_json_response(response)
+        if isinstance(parsed, dict) and "is_same" in parsed:
+            subsumes = parsed.get("subsumes")
+            if subsumes not in ("a_subsumes_b", "b_subsumes_a"):
+                subsumes = None
+            return {
+                1: {
+                    "is_same": bool(parsed["is_same"]) or subsumes is not None,
+                    "subsumes": subsumes,
+                    "reasoning": str(parsed.get("reasoning", "")),
+                }
+            }
+        return None
+
+    pair_lines = "\n".join(
+        f'{idx}. "{existing}"'
+        for idx, existing in enumerate(candidates, start=1)
+    )
     prompt = (
-        "Are these two statements the same fact (just reworded), or does one "
-        "SUBSUME the other (contains all the same info plus additional detail)?\n\n"
+        "Compare Statement A against each candidate statement below.\n\n"
         "IMPORTANT RULES:\n"
         "- Negation flips meaning: 'likes coffee' vs 'doesn't like coffee' are DIFFERENT.\n"
         "- If Statement A includes ALL info from Statement B plus more detail, "
         "A subsumes B. Example: 'Maya has a dog named Biscuit' subsumes 'Maya has a dog'.\n"
         "- If they convey the same info in different words, they are the SAME.\n"
         "- Only mark as different if they contain genuinely distinct information.\n\n"
-        f'Statement A (new): "{new_text}"\n'
-        f'Statement B (existing): "{existing_text}"\n\n'
-        'Respond with JSON only: {"is_same": true/false, "subsumes": "a_subsumes_b" | "b_subsumes_a" | null, "reasoning": "brief reason"}'
+        f'Statement A (new): "{new_text}"\n\n'
+        f"Candidates:\n{pair_lines}\n\n"
+        "Respond with JSON only as an array of objects:\n"
+        '[{"pair": 1, "is_same": true/false, "subsumes": "a_subsumes_b" | "b_subsumes_a" | null, "reasoning": "brief reason"}]'
     )
 
-    response, duration = call_fast_reasoning(prompt, max_tokens=100, timeout=30.0)
+    max_tokens = min(1200, max(200, 120 * len(candidates)))
+    response, _duration = call_fast_reasoning(prompt, max_tokens=max_tokens, timeout=30.0)
     if not response:
         return None
 
     parsed = parse_json_response(response)
-    if isinstance(parsed, dict) and "is_same" in parsed:
-        subsumes = parsed.get("subsumes")
+    if not isinstance(parsed, list):
+        return None
+    results: Dict[int, Dict[str, Any]] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pair_idx = int(item.get("pair", 0))
+        except Exception:
+            continue
+        if pair_idx < 1 or pair_idx > len(candidates):
+            continue
+        subsumes = item.get("subsumes")
         if subsumes not in ("a_subsumes_b", "b_subsumes_a"):
             subsumes = None
-        return {
-            "is_same": bool(parsed["is_same"]) or subsumes is not None,
+        is_same_raw = item.get("is_same")
+        if not isinstance(is_same_raw, bool):
+            if isinstance(is_same_raw, str):
+                is_same = is_same_raw.lower() in ("true", "yes", "1")
+            else:
+                is_same = bool(is_same_raw)
+        else:
+            is_same = is_same_raw
+        results[pair_idx] = {
+            "is_same": bool(is_same) or subsumes is not None,
             "subsumes": subsumes,
-            "reasoning": str(parsed.get("reasoning", ""))
+            "reasoning": str(item.get("reasoning", "")),
         }
-    return None
+    return results or None
 
 
 def get_recent_dedup_rejections(hours: int = 24, limit: int = 50) -> List[Dict[str, Any]]:
@@ -8616,6 +9073,22 @@ def initialize_db() -> None:
     """Initialize the database - just ensure schema exists."""
     graph = get_graph()  # This calls _init_db() internally
     # The initialization is already done in the constructor
+
+
+def warm_embedding_cache(
+    texts: List[str],
+    *,
+    max_workers: Optional[int] = None,
+    pool_name: str = "embeddings",
+    task_name: str = "embedding_cache",
+) -> Dict[str, int]:
+    """Precompute embeddings for a batch of texts into the shared cache."""
+    return get_graph().warm_embedding_cache(
+        texts,
+        max_workers=max_workers,
+        pool_name=pool_name,
+        task_name=task_name,
+    )
 
 
 if __name__ == "__main__":
