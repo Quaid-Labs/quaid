@@ -6223,6 +6223,15 @@ def recall_fast(
         )
         planned_queries, planner_meta = planned if isinstance(planned, tuple) and len(planned) == 2 else ([query], {})
     except Exception as exc:
+        # If the LLM planner was actually invoked and failed, this is a real
+        # planner failure. Under failHard, raise immediately — no soft fallback.
+        # Pre-LLM structured bailouts (too_short, preserve_short_exact_query,
+        # no_entities) are returned as values, not raised, so they never reach here.
+        if planner_profile != "off" and _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Recall fanout planner failed while failHard is enabled "
+                f"(profile={planner_profile}, elapsed_ms={round((_time.monotonic() - planner_started) * 1000)}): {exc}"
+            ) from exc
         fallback_stores, fallback_project = _infer_recall_store_defaults(query)
         detail = str(exc or "").lower()
         timeout_like = isinstance(exc, TimeoutError) or ("timed out" in detail) or ("timeout" in detail)

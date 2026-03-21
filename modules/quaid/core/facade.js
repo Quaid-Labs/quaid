@@ -2179,11 +2179,11 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       return mergeRecallResults(primary, secondary, limit);
     } catch (err) {
       const msg = String(err?.message || err);
-      if (msg.includes("failHard") || msg.includes("fail_hard")) {
-        throw err;
+      if (msg.includes("retry budget exceeded")) {
+        console.warn(`[quaid][facade][recall] retry bailed: ${msg}; returning primary`);
+        return primary;
       }
-      console.warn(`[quaid][facade][recall] retry bailed: ${msg}; returning primary`);
-      return primary;
+      throw err;
     }
   }
   function formatMemoriesForInjection(memories) {

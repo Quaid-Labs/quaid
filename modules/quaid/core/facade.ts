@@ -2846,11 +2846,14 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       return mergeRecallResults(primary, secondary, limit);
     } catch (err) {
       const msg = String((err as Error)?.message || err);
-      if (msg.includes("failHard") || msg.includes("fail_hard")) {
-        throw err;
+      // Only swallow retry budget timeouts — these are expected when the expansion
+      // window runs out. Any other failure (including planner failHard RuntimeErrors)
+      // must propagate so the caller sees a real error, not a silent degradation.
+      if (msg.includes("retry budget exceeded")) {
+        console.warn(`[quaid][facade][recall] retry bailed: ${msg}; returning primary`);
+        return primary;
       }
-      console.warn(`[quaid][facade][recall] retry bailed: ${msg}; returning primary`);
-      return primary;
+      throw err;
     }
   }
 
