@@ -40,14 +40,36 @@ def _normalize_session_id(session_id: str) -> str:
     return sid
 
 
+def _is_quaid_process(pid: int) -> bool:
+    """Return True if the given PID is running quaid code (not an unrelated recycled PID)."""
+    try:
+        cmdline_path = Path(f"/proc/{pid}/cmdline")
+        if cmdline_path.exists():
+            cmdline = cmdline_path.read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+            return "quaid" in cmdline
+        import subprocess
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True, text=True, timeout=2,
+        )
+        return "quaid" in result.stdout
+    except Exception:
+        # If we can't verify, assume it's a live quaid process (safe default).
+        return True
+
+
 def _is_stale_lock(lock_path: str) -> bool:
-    """Return True if the lock file is orphaned (owning process is dead or file is old)."""
+    """Return True if the lock file is orphaned (owning process is dead or PID was reused)."""
     try:
         with open(lock_path, "r") as f:
             pid = int(f.read().strip())
         # Lock is stale if the recorded PID is no longer running.
         os.kill(pid, 0)
-        return False  # Process is alive — lock is live.
+        # PID is alive — but verify it's actually a quaid process, not a recycled PID
+        # from an unrelated process that happened to inherit the same PID after a crash.
+        if not _is_quaid_process(pid):
+            return True  # PID reuse — treat as stale.
+        return False  # Process is alive and is a quaid process — lock is live.
     except (ValueError, FileNotFoundError):
         # No PID or file gone — treat as stale.
         return True
