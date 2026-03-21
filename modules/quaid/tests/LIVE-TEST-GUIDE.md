@@ -931,8 +931,10 @@ Verify:
 
 ```bash
 ssh example.local 'ls ~/quaid/shared/projects/misc--openclaw-main/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
-# Use registry show (SQLite backend) — quaid project show reads JSON backend
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep misc--openclaw'
+# Verify misc project is in the SQLite project_definitions table (it won't appear in
+# 'quaid registry list' because that lists registered docs, not projects — misc projects
+# have no docs and are invisible to doc-list output):
+ssh example.local "sqlite3 ~/quaid/data/memory.db \"SELECT name, state FROM project_definitions WHERE name LIKE 'misc--%';\""
 ```
 
 After project CRUD, trigger extraction to generate project logs. Tell the agent
