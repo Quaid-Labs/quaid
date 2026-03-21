@@ -2886,9 +2886,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       lines.push(`- [graph-node-hits] Entity node references (not standalone facts): ${packed}`);
     }
     return `<injected_memories>
-AUTOMATED MEMORY SYSTEM: The following memories were automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you. For direct personal questions (names, relationships, pets, preferences, past events), answer from these memories when the match is exact or high-confidence — do not say you have no information when relevant facts appear here. Items marked (uncertain) have lower extraction confidence. Dates shown are when the fact was recorded.
-INJECTOR CONFIDENCE RULE: Treat high-confidence injected memories as reliable facts for personal questions. Only run memory_recall if results are marked (uncertain) or the match seems only loosely related to the question.
-TOPIC LICENSING RULE: Knowing a sensitive detail does not make it on-topic. For light prompts, acknowledgments, or vague openings, do not volunteer private health, finances, conflicts, or emotionally loaded history unless the user clearly opens that topic.
 ${lines.join("\n")}
 </injected_memories>`;
   }
