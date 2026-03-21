@@ -1956,21 +1956,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             || resolveSessionKeyForSessionId(sessionId)
             || ""
           ).trim();
-          let timeoutActivitySessionId = sessionId;
-          if (
-            sessionKey === "agent:main:main"
-            && currentInteractiveSession?.sessionId
-            && currentInteractiveSession.sessionId !== sessionId
-          ) {
-            timeoutActivitySessionId = currentInteractiveSession.sessionId;
-            writeHookTrace("hook.transcript_update.timeout_rerouted", {
-              session_file: sessionFile,
-              parsed_session_id: sessionId,
-              parsed_session_key: sessionKey,
-              rerouted_session_id: timeoutActivitySessionId,
-              rerouted_session_key: currentInteractiveSession.key,
-            });
-          }
+          // Use sessionId from the transcript file path directly — it is authoritative
+          // for which session is being updated. The previous rerouting to
+          // currentInteractiveSession (mtime-based "most active" heuristic) was
+          // unreliable: when a new session starts after /new or TUI restart, the
+          // previous session's file has a higher mtime and the heuristic picks the
+          // wrong session, causing onAgentEnd to fire with the wrong session ID.
+          const timeoutActivitySessionId = sessionId;
 
           // Track resolved sessionId → transcript file for daemon signals
           if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);

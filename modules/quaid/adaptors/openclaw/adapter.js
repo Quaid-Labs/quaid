@@ -1508,17 +1508,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const sessionKey = String(
             update?.sessionKey || update?.targetSessionKey || resolveSessionKeyForSessionId(sessionId) || ""
           ).trim();
-          let timeoutActivitySessionId = sessionId;
-          if (sessionKey === "agent:main:main" && currentInteractiveSession?.sessionId && currentInteractiveSession.sessionId !== sessionId) {
-            timeoutActivitySessionId = currentInteractiveSession.sessionId;
-            writeHookTrace("hook.transcript_update.timeout_rerouted", {
-              session_file: sessionFile,
-              parsed_session_id: sessionId,
-              parsed_session_key: sessionKey,
-              rerouted_session_id: timeoutActivitySessionId,
-              rerouted_session_key: currentInteractiveSession.key
-            });
-          }
+          const timeoutActivitySessionId = sessionId;
           if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
           if (timeoutActivitySessionId && timeoutManager && !isInternalSessionContext(
             { sessionId: timeoutActivitySessionId, sessionKey },
