@@ -4713,7 +4713,7 @@ def _recall_once(
                         exclude_clause = ""
                         params = [sid]
                     rows = conn.execute(
-                        "SELECT * FROM nodes WHERE session_id = ? AND status IN ('active', 'approved') {} LIMIT 5".format(
+                        "SELECT * FROM nodes WHERE session_id = ? AND status IN ('active', 'approved', 'pending') {} LIMIT 5".format(
                             exclude_clause
                         ),
                         params
