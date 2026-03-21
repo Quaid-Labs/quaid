@@ -34,10 +34,11 @@ import signal
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure plugin root is importable (B060)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,7 +46,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logger = logging.getLogger("quaid.daemon")
 
 # Valid signal types (B062)
-VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout")
+VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout", "rolling")
+_SIGNAL_PRIORITY = {
+    "rolling": 0,
+    "timeout": 1,
+    "session_end": 2,
+    "reset": 3,
+    "compaction": 4,
+}
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -242,6 +250,22 @@ def write_signal(
     # B008: Validate session_id
     session_id = _validate_session_id(session_id)
 
+    sig_dir = _signal_dir()
+    existing_path = None
+    existing_payload: Optional[Dict[str, Any]] = None
+    for f in sorted(sig_dir.iterdir()):
+        if not f.name.endswith(".json"):
+            continue
+        try:
+            existing = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if _validate_session_id(existing.get("session_id", "")) != session_id:
+            continue
+        existing_path = f
+        existing_payload = existing if isinstance(existing, dict) else None
+        break
+
     payload = {
         "type": signal_type,
         "session_id": session_id,
@@ -251,7 +275,18 @@ def write_signal(
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "meta": meta or {},
     }
-    sig_dir = _signal_dir()
+    if existing_path is not None and existing_payload is not None:
+        existing_type = str(existing_payload.get("type", "") or "").strip()
+        existing_priority = _SIGNAL_PRIORITY.get(existing_type, 0)
+        new_priority = _SIGNAL_PRIORITY.get(signal_type, 0)
+        merged_meta = dict(existing_payload.get("meta", {}) or {})
+        merged_meta.update(meta or {})
+        if existing_priority > new_priority:
+            payload["type"] = existing_type
+        payload["meta"] = merged_meta
+        _atomic_write(existing_path, json.dumps(payload))
+        return existing_path
+
     # B047: Use UUID suffix for uniqueness (avoids ms-level collision)
     fname = f"{int(time.time() * 1000)}_{os.getpid()}_{uuid.uuid4().hex[:8]}_{signal_type}.json"
     sig_path = sig_dir / fname
@@ -339,6 +374,678 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> Non
         logger.error("cursor write failed for %s: %s", session_id, e)
 
 
+def _rolling_state_dir() -> Path:
+    d = _instance_root() / "data" / "rolling-extraction"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _processing_lock_dir() -> Path:
+    d = _instance_root() / "data" / "session-processing"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _processing_lock_path(session_id: str) -> Path:
+    session_id = _validate_session_id(session_id)
+    return _processing_lock_dir() / f"{session_id}.lock"
+
+
+def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
+    """Acquire a per-session processing lease; returns fd while held."""
+    lock_path = _processing_lock_path(session_id)
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        logger.warning("failed opening session processing lock for %s: %s", session_id, e)
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return None
+    payload = {
+        "session_id": _validate_session_id(session_id),
+        "pid": os.getpid(),
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, json.dumps(payload).encode("utf-8"))
+        os.fsync(fd)
+    except OSError:
+        pass
+    return fd
+
+
+def _release_session_processing_lock(session_id: str, lock_fd: Optional[int]) -> None:
+    if lock_fd is None:
+        return
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+    try:
+        _processing_lock_path(session_id).unlink()
+    except OSError:
+        pass
+
+
+def _rolling_state_path(session_id: str) -> Path:
+    session_id = _validate_session_id(session_id)
+    return _rolling_state_dir() / f"{session_id}.json"
+
+
+def read_rolling_state(session_id: str) -> Dict[str, Any]:
+    """Read durable staged extraction state for a session."""
+    semantic_defaults = _semantic_stage_metrics_defaults()
+    state_path = _rolling_state_path(session_id)
+    if not state_path.is_file():
+        return {
+            "session_id": session_id,
+            "carry_facts": [],
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "rolling_batches": 0,
+            "processed_line_offset": 0,
+            "facts_skipped": 0,
+            "payload_duplicate_facts_collapsed": 0,
+            "carry_duplicate_facts_dropped": 0,
+            "assessment_usable": 0,
+            "assessment_nothing_usable": 0,
+            "assessment_needs_smaller_chunk": 0,
+            "unclassified_empty_payloads": 0,
+            **semantic_defaults,
+        }
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("rolling state read failed for %s; resetting staged state", session_id)
+        return {
+            "session_id": session_id,
+            "carry_facts": [],
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "rolling_batches": 0,
+            "processed_line_offset": 0,
+            "facts_skipped": 0,
+            "payload_duplicate_facts_collapsed": 0,
+            "carry_duplicate_facts_dropped": 0,
+            "assessment_usable": 0,
+            "assessment_nothing_usable": 0,
+            "assessment_needs_smaller_chunk": 0,
+            "unclassified_empty_payloads": 0,
+            **semantic_defaults,
+        }
+    if not isinstance(data, dict):
+        return {
+            "session_id": session_id,
+            "carry_facts": [],
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "rolling_batches": 0,
+            "processed_line_offset": 0,
+            "facts_skipped": 0,
+            "payload_duplicate_facts_collapsed": 0,
+            "carry_duplicate_facts_dropped": 0,
+            "assessment_usable": 0,
+            "assessment_nothing_usable": 0,
+            "assessment_needs_smaller_chunk": 0,
+            "unclassified_empty_payloads": 0,
+            **semantic_defaults,
+        }
+    data.setdefault("session_id", session_id)
+    data.setdefault("carry_facts", [])
+    data.setdefault("raw_facts", [])
+    data.setdefault("raw_snippets", {})
+    data.setdefault("raw_journal", {})
+    data.setdefault("raw_project_logs", {})
+    data.setdefault("rolling_batches", 0)
+    data.setdefault("processed_line_offset", 0)
+    data.setdefault("facts_skipped", 0)
+    data.setdefault("payload_duplicate_facts_collapsed", 0)
+    data.setdefault("carry_duplicate_facts_dropped", 0)
+    data.setdefault("assessment_usable", 0)
+    data.setdefault("assessment_nothing_usable", 0)
+    data.setdefault("assessment_needs_smaller_chunk", 0)
+    data.setdefault("unclassified_empty_payloads", 0)
+    for key, value in semantic_defaults.items():
+        data.setdefault(key, value)
+    return data
+
+
+def write_rolling_state(session_id: str, state: Dict[str, Any]) -> None:
+    payload = dict(state or {})
+    payload["session_id"] = _validate_session_id(session_id)
+    payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _atomic_write(_rolling_state_path(session_id), json.dumps(payload))
+
+
+def clear_rolling_state(session_id: str) -> None:
+    try:
+        _rolling_state_path(session_id).unlink()
+    except OSError:
+        pass
+
+
+def _merge_unique_strings(existing: List[str], incoming: List[str]) -> List[str]:
+    combined = []
+    seen = set()
+    for item in list(existing or []) + list(incoming or []):
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        combined.append(text)
+    return combined
+
+
+def _warm_payload_embeddings(facts: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Front-load embeddings into cache so final publish stays mostly cache-hit."""
+    texts: List[str] = []
+    for fact in facts or []:
+        if not isinstance(fact, dict):
+            continue
+        text = str(fact.get("text", "") or "").strip()
+        if not text or len(text.split()) < 3:
+            continue
+        texts.append(text)
+    if not texts:
+        return {
+            "requested": 0,
+            "unique": 0,
+            "cache_hits": 0,
+            "warmed": 0,
+            "failed": 0,
+            "skipped_empty": 0,
+        }
+    from core.services.memory_service import get_memory_service
+
+    return get_memory_service().warm_embeddings(texts)
+
+
+def _semantic_stage_metrics_defaults() -> Dict[str, int]:
+    return {
+        "staged_semantic_duplicate_facts_collapsed": 0,
+        "staged_semantic_auto_reject_hits": 0,
+        "staged_semantic_gray_zone_rows": 0,
+        "staged_semantic_llm_checks": 0,
+        "staged_semantic_llm_same_hits": 0,
+        "staged_semantic_llm_different_hits": 0,
+    }
+
+
+def _semantic_confidence_rank(value: Any) -> int:
+    raw = str(value or "").strip().lower()
+    if raw == "high":
+        return 3
+    if raw == "medium":
+        return 2
+    if raw == "low":
+        return 1
+    return 0
+
+
+def _merge_fact_keywords(existing: Any, incoming: Any) -> Optional[str]:
+    tokens: List[str] = []
+    seen: set[str] = set()
+    for raw in (existing, incoming):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        for token in text.split():
+            clean = token.strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            tokens.append(clean)
+    return " ".join(tokens) if tokens else None
+
+
+def _merge_fact_edges(existing: Any, incoming: Any) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str, str]] = set()
+    for edges in (existing, incoming):
+        for edge in list(edges or []):
+            if not isinstance(edge, dict):
+                continue
+            key = (
+                str(edge.get("subject", "") or "").strip(),
+                str(edge.get("relation", "") or "").strip(),
+                str(edge.get("object", "") or "").strip(),
+            )
+            if not all(key) or key in seen:
+                continue
+            seen.add(key)
+            merged.append(dict(edge))
+    return merged
+
+
+def _merge_semantic_duplicate_fact(
+    existing_fact: Dict[str, Any],
+    incoming_fact: Dict[str, Any],
+    *,
+    prefer_incoming_text: bool,
+) -> Dict[str, Any]:
+    merged = dict(existing_fact or {})
+    incoming = dict(incoming_fact or {})
+    existing_text = str(merged.get("text", "") or "").strip()
+    incoming_text = str(incoming.get("text", "") or "").strip()
+    if prefer_incoming_text and incoming_text:
+        merged["text"] = incoming_text
+    elif not existing_text and incoming_text:
+        merged["text"] = incoming_text
+
+    existing_domains = list(merged.get("domains", []) or [])
+    incoming_domains = list(incoming.get("domains", []) or [])
+    merged_domains: List[str] = []
+    for domain in existing_domains + incoming_domains:
+        clean = str(domain or "").strip()
+        if clean and clean not in merged_domains:
+            merged_domains.append(clean)
+    if merged_domains:
+        merged["domains"] = merged_domains
+
+    if _semantic_confidence_rank(incoming.get("extraction_confidence")) >= _semantic_confidence_rank(merged.get("extraction_confidence")):
+        incoming_conf = incoming.get("extraction_confidence")
+        if incoming_conf is not None:
+            merged["extraction_confidence"] = incoming_conf
+
+    merged_keywords = _merge_fact_keywords(merged.get("keywords"), incoming.get("keywords"))
+    if merged_keywords:
+        merged["keywords"] = merged_keywords
+
+    merged_edges = _merge_fact_edges(merged.get("edges"), incoming.get("edges"))
+    if merged_edges:
+        merged["edges"] = merged_edges
+
+    for key in (
+        "category",
+        "privacy",
+        "project",
+        "speaker",
+        "source",
+    ):
+        if not merged.get(key) and incoming.get(key):
+            merged[key] = incoming.get(key)
+    return merged
+
+
+def _stage_dedup_settings() -> Tuple[float, float, bool]:
+    try:
+        from config import get_config
+
+        cfg = get_config()
+        auto_reject_thresh = float(cfg.janitor.dedup.auto_reject_threshold)
+        gray_zone_low = float(cfg.janitor.dedup.gray_zone_low)
+        llm_verify_enabled = bool(cfg.janitor.dedup.llm_verify_enabled)
+        return auto_reject_thresh, gray_zone_low, llm_verify_enabled
+    except Exception:
+        return 0.98, 0.88, False
+
+
+def _semantic_candidate_overlaps(new_text: str, existing_facts: List[Dict[str, Any]], max_candidates: int = 12) -> List[int]:
+    from lib.tokens import extract_key_tokens
+
+    new_tokens = set(extract_key_tokens(new_text, max_tokens=10))
+    if not new_tokens:
+        return []
+    scored: List[Tuple[int, int]] = []
+    for idx, fact in enumerate(existing_facts):
+        text = str((fact or {}).get("text", "") or "").strip()
+        if len(text.split()) < 3:
+            continue
+        existing_tokens = set(extract_key_tokens(text, max_tokens=10))
+        overlap = len(new_tokens & existing_tokens)
+        if overlap <= 0:
+            continue
+        if overlap >= 2 or len(new_tokens) <= 3:
+            scored.append((overlap, idx))
+    scored.sort(key=lambda item: (-item[0], -item[1]))
+    return [idx for _overlap, idx in scored[:max_candidates]]
+
+
+def _collapse_staged_semantic_duplicates(
+    existing_facts: List[Dict[str, Any]],
+    incoming_facts: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    from datastore.memorydb.memory_graph import _llm_dedup_check_many, get_graph
+    from lib.similarity import cosine_similarity
+    from lib.tokens import texts_are_near_identical
+
+    metrics = _semantic_stage_metrics_defaults()
+    if not incoming_facts:
+        return list(existing_facts or []), metrics
+
+    auto_reject_thresh, gray_zone_low, llm_verify_enabled = _stage_dedup_settings()
+    accepted = [dict(fact) for fact in list(existing_facts or []) if isinstance(fact, dict)]
+    graph = get_graph()
+
+    for incoming_fact in list(incoming_facts or []):
+        if not isinstance(incoming_fact, dict):
+            continue
+        new_text = str(incoming_fact.get("text", "") or "").strip()
+        if len(new_text.split()) < 3:
+            accepted.append(dict(incoming_fact))
+            continue
+
+        candidate_indexes = _semantic_candidate_overlaps(new_text, accepted)
+        if not candidate_indexes:
+            accepted.append(dict(incoming_fact))
+            continue
+
+        new_embedding = graph.get_embedding(new_text)
+        if not new_embedding:
+            accepted.append(dict(incoming_fact))
+            continue
+
+        gray_zone: List[Tuple[int, Dict[str, Any], float]] = []
+        merged = False
+        for idx in candidate_indexes:
+            existing_fact = accepted[idx]
+            existing_text = str(existing_fact.get("text", "") or "").strip()
+            if len(existing_text.split()) < 3:
+                continue
+            existing_embedding = graph.get_embedding(existing_text)
+            if not existing_embedding:
+                continue
+            sim = cosine_similarity(new_embedding, existing_embedding)
+            if sim >= auto_reject_thresh and texts_are_near_identical(new_text, existing_text):
+                accepted[idx] = _merge_semantic_duplicate_fact(
+                    existing_fact,
+                    incoming_fact,
+                    prefer_incoming_text=len(new_text) >= len(existing_text),
+                )
+                metrics["staged_semantic_duplicate_facts_collapsed"] += 1
+                metrics["staged_semantic_auto_reject_hits"] += 1
+                merged = True
+                break
+            if sim >= gray_zone_low:
+                metrics["staged_semantic_gray_zone_rows"] += 1
+                gray_zone.append((idx, existing_fact, sim))
+
+        if merged:
+            continue
+
+        if gray_zone and llm_verify_enabled:
+            batch = gray_zone[:4]
+            metrics["staged_semantic_llm_checks"] += len(batch)
+            llm_results = _llm_dedup_check_many(new_text, [fact.get("text", "") for _idx, fact, _sim in batch])
+            if llm_results:
+                for result_idx, (accepted_idx, existing_fact, _sim) in enumerate(batch, start=1):
+                    llm_result = llm_results.get(result_idx)
+                    if llm_result is None:
+                        continue
+                    if llm_result.get("is_same"):
+                        metrics["staged_semantic_duplicate_facts_collapsed"] += 1
+                        metrics["staged_semantic_llm_same_hits"] += 1
+                        subsumes = llm_result.get("subsumes")
+                        prefer_incoming = subsumes == "a_subsumes_b" or (
+                            subsumes is None and len(new_text) >= len(str(existing_fact.get("text", "") or "").strip())
+                        )
+                        accepted[accepted_idx] = _merge_semantic_duplicate_fact(
+                            existing_fact,
+                            incoming_fact,
+                            prefer_incoming_text=prefer_incoming,
+                        )
+                        merged = True
+                        break
+                    metrics["staged_semantic_llm_different_hits"] += 1
+
+        if not merged:
+            accepted.append(dict(incoming_fact))
+
+    return accepted, metrics
+
+
+def merge_staged_payloads(state: Dict[str, Any], payload_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge a dry-run extraction payload into durable staged session state."""
+    merged = dict(state or {})
+    merged["carry_facts"] = list(payload_result.get("carry_facts", []) or [])
+    existing_facts = list(merged.get("raw_facts", []) or [])
+    incoming_facts = list(payload_result.get("raw_facts", []) or [])
+    raw_facts = existing_facts + incoming_facts
+    from ingest.extract import collapse_duplicate_payload_facts
+    raw_facts, collapsed_duplicates = collapse_duplicate_payload_facts(raw_facts)
+    existing_count = len(existing_facts)
+    deduped_existing = raw_facts[: min(existing_count, len(raw_facts))]
+    deduped_incoming = raw_facts[min(existing_count, len(raw_facts)) :]
+    raw_facts, semantic_metrics = _collapse_staged_semantic_duplicates(deduped_existing, deduped_incoming)
+    merged["raw_facts"] = raw_facts
+    snippets = dict(merged.get("raw_snippets", {}) or {})
+    for filename, items in (payload_result.get("raw_snippets", {}) or {}).items():
+        snippets[str(filename)] = _merge_unique_strings(snippets.get(str(filename), []), list(items or []))
+    merged["raw_snippets"] = snippets
+    journal = dict(merged.get("raw_journal", {}) or {})
+    for filename, text in (payload_result.get("raw_journal", {}) or {}).items():
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if filename in journal and journal[filename].strip():
+            journal[filename] = f"{journal[filename].strip()}\n\n{text.strip()}"
+        else:
+            journal[filename] = text.strip()
+    merged["raw_journal"] = journal
+    project_logs = dict(merged.get("raw_project_logs", {}) or {})
+    for project_name, items in (payload_result.get("raw_project_logs", {}) or {}).items():
+        project_logs[str(project_name)] = _merge_unique_strings(
+            project_logs.get(str(project_name), []),
+            list(items or []),
+        )
+    merged["raw_project_logs"] = project_logs
+    merged["rolling_batches"] = int(merged.get("rolling_batches", 0) or 0) + 1
+    merged["facts_skipped"] = int(merged.get("facts_skipped", 0) or 0) + int(payload_result.get("facts_skipped", 0) or 0)
+    merged["payload_duplicate_facts_collapsed"] = int(
+        merged.get("payload_duplicate_facts_collapsed", 0) or 0
+    ) + int(payload_result.get("payload_duplicate_facts_collapsed", 0) or 0) + int(collapsed_duplicates)
+    for key, value in semantic_metrics.items():
+        merged[key] = int(merged.get(key, 0) or 0) + int(value or 0)
+    merged["carry_duplicate_facts_dropped"] = int(
+        merged.get("carry_duplicate_facts_dropped", 0) or 0
+    ) + int(payload_result.get("carry_duplicate_facts_dropped", 0) or 0)
+    for key in ("root_chunks", "split_events", "split_child_chunks", "leaf_chunks", "chunk_calls", "deep_calls", "repair_calls"):
+        merged[key] = int(merged.get(key, 0) or 0) + int(payload_result.get(key, 0) or 0)
+    for key in (
+        "assessment_usable",
+        "assessment_nothing_usable",
+        "assessment_needs_smaller_chunk",
+        "unclassified_empty_payloads",
+    ):
+        merged[key] = int(merged.get(key, 0) or 0) + int(payload_result.get(key, 0) or 0)
+    merged["max_split_depth"] = max(
+        int(merged.get("max_split_depth", 0) or 0),
+        int(payload_result.get("max_split_depth", 0) or 0),
+    )
+    merged["chunks_processed"] = int(merged.get("chunks_processed", 0) or 0) + int(payload_result.get("chunks_processed", 0) or 0)
+    merged["chunks_total"] = int(merged.get("chunks_total", 0) or 0) + int(payload_result.get("chunks_total", 0) or 0)
+    return merged
+
+
+def staged_state_has_payload(state: Dict[str, Any]) -> bool:
+    return bool(
+        (state.get("raw_facts") or [])
+        or any(v for v in (state.get("raw_snippets") or {}).values())
+        or any(v for v in (state.get("raw_journal") or {}).values())
+        or any(v for v in (state.get("raw_project_logs") or {}).values())
+    )
+
+
+def build_flush_payload(state: Dict[str, Any], tail_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Combine staged rolling payloads with the final tail extraction payload."""
+    combined = {
+        "facts_stored": int(state.get("facts_stored", 0) or 0),
+        "facts_skipped": int(state.get("facts_skipped", 0) or 0),
+        "edges_created": 0,
+        "facts": [],
+        "snippets": {},
+        "journal": {},
+        "project_logs": {},
+        "project_log_metrics": {},
+        "dry_run": False,
+        "raw_facts": list(state.get("raw_facts", []) or []),
+        "raw_snippets": dict(state.get("raw_snippets", {}) or {}),
+        "raw_journal": dict(state.get("raw_journal", {}) or {}),
+        "raw_project_logs": dict(state.get("raw_project_logs", {}) or {}),
+        "carry_facts": list((tail_result or {}).get("carry_facts", state.get("carry_facts", [])) or []),
+        "chunks_processed": int(state.get("chunks_processed", 0) or 0),
+        "chunks_total": int(state.get("chunks_total", 0) or 0),
+        "carry_context_enabled": True,
+        "parallel_root_workers": 1,
+        "payload_duplicate_facts_collapsed": int(state.get("payload_duplicate_facts_collapsed", 0) or 0),
+        "carry_duplicate_facts_dropped": int(state.get("carry_duplicate_facts_dropped", 0) or 0),
+        "root_chunks": int(state.get("root_chunks", 0) or 0),
+        "split_events": int(state.get("split_events", 0) or 0),
+        "split_child_chunks": int(state.get("split_child_chunks", 0) or 0),
+        "leaf_chunks": int(state.get("leaf_chunks", 0) or 0),
+        "max_split_depth": int(state.get("max_split_depth", 0) or 0),
+        "chunk_calls": int(state.get("chunk_calls", 0) or 0),
+        "deep_calls": int(state.get("deep_calls", 0) or 0),
+        "repair_calls": int(state.get("repair_calls", 0) or 0),
+        "assessment_usable": int(state.get("assessment_usable", 0) or 0),
+        "assessment_nothing_usable": int(state.get("assessment_nothing_usable", 0) or 0),
+        "assessment_needs_smaller_chunk": int(state.get("assessment_needs_smaller_chunk", 0) or 0),
+        "unclassified_empty_payloads": int(state.get("unclassified_empty_payloads", 0) or 0),
+        "rolling_batches": int(state.get("rolling_batches", 0) or 0),
+        **{key: int(state.get(key, 0) or 0) for key in _semantic_stage_metrics_defaults().keys()},
+    }
+    if not tail_result:
+        return combined
+    combined["facts_skipped"] = int(combined.get("facts_skipped", 0) or 0) + int(tail_result.get("facts_skipped", 0) or 0)
+    combined["carry_duplicate_facts_dropped"] = int(
+        combined.get("carry_duplicate_facts_dropped", 0) or 0
+    ) + int(tail_result.get("carry_duplicate_facts_dropped", 0) or 0)
+    combined["payload_duplicate_facts_collapsed"] = int(
+        combined.get("payload_duplicate_facts_collapsed", 0) or 0
+    ) + int(tail_result.get("payload_duplicate_facts_collapsed", 0) or 0)
+    combined["raw_facts"].extend(list(tail_result.get("raw_facts", []) or []))
+    from ingest.extract import collapse_duplicate_payload_facts
+    combined["raw_facts"], extra_collapsed = collapse_duplicate_payload_facts(combined["raw_facts"])
+    combined["payload_duplicate_facts_collapsed"] += int(extra_collapsed)
+    for filename, items in (tail_result.get("raw_snippets", {}) or {}).items():
+        combined["raw_snippets"][str(filename)] = _merge_unique_strings(
+            combined["raw_snippets"].get(str(filename), []),
+            list(items or []),
+        )
+    for filename, text in (tail_result.get("raw_journal", {}) or {}).items():
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if filename in combined["raw_journal"] and combined["raw_journal"][filename].strip():
+            combined["raw_journal"][filename] = f"{combined['raw_journal'][filename].strip()}\n\n{text.strip()}"
+        else:
+            combined["raw_journal"][filename] = text.strip()
+    for project_name, items in (tail_result.get("raw_project_logs", {}) or {}).items():
+        combined["raw_project_logs"][str(project_name)] = _merge_unique_strings(
+            combined["raw_project_logs"].get(str(project_name), []),
+            list(items or []),
+        )
+    for key in (
+        "chunks_processed",
+        "chunks_total",
+        "root_chunks",
+        "split_events",
+        "split_child_chunks",
+        "leaf_chunks",
+        "chunk_calls",
+        "deep_calls",
+        "repair_calls",
+        "assessment_usable",
+        "assessment_nothing_usable",
+        "assessment_needs_smaller_chunk",
+        "unclassified_empty_payloads",
+    ):
+        combined[key] = int(combined.get(key, 0) or 0) + int(tail_result.get(key, 0) or 0)
+    for key in _semantic_stage_metrics_defaults().keys():
+        combined[key] = int(combined.get(key, 0) or 0) + int(tail_result.get(key, 0) or 0)
+    combined["max_split_depth"] = max(
+        int(combined.get("max_split_depth", 0) or 0),
+        int(tail_result.get("max_split_depth", 0) or 0),
+    )
+    return combined
+
+
+def _rolling_metrics_path() -> Path:
+    path = _instance_root() / "logs" / "daemon" / "rolling-extraction.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _usage_events_path() -> Path:
+    return _instance_root() / "logs" / "llm-usage-events.jsonl"
+
+
+def _read_usage_totals() -> Dict[str, int]:
+    totals = {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "fast_calls": 0,
+        "fast_input_tokens": 0,
+        "fast_output_tokens": 0,
+        "deep_calls": 0,
+        "deep_input_tokens": 0,
+        "deep_output_tokens": 0,
+    }
+    path = _usage_events_path()
+    if not path.is_file():
+        return totals
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                tier = str(row.get("tier", "") or "").strip().lower()
+                input_tokens = int(row.get("input_tokens", 0) or 0)
+                output_tokens = int(row.get("output_tokens", 0) or 0)
+                totals["calls"] += 1
+                totals["input_tokens"] += input_tokens
+                totals["output_tokens"] += output_tokens
+                if tier in ("fast", "deep"):
+                    totals[f"{tier}_calls"] += 1
+                    totals[f"{tier}_input_tokens"] += input_tokens
+                    totals[f"{tier}_output_tokens"] += output_tokens
+    except OSError:
+        return totals
+    return totals
+
+
+def _usage_delta(before: Dict[str, int], after: Dict[str, int]) -> Dict[str, int]:
+    keys = set(before.keys()) | set(after.keys())
+    return {key: int(after.get(key, 0) or 0) - int(before.get(key, 0) or 0) for key in keys}
+
+
+def write_rolling_metric(event: str, session_id: str, **data: Any) -> None:
+    payload = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": event,
+        "session_id": session_id,
+    }
+    payload.update(data)
+    try:
+        with _rolling_metrics_path().open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+    except OSError as exc:
+        logger.warning("rolling metric write failed for %s: %s", session_id, exc)
+
+
 # ---------------------------------------------------------------------------
 # Transcript reading
 # ---------------------------------------------------------------------------
@@ -374,6 +1081,94 @@ def count_transcript_lines(transcript_path: str) -> int:
         return 0
 
 
+def _get_capture_chunk_tokens(default: int = 30_000) -> int:
+    """Read the live extraction chunk budget from config."""
+    try:
+        from config import get_config
+        cfg = get_config()
+        capture = getattr(cfg, "capture", None)
+        raw = getattr(capture, "chunk_tokens", default) if capture is not None else default
+        tokens = int(raw)
+        return max(1_000, tokens)
+    except Exception:
+        return default
+
+
+def _get_capture_chunk_max_lines(default: int = 0) -> int:
+    """Optional message-line budget for rolling extraction windows.
+
+    Token budgets alone do not prevent highly fragmented windows. This cap
+    keeps rolling extraction closer to normal session shapes by limiting how
+    many transcript rows can be packed into a single extraction unit.
+    """
+    raw_env = str(os.environ.get("QUAID_CAPTURE_CHUNK_MAX_LINES", "") or "").strip()
+    if raw_env:
+        try:
+            value = int(raw_env)
+            return max(0, value)
+        except Exception:
+            logger.warning("invalid QUAID_CAPTURE_CHUNK_MAX_LINES=%r; ignoring", raw_env)
+    try:
+        from config import get_config
+        cfg = get_config()
+        capture = getattr(cfg, "capture", None)
+        raw = getattr(capture, "chunk_max_lines", default) if capture is not None else default
+        value = int(raw)
+        return max(0, value)
+    except Exception:
+        return default
+
+
+def read_transcript_token_window(
+    transcript_path: str,
+    from_line: int,
+    max_tokens: int,
+    max_lines: int = 0,
+) -> List[str]:
+    """Read a single message-aligned transcript window up to the token budget."""
+    lines: List[str] = []
+    approx_tokens = 0
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i < from_line:
+                    continue
+                if max_lines > 0 and lines and len(lines) >= max_lines:
+                    break
+                line_tokens = max(1, len(line) // 4)
+                if lines and approx_tokens + line_tokens > max_tokens:
+                    break
+                lines.append(line)
+                approx_tokens += line_tokens
+                if len(lines) >= MAX_TRANSCRIPT_LINES:
+                    logger.warning(
+                        "transcript %s: token window capped at %d lines (from offset %d)",
+                        transcript_path,
+                        MAX_TRANSCRIPT_LINES,
+                        from_line,
+                    )
+                    break
+    except OSError as e:
+        logger.error("failed reading token window %s: %s", transcript_path, e)
+    return lines
+
+
+def estimate_unextracted_tokens(transcript_path: str, from_line: int, max_tokens: int) -> int:
+    """Cheap message-aligned estimate of unextracted transcript tokens."""
+    approx_tokens = 0
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i < from_line:
+                    continue
+                approx_tokens += max(1, len(line) // 4)
+                if approx_tokens >= max_tokens:
+                    break
+    except OSError:
+        return 0
+    return approx_tokens
+
+
 # ---------------------------------------------------------------------------
 # Core extraction processing
 # ---------------------------------------------------------------------------
@@ -385,21 +1180,22 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     which handles chunking and storage internally.
     """
     signal_type = signal_data.get("type", "unknown")
-    session_id = signal_data.get("session_id", "unknown")
+    session_id = _validate_session_id(signal_data.get("session_id", "unknown"))
     transcript_path = signal_data.get("transcript_path", "")
     label = f"daemon-{signal_type}"
+    rolling_mode = signal_type == "rolling"
+    staged_state = read_rolling_state(session_id)
+    lock_fd = _acquire_session_processing_lock(session_id)
 
-    # B062: Skip unknown signal types
     if signal_type not in VALID_SIGNAL_TYPES:
         logger.warning("[%s] unknown signal type, skipping", label)
         mark_signal_processed(signal_data)
         return
 
-    # B008: Validate session_id
-    session_id = _validate_session_id(session_id)
+    if lock_fd is None:
+        logger.info("[%s] session %s already has an active extraction; preserving signal for retry", label, session_id)
+        return
 
-    # Skip extraction for registered subagents — their transcripts are
-    # merged into the parent session's extraction batch instead.
     try:
         from core.subagent_registry import is_registered_subagent
         if is_registered_subagent(session_id):
@@ -414,12 +1210,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         mark_signal_processed(signal_data)
         return
 
-    # B057: Read cursor and compare transcript_path
     cursor_data = read_cursor(session_id)
-    cursor_offset = cursor_data["line_offset"]
+    cursor_offset = int(cursor_data["line_offset"] or 0)
     cursor_transcript = cursor_data["transcript_path"]
-
-    # If transcript path changed (file rotation), reset cursor
     if cursor_transcript and cursor_transcript != transcript_path:
         logger.info(
             "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
@@ -427,7 +1220,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         )
         cursor_offset = 0
 
-    # B055: Detect cursor > file length (file truncation/rotation)
     total_lines = count_transcript_lines(transcript_path)
     if cursor_offset > total_lines:
         logger.warning(
@@ -436,40 +1228,41 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         )
         cursor_offset = 0
 
-    new_lines = read_transcript_slice(transcript_path, cursor_offset)
+    chunk_budget = _get_capture_chunk_tokens()
+    chunk_line_budget = _get_capture_chunk_max_lines()
+    new_lines = (
+        read_transcript_token_window(transcript_path, cursor_offset, chunk_budget, chunk_line_budget)
+        if rolling_mode
+        else read_transcript_slice(transcript_path, cursor_offset)
+    )
 
     if not new_lines:
-        logger.info("[%s] session %s: no new content past cursor (offset=%d)",
-                     label, session_id, cursor_offset)
-        # Still index the session at session_end even if no new content to extract.
-        # The cursor may have been advanced by a prior signal — the session is
-        # complete and must be reachable via 'quaid session list/load'.
-        if signal_type == "session_end":
-            try:
-                from core.ingest_runtime import run_session_logs_ingest
-                sl_result = run_session_logs_ingest(
-                    session_id=session_id,
-                    owner_id=_get_owner_id(),
-                    label=label,
-                    transcript_path=str(transcript_path),
-                    message_count=0,
-                    topic_hint="",
-                )
-                sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
-                sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
-                logger.info("[%s] session %s: session_logs ingest (no-new-content path): %s%s",
-                            label, session_id, sl_status,
-                            f" ({sl_reason})" if sl_reason else "")
-            except Exception as e:
-                logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
-                               label, session_id, e)
-        mark_signal_processed(signal_data)
-        return
+        logger.info("[%s] session %s: no new content past cursor (offset=%d)", label, session_id, cursor_offset)
+        if not rolling_mode and staged_state_has_payload(staged_state):
+            new_lines = []
+        else:
+            if signal_type == "session_end":
+                try:
+                    from core.ingest_runtime import run_session_logs_ingest
+                    sl_result = run_session_logs_ingest(
+                        session_id=session_id,
+                        owner_id=_get_owner_id(),
+                        label=label,
+                        transcript_path=str(transcript_path),
+                        message_count=0,
+                        topic_hint="",
+                    )
+                    sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
+                    sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
+                    logger.info("[%s] session %s: session_logs ingest (no-new-content path): %s%s",
+                                label, session_id, sl_status,
+                                f" ({sl_reason})" if sl_reason else "")
+                except Exception as e:
+                    logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
+                                   label, session_id, e)
+            mark_signal_processed(signal_data)
+            return
 
-    # If read_transcript_slice hit the cap on a compaction/reset signal, the
-    # remaining lines beyond the cap could be lost if the transcript gets wiped
-    # before the daemon cycles again. Write a follow-up session_end signal now
-    # so the remaining lines are extracted even if the original trigger is gone.
     capped_lines = len(new_lines) >= MAX_TRANSCRIPT_LINES
     if capped_lines and signal_type in ("compaction", "reset"):
         remaining_after_cap = total_lines - (cursor_offset + len(new_lines))
@@ -486,127 +1279,283 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 meta={"reason": "cap_followup", "cap_offset": cursor_offset + len(new_lines)},
             )
 
-    # B030: Write lines to temp file in QUAID_HOME/data/tmp/ (not /tmp)
-    tmp_dir = _tmp_dir()
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8",
-        dir=str(tmp_dir),
-    ) as tmp:
-        tmp.writelines(new_lines)
-        tmp_path = tmp.name
-
+    tmp_path = None
+    operation_phase = "prepare"
+    extract_started_at: Optional[float] = None
+    publish_started_at: Optional[float] = None
+    flush_payload: Dict[str, Any] = {}
     try:
         from lib.adapter import get_adapter
-        adapter = get_adapter()
-        transcript_text = adapter.parse_session_jsonl(Path(tmp_path))
+        from ingest.extract import extract_from_transcript, apply_extracted_payloads
 
-        if not transcript_text.strip():
-            logger.info("[%s] session %s: empty transcript after parsing", label, session_id)
-            write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
-            # B002: Mark processed only on success path
-            mark_signal_processed(signal_data)
-            return
+        transcript_text = ""
+        if new_lines:
+            tmp_dir = _tmp_dir()
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".jsonl", delete=False, encoding="utf-8",
+                dir=str(tmp_dir),
+            ) as tmp:
+                tmp.writelines(new_lines)
+                tmp_path = tmp.name
+            adapter = get_adapter()
+            transcript_text = adapter.parse_session_jsonl(Path(tmp_path))
 
-        # Guard against post-compaction status lines or other metadata-only content
-        # (e.g. "Compacted (17k -> 2.1k)") that aren't extractable conversations.
-        # 200 chars is safely below any real conversation with facts worth extracting.
-        _MIN_EXTRACTABLE_CHARS = 200
-        if len(transcript_text.strip()) < _MIN_EXTRACTABLE_CHARS:
-            logger.info(
-                "[%s] session %s: transcript too short to extract (%d chars < %d min), skipping",
-                label, session_id, len(transcript_text.strip()), _MIN_EXTRACTABLE_CHARS,
-            )
-            write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
-            mark_signal_processed(signal_data)
-            return
-
-        # Merge harvestable subagent transcripts into parent extraction.
-        # B010: Per-child size is advisory (chunker handles large transcripts).
-        # MAX_MERGED_CHARS bounds the total injected into this extraction pass.
-        # Subagents deferred due to the total cap are NOT dropped — a follow-up
-        # session_end signal is written for the parent so they are harvested on
-        # the next daemon cycle rather than silently skipped.
-        MAX_CHILD_CHARS = 50_000
-        MAX_MERGED_CHARS = 200_000
-        harvestable = []
-        merged_chars = 0
-        deferred_subagents: List[Dict[str, Any]] = []
-        try:
-            from core.subagent_registry import get_harvestable, mark_harvested
-            harvestable = get_harvestable(session_id)
-            for child in harvestable:
-                child_path = child.get("transcript_path", "")
-                child_id = child.get("child_id", "")
-                if child_path and os.path.isfile(child_path):
-                    if merged_chars >= MAX_MERGED_CHARS:
-                        # Defer rather than drop — record for follow-up signal.
-                        deferred_subagents.append(child)
-                        continue
-                    try:
-                        child_text = adapter.parse_session_jsonl(Path(child_path))
-                        if child_text.strip():
-                            if len(child_text) > MAX_CHILD_CHARS:
-                                logger.warning(
-                                    "[%s] session %s: subagent %s transcript is very large (%d chars), "
-                                    "extraction chunker will handle splitting",
-                                    label, session_id, child_id, len(child_text),
-                                )
-                            transcript_text += (
-                                f"\n\n--- Subagent ({child.get('child_type', 'unknown')}) ---\n"
-                                + child_text
-                            )
-                            merged_chars += len(child_text)
-                            logger.info(
-                                "[%s] session %s: merged subagent %s transcript (%d chars)",
-                                label, session_id, child_id, len(child_text),
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            "[%s] session %s: failed to parse subagent %s transcript: %s",
-                            label, session_id, child_id, e,
-                        )
-            if deferred_subagents:
-                logger.warning(
-                    "[%s] session %s: %d subagent(s) deferred due to merged transcript cap "
-                    "(%d chars); writing follow-up session_end signal for parent session",
-                    label, session_id, len(deferred_subagents), merged_chars,
+        if not rolling_mode and not transcript_text.strip():
+            if staged_state_has_payload(staged_state):
+                logger.info(
+                    "[%s] session %s: empty transcript after parsing; flushing staged payload only",
+                    label, session_id,
                 )
-                # Write a follow-up signal so the parent session is re-processed
-                # and remaining subagents are harvested.
-                write_signal(
-                    signal_type="session_end",
-                    session_id=session_id,
-                    transcript_path=transcript_path,
-                    meta={"reason": "deferred_subagents", "deferred_count": len(deferred_subagents)},
-                )
-        except Exception as e:
-            logger.warning("[%s] session %s: subagent merge error: %s", label, session_id, e)
+            else:
+                logger.info("[%s] session %s: empty transcript after parsing", label, session_id)
+                write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+                mark_signal_processed(signal_data)
+                return
 
-        # Delegate to extract_from_transcript() — it handles chunking,
-        # LLM calls, fact storage, snippets, journal, and project logs.
-        # carry_facts starts empty each tick; extract_from_transcript builds
-        # it in-memory across chunks within this single extraction run.
-        from ingest.extract import extract_from_transcript
+        if not rolling_mode and transcript_text.strip():
+            # Guard against post-compaction status lines or other metadata-only content
+            # (e.g. "Compacted (17k -> 2.1k)") that aren't extractable conversations.
+            # 200 chars is safely below any real conversation with facts worth extracting.
+            _MIN_EXTRACTABLE_CHARS = 200
+            transcript_len = len(transcript_text.strip())
+            if transcript_len < _MIN_EXTRACTABLE_CHARS:
+                if staged_state_has_payload(staged_state):
+                    logger.info(
+                        "[%s] session %s: transcript too short to extract (%d chars < %d min); "
+                        "flushing staged payload only",
+                        label, session_id, transcript_len, _MIN_EXTRACTABLE_CHARS,
+                    )
+                    transcript_text = ""
+                else:
+                    logger.info(
+                        "[%s] session %s: transcript too short to extract (%d chars < %d min), skipping",
+                        label, session_id, transcript_len, _MIN_EXTRACTABLE_CHARS,
+                    )
+                    write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+                    mark_signal_processed(signal_data)
+                    return
 
         owner = _get_owner_id()
-        result = extract_from_transcript(
-            transcript=transcript_text,
+        harvestable = []
+        snapshots = []
+        mark_harvested_fn = None
+        if transcript_text.strip() and not rolling_mode:
+            MAX_CHILD_CHARS = 50_000
+            MAX_MERGED_CHARS = 200_000
+            merged_chars = 0
+            deferred_subagents: List[Dict[str, Any]] = []
+            try:
+                from core.subagent_registry import get_harvestable, mark_harvested
+                harvestable = get_harvestable(session_id)
+                mark_harvested_fn = mark_harvested
+                for child in harvestable:
+                    child_path = child.get("transcript_path", "")
+                    child_id = child.get("child_id", "")
+                    if child_path and os.path.isfile(child_path):
+                        if merged_chars >= MAX_MERGED_CHARS:
+                            deferred_subagents.append(child)
+                            continue
+                        try:
+                            child_text = adapter.parse_session_jsonl(Path(child_path))
+                            if child_text.strip():
+                                if len(child_text) > MAX_CHILD_CHARS:
+                                    logger.warning(
+                                        "[%s] session %s: subagent %s transcript is very large (%d chars), "
+                                        "extraction chunker will handle splitting",
+                                        label, session_id, child_id, len(child_text),
+                                    )
+                                transcript_text += (
+                                    f"\n\n--- Subagent ({child.get('child_type', 'unknown')}) ---\n"
+                                    + child_text
+                                )
+                                merged_chars += len(child_text)
+                                logger.info(
+                                    "[%s] session %s: merged subagent %s transcript (%d chars)",
+                                    label, session_id, child_id, len(child_text),
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "[%s] session %s: failed to parse subagent %s transcript: %s",
+                                label, session_id, child_id, e,
+                            )
+                if deferred_subagents:
+                    logger.warning(
+                        "[%s] session %s: %d subagent(s) deferred due to merged transcript cap "
+                        "(%d chars); writing follow-up session_end signal for parent session",
+                        label, session_id, len(deferred_subagents), merged_chars,
+                    )
+                    write_signal(
+                        signal_type="session_end",
+                        session_id=session_id,
+                        transcript_path=transcript_path,
+                        meta={"reason": "deferred_subagents", "deferred_count": len(deferred_subagents)},
+                    )
+            except Exception as e:
+                logger.warning("[%s] session %s: subagent merge error: %s", label, session_id, e)
+
+        if rolling_mode:
+            operation_phase = "rolling_stage_extract"
+            if not transcript_text.strip():
+                logger.info("[%s] session %s: empty rolling transcript after parsing", label, session_id)
+                write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+                mark_signal_processed(signal_data)
+                return
+            stage_started_at = time.time()
+            line_chars = sum(len(line) for line in new_lines)
+            line_estimated_tokens = sum(max(1, len(line) // 4) for line in new_lines)
+            max_line_chars = max((len(line) for line in new_lines), default=0)
+            max_line_estimated_tokens = max((max(1, len(line) // 4) for line in new_lines), default=0)
+            carry_facts_in = len(staged_state.get("carry_facts", []) or [])
+            stage_result = extract_from_transcript(
+                transcript=transcript_text,
+                owner_id=owner,
+                label=label,
+                session_id=session_id,
+                dry_run=True,
+                carry_facts=list(staged_state.get("carry_facts", []) or []),
+            )
+            stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
+            chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
+            chunks_total = int(stage_result.get("chunks_total", 0) or 0)
+            if chunks_total > 0 and chunks_processed < chunks_total:
+                raise RuntimeError(
+                    f"rolling extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
+                )
+            staged_state = merge_staged_payloads(staged_state, stage_result)
+            staged_state["processed_line_offset"] = cursor_offset + len(new_lines)
+            staged_state["transcript_path"] = transcript_path
+            write_rolling_state(session_id, staged_state)
+            write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+            mark_signal_processed(signal_data)
+            write_rolling_metric(
+                "rolling_stage",
+                session_id,
+                signal_type=signal_type,
+                line_count=len(new_lines),
+                line_chars=line_chars,
+                line_estimated_tokens=line_estimated_tokens,
+                max_line_chars=max_line_chars,
+                max_line_estimated_tokens=max_line_estimated_tokens,
+                chunk_budget_tokens=chunk_budget,
+                chunk_budget_lines=chunk_line_budget,
+                new_cursor_offset=cursor_offset + len(new_lines),
+                staged_fact_count=len(staged_state.get("raw_facts", []) or []),
+                rolling_batches=int(staged_state.get("rolling_batches", 0) or 0),
+                carry_facts_in=carry_facts_in,
+                carry_facts_out=len(stage_result.get("carry_facts", []) or []),
+                payload_duplicate_facts_collapsed=int(
+                    staged_state.get("payload_duplicate_facts_collapsed", 0) or 0
+                ),
+                carry_duplicate_facts_dropped=int(stage_result.get("carry_duplicate_facts_dropped", 0) or 0),
+                embedding_cache_requested=int(stage_embedding_stats.get("requested", 0) or 0),
+                embedding_cache_unique=int(stage_embedding_stats.get("unique", 0) or 0),
+                embedding_cache_hits=int(stage_embedding_stats.get("cache_hits", 0) or 0),
+                embedding_cache_warmed=int(stage_embedding_stats.get("warmed", 0) or 0),
+                embedding_cache_failed=int(stage_embedding_stats.get("failed", 0) or 0),
+                stage_raw_fact_count=len(stage_result.get("raw_facts", []) or []),
+                chunks_processed=chunks_processed,
+                chunks_total=chunks_total,
+                root_chunks=int(stage_result.get("root_chunks", 0) or 0),
+                split_events=int(stage_result.get("split_events", 0) or 0),
+                split_child_chunks=int(stage_result.get("split_child_chunks", 0) or 0),
+                leaf_chunks=int(stage_result.get("leaf_chunks", 0) or 0),
+                max_split_depth=int(stage_result.get("max_split_depth", 0) or 0),
+                deep_calls=int(stage_result.get("deep_calls", 0) or 0),
+                repair_calls=int(stage_result.get("repair_calls", 0) or 0),
+                assessment_usable=int(stage_result.get("assessment_usable", 0) or 0),
+                assessment_nothing_usable=int(stage_result.get("assessment_nothing_usable", 0) or 0),
+                assessment_needs_smaller_chunk=int(stage_result.get("assessment_needs_smaller_chunk", 0) or 0),
+                unclassified_empty_payloads=int(stage_result.get("unclassified_empty_payloads", 0) or 0),
+                staged_semantic_duplicate_facts_collapsed=int(
+                    staged_state.get("staged_semantic_duplicate_facts_collapsed", 0) or 0
+                ),
+                staged_semantic_auto_reject_hits=int(
+                    staged_state.get("staged_semantic_auto_reject_hits", 0) or 0
+                ),
+                staged_semantic_gray_zone_rows=int(
+                    staged_state.get("staged_semantic_gray_zone_rows", 0) or 0
+                ),
+                staged_semantic_llm_checks=int(
+                    staged_state.get("staged_semantic_llm_checks", 0) or 0
+                ),
+                staged_semantic_llm_same_hits=int(
+                    staged_state.get("staged_semantic_llm_same_hits", 0) or 0
+                ),
+                staged_semantic_llm_different_hits=int(
+                    staged_state.get("staged_semantic_llm_different_hits", 0) or 0
+                ),
+                wall_seconds=round(time.time() - stage_started_at, 3),
+            )
+            if total_lines > cursor_offset + len(new_lines):
+                remaining_tokens = estimate_unextracted_tokens(transcript_path, cursor_offset + len(new_lines), chunk_budget)
+                if (
+                    remaining_tokens >= chunk_budget
+                    or (chunk_line_budget > 0 and len(new_lines) >= chunk_line_budget)
+                ):
+                    write_signal(
+                        signal_type="rolling",
+                        session_id=session_id,
+                        transcript_path=transcript_path,
+                        meta={
+                            "reason": "continued_chunk_budget",
+                            "chunk_tokens": chunk_budget,
+                            "chunk_lines": chunk_line_budget,
+                        },
+                    )
+            return
+
+        tail_result = None
+        operation_phase = "flush_extract"
+        usage_before_extract = _read_usage_totals()
+        extract_started_at = time.time()
+        if transcript_text.strip():
+            tail_result = extract_from_transcript(
+                transcript=transcript_text,
+                owner_id=owner,
+                label=label,
+                session_id=session_id,
+                dry_run=True,
+                carry_facts=list(staged_state.get("carry_facts", []) or []),
+            )
+            chunks_processed = int(tail_result.get("chunks_processed", 0) or 0)
+            chunks_total = int(tail_result.get("chunks_total", 0) or 0)
+            if chunks_total > 0 and chunks_processed < chunks_total:
+                raise RuntimeError(
+                    f"flush extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
+                )
+        extract_wall = time.time() - extract_started_at
+        usage_after_extract = _read_usage_totals()
+
+        usage_before_publish = usage_after_extract
+        operation_phase = "build_flush_payload"
+        flush_payload = build_flush_payload(staged_state, tail_result)
+        operation_phase = "flush_publish"
+        publish_started_at = time.time()
+        result = apply_extracted_payloads(
+            flush_payload,
             owner_id=owner,
             label=label,
             session_id=session_id,
-            carry_facts=[],
+            dry_run=False,
         )
+        publish_wall = time.time() - publish_started_at
+        usage_after_publish = _read_usage_totals()
+        extract_usage = _usage_delta(usage_before_extract, usage_after_extract)
+        publish_usage = _usage_delta(usage_before_publish, usage_after_publish)
 
         facts_stored = result.get("facts_stored", 0)
         facts_skipped = result.get("facts_skipped", 0)
         edges_created = result.get("edges_created", 0)
-
-        logger.info(
-            "[%s] session %s: %d stored, %d skipped, %d edges",
-            label, session_id, facts_stored, facts_skipped, edges_created,
+        snippets_count = sum(
+            len(v)
+            for v in (result.get("snippets", {}) or {}).values()
+            if isinstance(v, list)
         )
+        journals_count = len(result.get("journal", {}) or {})
+        project_log_metrics = dict(result.get("project_log_metrics", {}) or {})
+        logger.info("[%s] session %s: %d stored, %d skipped, %d edges",
+                    label, session_id, facts_stored, facts_skipped, edges_created)
 
-        # Send extraction notification (Telegram, stderr, etc.)
         try:
             from core.runtime.notify import notify_memory_extraction
             notify_memory_extraction(
@@ -620,8 +1569,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning("[%s] session %s: notification failed: %s", label, session_id, e)
 
-        # Index session into session_logs so 'quaid session list/load' can find it.
-        # Run after notification so a failure here doesn't block the main path.
         try:
             from core.ingest_runtime import run_session_logs_ingest
             sl_result = run_session_logs_ingest(
@@ -640,43 +1587,110 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
 
-        # B054: Only advance cursor if extraction completed all chunks
-        chunks_processed = result.get("chunks_processed", 0)
-        chunks_total = result.get("chunks_total", 0)
-        if chunks_total > 0 and chunks_processed < chunks_total:
-            logger.warning(
-                "[%s] session %s: extraction incomplete (%d/%d chunks), "
-                "NOT advancing cursor to allow retry",
-                label, session_id, chunks_processed, chunks_total,
-            )
-        else:
-            # Advance cursor
-            write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
-
-        # Mark harvested subagent transcripts after successful extraction
-        try:
-            for child in harvestable:
-                mark_harvested(session_id, child.get("child_id", ""))
-        except Exception as e:
-            logger.warning("[%s] session %s: mark_harvested error: %s", label, session_id, e)
-
-        # B002: Mark processed only on success
+        write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+        clear_rolling_state(session_id)
+        if mark_harvested_fn is not None:
+            try:
+                for child in harvestable:
+                    mark_harvested_fn(session_id, child.get("child_id", ""))
+            except Exception as e:
+                logger.warning("[%s] session %s: mark_harvested error: %s", label, session_id, e)
         mark_signal_processed(signal_data)
 
-        # Post-extraction hooks: snapshot shadow git for tracked projects.
-        snapshots = []
+        signal_to_publish_seconds = None
+        raw_signal_ts = str(signal_data.get("timestamp", "") or "").strip()
+        if raw_signal_ts:
+            try:
+                signal_dt = datetime.fromisoformat(raw_signal_ts.replace("Z", "+00:00"))
+                signal_to_publish_seconds = round(time.time() - signal_dt.timestamp(), 3)
+            except Exception:
+                signal_to_publish_seconds = None
+
+        write_rolling_metric(
+            "rolling_flush",
+            session_id,
+            signal_type=signal_type,
+            signal_timestamp=signal_data.get("timestamp"),
+            staged_batches=int(staged_state.get("rolling_batches", 0) or 0),
+            staged_facts=len(staged_state.get("raw_facts", []) or []),
+            final_raw_fact_count=len(flush_payload.get("raw_facts", []) or []),
+            final_facts_stored=facts_stored,
+            final_facts_skipped=facts_skipped,
+            final_edges_created=edges_created,
+            snippets_count=snippets_count,
+            journals_count=journals_count,
+            project_logs_seen=int(project_log_metrics.get("entries_seen", 0) or 0),
+            project_logs_written=int(project_log_metrics.get("entries_written", 0) or 0),
+            project_logs_projects_updated=int(project_log_metrics.get("projects_updated", 0) or 0),
+            extract_wall_seconds=round(extract_wall, 3),
+            publish_wall_seconds=round(publish_wall, 3),
+            flush_wall_seconds=round(extract_wall + publish_wall, 3),
+            extract_llm_calls=int(extract_usage.get("calls", 0) or 0),
+            extract_fast_calls=int(extract_usage.get("fast_calls", 0) or 0),
+            extract_deep_calls=int(extract_usage.get("deep_calls", 0) or 0),
+            extract_input_tokens=int(extract_usage.get("input_tokens", 0) or 0),
+            extract_output_tokens=int(extract_usage.get("output_tokens", 0) or 0),
+            publish_llm_calls=int(publish_usage.get("calls", 0) or 0),
+            publish_fast_calls=int(publish_usage.get("fast_calls", 0) or 0),
+            publish_deep_calls=int(publish_usage.get("deep_calls", 0) or 0),
+            publish_input_tokens=int(publish_usage.get("input_tokens", 0) or 0),
+            publish_output_tokens=int(publish_usage.get("output_tokens", 0) or 0),
+            signal_to_publish_seconds=signal_to_publish_seconds,
+            carry_facts_final=len(flush_payload.get("carry_facts", []) or []),
+            carry_duplicate_facts_dropped=int(flush_payload.get("carry_duplicate_facts_dropped", 0) or 0),
+            dedup_hash_exact_hits=int(result.get("dedup_hash_exact_hits", 0) or 0),
+            payload_duplicate_facts_collapsed=int(result.get("payload_duplicate_facts_collapsed", 0) or 0),
+            dedup_scanned_rows=int(result.get("dedup_scanned_rows", 0) or 0),
+            dedup_gray_zone_rows=int(result.get("dedup_gray_zone_rows", 0) or 0),
+            dedup_llm_checks=int(result.get("dedup_llm_checks", 0) or 0),
+            dedup_llm_same_hits=int(result.get("dedup_llm_same_hits", 0) or 0),
+            dedup_llm_different_hits=int(result.get("dedup_llm_different_hits", 0) or 0),
+            dedup_fallback_reject_hits=int(result.get("dedup_fallback_reject_hits", 0) or 0),
+            dedup_auto_reject_hits=int(result.get("dedup_auto_reject_hits", 0) or 0),
+            embedding_cache_requested=int(result.get("embedding_cache_requested", 0) or 0),
+            embedding_cache_unique=int(result.get("embedding_cache_unique", 0) or 0),
+            embedding_cache_hits=int(result.get("embedding_cache_hits", 0) or 0),
+            embedding_cache_warmed=int(result.get("embedding_cache_warmed", 0) or 0),
+            embedding_cache_failed=int(result.get("embedding_cache_failed", 0) or 0),
+            staged_semantic_duplicate_facts_collapsed=int(
+                flush_payload.get("staged_semantic_duplicate_facts_collapsed", 0) or 0
+            ),
+            staged_semantic_auto_reject_hits=int(
+                flush_payload.get("staged_semantic_auto_reject_hits", 0) or 0
+            ),
+            staged_semantic_gray_zone_rows=int(
+                flush_payload.get("staged_semantic_gray_zone_rows", 0) or 0
+            ),
+            staged_semantic_llm_checks=int(
+                flush_payload.get("staged_semantic_llm_checks", 0) or 0
+            ),
+            staged_semantic_llm_same_hits=int(
+                flush_payload.get("staged_semantic_llm_same_hits", 0) or 0
+            ),
+            staged_semantic_llm_different_hits=int(
+                flush_payload.get("staged_semantic_llm_different_hits", 0) or 0
+            ),
+            root_chunks=int(flush_payload.get("root_chunks", 0) or 0),
+            split_events=int(flush_payload.get("split_events", 0) or 0),
+            split_child_chunks=int(flush_payload.get("split_child_chunks", 0) or 0),
+            leaf_chunks=int(flush_payload.get("leaf_chunks", 0) or 0),
+            max_split_depth=int(flush_payload.get("max_split_depth", 0) or 0),
+            deep_calls=int(flush_payload.get("deep_calls", 0) or 0),
+            repair_calls=int(flush_payload.get("repair_calls", 0) or 0),
+            assessment_usable=int(flush_payload.get("assessment_usable", 0) or 0),
+            assessment_nothing_usable=int(flush_payload.get("assessment_nothing_usable", 0) or 0),
+            assessment_needs_smaller_chunk=int(flush_payload.get("assessment_needs_smaller_chunk", 0) or 0),
+            unclassified_empty_payloads=int(flush_payload.get("unclassified_empty_payloads", 0) or 0),
+        )
+
         try:
             from core.project_registry import snapshot_all_projects
             snapshots = snapshot_all_projects()
             for snap in snapshots:
-                logger.info(
-                    "[%s] shadow snapshot %s: %d changes",
-                    label, snap["project"], len(snap["changes"]),
-                )
+                logger.info("[%s] shadow snapshot %s: %d changes", label, snap["project"], len(snap["changes"]))
         except Exception as e:
             logger.warning("[%s] post-extraction shadow git error: %s", label, e)
 
-        # Update project docs from shadow git diffs
         if snapshots:
             try:
                 from core.docs_updater_hook import update_project_docs
@@ -687,14 +1701,47 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 logger.warning("[%s] post-extraction docs update error: %s", label, e)
 
     except Exception as e:
-        # B002: Do NOT mark_signal_processed here — leave signal for retry
+        should_write_flush_error = (
+            not rolling_mode
+            and signal_type in ("compaction", "reset", "session_end", "timeout")
+            and staged_state_has_payload(staged_state)
+        )
+        if should_write_flush_error:
+            extract_wall = round((time.time() - extract_started_at), 3) if extract_started_at else 0.0
+            publish_wall = round((time.time() - publish_started_at), 3) if publish_started_at else 0.0
+            signal_to_publish_seconds = None
+            raw_signal_ts = str(signal_data.get("timestamp", "") or "").strip()
+            if raw_signal_ts:
+                try:
+                    signal_dt = datetime.fromisoformat(raw_signal_ts.replace("Z", "+00:00"))
+                    signal_to_publish_seconds = round(time.time() - signal_dt.timestamp(), 3)
+                except Exception:
+                    signal_to_publish_seconds = None
+            write_rolling_metric(
+                "rolling_flush_error",
+                session_id,
+                signal_type=signal_type,
+                signal_timestamp=signal_data.get("timestamp"),
+                phase=operation_phase,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                traceback_tail=" | ".join(traceback.format_exc().strip().splitlines()[-4:]),
+                staged_batches=int(staged_state.get("rolling_batches", 0) or 0),
+                staged_facts=len(staged_state.get("raw_facts", []) or []),
+                final_raw_fact_count=len(flush_payload.get("raw_facts", []) or []),
+                extract_wall_seconds=extract_wall,
+                publish_wall_seconds=publish_wall,
+                signal_to_publish_seconds=signal_to_publish_seconds,
+            )
         logger.error("[%s] session %s: extraction failed (signal preserved for retry): %s",
                      label, session_id, e, exc_info=True)
     finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        _release_session_processing_lock(session_id, lock_fd)
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -827,6 +1874,52 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         )
 
 
+def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
+    """Queue rolling extraction for sessions whose unprocessed tail crossed chunk budget."""
+    cursor_dir = _cursor_dir()
+    if not cursor_dir.is_dir():
+        return
+
+    chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
+    pending = read_pending_signals()
+    pending_session_ids = {s.get("session_id") for s in pending}
+
+    for cursor_file in cursor_dir.glob("*.json"):
+        try:
+            data = json.loads(cursor_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        session_id = data.get("session_id", "")
+        transcript_path = data.get("transcript_path", "")
+        if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if session_id in pending_session_ids:
+            continue
+
+        cursor_offset = int(data.get("line_offset", 0) or 0)
+        total_lines = count_transcript_lines(transcript_path)
+        if total_lines <= cursor_offset:
+            continue
+
+        unextracted_tokens = estimate_unextracted_tokens(transcript_path, cursor_offset, chunk_budget)
+        if unextracted_tokens < chunk_budget:
+            continue
+
+        logger.info(
+            "session %s crossed rolling extract budget (%d >= %d tokens), generating rolling signal",
+            session_id,
+            unextracted_tokens,
+            chunk_budget,
+        )
+        write_signal(
+            signal_type="rolling",
+            session_id=session_id,
+            transcript_path=transcript_path,
+            meta={"reason": "chunk_budget", "chunk_tokens": chunk_budget},
+        )
+
+
 # ---------------------------------------------------------------------------
 # Orphaned session sweep (runs on session-init)
 # ---------------------------------------------------------------------------
@@ -953,6 +2046,11 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                     logger.error("failed processing signal: %s", e, exc_info=True)
                     # Preserve the signal for a future retry. Outer-loop exceptions
                     # mean we do not know whether processing was durable.
+
+            try:
+                check_chunk_ready_sessions()
+            except Exception as e:
+                logger.error("rolling chunk readiness check failed: %s", e)
 
             # Periodic idle session check. Use a timeout-aware cadence so
             # shorter configured inactivity windows do not wait on a fixed

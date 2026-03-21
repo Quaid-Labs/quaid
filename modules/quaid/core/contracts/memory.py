@@ -6,6 +6,10 @@ from typing import Any, Dict, List, Optional, Protocol
 
 
 class MemoryServicePort(Protocol):
+    def batch_write(self) -> Any: ...
+
+    def warm_embeddings(self, texts: List[str]) -> Dict[str, Any]: ...
+
     def store(
         self,
         text: str,

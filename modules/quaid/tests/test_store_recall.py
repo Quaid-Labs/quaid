@@ -194,6 +194,44 @@ class TestStoreBasic:
         assert node is not None
         assert node.session_id == "session-1"
 
+    def test_batch_write_duplicate_logging_reuses_shared_connection(self, tmp_path):
+        from datastore.memorydb.memory_graph import batch_write, store
+
+        graph, _ = _make_graph(tmp_path)
+        text = "Maya's birthday dinner is planned for May 18"
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            with batch_write() as conn:
+                first = store(text, owner_id="quaid", _conn=conn)
+                second = store(text, owner_id="quaid", _conn=conn)
+
+        assert first["status"] == "created"
+        assert second["status"] in {"duplicate", "updated"}
+        with graph._get_conn() as conn:
+            dedup_rows = conn.execute("SELECT COUNT(*) FROM dedup_log").fetchone()[0]
+        assert dedup_rows == 1
+
+    def test_batch_write_dedup_rowid_max_ignores_same_batch_rows(self, tmp_path):
+        from datastore.memorydb.memory_graph import batch_write, store
+
+        graph, _ = _make_graph(tmp_path)
+        text = "Maya's birthday dinner is planned for May 18"
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            with graph._get_conn() as conn:
+                dedup_rowid_max = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM nodes").fetchone()[0]
+            with batch_write() as conn:
+                first = store(text, owner_id="quaid", _conn=conn, _dedup_rowid_max=dedup_rowid_max)
+                second = store(text, owner_id="quaid", _conn=conn, _dedup_rowid_max=dedup_rowid_max)
+
+        assert first["status"] == "created"
+        assert second["status"] == "created"
+        with graph._get_conn() as conn:
+            row_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        assert row_count == 2
+
     def test_category_to_type_mapping_preference(self, tmp_path):
         """category='preference' maps to type 'Preference'."""
         from datastore.memorydb.memory_graph import store
@@ -1070,7 +1108,7 @@ class TestRecallTelemetry:
         assert captured["timeout_s"] == 2.0
         assert captured["planner_profile"] == "fast"
 
-    def test_recall_fast_falls_back_to_off_when_planner_times_out(self):
+    def test_recall_fast_falls_back_to_off_when_planner_times_out_without_failhard(self):
         import datastore.memorydb.memory_graph as mg
 
         captured = {}
@@ -1082,7 +1120,8 @@ class TestRecallTelemetry:
             return [], {"phases_ms": {"total_ms": 0}}, None
 
         with patch.object(mg, "_plan_fanout_queries", side_effect=RuntimeError("Anthropic API error: The read operation timed out")), \
-             patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run):
+             patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run), \
+             patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
             rows, meta = mg.recall_fast("What tables exist in the recipe app database?", return_meta=True)
 
         assert rows == []
@@ -1312,7 +1351,7 @@ class TestRecallTelemetry:
         assert "fast_drill_queries" not in meta["quality_gate"]
         assert "fast_drill_wall_ms" not in meta.get("phases_ms", {})
 
-    def test_recall_fast_runs_second_store_plan_for_preserved_exact_candidate(self):
+    def test_recall_fast_uses_deterministic_drill_for_preserved_exact_candidate(self):
         import datastore.memorydb.memory_graph as mg
 
         run_calls = []
@@ -1364,33 +1403,18 @@ class TestRecallTelemetry:
                 ["preserved_exact_low_overlap"],
                 "GENERAL",
             ),
-        ), patch.object(
-            mg,
-            "_drill_plan_queries",
-            return_value=(
-                [
-                    "Have Maya and David done any races together?",
-                    "Maya and David ran races together",
-                ],
-                {"used_llm": True, "queries_count": 2, "elapsed_ms": 80, "bailout_reason": None},
-            ),
         ):
             rows, meta = mg.recall_fast("Have Maya and David done any races together?", return_meta=True)
 
         assert len(run_calls) == 2
         assert run_calls[0]["planner_profile"] == "fast"
         assert run_calls[1]["planner_profile"] == "off"
-        assert run_calls[1]["planned_queries"] == [
-            "Have Maya and David done any races together?",
-            "Maya and David ran races together",
-        ]
+        assert run_calls[1]["planned_queries"][0] == "Have Maya and David done any races together?"
+        assert len(run_calls[1]["planned_queries"]) >= 2
         assert rows[0]["text"] == "Maya and David ran races together"
         assert meta["quality_gate"]["fast_drill_candidate"] is True
         assert meta["quality_gate"]["fast_drill_enabled"] is True
-        assert meta["quality_gate"]["fast_drill_queries"] == [
-            "Have Maya and David done any races together?",
-            "Maya and David ran races together",
-        ]
+        assert meta["quality_gate"]["fast_drill_queries"] == run_calls[1]["planned_queries"]
         assert meta["phases_ms"]["fast_drill_wall_ms"] == 90
 
     def test_recall_fast_does_not_use_keyword_fallback_when_fast_drill_disabled(self):
@@ -2045,6 +2069,131 @@ class TestRecallFastHookInjectContract:
 
         assert mult >= 1.08
 
+    def test_query_fit_multiplier_boosts_temporal_rows_for_when_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node(
+            id="n2",
+            type="Fact",
+            name="The Austin Half Marathon is on May 18, 2026",
+            attributes={},
+        )
+
+        mult = mg._compute_query_fit_multiplier(
+            "When is the Austin Half marathon?",
+            node,
+            node.attributes,
+            intent="WHEN",
+        )
+
+        assert mult >= 1.05
+
+    def test_query_fit_multiplier_boosts_technical_rows_for_project_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node(
+            id="n3",
+            type="Fact",
+            name="The recipe app has sharing.test.js and recipe.test.js test suites",
+            attributes={},
+        )
+
+        mult = mg._compute_query_fit_multiplier(
+            "What test suites exist for the recipe app?",
+            node,
+            node.attributes,
+            intent="PROJECT",
+        )
+
+        assert mult >= 1.08
+
+    def test_query_requirements_detect_enumeration_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        analysis = mg._derive_query_requirements(
+            "What dietary labels does the recipe app support?",
+            intent="PROJECT",
+        )
+
+        assert analysis["enumeration_like"] is True
+        assert "enumeration" in analysis["requirements"]
+
+    def test_query_fit_multiplier_boosts_enumeration_rows_for_list_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node(
+            id="n4",
+            type="Fact",
+            name="The recipe app defines 10 allowed dietary labels: vegetarian, vegan, gluten-free, dairy-free, nut-free, diabetic-friendly, low-sodium, low-carb, keto, paleo.",
+            attributes={},
+        )
+
+        mult = mg._compute_query_fit_multiplier(
+            "What dietary labels does the recipe app support?",
+            node,
+            node.attributes,
+            intent="PROJECT",
+        )
+
+        assert mult >= 1.12
+
+    def test_quality_gate_tracks_enumeration_query_without_forcing_validation(self):
+        import datastore.memorydb.memory_graph as mg
+
+        gate = mg._evaluate_quality_gate_readiness(
+            "What test suites exist for the recipe app?",
+            [
+                {
+                    "text": "The test suites that exist for the recipe app use Jest for unit testing.",
+                    "category": "fact",
+                }
+            ],
+            intent="PROJECT",
+            limit=5,
+        )
+
+        assert gate["enumeration_like"] is True
+        assert "enumeration" in gate["requirements"]
+        assert gate["coverage"].get("enumeration", 0) == 0
+        assert gate["needs_validation"] is False
+
+    def test_quality_gate_accepts_enumeration_query_with_list_row(self):
+        import datastore.memorydb.memory_graph as mg
+
+        gate = mg._evaluate_quality_gate_readiness(
+            "What dietary labels does the recipe app support?",
+            [
+                {
+                    "text": "The recipe app defines 10 allowed dietary labels: vegetarian, vegan, gluten-free, dairy-free, nut-free, diabetic-friendly, low-sodium, low-carb, keto, paleo.",
+                    "category": "fact",
+                }
+            ],
+            intent="PROJECT",
+            limit=5,
+        )
+
+        assert gate["enumeration_like"] is True
+        assert gate["coverage"].get("enumeration", 0) >= 1
+        assert gate["needs_validation"] is False
+
+    def test_quality_gate_does_not_force_non_structured_enumeration_validation(self):
+        import datastore.memorydb.memory_graph as mg
+
+        gate = mg._evaluate_quality_gate_readiness(
+            "What are the names of all the people in Maya's life?",
+            [
+                {
+                    "text": "The names of all the people in Maya's life include David, Rachel, Linda, Priya, Ethan, and Lily.",
+                    "category": "fact",
+                }
+            ],
+            intent="GENERAL",
+            limit=5,
+        )
+
+        assert gate["enumeration_like"] is True
+        assert "enumeration" in gate["requirements"]
+        assert gate["needs_validation"] is False
 
 # ---------------------------------------------------------------------------
 # Domain filter normalization — unit tests for _normalize_domain_filter

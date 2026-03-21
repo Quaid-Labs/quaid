@@ -6,10 +6,12 @@ routines should import datastore internals directly from
 """
 
 from datastore.memorydb.memory_graph import (
+    batch_write as batch_memory_write,
     store as store_memory,
     recall as recall_memories,
     recall_fast as recall_memories_fast,
     search as search_memories,
+    warm_embedding_cache as warm_memory_embeddings,
     stats as datastore_stats,
     list_domains as list_memory_domains,
     register_domain as register_memory_domain,
@@ -19,10 +21,12 @@ from datastore.memorydb.memory_graph import (
 )
 
 __all__ = [
+    "batch_memory_write",
     "store_memory",
     "recall_memories",
     "recall_memories_fast",
     "search_memories",
+    "warm_memory_embeddings",
     "datastore_stats",
     "list_memory_domains",
     "register_memory_domain",

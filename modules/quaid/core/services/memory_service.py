@@ -19,10 +19,12 @@ from core.runtime.identity_runtime import (
     register_privacy_policy,
 )
 from datastore.facade import (
+    batch_memory_write,
     store_memory,
     recall_memories,
     recall_memories_fast,
     search_memories,
+    warm_memory_embeddings,
     create_edge,
     datastore_stats,
     list_memory_domains,
@@ -33,6 +35,12 @@ from datastore.facade import (
 
 
 class DatastoreMemoryService(MemoryServicePort):
+    def batch_write(self) -> Any:
+        return batch_memory_write()
+
+    def warm_embeddings(self, texts: List[str]) -> Dict[str, Any]:
+        return warm_memory_embeddings(texts=texts)
+
     def store(
         self,
         text: str,
@@ -183,6 +191,7 @@ class DatastoreMemoryService(MemoryServicePort):
         object_name: str,
         owner_id: str,
         source_fact_id: Optional[str] = None,
+        _conn: Any = None,
     ) -> Dict[str, Any]:
         return create_edge(
             subject_name=subject_name,
@@ -190,6 +199,7 @@ class DatastoreMemoryService(MemoryServicePort):
             object_name=object_name,
             owner_id=owner_id,
             source_fact_id=source_fact_id,
+            _conn=_conn,
         )
 
     def forget(self, node_id: Optional[str] = None, query: Optional[str] = None) -> bool:

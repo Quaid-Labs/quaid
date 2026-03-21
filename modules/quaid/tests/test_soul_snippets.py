@@ -290,6 +290,22 @@ class TestDistillationState:
 
 
 class TestDistillation:
+    def test_review_timeout_helpers_use_large_task_floors_and_allow_disable(self, workspace_dir, mock_config, monkeypatch):
+        mock_config.docs.update_timeout_seconds = 120
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import (
+                _journal_review_timeout_seconds,
+                _snippet_review_timeout_seconds,
+            )
+            assert _snippet_review_timeout_seconds() == 600.0
+            assert _journal_review_timeout_seconds() == 1800.0
+
+            monkeypatch.setenv("QUAID_JOURNAL_REVIEW_TIMEOUT_SECONDS", "0")
+            monkeypatch.setenv("QUAID_SNIPPETS_REVIEW_TIMEOUT_SECONDS", "900")
+
+            assert _journal_review_timeout_seconds() is None
+            assert _snippet_review_timeout_seconds() == 900.0
+
     def test_build_distillation_prompt(self, workspace_dir, mock_config):
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import build_distillation_prompt
@@ -429,6 +445,40 @@ class TestDistillation:
         assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
         assert isinstance(kwargs.get("max_tokens"), int)
         assert isinstance(kwargs.get("timeout"), (int, float))
+
+    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    def test_journal_distillation_writes_review_telemetry(self, mock_opus, workspace_dir, mock_config):
+        journal_dir = workspace_dir / "journal"
+        journal_dir.mkdir()
+        (journal_dir / "SOUL.journal.md").write_text(
+            "# SOUL Journal\n\n"
+            "## 2026-02-10 — Reset\n"
+            "Today I felt something shift in how I approach problems.\n"
+        )
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        mock_config.docs.update_timeout_seconds = 120
+
+        mock_opus.return_value = (json.dumps({
+            "reasoning": "Worth preserving.",
+            "additions": [{"text": "I grow through every conversation.", "after_section": "END"}],
+            "edits": [],
+            "captured_dates": ["2026-02-10"],
+        }), 1.5)
+
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import run_journal_distillation
+            run_journal_distillation(dry_run=True, force_distill=True)
+
+        telemetry_path = workspace_dir / "logs" / "soul_review_telemetry.jsonl"
+        assert telemetry_path.exists()
+        events = [json.loads(line) for line in telemetry_path.read_text().splitlines() if line.strip()]
+        assert any(e["task"] == "journal_distillation" and e["status"] == "start" for e in events)
+        ok_events = [e for e in events if e["task"] == "journal_distillation" and e["status"] == "ok"]
+        assert len(ok_events) == 1
+        assert ok_events[0]["file"] == "SOUL.md"
+        assert ok_events[0]["items"] == 1
+        assert ok_events[0]["timeout_s"] == 1800.0
+        assert ok_events[0]["duration_s"] == 1.5
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_apply(self, mock_opus, workspace_dir, mock_config):
@@ -1389,6 +1439,118 @@ class TestSnippetReview:
         assert "I notice patterns in my responses." in (
             workspace_dir / "projects" / "quaid" / "SOUL.md"
         ).read_text()
+
+    def test_snippet_review_retries_smaller_windows_on_parse_failure(
+        self, workspace_dir, mock_config, monkeypatch
+    ):
+        """Large snippet-review windows should split and retry instead of fail-hard on truncation."""
+        (workspace_dir / "USER.snippets.md").write_text(
+            "# USER — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- snippet one\n"
+            "- snippet two\n"
+            "- snippet three\n"
+            "- snippet four\n",
+            encoding="utf-8",
+        )
+        (workspace_dir / "identity" / "USER.md").write_text("# USER\n\nKnown facts.\n", encoding="utf-8")
+
+        import datastore.notedb.soul_snippets as soul_snippets
+
+        mock_config.docs.journal.max_tokens = 4096
+        monkeypatch.setattr(soul_snippets, "_REVIEW_WINDOW_TOKEN_CAP", 10_000)
+        monkeypatch.setattr(soul_snippets, "_snippet_review_output_estimate", lambda _s: 1)
+
+        prompt_sizes = []
+
+        def _fake_build_review_prompt(payload):
+            count = len(payload["USER.md"]["snippets"])
+            prompt_sizes.append(count)
+            return str(count)
+
+        call_count = {"n": 0}
+
+        def _fake_call(prompt, **_kwargs):
+            call_count["n"] += 1
+            count = int(prompt)
+            if call_count["n"] == 1:
+                return '{"decisions":[', 0.1
+            decisions = [
+                {
+                    "file": "USER.md",
+                    "snippet_index": idx + 1,
+                    "action": "DISCARD",
+                    "reason": "covered",
+                }
+                for idx in range(count)
+            ]
+            return json.dumps({"decisions": decisions}), 0.1
+
+        monkeypatch.setattr(soul_snippets, "build_review_prompt", _fake_build_review_prompt)
+        monkeypatch.setattr(soul_snippets, "call_deep_reasoning", _fake_call)
+
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import run_soul_snippets_review
+
+            result = run_soul_snippets_review(dry_run=True)
+
+        assert result["discarded"] == 4
+        assert result["errors"] == []
+        assert prompt_sizes == [4, 2, 2]
+
+    def test_snippet_review_splits_windows_by_output_budget(
+        self, workspace_dir, mock_config, monkeypatch
+    ):
+        """Snippet review should pre-split windows when expected decision output is too large."""
+        (workspace_dir / "USER.snippets.md").write_text(
+            "# USER — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- one\n"
+            "- two\n"
+            "- three\n"
+            "- four\n"
+            "- five\n",
+            encoding="utf-8",
+        )
+        (workspace_dir / "identity" / "USER.md").write_text("# USER\n\nKnown facts.\n", encoding="utf-8")
+
+        import datastore.notedb.soul_snippets as soul_snippets
+
+        mock_config.docs.journal.max_tokens = 900
+        monkeypatch.setattr(soul_snippets, "_REVIEW_WINDOW_TOKEN_CAP", 10_000)
+        monkeypatch.setattr(soul_snippets, "_snippet_review_output_estimate", lambda _s: 180)
+
+        prompt_sizes = []
+
+        def _fake_build_review_prompt(payload):
+            count = len(payload["USER.md"]["snippets"])
+            prompt_sizes.append(count)
+            return str(count)
+
+        def _fake_call(prompt, **_kwargs):
+            count = int(prompt)
+            decisions = [
+                {
+                    "file": "USER.md",
+                    "snippet_index": idx + 1,
+                    "action": "DISCARD",
+                    "reason": "covered",
+                }
+                for idx in range(count)
+            ]
+            return json.dumps({"decisions": decisions}), 0.1
+
+        monkeypatch.setattr(soul_snippets, "build_review_prompt", _fake_build_review_prompt)
+        monkeypatch.setattr(soul_snippets, "call_deep_reasoning", _fake_call)
+
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import run_soul_snippets_review
+
+            result = run_soul_snippets_review(dry_run=True)
+
+        assert result["discarded"] == 5
+        assert result["errors"] == []
+        assert prompt_sizes == [2, 2, 1]
 
     def test_disabled_skips(self, workspace_dir, mock_config):
         """Snippets disabled returns skipped."""

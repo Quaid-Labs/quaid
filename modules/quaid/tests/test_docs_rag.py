@@ -314,6 +314,99 @@ class TestDocsSearchFiltering:
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.80)
+    def test_search_docs_penalizes_fixture_files_for_impl_queries(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "seed:0",
+                    "/tmp/workspace/projects/recipe-app/seeds/sample-recipes.json",
+                    0,
+                    "recipe tests mention ingredients and setup",
+                    "# Seed Recipes",
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "server:0",
+                    "/tmp/workspace/projects/recipe-app/server.js",
+                    0,
+                    "test suites include dietary.test.js and sharing.test.js",
+                    "# Tests",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/recipe-app",
+                "source_roots": ["/tmp/workspace/projects/recipe-app"],
+            },
+        ):
+            results = rag.search_docs("what test suites exist for the recipe app", limit=10, project="recipe-app")
+
+        assert len(results) == 2
+        assert results[0]["source"].endswith("server.js")
+        assert results[0]["similarity"] > results[1]["similarity"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.80)
+    def test_search_docs_keeps_seed_files_when_query_explicitly_asks_for_seeds(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "seed:0",
+                    "/tmp/workspace/projects/recipe-app/seeds/sample-recipes.json",
+                    0,
+                    "safe recipes include grilled salmon and lentil soup",
+                    "# Seed Recipes",
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "project:0",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.md",
+                    0,
+                    "overview of project",
+                    "# Project: Recipe App",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/recipe-app",
+                "source_roots": ["/tmp/workspace/projects/recipe-app"],
+            },
+        ):
+            results = rag.search_docs("what seed recipes are safe for mom", limit=10, project="recipe-app")
+
+        assert len(results) == 2
+        assert results[0]["source"].endswith("sample-recipes.json")
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_matches_relocated_project_paths_by_suffix(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)

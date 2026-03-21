@@ -13,9 +13,10 @@ import os
 import logging
 import struct
 import threading
-from typing import List, Optional
+from typing import List, Optional, Sequence, Any
 
 from lib.fail_policy import is_fail_hard_enabled
+from lib.worker_pool import run_callables
 from lib.providers import (
     EmbeddingsProvider,
     MockEmbeddingsProvider,
@@ -106,6 +107,90 @@ def get_embedding(text: str) -> Optional[List[float]]:
     Set MOCK_EMBEDDINGS=1 to use deterministic fakes for testing.
     """
     return get_embeddings_provider().embed(text)
+
+
+def _embedding_parallel_workers(task_name: str = "embeddings", default: int = 4) -> int:
+    """Resolve bounded worker count for embedding tasks."""
+    try:
+        from config import get_config
+
+        cfg = get_config()
+        parallel = getattr(getattr(cfg, "core", None), "parallel", None)
+        if parallel is None or not getattr(parallel, "enabled", True):
+            return 1
+        workers = int(getattr(parallel, "llm_workers", default) or default)
+        task_workers = getattr(parallel, "task_workers", {}) or {}
+        override = None
+        if isinstance(task_workers, dict):
+            for key in (task_name, task_name.upper(), task_name.lower()):
+                if key in task_workers:
+                    override = task_workers.get(key)
+                    break
+        raw = override if override is not None else workers
+        return max(1, min(int(raw), 16))
+    except Exception as exc:
+        logger.warning("embedding worker config parse failed for task=%s: %s", task_name, exc)
+        return max(1, int(default))
+
+
+def get_embeddings(
+    texts: Sequence[str],
+    *,
+    max_workers: Optional[int] = None,
+    pool_name: str = "embeddings",
+    task_name: str = "embeddings",
+    return_exceptions: bool = False,
+) -> List[Any]:
+    """Get embeddings for many texts with a bounded worker pool.
+
+    Results preserve input ordering. Duplicate texts are computed once and
+    fanned back out to all matching positions.
+    """
+    items = list(texts or [])
+    if not items:
+        return []
+
+    provider = get_embeddings_provider()
+    embed_many = getattr(provider, "embed_many", None)
+    if callable(embed_many):
+        try:
+            out = list(embed_many(items))
+            if len(out) == len(items):
+                return out
+        except Exception:
+            if not return_exceptions:
+                raise
+            return [None] * len(items)
+
+    positions: dict[str, List[int]] = {}
+    unique_items: List[str] = []
+    for idx, text in enumerate(items):
+        key = str(text or "")
+        bucket = positions.get(key)
+        if bucket is None:
+            positions[key] = [idx]
+            unique_items.append(key)
+        else:
+            bucket.append(idx)
+
+    worker_count = (
+        _embedding_parallel_workers(task_name)
+        if max_workers is None
+        else max(1, int(max_workers))
+    )
+    calls = [(lambda chunk_text=text: (lambda: provider.embed(chunk_text)))() for text in unique_items]
+    unique_results = run_callables(
+        calls,
+        max_workers=min(worker_count, len(unique_items)),
+        pool_name=pool_name,
+        return_exceptions=return_exceptions,
+    )
+
+    out: List[Any] = [None] * len(items)
+    for text, result in zip(unique_items, unique_results):
+        for idx in positions.get(text, []):
+            out[idx] = result
+    return out
 
 
 def pack_embedding(embedding: List[float]) -> bytes:

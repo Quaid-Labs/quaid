@@ -372,6 +372,25 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_loads_capture_chunk_token_fields(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "capture": {
+                    "chunkTokens": 8000,
+                    "chunkMaxLines": 144,
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.capture.chunk_tokens == 8000
+                assert cfg.capture.chunk_max_lines == 144
+        finally:
+            config._config = old_config
+
     def test_loads_plugins_config_block(self, tmp_path):
         import config
         old_config = config._config
