@@ -1122,9 +1122,12 @@ ssh alfie.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code-main/S
 ssh alfie.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code-main/USER.snippets.md 2>/dev/null || echo "(absent)"'
 ```
 
-Pass: OC `SOUL.snippets.md` has at least one entry. The section headers (e.g.
-`## Compaction — YYYY-MM-DD`) should correspond to extraction events from this
-run. CC snippets may be absent on first install — they build via CC sessions.
+Pass: OC `USER.snippets.md` has at least one entry (hard gate). `SOUL.snippets.md`
+is soft — the extraction LLM correctly skips SOUL snippets for transactional/test
+content ("project admin + task completion report, not reflective or emotionally
+weighted"). SOUL snippets build from organic usage, not scripted test sessions.
+If USER.snippets.md has entries and SOUL.snippets.md is absent, that is a PASS.
+CC snippets may be absent on first install — they build via CC sessions.
 
 **Journal entries** (written when LLM includes `journal_entries`; discretionary):
 
@@ -1150,9 +1153,13 @@ entry from this test run — M8 includes a deliberate `/reset` to capture projec
 context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
 
 Fail:
-- OC `SOUL.snippets.md` is absent or empty after 3+ extractions
-- `projects/quaid/PROJECT.log` absent after M8's trigger step
+- OC `USER.snippets.md` is absent or empty after M11 extraction
+- `projects/quaid/PROJECT.log` absent after M11's trigger step
 - Any file is structurally malformed (broken JSON, truncated entries)
+
+Not a failure:
+- `SOUL.snippets.md` absent on a scripted test run — the extraction LLM correctly
+  withholds SOUL snippets for transactional content. Absence is expected and correct.
 
 ### M12: OC Multi-Agent Verification ✓ 2026-03-15
 
