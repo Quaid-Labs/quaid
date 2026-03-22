@@ -851,8 +851,19 @@ async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
   if (!IS_OPENCLAW || !cli) return;
   if (await waitForGatewayWarmup(timeoutMs)) return;
 
+  // The gateway may have come up during the warmup window but just missed the
+  // deadline — do a final extended HTTP wait (up to 60s extra) before running
+  // the expensive snapshot + recovery logic. This avoids racing against a
+  // slow launchd bootstrap or plugin-triggered restart.
+  log.warn(`Gateway not ready after initial ${Math.round(timeoutMs / 1000)}s warmup during ${context}; waiting up to 60s more.`);
+  if (await waitForGatewayWarmup(60_000)) return;
+
   let snapshot = _gatewayStatusSnapshot(cli);
   log.warn(`Gateway warmup failed during ${context}: ${_formatGatewaySnapshot(snapshot)}`);
+
+  // One last HTTP health check after the expensive snapshot (which itself takes
+  // up to 36s during which the gateway may have finished bootstrapping).
+  if (_gatewayHttpCode("/health", "GET", null) === 200) return;
 
   const serviceInLaunchd = _gatewayRegisteredInLaunchd();
   if (_gatewayServiceLooksMissing(snapshot) && !serviceInLaunchd) {
