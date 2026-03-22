@@ -528,7 +528,7 @@ class TestSoulSnippetsProtectedRegions:
             result = run_journal_distillation(dry_run=False, force_distill=True)
 
         assert result["additions"] == 1
-        content = (snippets_workspace_dir / "projects" / "quaid" / "SOUL.md").read_text()
+        content = (snippets_workspace_dir / "identity" / "SOUL.md").read_text()
         # Protected content unchanged
         assert "I am Alfie. This never changes." in content
         # Addition was made in unprotected section

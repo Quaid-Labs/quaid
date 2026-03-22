@@ -88,6 +88,34 @@ QUAID_HOME/<instance_id>/
   journal/                journal entries for distillation
 ```
 
+### Identity seed vs. live identity
+
+`projects/quaid/SOUL.md`, `projects/quaid/USER.md`, and
+`projects/quaid/ENVIRONMENT.md` are base templates shipped with Quaid. They are
+seed material, not the live writable copies.
+
+For a real instance, the writable files live under:
+
+```text
+QUAID_HOME/<instance_id>/identity/
+  SOUL.md
+  USER.md
+  ENVIRONMENT.md
+```
+
+At install or workspace bootstrap time, the base templates are copied into the
+instance `identity/` directory. After that:
+
+- janitor distillation and snippet compaction update the instance `identity/`
+  files
+- `projects/quaid/*.md` remain stable base templates / companion context
+- hook injection reads the per-instance identity files, not the project bases
+
+If `identity/SOUL.md`, `identity/USER.md`, or `identity/ENVIRONMENT.md` are
+missing, runtime may seed them from the corresponding `projects/quaid/` base
+files, but it should never treat the project copies as the canonical writable
+targets.
+
 ---
 
 ## 2. Config Layer Merge Chain
