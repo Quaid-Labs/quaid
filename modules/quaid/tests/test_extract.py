@@ -875,14 +875,20 @@ class TestExtractFromTranscript:
 
         read_conn = MagicMock()
         read_conn.execute.return_value.fetchone.return_value = (0,)
-        batch_snapshot_conn = MagicMock()
-        batch_snapshot_conn.execute.return_value.fetchone.return_value = (0,)
-        shared_conn = object()
+        shared_conn = MagicMock()
         seen_store = []
         seen_edge = []
         entered = []
 
-        conns = iter([read_conn, batch_snapshot_conn, shared_conn])
+        def shared_execute(sql, *_args, **_kwargs):
+            res = MagicMock()
+            if "MAX(rowid)" in sql:
+                res.fetchone.return_value = (0,)
+            return res
+
+        shared_conn.execute.side_effect = shared_execute
+
+        conns = iter([read_conn, shared_conn])
 
         @contextmanager
         def fake_batch_write():
@@ -936,7 +942,8 @@ class TestExtractFromTranscript:
 
         assert applied["facts_stored"] == 1
         assert applied["edges_created"] == 1
-        assert entered == [read_conn, batch_snapshot_conn, shared_conn]
+        assert entered == [read_conn, shared_conn]
+        assert shared_conn.execute.call_args_list[0].args[0] == "BEGIN IMMEDIATE"
         assert seen_store == [shared_conn]
         assert seen_edge == [shared_conn]
 
@@ -947,13 +954,20 @@ class TestExtractFromTranscript:
         entered = []
         read_conn = MagicMock()
         read_conn.execute.return_value.fetchone.return_value = (0,)
-        batch_snapshot_a = MagicMock()
-        batch_snapshot_a.execute.return_value.fetchone.return_value = (0,)
-        batch_snapshot_b = MagicMock()
-        batch_snapshot_b.execute.return_value.fetchone.return_value = (0,)
-        conn_a = object()
-        conn_b = object()
-        conns = iter([read_conn, batch_snapshot_a, conn_a, batch_snapshot_b, conn_b])
+        conn_a = MagicMock()
+        conn_b = MagicMock()
+
+        def make_write_execute(max_rowid):
+            def _execute(sql, *_args, **_kwargs):
+                res = MagicMock()
+                if "MAX(rowid)" in sql:
+                    res.fetchone.return_value = (max_rowid,)
+                return res
+            return _execute
+
+        conn_a.execute.side_effect = make_write_execute(0)
+        conn_b.execute.side_effect = make_write_execute(0)
+        conns = iter([read_conn, conn_a, conn_b])
 
         @contextmanager
         def fake_batch_write():
@@ -1010,7 +1024,9 @@ class TestExtractFromTranscript:
 
         assert applied["facts_stored"] == 2
         assert applied["publish_batches"] == 2
-        assert entered == [read_conn, batch_snapshot_a, conn_a, batch_snapshot_b, conn_b]
+        assert entered == [read_conn, conn_a, conn_b]
+        assert conn_a.execute.call_args_list[0].args[0] == "BEGIN IMMEDIATE"
+        assert conn_b.execute.call_args_list[0].args[0] == "BEGIN IMMEDIATE"
         assert seen_store == [conn_a, conn_b]
 
     @patch("ingest.extract._memory.store")
@@ -1019,11 +1035,19 @@ class TestExtractFromTranscript:
 
         initial_snapshot = MagicMock()
         initial_snapshot.execute.return_value.fetchone.return_value = (10,)
-        delta_snapshot = MagicMock()
-        delta_snapshot.execute.return_value.fetchone.return_value = (12,)
-        write_conn = object()
+        write_conn = MagicMock()
+        seen_exec = []
+
+        def write_execute(sql, *_args, **_kwargs):
+            seen_exec.append(sql)
+            res = MagicMock()
+            if "MAX(rowid)" in sql:
+                res.fetchone.return_value = (12,)
+            return res
+
+        write_conn.execute.side_effect = write_execute
         entered = []
-        conns = iter([initial_snapshot, delta_snapshot, write_conn])
+        conns = iter([initial_snapshot, write_conn])
 
         @contextmanager
         def fake_batch_write():
@@ -1080,7 +1104,8 @@ class TestExtractFromTranscript:
 
         assert applied["facts_stored"] == 0
         assert applied["facts_skipped"] == 1
-        assert entered == [initial_snapshot, delta_snapshot, write_conn]
+        assert entered == [initial_snapshot, write_conn]
+        assert seen_exec[:2] == ["BEGIN IMMEDIATE", "SELECT COALESCE(MAX(rowid), 0) FROM nodes"]
         assert len(seen_calls) == 1
         assert seen_calls[0]["_dedup_only"] is True
         assert seen_calls[0]["_dedup_rowid_min_exclusive"] == 10

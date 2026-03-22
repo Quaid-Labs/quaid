@@ -1478,6 +1478,44 @@ def apply_extracted_payloads(
                         )
         return fact_entry["status"] == "blocked"
 
+    def _begin_publish_batch_write(write_conn: Any, *, batch_index: int) -> None:
+        execute = getattr(write_conn, "execute", None)
+        if not callable(execute):
+            return
+        execute("BEGIN IMMEDIATE")
+        _write_publish_trace(
+            "publish_batch_lock_acquired",
+            session_id=session_id,
+            label=label,
+            batch_index=batch_index,
+        )
+
+    def _snapshot_publish_batch_rowid_max(
+        write_conn: Any,
+        *,
+        batch_index: int,
+        external_rowid_seen: Optional[int],
+    ) -> Optional[int]:
+        if external_rowid_seen is None:
+            return external_rowid_seen
+        execute = getattr(write_conn, "execute", None)
+        if not callable(execute):
+            return external_rowid_seen
+        row = execute("SELECT COALESCE(MAX(rowid), 0) FROM nodes").fetchone()
+        current_max = int(row[0] or 0) if row else 0
+        delta_rowid_max = external_rowid_seen
+        if current_max > int(external_rowid_seen or 0):
+            delta_rowid_max = current_max
+        _write_publish_trace(
+            "publish_batch_rowid_window",
+            session_id=session_id,
+            label=label,
+            batch_index=batch_index,
+            external_rowid_seen=external_rowid_seen,
+            delta_rowid_max=delta_rowid_max,
+        )
+        return delta_rowid_max
+
     def _process_fact(
         fact: Dict[str, Any],
         write_conn: Any,
@@ -1680,24 +1718,17 @@ def apply_extracted_payloads(
                 batch_size=len(batch),
                 external_rowid_seen=external_rowid_seen,
             )
-            if external_rowid_seen is not None:
-                try:
-                    with _memory.batch_write() as snapshot_conn:
-                        row = snapshot_conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM nodes").fetchone()
-                        current_max = int(row[0] or 0) if row else 0
-                    if current_max > int(external_rowid_seen or 0):
-                        delta_rowid_max = current_max
-                except Exception:
-                    delta_rowid_max = external_rowid_seen
-            _write_publish_trace(
-                "publish_batch_rowid_window",
-                session_id=session_id,
-                label=label,
-                batch_index=batch_index,
-                external_rowid_seen=external_rowid_seen,
-                delta_rowid_max=delta_rowid_max,
-            )
             with _memory.batch_write() as write_conn:
+                _begin_publish_batch_write(write_conn, batch_index=batch_index)
+                if external_rowid_seen is not None:
+                    try:
+                        delta_rowid_max = _snapshot_publish_batch_rowid_max(
+                            write_conn,
+                            batch_index=batch_index,
+                            external_rowid_seen=external_rowid_seen,
+                        )
+                    except Exception:
+                        delta_rowid_max = external_rowid_seen
                 _write_publish_trace(
                     "publish_batch_conn_opened",
                     session_id=session_id,
