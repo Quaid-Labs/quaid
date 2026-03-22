@@ -1185,12 +1185,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     label = f"daemon-{signal_type}"
     rolling_mode = signal_type == "rolling"
     staged_state = read_rolling_state(session_id)
-    lock_fd = _acquire_session_processing_lock(session_id)
-
     if signal_type not in VALID_SIGNAL_TYPES:
         logger.warning("[%s] unknown signal type, skipping", label)
         mark_signal_processed(signal_data)
         return
+
+    lock_fd = _acquire_session_processing_lock(session_id)
 
     if lock_fd is None:
         logger.info("[%s] session %s already has an active extraction; preserving signal for retry", label, session_id)
@@ -1201,6 +1201,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if is_registered_subagent(session_id):
             logger.info("[%s] session %s: registered subagent, skipping standalone extraction", label, session_id)
             mark_signal_processed(signal_data)
+            _release_session_processing_lock(session_id, lock_fd)
             return
     except Exception:
         pass
@@ -1208,6 +1209,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     if not transcript_path or not os.path.isfile(transcript_path):
         logger.warning("[%s] transcript not found: %s", label, transcript_path)
         mark_signal_processed(signal_data)
+        _release_session_processing_lock(session_id, lock_fd)
         return
 
     cursor_data = read_cursor(session_id)
