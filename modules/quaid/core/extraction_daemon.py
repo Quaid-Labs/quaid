@@ -1223,11 +1223,22 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             cursor_transcript.endswith(".jsonl")
             and transcript_path.startswith(cursor_transcript[:-len(".jsonl")] + ".jsonl.reset.")
         )
-        if _is_reset_rename:
+        if _is_reset_rename and signal_type != "reset":
+            # Non-reset signals on a renamed backup (e.g. orphan_reset_check on an
+            # active session) — content up to cursor_offset is already extracted, so
+            # preserve the cursor to avoid re-extraction.
             logger.info(
                 "[%s] session %s: transcript path is reset backup of cursor path (%s -> %s), preserving cursor",
                 label, session_id, cursor_transcript, transcript_path,
             )
+        elif _is_reset_rename:
+            # Reset signal on a renamed backup — this IS the /reset extraction.
+            # We want the full session content, so start from offset 0.
+            logger.info(
+                "[%s] session %s: reset signal on backup path (%s -> %s), resetting cursor for full extraction",
+                label, session_id, cursor_transcript, transcript_path,
+            )
+            cursor_offset = 0
         else:
             logger.info(
                 "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
