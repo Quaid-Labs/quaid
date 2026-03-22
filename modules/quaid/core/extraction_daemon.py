@@ -1216,11 +1216,24 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     cursor_offset = int(cursor_data["line_offset"] or 0)
     cursor_transcript = cursor_data["transcript_path"]
     if cursor_transcript and cursor_transcript != transcript_path:
-        logger.info(
-            "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
-            label, session_id, cursor_transcript, transcript_path,
+        # A .jsonl → .jsonl.reset.<ts> rename is OC's /reset backup mechanism.
+        # The content up to cursor_offset is identical in the backup file, so
+        # preserving the cursor avoids re-extracting already-processed lines.
+        _is_reset_rename = (
+            cursor_transcript.endswith(".jsonl")
+            and transcript_path.startswith(cursor_transcript[:-len(".jsonl")] + ".jsonl.reset.")
         )
-        cursor_offset = 0
+        if _is_reset_rename:
+            logger.info(
+                "[%s] session %s: transcript path is reset backup of cursor path (%s -> %s), preserving cursor",
+                label, session_id, cursor_transcript, transcript_path,
+            )
+        else:
+            logger.info(
+                "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
+                label, session_id, cursor_transcript, transcript_path,
+            )
+            cursor_offset = 0
 
     total_lines = count_transcript_lines(transcript_path)
     if cursor_offset > total_lines:
