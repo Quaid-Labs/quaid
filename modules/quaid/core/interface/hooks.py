@@ -18,13 +18,45 @@ Usage:
 """
 
 import argparse
+import fcntl
 import glob as glob_mod
 import json
 import os
+import select
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List
+
+
+def _read_stdin_json() -> dict:
+    """Read a JSON object from stdin without blocking on newline or EOF.
+
+    CC sends the JSON payload as a single write without a trailing newline
+    and keeps stdin open. readline() blocks waiting for newline; json.load()
+    blocks waiting for EOF. Use select + non-blocking read to consume only
+    what is available, then parse.
+    """
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], 10.0)
+        if not ready:
+            return {}
+        flags = fcntl.fcntl(sys.stdin.fileno(), fcntl.F_GETFL)
+        fcntl.fcntl(sys.stdin.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        buf = ""
+        while True:
+            try:
+                chunk = sys.stdin.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+            except (IOError, OSError):
+                break
+        # Restore blocking mode
+        fcntl.fcntl(sys.stdin.fileno(), fcntl.F_SETFL, flags)
+        return json.loads(buf.strip()) if buf.strip() else {}
+    except Exception:
+        return {}
 
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -79,7 +111,7 @@ def hook_inject(args):
     and appends them to the context so Claude can relay them to the user.
     """
     try:
-        hook_input = json.loads(sys.stdin.readline())
+        hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         return
 
@@ -206,7 +238,7 @@ def hook_inject_compact(args):
     Writes plain text to stdout.
     """
     try:
-        hook_input = json.loads(sys.stdin.readline())
+        hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
@@ -241,7 +273,7 @@ def hook_extract(args):
     asynchronously, handling cursors, chunking, and carryover.
     """
     try:
-        hook_input = json.loads(sys.stdin.readline())
+        hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
@@ -384,7 +416,7 @@ def hook_session_init(args):
     """
     # Read hook input to get current session_id for orphan sweep
     try:
-        hook_input = json.loads(sys.stdin.readline())
+        hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
@@ -606,7 +638,7 @@ def hook_subagent_start(args):
       - Merge its transcript into the parent on parent extraction
     """
     try:
-        hook_input = json.loads(sys.stdin.readline())
+        hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[quaid][subagent-start] invalid JSON on stdin: {e}", file=sys.stderr)
         return
@@ -641,7 +673,7 @@ def hook_subagent_stop(args):
     as complete/harvestable.
     """
     try:
-        hook_input = json.loads(sys.stdin.readline())
+        hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[quaid][subagent-stop] invalid JSON on stdin: {e}", file=sys.stderr)
         return
