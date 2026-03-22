@@ -13,9 +13,12 @@ Usage::
 """
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from lib.adapter import QuaidAdapter
