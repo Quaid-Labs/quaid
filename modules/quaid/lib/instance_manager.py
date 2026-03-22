@@ -149,8 +149,8 @@ class InstanceManager:
             from core.project_registry import create_project as _cp, get_project as _gp
             if not _gp(misc_name):
                 _cp(misc_name, description=misc_desc)
-        except Exception:
-            pass  # Non-fatal at silo init
+        except Exception as _e:
+            logger.warning("misc project registration skipped at silo init: %s", _e)
 
     def _default_config(self) -> dict:
         return {

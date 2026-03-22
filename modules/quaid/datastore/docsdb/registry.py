@@ -776,7 +776,7 @@ class DocsRegistry:
                 description=description or f"{label} project.",
             )
         except Exception as e:
-            logger.debug("Global project registry update skipped: %s", e)
+            logger.warning("Global project registry update skipped: %s", e)
 
         print(f"Created project '{name}' at {home_abs}")
         print(f"  PROJECT.md: {project_md_path}")

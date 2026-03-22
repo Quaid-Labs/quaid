@@ -19,8 +19,14 @@ logger = logging.getLogger(__name__)
 
 def _registry_path() -> Path:
     """Path to the project registry file."""
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home() / "project-registry.json"
+    try:
+        from lib.adapter import get_adapter
+        return get_adapter().quaid_home() / "project-registry.json"
+    except Exception:
+        import os
+        home = os.environ.get("QUAID_HOME", "").strip()
+        root = Path(home).resolve() if home else Path.home() / "quaid"
+        return root / "project-registry.json"
 
 
 def _load_registry() -> Dict[str, Any]:
