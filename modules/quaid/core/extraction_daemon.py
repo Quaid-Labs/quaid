@@ -1230,6 +1230,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             not _is_reset_rename
             and os.path.basename(cursor_transcript) == os.path.basename(transcript_path)
         )
+        # Cross-directory reset rename: cursor is at a relocated path (dir2/X.jsonl)
+        # and the new transcript is the .reset.* backup in the original directory
+        # (dir1/X.jsonl.reset.<ts>).  The directory-level _is_reset_rename check
+        # above fails because the dirs differ.  A basename-level check catches it.
+        _cursor_base = os.path.basename(cursor_transcript)
+        _transcript_base = os.path.basename(transcript_path)
+        _is_cross_dir_reset_rename = (
+            not _is_reset_rename
+            and not _is_dir_relocation
+            and _cursor_base.endswith(".jsonl")
+            and _transcript_base.startswith(_cursor_base[:-len(".jsonl")] + ".jsonl.reset.")
+        )
         if _is_reset_rename and signal_type != "reset":
             # Non-reset signals on a renamed backup (e.g. orphan_reset_check on an
             # active session) — content up to cursor_offset is already extracted, so
@@ -1258,6 +1270,20 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             # Reset cursor to 0 so the full session content is extracted.
             logger.info(
                 "[%s] session %s: reset signal on relocated transcript (%s -> %s), resetting cursor for full extraction",
+                label, session_id, cursor_transcript, transcript_path,
+            )
+            cursor_offset = 0
+        elif _is_cross_dir_reset_rename and signal_type != "reset":
+            # Non-reset signal on a cross-directory reset backup — content up to
+            # cursor_offset already extracted; preserve cursor.
+            logger.info(
+                "[%s] session %s: cross-dir reset backup of cursor path (%s -> %s), preserving cursor",
+                label, session_id, cursor_transcript, transcript_path,
+            )
+        elif _is_cross_dir_reset_rename:
+            # Reset signal on a cross-directory reset backup — full /reset extraction.
+            logger.info(
+                "[%s] session %s: reset signal on cross-dir reset backup (%s -> %s), resetting cursor for full extraction",
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
