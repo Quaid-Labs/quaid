@@ -1223,6 +1223,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             cursor_transcript.endswith(".jsonl")
             and transcript_path.startswith(cursor_transcript[:-len(".jsonl")] + ".jsonl.reset.")
         )
+        # A same-basename move is a session directory relocation (e.g.
+        # .openclaw/agents/.../sessions/X.jsonl -> quaid/logs/.../sessions/X.jsonl).
+        # The file content is identical, so preserve the cursor.
+        _is_dir_relocation = (
+            not _is_reset_rename
+            and os.path.basename(cursor_transcript) == os.path.basename(transcript_path)
+        )
         if _is_reset_rename and signal_type != "reset":
             # Non-reset signals on a renamed backup (e.g. orphan_reset_check on an
             # active session) — content up to cursor_offset is already extracted, so
@@ -1239,6 +1246,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
+        elif _is_dir_relocation:
+            # Same-basename path: session file relocated to a different directory.
+            # Content is identical; preserve cursor to avoid duplicate extraction.
+            logger.info(
+                "[%s] session %s: transcript directory relocation (%s -> %s), preserving cursor",
+                label, session_id, cursor_transcript, transcript_path,
+            )
         else:
             logger.info(
                 "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
