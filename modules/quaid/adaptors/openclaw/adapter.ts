@@ -1745,20 +1745,28 @@ notify_user(${JSON.stringify(message)})
           }
         };
 
-        // Prefer last user message from event.messages — clean structured content.
-        // Falls back to extractFromOCPromptJson (parses event.prompt JSON blob) when
-        // event.messages is stale, and finally to rawPrompt scrubbing.
+        // Prefer extractFromOCPromptJson — it reads the JSON blob in event.prompt which
+        // always contains the CURRENT user message. event.messages is updated via
+        // transcript_update which fires a few milliseconds AFTER before_prompt_build,
+        // making it stale on turn N+1 (shows the previous turn's last user message).
+        // Falls back to event.messages, then rawPrompt scrubbing.
         let query = "";
         let querySource = "unknown";
         const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
-        const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
-        if (lastUserMsg) {
-          const c = lastUserMsg.content;
-          const raw = typeof c === "string" ? c
-            : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
-            : "";
-          query = scrubQuery(raw);
-          querySource = "event.messages";
+        const jsonExtracted = extractFromOCPromptJson(rawPrompt);
+        if (jsonExtracted.length >= 3) {
+          query = jsonExtracted;
+          querySource = "oc_prompt_json";
+        } else {
+          const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
+          if (lastUserMsg) {
+            const c = lastUserMsg.content;
+            const raw = typeof c === "string" ? c
+              : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
+              : "";
+            query = scrubQuery(raw);
+            querySource = "event.messages";
+          }
         }
         if (query.length < 3) {
           query = scrubQuery(rawPrompt);
@@ -1776,17 +1784,13 @@ notify_user(${JSON.stringify(message)})
         });
 
         // Skip system/internal prompts, slash commands, and OC gateway error messages.
-        // IMPORTANT: check event.messages staleness before skipping — OC fires
-        // before_prompt_build before transcript_update, so event.messages can show a
-        // prior slash command (e.g. /new) as the last user message even though the
-        // actual current message is a real user query. When the skip pattern fires,
-        // try to recover the true current query from the JSON blob in event.prompt.
+        // oc_prompt_json is the primary source (always current); this fallback handles
+        // non-JSON-wrapped prompts where oc_prompt_json returned empty and event.messages
+        // fell back to a stale slash command or startup message.
         const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
         if (STARTUP_SKIP_RE.test(query)) {
-          // event.messages is stale — try two recovery paths:
-          // 1. JSON blob inside event.prompt (OC JSON-wrapped format)
-          // 2. scrubQuery(rawPrompt) directly (handles "[Tue ...] <user msg>" format
-          //    where scrubQuery strips the leading timestamp bracket)
+          // Try to recover from rawPrompt directly (handles "[Tue ...] <user msg>" format
+          // where scrubQuery strips the leading timestamp bracket).
           const jsonRecovered = extractFromOCPromptJson(rawPrompt);
           const rawRecovered = jsonRecovered.length >= 3 ? jsonRecovered : scrubQuery(rawPrompt);
           const recoveredSource = rawRecovered === jsonRecovered ? "oc_prompt_json_recovered" : "rawPrompt_recovered";
