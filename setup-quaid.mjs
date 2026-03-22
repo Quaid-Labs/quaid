@@ -870,6 +870,9 @@ async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
     log.warn("Gateway service appears missing after restart; attempting service install recovery.");
     const installRes = runCliWithTimeout(cli, ["gateway", "install"], 30_000);
     if (installRes.status !== 0) {
+      // gateway install may exit non-zero even when it succeeds (e.g. plist already exists
+      // warning). Check HTTP health before treating the non-zero exit as fatal.
+      if (await waitForGatewayWarmup(30_000)) return;
       const msg = renderCliFailure(installRes, 30_000);
       throw new Error(`gateway service missing after ${context}; auto-recovery failed during install: ${msg || "unknown error"}`);
     }
