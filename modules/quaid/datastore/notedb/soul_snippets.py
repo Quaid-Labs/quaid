@@ -239,6 +239,12 @@ def _refresh_generated_user_snippets_projection() -> None:
 
     _atomic_write_text(user_path, updated)
 
+
+def _refresh_generated_projection_hygiene() -> None:
+    """Reconcile managed projection blocks with current snippet-file state."""
+    _refresh_generated_memory_projection()
+    _refresh_generated_user_snippets_projection()
+
 # Voice guidance for distillation prompts per target file
 _FILE_VOICE_GUIDANCE = {
     "SOUL.md": (
@@ -1923,6 +1929,9 @@ def run_soul_snippets_review(
     if not _is_snippets_enabled():
         print("  Snippets disabled in config")
         return {"skipped": True, "reason": "snippets_disabled"}
+
+    if not dry_run:
+        _refresh_generated_projection_hygiene()
 
     target_files = _get_target_files()
     total_snippet_count = 0
