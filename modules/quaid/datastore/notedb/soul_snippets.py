@@ -1212,8 +1212,16 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
     """
     file_path = _resolve_writable_file_path(filename)
     if file_path is None:
-        logger.warning(f"Skipping insert into {filename}: file does not exist")
-        return False
+        # Identity stubs (SOUL.md, USER.md, ENVIRONMENT.md) may be absent on
+        # instances that were set up manually or before the init code created
+        # them.  Auto-create a minimal stub so the janitor can proceed rather
+        # than accumulating errors that cause a non-zero exit.
+        root_candidate = _root_file_path(filename)
+        root_candidate.parent.mkdir(parents=True, exist_ok=True)
+        stub_header = f"# {filename.removesuffix('.md')}\n"
+        _atomic_write_text(root_candidate, stub_header)
+        logger.info("Auto-created missing identity stub: %s", root_candidate)
+        file_path = root_candidate
 
     content = file_path.read_text(encoding='utf-8')
 
