@@ -1350,12 +1350,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         elif _is_cursor_on_backup_to_plain and cursor_offset > 0:
             # Cursor was written against a .reset.* backup; new signal points to
             # the plain preserved copy of the same session content. Content up to
-            # cursor_offset is already extracted — preserve cursor.
+            # cursor_offset is already extracted.
+            # Skip extraction entirely and leave the cursor on the backup path.
+            # If we let extraction run (even with "no new content"), write_cursor
+            # would update cursor_transcript to the plain path, which then triggers
+            # _is_reset_rename on any late .reset.* signal and re-extracts from 0.
             logger.info(
                 "[%s] session %s: cursor on reset backup, new signal is preserved copy "
-                "(%s -> %s), content already extracted at offset %d, preserving cursor",
+                "(%s -> %s), content already extracted at offset %d, skipping",
                 label, session_id, cursor_transcript, transcript_path, cursor_offset,
             )
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(session_id, lock_fd)
+            return
         elif _is_cursor_on_backup_to_plain:
             # cursor_offset == 0: no prior extraction — proceed normally.
             logger.info(
