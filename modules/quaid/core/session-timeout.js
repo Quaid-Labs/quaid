@@ -156,7 +156,7 @@ class SessionTimeoutManager {
   staleRecoveryInitialBackoffMs = 5e3;
   staleRecoveryMaxBackoffMs = 5 * 60 * 1e3;
   constructor(opts) {
-    this.timeoutMinutes = opts.timeoutMinutes;
+    this.timeoutMinutes = typeof opts.timeoutMinutes === "function" ? opts.timeoutMinutes : opts.timeoutMinutes;
     this.extract = opts.extract;
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
@@ -256,6 +256,9 @@ class SessionTimeoutManager {
       if (timer) clearTimeout(timer);
     }
   }
+  resolveTimeoutMinutes() {
+    return typeof this.timeoutMinutes === "function" ? this.timeoutMinutes() : this.timeoutMinutes;
+  }
   setTimeoutMinutes(minutes) {
     this.timeoutMinutes = minutes;
   }
@@ -318,20 +321,22 @@ class SessionTimeoutManager {
         total: this.pendingFallbackMessages.length
       });
     }
+    const tm = this.resolveTimeoutMinutes();
     this.writeQuaidLog("buffered", sessionId, {
       appended: gatedIncoming.length,
-      timeout_minutes: this.timeoutMinutes,
+      timeout_minutes: tm,
       source: "event_messages"
     });
-    if (this.timeoutMinutes <= 0) return;
-    const delayMs = this.timeoutMinutes * 60 * 1e3;
+    if (tm <= 0) return;
+    const delayMs = tm * 60 * 1e3;
     this.writeQuaidLog("timer_scheduled", sessionId, {
-      timeout_minutes: this.timeoutMinutes,
+      timeout_minutes: tm,
       delay_ms: delayMs
     });
     this.timer = setTimeout(() => {
+      const tmFired = this.resolveTimeoutMinutes();
       this.writeQuaidLog("timer_callback_entered", this.pendingSessionId || sessionId, {
-        timeout_minutes: this.timeoutMinutes
+        timeout_minutes: tmFired
       });
       const sid = this.pendingSessionId;
       const fallback = this.pendingFallbackMessages || [];
@@ -340,9 +345,9 @@ class SessionTimeoutManager {
       this.pendingFallbackMessages = null;
       if (!sid) return;
       this.writeQuaidLog("timer_fired", sid, {
-        timeout_minutes: this.timeoutMinutes
+        timeout_minutes: tmFired
       });
-      this.queueExtractionFromSession(sid, fallback, this.timeoutMinutes);
+      this.queueExtractionFromSession(sid, fallback, tmFired);
     }, delayMs);
   }
   async extractSessionFromSourceDirect(sessionId, label, fallbackMessages, signalMeta) {
@@ -424,8 +429,9 @@ class SessionTimeoutManager {
     }
   }
   async recoverStaleBuffers() {
-    if (this.timeoutMinutes <= 0) return;
-    const timeoutMs = this.timeoutMinutes * 60 * 1e3;
+    const _recoverTm = this.resolveTimeoutMinutes();
+    if (_recoverTm <= 0) return;
+    const timeoutMs = _recoverTm * 60 * 1e3;
     const nowMs = Date.now();
     const state = this.readStaleSweepState();
     const installedAtMs = Date.parse(String(state.installedAt || this.readInstalledAt() || ""));
@@ -474,7 +480,7 @@ class SessionTimeoutManager {
       candidates.set(sessionId, Number(retry.lastActivityMs || latestActivity || 0));
     }
     this.writeQuaidLog("stale_sweep_window", void 0, {
-      timeout_minutes: this.timeoutMinutes,
+      timeout_minutes: _recoverTm,
       previous_cutoff_ms: previousCutoffMs,
       current_cutoff_ms: currentCutoffMs,
       candidate_count: candidates.size
