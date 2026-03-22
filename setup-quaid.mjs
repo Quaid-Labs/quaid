@@ -830,6 +830,15 @@ function _gatewayServiceLooksMissing(snapshot) {
     || text.includes("could not find service");
 }
 
+/** Returns true if launchd has the gateway service registered (running or starting). */
+function _gatewayRegisteredInLaunchd() {
+  const lctl = spawnSync("launchctl", ["print", `gui/${process.getuid()}/ai.openclaw.gateway`], {
+    encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+  });
+  const out = (lctl.stdout || "") + (lctl.stderr || "");
+  return out.includes("state =") || out.includes("pid =");
+}
+
 function _gatewayServiceLooksStopped(snapshot) {
   const text = `${snapshot.statusText}\n${snapshot.probeText}`.toLowerCase();
   return text.includes("not loaded")
@@ -845,7 +854,8 @@ async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
   let snapshot = _gatewayStatusSnapshot(cli);
   log.warn(`Gateway warmup failed during ${context}: ${_formatGatewaySnapshot(snapshot)}`);
 
-  if (_gatewayServiceLooksMissing(snapshot)) {
+  const serviceInLaunchd = _gatewayRegisteredInLaunchd();
+  if (_gatewayServiceLooksMissing(snapshot) && !serviceInLaunchd) {
     log.warn("Gateway service appears missing after restart; attempting service install recovery.");
     const installRes = runCliWithTimeout(cli, ["gateway", "install"], 30_000);
     if (installRes.status !== 0) {
@@ -858,6 +868,12 @@ async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
       throw new Error(`gateway service recovered but restart failed during ${context}: ${msg || "unknown error"}`);
     }
     if (await waitForGatewayWarmup(30_000)) return;
+    snapshot = _gatewayStatusSnapshot(cli);
+  } else if (serviceInLaunchd) {
+    // Service is registered in launchd but HTTP not yet ready — still bootstrapping after
+    // plugin registration triggered a restart.  Give it extra time; do not attempt recovery.
+    log.warn(`Gateway not yet HTTP-ready during ${context}; launchd has it registered — waiting up to 60s.`);
+    if (await waitForGatewayWarmup(60_000)) return;
     snapshot = _gatewayStatusSnapshot(cli);
   } else if (_gatewayServiceLooksStopped(snapshot)) {
     log.warn("Gateway service appears installed but not healthy; attempting restart recovery.");
@@ -2921,15 +2937,8 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
       const fp = path.join(identityDir, f);
       if (!fs.existsSync(fp)) {
-        const stub = `# ${f.replace(".md", "")}\n`;
-        const sharedSrc = path.join(WORKSPACE, "shared", "projects", "quaid", f);
-        let content = stub;
-        if (fs.existsSync(sharedSrc)) {
-          const shared = fs.readFileSync(sharedSrc, "utf8");
-          if (shared.length > stub.length) content = shared;
-        }
-        fs.writeFileSync(fp, content);
-        log.info(`Created identity/${f}${content !== stub ? " (seeded from shared)" : ""}`);
+        fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
+        log.info(`Created identity/${f}`);
       }
     }
     // Create misc project dir in shared/projects/misc--{instanceId}/.
@@ -3154,7 +3163,7 @@ except Exception as e:
     if (_ensureOpenClawPluginsAllowQuaid()) {
       log.info("Ensured plugins.allow includes: quaid");
     }
-    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 30_000);
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 60_000);
     enableRequiredOpenClawHooks();
   }
 
