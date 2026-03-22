@@ -1777,8 +1777,17 @@ notify_user(${JSON.stringify(message)})
           }
         }
         if (query.length < 3) {
-          query = rawPrompt;
-          querySource = "rawPrompt_raw";
+          // Last resort: use the text captured from message_received (fires before
+          // before_prompt_build with the actual current user message). Only use if
+          // captured within the last 10 seconds to avoid stale cross-turn pollution.
+          const umq = lastUserMessageQuery;
+          if (umq && (Date.now() - umq.seenAtMs) <= 10_000 && umq.text.length >= 3) {
+            query = umq.text.slice(0, 500);
+            querySource = "message_received_cache";
+          } else {
+            query = rawPrompt;
+            querySource = "rawPrompt_raw";
+          }
         }
         // Cap query length — embedding a 2000-char polluted string is wasteful
         if (query.length > 500) { query = query.slice(0, 500); }
@@ -1975,6 +1984,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const transcriptLifecycleCursor = new Map<string, number>();
     let lastTranscriptSessionHint: { sessionId: string; seenAtMs: number } | null = null;
     let currentInteractiveSession: ActiveInteractiveSession | null = null;
+    // Stores the most recent non-slash user message text captured from message_received,
+    // which fires before before_prompt_build with the actual user query. Used as query
+    // fallback when event.prompt is the OC metadata wrapper (empty after scrubbing).
+    let lastUserMessageQuery: { text: string; seenAtMs: number } | null = null;
     const runtimeEvents = (api as any)?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update: any) => {
@@ -2605,6 +2618,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
     onChecked("message_received", async (event: any, ctx: any) => {
+      // Capture non-slash user messages for use as auto-inject query in before_prompt_build.
+      // before_prompt_build fires after message_received but before the user text lands in
+      // event.prompt or event.messages (OC appends those a few ms later via transcript_update).
+      try {
+        const rawText = String(
+          facade.getMessageText(event?.message || event) ||
+          event?.text ||
+          event?.content ||
+          ""
+        ).replace(/^\[.*?\]\s*/, "").trim();
+        if (rawText.length >= 3 && !rawText.startsWith("/")) {
+          lastUserMessageQuery = { text: rawText, seenAtMs: Date.now() };
+        }
+      } catch { /* ignore */ }
       await handleSlashLifecycleFromMessage(event, ctx, "message:received");
     }, {
       name: "message-received-command-memory-extraction",

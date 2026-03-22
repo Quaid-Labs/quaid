@@ -1379,8 +1379,14 @@ notify_user(${JSON.stringify(message)})
           }
         }
         if (query.length < 3) {
-          query = rawPrompt;
-          querySource = "rawPrompt_raw";
+          const umq = lastUserMessageQuery;
+          if (umq && Date.now() - umq.seenAtMs <= 1e4 && umq.text.length >= 3) {
+            query = umq.text.slice(0, 500);
+            querySource = "message_received_cache";
+          } else {
+            query = rawPrompt;
+            querySource = "rawPrompt_raw";
+          }
         }
         if (query.length > 500) {
           query = query.slice(0, 500);
@@ -1517,6 +1523,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const transcriptLifecycleCursor = /* @__PURE__ */ new Map();
     let lastTranscriptSessionHint = null;
     let currentInteractiveSession = null;
+    let lastUserMessageQuery = null;
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
@@ -2014,6 +2021,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
     onChecked("message_received", async (event, ctx) => {
+      try {
+        const rawText = String(
+          facade.getMessageText(event?.message || event) || event?.text || event?.content || ""
+        ).replace(/^\[.*?\]\s*/, "").trim();
+        if (rawText.length >= 3 && !rawText.startsWith("/")) {
+          lastUserMessageQuery = { text: rawText, seenAtMs: Date.now() };
+        }
+      } catch {
+      }
       await handleSlashLifecycleFromMessage(event, ctx, "message:received");
     }, {
       name: "message-received-command-memory-extraction",
