@@ -293,7 +293,7 @@ def hook_extract(args):
         return
 
     try:
-        from core.extraction_daemon import write_signal, ensure_alive
+        from core.extraction_daemon import write_signal
 
         # Capture session-scoped OAuth token for the daemon.
         # Stop/PreCompact hooks run after CC's auth is established, so
@@ -310,11 +310,10 @@ def hook_extract(args):
         except Exception as _te:
             print(f"[quaid][{label}] auth token capture failed: {_te}", file=sys.stderr)
 
-        # Ensure daemon is running (launch if not)
-        try:
-            ensure_alive()
-        except Exception as e:
-            print(f"[quaid][{label}] daemon ensure_alive failed: {e}", file=sys.stderr)
+        # Do NOT call ensure_alive() here — hook_extract must exit quickly.
+        # CC cancels SessionEnd hooks that take too long. The daemon is
+        # started by session-init; signals written here will be picked up
+        # on the next daemon poll even if the daemon isn't live yet.
 
         # Determine adapter type from config for compaction control advertisement
         try:
