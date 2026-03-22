@@ -33,7 +33,7 @@ type TimeoutLogger = (message: string) => void;
 type SessionTimeoutManagerOptions = {
   workspace: string;
   logDir?: string;
-  timeoutMinutes: number;
+  timeoutMinutes: number | (() => number);
   extract: TimeoutExtractor;
   isBootstrapOnly: (messages: any[]) => boolean;
   failHardEnabled?: boolean | (() => boolean);
@@ -195,7 +195,7 @@ function mergeUniqueMessages(existing: any[], incoming: any[]): any[] {
 }
 
 export class SessionTimeoutManager {
-  private timeoutMinutes: number;
+  private timeoutMinutes: number | (() => number);
   private extract: TimeoutExtractor;
   private isBootstrapOnly: (messages: any[]) => boolean;
   private logger?: TimeoutLogger;
@@ -221,7 +221,9 @@ export class SessionTimeoutManager {
   private readonly staleRecoveryMaxBackoffMs = 5 * 60 * 1000;
 
   constructor(opts: SessionTimeoutManagerOptions) {
-    this.timeoutMinutes = opts.timeoutMinutes;
+    this.timeoutMinutes = typeof opts.timeoutMinutes === "function"
+      ? opts.timeoutMinutes
+      : opts.timeoutMinutes;
     this.extract = opts.extract;
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
@@ -331,6 +333,10 @@ export class SessionTimeoutManager {
     }
   }
 
+  private resolveTimeoutMinutes(): number {
+    return typeof this.timeoutMinutes === "function" ? this.timeoutMinutes() : this.timeoutMinutes;
+  }
+
   setTimeoutMinutes(minutes: number): void {
     this.timeoutMinutes = minutes;
   }
@@ -399,23 +405,25 @@ export class SessionTimeoutManager {
       });
     }
 
+    const tm = this.resolveTimeoutMinutes();
     this.writeQuaidLog("buffered", sessionId, {
       appended: gatedIncoming.length,
-      timeout_minutes: this.timeoutMinutes,
+      timeout_minutes: tm,
       source: "event_messages",
     });
 
-    if (this.timeoutMinutes <= 0) return;
+    if (tm <= 0) return;
 
-    const delayMs = this.timeoutMinutes * 60 * 1000;
+    const delayMs = tm * 60 * 1000;
     this.writeQuaidLog("timer_scheduled", sessionId, {
-      timeout_minutes: this.timeoutMinutes,
+      timeout_minutes: tm,
       delay_ms: delayMs,
     });
 
     this.timer = setTimeout(() => {
+      const tmFired = this.resolveTimeoutMinutes();
       this.writeQuaidLog("timer_callback_entered", this.pendingSessionId || sessionId, {
-        timeout_minutes: this.timeoutMinutes,
+        timeout_minutes: tmFired,
       });
       const sid = this.pendingSessionId;
       const fallback = this.pendingFallbackMessages || [];
@@ -424,9 +432,9 @@ export class SessionTimeoutManager {
       this.pendingFallbackMessages = null;
       if (!sid) return;
       this.writeQuaidLog("timer_fired", sid, {
-        timeout_minutes: this.timeoutMinutes,
+        timeout_minutes: tmFired,
       });
-      this.queueExtractionFromSession(sid, fallback, this.timeoutMinutes);
+      this.queueExtractionFromSession(sid, fallback, tmFired);
     }, delayMs);
   }
 
@@ -534,8 +542,9 @@ export class SessionTimeoutManager {
   }
 
   async recoverStaleBuffers(): Promise<void> {
-    if (this.timeoutMinutes <= 0) return;
-    const timeoutMs = this.timeoutMinutes * 60 * 1000;
+    const _recoverTm = this.resolveTimeoutMinutes();
+    if (_recoverTm <= 0) return;
+    const timeoutMs = _recoverTm * 60 * 1000;
     const nowMs = Date.now();
 
     const state = this.readStaleSweepState();
@@ -592,7 +601,7 @@ export class SessionTimeoutManager {
     }
 
     this.writeQuaidLog("stale_sweep_window", undefined, {
-      timeout_minutes: this.timeoutMinutes,
+      timeout_minutes: _recoverTm,
       previous_cutoff_ms: previousCutoffMs,
       current_cutoff_ms: currentCutoffMs,
       candidate_count: candidates.size,

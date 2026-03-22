@@ -2741,7 +2741,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       logDir: path.join(QUAID_LOGS_DIR, "quaid"),
-      timeoutMinutes: facade.getCaptureTimeoutMinutes(),
+      timeoutMinutes: () => facade.getCaptureTimeoutMinutes(),
       failHardEnabled: () => isFailHardEnabled(),
       isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
       shouldSkipText: (text: string) => shouldSkipTranscriptText(text),
