@@ -1224,6 +1224,26 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         pass
 
+    # Consume all duplicate signals for this session now that we hold the lock.
+    # Any other queued signals targeting the same session_id are redundant —
+    # this extraction will process the content once and advance the cursor.
+    # Draining them here prevents the daemon from scheduling N-1 follow-up
+    # extraction passes after this one completes.
+    try:
+        _current_sig_path = signal_data.get("_signal_path", "")
+        for _dup_f in list(_signal_dir().iterdir()):
+            if not _dup_f.name.endswith(".json") or str(_dup_f) == _current_sig_path:
+                continue
+            try:
+                _dup = json.loads(_dup_f.read_text(encoding="utf-8"))
+                if _dup.get("session_id") == session_id:
+                    _dup["_signal_path"] = str(_dup_f)
+                    mark_signal_processed(_dup)
+            except (json.JSONDecodeError, OSError):
+                pass
+    except Exception:
+        pass
+
     if not transcript_path or not os.path.isfile(transcript_path):
         logger.warning("[%s] transcript not found: %s", label, transcript_path)
         mark_signal_processed(signal_data)
@@ -1259,6 +1279,16 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             and not _is_dir_relocation
             and _cursor_base.endswith(".jsonl")
             and _transcript_base.startswith(_cursor_base[:-len(".jsonl")] + ".jsonl.reset.")
+        )
+        # Cursor is on a .reset.* backup; new signal points to the plain preserved
+        # copy (.jsonl) of the same session content in a different directory.
+        # Treat as already-consumed when cursor_offset > 0.
+        _is_cursor_on_backup_to_plain = (
+            not _is_reset_rename
+            and not _is_dir_relocation
+            and not _is_cross_dir_reset_rename
+            and _transcript_base.endswith(".jsonl")
+            and _cursor_base.startswith(_transcript_base[:-len(".jsonl")] + ".jsonl.reset.")
         )
         if _is_reset_rename and signal_type != "reset":
             # Non-reset signals on a renamed backup (e.g. orphan_reset_check on an
@@ -1314,6 +1344,23 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             # Reset signal on a cross-directory reset backup — full /reset extraction.
             logger.info(
                 "[%s] session %s: reset signal on cross-dir reset backup (%s -> %s), resetting cursor for full extraction",
+                label, session_id, cursor_transcript, transcript_path,
+            )
+            cursor_offset = 0
+        elif _is_cursor_on_backup_to_plain and cursor_offset > 0:
+            # Cursor was written against a .reset.* backup; new signal points to
+            # the plain preserved copy of the same session content. Content up to
+            # cursor_offset is already extracted — preserve cursor.
+            logger.info(
+                "[%s] session %s: cursor on reset backup, new signal is preserved copy "
+                "(%s -> %s), content already extracted at offset %d, preserving cursor",
+                label, session_id, cursor_transcript, transcript_path, cursor_offset,
+            )
+        elif _is_cursor_on_backup_to_plain:
+            # cursor_offset == 0: no prior extraction — proceed normally.
+            logger.info(
+                "[%s] session %s: cursor on reset backup (offset 0), new signal is preserved copy "
+                "(%s -> %s), resetting cursor for full extraction",
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
