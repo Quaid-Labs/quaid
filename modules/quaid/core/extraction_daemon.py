@@ -1298,6 +1298,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 "[%s] session %s: transcript path is reset backup of cursor path (%s -> %s), preserving cursor",
                 label, session_id, cursor_transcript, transcript_path,
             )
+        elif _is_reset_rename and cursor_offset > 0:
+            # Reset signal on a renamed backup, but content was already extracted
+            # from the plain path (cursor_offset > 0). This is a late duplicate
+            # signal — the backup contains the same content already consumed.
+            # Preserve cursor and skip re-extraction to avoid duplicate facts.
+            logger.info(
+                "[%s] session %s: reset signal on backup path (%s -> %s), "
+                "content already extracted at offset %d, skipping",
+                label, session_id, cursor_transcript, transcript_path, cursor_offset,
+            )
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(session_id, lock_fd)
+            return
         elif _is_reset_rename:
             # Reset signal on a renamed backup — this IS the /reset extraction.
             # We want the full session content, so start from offset 0.
