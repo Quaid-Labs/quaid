@@ -978,6 +978,38 @@ class TestOllamaEmbeddingsProvider:
         assert seen_batches == [["a", "bb"], ["ccc", "dddd"], ["eeeee"]]
         assert result == [[1.0], [2.0], [3.0], [4.0], [5.0]]
 
+    def test_embed_many_recursively_splits_timeout_batches(self, monkeypatch):
+        p = OllamaEmbeddingsProvider()
+        monkeypatch.setenv("OLLAMA_EMBED_BATCH_SIZE", "4")
+
+        seen_batches = []
+
+        def _fake_urlopen(req, timeout):
+            payload = json.loads(req.data.decode("utf-8"))
+            batch = list(payload["input"])
+            seen_batches.append(batch)
+            if len(batch) > 2:
+                raise TimeoutError("timed out")
+            embeddings = [[float(len(text))] for text in batch]
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps({"embeddings": embeddings}).encode()
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        with patch("lib.providers.urllib.request.urlopen", side_effect=_fake_urlopen), \
+             patch("lib.providers.time.sleep"):
+            result = p.embed_many(["a", "bb", "ccc", "dddd", "eeeee"])
+
+        assert seen_batches == [
+            ["a", "bb", "ccc", "dddd"],
+            ["a", "bb", "ccc", "dddd"],
+            ["a", "bb"],
+            ["ccc", "dddd"],
+            ["eeeee"],
+        ]
+        assert result == [[1.0], [2.0], [3.0], [4.0], [5.0]]
+
     def test_embed_many_returns_empty_list_on_error(self):
         p = OllamaEmbeddingsProvider()
         with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \

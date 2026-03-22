@@ -202,7 +202,10 @@ Files scanned by `scan_docs_directory()`:
 - **Storage:** Packed as a float32 BLOB in `doc_chunks.embedding` via `lib/embeddings.py` helpers: `pack_embedding()` / `unpack_embedding()`
 - **Batch path:** `lib/embeddings.get_embeddings()` dedupes repeated texts and
   prefers provider-side `embed_many()` when available. `OllamaEmbeddingsProvider`
-  now implements `embed_many()` for multi-chunk RAG indexing.
+  now implements `embed_many()` for multi-chunk RAG indexing. Default batch size
+  is `16` (`OLLAMA_EMBED_BATCH_SIZE` override), and timeout-like batch failures
+  split into smaller batches before the provider gives up. `OLLAMA_EMBED_TIMEOUT_S`
+  controls the per-batch timeout.
 - **Ollama URL:** Configured in `QUAID_HOME/shared/config/memory.json` under `ollama.url`. Both OC and CC adapters on the same machine share the same Ollama instance.
 - **Fail policy:** If `lib/fail_policy.is_fail_hard_enabled()` is `True` and
   embedding or vec-backed recall fails during search, `search_docs()` raises

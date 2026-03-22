@@ -1141,11 +1141,11 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
             return []
 
         try:
-            batch_size = int(os.environ.get("OLLAMA_EMBED_BATCH_SIZE", "32") or 32)
+            batch_size = int(os.environ.get("OLLAMA_EMBED_BATCH_SIZE", "16") or 16)
         except Exception:
-            batch_size = 32
+            batch_size = 16
         if batch_size <= 0:
-            batch_size = 32
+            batch_size = 16
 
         try:
             timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
@@ -1155,10 +1155,9 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
             timeout_s = 120.0
 
         retries = 1
-        all_embeddings: List[Optional[List[float]]] = []
-        last_error = None
-        for start in range(0, len(items), batch_size):
-            batch = items[start:start + batch_size]
+        retryable_errors = (urllib.error.URLError, TimeoutError, OSError, ConnectionError)
+
+        def _request_batch(batch: List[str]) -> List[Optional[List[float]]]:
             batch_error = None
             for attempt in range(retries + 1):
                 try:
@@ -1179,10 +1178,8 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                             raise RuntimeError(
                                 f"Ollama embeddings batch returned {len(embeddings)} vectors for {len(batch)} inputs"
                             )
-                        all_embeddings.extend(embeddings)
-                        batch_error = None
-                        break
-                except (urllib.error.URLError, TimeoutError, OSError, ConnectionError) as e:
+                        return embeddings
+                except retryable_errors as e:
                     batch_error = e
                     if attempt < retries:
                         time.sleep(0.2 * (2 ** attempt))
@@ -1191,8 +1188,30 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                 except Exception as e:
                     batch_error = e
                     break
-            if batch_error is not None:
-                last_error = batch_error
+            if batch_error is None:
+                return []
+            if len(batch) > 1 and isinstance(batch_error, retryable_errors):
+                split_at = max(1, len(batch) // 2)
+                logger.warning(
+                    "Ollama embeddings batch timed out; retrying with smaller batches model=%s batch_len=%d split_at=%d error=%s",
+                    self._model,
+                    len(batch),
+                    split_at,
+                    batch_error,
+                )
+                left = _request_batch(batch[:split_at])
+                right = _request_batch(batch[split_at:])
+                return left + right
+            raise batch_error
+
+        all_embeddings: List[Optional[List[float]]] = []
+        last_error = None
+        for start in range(0, len(items), batch_size):
+            batch = items[start:start + batch_size]
+            try:
+                all_embeddings.extend(_request_batch(batch))
+            except Exception as e:
+                last_error = e
                 break
 
         if last_error is not None:
