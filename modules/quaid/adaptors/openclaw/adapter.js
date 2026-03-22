@@ -90,6 +90,7 @@ function getDaemonSignalDir(agentId = "main") {
   return instanceId ? path.join(WORKSPACE, instanceId, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
 }
 const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
+const _recentResetSignalsWritten = /* @__PURE__ */ new Map();
 function readInstalledAtMs() {
   try {
     const instanceId = getInstanceId("main");
@@ -346,6 +347,12 @@ function writeDaemonSignal(sessionId, signalType, meta) {
   }
   if (signalType === "reset") {
     const RECENT_RESET_SUPPRESS_MS = 5 * 60 * 1e3;
+    const _inProcLast = _recentResetSignalsWritten.get(sessionId);
+    if (_inProcLast !== void 0 && Date.now() - _inProcLast < RECENT_RESET_SUPPRESS_MS) {
+      console.log(`[quaid][daemon-signal] suppressed duplicate reset signal for session=${sessionId} (in-process dedup)`);
+      writeHookTrace("session_index.signal_suppressed", { reason: "in_process_dedup", session_id: sessionId });
+      return null;
+    }
     const markerPath = path.join(signalDir, `.last_reset_signal.${sessionId}`);
     try {
       const markerStat = fs.statSync(markerPath);
@@ -360,6 +367,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       fs.writeFileSync(markerPath, sessionId, { mode: 384 });
     } catch {
     }
+    _recentResetSignalsWritten.set(sessionId, Date.now());
   }
   const payload = {
     type: signalType,

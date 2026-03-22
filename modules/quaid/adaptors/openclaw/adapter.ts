@@ -141,6 +141,14 @@ function getDaemonSignalDir(agentId: string = "main"): string {
 // Primary instance signal dir (backward-compat constant for non-session-routed callers).
 const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
 
+// In-process dedup for reset signals: prevents multiple gateway processes (or
+// multiple bursts within the same process) from writing redundant reset signals
+// for the same session within a single process lifetime. The filesystem marker
+// in writeDaemonSignal handles cross-process dedup after gateway restarts; this
+// Set handles same-process bursts where multiple callers race before the marker
+// is visible on disk.
+const _recentResetSignalsWritten = new Map<string, number>(); // session_id → timestamp
+
 /**
  * Read the install-time lower bound from data/installed-at.json.
  * Mirrors Python's _read_installed_at() in core/extraction_daemon.py.
@@ -478,6 +486,15 @@ function writeDaemonSignal(
   // session ID.
   if (signalType === "reset") {
     const RECENT_RESET_SUPPRESS_MS = 5 * 60 * 1000;
+    // In-process dedup: check Map before hitting the filesystem. Prevents bursts
+    // within a single process from writing multiple signals before the marker
+    // file is visible to concurrent callers.
+    const _inProcLast = _recentResetSignalsWritten.get(sessionId);
+    if (_inProcLast !== undefined && Date.now() - _inProcLast < RECENT_RESET_SUPPRESS_MS) {
+      console.log(`[quaid][daemon-signal] suppressed duplicate reset signal for session=${sessionId} (in-process dedup)`);
+      writeHookTrace("session_index.signal_suppressed", { reason: "in_process_dedup", session_id: sessionId });
+      return null;
+    }
     const markerPath = path.join(signalDir, `.last_reset_signal.${sessionId}`);
     try {
       const markerStat = fs.statSync(markerPath);
@@ -490,6 +507,7 @@ function writeDaemonSignal(
       // Marker absent or unreadable — proceed to write signal.
     }
     try { fs.writeFileSync(markerPath, sessionId, { mode: 0o600 }); } catch {}
+    _recentResetSignalsWritten.set(sessionId, Date.now());
   }
 
   const payload = {
