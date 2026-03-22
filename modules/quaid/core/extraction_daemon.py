@@ -1266,13 +1266,25 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path,
             )
         elif _is_dir_relocation:
-            # Reset signal on a relocated transcript — this IS the /reset extraction.
-            # Reset cursor to 0 so the full session content is extracted.
-            logger.info(
-                "[%s] session %s: reset signal on relocated transcript (%s -> %s), resetting cursor for full extraction",
-                label, session_id, cursor_transcript, transcript_path,
-            )
-            cursor_offset = 0
+            # Reset signal on a relocated transcript. Two sub-cases:
+            # (a) cursor_offset == 0: content not yet extracted — reset and extract
+            #     the full content from the relocated file (M10 scenario: first
+            #     signal for this session arrives via the relocated path).
+            # (b) cursor_offset > 0: content already extracted in a prior pass
+            #     (M2 scenario: duplicate reset signal after relocation). The
+            #     relocated file has identical content; preserve cursor to avoid
+            #     re-extracting and storing duplicate facts.
+            if cursor_offset == 0:
+                logger.info(
+                    "[%s] session %s: reset signal on relocated transcript, no prior extraction (%s -> %s), resetting cursor for full extraction",
+                    label, session_id, cursor_transcript, transcript_path,
+                )
+                cursor_offset = 0
+            else:
+                logger.info(
+                    "[%s] session %s: reset signal on relocated transcript, content already extracted at offset %d (%s -> %s), preserving cursor",
+                    label, session_id, cursor_offset, cursor_transcript, transcript_path,
+                )
         elif _is_cross_dir_reset_rename and signal_type != "reset":
             # Non-reset signal on a cross-directory reset backup — content up to
             # cursor_offset already extracted; preserve cursor.
