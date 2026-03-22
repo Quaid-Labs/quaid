@@ -469,6 +469,29 @@ function writeDaemonSignal(
     fs.mkdirSync(signalDir, { recursive: true });
   } catch {}
 
+  // Filesystem-based dedup for reset signals: OC restarts its gateway process
+  // several times after /reset, each restart clearing the in-memory
+  // shouldProcessLifecycleSignal state and re-queuing signals. A marker file
+  // records the last time a reset signal was written for this session so
+  // the dedup survives gateway restarts. 5-minute window is well above the
+  // longest extraction run and well below any realistic re-use of the same
+  // session ID.
+  if (signalType === "reset") {
+    const RECENT_RESET_SUPPRESS_MS = 5 * 60 * 1000;
+    const markerPath = path.join(signalDir, `.last_reset_signal.${sessionId}`);
+    try {
+      const markerStat = fs.statSync(markerPath);
+      if (Date.now() - markerStat.mtimeMs < RECENT_RESET_SUPPRESS_MS) {
+        console.log(`[quaid][daemon-signal] suppressed duplicate reset signal for session=${sessionId} (recent marker exists)`);
+        writeHookTrace("session_index.signal_suppressed", { reason: "recent_reset_marker", session_id: sessionId });
+        return null;
+      }
+    } catch {
+      // Marker absent or unreadable — proceed to write signal.
+    }
+    try { fs.writeFileSync(markerPath, sessionId, { mode: 0o600 }); } catch {}
+  }
+
   const payload = {
     type: signalType,
     session_id: sessionId,

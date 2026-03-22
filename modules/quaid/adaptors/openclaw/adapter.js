@@ -344,6 +344,23 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     fs.mkdirSync(signalDir, { recursive: true });
   } catch {
   }
+  if (signalType === "reset") {
+    const RECENT_RESET_SUPPRESS_MS = 5 * 60 * 1e3;
+    const markerPath = path.join(signalDir, `.last_reset_signal.${sessionId}`);
+    try {
+      const markerStat = fs.statSync(markerPath);
+      if (Date.now() - markerStat.mtimeMs < RECENT_RESET_SUPPRESS_MS) {
+        console.log(`[quaid][daemon-signal] suppressed duplicate reset signal for session=${sessionId} (recent marker exists)`);
+        writeHookTrace("session_index.signal_suppressed", { reason: "recent_reset_marker", session_id: sessionId });
+        return null;
+      }
+    } catch {
+    }
+    try {
+      fs.writeFileSync(markerPath, sessionId, { mode: 384 });
+    } catch {
+    }
+  }
   const payload = {
     type: signalType,
     session_id: sessionId,
