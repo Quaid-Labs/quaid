@@ -1194,6 +1194,24 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     if lock_fd is None:
         logger.info("[%s] session %s already has an active extraction; preserving signal for retry", label, session_id)
+        # Dedup: if another signal for this session already exists in the queue,
+        # mark this one processed to prevent unbounded pile-up when orphan scan
+        # generates multiple redundant signals while a lock is held.
+        try:
+            sig_dir = _signal_dir()
+            current_path = signal_data.get("_signal_path", "")
+            for f in sig_dir.iterdir():
+                if not f.name.endswith(".json") or str(f) == current_path:
+                    continue
+                try:
+                    other = json.loads(f.read_text(encoding="utf-8"))
+                    if other.get("session_id") == session_id:
+                        mark_signal_processed(signal_data)
+                        break
+                except (json.JSONDecodeError, OSError):
+                    pass
+        except Exception:
+            pass
         return
 
     try:

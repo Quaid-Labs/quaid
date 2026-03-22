@@ -1881,6 +1881,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   continue;
                 }
                 pendingOrphanChecks.delete(sid);
+                const _orphanInstanceId = getInstanceId("main");
+                const _orphanLockPath = _orphanInstanceId ? path.join(WORKSPACE, _orphanInstanceId, "data", "session-processing", `${sid}.lock`) : path.join(WORKSPACE, "data", "session-processing", `${sid}.lock`);
+                if (fs.existsSync(_orphanLockPath)) {
+                  writeHookTrace("session_index.orphan_reset_skipped_locked", { session_id: sid });
+                  console.log(`[quaid][signal] orphan reset skipped \u2014 session=${sid} already locked`);
+                  continue;
+                }
                 facade.markLifecycleSignalFromHook(sid, "ResetSignal");
                 writeDaemonSignal(sid, "reset", { source: "orphan_reset_check" });
                 writeHookTrace("session_index.orphan_reset_detected", { session_id: sid });
