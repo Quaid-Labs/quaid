@@ -104,11 +104,25 @@ class InstanceManager:
                 conn.close()
                 db_path.chmod(0o600)
 
-        # Identity stubs
+        # Identity files — seed from shared project templates when available,
+        # fall back to minimal stubs so the silo is always self-consistent.
+        try:
+            from lib.adapter import get_adapter
+            _quaid_home = get_adapter().quaid_home()
+        except Exception:
+            _quaid_home = None
+        _template_dir = (
+            _quaid_home / "shared" / "projects" / "quaid"
+            if _quaid_home else None
+        )
         for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
             fpath = silo_root / "identity" / fname
             if not fpath.exists():
-                fpath.write_text(f"# {fname[:-3]}\n", encoding="utf-8")
+                template = _template_dir / fname if _template_dir else None
+                if template and template.exists():
+                    fpath.write_bytes(template.read_bytes())
+                else:
+                    fpath.write_text(f"# {fname[:-3]}\n", encoding="utf-8")
 
         # PROJECT.md
         project_md = silo_root / "PROJECT.md"

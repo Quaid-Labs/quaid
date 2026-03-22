@@ -117,22 +117,28 @@ ssh example.local 'rm -rf ~/.openclaw/agents/main/sessions/ && echo "OC sessions
 ssh example.local 'rm -f ~/.claude/rules/quaid-projects.md && echo "CC rules cleared"'
 ```
 
-### Remaining start checks
+### Step 1 — Installer-Based Clean Install (mandatory)
 
-Before any run:
+The wipe in Step 0 is not enough on its own. **Every run must reinstall Quaid
+using the installer script.** The purpose of M0 is to validate the installer
+itself — that it correctly provisions the workspace, identity files, config,
+DB, and hooks from scratch. Running milestones against a hand-crafted or
+previously installed workspace does not test the installer.
+
+Do not skip the reinstall. There is no "note it and move on" option — a run
+without installer reinstall is not a live install validation run.
+
+After the wipe and before M1:
 - verify the repo checkout is on `canary`
-- reinstall Quaid cleanly with the installer script
-- verify the install is stable before M1
-
-Minimum stability check before M1:
-- the install artifacts exist where expected
-- `quaid doctor` or `quaid health` succeeds
-- the active DB and log paths are identified
-- the daemon starts cleanly
-- one basic agent turn succeeds without hanging
-
-If clean reinstall is skipped, note that the run is not a clean live install
-validation.
+- build runtime artifacts and sync to alfie
+- run the installer for OC and CC (see commands below)
+- run post-install verification checks
+- confirm minimum stability before M1:
+  - install artifacts exist where expected
+  - `quaid doctor` or `quaid health` succeeds
+  - active DB and log paths are identified
+  - daemon starts cleanly
+  - one basic agent turn succeeds without hanging
 
 ## Installer-Based Clean Install
 
@@ -312,21 +318,25 @@ ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=
 ssh example.local 'ls -l ~/quaid/openclaw-main/identity/SOUL.md ~/quaid/claude-code-main/identity/SOUL.md 2>/dev/null || true'
 ```
 
-If either instance-local `identity/SOUL.md` is missing, seed it from the shared
-root file before running janitor `--apply`:
+If either instance-local `identity/SOUL.md` is missing, the installer did not
+seed it correctly — this is a bug. Fix the installer. As a temporary unblock,
+seed from the shared project template:
 
 ```bash
 ssh example.local 'python3 - <<\"PY\"
 from pathlib import Path
-src = Path("/Users/owner/quaid/SOUL.md")
-for dst in [
-    Path("/Users/owner/quaid/openclaw-main/identity/SOUL.md"),
-    Path("/Users/owner/quaid/claude-code-main/identity/SOUL.md"),
-]:
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if not dst.exists():
-        dst.write_text(src.read_text())
-        print(f"created {dst}")
+template_dir = Path("/Users/owner/quaid/shared/projects/quaid")
+for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
+    src = template_dir / fname
+    if not src.exists():
+        print(f"WARNING: template missing: {src}")
+        continue
+    for instance in ("openclaw-main", "claude-code-main"):
+        dst = Path("/Users/owner/quaid") / instance / "identity" / fname
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not dst.exists():
+            dst.write_bytes(src.read_bytes())
+            print(f"created {dst}")
 PY'
 ```
 
