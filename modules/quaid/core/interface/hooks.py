@@ -406,13 +406,24 @@ def hook_session_init(args):
     except Exception as _e:
         print(f"[quaid][session-init] auth token capture failed: {_e}", file=sys.stderr)
 
-    # Sweep orphaned sessions via the extraction daemon
+    # Sweep orphaned sessions via the extraction daemon.
+    # Only call ensure_alive() for adapters that do not manage the daemon
+    # externally (e.g. OC gateway owns its daemon lifecycle — calling
+    # ensure_alive() from the hook races the gateway at startup and produces
+    # duplicate daemon processes).
     try:
         from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
         try:
-            ensure_alive()
-        except Exception as e:
-            print(f"[quaid][session-init] daemon ensure_alive failed: {e}", file=sys.stderr)
+            from lib.adapter import get_adapter as _ga
+            _adapter_id = type(_ga()).__name__.lower()
+        except Exception:
+            _adapter_id = ""
+        _gateway_managed = "openclaw" in _adapter_id
+        if not _gateway_managed:
+            try:
+                ensure_alive()
+            except Exception as e:
+                print(f"[quaid][session-init] daemon ensure_alive failed: {e}", file=sys.stderr)
         swept = sweep_orphaned_sessions(current_session_id)
         if swept:
             print(f"[quaid][session-init] swept {swept} orphaned session(s)", file=sys.stderr)
