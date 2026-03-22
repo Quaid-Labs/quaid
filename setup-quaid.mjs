@@ -2921,8 +2921,15 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
       const fp = path.join(identityDir, f);
       if (!fs.existsSync(fp)) {
-        fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
-        log.info(`Created identity/${f}`);
+        const stub = `# ${f.replace(".md", "")}\n`;
+        const sharedSrc = path.join(WORKSPACE, "shared", "projects", "quaid", f);
+        let content = stub;
+        if (fs.existsSync(sharedSrc)) {
+          const shared = fs.readFileSync(sharedSrc, "utf8");
+          if (shared.length > stub.length) content = shared;
+        }
+        fs.writeFileSync(fp, content);
+        log.info(`Created identity/${f}${content !== stub ? " (seeded from shared)" : ""}`);
       }
     }
     // Create misc project dir in shared/projects/misc--{instanceId}/.
@@ -3508,7 +3515,11 @@ c.close()
   checks.push(`${C.green("■")} LLM (high)   ${C.dim("—")} ${models.highModel}`);
   checks.push(`${C.green("■")} LLM (fast)   ${C.dim("—")} ${models.lowModel}`);
 
-  if (fs.existsSync(path.join(CONFIG_DIR, "memory.json"))) {
+  const _valInstanceId = (process.env.QUAID_INSTANCE || "").trim();
+  const _configCheckPath = _valInstanceId
+    ? path.join(WORKSPACE, _valInstanceId, "config", "memory.json")
+    : path.join(CONFIG_DIR, "memory.json");
+  if (fs.existsSync(_configCheckPath)) {
     checks.push(`${C.green("■")} Config       ${C.dim("—")} OK`);
   } else {
     checks.push(`${C.red("■")} Config       ${C.dim("—")} MISSING`);
