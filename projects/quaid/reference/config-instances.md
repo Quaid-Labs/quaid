@@ -256,8 +256,8 @@ Values are coerced by `parse_literal()`:
 
 The summary printed by `quaid config show` covers: LLM provider, deep/fast
 reasoning models, embeddings model, notification level, fail_hard, identity
-mode, strict privacy, core.parallel enabled/workers, idle timeout, and active
-plugin slots.
+mode, strict privacy, core.parallel enabled plus distinct LLM/embedding worker
+counts, idle timeout, and active plugin slots.
 
 ---
 
@@ -318,11 +318,12 @@ Everything under `QUAID_HOME/<instance>/`:
 | Path | Purpose |
 |---|---|
 | `config/memory.json` | Instance-specific config (highest-priority layer) |
-| `data/memory.db` | SQLite memory database (nodes, edges, FTS, doc_registry, doc_chunks, vec_nodes) |
+| `data/memory.db` | SQLite memory database (nodes, edges, FTS, doc_registry, doc_chunks, vec_nodes, vec_doc_chunks) |
 | `data/memory_archive.db` | Archive database for graduated/decayed memories |
 | `data/extraction-signals/` | Signal files for async extraction daemon |
+| `data/rolling-extraction/` | Rolling extraction staged state per session (raw facts/carryover awaiting final flush) |
 | `data/cc-pending-notifications.jsonl` | Deferred notifications queue (Claude Code adapter) |
-| `logs/` | Janitor stats, extraction logs (retention per `logging.retentionDays`) |
+| `logs/` | Janitor stats, extraction logs, including rolling daemon telemetry under `logs/daemon/` |
 | `identity/` | Quaid-managed identity files (SOUL.md, USER.md, ENVIRONMENT.md, *.snippets.md) |
 | `journal/` | Journal entries awaiting distillation into core markdown |
 

@@ -16,11 +16,14 @@ The docs system has four tightly integrated components:
 |-----------|---------------|---------|---------|
 | Doc registry | `DocsRegistry` | `doc_registry` (SQLite) | Tracks which files belong to which projects; maps source files to docs |
 | Project definitions | `DocsRegistry` | `project_definitions` (SQLite) | Canonical project config (seeded from `config/memory.json`, then DB is source of truth) |
-| RAG indexer | `DocsRAG` | `doc_chunks` (SQLite) | Chunks files, generates embeddings, serves semantic search |
+| RAG indexer | `DocsRAG` | `doc_chunks` + `vec_doc_chunks` (SQLite + sqlite-vec) | Chunks files, batches embeddings, serves bounded semantic search |
 | Staleness detector / updater | `updater.py` | `logs/docs-update-log.json` | Detects when source code has drifted ahead of docs, calls Opus to rewrite |
 | Project event processor | `project_updater.py` | `projects/<staging_dir>/` | Processes compact/reset event files, calls `update_doc_from_diffs`, refreshes PROJECT.md |
 
-All components share a single SQLite database at `QUAID_HOME/db/` (path from `lib/config.get_db_path()`). Embeddings are stored in the same DB inside `doc_chunks`.
+All components share a single SQLite database at `QUAID_HOME/<instance>/data/memory.db`
+(path from `lib/config.get_db_path()`). Packed chunk embeddings are stored in
+`doc_chunks.embedding`, and when `sqlite-vec` is available a companion
+`vec_doc_chunks` virtual table mirrors those embeddings for bounded KNN recall.
 
 ---
 
@@ -37,13 +40,33 @@ Created by `DocsRAG._ensure_schema()`.
 | `chunk_index` | INTEGER | 0-based position within the file |
 | `content` | TEXT | Chunk text content |
 | `section_header` | TEXT | First H1/H2/H3 header found in chunk (nullable) |
-| `embedding` | BLOB | float32 array, 4096 dims (qwen3-embedding:8b) |
+| `embedding` | BLOB | float32 array, packed for reuse and vec sync |
 | `created_at` | TEXT | UTC ISO datetime |
-| `updated_at` | TEXT | UTC ISO datetime — used by `needs_reindex()` |
+| `updated_at` | TEXT | UTC ISO datetime — used by `needs_reindex()` / `needs_reindex_many()` |
 
 Indexes: `idx_doc_chunks_source` (source_file), `idx_doc_chunks_updated` (updated_at).
 
-Change detection: `needs_reindex()` compares the file's `st_mtime` (UTC) against `updated_at` of any existing chunk. If `file_time > indexed_time`, the file is reindexed. There is no SHA hash in the `doc_chunks` table; the `_get_file_hash()` method exists but is not used for the reindex check — mtime is the only gate.
+Change detection: `needs_reindex_many()` batches `MAX(updated_at)` lookups for
+many files at once, and `needs_reindex()` delegates to the same UTC mtime
+comparison logic for one file. There is no SHA hash gate in the table; mtime is
+still the authoritative staleness check.
+
+### `vec_doc_chunks` — bounded semantic recall index
+
+Created lazily by `DocsRAG._ensure_doc_vec_table()` when `sqlite-vec` is
+available and the first document is indexed.
+
+```sql
+CREATE VIRTUAL TABLE vec_doc_chunks
+USING vec0(
+    chunk_id TEXT PRIMARY KEY,
+    embedding float[DIM] distance_metric=cosine
+);
+```
+
+Runtime also creates companion tables such as `vec_doc_chunks_rowids` and
+`vec_doc_chunks_chunks00`. These are implementation tables owned by
+`sqlite-vec`, not an additional app-level schema.
 
 ### `doc_registry` — registered documents
 
@@ -115,20 +138,25 @@ The janitor performs three distinct passes:
 
 2. **Pass 2 — project home directories:** For each project in `cfg.projects.definitions`, if `proj_dir.exists()`, calls `rag.reindex_all(str(proj_dir))` using the same scan logic. Covers project-owned markdown and logs.
 
-3. **Pass 3 — `doc_registry` external files:** Enumerates all entries via `DocsRegistry().list_docs()`. For each entry whose `file_path` resolves to a real file, calls `rag.needs_reindex()` and indexes if stale. This covers files registered outside the scanned directories (e.g., source code files linked via `quaid registry register`). **Double-counting guard:** Passes 1 and 2 each append their scanned directory to a `scanned_dirs` list. Pass 3 resolves each registry path to an absolute path and skips it if it starts with any entry in `scanned_dirs`. This prevents files that live inside an already-scanned project directory from being re-counted in pass 3.
+3. **Pass 3 — `doc_registry` external files:** Enumerates all entries via `DocsRegistry().list_docs()`. For each entry whose `file_path` resolves to a real file, janitor batches them through `rag.needs_reindex_many()` and indexes only the stale subset. This covers files registered outside the scanned directories (e.g., source code files linked via `quaid registry register`). **Double-counting guard:** Passes 1 and 2 each append their scanned directory to a `scanned_dirs` list. Pass 3 resolves each registry path to an absolute path and skips it if it starts with any entry in `scanned_dirs`. This prevents files that live inside an already-scanned project directory from being re-counted in pass 3.
 
 Pre-pass: before the three indexing passes, janitor also:
 - Calls `process_all_events()` (project_updater) to drain the event queue.
 - Calls `docs_registry.auto_discover(proj_name)` for each project with `auto_index=True`.
 - Calls `docs_registry.sync_external_files(proj_name)` for each project.
 
-**Step 4: `needs_reindex(file_path)` check**
+**Step 4: batched staleness checks**
 
 ```python
-def needs_reindex(self, file_path: str) -> bool
+def needs_reindex_many(self, file_paths: List[str]) -> Dict[str, bool]
 ```
 
-Reads `st_mtime` from disk (UTC), queries `updated_at` from `doc_chunks` for that file (`LIMIT 1`). Returns `True` if file is newer than the stored index time, or if no chunks exist. On any exception, returns `True` (fail-safe reindex).
+Reads `st_mtime` from disk (UTC), batches `MAX(updated_at)` queries against
+`doc_chunks`, and returns a per-file `True/False` map. `needs_reindex(file_path)`
+is still available for one-off callers, but janitor and updater now use the
+batched path so large reindex passes do not issue one SQL query per file. On
+table-missing or stat errors, the implementation returns `True` (reindex when
+in doubt).
 
 **Step 5: `index_document(file_path)` — atomic index-and-replace**
 
@@ -139,8 +167,9 @@ def index_document(self, file_path: str) -> int  # returns chunk count
 1. Reads file content (UTF-8).
 2. If file is in `log/*.log` (archive log), prepends a temporal context header via `_archive_temporal_header()`.
 3. Calls `chunk_markdown(content)` to produce a list of text chunks.
-4. For each chunk: calls `_lib_get_embedding(chunk_text)` (Ollama). If any embedding fails, aborts without deleting old chunks (preserves stale but working index).
-5. Only after all embeddings succeed: deletes old `doc_chunks` rows for this file, inserts new rows.
+4. Calls `_lib_get_embeddings(chunk_texts, pool_name="rag_embeddings", task_name="rag")`. Duplicate chunk texts are deduped in the shared embedding helper before provider calls.
+5. If any chunk embedding fails, aborts without deleting old chunks (preserves stale but working index).
+6. Only after all embeddings succeed: deletes old `doc_chunks` rows for this file, bulk-inserts new rows, and when `sqlite-vec` is available synchronizes `vec_doc_chunks` to exactly the new chunk ids for that file.
 6. Calls `DocsRegistry.update_timestamps(file_path, indexed_at=now)` to sync `last_indexed_at`.
 
 Returns the number of chunks created (0 on any failure).
@@ -171,8 +200,13 @@ Files scanned by `scan_docs_directory()`:
 - **Model:** `qwen3-embedding:8b`
 - **Dimensions:** 4096 (float32)
 - **Storage:** Packed as a float32 BLOB in `doc_chunks.embedding` via `lib/embeddings.py` helpers: `pack_embedding()` / `unpack_embedding()`
+- **Batch path:** `lib/embeddings.get_embeddings()` dedupes repeated texts and
+  prefers provider-side `embed_many()` when available. `OllamaEmbeddingsProvider`
+  now implements `embed_many()` for multi-chunk RAG indexing.
 - **Ollama URL:** Configured in `QUAID_HOME/shared/config/memory.json` under `ollama.url`. Both OC and CC adapters on the same machine share the same Ollama instance.
-- **Fail policy:** If `lib/fail_policy.is_fail_hard_enabled()` is `True` and embedding fails during search, `search_docs()` raises `RuntimeError` instead of returning an empty list.
+- **Fail policy:** If `lib/fail_policy.is_fail_hard_enabled()` is `True` and
+  embedding or vec-backed recall fails during search, `search_docs()` raises
+  `RuntimeError` instead of silently degrading.
 
 ---
 
@@ -199,10 +233,18 @@ def search_docs(
    - Each of the project's `source_roots`
    - All file paths registered for that project in `doc_registry` (via `DocsRegistry().list_docs(project=...)`)
 3. If `docs` filter is set (`--docs` flag), adds additional `LIKE` clauses matching basename/fragment against `source_file`.
-4. Issues a single SQL query with the combined `WHERE` clause — avoids full table scan when project is known.
-5. For each returned chunk: computes `cosine_similarity(query_embedding, chunk_embedding)` via `lib/similarity.py`.
-6. Filters to `similarity >= min_similarity` (default 0.3).
-7. Sorts by similarity descending, returns `results[:limit]`.
+4. If `sqlite-vec` is available and `vec_doc_chunks` exists, runs a bounded KNN
+   query first:
+   - `k = max(64, limit * 16)`
+   - joins `vec_doc_chunks` back to `doc_chunks`
+   - applies the same project/docs SQL filters to the joined rows
+5. If vec is unavailable, or vec recall fails while failHard is disabled,
+   falls back to the legacy row-scan path over `doc_chunks`.
+6. For vec-backed rows, converts `distance` to a bounded cosine-like similarity.
+   For fallback rows, unpacks `doc_chunks.embedding` and computes cosine in
+   Python.
+7. Applies `min_similarity`, reranks with `_docs_rank_score(...)`, and returns
+   `results[:limit]`.
 
 **Return format:**
 ```python

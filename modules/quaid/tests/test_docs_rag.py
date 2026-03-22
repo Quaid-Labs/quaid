@@ -123,6 +123,170 @@ class TestNeedsReindex:
         result = rag.needs_reindex("/nonexistent/path.md")
         assert result is True
 
+    def test_needs_reindex_many_returns_true_when_doc_chunks_missing(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        first = tmp_path / "first.md"
+        second = tmp_path / "second.md"
+        first.write_text("# First\nContent.")
+        second.write_text("# Second\nContent.")
+
+        with sqlite3.connect(rag.db_path) as conn:
+            conn.execute("DROP TABLE doc_chunks")
+            conn.commit()
+
+        result = rag.needs_reindex_many([str(first), str(second)])
+
+        assert result == {
+            str(first): True,
+            str(second): True,
+        }
+
+
+# ---------------------------------------------------------------------------
+# index_document
+# ---------------------------------------------------------------------------
+
+class TestIndexDocument:
+    """Tests for DocsRAG.index_document()."""
+
+    def test_uses_parallel_embeddings_and_indexes_chunks(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.")
+
+        chunk_texts = ["# Guide\nChunk A", "## Notes\nChunk B"]
+        embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+        with patch.object(rag, "chunk_markdown", return_value=chunk_texts), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=embeddings) as mock_get_embeddings:
+            chunks = rag.index_document(str(test_file))
+
+        assert chunks == 2
+        mock_get_embeddings.assert_called_once_with(
+            chunk_texts,
+            pool_name="rag_embeddings",
+            task_name="rag",
+        )
+
+        with sqlite3.connect(rag.db_path) as conn:
+            rows = conn.execute(
+                "SELECT source_file, chunk_index, content, section_header FROM doc_chunks ORDER BY chunk_index"
+            ).fetchall()
+
+        assert rows == [
+            (str(test_file), 0, "# Guide\nChunk A", "# Guide"),
+            (str(test_file), 1, "## Notes\nChunk B", "## Notes"),
+        ]
+
+    def test_preserves_existing_chunks_when_any_embedding_fails(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.")
+
+        with sqlite3.connect(rag.db_path) as conn:
+            conn.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("old:0", str(test_file), 0, "old chunk", "# Old", b"old"),
+            )
+            conn.commit()
+
+        with patch.object(rag, "chunk_markdown", return_value=["# Guide\nChunk A", "## Notes\nChunk B"]), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3], None]):
+            chunks = rag.index_document(str(test_file))
+
+        assert chunks == 0
+
+        with sqlite3.connect(rag.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content, section_header FROM doc_chunks WHERE source_file = ? ORDER BY chunk_index",
+                (str(test_file),),
+            ).fetchall()
+
+        assert rows == [("old:0", "old chunk", "# Old")]
+
+    def test_syncs_vec_doc_chunks_and_replaces_stale_vec_rows(self, tmp_path):
+        from lib.database import get_connection, has_vec
+        from lib.embeddings import pack_embedding
+
+        if not has_vec():
+            pytest.skip("sqlite-vec not available in this environment")
+
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.")
+
+        old_embedding = pack_embedding([0.9, 0.1, 0.0])
+        with get_connection(rag.db_path) as conn:
+            rag._ensure_doc_vec_table(conn, [0.9, 0.1, 0.0])
+            conn.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("old:0", str(test_file), 0, "old chunk", "# Old", old_embedding),
+            )
+            conn.execute(
+                "INSERT INTO vec_doc_chunks(chunk_id, embedding) VALUES (?, ?)",
+                ("old:0", old_embedding),
+            )
+
+        chunk_texts = ["# Guide\nChunk A", "## Notes\nChunk B"]
+        embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+        with patch.object(rag, "chunk_markdown", return_value=chunk_texts), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=embeddings):
+            chunks = rag.index_document(str(test_file))
+
+        assert chunks == 2
+
+        with get_connection(rag.db_path) as conn:
+            doc_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM doc_chunks WHERE source_file = ? ORDER BY chunk_index",
+                    (str(test_file),),
+                ).fetchall()
+            ]
+            vec_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT chunk_id FROM vec_doc_chunks ORDER BY chunk_id"
+                ).fetchall()
+            ]
+
+        assert doc_ids == [f"{test_file}:0", f"{test_file}:1"]
+        assert vec_ids == doc_ids
+
+
+class TestReindexAll:
+    """Tests for DocsRAG.reindex_all()."""
+
+    def test_batches_reindex_checks_and_skips_fresh_files(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        docs = tmp_path / "docs"
+        docs.mkdir()
+
+        fresh_file = docs / "fresh.md"
+        fresh_file.write_text("# Fresh\nStill current.")
+        stale_file = docs / "stale.md"
+        stale_file.write_text("# Stale\nNeeds reindex.")
+
+        with sqlite3.connect(rag.db_path) as conn:
+            conn.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("fresh:0", str(fresh_file), 0, "fresh chunk", "# Fresh", b"emb", "2100-01-01T00:00:00+00:00"),
+            )
+            conn.commit()
+
+        with patch.object(rag, "needs_reindex", side_effect=AssertionError("reindex_all should use batched lookups")), \
+             patch.object(rag, "index_document", return_value=3) as mock_index:
+            result = rag.reindex_all(str(docs), force=False)
+
+        mock_index.assert_called_once_with(str(stale_file))
+        assert result == {
+            "total_files": 2,
+            "indexed_files": 1,
+            "skipped_files": 1,
+            "total_chunks": 3,
+        }
+
 
 # ---------------------------------------------------------------------------
 # scan_docs_directory
@@ -520,6 +684,57 @@ class TestDocsSearchFiltering:
         assert bundle["telemetry"]["chunk_count"] == 1
         assert bundle["telemetry"]["requested_docs"] == ["api.md"]
 
+    def test_search_docs_uses_vec_doc_chunks_when_available(self, tmp_path):
+        from lib.database import get_connection, has_vec
+        from lib.embeddings import pack_embedding
+
+        if not has_vec():
+            pytest.skip("sqlite-vec not available in this environment")
+
+        rag = _make_rag(tmp_path)
+        with get_connection(rag.db_path) as conn:
+            rag._ensure_doc_vec_table(conn, [1.0, 0.0, 0.0])
+            rows = [
+                ("alpha:0", "/tmp/docs/alpha.md", 0, "alpha content", "# Alpha", pack_embedding([1.0, 0.0, 0.0])),
+                ("beta:0", "/tmp/docs/beta.md", 0, "beta content", "# Beta", pack_embedding([0.0, 1.0, 0.0])),
+            ]
+            conn.executemany(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            conn.executemany(
+                "INSERT INTO vec_doc_chunks(chunk_id, embedding) VALUES (?, ?)",
+                [(row[0], row[5]) for row in rows],
+            )
+
+        with patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0, 0.0, 0.0]), \
+             patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=AssertionError("scan path should not run")):
+            results = rag.search_docs("alpha", limit=2)
+
+        assert len(results) == 1
+        assert results[0]["source"].endswith("alpha.md")
+
+    def test_search_docs_vec_failure_raises_when_failhard_enabled(self, tmp_path):
+        rag = _make_rag(tmp_path)
+
+        class _BoomConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, sql, params=()):
+                raise sqlite3.OperationalError("vec query exploded")
+
+        with patch("datastore.docsdb.rag._lib_get_connection", return_value=_BoomConn()), \
+             patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0, 0.0, 0.0]), \
+             patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
+             patch.object(rag, "_doc_vec_table_exists", return_value=True), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="failHard is enabled"):
+                rag.search_docs("alpha")
+
     def test_infer_project_from_chunks_prefers_highest_similarity_sum(self, tmp_path):
         rag = _make_rag(tmp_path)
         chunks = [
@@ -600,7 +815,7 @@ class TestRagMaintenanceThirdPass:
 
         with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
              patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
-             patch("datastore.docsdb.rag.DocsRAG.needs_reindex", return_value=True), \
+             patch("datastore.docsdb.rag.DocsRAG.needs_reindex_many", return_value={str(external_file): True}), \
              patch("datastore.docsdb.rag.DocsRAG.index_document", return_value=3) as mock_index:
             result = handler(ctx)
 
@@ -621,7 +836,7 @@ class TestRagMaintenanceThirdPass:
 
         with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
              patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
-             patch("datastore.docsdb.rag.DocsRAG.needs_reindex", return_value=False), \
+             patch("datastore.docsdb.rag.DocsRAG.needs_reindex_many", return_value={str(existing_file): False}), \
              patch("datastore.docsdb.rag.DocsRAG.index_document") as mock_index:
             result = handler(ctx)
 
@@ -677,7 +892,7 @@ class TestRagMaintenanceThirdPass:
         with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
              patch("datastore.docsdb.rag._workspace", return_value=instance_root), \
              patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
-             patch("datastore.docsdb.rag.DocsRAG.needs_reindex", return_value=True), \
+             patch("datastore.docsdb.rag.DocsRAG.needs_reindex_many", return_value={str(test_file): True}), \
              patch("datastore.docsdb.rag.DocsRAG.index_document", return_value=4) as mock_index:
             result = handler(ctx)
 

@@ -1315,16 +1315,20 @@ def cmd_update_stale(dry_run: bool = True, trivial_only: bool = False) -> int:
         registry = DocsRegistry()
         rag = DocsRAG()
         all_docs = registry.list_docs()
+        candidate_paths = []
         for entry in all_docs:
             file_path = entry.get("file_path") or entry.get("path", "")
             if not file_path:
                 continue
             if not Path(file_path).exists():
                 continue
-            if not rag.needs_reindex(file_path):
-                continue
             # Skip docs already handled by the stale pass above
             if file_path in stale:
+                continue
+            candidate_paths.append(file_path)
+        needs_reindex = rag.needs_reindex_many(candidate_paths)
+        for file_path in candidate_paths:
+            if not needs_reindex.get(file_path, True):
                 continue
             if dry_run:
                 print(f"  Would index new doc: {file_path}")

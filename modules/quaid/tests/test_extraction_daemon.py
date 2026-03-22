@@ -851,6 +851,14 @@ class TestRollingExtraction:
             assert flush_metric["dedup_scanned_rows"] == 0
             assert flush_metric["dedup_gray_zone_rows"] == 0
             assert flush_metric["dedup_llm_checks"] == 0
+            assert flush_metric["dedup_fts_query_count"] == 0
+            assert flush_metric["dedup_fts_candidates_returned"] == 0
+            assert flush_metric["dedup_fts_candidate_limit"] == 0
+            assert flush_metric["dedup_fts_limit_hits"] == 0
+            assert flush_metric["dedup_fallback_scan_count"] == 0
+            assert flush_metric["dedup_fallback_candidates_returned"] == 0
+            assert flush_metric["dedup_token_prefilter_terms"] == 0
+            assert flush_metric["dedup_token_prefilter_skips"] == 0
             assert flush_metric["embedding_cache_requested"] == 0
         finally:
             if real_registry is not None:

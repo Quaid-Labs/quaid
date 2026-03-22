@@ -17,8 +17,13 @@ from pathlib import Path
 from typing import Any, List, Dict, Optional, Tuple
 
 from lib.config import get_db_path
-from lib.database import get_connection as _lib_get_connection
-from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
+from lib.database import get_connection as _lib_get_connection, has_vec as _lib_has_vec
+from lib.embeddings import (
+    get_embedding as _lib_get_embedding,
+    get_embeddings as _lib_get_embeddings,
+    pack_embedding as _lib_pack_embedding,
+    unpack_embedding as _lib_unpack_embedding,
+)
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.fail_policy import is_fail_hard_enabled
 from lib.runtime_context import get_workspace_dir
@@ -260,6 +265,73 @@ class DocsRAG:
                 CREATE INDEX IF NOT EXISTS idx_doc_chunks_updated 
                 ON doc_chunks(updated_at)
             """)
+
+    def _doc_vec_table_exists(self, conn: sqlite3.Connection) -> bool:
+        try:
+            conn.execute("SELECT 1 FROM vec_doc_chunks LIMIT 0")
+            return True
+        except sqlite3.OperationalError:
+            return False
+
+    def _ensure_doc_vec_table(self, conn: sqlite3.Connection, embedding: List[float]) -> None:
+        """Lazily create vec_doc_chunks using the provided embedding dimension."""
+        if self._doc_vec_table_exists(conn):
+            return
+        dim = len(embedding)
+        conn.execute(
+            f"CREATE VIRTUAL TABLE vec_doc_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{dim}] distance_metric=cosine)"
+        )
+
+    def _build_doc_filter_sql(
+        self,
+        *,
+        project: Optional[str],
+        project_paths: Optional[Dict[str, Any]],
+        registry_paths: List[str],
+        doc_filters: List[str],
+        workspace: Path,
+        source_expr: str = "source_file",
+    ) -> Tuple[Optional[str], List[Any], bool]:
+        """Build SQL WHERE clause components for doc source filtering."""
+        like_clauses: List[str] = []
+        params: List[Any] = []
+        if project and (project_paths or registry_paths):
+            suffixes = set()
+            project_like: List[str] = []
+            if project_paths and project_paths["home_dir"]:
+                project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                params.append(_escape_like(project_paths["home_dir"]) + "%")
+                suffixes.update(_path_suffix_candidates(project_paths["home_dir"], workspace))
+            if project_paths:
+                for root in project_paths.get("source_roots", []):
+                    project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                    params.append(_escape_like(root) + "%")
+                    suffixes.update(_path_suffix_candidates(root, workspace))
+            for rp in registry_paths:
+                project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                params.append(_escape_like(rp) + "%")
+                suffixes.update(_path_suffix_candidates(rp, workspace))
+            for suffix in sorted(suffixes):
+                project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                params.append(f"%/{_escape_like(suffix)}")
+                project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                params.append(f"%/{_escape_like(suffix)}/%")
+            if project_like:
+                like_clauses.append(f"({ ' OR '.join(project_like) })")
+            elif not doc_filters:
+                return None, [], True
+
+        if doc_filters:
+            doc_like = []
+            for df in doc_filters:
+                doc_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                params.append(f"%{_escape_like(df)}%")
+            if doc_like:
+                like_clauses.append(f"({ ' OR '.join(doc_like) })")
+
+        if not like_clauses:
+            return "", params, False
+        return " AND ".join(like_clauses), params, False
         
     def estimate_tokens(self, text: str) -> int:
         """Rough token estimation (4 chars ≈ 1 token)."""
@@ -332,26 +404,63 @@ class DocsRAG:
         except Exception:
             return ""
 
+    def _needs_reindex_from_indexed_at(self, file_path: str, indexed_at: Optional[str]) -> bool:
+        """Check staleness using a preloaded indexed timestamp."""
+        try:
+            file_time = datetime.fromtimestamp(os.stat(file_path).st_mtime, tz=timezone.utc)
+            if not indexed_at:
+                return True
+            indexed_time = datetime.fromisoformat(str(indexed_at))
+            if indexed_time.tzinfo is None:
+                indexed_time = indexed_time.replace(tzinfo=timezone.utc)
+            return file_time > indexed_time
+        except Exception as e:
+            logger.warning("Error checking if %s needs reindex: %s", file_path, e)
+            return True  # When in doubt, reindex
+
+    def needs_reindex_many(self, file_paths: List[str]) -> Dict[str, bool]:
+        """Check many files for staleness with batched doc_chunks lookups."""
+        files = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
+        if not files:
+            return {}
+
+        indexed_at_by_file: Dict[str, str] = {}
+        batch_size = 250
+        try:
+            with _lib_get_connection(self.db_path) as conn:
+                for start in range(0, len(files), batch_size):
+                    batch = files[start:start + batch_size]
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = conn.execute(
+                        f"""
+                            SELECT source_file, MAX(updated_at) AS indexed_at
+                            FROM doc_chunks
+                            WHERE source_file IN ({placeholders})
+                            GROUP BY source_file
+                        """,
+                        tuple(batch),
+                    ).fetchall()
+                    for row in rows:
+                        indexed_at_by_file[str(row["source_file"])] = str(row["indexed_at"] or "")
+        except sqlite3.OperationalError as exc:
+            if "no such table: doc_chunks" in str(exc).lower():
+                return {file_path: True for file_path in files}
+            raise
+
+        return {
+            file_path: self._needs_reindex_from_indexed_at(file_path, indexed_at_by_file.get(file_path))
+            for file_path in files
+        }
+
     def needs_reindex(self, file_path: str) -> bool:
         """Check if file needs reindexing based on modification time."""
         try:
-            stat = os.stat(file_path)
-            # Use UTC to match SQLite datetime('now') which is always UTC
-            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-            
             with _lib_get_connection(self.db_path) as conn:
                 result = conn.execute(
-                    "SELECT updated_at FROM doc_chunks WHERE source_file = ? LIMIT 1",
-                    (file_path,)
+                    "SELECT MAX(updated_at) FROM doc_chunks WHERE source_file = ?",
+                    (file_path,),
                 ).fetchone()
-                
-                if not result:
-                    return True  # File not indexed yet
-                
-                indexed_time = datetime.fromisoformat(result[0]).replace(tzinfo=timezone.utc)
-                file_time = datetime.fromisoformat(mtime)
-
-                return file_time > indexed_time
+            return self._needs_reindex_from_indexed_at(file_path, result[0] if result else None)
         except Exception as e:
             logger.warning("Error checking if %s needs reindex: %s", file_path, e)
             return True  # When in doubt, reindex
@@ -399,10 +508,14 @@ class DocsRAG:
 
         # Collect all embeddings BEFORE deleting old chunks.
         # This prevents data loss if Ollama is down or embedding fails.
+        embeddings = _lib_get_embeddings(
+            chunk_texts,
+            pool_name="rag_embeddings",
+            task_name="rag",
+        )
         prepared_chunks = []
-        for i, chunk_text in enumerate(chunk_texts):
+        for i, (chunk_text, embedding) in enumerate(zip(chunk_texts, embeddings)):
             section_header = self._extract_section_header(chunk_text)
-            embedding = _lib_get_embedding(chunk_text)
             if not embedding:
                 logger.warning(
                     "Failed embedding for chunk %s in %s; aborting reindex to preserve old chunks",
@@ -426,14 +539,32 @@ class DocsRAG:
         # All embeddings succeeded — now safe to delete and replace
         chunks_created = 0
         with _lib_get_connection(self.db_path) as conn:
+            old_chunk_ids = [row[0] for row in conn.execute(
+                "SELECT id FROM doc_chunks WHERE source_file = ?",
+                (file_path,),
+            ).fetchall()]
             conn.execute("DELETE FROM doc_chunks WHERE source_file = ?", (file_path,))
-            for chunk_data in prepared_chunks:
-                conn.execute("""
+            conn.executemany(
+                """
                     INSERT INTO doc_chunks
                     (id, source_file, chunk_index, content, section_header, embedding, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-                """, chunk_data)
-                chunks_created += 1
+                """,
+                prepared_chunks,
+            )
+            chunks_created = len(prepared_chunks)
+            if _lib_has_vec() and prepared_chunks:
+                if not self._doc_vec_table_exists(conn):
+                    self._ensure_doc_vec_table(conn, embeddings[0])
+                if old_chunk_ids and self._doc_vec_table_exists(conn):
+                    conn.executemany(
+                        "DELETE FROM vec_doc_chunks WHERE chunk_id = ?",
+                        [(chunk_id,) for chunk_id in old_chunk_ids],
+                    )
+                conn.executemany(
+                    "INSERT OR REPLACE INTO vec_doc_chunks(chunk_id, embedding) VALUES (?, ?)",
+                    [(chunk_id, packed_embedding) for chunk_id, _, _, _, _, packed_embedding in prepared_chunks],
+                )
         
         logger.info("[docs] Indexed %s chunks from %s", chunks_created, file_path)
 
@@ -516,9 +647,10 @@ class DocsRAG:
         indexed_files = 0
         total_chunks = 0
         skipped_files = 0
+        reindex_needed = self.needs_reindex_many(md_files) if not force else {}
         
         for file_path in md_files:
-            if not force and not self.needs_reindex(file_path):
+            if not force and not reindex_needed.get(file_path, True):
                 skipped_files += 1
                 continue
                 
@@ -701,68 +833,75 @@ class DocsRAG:
                 pass
 
         doc_filters = self._normalize_docs_filter(docs)
+        query_terms = _docs_query_terms(query)
 
         results = []
         with _lib_get_connection(self.db_path) as conn:
-            # Filter at SQL level when project is specified (avoids loading all chunks)
-            like_clauses = []
-            params = []
-            if project and (project_paths or registry_paths):
-                params = []
-                suffixes = set()
-                if project_paths and project_paths["home_dir"]:
-                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
-                    params.append(_escape_like(project_paths["home_dir"]) + "%")
-                    suffixes.update(_path_suffix_candidates(project_paths["home_dir"], workspace))
-                if project_paths:
-                    for root in project_paths.get("source_roots", []):
-                        like_clauses.append("source_file LIKE ? ESCAPE '\\'")
-                        params.append(_escape_like(root) + "%")
-                        suffixes.update(_path_suffix_candidates(root, workspace))
-                # Include registered external files by exact path prefix
-                for rp in registry_paths:
-                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
-                    params.append(_escape_like(rp) + "%")
-                    suffixes.update(_path_suffix_candidates(rp, workspace))
-                for suffix in sorted(suffixes):
-                    # Match relocated/copied instances by stable project-relative suffix.
-                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
-                    params.append(f"%/{_escape_like(suffix)}")
-                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
-                    params.append(f"%/{_escape_like(suffix)}/%")
-                if like_clauses:
-                    like_clauses = [f"({ ' OR '.join(like_clauses) })"]
+            where, params, empty = self._build_doc_filter_sql(
+                project=project,
+                project_paths=project_paths,
+                registry_paths=registry_paths,
+                doc_filters=doc_filters,
+                workspace=workspace,
+                source_expr="dc.source_file",
+            )
+            if empty:
+                return []
+
+            use_vec = _lib_has_vec() and self._doc_vec_table_exists(conn)
+            if use_vec:
+                try:
+                    packed_query = _lib_pack_embedding(query_embedding)
+                    candidate_limit = max(64, limit * 16)
+                    sql = """
+                        SELECT dc.*, knn.distance AS vec_distance
+                        FROM (
+                            SELECT chunk_id, distance
+                            FROM vec_doc_chunks
+                            WHERE embedding MATCH ? AND k = ?
+                        ) knn
+                        JOIN doc_chunks dc ON dc.id = knn.chunk_id
+                    """
+                    if where:
+                        sql += f" WHERE {where}"
+                    sql += " ORDER BY knn.distance"
+                    rows = conn.execute(sql, tuple([packed_query, candidate_limit] + params)).fetchall()
+                except Exception as exc:
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(
+                            "Doc RAG vec recall failed while failHard is enabled."
+                        ) from exc
+                    logger.warning("Doc RAG vec recall failed; falling back to row scan: %s", exc)
+                    use_vec = False
+
+            if not use_vec:
+                scan_where, scan_params, _ = self._build_doc_filter_sql(
+                    project=project,
+                    project_paths=project_paths,
+                    registry_paths=registry_paths,
+                    doc_filters=doc_filters,
+                    workspace=workspace,
+                    source_expr="source_file",
+                )
+                if scan_where:
+                    rows = conn.execute(f"SELECT * FROM doc_chunks WHERE {scan_where}", tuple(scan_params)).fetchall()
                 else:
-                    rows = []  # No matching paths for this project
-                    if not doc_filters:
-                        return rows
-
-            # Optional explicit doc filter set
-            if doc_filters:
-                doc_like = []
-                for df in doc_filters:
-                    doc_like.append("source_file LIKE ? ESCAPE '\\'")
-                    params.append(f"%{_escape_like(df)}%")
-                if doc_like:
-                    like_clauses.append(f"({ ' OR '.join(doc_like) })")
-
-            if like_clauses:
-                where = " AND ".join(like_clauses)
-                rows = conn.execute(f"SELECT * FROM doc_chunks WHERE {where}", params).fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM doc_chunks").fetchall()
+                    rows = conn.execute("SELECT * FROM doc_chunks").fetchall()
 
             for row in rows:
                 source_file = str(row[1] or "")
                 if self._is_context_file(Path(source_file)):
                     continue
-                chunk_embedding = _lib_unpack_embedding(row[5])  # embedding is column 5
-                similarity = _lib_cosine_similarity(query_embedding, chunk_embedding)
+                if use_vec:
+                    distance = row["vec_distance"]
+                    similarity = max(-1.0, min(1.0, 1.0 - float(distance if distance is not None else 1.0)))
+                else:
+                    chunk_embedding = _lib_unpack_embedding(row[5])  # embedding is column 5
+                    similarity = _lib_cosine_similarity(query_embedding, chunk_embedding)
 
                 if similarity >= min_similarity:
                     content = row[3]
                     section_header = row[4]
-                    query_terms = _docs_query_terms(query)
                     rank_score = _docs_rank_score(
                         query_terms,
                         source_file,
@@ -960,6 +1099,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 from datastore.docsdb.registry import DocsRegistry as _DR
                 reg_docs = _DR().list_docs()
                 runtime_workspace = _workspace()
+                registry_paths = []
                 for doc in reg_docs:
                     raw_path = doc.get("file_path", "")
                     if not raw_path:
@@ -969,8 +1109,12 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         p = runtime_workspace / p
                     if not p.is_file():
                         continue
-                    if rag.needs_reindex(str(p)):
-                        doc_chunks = rag.index_document(str(p))
+                    registry_paths.append(str(p))
+
+                registry_reindex = rag.needs_reindex_many(registry_paths)
+                for file_path in registry_paths:
+                    if registry_reindex.get(file_path, True):
+                        doc_chunks = rag.index_document(file_path)
                         if doc_chunks > 0:
                             indexed += 1
                             chunks += doc_chunks

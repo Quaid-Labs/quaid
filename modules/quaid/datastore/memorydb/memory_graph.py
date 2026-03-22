@@ -6012,6 +6012,21 @@ def _plan_fanout_queries(
             fail_hard = bool(is_fail_hard_enabled())
         except Exception:
             fail_hard = True
+        detail_lc = " ".join(part for part in [message, str(exc or "")] if part).lower()
+        timeout_like = (
+            bailout_reason == "planner_exception_fallback"
+            and (
+                isinstance(exc, TimeoutError)
+                or "timed out" in detail_lc
+                or "timeout" in detail_lc
+            )
+        )
+        if timeout_like:
+            # The fast fanout planner is a best-effort query-expansion gate.
+            # If it times out, use the original query rather than fail the
+            # entire recall path. Non-timeout planner failures still obey
+            # failHard below.
+            return _finish([clean], "planner_timeout_fallback")
         if fail_hard:
             # failHard=true means dev: surface planner failures loudly rather than
             # silently degrading. Fallback only happens when failHard=false (prod).
@@ -7569,6 +7584,183 @@ def _validate_confidence_unit_interval(value: Any, field_name: str) -> float:
     return parsed
 
 
+def _load_dedup_candidates_vec(
+    *,
+    graph: "MemoryGraph",
+    conn: sqlite3.Connection,
+    query_embedding: List[float],
+    owner_id: Optional[str],
+    rowid_min: Optional[int],
+    rowid_max: Optional[int],
+    candidate_limit: int = 64,
+) -> Tuple[List[Tuple[sqlite3.Row, float]], Dict[str, int]]:
+    """Load bounded nearest-neighbor dedup candidates from sqlite-vec."""
+    telemetry = {
+        "vec_query_count": 0,
+        "vec_candidates_returned": 0,
+        "vec_candidate_limit": candidate_limit,
+        "vec_limit_hits": 0,
+    }
+
+    try:
+        conn.execute("SELECT 1 FROM vec_nodes LIMIT 0")
+    except sqlite3.OperationalError as exc:
+        if "no such table: vec_nodes" not in str(exc).lower():
+            raise
+        sample = conn.execute(
+            "SELECT embedding FROM nodes WHERE embedding IS NOT NULL LIMIT 1"
+        ).fetchone()
+        if not sample:
+            return [], telemetry
+        graph._ensure_vec_table(conn, query_embedding)
+        missing = conn.execute(
+            """
+                SELECT n.id, n.embedding FROM nodes n
+                WHERE n.embedding IS NOT NULL
+                  AND n.id NOT IN (SELECT node_id FROM vec_nodes)
+            """
+        ).fetchall()
+        for row in missing:
+            conn.execute(
+                "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                (row["id"], row["embedding"]),
+            )
+
+    rowid_clause = ""
+    rowid_params: List[Any] = []
+    if rowid_min is not None and rowid_min >= 0:
+        rowid_clause += " AND n.rowid > ?"
+        rowid_params.append(rowid_min)
+    if rowid_max is not None and rowid_max >= 0:
+        rowid_clause += " AND n.rowid <= ?"
+        rowid_params.append(rowid_max)
+
+    owner_clause = ""
+    owner_params: List[Any] = []
+    if owner_id:
+        owner_clause = " AND (n.owner_id = ? OR n.owner_id IS NULL)"
+        owner_params.append(owner_id)
+
+    packed_query = graph._pack_embedding(query_embedding)
+    telemetry["vec_query_count"] = 1
+    rows = conn.execute(
+        f"""
+            SELECT n.*, knn.distance AS vec_distance
+            FROM (
+                SELECT node_id, distance
+                FROM vec_nodes
+                WHERE embedding MATCH ? AND k = ?
+            ) knn
+            JOIN nodes n ON n.id = knn.node_id
+            WHERE n.embedding IS NOT NULL
+              AND n.superseded_by IS NULL
+              AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+              {rowid_clause}
+              {owner_clause}
+            ORDER BY knn.distance
+        """,
+        tuple([packed_query, candidate_limit] + rowid_params + owner_params),
+    ).fetchall()
+
+    telemetry["vec_candidates_returned"] = len(rows)
+    telemetry["vec_limit_hits"] = 1 if len(rows) >= candidate_limit else 0
+    candidates: List[Tuple[sqlite3.Row, float]] = []
+    for row in rows:
+        distance = row["vec_distance"]
+        similarity = max(-1.0, min(1.0, 1.0 - float(distance if distance is not None else 1.0)))
+        candidates.append((row, similarity))
+    return candidates, telemetry
+
+
+def _load_dedup_candidates_fts(
+    *,
+    conn: sqlite3.Connection,
+    owner_id: Optional[str],
+    rowid_filter_sql: str,
+    rowid_filter_params: List[Any],
+    rowid_min: Optional[int],
+    rowid_max: Optional[int],
+    text: str,
+    candidate_limit: int = 64,
+) -> Tuple[List[Tuple[sqlite3.Row, Optional[float]]], Dict[str, int]]:
+    """Load lexical dedup candidates through FTS with bounded fallback scan."""
+    telemetry: Dict[str, int] = {
+        "fts_query_count": 0,
+        "fts_candidates_returned": 0,
+        "fts_candidate_limit": 0,
+        "fts_limit_hits": 0,
+        "fallback_scan_count": 0,
+        "fallback_candidates_returned": 0,
+        "token_prefilter_terms": 0,
+        "token_prefilter_skips": 0,
+    }
+    tokens = _lib_extract_key_tokens(text)
+    telemetry["token_prefilter_terms"] += len(tokens)
+    if not tokens:
+        telemetry["token_prefilter_skips"] += 1
+        return [], telemetry
+
+    telemetry["fts_query_count"] += 1
+    telemetry["fts_candidate_limit"] = candidate_limit
+    fts_query = " OR ".join(f'"{t}"' for t in tokens)
+    try:
+        rowid_clause = ""
+        rowid_clause_params: List[Any] = []
+        if rowid_min is not None and rowid_min >= 0:
+            rowid_clause += " AND n.rowid > ?"
+            rowid_clause_params.append(rowid_min)
+        if rowid_max is not None and rowid_max >= 0:
+            rowid_clause += " AND n.rowid <= ?"
+            rowid_clause_params.append(rowid_max)
+        if owner_id:
+            rows = conn.execute(
+                f"""
+                    SELECT n.* FROM nodes_fts
+                    JOIN nodes n ON n.rowid = nodes_fts.rowid
+                    WHERE nodes_fts MATCH ?
+                      {rowid_clause}
+                      AND n.embedding IS NOT NULL
+                      AND n.superseded_by IS NULL
+                      AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+                      AND (n.owner_id = ? OR n.owner_id IS NULL)
+                    LIMIT ?
+                """,
+                tuple([fts_query] + rowid_clause_params + [owner_id, candidate_limit]),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""
+                    SELECT n.* FROM nodes_fts
+                    JOIN nodes n ON n.rowid = nodes_fts.rowid
+                    WHERE nodes_fts MATCH ?
+                      {rowid_clause}
+                      AND n.embedding IS NOT NULL
+                      AND n.superseded_by IS NULL
+                      AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+                    LIMIT ?
+                """,
+                tuple([fts_query] + rowid_clause_params + [candidate_limit]),
+            ).fetchall()
+        telemetry["fts_candidates_returned"] += len(rows)
+        if len(rows) >= candidate_limit:
+            telemetry["fts_limit_hits"] += 1
+        return [(row, None) for row in rows], telemetry
+    except Exception:
+        telemetry["fallback_scan_count"] += 1
+        if owner_id:
+            rows = conn.execute(
+                f"SELECT * FROM nodes WHERE embedding IS NOT NULL{rowid_filter_sql} AND (owner_id = ? OR owner_id IS NULL) ORDER BY accessed_at DESC LIMIT 64",
+                tuple(rowid_filter_params + [owner_id]),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT * FROM nodes WHERE embedding IS NOT NULL{rowid_filter_sql} ORDER BY accessed_at DESC LIMIT 64",
+                tuple(rowid_filter_params),
+            ).fetchall()
+        telemetry["fallback_candidates_returned"] += len(rows)
+        return [(row, None) for row in rows], telemetry
+
+
 def store(
     text: str,
     category: str = "fact",
@@ -7706,6 +7898,18 @@ def store(
         "llm_different_hits": 0,
         "fallback_reject_hits": 0,
         "auto_reject_hits": 0,
+        "vec_query_count": 0,
+        "vec_candidates_returned": 0,
+        "vec_candidate_limit": 0,
+        "vec_limit_hits": 0,
+        "fts_query_count": 0,
+        "fts_candidates_returned": 0,
+        "fts_candidate_limit": 0,
+        "fts_limit_hits": 0,
+        "fallback_scan_count": 0,
+        "fallback_candidates_returned": 0,
+        "token_prefilter_terms": 0,
+        "token_prefilter_skips": 0,
     }
 
     def _with_dedup_telemetry(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -7877,139 +8081,124 @@ def store(
             llm_verify_enabled = False
 
         # Search for high-similarity matches using FTS5 token pre-filter
-        tokens = _lib_extract_key_tokens(text)
         gray_zone_candidates: List[Tuple[Node, float]] = []
         conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
         with conn_cm as conn:
-            if tokens:
-                fts_query = " OR ".join(f'"{t}"' for t in tokens)
+            candidate_rows: List[Tuple[sqlite3.Row, Optional[float]]] = []
+            if _lib_has_vec():
                 try:
-                    rowid_clause = ""
-                    rowid_clause_params: List[Any] = []
-                    if rowid_min is not None and rowid_min >= 0:
-                        rowid_clause += " AND n.rowid > ?"
-                        rowid_clause_params.append(rowid_min)
-                    if rowid_max is not None and rowid_max >= 0:
-                        rowid_clause += " AND n.rowid <= ?"
-                        rowid_clause_params.append(rowid_max)
-                    if owner_id:
-                        rows = conn.execute(f"""
-                            SELECT n.* FROM nodes_fts
-                            JOIN nodes n ON n.rowid = nodes_fts.rowid
-                            WHERE nodes_fts MATCH ?
-                              {rowid_clause}
-                              AND n.embedding IS NOT NULL
-                              AND n.superseded_by IS NULL
-                              AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
-                              AND (n.owner_id = ? OR n.owner_id IS NULL)
-                            LIMIT 500
-                        """, tuple([fts_query] + rowid_clause_params + [owner_id])).fetchall()
-                    else:
-                        rows = conn.execute(f"""
-                            SELECT n.* FROM nodes_fts
-                            JOIN nodes n ON n.rowid = nodes_fts.rowid
-                            WHERE nodes_fts MATCH ?
-                              {rowid_clause}
-                              AND n.embedding IS NOT NULL
-                              AND n.superseded_by IS NULL
-                              AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
-                            LIMIT 500
-                        """, tuple([fts_query] + rowid_clause_params)).fetchall()
-                except Exception:
-                    # Fallback to bounded scan if FTS5 unavailable (cap at 500 most recent)
-                    if owner_id:
-                        rows = conn.execute(
-                            f"SELECT * FROM nodes WHERE embedding IS NOT NULL{rowid_filter_sql} AND (owner_id = ? OR owner_id IS NULL) ORDER BY accessed_at DESC LIMIT 500",
-                            tuple(rowid_filter_params + [owner_id])
-                        ).fetchall()
-                    else:
-                        rows = conn.execute(
-                            f"SELECT * FROM nodes WHERE embedding IS NOT NULL{rowid_filter_sql} ORDER BY accessed_at DESC LIMIT 500",
-                            tuple(rowid_filter_params)
-                        ).fetchall()
-            else:
-                rows = []  # No tokens = novel fact, no dedup possible
+                    candidate_rows, candidate_meta = _load_dedup_candidates_vec(
+                        graph=graph,
+                        conn=conn,
+                        query_embedding=embedding,
+                        owner_id=owner_id,
+                        rowid_min=rowid_min,
+                        rowid_max=rowid_max,
+                    )
+                    for key, value in candidate_meta.items():
+                        dedup_telemetry[key] += int(value or 0)
+                except Exception as exc:
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "Vector dedup candidate search failed while fail-hard mode is enabled"
+                        ) from exc
+                    logger.warning("Vector dedup candidate search failed; falling back to FTS: %s", exc)
+            if not candidate_rows:
+                candidate_rows, candidate_meta = _load_dedup_candidates_fts(
+                    conn=conn,
+                    owner_id=owner_id,
+                    rowid_filter_sql=rowid_filter_sql,
+                    rowid_filter_params=rowid_filter_params,
+                    rowid_min=rowid_min,
+                    rowid_max=rowid_max,
+                    text=text,
+                )
+                for key, value in candidate_meta.items():
+                    dedup_telemetry[key] += int(value or 0)
 
-            for row in rows:
+            for row, candidate_similarity in candidate_rows:
                 existing = graph._row_to_node(row)
-                if existing.embedding:
-                    dedup_telemetry["scanned_rows"] += 1
+                sim = candidate_similarity
+                if sim is None:
+                    if not existing.embedding:
+                        continue
                     sim = graph.cosine_similarity(embedding, existing.embedding)
+                dedup_telemetry["scanned_rows"] += 1
 
-                    if sim >= auto_reject_thresh and texts_are_near_identical(text, existing.name):
-                        dedup_telemetry["auto_reject_hits"] += 1
-                        # Zone 1: Auto-reject (high sim AND texts are near-identical strings)
-                        log_dedup_decision(graph, text, existing.id, existing.name,
-                                           sim, "auto_reject", owner_id=owner_id, source=source, conn=_conn)
-                        # Confirmation boosting: re-extraction confirms this fact
-                        existing.confirmation_count += 1
-                        existing.last_confirmed_at = datetime.now().isoformat()
-                        existing.confidence = min(existing.confidence + 0.02, 0.95)
-                        # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
-                        existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                        _apply_metadata_flags(existing)
-                        if update_if_dup and verified and not existing.verified:
-                            existing.verified = True
-                            existing.confidence = 0.9
-                        graph.update_node(existing, conn=_conn)
-                        if update_if_dup and verified:
-                            return _with_dedup_telemetry({
-                                "id": existing.id,
-                                "status": "updated",
-                                "similarity": round(sim, 3),
-                                "existing_text": existing.name,
-                                "confirmation_count": existing.confirmation_count,
-                            })
+                if sim >= auto_reject_thresh and texts_are_near_identical(text, existing.name):
+                    dedup_telemetry["auto_reject_hits"] += 1
+                    # Zone 1: Auto-reject (high sim AND texts are near-identical strings)
+                    log_dedup_decision(graph, text, existing.id, existing.name,
+                                       sim, "auto_reject", owner_id=owner_id, source=source, conn=_conn)
+                    # Confirmation boosting: re-extraction confirms this fact
+                    existing.confirmation_count += 1
+                    existing.last_confirmed_at = datetime.now().isoformat()
+                    existing.confidence = min(existing.confidence + 0.02, 0.95)
+                    # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
+                    existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                    _apply_metadata_flags(existing)
+                    if update_if_dup and verified and not existing.verified:
+                        existing.verified = True
+                        existing.confidence = 0.9
+                    graph.update_node(existing, conn=_conn)
+                    if update_if_dup and verified:
                         return _with_dedup_telemetry({
                             "id": existing.id,
-                            "status": "duplicate",
+                            "status": "updated",
                             "similarity": round(sim, 3),
                             "existing_text": existing.name,
                             "confirmation_count": existing.confirmation_count,
                         })
+                    return _with_dedup_telemetry({
+                        "id": existing.id,
+                        "status": "duplicate",
+                        "similarity": round(sim, 3),
+                        "existing_text": existing.name,
+                        "confirmation_count": existing.confirmation_count,
+                    })
 
-                    elif sim >= gray_zone_low:
-                        dedup_telemetry["gray_zone_rows"] += 1
-                        # Zone 2: Gray zone — LLM verification
-                        if llm_verify_enabled:
-                            gray_zone_candidates.append((existing, sim))
-                            continue
-                        else:
-                            # LLM verification disabled — use similarity threshold
-                            # But only reject if texts are near-identical strings
-                            if sim >= dedup_threshold and texts_are_near_identical(text, existing.name):
-                                dedup_telemetry["fallback_reject_hits"] += 1
-                                log_dedup_decision(graph, text, existing.id, existing.name,
-                                                   sim, "fallback_reject",
-                                                   owner_id=owner_id, source=source, conn=_conn)
-                                # Confirmation boosting: re-extraction confirms this fact
-                                existing.confirmation_count += 1
-                                existing.last_confirmed_at = datetime.now().isoformat()
-                                existing.confidence = min(existing.confidence + 0.02, 0.95)
-                                # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
-                                existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                                _apply_metadata_flags(existing)
-                                if update_if_dup and verified and not existing.verified:
-                                    existing.verified = True
-                                    existing.confidence = 0.9
-                                graph.update_node(existing, conn=_conn)
-                                if update_if_dup and verified:
-                                    return _with_dedup_telemetry({
-                                        "id": existing.id,
-                                        "status": "updated",
-                                        "similarity": round(sim, 3),
-                                        "existing_text": existing.name,
-                                        "confirmation_count": existing.confirmation_count,
-                                    })
+                elif sim >= gray_zone_low:
+                    dedup_telemetry["gray_zone_rows"] += 1
+                    # Zone 2: Gray zone — LLM verification
+                    if llm_verify_enabled:
+                        gray_zone_candidates.append((existing, sim))
+                        continue
+                    else:
+                        # LLM verification disabled — use similarity threshold
+                        # But only reject if texts are near-identical strings
+                        if sim >= dedup_threshold and texts_are_near_identical(text, existing.name):
+                            dedup_telemetry["fallback_reject_hits"] += 1
+                            log_dedup_decision(graph, text, existing.id, existing.name,
+                                               sim, "fallback_reject",
+                                               owner_id=owner_id, source=source, conn=_conn)
+                            # Confirmation boosting: re-extraction confirms this fact
+                            existing.confirmation_count += 1
+                            existing.last_confirmed_at = datetime.now().isoformat()
+                            existing.confidence = min(existing.confidence + 0.02, 0.95)
+                            # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
+                            existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                            _apply_metadata_flags(existing)
+                            if update_if_dup and verified and not existing.verified:
+                                existing.verified = True
+                                existing.confidence = 0.9
+                            graph.update_node(existing, conn=_conn)
+                            if update_if_dup and verified:
                                 return _with_dedup_telemetry({
                                     "id": existing.id,
-                                    "status": "duplicate",
+                                    "status": "updated",
                                     "similarity": round(sim, 3),
                                     "existing_text": existing.name,
                                     "confirmation_count": existing.confirmation_count,
                                 })
+                            return _with_dedup_telemetry({
+                                "id": existing.id,
+                                "status": "duplicate",
+                                "similarity": round(sim, 3),
+                                "existing_text": existing.name,
+                                "confirmation_count": existing.confirmation_count,
+                            })
 
-                    # Zone 3: sim < gray_zone_low — store normally (continue checking)
+                # Zone 3: sim < gray_zone_low — store normally (continue checking)
 
         if gray_zone_candidates and llm_verify_enabled:
             # Keep gray-zone dedup batches small enough that Haiku can return

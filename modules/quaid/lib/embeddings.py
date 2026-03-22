@@ -118,7 +118,7 @@ def _embedding_parallel_workers(task_name: str = "embeddings", default: int = 4)
         parallel = getattr(getattr(cfg, "core", None), "parallel", None)
         if parallel is None or not getattr(parallel, "enabled", True):
             return 1
-        workers = int(getattr(parallel, "llm_workers", default) or default)
+        workers = int(getattr(parallel, "embedding_workers", default) or default)
         task_workers = getattr(parallel, "task_workers", {}) or {}
         override = None
         if isinstance(task_workers, dict):
@@ -150,18 +150,6 @@ def get_embeddings(
     if not items:
         return []
 
-    provider = get_embeddings_provider()
-    embed_many = getattr(provider, "embed_many", None)
-    if callable(embed_many):
-        try:
-            out = list(embed_many(items))
-            if len(out) == len(items):
-                return out
-        except Exception:
-            if not return_exceptions:
-                raise
-            return [None] * len(items)
-
     positions: dict[str, List[int]] = {}
     unique_items: List[str] = []
     for idx, text in enumerate(items):
@@ -172,6 +160,25 @@ def get_embeddings(
             unique_items.append(key)
         else:
             bucket.append(idx)
+
+    def _fan_out(unique_results: Sequence[Any]) -> List[Any]:
+        out: List[Any] = [None] * len(items)
+        for text, result in zip(unique_items, unique_results):
+            for idx in positions.get(text, []):
+                out[idx] = result
+        return out
+
+    provider = get_embeddings_provider()
+    embed_many = getattr(provider, "embed_many", None)
+    if callable(embed_many):
+        try:
+            out = list(embed_many(unique_items))
+            if len(out) == len(unique_items):
+                return _fan_out(out)
+        except Exception:
+            if not return_exceptions:
+                raise
+            return [None] * len(items)
 
     worker_count = (
         _embedding_parallel_workers(task_name)
@@ -185,12 +192,7 @@ def get_embeddings(
         pool_name=pool_name,
         return_exceptions=return_exceptions,
     )
-
-    out: List[Any] = [None] * len(items)
-    for text, result in zip(unique_items, unique_results):
-        for idx in positions.get(text, []):
-            out[idx] = result
-    return out
+    return _fan_out(unique_results)
 
 
 def pack_embedding(embedding: List[float]) -> bytes:

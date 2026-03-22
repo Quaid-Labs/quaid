@@ -179,6 +179,43 @@ def _janitor_test_timeout_seconds(default_seconds: int = 600) -> int:
     return parsed if parsed > 0 else int(default_seconds)
 
 
+def _checkpoint_heartbeat_interval_seconds(default_seconds: float = 15.0) -> float:
+    raw = os.environ.get("QUAID_JANITOR_CHECKPOINT_HEARTBEAT_S", "")
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        parsed = 0.0
+    return parsed if parsed > 0 else float(default_seconds)
+
+
+def _start_checkpoint_heartbeat(
+    save_fn,
+    stage_getter,
+    *,
+    enabled: bool,
+) -> tuple[Optional[threading.Event], Optional[threading.Thread]]:
+    if not enabled:
+        return None, None
+
+    stop_event = threading.Event()
+    interval_seconds = max(0.1, _checkpoint_heartbeat_interval_seconds())
+
+    def _loop() -> None:
+        while not stop_event.wait(interval_seconds):
+            try:
+                save_fn(stage=str(stage_getter() or ""), status="running", completed=False)
+            except Exception as exc:
+                janitor_logger.warn("checkpoint_heartbeat_failed", error=str(exc))
+
+    thread = threading.Thread(
+        target=_loop,
+        name="janitor-checkpoint-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
 def _default_owner_id() -> str:
     """Resolve default owner from config with safe fallback."""
     _ensure_runtime_state()
@@ -768,20 +805,22 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print(f"[checkpoint] WARNING: failed to parse resume checkpoint {checkpoint_path}: {exc}")
     if task == "all" and not dry_run:
         _atomic_write_json(checkpoint_path, checkpoint_state)
+    checkpoint_lock = threading.Lock()
 
     def _checkpoint_save(stage: str = "", status: Optional[str] = None, completed: bool = False) -> None:
         if task != "all" or dry_run:
             return
-        checkpoint_state["heartbeat_at"] = datetime.now().isoformat()
-        if stage:
-            checkpoint_state["current_stage"] = stage
-        if status:
-            checkpoint_state["status"] = status
-        if completed and stage:
-            done = checkpoint_state.setdefault("completed_stages", [])
-            if stage not in done:
-                done.append(stage)
-        _atomic_write_json(checkpoint_path, checkpoint_state)
+        with checkpoint_lock:
+            checkpoint_state["heartbeat_at"] = datetime.now().isoformat()
+            if stage:
+                checkpoint_state["current_stage"] = stage
+            if status:
+                checkpoint_state["status"] = status
+            if completed and stage:
+                done = checkpoint_state.setdefault("completed_stages", [])
+                if stage not in done:
+                    done.append(stage)
+            _atomic_write_json(checkpoint_path, checkpoint_state)
 
     def _stage_completed(stage: str) -> bool:
         return stage in set(checkpoint_state.get("completed_stages", []) or [])
@@ -963,6 +1002,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     # Track which tasks were skipped due to budget
     _budget_skipped = []
+    checkpoint_heartbeat_stop, checkpoint_heartbeat_thread = _start_checkpoint_heartbeat(
+        _checkpoint_save,
+        lambda: checkpoint_state.get("current_stage", ""),
+        enabled=(task == "all" and not dry_run),
+    )
 
     try:
         # --- Task 0b: Embedding Backfill ---
@@ -1610,6 +1654,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         except Exception as e:
             metrics.add_error(f"Benchmark mode validation failed: {e}")
             memory_pipeline_ok = False
+
+    if checkpoint_heartbeat_stop is not None:
+        checkpoint_heartbeat_stop.set()
+    if checkpoint_heartbeat_thread is not None:
+        checkpoint_heartbeat_thread.join(timeout=1.0)
 
     # Generate comprehensive report
     final_metrics = metrics.summary()

@@ -111,6 +111,11 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - Use `quaid docs search` for codebase/architecture questions.
 - Use `quaid recall --docs` for a single pass across both memories and docs.
 
+**Memory retention boundary**
+- Only information you state explicitly in assistant messages is reliably retained as memory.
+- Raw tool output, private reasoning, and unstated intermediate results may not be preserved.
+- Project file writes may be tracked from actual filesystem changes, but important conclusions, decisions, explanations, and outcomes should still be stated explicitly if they are worth remembering.
+
 **Interrupt policy**
 - Complete the current task before starting a new one.
 - Switch immediately only on explicit interruption (`wait`, `stop`, `cancel`).

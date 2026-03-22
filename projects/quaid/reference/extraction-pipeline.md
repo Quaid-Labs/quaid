@@ -10,12 +10,13 @@ from raw transcript to stored memories, and the public API surface.
 
 1. [Extraction Triggers](#1-extraction-triggers)
 2. [Signal File Protocol](#2-signal-file-protocol)
-3. [The Extraction Pipeline Step by Step](#3-the-extraction-pipeline-step-by-step)
-4. [Extraction Priority Invariant](#4-extraction-priority-invariant)
-5. [Hook Entry Points](#5-hook-entry-points)
-6. [Daemon Lifecycle](#6-daemon-lifecycle)
-7. [Public API vs CLI](#7-public-api-vs-cli)
-8. [Key Constants and Configuration](#8-key-constants-and-configuration)
+3. [Rolling Extraction Mode](#3-rolling-extraction-mode)
+4. [The Extraction Pipeline Step by Step](#4-the-extraction-pipeline-step-by-step)
+5. [Extraction Priority Invariant](#5-extraction-priority-invariant)
+6. [Hook Entry Points](#6-hook-entry-points)
+7. [Daemon Lifecycle](#7-daemon-lifecycle)
+8. [Public API vs CLI](#8-public-api-vs-cli)
+9. [Key Constants and Configuration](#9-key-constants-and-configuration)
 
 ---
 
@@ -163,7 +164,83 @@ Invalid signal types default to `session_end` with a warning log.
 
 ---
 
-## 3. The Extraction Pipeline Step by Step
+## 3. Rolling Extraction Mode
+
+Rolling extraction is the daemon's staged-ingest path for transcripts that are too
+large or too expensive to wait on until the final compaction/reset boundary.
+
+It is used in two places:
+
+- Runtime daemon operation, via `check_chunk_ready_sessions(max_tokens)`, which
+  stages extraction once a transcript grows past the configured chunk budget.
+- Benchmark harness stress lanes, especially `rolling-obd` and the imported-Claude
+  replay scripts, which intentionally drive the real daemon signal path in stage
+  batches and then perform one final flush.
+
+### Stage vs flush
+
+Rolling extraction has two phases:
+
+1. **Stage**
+   - The daemon reads only the next chunk-budget-sized transcript window.
+   - It parses and extracts facts/snippets/journal/project logs into staged state.
+   - It advances the session cursor immediately, so the same lines are not re-read.
+   - It persists carryover context for the next rolling stage.
+
+2. **Flush**
+   - Triggered by a terminal signal such as `compaction`, `reset`, `session_end`,
+     `timeout`, or an explicit benchmark final-flush signal.
+   - The daemon takes the accumulated staged payload and calls
+     `apply_extracted_payloads()`.
+   - This is the point where facts are actually published to the DB and dedup/store
+     telemetry is finalized.
+
+### Rolling state and telemetry files
+
+Per-session staged state lives at:
+
+```
+QUAID_HOME/<instance>/data/rolling-extraction/<session_id>.json
+```
+
+Rolling daemon telemetry is appended to:
+
+```
+QUAID_HOME/<instance>/logs/daemon/rolling-extraction.jsonl
+```
+
+Important event types:
+
+- `rolling_stage` — one staged chunk was extracted and added to rolling state
+- `rolling_flush` — staged payload was published
+- `rolling_flush_error` — final publish path failed and the signal was preserved
+
+Important telemetry families on `rolling_flush`:
+
+- extract timings: stage wall, flush wall, signal-to-publish
+- carryover counts: `carry_facts_*`, duplicate carry drops
+- publish counts: facts stored/skipped, snippets/journal/project logs
+- dedup metrics: hash hits, scanned rows, gray-zone rows, LLM checks
+- rolling candidate metrics: vec query count, vec candidates returned, vec
+  candidate limit, vec limit hits
+- rolling fallback metrics: FTS query count, FTS candidates returned, FTS
+  candidate limit hits, fallback scan count, token-prefilter counts
+- embedding cache metrics
+
+### Failure and resume semantics
+
+- Stage-state files persist until flush succeeds.
+- If flush fails, the terminal signal is intentionally left on disk for retry.
+- Benchmark harness rolling drivers also maintain a pre-publish checkpoint so a
+  benchmark rerun can resume from "stage already done, flush still pending"
+  instead of re-extracting the whole transcript.
+
+Rolling extraction is still fail-hard on publish errors. It is a staging strategy,
+not a degraded mode.
+
+---
+
+## 4. The Extraction Pipeline Step by Step
 
 ### Overview
 
@@ -406,7 +483,7 @@ After a successful extraction, the daemon runs:
 
 ---
 
-## 4. Extraction Priority Invariant
+## 5. Extraction Priority Invariant
 
 The extraction prompt enforces a strict ordering of what gets extracted:
 
@@ -427,7 +504,7 @@ Agent/technical extraction must never reduce baseline user-memory coverage.
 
 ---
 
-## 5. Hook Entry Points
+## 6. Hook Entry Points
 
 All hooks are in `core/interface/hooks.py` and invoked via the `quaid` CLI.
 Each hook reads JSON from stdin and writes to stdout/stderr.
@@ -564,7 +641,7 @@ extracted.
 
 ---
 
-## 6. Daemon Lifecycle
+## 7. Daemon Lifecycle
 
 ### Starting and stopping
 
@@ -644,7 +721,7 @@ were never processed.
 
 ---
 
-## 7. Public API vs CLI
+## 8. Public API vs CLI
 
 ### `core/interface/api.py` — Python API
 
@@ -722,7 +799,7 @@ circular imports.
 
 ---
 
-## 8. Key Constants and Configuration
+## 9. Key Constants and Configuration
 
 ### Daemon constants (`core/extraction_daemon.py`)
 

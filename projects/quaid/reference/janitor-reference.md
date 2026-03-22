@@ -439,6 +439,8 @@ The janitor dispatches maintenance tasks through a `LifecycleRegistry` — a plu
 
 **LLM concurrency inside routines:** The registry injects a `ctx.parallel_map(items, fn)` helper into each `RoutineContext`. This routes through `GlobalLlmScheduler.run_map()` with workload key `lifecycle_prepass:<routine_name>`, using `core.parallel.lifecyclePrepassWorkers` (default 3) as the configured concurrency. Timeout and retry count come from `lifecyclePrepassTimeoutSeconds` / `lifecyclePrepassTimeoutRetries` (or their env var overrides).
 
+**Checkpoint heartbeat:** `task=all` apply runs keep `logs/janitor/checkpoint-all.json` fresh with a periodic heartbeat while long stages are in flight. The interval defaults to 15 seconds and can be overridden with `QUAID_JANITOR_CHECKPOINT_HEARTBEAT_S`.
+
 ## Memory Lifecycle
 
 Facts flow through the pipeline before becoming permanent:

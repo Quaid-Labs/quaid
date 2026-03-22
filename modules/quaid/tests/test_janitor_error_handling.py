@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -99,24 +100,39 @@ def test_review_stage_dispatches_plugin_maintenance_surface(monkeypatch, tmp_pat
         ),
     )
 
-    def _fake_collect(*, registry, slots, surface, config, plugin_config, workspace_root, strict, payload):
+    def _fake_collect(
+        *,
+        registry,
+        slots,
+        surface,
+        config,
+        plugin_config,
+        workspace_root,
+        strict,
+        payload=None,
+        skip_plugin_ids=None,
+    ):
+        assert registry is not None
+        assert strict is True
+        assert skip_plugin_ids in (None, [])
+        if surface != "maintenance":
+            return [], [], []
         calls["surface"] = surface
         calls["slots"] = slots
         calls["payload"] = dict(payload or {})
-        assert registry is not None
-        assert strict is True
         assert workspace_root == str(tmp_path)
         return [], [], [("memorydb.core", {"handled": True, "metrics": {"memories_reviewed": 1}})]
 
     monkeypatch.setattr("core.runtime.plugins.get_runtime_registry", lambda: object())
     monkeypatch.setattr("core.runtime.plugins.run_plugin_contract_surface_collect", _fake_collect)
 
-    result = janitor.run_task_optimized("review", dry_run=True, incremental=False, resume_checkpoint=False)
+    result = janitor.run_task_optimized("review", dry_run=False, incremental=False, resume_checkpoint=False)
 
     assert result["success"] is True
     assert calls["surface"] == "maintenance"
     assert calls["payload"]["stage"] == "review"
     assert calls["payload"]["subtask"] == "review"
+    assert calls["payload"]["dry_run"] is False
     assert "memorydb.core" in calls["slots"]["datastores"]
 
 
@@ -185,6 +201,32 @@ def test_run_tests_uses_configurable_timeout(monkeypatch):
     out = janitor.run_tests(metrics)
     assert captured["timeout"] == 42
     assert out["success"] is True
+
+
+def test_checkpoint_heartbeat_updates_during_long_stage(monkeypatch):
+    writes = []
+
+    def _save_fn(*, stage="", status=None, completed=False):
+        writes.append({"stage": stage, "status": status, "completed": completed})
+
+    monkeypatch.setenv("QUAID_JANITOR_CHECKPOINT_HEARTBEAT_S", "0.1")
+    stop_event, thread = janitor._start_checkpoint_heartbeat(
+        _save_fn,
+        lambda: "review",
+        enabled=True,
+    )
+
+    try:
+        time.sleep(0.25)
+    finally:
+        assert stop_event is not None
+        stop_event.set()
+        assert thread is not None
+        thread.join(timeout=1.0)
+
+    assert writes, "Expected at least one heartbeat write"
+    assert all(row["stage"] == "review" for row in writes)
+    assert all(row["status"] == "running" for row in writes)
 
 
 def test_append_decision_log_archives_via_rotation(tmp_path, monkeypatch):

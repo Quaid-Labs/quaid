@@ -266,6 +266,7 @@ def _print_summary(path: Path, data: dict[str, Any], label: str = "") -> None:
     print(f"strict privacy:   {_get(data, 'privacy.enforceStrictFilters', _get(data, 'privacy.enforce_strict_filters', True))}")
     print(f"core parallel:    {_get(data, 'core.parallel.enabled', True)}")
     print(f"llm workers:      {_get(data, 'core.parallel.llmWorkers', _get(data, 'core.parallel.llm_workers', 4))}")
+    print(f"embedding workers:{_get(data, 'core.parallel.embeddingWorkers', _get(data, 'core.parallel.embedding_workers', 4))}")
     print(f"idle timeout:     {_get(data, 'capture.inactivity_timeout_minutes', _get(data, 'capture.inactivityTimeoutMinutes', 60))}m")
     print(f"plugin adapter:   {_get(data, 'plugins.slots.adapter', '(none)')}")
     print(f"plugin ingest:    {_get(data, 'plugins.slots.ingest', [])}")
@@ -334,9 +335,10 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
         print("7. Fail hard (retrieval.fail_hard)")
         print("8. Core parallel enabled")
         print("9. Core LLM workers")
-        print("10. Edit plugin config JSON")
-        print("11. Show summary")
-        print("12. Save and exit")
+        print("10. Core embedding workers")
+        print("11. Edit plugin config JSON")
+        print("12. Show summary")
+        print("13. Save and exit")
         print("0. Exit without saving")
         choice = input("Select: ").strip()
 
@@ -376,10 +378,13 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = int(_get(staged, "core.parallel.llmWorkers", _get(staged, "core.parallel.llm_workers", 4)))
                 _set(staged, "core.parallel.llmWorkers", _prompt_int("core.parallel.llmWorkers", cur))
             elif choice == "10":
-                _edit_plugin_config(staged, path)
+                cur = int(_get(staged, "core.parallel.embeddingWorkers", _get(staged, "core.parallel.embedding_workers", 4)))
+                _set(staged, "core.parallel.embeddingWorkers", _prompt_int("core.parallel.embeddingWorkers", cur))
             elif choice == "11":
-                _print_summary(path, staged)
+                _edit_plugin_config(staged, path)
             elif choice == "12":
+                _print_summary(path, staged)
+            elif choice == "13":
                 _save_config(path, staged)
                 _run_config_callbacks_after_save()
                 print(f"Saved: {path}")

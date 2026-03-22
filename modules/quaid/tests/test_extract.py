@@ -533,6 +533,18 @@ class TestExtractFromTranscript:
                     "llm_different_hits": 1,
                     "fallback_reject_hits": 0,
                     "auto_reject_hits": 0,
+                    "vec_query_count": 1,
+                    "vec_candidates_returned": 4,
+                    "vec_candidate_limit": 64,
+                    "vec_limit_hits": 0,
+                    "fts_query_count": 1,
+                    "fts_candidates_returned": 4,
+                    "fts_candidate_limit": 64,
+                    "fts_limit_hits": 0,
+                    "fallback_scan_count": 0,
+                    "fallback_candidates_returned": 0,
+                    "token_prefilter_terms": 6,
+                    "token_prefilter_skips": 0,
                 },
             },
             {
@@ -547,6 +559,18 @@ class TestExtractFromTranscript:
                     "llm_different_hits": 1,
                     "fallback_reject_hits": 0,
                     "auto_reject_hits": 1,
+                    "vec_query_count": 1,
+                    "vec_candidates_returned": 3,
+                    "vec_candidate_limit": 64,
+                    "vec_limit_hits": 0,
+                    "fts_query_count": 1,
+                    "fts_candidates_returned": 3,
+                    "fts_candidate_limit": 64,
+                    "fts_limit_hits": 0,
+                    "fallback_scan_count": 0,
+                    "fallback_candidates_returned": 0,
+                    "token_prefilter_terms": 5,
+                    "token_prefilter_skips": 0,
                 },
             },
         ]
@@ -587,6 +611,18 @@ class TestExtractFromTranscript:
         assert applied["dedup_llm_same_hits"] == 1
         assert applied["dedup_llm_different_hits"] == 2
         assert applied["dedup_auto_reject_hits"] == 1
+        assert applied["dedup_vec_query_count"] == 2
+        assert applied["dedup_vec_candidates_returned"] == 7
+        assert applied["dedup_vec_candidate_limit"] == 64
+        assert applied["dedup_vec_limit_hits"] == 0
+        assert applied["dedup_fts_query_count"] == 2
+        assert applied["dedup_fts_candidates_returned"] == 7
+        assert applied["dedup_fts_candidate_limit"] == 64
+        assert applied["dedup_fts_limit_hits"] == 0
+        assert applied["dedup_fallback_scan_count"] == 0
+        assert applied["dedup_fallback_candidates_returned"] == 0
+        assert applied["dedup_token_prefilter_terms"] == 11
+        assert applied["dedup_token_prefilter_skips"] == 0
         assert mock_store.call_count == 2
         first_call = mock_store.call_args_list[0].kwargs
         second_call = mock_store.call_args_list[1].kwargs

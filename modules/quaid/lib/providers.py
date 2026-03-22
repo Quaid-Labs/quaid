@@ -235,7 +235,7 @@ class AnthropicLLMProvider(LLMProvider):
             "messages": [{"role": "user", "content": user_message}],
         }
 
-        retry_attempts = max(1, int(os.environ.get("ANTHROPIC_RETRY_ATTEMPTS", "1") or "1"))
+        retry_attempts = max(1, int(os.environ.get("ANTHROPIC_RETRY_ATTEMPTS", "3") or "3"))
         backoff_s = max(0.0, float(os.environ.get("ANTHROPIC_RETRY_BACKOFF_S", "2") or "2"))
         backoff_cap_s = max(backoff_s, float(os.environ.get("ANTHROPIC_RETRY_BACKOFF_CAP_S", "60") or "60"))
         retryable_http_codes = {408, 429, 500, 502, 503, 504, 529}
@@ -1134,6 +1134,83 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     f"Ollama embeddings provider failed while failHard is enabled: model={self._model}"
                 ) from e
         return None
+
+    def embed_many(self, texts: List[str]) -> List[Optional[List[float]]]:
+        items = list(texts or [])
+        if not items:
+            return []
+
+        try:
+            batch_size = int(os.environ.get("OLLAMA_EMBED_BATCH_SIZE", "32") or 32)
+        except Exception:
+            batch_size = 32
+        if batch_size <= 0:
+            batch_size = 32
+
+        try:
+            timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
+        except Exception:
+            timeout_s = 120.0
+        if timeout_s <= 0:
+            timeout_s = 120.0
+
+        retries = 1
+        all_embeddings: List[Optional[List[float]]] = []
+        last_error = None
+        for start in range(0, len(items), batch_size):
+            batch = items[start:start + batch_size]
+            batch_error = None
+            for attempt in range(retries + 1):
+                try:
+                    data = json.dumps({
+                        "model": self._model,
+                        "input": batch,
+                        "keep_alive": -1,
+                    }).encode("utf-8")
+                    req = urllib.request.Request(
+                        f"{self._url}/api/embed",
+                        data=data,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                        result = json.loads(resp.read().decode("utf-8"))
+                        embeddings = result.get("embeddings", [])
+                        if len(embeddings) != len(batch):
+                            raise RuntimeError(
+                                f"Ollama embeddings batch returned {len(embeddings)} vectors for {len(batch)} inputs"
+                            )
+                        all_embeddings.extend(embeddings)
+                        batch_error = None
+                        break
+                except (urllib.error.URLError, TimeoutError, OSError, ConnectionError) as e:
+                    batch_error = e
+                    if attempt < retries:
+                        time.sleep(0.2 * (2 ** attempt))
+                        continue
+                    break
+                except Exception as e:
+                    batch_error = e
+                    break
+            if batch_error is not None:
+                last_error = batch_error
+                break
+
+        if last_error is not None:
+            e = last_error
+            logger.error(
+                "Ollama embeddings batch call failed provider=ollama model=%s url=%s items=%d batch_size=%d error=%s",
+                self._model,
+                _sanitize_url_for_logs(self._url),
+                len(items),
+                batch_size,
+                e,
+            )
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Ollama embeddings provider failed while failHard is enabled: model={self._model}"
+                ) from e
+            return []
+        return all_embeddings
 
     def dimension(self):
         return self._dim

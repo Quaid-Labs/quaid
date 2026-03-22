@@ -1142,7 +1142,8 @@ LLM-generated keywords map edge types to natural language triggers. Used by `sho
 Managed by `datastore/docsdb/registry.py` `ensure_table()` — NOT in schema.sql.
 
 > **Location:** `QUAID_HOME/<instance>/data/memory.db`. When OC and CC share a `QUAID_HOME`,
-> `doc_registry` and `doc_chunks` are in the shared database and visible to both instances.
+> `doc_registry`, `doc_chunks`, and `vec_doc_chunks` are in the shared database and visible
+> to both instances.
 
 ```sql
 CREATE TABLE IF NOT EXISTS doc_registry (
@@ -1203,6 +1204,21 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
 Used by the RAG search pipeline (`quaid docs search`). Indexing by one adapter makes chunks
 searchable by both adapters on the same machine (shared DB). Reindex with:
 `python3 datastore/docsdb/rag.py reindex --all`
+
+When `sqlite-vec` is available, `DocsRAG.index_document()` also maintains a
+lazy companion table:
+
+```sql
+CREATE VIRTUAL TABLE vec_doc_chunks
+USING vec0(
+    chunk_id TEXT PRIMARY KEY,
+    embedding float[DIM] distance_metric=cosine
+);
+```
+
+`vec_doc_chunks` is a mirror index over `doc_chunks.embedding`, used for bounded
+top-K docs recall before any Python reranking. `sqlite-vec` also creates
+companion tables such as `vec_doc_chunks_rowids`.
 
 ### 3.18 Project Definitions — Project Configuration (DB)
 
@@ -1367,6 +1383,8 @@ Controls lifecycle routine concurrency and resource locking:
   "core": {
     "parallel": {
       "enabled": true,
+      "llmWorkers": 4,
+      "embeddingWorkers": 6,
       "lifecyclePrepassWorkers": 3,
       "lifecyclePrepassTimeoutSeconds": 300,
       "lifecyclePrepassTimeoutRetries": 1,
@@ -1382,6 +1400,11 @@ All keys accept snake_case aliases (e.g. `lifecycle_prepass_timeout_seconds`). E
 - `QUAID_CORE_PARALLEL_MAP_TIMEOUT_SECONDS` — per-map timeout (overrides `lifecyclePrepassTimeoutSeconds`)
 - `QUAID_CORE_PARALLEL_MAP_TIMEOUT_RETRIES` — per-map retry count (overrides `lifecyclePrepassTimeoutRetries`)
 - `QUAID_GLOBAL_LLM_MAX_WORKERS` — global LLM thread pool ceiling (default 32; set on `GlobalLlmScheduler` at process start)
+
+`llmWorkers` and `embeddingWorkers` target different resources. `llmWorkers`
+gates shared fast/deep reasoning calls through `lib/llm_pool.py`, while
+`embeddingWorkers` controls embedding fanout in `lib/embeddings.py` for
+providers that do not batch internally.
 
 **Lock resources** — lifecycle routines declare `write_resources` at registration time. Recognized tokens:
 - `db:memory` — resolves to the memory DB path; serializes DB writers

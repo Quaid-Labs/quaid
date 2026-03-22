@@ -283,7 +283,12 @@ function coreParallelEnabled(cfg) {
 
 function coreLlmWorkers(cfg) {
   const raw = getPath(cfg, "core.parallel.llmWorkers", getPath(cfg, "core.parallel.llm_workers", 4));
-  return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 2;
+  return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 4;
+}
+
+function coreEmbeddingWorkers(cfg) {
+  const raw = getPath(cfg, "core.parallel.embeddingWorkers", getPath(cfg, "core.parallel.embedding_workers", 4));
+  return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 4;
 }
 
 function coreLifecyclePrepassWorkers(cfg) {
@@ -327,6 +332,7 @@ function compactSummary(cfgPath, cfg) {
   const strictPrivacy = !!getPath(cfg, "privacy.enforceStrictFilters", getPath(cfg, "privacy.enforce_strict_filters", true));
   const janitorParallel = coreParallelEnabled(cfg);
   const janitorWorkers = coreLlmWorkers(cfg);
+  const embeddingWorkers = coreEmbeddingWorkers(cfg);
   const janitorPrepassWorkers = coreLifecyclePrepassWorkers(cfg);
 
   const lines = [
@@ -348,7 +354,7 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
     `${C.bold("Router Fail-Open")}: ${routerFailOpen ? "on" : "off"} ${C.dim("(on: noisy fallback to default recall plan if prepass fails)")}`,
     `${C.bold("Fail Hard")}: ${failHard ? "on" : "off"} ${C.dim("(on: no fallbacks; raise immediately)")}`,
-    `${C.bold("Core Parallel")}: ${janitorParallel ? "on" : "off"} ${C.dim(`(llmWorkers:${janitorWorkers} prepassWorkers:${janitorPrepassWorkers})`)}`,
+    `${C.bold("Core Parallel")}: ${janitorParallel ? "on" : "off"} ${C.dim(`(llmWorkers:${janitorWorkers} embeddingWorkers:${embeddingWorkers} prepassWorkers:${janitorPrepassWorkers})`)}`,
   ];
   note(lines.join("\n"), "Current");
 }
@@ -560,6 +566,7 @@ async function runEdit() {
         options: [
           { value: "core_parallel_enabled", label: "Parallel enabled", hint: "master parallelism toggle" },
           { value: "core_parallel_llm_workers", label: "LLM workers", hint: "parallel workers for LLM-backed maintenance batches" },
+          { value: "core_parallel_embedding_workers", label: "Embedding workers", hint: "parallel workers for embedding fanout when the provider is not batching" },
           { value: "core_parallel_prepass_workers", label: "Prepass workers", hint: "parallel workers for lifecycle prepass stage" },
           { value: "back", label: "Back" },
         ],
@@ -743,6 +750,18 @@ async function runEdit() {
         },
       }));
       setPath(cfg, "core.parallel.llmWorkers", parseInt(String(next).trim(), 10));
+    } else if (menu === "core_parallel_embedding_workers") {
+      const current = coreEmbeddingWorkers(cfg);
+      const next = handleCancel(await text({
+        message: "core.parallel.embeddingWorkers",
+        placeholder: String(current),
+        validate: (v) => {
+          const n = parseInt(String(v || "").trim(), 10);
+          if (!Number.isFinite(n) || n < 1) return "Enter an integer >= 1";
+          return undefined;
+        },
+      }));
+      setPath(cfg, "core.parallel.embeddingWorkers", parseInt(String(next).trim(), 10));
     } else if (menu === "core_parallel_prepass_workers") {
       const current = coreLifecyclePrepassWorkers(cfg);
       const next = handleCancel(await text({
@@ -845,7 +864,7 @@ function showConfig() {
   console.log(`notify level:     ${getPath(cfg, "notifications.level", "normal")} (janitor:${getPath(cfg, "notifications.janitor.verbosity", "inherit")} extraction:${getPath(cfg, "notifications.extraction.verbosity", "inherit")} retrieval:${getPath(cfg, "notifications.retrieval.verbosity", "inherit")})`);
   console.log(`janitor apply:    ${getPath(cfg, "janitor.applyMode", "auto")}`);
   console.log(`fail hard:        ${retrievalFailHard(cfg) ? "on" : "off"} (retrieval.fail_hard)`);
-  console.log(`core parallel:    ${coreParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${coreLlmWorkers(cfg)} prepassWorkers=${coreLifecyclePrepassWorkers(cfg)})`);
+  console.log(`core parallel:    ${coreParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${coreLlmWorkers(cfg)} embeddingWorkers=${coreEmbeddingWorkers(cfg)} prepassWorkers=${coreLifecyclePrepassWorkers(cfg)})`);
   console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${captureTimeoutMinutes(cfg)}m`);
   console.log(`timeout compact:  ${getPath(cfg, "capture.autoCompactionOnTimeout", true) ? "on" : "off"}`);

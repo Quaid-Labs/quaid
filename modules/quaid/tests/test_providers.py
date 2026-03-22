@@ -204,6 +204,35 @@ class TestAnthropicLLMProvider:
         assert result.text == "Recovered"
         assert mock_open.call_count == 2
 
+    def test_llm_call_retries_on_retryable_http_error_by_default(self, monkeypatch):
+        p = AnthropicLLMProvider(api_key="sk-test-key")
+        monkeypatch.delenv("ANTHROPIC_RETRY_ATTEMPTS", raising=False)
+        monkeypatch.setenv("ANTHROPIC_RETRY_BACKOFF_S", "0")
+        monkeypatch.setenv("ANTHROPIC_RETRY_BACKOFF_CAP_S", "0")
+
+        first_err = urllib.error.HTTPError(
+            url="https://api.anthropic.com/v1/messages",
+            code=529,
+            msg="overloaded",
+            hdrs={},
+            fp=io.BytesIO(b'{"type":"error","error":{"type":"overloaded_error"}}'),
+        )
+        response_data = {
+            "content": [{"type": "text", "text": "Recovered"}],
+            "usage": {"input_tokens": 8, "output_tokens": 3},
+            "model": "claude-sonnet-4-6",
+            "stop_reason": "end_turn",
+        }
+        ok_resp = MagicMock()
+        ok_resp.read.return_value = json.dumps(response_data).encode()
+        ok_resp.__enter__ = lambda s: s
+        ok_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", side_effect=[first_err, ok_resp]) as mock_open:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+        assert result.text == "Recovered"
+        assert mock_open.call_count == 2
+
     def test_llm_call_does_not_retry_on_non_retryable_http_error(self, monkeypatch):
         p = AnthropicLLMProvider(api_key="sk-test-key")
         monkeypatch.setenv("ANTHROPIC_RETRY_ATTEMPTS", "3")
@@ -912,6 +941,57 @@ class TestOllamaEmbeddingsProvider:
         assert result == embedding
         assert urlopen.call_count == 2
         sleep.assert_called_once()
+
+    def test_embed_many_mock_http(self):
+        p = OllamaEmbeddingsProvider()
+        embeddings = [[0.1] * 4, [0.2] * 4]
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"embeddings": embeddings}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            result = p.embed_many(["first", "second"])
+
+        assert result == embeddings
+
+    def test_embed_many_splits_large_requests_into_multiple_batches(self, monkeypatch):
+        p = OllamaEmbeddingsProvider()
+        monkeypatch.setenv("OLLAMA_EMBED_BATCH_SIZE", "2")
+
+        seen_batches = []
+
+        def _fake_urlopen(req, timeout):
+            payload = json.loads(req.data.decode("utf-8"))
+            batch = list(payload["input"])
+            seen_batches.append(batch)
+            embeddings = [[float(len(text))] for text in batch]
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps({"embeddings": embeddings}).encode()
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        with patch("lib.providers.urllib.request.urlopen", side_effect=_fake_urlopen):
+            result = p.embed_many(["a", "bb", "ccc", "dddd", "eeeee"])
+
+        assert seen_batches == [["a", "bb"], ["ccc", "dddd"], ["eeeee"]]
+        assert result == [[1.0], [2.0], [3.0], [4.0], [5.0]]
+
+    def test_embed_many_returns_empty_list_on_error(self):
+        p = OllamaEmbeddingsProvider()
+        with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \
+             patch("lib.providers.is_fail_hard_enabled", return_value=False):
+            result = p.embed_many(["first", "second"])
+
+        assert result == []
+
+    def test_embed_many_raises_on_error_when_failhard_enabled(self):
+        p = OllamaEmbeddingsProvider()
+        with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \
+             patch("lib.providers.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="failHard is enabled"):
+                p.embed_many(["first", "second"])
 
 
 # ---------------------------------------------------------------------------

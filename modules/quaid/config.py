@@ -165,6 +165,7 @@ class OpusReviewConfig:
 class CoreParallelConfig:
     enabled: bool = True
     llm_workers: int = 4
+    embedding_workers: int = 6
     task_workers: Dict[str, int] = field(default_factory=dict)
     lifecycle_prepass_workers: int = 3
     lifecycle_prepass_timeout_seconds: int = 300
@@ -1010,6 +1011,10 @@ def _load_config_inner() -> MemoryConfig:
         llm_workers=_coerce_positive_int(
             parallel_data.get('llm_workers', parallel_data.get('llmWorkers', 4)),
             4,
+        ),
+        embedding_workers=_coerce_positive_int(
+            parallel_data.get('embedding_workers', parallel_data.get('embeddingWorkers', 6)),
+            6,
         ),
         task_workers=task_workers,
         lifecycle_prepass_workers=_coerce_positive_int(

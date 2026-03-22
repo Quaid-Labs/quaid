@@ -148,6 +148,8 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 ## Retrieval Policy
 
 - Treat auto-injected memory as hints — verify concrete claims (names, dates, versions) with explicit `recall`.
+- Only facts stated explicitly in assistant messages are reliably retained as memory. Do not assume raw tool output or private reasoning will be preserved.
+- Project file writes may be tracked from actual filesystem changes, but if a tool result or your reasoning yields a durable fact, decision, status update, or outcome worth remembering, state it clearly in your reply.
 - For codebase/architecture questions, include `"docs"` in stores: `recall "query" '{"stores":["docs"]}'`.
 - Do not upgrade a planned, offered, interviewing, or job-searching state into a completed current state unless the retrieved evidence explicitly says the change already happened.
 - For questions about what the agent or assistant found, suggested, or recommended, answer the suggestion itself rather than the currently implemented feature.

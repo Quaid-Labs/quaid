@@ -727,6 +727,121 @@ class TestStoreDedup:
                            owner_id="quaid")
             assert result["status"] == "created"
 
+    def test_vec_dedup_skips_cleanly_before_first_store(self, tmp_path):
+        from datastore.memorydb.memory_graph import store, _lib_has_vec
+
+        if not _lib_has_vec():
+            pytest.skip("sqlite-vec not available in this environment")
+
+        graph, _ = _make_graph(tmp_path)
+        text = "Solomon's mother's name is Wendy"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
+            result = store(text, owner_id="quaid")
+
+        assert result["status"] == "created"
+        assert result["dedup_telemetry"]["vec_query_count"] == 0
+        assert result["dedup_telemetry"]["vec_candidates_returned"] == 0
+        assert result["dedup_telemetry"]["scanned_rows"] == 0
+
+    def test_vec_candidates_precede_fts_when_available(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        base_text = "Wendy is Solomon's mother's name"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store(base_text, owner_id="quaid", skip_dedup=True)
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        vec_meta = {
+            "vec_query_count": 1,
+            "vec_candidates_returned": 1,
+            "vec_candidate_limit": 64,
+            "vec_limit_hits": 0,
+        }
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 return_value=([(existing_row, 0.995)], vec_meta),
+             ) as vec_spy, \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_fts",
+                 side_effect=AssertionError("FTS should not be consulted when vec candidates succeed"),
+             ), \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=True):
+            result = store("Solomon's mother's name is Wendy", owner_id="quaid")
+
+        assert vec_spy.call_count == 1
+        assert result["status"] == "duplicate"
+        assert result["dedup_telemetry"]["vec_query_count"] == 1
+        assert result["dedup_telemetry"]["fts_query_count"] == 0
+
+    def test_vec_dedup_falls_back_to_fts_when_fail_hard_disabled(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        base_text = "Wendy is Solomon's mother's name"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store(base_text, owner_id="quaid", skip_dedup=True)
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        fts_meta = {
+            "fts_query_count": 1,
+            "fts_candidates_returned": 1,
+            "fts_candidate_limit": 64,
+            "fts_limit_hits": 0,
+            "fallback_scan_count": 0,
+            "fallback_candidates_returned": 0,
+            "token_prefilter_terms": 4,
+            "token_prefilter_skips": 0,
+        }
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 side_effect=RuntimeError("vec unavailable"),
+             ), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_fts",
+                 return_value=([(existing_row, 0.995)], fts_meta),
+             ) as fts_spy, \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=True):
+            result = store("Solomon's mother's name is Wendy", owner_id="quaid")
+
+        assert fts_spy.call_count == 1
+        assert result["status"] == "duplicate"
+        assert result["dedup_telemetry"]["vec_query_count"] == 0
+        assert result["dedup_telemetry"]["fts_query_count"] == 1
+
+    def test_vec_dedup_error_raises_when_fail_hard_enabled(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 side_effect=RuntimeError("vec unavailable"),
+             ), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="fail-hard mode is enabled"):
+                store("Solomon's mother's name is Wendy", owner_id="quaid")
+
 
 # ---------------------------------------------------------------------------
 # Prompt injection blocklist
@@ -1022,10 +1137,14 @@ class TestRecallTelemetry:
     def test_plan_fanout_queries_reports_query_shape_and_budget(self):
         from datastore.memorydb.memory_graph import _plan_fanout_queries
 
-        queries, meta = _plan_fanout_queries(
-            "Trace Maya's career arc from TechFlow to Stripe",
-            return_meta=True,
-        )
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            return_value=('{"queries":["Trace Maya\\u0027s career arc from TechFlow to Stripe"]}', {}),
+        ):
+            queries, meta = _plan_fanout_queries(
+                "Trace Maya's career arc from TechFlow to Stripe",
+                return_meta=True,
+            )
 
         assert isinstance(queries, list)
         assert meta["query_shape"] in {"broad", "focused", "narrow"}
@@ -1036,16 +1155,20 @@ class TestRecallTelemetry:
     def test_plan_fanout_queries_fast_profiles_preserve_full_budget_metadata(self):
         from datastore.memorydb.memory_graph import _plan_fanout_queries
 
-        _queries_fast, fast_meta = _plan_fanout_queries(
-            "Trace Maya's career arc from TechFlow to Stripe",
-            return_meta=True,
-            planner_profile="fast",
-        )
-        _queries_aggressive, aggressive_meta = _plan_fanout_queries(
-            "Trace Maya's career arc from TechFlow to Stripe",
-            return_meta=True,
-            planner_profile="aggressive",
-        )
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            return_value=('{"queries":["Trace Maya\\u0027s career arc from TechFlow to Stripe"]}', {}),
+        ):
+            _queries_fast, fast_meta = _plan_fanout_queries(
+                "Trace Maya's career arc from TechFlow to Stripe",
+                return_meta=True,
+                planner_profile="fast",
+            )
+            _queries_aggressive, aggressive_meta = _plan_fanout_queries(
+                "Trace Maya's career arc from TechFlow to Stripe",
+                return_meta=True,
+                planner_profile="aggressive",
+            )
 
         assert fast_meta["planner_profile"] == "fast"
         assert aggressive_meta["planner_profile"] == "aggressive"
@@ -1531,6 +1654,24 @@ class TestRecallTelemetry:
                 )
         assert "planner_timeout_ms=" in str(exc.value)
         assert "planner_elapsed_ms=" in str(exc.value)
+
+    def test_plan_fanout_queries_times_out_to_base_query_when_failhard_enabled(self):
+        import datastore.memorydb.memory_graph as mg
+        query = "How should Maya migrate from SQLite to PostgreSQL while preserving old REST clients and avoiding downtime during the cutover?"
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError("Anthropic API error: The read operation timed out"),
+        ), patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == [query]
+        assert meta["bailout_reason"] == "planner_timeout_fallback"
+        assert meta["used_llm"] is True
 
     def test_drill_plan_queries_keeps_original_query_as_anchor(self):
         import datastore.memorydb.memory_graph as mg

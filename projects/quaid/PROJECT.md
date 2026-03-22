@@ -26,7 +26,7 @@ Supports multiple adapters (OpenClaw, Claude Code) sharing a single `QUAID_HOME`
 | `reference/memory-deduplication-system.md` | Store-time and janitor dedup pipeline, thresholds, merge safety. |
 | `reference/memory-operations-guide.md` | Day-to-day operations: storing, recalling, maintaining memory health. |
 | `reference/janitor-reference.md` | Nightly janitor: schedule, tasks, 3-pass RAG reindex, locking, LifecycleRegistry. |
-| `reference/extraction-pipeline.md` | 14-step extraction pipeline, all hooks, daemon lifecycle, public API. |
+| `reference/extraction-pipeline.md` | 14-step extraction pipeline, signal protocol, rolling extraction stage/flush flow, daemon lifecycle, public API. |
 | `reference/config-instances.md` | 4-layer config merge chain, per-instance layout, shared state, multi-instance patterns. |
 
 ---

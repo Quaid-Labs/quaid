@@ -1291,6 +1291,18 @@ def apply_extracted_payloads(
     result.setdefault("dedup_llm_different_hits", 0)
     result.setdefault("dedup_fallback_reject_hits", 0)
     result.setdefault("dedup_auto_reject_hits", 0)
+    result.setdefault("dedup_vec_query_count", 0)
+    result.setdefault("dedup_vec_candidates_returned", 0)
+    result.setdefault("dedup_vec_candidate_limit", 0)
+    result.setdefault("dedup_vec_limit_hits", 0)
+    result.setdefault("dedup_fts_query_count", 0)
+    result.setdefault("dedup_fts_candidates_returned", 0)
+    result.setdefault("dedup_fts_candidate_limit", 0)
+    result.setdefault("dedup_fts_limit_hits", 0)
+    result.setdefault("dedup_fallback_scan_count", 0)
+    result.setdefault("dedup_fallback_candidates_returned", 0)
+    result.setdefault("dedup_token_prefilter_terms", 0)
+    result.setdefault("dedup_token_prefilter_skips", 0)
     result["payload_duplicate_facts_collapsed"] = int(collapsed_duplicates)
     result.setdefault("embedding_cache_requested", 0)
     result.setdefault("embedding_cache_unique", 0)
@@ -1378,6 +1390,26 @@ def apply_extracted_payloads(
             result["dedup_llm_different_hits"] += int(dedup_meta.get("llm_different_hits", 0) or 0)
             result["dedup_fallback_reject_hits"] += int(dedup_meta.get("fallback_reject_hits", 0) or 0)
             result["dedup_auto_reject_hits"] += int(dedup_meta.get("auto_reject_hits", 0) or 0)
+            result["dedup_vec_query_count"] += int(dedup_meta.get("vec_query_count", 0) or 0)
+            result["dedup_vec_candidates_returned"] += int(dedup_meta.get("vec_candidates_returned", 0) or 0)
+            result["dedup_vec_candidate_limit"] = max(
+                int(result.get("dedup_vec_candidate_limit", 0) or 0),
+                int(dedup_meta.get("vec_candidate_limit", 0) or 0),
+            )
+            result["dedup_vec_limit_hits"] += int(dedup_meta.get("vec_limit_hits", 0) or 0)
+            result["dedup_fts_query_count"] += int(dedup_meta.get("fts_query_count", 0) or 0)
+            result["dedup_fts_candidates_returned"] += int(dedup_meta.get("fts_candidates_returned", 0) or 0)
+            result["dedup_fts_candidate_limit"] = max(
+                int(result.get("dedup_fts_candidate_limit", 0) or 0),
+                int(dedup_meta.get("fts_candidate_limit", 0) or 0),
+            )
+            result["dedup_fts_limit_hits"] += int(dedup_meta.get("fts_limit_hits", 0) or 0)
+            result["dedup_fallback_scan_count"] += int(dedup_meta.get("fallback_scan_count", 0) or 0)
+            result["dedup_fallback_candidates_returned"] += int(
+                dedup_meta.get("fallback_candidates_returned", 0) or 0
+            )
+            result["dedup_token_prefilter_terms"] += int(dedup_meta.get("token_prefilter_terms", 0) or 0)
+            result["dedup_token_prefilter_skips"] += int(dedup_meta.get("token_prefilter_skips", 0) or 0)
 
     def _finalize_store_result(
         *,
