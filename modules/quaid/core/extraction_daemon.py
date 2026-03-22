@@ -1246,13 +1246,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
-        elif _is_dir_relocation:
+        elif _is_dir_relocation and signal_type != "reset":
             # Same-basename path: session file relocated to a different directory.
             # Content is identical; preserve cursor to avoid duplicate extraction.
             logger.info(
                 "[%s] session %s: transcript directory relocation (%s -> %s), preserving cursor",
                 label, session_id, cursor_transcript, transcript_path,
             )
+        elif _is_dir_relocation:
+            # Reset signal on a relocated transcript — this IS the /reset extraction.
+            # Reset cursor to 0 so the full session content is extracted.
+            logger.info(
+                "[%s] session %s: reset signal on relocated transcript (%s -> %s), resetting cursor for full extraction",
+                label, session_id, cursor_transcript, transcript_path,
+            )
+            cursor_offset = 0
         else:
             logger.info(
                 "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
