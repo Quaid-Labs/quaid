@@ -1263,6 +1263,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
                                    label, session_id, e)
             mark_signal_processed(signal_data)
+            _release_session_processing_lock(session_id, lock_fd)
             return
 
     capped_lines = len(new_lines) >= MAX_TRANSCRIPT_LINES
