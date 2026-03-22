@@ -1745,33 +1745,40 @@ notify_user(${JSON.stringify(message)})
           }
         };
 
-        // Prefer extractFromOCPromptJson — it reads the JSON blob in event.prompt which
-        // always contains the CURRENT user message. event.messages is updated via
-        // transcript_update which fires a few milliseconds AFTER before_prompt_build,
-        // making it stale on turn N+1 (shows the previous turn's last user message).
-        // Falls back to event.messages, then rawPrompt scrubbing.
+        // Primary: scrubQuery(rawPrompt) — strips the OC metadata wrapper and timestamp
+        // prefix from event.prompt to extract the actual current user message. This is
+        // always up-to-date because event.prompt is the live current prompt.
+        // event.messages is stale on turn N+1: transcript_update fires a few milliseconds
+        // AFTER before_prompt_build, so event.messages still shows the prior turn's last
+        // user message. extractFromOCPromptJson is retained as a secondary check for
+        // sessions that wrap messages in a JSON array (some OC session types).
         let query = "";
         let querySource = "unknown";
         const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
-        const jsonExtracted = extractFromOCPromptJson(rawPrompt);
-        if (jsonExtracted.length >= 3) {
-          query = jsonExtracted;
-          querySource = "oc_prompt_json";
+        const scrubbed = scrubQuery(rawPrompt);
+        if (scrubbed.length >= 3) {
+          query = scrubbed;
+          querySource = "rawPrompt_scrubbed";
         } else {
-          const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
-          if (lastUserMsg) {
-            const c = lastUserMsg.content;
-            const raw = typeof c === "string" ? c
-              : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
-              : "";
-            query = scrubQuery(raw);
-            querySource = "event.messages";
+          const jsonExtracted = extractFromOCPromptJson(rawPrompt);
+          if (jsonExtracted.length >= 3) {
+            query = jsonExtracted;
+            querySource = "oc_prompt_json";
+          } else {
+            const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
+            if (lastUserMsg) {
+              const c = lastUserMsg.content;
+              const raw = typeof c === "string" ? c
+                : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
+                : "";
+              query = scrubQuery(raw);
+              querySource = "event.messages";
+            }
           }
         }
         if (query.length < 3) {
-          query = scrubQuery(rawPrompt);
-          querySource = "rawPrompt";
-          if (query.length < 3) { query = rawPrompt; querySource = "rawPrompt_raw"; }
+          query = rawPrompt;
+          querySource = "rawPrompt_raw";
         }
         // Cap query length — embedding a 2000-char polluted string is wasteful
         if (query.length > 500) { query = query.slice(0, 500); }

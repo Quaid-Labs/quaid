@@ -1359,26 +1359,28 @@ notify_user(${JSON.stringify(message)})
         let query = "";
         let querySource = "unknown";
         const eventMessages = Array.isArray(event.messages) ? event.messages : [];
-        const jsonExtracted = extractFromOCPromptJson(rawPrompt);
-        if (jsonExtracted.length >= 3) {
-          query = jsonExtracted;
-          querySource = "oc_prompt_json";
+        const scrubbed = scrubQuery(rawPrompt);
+        if (scrubbed.length >= 3) {
+          query = scrubbed;
+          querySource = "rawPrompt_scrubbed";
         } else {
-          const lastUserMsg = eventMessages.slice().reverse().find((m) => m?.role === "user");
-          if (lastUserMsg) {
-            const c = lastUserMsg.content;
-            const raw = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n") : "";
-            query = scrubQuery(raw);
-            querySource = "event.messages";
+          const jsonExtracted = extractFromOCPromptJson(rawPrompt);
+          if (jsonExtracted.length >= 3) {
+            query = jsonExtracted;
+            querySource = "oc_prompt_json";
+          } else {
+            const lastUserMsg = eventMessages.slice().reverse().find((m) => m?.role === "user");
+            if (lastUserMsg) {
+              const c = lastUserMsg.content;
+              const raw = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n") : "";
+              query = scrubQuery(raw);
+              querySource = "event.messages";
+            }
           }
         }
         if (query.length < 3) {
-          query = scrubQuery(rawPrompt);
-          querySource = "rawPrompt";
-          if (query.length < 3) {
-            query = rawPrompt;
-            querySource = "rawPrompt_raw";
-          }
+          query = rawPrompt;
+          querySource = "rawPrompt_raw";
         }
         if (query.length > 500) {
           query = query.slice(0, 500);
