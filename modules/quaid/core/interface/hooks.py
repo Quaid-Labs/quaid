@@ -79,7 +79,7 @@ def hook_inject(args):
     and appends them to the context so Claude can relay them to the user.
     """
     try:
-        hook_input = json.load(sys.stdin)
+        hook_input = json.loads(sys.stdin.readline())
     except (json.JSONDecodeError, ValueError):
         return
 
@@ -206,7 +206,7 @@ def hook_inject_compact(args):
     Writes plain text to stdout.
     """
     try:
-        hook_input = json.load(sys.stdin)
+        hook_input = json.loads(sys.stdin.readline())
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
@@ -241,7 +241,7 @@ def hook_extract(args):
     asynchronously, handling cursors, chunking, and carryover.
     """
     try:
-        hook_input = json.load(sys.stdin)
+        hook_input = json.loads(sys.stdin.readline())
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
@@ -384,7 +384,7 @@ def hook_session_init(args):
     """
     # Read hook input to get current session_id for orphan sweep
     try:
-        hook_input = json.load(sys.stdin)
+        hook_input = json.loads(sys.stdin.readline())
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
@@ -595,7 +595,7 @@ def hook_subagent_start(args):
       - Merge its transcript into the parent on parent extraction
     """
     try:
-        hook_input = json.load(sys.stdin)
+        hook_input = json.loads(sys.stdin.readline())
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[quaid][subagent-start] invalid JSON on stdin: {e}", file=sys.stderr)
         return
@@ -630,7 +630,7 @@ def hook_subagent_stop(args):
     as complete/harvestable.
     """
     try:
-        hook_input = json.load(sys.stdin)
+        hook_input = json.loads(sys.stdin.readline())
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[quaid][subagent-stop] invalid JSON on stdin: {e}", file=sys.stderr)
         return
