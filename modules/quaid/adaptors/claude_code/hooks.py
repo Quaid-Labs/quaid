@@ -24,14 +24,9 @@ def _auto_provision_if_needed() -> None:
     cwd = Path(os.getcwd()).resolve()
     home = Path.home().resolve()
 
-    # Translate the full path into a folder-safe slug.
-    # Strip home prefix so ~/work/myapp → work-myapp.
-    try:
-        rel = cwd.relative_to(home)
-        path_str = str(rel)
-    except ValueError:
-        path_str = str(cwd).lstrip("/")
-    slug = re.sub(r"[^a-z0-9]+", "-", path_str.lower()).strip("-") or home.name.lower()
+    # Translate the full absolute path into a folder-safe slug.
+    # /Users/owner/work/myapp → users-clawdbot-work-myapp
+    slug = re.sub(r"[^a-z0-9]+", "-", str(cwd).lower()).strip("-")
     name = slug
 
     try:
