@@ -907,6 +907,11 @@ def get_adapter() -> QuaidAdapter:
 
     Selection: config/memory.json adapter.type under QUAID_HOME.
     Each QUAID_HOME silo has its own config that declares which adapter owns it.
+
+    On first resolution, also bootstraps QUAID_INSTANCE from
+    adapter.get_instance_name() if not already set in the environment.
+    This is the single place where instance identity is established —
+    adapters do not need to set QUAID_INSTANCE themselves.
     """
     global _adapter
     if _adapter is not None:
@@ -917,10 +922,35 @@ def get_adapter() -> QuaidAdapter:
         kind = _read_adapter_type_from_config()
         if kind == "standalone":
             _adapter = StandaloneAdapter()
-            return _adapter
-        from adaptors.factory import create_adapter
-        _adapter = create_adapter(kind)
+        else:
+            from adaptors.factory import create_adapter
+            _adapter = create_adapter(kind)
+        _bootstrap_instance_env(_adapter)
         return _adapter
+
+
+def _bootstrap_instance_env(adapter: QuaidAdapter) -> None:
+    """Set QUAID_INSTANCE from adapter.get_instance_name() if not already set.
+
+    Builds the full instance ID as "<adapter_prefix>-<instance_name>" and
+    writes it to os.environ so all downstream code (lib.instance, subprocesses,
+    CLI calls) sees a consistent value without each adapter managing it.
+
+    Skips if QUAID_INSTANCE is already set — OC's TS side may have pre-set it,
+    and explicit env overrides always win.
+    """
+    import os
+    if os.environ.get("QUAID_INSTANCE", "").strip():
+        return
+    try:
+        name = adapter.get_instance_name()
+        prefix = adapter.agent_id_prefix()
+        instance_id = f"{prefix}-{name}" if name else prefix
+        # Validate before setting — guard against empty/invalid slugs
+        if instance_id and instance_id != prefix:
+            os.environ["QUAID_INSTANCE"] = instance_id
+    except Exception:
+        pass  # Never block adapter init — instance_id() will raise later if needed
 
 
 def set_adapter(adapter: QuaidAdapter) -> None:
