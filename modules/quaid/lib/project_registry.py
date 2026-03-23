@@ -3,7 +3,7 @@
 Maps project names to canonical filesystem paths and tracks which adapter
 instances (claude-code, openclaw, standalone) are linked to each project.
 
-Registry file: <quaid_home>/project-registry.json
+Registry file: <quaid_home>/projects/project-registry.json
 
 Schema:
     {
@@ -36,11 +36,11 @@ def _registry_path() -> Path:
     """Resolve the global registry file path."""
     try:
         from lib.adapter import get_adapter
-        return get_adapter().quaid_home() / "project-registry.json"
+        return get_adapter().quaid_home() / "projects" / "project-registry.json"
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
         root = Path(home).resolve() if home else Path.home() / "quaid"
-        return root / "project-registry.json"
+        return root / "projects" / "project-registry.json"
 
 
 def _load() -> Dict[str, Any]:

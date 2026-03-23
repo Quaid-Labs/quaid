@@ -273,7 +273,7 @@ MDEOF
     fi
 
     # Verify shared project dir exists
-    shared_dir="$QUAID_HOME/shared/projects/$SHARED_PROJECT"
+    shared_dir="$QUAID_HOME/projects/$SHARED_PROJECT"
     if [[ -d "$shared_dir" ]]; then
         log_pass "shared project dir exists at $shared_dir"
     else

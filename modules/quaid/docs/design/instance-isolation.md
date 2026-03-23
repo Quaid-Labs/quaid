@@ -80,11 +80,11 @@ Instance root = `$QUAID_HOME/$QUAID_INSTANCE`
 - Reads from `$QUAID_HOME/openclaw/`
 
 ### Shared Projects
-- Live at `$QUAID_HOME/shared/projects/`
-- Global registry at `$QUAID_HOME/shared/project-registry.json`
+- Live at `$QUAID_HOME/projects/`
+- Global registry at `$QUAID_HOME/projects/project-registry.json`
 - Each project has `instances: ["openclaw", "claude-code"]`
-- Sync engine copies from `shared/projects/` to OC workspace
-- CC reads `shared/projects/` directly (via hook_session_init)
+- Sync engine copies from `projects/` to OC workspace
+- CC reads `projects/` directly (via hook_session_init)
 
 ### Path Resolution (lib/adapter.py)
 - `quaid_home()` → `$QUAID_HOME` (root)
@@ -92,7 +92,7 @@ Instance root = `$QUAID_HOME/$QUAID_INSTANCE`
 - `data_dir()` → `instance_root/data/`
 - `config_dir()` → `instance_root/config/`
 - `identity_dir()` → `instance_root/identity/`
-- `projects_dir()` → `$QUAID_HOME/shared/projects/` (shared!)
+- `projects_dir()` → `$QUAID_HOME/projects/` (shared!)
 - `logs_dir()` → `instance_root/logs/`
 
 ### Key Passed Around

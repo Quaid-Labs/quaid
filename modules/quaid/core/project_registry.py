@@ -1,6 +1,6 @@
 """Project registry — single source of truth for all Quaid projects.
 
-Manages project-registry.json in QUAID_HOME. Tracks project metadata,
+Manages project-registry.json in QUAID_HOME/projects. Tracks project metadata,
 source roots, and adapter instances.
 
 See docs/PROJECT-SYSTEM-SPEC.md#project-registry.
@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from lib.project_templates import render_project_md_template
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,12 +23,12 @@ def _registry_path() -> Path:
     """Path to the project registry file."""
     try:
         from lib.adapter import get_adapter
-        return get_adapter().quaid_home() / "project-registry.json"
+        return get_adapter().quaid_home() / "projects" / "project-registry.json"
     except Exception:
         import os
         home = os.environ.get("QUAID_HOME", "").strip()
         root = Path(home).resolve() if home else Path.home() / "quaid"
-        return root / "project-registry.json"
+        return root / "projects" / "project-registry.json"
 
 
 def _load_registry() -> Dict[str, Any]:
@@ -149,8 +151,13 @@ def create_project(
     project_md = canonical / "PROJECT.md"
     if not project_md.exists():
         project_md.write_text(
-            f"# {name}\n\n{description}\n\n"
-            f"Created: {entry['created_at']}\n",
+            render_project_md_template(
+                label=name.replace("-", " ").title(),
+                description=description or f"{name} project.",
+                project_home=str(canonical),
+                source_roots=[source_root] if source_root else [],
+                exclude_patterns=[],
+            ),
             encoding="utf-8",
         )
 

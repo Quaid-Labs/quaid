@@ -3211,7 +3211,7 @@ ${lines.join("\n")}
         }
       }
 
-      // Project docs: TOOLS.md + AGENTS.md for every project in shared/projects/.
+      // Project docs: TOOLS.md + AGENTS.md for every project in projects/.
       const projectsDir = path.join(deps.workspace, "shared", "projects");
       let subdirs: string[] = [];
       try {
@@ -3221,7 +3221,7 @@ ${lines.join("\n")}
             catch { return false; }
           })
           .sort((a: string, b: string) => a === "quaid" ? -1 : b === "quaid" ? 1 : a.localeCompare(b));
-      } catch { /* no shared/projects yet */ }
+      } catch { /* no projects dir yet */ }
 
       for (const projectName of subdirs) {
         for (const docFile of ["TOOLS.md", "AGENTS.md"]) {

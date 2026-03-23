@@ -9,6 +9,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from lib.project_templates import render_project_md_template
+
 _tmp_db = None
 
 
@@ -26,8 +28,13 @@ def setup_env(tmp_path, monkeypatch):
 
     # Create directories
     (iroot / "config").mkdir(exist_ok=True)
-    (iroot / "projects" / "staging").mkdir(parents=True)
-    (iroot / "projects" / "test-project").mkdir(parents=True)
+    shared_projects_dir = tmp_path / "projects"
+    shared_projects_dir.mkdir(parents=True, exist_ok=True)
+    instance_projects = iroot / "projects"
+    if not instance_projects.exists():
+        instance_projects.symlink_to(shared_projects_dir, target_is_directory=True)
+    (shared_projects_dir / "staging").mkdir(parents=True, exist_ok=True)
+    (shared_projects_dir / "test-project").mkdir(parents=True)
     (iroot / "src").mkdir()
     (iroot / "docs").mkdir()
 
@@ -61,33 +68,14 @@ def setup_env(tmp_path, monkeypatch):
     (iroot / "config" / "memory.json").write_text(json.dumps(config_data))
 
     # Create PROJECT.md
-    project_md = """# Project: Test Project
-
-## Overview
-A test project.
-
-## Files & Assets
-
-### In This Directory
-<!-- Auto-discovered -->
-
-### External Files
-| File | Purpose | Auto-Update |
-|------|---------|-------------|
-
-## Documents
-| Document | Tracks | Auto-Update |
-|----------|--------|-------------|
-
-## Related Projects
-
-## Update Rules
-
-## Exclude
-- *.log
-- *.db
-"""
-    (iroot / "projects" / "test-project" / "PROJECT.md").write_text(project_md)
+    project_md = render_project_md_template(
+        label="Test Project",
+        description="A test project.",
+        project_home=str(shared_projects_dir / "test-project"),
+        source_roots=[str(iroot / "src")],
+        exclude_patterns=["*.log", "*.db"],
+    )
+    (shared_projects_dir / "test-project" / "PROJECT.md").write_text(project_md)
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     import config as config_mod
@@ -289,9 +277,34 @@ A test project.
         ok = refresh_project_md("test-project")
         assert ok is True
         content = project_md_path.read_text()
-        assert "### In This Directory" in content
+        assert "## Primary Artifacts" in content
         assert "### External Files" in content
-        assert "- projects/test-project/notes.md" in content
+        assert "- `notes.md`" in content
+
+    def test_preserves_markerized_custom_sections(self, setup_env):
+        """Refresh should preserve custom scaffold content when markers already exist."""
+        from datastore.docsdb.project_updater import refresh_project_md
+
+        tmp_path = setup_env
+        registry = _get_registry()
+        project_md_path = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        custom = project_md_path.read_text().replace(
+            "## Primary Artifacts",
+            "## Start Here By Task\n- Read `docs/overview.md` first.\n\n## Primary Artifacts",
+            1,
+        )
+        project_md_path.write_text(custom)
+        notes = tmp_path / "projects" / "test-project" / "notes.md"
+        notes.write_text("# Notes")
+        registry.register("projects/test-project/notes.md", project="test-project")
+
+        ok = refresh_project_md("test-project")
+        assert ok is True
+
+        content = project_md_path.read_text()
+        assert "## Start Here By Task" in content
+        assert "- Read `docs/overview.md` first." in content
+        assert "- `notes.md`" in content
 
 
 class TestExclusionPatterns:
@@ -391,6 +404,31 @@ class TestAppendProjectLogs:
         assert metrics["projects_updated"] == 1
         assert metrics["entries_written"] == 1
         assert project_md.read_text() == before
+
+    def test_visible_project_md_log_is_capped_but_history_is_append_only(self, setup_env, monkeypatch):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+        monkeypatch.setenv("QUAID_PROJECT_MD_RECENT_LIMIT", "2")
+
+        append_project_logs(
+            {"test-project": ["Session 1: one", "Session 2: two", "Session 3: three"]},
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        content = project_md.read_text()
+        assert "Session 1" not in content
+        assert "- 2026-03-03 [Compaction] two" in content
+        assert "- 2026-03-03 [Compaction] three" in content
+
+        history = project_log.read_text()
+        assert "one" in history
+        assert "two" in history
+        assert "three" in history
 
     def test_unknown_project_is_reported_and_skipped(self, setup_env, capsys):
         from datastore.docsdb.project_updater import append_project_logs

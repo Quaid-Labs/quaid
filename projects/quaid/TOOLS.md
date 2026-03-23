@@ -4,7 +4,7 @@ Quaid is an active knowledge layer. Use the `quaid` CLI via your Bash tool — n
 
 **Environment:** `QUAID_HOME` and `QUAID_INSTANCE` are baked into hooks at install time. If calling `quaid` from a shell outside of a hook, ensure both are set.
 
-**For full project docs, architecture, and reference index:** read the Quaid project's `PROJECT.md` — found at `$QUAID_HOME/shared/projects/quaid/PROJECT.md` or via `quaid recall "topic" '{"stores":["docs"],"project":"quaid"}'`.
+**For full project docs, architecture, and reference index:** every tracked project has its own `PROJECT.md` at `QUAID_HOME/projects/<project-name>/PROJECT.md`. Read the relevant project's `PROJECT.md` first. If you do not know the project name yet, docs recall/search will try to infer it and surface the best matching `PROJECT.md`.
 
 ---
 
@@ -38,7 +38,7 @@ quaid stats
 **Stores:**
 - `vector` — semantic + FTS hybrid search across all memories (domain-filtered by `domain_filter`/`domain_boost`)
 - `graph` — graph-aware recall with edge traversal (expands via relationship edges)
-- `docs` — project docs RAG; returns chunks + PROJECT.md when `project` is set
+- `docs` — project docs RAG; returns chunks plus the relevant `PROJECT.md` when a project is set or confidently inferred
 
 **`domain_filter` vs `domain_boost`:** Default to `domain_boost` (soft preference). Use `domain_filter` only when you must exclude other domains entirely.
 
@@ -84,6 +84,9 @@ quaid registry register <path> --project <name>  # link external file into proje
 quaid registry list [--project <name>]
 ```
 
+- For an actively worked-on project, read its `PROJECT.md` first. Use docs recall/search when you need deeper detail or do not yet know which project matches the task.
+- `PROJECT.md` should be the overview and navigation map. Registry/project commands are the exact-truth backstop when you need to confirm current tracked files or ownership.
+
 ---
 
 ## Projects
@@ -102,10 +105,10 @@ quaid global-registry list    # cross-instance project list
 ```
 
 **File placement:**
-- In-project files → `QUAID_HOME/<instance>/projects/<name>/`
-- Project docs → `QUAID_HOME/<instance>/projects/<name>/docs/`
+- In-project files → `QUAID_HOME/projects/<name>/`
+- Project docs → `QUAID_HOME/projects/<name>/docs/`
 - External code files → link with `quaid registry register <path> --project <name>`
-- Ephemeral/drafts/quick work → project `misc--$QUAID_INSTANCE` at `$QUAID_HOME/shared/projects/misc--$QUAID_INSTANCE/` (pre-created at install; always tell the user when writing here)
+- Ephemeral/drafts/quick work → project `misc--$QUAID_INSTANCE` at `$QUAID_HOME/projects/misc--$QUAID_INSTANCE/` (pre-created at install; always tell the user when writing here)
 
 ---
 
@@ -158,7 +161,7 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 
 **Personal/relationship question:** `recall "query"` → if the first pass feels adjacent rather than decisive, run one narrower follow-up `recall`
 
-**Technical/project question:** `recall "query"` → if the answer depends on implementation, schema, API shape, tests, or UI details, add `"docs"` to stores
+**Technical/project question:** read the relevant `PROJECT.md` or run `recall "query" '{"stores":["docs"]}'` → if the answer depends on implementation, schema, API shape, tests, or UI details, use docs recall so it can bring back the project's `PROJECT.md` and deeper docs together
 
 **Memory + docs in one pass:** `recall "query" '{"stores": ["vector","graph","docs"]}'`
 

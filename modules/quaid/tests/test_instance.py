@@ -111,11 +111,11 @@ class TestSharedPaths:
 
     def test_shared_projects_dir(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        assert shared_projects_dir() == tmp_path / "shared" / "projects"
+        assert shared_projects_dir() == tmp_path / "projects"
 
     def test_shared_registry_path(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        assert shared_registry_path() == tmp_path / "shared" / "project-registry.json"
+        assert shared_registry_path() == tmp_path / "projects" / "project-registry.json"
 
 
 class TestInstanceExists:

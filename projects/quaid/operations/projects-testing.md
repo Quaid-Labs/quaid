@@ -17,8 +17,8 @@ CC_ENV="QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code"
 QUAID=~/.local/bin/quaid
 ```
 
-Projects are shared at `$QUAID_HOME/shared/projects/` — both adapters read and write the same directory.
-The global registry lives at `$QUAID_HOME/project-registry.json` — shared by both adapters.
+Projects are shared at `$QUAID_HOME/projects/` — both adapters read and write the same directory.
+The global registry lives at `$QUAID_HOME/projects/project-registry.json` — shared by both adapters.
 
 Run order:
 1. OC CRUD
@@ -36,7 +36,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry create-project oc-test-proj --label 'OC Test Project'"
 ```
 
-**Expected:** `Created project 'oc-test-proj' at .../shared/projects/oc-test-proj`
+**Expected:** `Created project 'oc-test-proj' at .../projects/oc-test-proj`
 
 **Verify:**
 ```bash
@@ -105,9 +105,9 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 ### OC-P6: Markdown sanity check
 
 ```bash
-ssh <oc-host> "head -5 $QUAID_HOME/shared/projects/oc-test-proj/PROJECT.md && \
-  file $QUAID_HOME/shared/projects/oc-test-proj/PROJECT.md && \
-  ls $QUAID_HOME/shared/projects/oc-test-proj/"
+ssh <oc-host> "head -5 $QUAID_HOME/projects/oc-test-proj/PROJECT.md && \
+  file $QUAID_HOME/projects/oc-test-proj/PROJECT.md && \
+  ls $QUAID_HOME/projects/oc-test-proj/"
 ```
 
 **Expected:**
@@ -130,7 +130,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry list | grep oc-test-proj"   # empty
 ```
 
-**Expected:** Project gone from registry list and `shared/projects/oc-test-proj/` removed.
+**Expected:** Project gone from registry list and `projects/oc-test-proj/` removed.
 
 ---
 
@@ -212,9 +212,9 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 ### CC-P6: Markdown sanity check
 
 ```bash
-ssh <oc-host> "head -5 $QUAID_HOME/shared/projects/cc-test-proj/PROJECT.md && \
-  file $QUAID_HOME/shared/projects/cc-test-proj/PROJECT.md && \
-  ls $QUAID_HOME/shared/projects/cc-test-proj/"
+ssh <oc-host> "head -5 $QUAID_HOME/projects/cc-test-proj/PROJECT.md && \
+  file $QUAID_HOME/projects/cc-test-proj/PROJECT.md && \
+  ls $QUAID_HOME/projects/cc-test-proj/"
 ```
 
 **Expected:** `# Project: CC Test Project`, UTF-8, `docs/` present.
@@ -359,9 +359,9 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 ### XP-8: Markdown sanity check (shared project)
 
 ```bash
-ssh <oc-host> "head -5 $QUAID_HOME/shared/projects/shared-xp-proj/PROJECT.md && \
-  file $QUAID_HOME/shared/projects/shared-xp-proj/PROJECT.md && \
-  ls $QUAID_HOME/shared/projects/shared-xp-proj/"
+ssh <oc-host> "head -5 $QUAID_HOME/projects/shared-xp-proj/PROJECT.md && \
+  file $QUAID_HOME/projects/shared-xp-proj/PROJECT.md && \
+  ls $QUAID_HOME/projects/shared-xp-proj/"
 ```
 
 **Expected:** `# Project: Cross-Platform Test`, UTF-8, `docs/` present.
@@ -407,7 +407,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 ## Notes
 
 - **Shared QUAID_HOME**: Both OC and CC use `QUAID_HOME=$QUAID_HOME` on `<oc-host>`. The global registry and shared project files are the same for both adapters. This is a requirement for cross-platform tests to work — separate QUAID_HOME paths mean separate registries.
-- **Projects location**: `$QUAID_HOME/shared/projects/` — shared across both adapters.
+- **Projects location**: `$QUAID_HOME/projects/` — shared across both adapters.
 - **CC instance dir**: `$QUAID_HOME/claude-code/` — created on first use.
 - **RAG indexing**: Both OC and CC use the same Ollama instance on `<oc-host>`. Indexing from either adapter writes chunks that are visible to both (same `memory.db`).
 - **`project link` command**: Adds the current `QUAID_INSTANCE` to the project's `instances` list in `project-registry.json` without changing ownership or moving files.
@@ -457,7 +457,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 **Say to the agent:**
 > "Create a new project called 'test-essay' with label 'Test Essay'"
 
-**Expected:** `shared/projects/test-essay/PROJECT.md` is created.
+**Expected:** `projects/test-essay/PROJECT.md` is created.
 
 **Cleanup:**
 ```bash
@@ -489,7 +489,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 1. Agent indicates project/doc processing in background.
 2. Event staging path reflects processing state:
 ```bash
-ls -la ~/quaid/shared/projects/staging/
+ls -la ~/quaid/projects/staging/
 ```
 
 ---

@@ -86,13 +86,13 @@ def shared_dir() -> Path:
 
 
 def shared_projects_dir() -> Path:
-    """Shared projects directory: QUAID_HOME/shared/projects/."""
-    return shared_dir() / "projects"
+    """Canonical projects directory: QUAID_HOME/projects/."""
+    return quaid_home() / "projects"
 
 
 def shared_registry_path() -> Path:
-    """Global project registry: QUAID_HOME/shared/project-registry.json."""
-    return shared_dir() / "project-registry.json"
+    """Global project registry: QUAID_HOME/projects/project-registry.json."""
+    return shared_projects_dir() / "project-registry.json"
 
 
 def shared_config_path() -> Path:
@@ -111,14 +111,14 @@ def misc_project_name(name: Optional[str] = None) -> str:
     Convention: misc--{instance_id}  (e.g. misc--openclaw-main)
     Single shared bucket for miscellaneous work without a proper project home:
     drafts, one-offs, quick scripts, staging. Not "temp" (implies deletion) —
-    misc files may stick around. Lives as a tracked project in shared/projects/.
+    misc files may stick around. Lives as a tracked project in QUAID_HOME/projects/.
 """
     iid = validate_instance_id(name) if name else instance_id()
     return f"misc--{iid}"
 
 
 def instance_misc_dir(name: Optional[str] = None) -> Path:
-    """Per-instance misc project directory: shared/projects/misc--{instance}/"""
+    """Per-instance misc project directory: QUAID_HOME/projects/misc--{instance}/"""
     return shared_projects_dir() / misc_project_name(name)
 
 

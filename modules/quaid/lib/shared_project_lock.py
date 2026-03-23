@@ -3,7 +3,7 @@
 Prevents multiple instance janitors from redundantly running LLM doc updates
 on the same shared project simultaneously.
 
-Lock:       QUAID_HOME/shared/projects/<name>/.doc-update.lock
+Lock:       QUAID_HOME/projects/<name>/.doc-update.lock
 Checkpoint: read from the project's existing janitor checkpoint mechanism
 
 Usage:

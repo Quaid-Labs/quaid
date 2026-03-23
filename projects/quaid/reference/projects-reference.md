@@ -63,7 +63,7 @@ data in different places. Confusing them is a common source of bugs.
 
 **Purpose:** Tracks project metadata — identity, instances, source roots, timestamps.
 
-**Authoritative store:** `QUAID_HOME/project-registry.json` (JSON file, shared across instances)
+**Authoritative store:** `QUAID_HOME/projects/project-registry.json` (JSON file, shared across instances)
 
 **Mirror:** SQLite `project_definitions` table in `memory.db` (seeded from JSON on first
 `DocsRegistry` instantiation; kept in sync by `DocsRegistry.save_project_definition()`)
@@ -824,14 +824,14 @@ def append_project_logs(
 Appends bullet entries to two places:
 - `PROJECT.log` (append-only file, one ISO-timestamp line per entry) — the durable history.
 - `PROJECT.md` inside `<!-- BEGIN:PROJECT_LOG --> ... <!-- END:PROJECT_LOG -->` markers
-  (human-visible rolling log section).
+  (human-visible recent frontier section).
 
 Normalizes entries (strips leading bullets, session prefixes, collapses whitespace).
 Deduplicates within the batch via `dict.fromkeys()`. Returns metrics dict.
 
 `PROJECT.log` is append-only — `append_project_logs()` never truncates or rewrites it.
-The marker-based section in `PROJECT.md` is a separate rolling view that accumulates
-entries over multiple sessions.
+The marker-based section in `PROJECT.md` is a bounded recent window meant to show the
+current frontier, not the full operational chronology.
 
 ### 6.7 Project Log Rotation
 
@@ -916,8 +916,8 @@ quaid project list --json
 ```bash
 quaid project create <name> [--description "Display Name"] [--source-root /path]
 ```
-Creates `QUAID_HOME/shared/projects/<name>/` with `PROJECT.md` and `docs/` subdir.
-Registers the project in `QUAID_HOME/project-registry.json` and the SQLite
+Creates `QUAID_HOME/projects/<name>/` with `PROJECT.md` and `docs/` subdir.
+Registers the project in `QUAID_HOME/projects/project-registry.json` and the SQLite
 `project_definitions` table. Also triggers `sync_all_projects()`.
 
 Note: The older `quaid registry create-project <name> --label "..."` command still
@@ -1040,7 +1040,7 @@ quaid global-registry remove <name> # --force overrides multi-instance guard
 quaid global-registry rename <name> <new>
 ```
 
-Reads `QUAID_HOME/project-registry.json`. When OC and CC run on the same machine and
+Reads `QUAID_HOME/projects/project-registry.json`. When OC and CC run on the same machine and
 share a `QUAID_HOME`, this shows the complete cross-adapter project list.
 
 **`quaid global-registry list`** calls `lib/project_registry.list_all()`:
@@ -1166,8 +1166,9 @@ next sync cycle. The `README.md` written into each target dir warns about this.
 
 **`PROJECT.log` is append-only.** `append_project_logs()` never truncates or rewrites
 `PROJECT.log`. The marker-based section in `PROJECT.md` (`<!-- BEGIN:PROJECT_LOG -->`)
-is a separate rolling view. Log rotation via `core.log_rotation.rotate_project_logs()`
-archives old entries; `PROJECT.log` itself is never in-place trimmed.
+is a separate bounded recent frontier, not the full history. Log rotation via
+`core.log_rotation.rotate_project_logs()` archives old entries; `PROJECT.log`
+itself is never in-place trimmed.
 
 **`_save_registry()` locking target:** The file lock must be acquired on the canonical
 `project-registry.json`, not the `.tmp` staging file. Locking `.tmp` is ineffective

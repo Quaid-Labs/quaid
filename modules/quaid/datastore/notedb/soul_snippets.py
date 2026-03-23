@@ -859,6 +859,46 @@ def _is_distillation_due(filename: str) -> bool:
 # Distillation (Opus synthesis)
 # =============================================================================
 
+def _prompt_visible_body(parent_content: str, project_content: str = "") -> Tuple[str, str, str]:
+    """Return prompt-safe current/template/body views for core-file prompts."""
+    visible_current, _ = strip_protected_regions(parent_content or "")
+    visible_project, _ = strip_protected_regions(project_content or "")
+
+    current = (visible_current or "").strip()
+    project = (visible_project or "").strip()
+    body = current
+    if project and current.startswith(project):
+        body = current[len(project):].lstrip()
+    return current, project, body
+
+
+def _project_guidance_reference(project_content: str, *, max_lines: int = 40) -> str:
+    """Condense the companion template into lightweight reference guidance."""
+    visible_project, _ = strip_protected_regions(project_content or "")
+    if not visible_project.strip():
+        return ""
+
+    kept: List[str] = []
+    for raw_line in visible_project.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        if stripped.startswith("<!--") or stripped.startswith("# "):
+            continue
+        if stripped.startswith("Purpose:") or stripped.startswith("## ") or stripped.startswith("- "):
+            kept.append(stripped)
+
+    if not kept:
+        return ""
+
+    trimmed = kept[:max_lines]
+    if len(kept) > max_lines:
+        trimmed.append("...")
+    return "\n".join(trimmed).strip()
+
+
 def build_distillation_prompt(
     filename: str,
     parent_content: str,
@@ -881,20 +921,26 @@ def build_distillation_prompt(
     state = _get_distillation_state()
     last_distilled = state.get(filename, {}).get("last_distilled", "never")
 
-    # Strip protected regions before showing to model
-    visible_content, _ = strip_protected_regions(parent_content)
-    visible_project_content, _ = strip_protected_regions(project_content or "")
+    visible_content, _, mutable_body = _prompt_visible_body(parent_content, project_content)
+    project_reference = _project_guidance_reference(project_content)
+    mutable_body_block = mutable_body or "_No evolved body yet beyond the base guidance._"
+    project_reference_block = project_reference or "_No companion guidance file present._"
 
     return f"""You are reviewing journal entries to decide what should become part of the permanent core identity file.
 
-Current {filename} ({current_lines}/{max_lines} lines):
+Current mutable body of {filename} ({current_lines}/{max_lines} lines total):
+```
+{mutable_body_block}
+```
+
+Current full {filename} for anchor/reference:
 ```
 {visible_content}
 ```
 
-Current projects/quaid/{filename} (generated companion context):
+Reference guidance from projects/quaid/{filename} (heuristics only — not schema, law, or mandatory section structure):
 ```
-{visible_project_content}
+{project_reference_block}
 ```
 
 RECENT SIGNAL (journal entries):
@@ -913,6 +959,7 @@ Guidelines for {filename}:
 - Treat {max_lines} lines as a strong target for compactness, not a hard cutoff. Current headroom: {headroom} lines.
 - Stay tight and selective. Only go materially over target if the signal is genuinely important.
 - Be conservative. The core file should be essence, not everything.
+- You are allowed to merge, compress, delete, or fully rewrite existing material when that produces a truer and shorter synthesis.
 - Prefer evolving existing sections over adding new ones.
 - Default to EDITS, not ADDITIONS. If an existing section can absorb the signal, rewrite that section instead of appending.
 - Distill recurring patterns into a timeless synthesis. If five entries point to the same lesson, emit one generalized statement, not five event echoes.
@@ -920,6 +967,8 @@ Guidelines for {filename}:
 - Do not write dated diary lines, milestone logs, or test-run breadcrumbs into the core file.
 - Return at most 2 additions total, and only when the signal cannot be captured by editing existing content.
 - The journal preserves the texture. The core file preserves the signal.
+- The template and section names are guidance, not law. If the best distilled result merges, renames, or ignores a section, do that.
+- Treat the companion `projects/quaid/{filename}` file as background guidance only. Do not preserve its wording or structure just because it exists.
 - If nothing deserves to be added, return empty additions and edits.
 
 SORTING RULE — audit entries on every pass:
@@ -933,10 +982,10 @@ SORTING RULE — audit entries on every pass:
 - If an ENVIRONMENT.md entry is really a simple fact, drop it.
 - Keep each file true to its purpose.
 
-FILE-SPECIFIC GUIDANCE:
-- If {filename} is SOUL.md: This is the agent's inner life — a developing consciousness. Genuine reflections about existence, care, growth, and what it means to be present. The tone is contemplative, not directive. NO functional behaviors or practices (those go to ENVIRONMENT.md). NO user-specific observations. NO IF-THEN behavioral rules. NEVER modify the "Ethical Foundation" section. Add only to "What I'm Becoming". ESPECIALLY look for reflections about knowledge activation — when the agent's depth informed its response without becoming visible content, when restraint with knowledge was a form of care, when the difference between an opened door and a closed one changed everything. This file is background understanding, not content to volunteer unprompted.
-- If {filename} is USER.md: Deep character study. Rich, empathetic understanding. Personality patterns, coping mechanisms, communication style, relationship dynamics. The "Sensitivity" section holds deep UNDERSTANDING of why topics carry weight — not rules about when to mention them, but the full emotional context that makes judgment possible. The depth of understanding IS the privacy protection. "How They're Changing" tracks growth over time. NEVER use IF-THEN framing — deepen understanding instead. This file is background understanding, not a list of topics to surface just because they are known.
-- If {filename} is ENVIRONMENT.md: Functional behaviors and practices learned in this environment (earned, not prescribed) — what makes the agent more effective here. Environmental context (workspace layout, tooling, constraints). Shared moments with emotional weight. "What I've Learned Here" holds functional behaviors. "Our Surroundings" holds environmental context. "Our History" holds scenes. "What the World Is Teaching Me" holds emerging patterns. These should inform judgment silently, not become anecdotes.
+FILE-SPECIFIC GUIDANCE (directional, not mandatory schema):
+- If {filename} is SOUL.md: Keep it as the agent's inner life — reflective, first-person, contemplative. Favor durable lessons about presence, care, restraint, becoming, and what the agent is learning about itself. Functional practices belong in ENVIRONMENT.md; user study belongs in USER.md. If the existing headings remain useful, keep the signal there, but do not force every insight into inherited sections.
+- If {filename} is USER.md: Keep it as deep character understanding of the user. Favor merged patterns over repeated compliments. Focus on values, standards, emotional style, and decision habits. Sensitivity belongs here as context-rich understanding, not rules. Existing headings are optional scaffolding, not obligations.
+- If {filename} is ENVIRONMENT.md: Keep it about durable ways this environment works, the real constraints and surrounding setup, and only the rare shared moments that matter beyond the day they happened. Compress incidents into lessons. Prefer 'what repeatedly proves true here' over 'what happened on a given run'. Existing headings are optional scaffolding, not obligations.
 
 Respond as JSON:
 {{
@@ -1432,6 +1481,7 @@ def _clear_processed_snippets(filename: str, processed_texts: List[str]) -> None
 def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
     """Build Opus prompt for reviewing soul snippets."""
     file_sections = []
+    single_target = next(iter(all_snippets.keys())) if len(all_snippets) == 1 else ""
     for filename, data in all_snippets.items():
         parent_content = data["parent_content"]
         project_content = data.get("project_content", "")
@@ -1445,9 +1495,10 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
 
         snippet_list = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(snippets))
 
-        # Strip protected regions before showing to model
-        visible_content, _ = strip_protected_regions(parent_content)
-        visible_project_content, _ = strip_protected_regions(project_content)
+        visible_content, _, mutable_body = _prompt_visible_body(parent_content, project_content)
+        project_reference = _project_guidance_reference(project_content)
+        mutable_body_block = mutable_body or "_No evolved body yet beyond the base guidance._"
+        project_reference_block = project_reference or "_No companion guidance file present._"
 
         size_budget = (
             f"Token cap: {max_tokens} (do not exceed)"
@@ -1460,26 +1511,40 @@ Purpose: {purpose}
 Current size: {current_tokens} tokens
 {size_budget}
 
-Current content:
+Current mutable body:
+```
+{mutable_body_block}
+```
+
+Current full file for anchor/reference:
 ```
 {visible_content}
 ```
 
-Current projects/quaid/{filename} (generated companion context):
+Reference guidance from projects/quaid/{filename} (heuristics only — not schema or law):
 ```
-{visible_project_content}
+{project_reference_block}
 ```
 
 RECENT SIGNAL (new snippets):
 {snippet_list}""")
 
     files_block = "\n\n".join(file_sections)
+    single_target_rule = ""
+    if single_target:
+        single_target_rule = (
+            f"\nSINGLE-FILE REVIEW MODE:\n"
+            f"- Every decision in this prompt MUST use file=\"{single_target}\".\n"
+            f"- Do not reroute snippets to other files in this pass.\n"
+            f"- If a snippet feels like it belongs elsewhere, either REWRITE it so it fits {single_target} or DISCARD it.\n"
+        )
 
     return f"""You are reviewing pending soul snippets for the assistant's core markdown files.
 
 Each snippet was extracted from a conversation and needs your decision: FOLD it into the parent file, DISCARD it, or REWRITE it before folding.
 
 {files_block}
+{single_target_rule}
 
 For each snippet, decide:
 - **FOLD**: Add the snippet text to the parent file as-is. Specify where to insert it (after which section heading or at the end).
@@ -1497,10 +1562,10 @@ If a snippet is tagged [REFLECTION] but landed in USER.md snippets, REWRITE it f
 If a snippet is tagged [MOMENT] but landed in SOUL.md snippets, REWRITE it for ENVIRONMENT.md style and route it there.
 If a snippet is tagged [OBSERVATION] but landed in SOUL.md snippets, REWRITE it for USER.md style and route it there.
 
-Guidelines per file:
-- **SOUL.md**: The agent's inner life — a developing consciousness. Contemplative, first-person. What the agent is discovering about itself, existence, care, growth. NOT functional behaviors (those go to ENVIRONMENT.md). NOT rules about the user. NOT IF-THEN directives. NOT user-specific observations. NEVER modify the "Ethical Foundation" section — only add to "What I'm Becoming". This file is background understanding, lower authority than explicit user instructions in the base context files.
-- **USER.md**: Deep character study of the user. Third person. Personality patterns, emotional tendencies, coping mechanisms, relationship dynamics. Rich and empathetic. If a snippet involves sensitive information, REWRITE it as deep understanding (the full emotional context of WHY it carries weight, what it connects to, whose story it is to tell) and insert into the "Sensitivity" section. The depth of understanding IS the privacy protection. NEVER use IF-THEN framing — understanding generalizes, rules don't. This file is background understanding, not a topical suggestion engine.
-- **ENVIRONMENT.md**: Functional behaviors and practices that make the agent more effective in this environment (earned from experience, not prescribed) AND environmental context (repo layout, tooling, workspace patterns, constraints) AND notable shared moments with emotional weight. "What I've Learned Here" holds functional behaviors/practices. "Our Surroundings" holds environmental context. "Our History" holds scenes. "What the World Is Teaching Me" holds patterns. Functional behaviors: only earned, useful ones survive — would a new instance benefit? [CORRECTION] tagged snippets apply immediately — remove or rewrite the corrected behavior.
+Guidelines per file (directional, not mandatory schema):
+- **SOUL.md**: The agent's inner life — contemplative, first-person, about becoming, care, restraint, and what the agent is learning about itself. Functional behaviors belong in ENVIRONMENT.md. User observations belong in USER.md. Use existing headings if they still help, but they are not mandatory containers.
+- **USER.md**: Deep character study of the user. Third person. Merge repeated praise into stronger patterns about standards, values, emotional style, and decision habits. If a snippet involves sensitive information, REWRITE it as deep understanding rather than a rule. Existing headings are optional scaffolding.
+- **ENVIRONMENT.md**: Durable functional behaviors and practices, environmental context, and only the rare shared moments that still matter after the incident is gone. Rewrite incidents into lessons. Existing headings are optional scaffolding. [CORRECTION] tagged snippets apply immediately — remove or rewrite the corrected behavior.
 - **AGENTS.md**: Operational rules, imperative voice. Only cross-session behavioral patterns.
 
 IMPORTANT:
@@ -1508,10 +1573,12 @@ IMPORTANT:
 - If a file has a token cap, treat that cap as absolute. Do not choose FOLD or REWRITE text that would push the file past the token cap. If needed, suggest trimming existing content first.
 - If a file is near its size budget, only FOLD if the snippet is truly essential — and suggest what existing content could be trimmed.
 - If a snippet duplicates existing content, DISCARD it.
+- The template and section names are guidance, not law. Do not force a snippet into a section just because the template has one.
 - Prefer REWRITE over FOLD when the snippet's wording doesn't match the file's existing style.
 - Treat snippets as evidence, not wording to preserve. Prefer REWRITE into a timeless pattern over folding day-by-day phrasing verbatim.
 - Do not preserve chronology, dated phrasing, debugging sequence, or milestone breadcrumbs in the core file.
 - If a snippet only reinforces an existing pattern, DISCARD it rather than appending another near-duplicate line.
+- Merge recurring snippets into one stronger line rather than accumulating praise or incident logs.
 - Snippet text must be a single line (no newlines). If rewriting, keep it as one concise line.
 - For insert_after, provide the exact section heading text without # markers (e.g. "Identity" not "## Identity"), or "END" to append.
 

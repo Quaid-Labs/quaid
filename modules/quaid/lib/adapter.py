@@ -85,8 +85,8 @@ class QuaidAdapter(abc.ABC):
         return self.instance_root() / "journal"
 
     def projects_dir(self) -> Path:
-        """Shared projects directory (cross-instance)."""
-        return self.quaid_home() / "shared" / "projects"
+        """Canonical projects directory (cross-instance)."""
+        return self.quaid_home() / "projects"
 
     def adapter_id(self) -> str:
         """Short identifier for this adapter type (e.g. 'claude-code', 'openclaw').
@@ -676,8 +676,8 @@ def quaid_identity_dir(quaid_home: Path, adapter_id: str) -> Path:
 
 
 def quaid_projects_dir(quaid_home: Path) -> Path:
-    """Canonical shared projects directory."""
-    return quaid_home / "shared" / "projects"
+    """Canonical projects directory."""
+    return quaid_home / "projects"
 
 
 def quaid_tracking_dir(quaid_home: Path) -> Path:

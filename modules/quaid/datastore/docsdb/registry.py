@@ -37,6 +37,21 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from lib.config import get_db_path
 from lib.database import get_connection
+from lib.project_templates import (
+    EXTERNAL_FILES_BEGIN,
+    EXTERNAL_FILES_END,
+    IN_DIR_FILES_BEGIN,
+    IN_DIR_FILES_END,
+    PROJECT_HOME_BEGIN,
+    PROJECT_HOME_END,
+    REGISTERED_DOCS_BEGIN,
+    REGISTERED_DOCS_END,
+    has_registry_managed_markers,
+    SOURCE_ROOTS_BEGIN,
+    SOURCE_ROOTS_END,
+    render_project_md_template,
+    replace_managed_block,
+)
 from lib.runtime_context import get_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
@@ -63,7 +78,7 @@ def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None
     try:
         real = resolved_path.resolve()
         # Per-instance paths: must be under instance_root.
-        # Shared paths (shared/projects/...): must be under quaid_home.
+        # Canonical project paths (projects/...): must be under quaid_home.
         workspace_real = _workspace().resolve()
         quaid_home_real = get_quaid_home().resolve()
         inside_instance = str(real).startswith(str(workspace_real) + "/") or real == workspace_real
@@ -78,35 +93,146 @@ def _get_default_db_path() -> Path:
     """Get DB path lazily (respects env vars set after import)."""
     return get_db_path()
 
-# PROJECT.md template
-PROJECT_MD_TEMPLATE = """# Project: {label}
 
-## Overview
-{description}
+def _format_bullets(items: List[str], *, empty: str) -> str:
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    if not cleaned:
+        return empty
+    return "\n".join(f"- `{item}`" for item in cleaned)
 
-## Files & Assets
 
-### In This Directory
-<!-- Auto-discovered — all files in this directory belong to this project -->
-<!-- Place project-owned files here. Documentation goes in docs/ -->
+def _display_registry_path(path_str: str, project_home: Path) -> str:
+    path = Path(path_str)
+    abs_path = path if path.is_absolute() else _workspace() / path_str
+    resolved = abs_path.resolve()
+    try:
+        return str(resolved.relative_to(project_home.resolve()))
+    except ValueError:
+        return str(resolved)
 
-### External Files
-<!-- Link files that live outside this project dir (e.g., source code in repo paths) -->
-| File | Purpose | Auto-Update |
-|------|---------|-------------|
 
-## Documents
-<!-- Project documentation lives in docs/ subdirectory -->
-| Document | Tracks | Auto-Update |
-|----------|--------|-------------|
+def _to_registry_path(abs_path: Path) -> str:
+    """Normalize an absolute path into the registry's relative path form."""
+    resolved = abs_path.resolve()
+    workspace = _workspace().resolve()
+    quaid_home = get_quaid_home().resolve()
+    projects_root = (quaid_home / "projects").resolve()
 
-## Related Projects
+    try:
+        resolved.relative_to(projects_root)
+        return str(resolved.relative_to(quaid_home))
+    except ValueError:
+        pass
 
-## Update Rules
+    try:
+        return str(resolved.relative_to(workspace))
+    except ValueError:
+        pass
 
-## Exclude
-{exclude_lines}
-"""
+    try:
+        return str(resolved.relative_to(quaid_home))
+    except ValueError:
+        return str(resolved)
+
+
+def _why_read_entry(doc: Dict[str, Any]) -> str:
+    description = str(doc.get("description") or "").strip()
+    if description:
+        return description
+    sources = [str(s).strip() for s in (doc.get("source_files") or []) if str(s).strip()]
+    if sources:
+        names = ", ".join(Path(s).name for s in sources[:3])
+        if len(sources) > 3:
+            names += ", ..."
+        return f"Tracks: {names}"
+    title = str(doc.get("title") or "").strip()
+    if title:
+        return title
+    return "Project reference"
+
+
+def _managed_project_sections(
+    registry: "DocsRegistry",
+    project_name: str,
+    defn: Any,
+) -> Dict[str, str]:
+    project_home = registry._resolve_path(defn.home_dir)
+    docs = registry.list_docs(project=project_name)
+
+    project_home_body = f"- `{project_home}`"
+
+    source_roots_body = _format_bullets(
+        [str(registry._resolve_path(root)) for root in (defn.source_roots or [])],
+        empty="- `(none configured yet)`",
+    )
+
+    in_dir_docs: List[Dict[str, Any]] = []
+    external_docs: List[Dict[str, Any]] = []
+    for doc in docs:
+        resolved = registry._resolve_path(doc["file_path"]).resolve()
+        try:
+            resolved.relative_to(project_home.resolve())
+            in_dir_docs.append(doc)
+        except ValueError:
+            external_docs.append(doc)
+
+    in_dir_body = _format_bullets(
+        [_display_registry_path(doc["file_path"], project_home) for doc in in_dir_docs],
+        empty="(none yet)",
+    )
+
+    external_rows = []
+    for doc in external_docs:
+        purpose = str(doc.get("description") or doc.get("title") or "").strip()
+        auto = "Yes" if doc.get("auto_update") else "—"
+        external_rows.append(
+            f"| `{_display_registry_path(doc['file_path'], project_home)}` | {purpose} | {auto} |"
+        )
+    external_body = (
+        "| File | Purpose | Auto-Update |\n"
+        "|------|---------|-------------|\n"
+        + ("\n".join(external_rows) if external_rows else "")
+    ).rstrip()
+
+    registered_rows = []
+    for doc in docs:
+        display = _display_registry_path(doc["file_path"], project_home)
+        if display == "PROJECT.md":
+            continue
+        auto = "Yes" if doc.get("auto_update") else "—"
+        registered_rows.append(
+            f"| `{display}` | {_why_read_entry(doc)} | {auto} |"
+        )
+    registered_body = (
+        "| Document | Why Read It | Auto-Update |\n"
+        "|----------|-------------|-------------|\n"
+        + ("\n".join(registered_rows) if registered_rows else "")
+    ).rstrip()
+
+    return {
+        "project_home": project_home_body,
+        "source_roots": source_roots_body,
+        "in_dir": in_dir_body,
+        "external": external_body,
+        "registered_docs": registered_body,
+    }
+
+
+def _populate_project_md_sections(
+    content: str,
+    *,
+    project_home_body: str,
+    source_roots_body: str,
+    in_dir_body: str,
+    external_body: str,
+    registered_docs_body: str,
+) -> str:
+    updated = replace_managed_block(content, PROJECT_HOME_BEGIN, PROJECT_HOME_END, project_home_body)
+    updated = replace_managed_block(updated, SOURCE_ROOTS_BEGIN, SOURCE_ROOTS_END, source_roots_body)
+    updated = replace_managed_block(updated, IN_DIR_FILES_BEGIN, IN_DIR_FILES_END, in_dir_body)
+    updated = replace_managed_block(updated, EXTERNAL_FILES_BEGIN, EXTERNAL_FILES_END, external_body)
+    updated = replace_managed_block(updated, REGISTERED_DOCS_BEGIN, REGISTERED_DOCS_END, registered_docs_body)
+    return updated
 
 
 class DocsRegistry:
@@ -726,16 +852,17 @@ class DocsRegistry:
         (home_abs / "docs").mkdir(exist_ok=True)
 
         exclude_list = exclude or ["*.db", "*.log", "*.pyc", "__pycache__/"]
-        exclude_lines = "\n".join(f"- {pat}" for pat in exclude_list)
-
-        project_md = PROJECT_MD_TEMPLATE.format(
+        project_md = render_project_md_template(
             label=label,
             description=description or f"{label} project.",
-            exclude_lines=exclude_lines,
+            project_home=str(home_abs),
+            source_roots=[str(self._resolve_path(root)) for root in (source_roots or [])],
+            exclude_patterns=exclude_list,
         )
 
         project_md_path = home_abs / "PROJECT.md"
-        project_md_path.write_text(project_md)
+        if not project_md_path.exists():
+            project_md_path.write_text(project_md, encoding="utf-8")
 
         # Save project definition to DB (source of truth)
         from config import ProjectDefinition, reload_config
@@ -758,7 +885,7 @@ class DocsRegistry:
             pass
 
         # Register PROJECT.md in the doc registry
-        rel_path = str(project_md_path.relative_to(_workspace()))
+        rel_path = _to_registry_path(project_md_path)
         self.register(
             file_path=rel_path,
             project=name,
@@ -766,6 +893,7 @@ class DocsRegistry:
             title=f"Project: {label}",
             registered_by="create-project",
         )
+        _generate_project_md(self, name, self._get_config())
 
         # Register in global project registry for cross-instance tracking
         try:
@@ -810,11 +938,9 @@ class DocsRegistry:
 
                 # Check exclusions
                 try:
-                    rel_path = str(file_path.relative_to(_workspace()))
+                    rel_path = _to_registry_path(file_path)
                 except ValueError:
-                    # Project home is outside workspace root (e.g. shared/projects/).
-                    # Use absolute path as the registry key.
-                    rel_path = str(file_path)
+                    rel_path = _to_registry_path(file_path)
                 if self._is_excluded(str(file_path), exclude_patterns):
                     continue
 
@@ -868,12 +994,12 @@ class DocsRegistry:
             if in_external and stripped.startswith("|") and not stripped.startswith("| File") and not stripped.startswith("|---"):
                 parts = [p.strip() for p in stripped.split("|") if p.strip()]
                 if len(parts) >= 1:
-                    file_path = parts[0].replace("~/", "").replace("~", "")
+                    file_path = parts[0].strip("`").replace("~/", "").replace("~", "")
                     # Resolve ~ paths
                     if file_path.startswith("/"):
                         # Absolute path — make relative to workspace
                         try:
-                            file_path = str(Path(file_path).relative_to(_workspace()))
+                            file_path = _to_registry_path(Path(file_path))
                         except ValueError:
                             pass  # Keep as-is if outside workspace
                     purpose = parts[1] if len(parts) > 1 else None
@@ -907,7 +1033,7 @@ class DocsRegistry:
             for row in rows:
                 abs_path = row[0]
                 try:
-                    rel_path = str(Path(abs_path).relative_to(_workspace()))
+                    rel_path = _to_registry_path(Path(abs_path))
                 except ValueError:
                     rel_path = abs_path
 
@@ -1214,7 +1340,7 @@ class DocsRegistry:
                     for file_path in home_abs.rglob(pattern):
                         if not file_path.is_file():
                             continue
-                        rel_path = str(file_path.relative_to(_workspace()))
+                        rel_path = _to_registry_path(file_path)
                         if self._is_excluded(str(file_path), exclude_patterns):
                             continue
                         if rel_path not in registered_paths:
@@ -1323,12 +1449,20 @@ class DocsRegistry:
     def _resolve_path(self, relative: str) -> Path:
         """Resolve a workspace-relative path to absolute.
 
-        Paths starting with 'shared/' live at QUAID_HOME (workspace root),
-        not at the per-instance silo returned by _workspace().
+        Canonical project paths live at QUAID_HOME/projects/, while
+        per-instance staging still lives under the instance workspace at
+        projects/staging/. Paths starting with 'shared/' also live at
+        QUAID_HOME for the remaining shared-config surfaces.
         """
         p = Path(relative)
         if p.is_absolute():
             return p
+        if relative == "projects" or (
+            relative.startswith("projects/")
+            and relative != "projects/staging"
+            and not relative.startswith("projects/staging/")
+        ):
+            return get_quaid_home() / relative
         if relative.startswith("shared/"):
             return get_quaid_home() / relative
         return _workspace() / relative
@@ -1466,87 +1600,34 @@ def sync_existing_docs(registry: DocsRegistry) -> Dict[str, int]:
 
 
 def _generate_project_md(registry: DocsRegistry, project_name: str, cfg) -> None:
-    """Generate PROJECT.md with auto file list from registry."""
+    """Generate PROJECT.md from the current registry-backed project state."""
     defn = cfg.projects.definitions.get(project_name)
     if not defn:
         return
 
-    project_home = _workspace() / defn.home_dir
+    project_home = registry._resolve_path(defn.home_dir)
     project_md_path = project_home / "PROJECT.md"
-
-    docs = registry.list_docs(project=project_name)
-
-    # Build files section
-    in_dir_files = []
-    external_files = []
-    home_abs = str(project_home)
-
-    for doc in docs:
-        abs_path = str((_workspace() / doc["file_path"]).resolve())
-        if abs_path.startswith(str(project_home.resolve())):
-            in_dir_files.append(doc)
-        else:
-            external_files.append(doc)
-
-    # Build documents section (docs with source_files)
-    tracked_docs = [d for d in docs if d.get("source_files")]
-
-    # Format external files table
-    ext_lines = []
-    for d in external_files:
-        purpose = d.get("description") or ""
-        auto = "Yes" if d.get("auto_update") else "No"
-        ext_lines.append(f"| {d['file_path']} | {purpose} | {auto} |")
-
-    # Format documents table
-    doc_lines = []
-    for d in tracked_docs:
-        sources = ", ".join(d.get("source_files", []))
-        auto = "Yes" if d.get("auto_update") else "No"
-        doc_lines.append(f"| {d['file_path']} | {sources} | {auto} |")
-
-    # Build source→doc update rules
-    rules = []
-    for d in tracked_docs:
-        sources = d.get("source_files", [])
-        if sources:
-            src_str = " or ".join(Path(s).name for s in sources)
-            rules.append(f"- When {src_str} changes → update {d['file_path']}")
-
-    exclude_patterns = defn.exclude or []
-    exclude_lines = "\n".join(f"- {pat}" for pat in exclude_patterns)
-
-    content = f"""# Project: {defn.label}
-
-## Overview
-{defn.description}
-
-## Files & Assets
-
-### In This Directory
-<!-- Auto-discovered — all files in this directory belong to this project -->
-{chr(10).join('- ' + d['file_path'] for d in in_dir_files) if in_dir_files else '(none yet)'}
-
-### External Files
-| File | Purpose | Auto-Update |
-|------|---------|-------------|
-{chr(10).join(ext_lines) if ext_lines else ''}
-
-## Documents
-| Document | Tracks | Auto-Update |
-|----------|--------|-------------|
-{chr(10).join(doc_lines) if doc_lines else ''}
-
-## Related Projects
-
-## Update Rules
-{chr(10).join(rules) if rules else '- (none configured)'}
-
-## Exclude
-{exclude_lines}
-"""
-
-    project_md_path.write_text(content)
+    sections = _managed_project_sections(registry, project_name, defn)
+    existing = project_md_path.read_text(encoding="utf-8") if project_md_path.exists() else ""
+    if has_registry_managed_markers(existing):
+        content = existing
+    else:
+        content = render_project_md_template(
+            label=defn.label,
+            description=defn.description or f"{defn.label} project.",
+            project_home=str(project_home),
+            source_roots=[str(registry._resolve_path(root)) for root in (defn.source_roots or [])],
+            exclude_patterns=defn.exclude or [],
+        )
+    content = _populate_project_md_sections(
+        content,
+        project_home_body=sections["project_home"],
+        source_roots_body=sections["source_roots"],
+        in_dir_body=sections["in_dir"],
+        external_body=sections["external"],
+        registered_docs_body=sections["registered_docs"],
+    )
+    project_md_path.write_text(content, encoding="utf-8")
     print(f"  Generated PROJECT.md at {project_md_path}")
 
 

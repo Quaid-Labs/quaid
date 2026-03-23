@@ -48,7 +48,8 @@ class TestRegistryIO:
 
     def test_load_corrupt_file(self, mock_adapter):
         _, tmp_path = mock_adapter
-        reg = tmp_path / "project-registry.json"
+        reg = tmp_path / "projects" / "project-registry.json"
+        reg.parent.mkdir(parents=True, exist_ok=True)
         reg.write_text("not valid json{{{")
         result = _load_registry()
         assert result == {"projects": {}}
@@ -65,10 +66,14 @@ class TestCreateProject:
         assert len(entry["instances"]) >= 1
 
         # Canonical dir created
-        canonical = tmp_path / "shared" / "projects" / "my-app"
+        canonical = tmp_path / "projects" / "my-app"
         assert canonical.is_dir()
         assert (canonical / "docs").is_dir()
         assert (canonical / "PROJECT.md").is_file()
+        project_md = (canonical / "PROJECT.md").read_text()
+        assert "## What This Is" in project_md
+        assert "## Primary Artifacts" in project_md
+        assert str(canonical) in project_md
 
         # In registry
         assert get_project("my-app") is not None
@@ -128,7 +133,7 @@ class TestDeleteProject:
 
         delete_project("my-app")
         assert get_project("my-app") is None
-        assert not (tmp_path / "shared" / "projects" / "my-app").exists()
+        assert not (tmp_path / "projects" / "my-app").exists()
 
     def test_rejects_unknown(self, mock_adapter):
         with pytest.raises(KeyError):

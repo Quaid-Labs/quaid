@@ -105,7 +105,7 @@ class TestStandaloneAdapter:
         assert standalone.journal_dir() == tmp_path / iid / "journal"
 
     def test_projects_dir(self, standalone, tmp_path):
-        assert standalone.projects_dir() == tmp_path / "shared" / "projects"
+        assert standalone.projects_dir() == tmp_path / "projects"
 
     def test_core_markdown_dir(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")

@@ -29,8 +29,12 @@ def setup_env(tmp_path, monkeypatch):
     # Create minimal config
     config_dir = iroot / "config"
     config_dir.mkdir(exist_ok=True)
-    projects_dir = iroot / "projects" / "staging"
-    projects_dir.mkdir(parents=True)
+    shared_projects_dir = tmp_path / "projects"
+    shared_projects_dir.mkdir(parents=True, exist_ok=True)
+    instance_projects = iroot / "projects"
+    if not instance_projects.exists():
+        instance_projects.symlink_to(shared_projects_dir, target_is_directory=True)
+    (shared_projects_dir / "staging").mkdir(parents=True, exist_ok=True)
 
     config_data = {
         "projects": {
@@ -60,7 +64,7 @@ def setup_env(tmp_path, monkeypatch):
     (config_dir / "memory.json").write_text(json.dumps(config_data))
 
     # Create project directory
-    (iroot / "projects" / "test-project").mkdir(parents=True, exist_ok=True)
+    (shared_projects_dir / "test-project").mkdir(parents=True, exist_ok=True)
     (iroot / "src").mkdir(exist_ok=True)
 
     # Patch config paths to use test config and WORKSPACE in docs_registry
@@ -372,6 +376,8 @@ class TestCreateProject:
         content = project_md.read_text()
         assert "# Project: My Essay" in content
         assert "An essay project" in content
+        assert "## Primary Artifacts" in content
+        assert "## Where To Learn More" in content
 
 
 class TestSyncFromChunks:
@@ -618,6 +624,33 @@ class TestCreateProjectConfig:
         with pytest.raises(ValueError, match="Invalid project name"):
             r.create_project("")
 
+    def test_preserves_markerized_seed_project_md(self, setup_env):
+        from lib.project_templates import render_project_md_template
+
+        tmp_path = setup_env
+        r = _get_registry()
+        project_dir = tmp_path / "projects" / "new-proj"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        seeded = render_project_md_template(
+            label="New Proj",
+            description="Seeded project.",
+            project_home="QUAID_HOME/projects/new-proj",
+            source_roots=["modules/new-proj"],
+            exclude_patterns=["*.tmp"],
+        ).replace(
+            "## Primary Artifacts",
+            "## Start Here By Task\n- Open `docs/overview.md` first.\n\n## Primary Artifacts",
+            1,
+        )
+        (project_dir / "PROJECT.md").write_text(seeded, encoding="utf-8")
+
+        r.create_project("new-proj")
+
+        content = (project_dir / "PROJECT.md").read_text(encoding="utf-8")
+        assert "## Start Here By Task" in content
+        assert "- Open `docs/overview.md` first." in content
+        assert str(setup_env.parent / "projects" / "new-proj") in content
+
 
 class TestRegisterValidation:
     def test_rejects_empty_path(self, setup_env):
@@ -717,8 +750,9 @@ A test project.
         assert new_defn.source_roots == ["src/"]
 
         renamed_project_md = (tmp_path / "projects" / "renamed-proj" / "PROJECT.md").read_text()
-        assert "projects/renamed-proj/PROJECT.md" in renamed_project_md
-        assert "projects/renamed-proj/README.md" in renamed_project_md
+        assert "## What This Is" in renamed_project_md
+        assert "- `PROJECT.md`" in renamed_project_md
+        assert "- `README.md`" in renamed_project_md
         assert "projects/test-project/README.md" not in renamed_project_md
 
         assert captured == {

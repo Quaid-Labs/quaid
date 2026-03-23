@@ -59,7 +59,7 @@ def resolve_command_registry(
     """Return registry entries with {misc_path} and {instance} resolved.
 
     Resolves the misc project path from QUAID_HOME + QUAID_INSTANCE env vars,
-    with a fallback scan of shared/projects/misc--* if QUAID_INSTANCE is unset.
+    with a fallback scan of projects/misc--* if QUAID_INSTANCE is unset.
     """
     raw = entries if entries is not None else COMMAND_REGISTRY
 
@@ -70,7 +70,7 @@ def resolve_command_registry(
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
 
     if not instance and workspace:
-        projects_dir = Path(workspace) / "shared" / "projects"
+        projects_dir = Path(workspace) / "projects"
         try:
             found = next(
                 (d.name for d in projects_dir.iterdir() if d.name.startswith("misc--")),
@@ -82,7 +82,7 @@ def resolve_command_registry(
             pass
 
     misc_path = (
-        str(Path(workspace) / "shared" / "projects" / f"misc--{instance}")
+        str(Path(workspace) / "projects" / f"misc--{instance}")
         if workspace and instance
         else None
     )

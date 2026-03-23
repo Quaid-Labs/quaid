@@ -6280,8 +6280,8 @@ def _load_tools_md() -> Optional[str]:
     """Load TOOLS.md content from the quaid project docs, or any project TOOLS.md found.
 
     Search order:
-      1. shared/projects/quaid/TOOLS.md  (canonical quaid project)
-      2. First TOOLS.md found in shared/projects/*/TOOLS.md
+      1. projects/quaid/TOOLS.md  (canonical quaid project)
+      2. First TOOLS.md found in projects/*/TOOLS.md
     Returns None if no file is found or readable.
     """
     from pathlib import Path as _Path

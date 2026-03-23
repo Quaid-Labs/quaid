@@ -29,7 +29,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
    # The misc project is pre-created. Write directly to its directory:
    ~/.openclaw/extensions/quaid/quaid project show misc--$QUAID_INSTANCE  # confirm path
    # Then write your file there, e.g.:
-   # ~/quaid/shared/projects/misc--$QUAID_INSTANCE/hello.py
+   # ~/quaid/projects/misc--$QUAID_INSTANCE/hello.py
    ```
    Always tell the user you wrote to misc and offer to promote to a real project.
 3. **Durable new work** → create a project first, then write files:
@@ -46,9 +46,9 @@ Correct response:
 # Step 1: confirm misc project path
 ~/.openclaw/extensions/quaid/quaid project show misc--$QUAID_INSTANCE
 # Step 2: write the file inside that project
-# e.g. write to ~/quaid/shared/projects/misc--$QUAID_INSTANCE/hello.py
+# e.g. write to ~/quaid/projects/misc--$QUAID_INSTANCE/hello.py
 ```
-Tell the user: "I wrote it to the misc project at `~/quaid/shared/projects/misc--$QUAID_INSTANCE/hello.py`."
+Tell the user: "I wrote it to the misc project at `~/quaid/projects/misc--$QUAID_INSTANCE/hello.py`."
 Do NOT write to `/tmp/hello.py` or any other path.
 
 **Example — user asks to build a new tool:**
@@ -106,9 +106,11 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 ## Operating Rules
 
 **Retrieval discipline**
+- Every tracked project has its own `PROJECT.md` at `QUAID_HOME/projects/<project-name>/PROJECT.md`.
+- If you are actively working on a project, load that project's `PROJECT.md` first. Treat it as the overview and navigation map before wandering the tree.
 - Always use memory/project tools before claiming missing context.
 - Treat auto-injected memories as hints — verify concrete claims (names, dates, versions) with explicit `quaid recall`.
-- Use `quaid docs search` for codebase/architecture questions.
+- Use `quaid docs search` for codebase/architecture questions. Docs retrieval will try to infer the relevant project and include its `PROJECT.md` when possible.
 - Use `quaid recall --docs` for a single pass across both memories and docs.
 
 **Memory retention boundary**
@@ -128,7 +130,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 **Project and file placement**
 
 All files go inside a tracked quaid project. `/tmp/` is never acceptable, even for throwaway work.
-- Misc project: `misc--$QUAID_INSTANCE` at `$QUAID_HOME/shared/projects/misc--$QUAID_INSTANCE/` — use this for throwaway/one-off work. It is pre-created.
+- Misc project: `misc--$QUAID_INSTANCE` at `$QUAID_HOME/projects/misc--$QUAID_INSTANCE/` — use this for throwaway/one-off work. It is pre-created.
 - New work: create a project first (`quaid registry create-project`), then write files.
 - See the **File Placement — MANDATORY RULES** section above for decision tree and examples.
 

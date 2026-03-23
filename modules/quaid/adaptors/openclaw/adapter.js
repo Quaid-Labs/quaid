@@ -1299,7 +1299,7 @@ notify_user(${JSON.stringify(message)})
           }
         }
         if (_QUAID_INSTANCE) {
-          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+          const miscPath = path.join(WORKSPACE, "projects", `misc--${_QUAID_INSTANCE}`);
           prependSystemContext = [
             `[Quaid \u2014 active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
             `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,

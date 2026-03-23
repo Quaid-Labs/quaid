@@ -26,9 +26,30 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from config import get_config
-from datastore.docsdb.registry import DocsRegistry
+from datastore.docsdb.registry import (
+    DocsRegistry,
+    _managed_project_sections,
+    _populate_project_md_sections,
+)
 from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
 from lib.delayed_requests import queue_delayed_request
+from lib.project_templates import (
+    EXTERNAL_FILES_BEGIN,
+    EXTERNAL_FILES_END,
+    has_registry_managed_markers,
+    IN_DIR_FILES_BEGIN,
+    IN_DIR_FILES_END,
+    PROJECT_HOME_BEGIN,
+    PROJECT_HOME_END,
+    PROJECT_LOG_BEGIN,
+    PROJECT_LOG_END,
+    REGISTERED_DOCS_BEGIN,
+    REGISTERED_DOCS_END,
+    SOURCE_ROOTS_BEGIN,
+    SOURCE_ROOTS_END,
+    render_project_md_template,
+    replace_managed_block,
+)
 from lib.runtime_context import get_workspace_dir, get_quaid_home
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
@@ -38,25 +59,32 @@ def _workspace() -> Path:
 
 
 def _resolve_path(relative: str) -> Path:
-    """Resolve a workspace-relative path to absolute."""
+    """Resolve a runtime path to absolute.
+
+    Canonical project homes live at QUAID_HOME/projects/, but per-instance
+    staging still lives at <instance>/projects/staging/.
+    """
     p = Path(relative)
     if p.is_absolute():
         return p
+    if relative == "projects" or (
+        relative.startswith("projects/")
+        and relative != "projects/staging"
+        and not relative.startswith("projects/staging/")
+    ):
+        return get_quaid_home() / relative
+    if relative.startswith("shared/"):
+        return get_quaid_home() / relative
     return _workspace() / relative
 
 
 def _resolve_project_home(home_dir: str) -> Path:
     """Resolve a project home_dir to an absolute path.
 
-    Project home_dirs (e.g. 'shared/projects/quaid/') are relative to
-    QUAID_HOME, not to the per-instance workspace root.  Using instance_root
-    as the base (as _resolve_path does) silently points at the wrong directory
-    when the instance silo lives one level below QUAID_HOME.
+    Canonical project homes (`projects/...`) live under QUAID_HOME. Legacy
+    `shared/...` homes also resolve under QUAID_HOME.
     """
-    p = Path(home_dir)
-    if p.is_absolute():
-        return p
-    return get_quaid_home() / home_dir
+    return _resolve_path(home_dir)
 
 
 def process_event(event_path: str) -> Dict:
@@ -147,7 +175,7 @@ def process_event(event_path: str) -> Dict:
         return result
 
     # Read PROJECT.md
-    project_md_path = _resolve_path(defn.home_dir) / "PROJECT.md"
+    project_md_path = _resolve_project_home(defn.home_dir) / "PROJECT.md"
     project_md_content = ""
     if project_md_path.exists():
         project_md_content = project_md_path.read_text()
@@ -244,11 +272,7 @@ def process_all_events() -> Dict:
 
 
 def refresh_project_md(project_name: str) -> bool:
-    """Regenerate PROJECT.md file list section from directory scan.
-
-    Preserves curated sections (Overview, Related Projects, Update Rules).
-    Only auto-generates the Files & Assets section.
-    """
+    """Refresh registry-backed navigation sections inside PROJECT.md."""
     cfg = get_config()
     defn = cfg.projects.definitions.get(project_name)
     if not defn:
@@ -551,7 +575,7 @@ Respond with JSON only, no markdown fences."""
 
 
 def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
-    """Refresh the Files & Assets section of PROJECT.md."""
+    """Refresh registry-backed navigation sections of PROJECT.md."""
     defn = cfg.projects.definitions.get(project_name)
     if not defn:
         return
@@ -560,92 +584,44 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
     if not project_md_path.exists():
         return
 
-    content = project_md_path.read_text()
-    docs = registry.list_docs(project=project_name)
-
-    # Use canonical real paths for reliable comparison (macOS /private/var symlinks)
-    home_real = str(Path(os.path.realpath(_resolve_path(defn.home_dir)))).rstrip("/") + "/"
-
-    # Classify files
-    in_dir = []
-    external = []
-    for d in docs:
-        file_real = str(Path(os.path.realpath(_resolve_path(d["file_path"]))))
-        if file_real.startswith(home_real):
-            in_dir.append(d)
-        else:
-            external.append(d)
-
-    # Build in-directory listing
-    in_dir_text = ""
-    if in_dir:
-        in_dir_text = "\n".join(f"- {d['file_path']}" for d in in_dir)
-    else:
-        in_dir_text = "(none yet)"
-
-    # Build external files table
-    ext_header = "| File | Purpose | Auto-Update |\n|------|---------|-------------|"
-    ext_rows = []
-    for d in external:
-        purpose = d.get("description") or ""
-        auto = "Yes" if d.get("auto_update") else "—"
-        ext_rows.append(f"| {d['file_path']} | {purpose} | {auto} |")
-    ext_text = ext_header + "\n" + "\n".join(ext_rows) if ext_rows else ext_header
-
-    # Use HTML comment markers for reliable section replacement
-    # (more robust than regex against markdown headings)
-    original = content
-
-    # Replace In This Directory section using marker
-    content = re.sub(
-        r"(<!-- Auto-discovered [^>]*-->)\n.*?(?=\n### External Files|\n<!-- BEGIN:external)",
-        rf"\g<1>\n{in_dir_text}",
-        content,
-        flags=re.DOTALL,
-    )
-
-    # Fallback: try heading-based replacement if marker not found
-    if content == original:
-        if "### External Files" in content:
-            content = re.sub(
-                r"(### In This Directory\n).*?(\n### External Files)",
-                rf"\g<1><!-- Auto-discovered — all files in this directory belong to this project -->\n{in_dir_text}\n\n\g<2>",
-                content,
-                flags=re.DOTALL,
-            )
-        else:
-            # Legacy malformed layout: no External Files heading yet.
-            content = re.sub(
-                r"(### In This Directory\n).*?(?=\n## )",
-                rf"\g<1><!-- Auto-discovered — all files in this directory belong to this project -->\n{in_dir_text}\n",
-                content,
-                flags=re.DOTALL,
-            )
-
-    # Replace External Files section
-    original2 = content
-    ext_pattern = r"(### External Files\n).*?(\n## Documents|\n## Related|\n## Update)"
-    if re.search(ext_pattern, content, flags=re.DOTALL):
-        content = re.sub(
-            ext_pattern,
-            rf"\g<1>{ext_text}\n\n\g<2>",
+    content = project_md_path.read_text(encoding="utf-8")
+    sections = _managed_project_sections(registry, project_name, defn)
+    has_markers = has_registry_managed_markers(content)
+    if has_markers:
+        content = _populate_project_md_sections(
             content,
-            flags=re.DOTALL,
+            project_home_body=sections["project_home"],
+            source_roots_body=sections["source_roots"],
+            in_dir_body=sections["in_dir"],
+            external_body=sections["external"],
+            registered_docs_body=sections["registered_docs"],
         )
     else:
-        # Recover malformed legacy PROJECT.md files that are missing
-        # the External Files heading by inserting a canonical section.
-        inserted = False
-        for marker in ("\n## Documents", "\n## Related", "\n## Update"):
-            idx = content.find(marker)
-            if idx >= 0:
-                insertion = f"\n### External Files\n{ext_text}\n"
-                content = content[:idx] + insertion + content[idx:]
-                inserted = True
-                break
-        if not inserted:
-            content = content.rstrip() + f"\n\n### External Files\n{ext_text}\n"
-        print("  Recovered missing External Files section in PROJECT.md")
+        rebuilt = render_project_md_template(
+            label=defn.label,
+            description=defn.description or f"{defn.label} project.",
+            project_home=str(_resolve_project_home(defn.home_dir)),
+            source_roots=[str(registry._resolve_path(root)) for root in (defn.source_roots or [])],
+            exclude_patterns=defn.exclude or [],
+        )
+        rebuilt = _populate_project_md_sections(
+            rebuilt,
+            project_home_body=sections["project_home"],
+            source_roots_body=sections["source_roots"],
+            in_dir_body=sections["in_dir"],
+            external_body=sections["external"],
+            registered_docs_body=sections["registered_docs"],
+        )
+        if PROJECT_LOG_BEGIN in content and PROJECT_LOG_END in content:
+            match = re.search(
+                re.escape(PROJECT_LOG_BEGIN) + r"(.*?)" + re.escape(PROJECT_LOG_END),
+                content,
+                flags=re.DOTALL,
+            )
+            if match:
+                rebuilt = replace_managed_block(rebuilt, PROJECT_LOG_BEGIN, PROJECT_LOG_END, match.group(1).strip())
+        content = rebuilt
+        print("  Rebuilt PROJECT.md with canonical navigation scaffold")
 
     # Atomic write: write to temp file, then rename
     tmp_path = project_md_path.with_suffix(".tmp")
@@ -661,6 +637,15 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
                 pass
 
 
+def _project_md_recent_log_limit(default: int = 15) -> int:
+    raw = os.getenv("QUAID_PROJECT_MD_RECENT_LIMIT", str(default))
+    try:
+        limit = int(raw)
+    except Exception:
+        limit = default
+    return max(1, limit)
+
+
 def append_project_logs(
     project_logs: Dict[str, List[str]],
     trigger: str = "Compaction",
@@ -670,7 +655,7 @@ def append_project_logs(
     """Append project log bullets to per-project PROJECT.md files.
 
     Project logs are written under:
-      ## Project Log
+      ## Recent Major Changes
       <!-- BEGIN:PROJECT_LOG -->
       - YYYY-MM-DD [Trigger] note
       <!-- END:PROJECT_LOG -->
@@ -688,8 +673,9 @@ def append_project_logs(
 
     cfg = get_config()
     today = date_str or datetime.now().strftime("%Y-%m-%d")
-    marker_begin = "<!-- BEGIN:PROJECT_LOG -->"
-    marker_end = "<!-- END:PROJECT_LOG -->"
+    marker_begin = PROJECT_LOG_BEGIN
+    marker_end = PROJECT_LOG_END
+    recent_limit = _project_md_recent_log_limit()
     session_prefix_re = re.compile(r"^\s*Session\s+\d+\s*(?:\([^)]*\))?\s*:\s*", flags=re.IGNORECASE)
 
     def _normalize_log_entry(raw: object) -> str:
@@ -738,23 +724,26 @@ def append_project_logs(
             _append_project_history_log(project_md, raw_entries or [])
 
         lines = [f"- {today} [{trigger}] {entry}" for entry in entries]
-        content = project_md.read_text()
+        content = project_md.read_text(encoding="utf-8")
         if marker_begin in content and marker_end in content:
             pattern = re.compile(
                 re.escape(marker_begin) + r"(.*?)" + re.escape(marker_end),
                 flags=re.DOTALL,
             )
             m = pattern.search(content)
-            existing = (m.group(1) if m else "").strip()
-            body = existing + ("\n" if existing else "") + "\n".join(lines)
+            existing_lines = []
+            if m and m.group(1).strip():
+                existing_lines = [line.strip() for line in m.group(1).strip().splitlines() if line.strip()]
+            body_lines = (existing_lines + lines)[-recent_limit:]
+            body = "\n".join(body_lines)
             replacement = f"{marker_begin}\n{body}\n{marker_end}"
             updated = pattern.sub(lambda _m: replacement, content, count=1)
         else:
             updated = (
                 content.rstrip()
-                + "\n\n## Project Log\n"
+                + "\n\n## Recent Major Changes\n"
                 + f"{marker_begin}\n"
-                + "\n".join(lines)
+                + "\n".join(lines[-recent_limit:])
                 + f"\n{marker_end}\n"
             )
 
@@ -765,7 +754,7 @@ def append_project_logs(
             f"file={project_md} dry_run={dry_run}"
         )
         if not dry_run:
-            project_md.write_text(updated)
+            project_md.write_text(updated, encoding="utf-8")
 
     return metrics
 

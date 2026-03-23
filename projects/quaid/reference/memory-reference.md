@@ -1580,7 +1580,7 @@ QUAID_HOME/
 ```
 
 **Key rules:**
-- Multiple instances share `QUAID_HOME/shared/` and `QUAID_HOME/project-registry.json`.
+- Multiple instances share `QUAID_HOME/shared/` and `QUAID_HOME/projects/project-registry.json`.
 - The shared config is written by the first installer; subsequent instances inherit it without overwriting.
 - Instance names must be alphanumeric (may include `.`, `_`, `-`), max 64 chars, and cannot use reserved names (`shared`, `projects`, `config`, `data`, etc.).
 

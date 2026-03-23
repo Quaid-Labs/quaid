@@ -10,12 +10,12 @@ from core.runtime.plugins import PluginHookContext
 
 def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
     root = Path(ctx.workspace_root)
-    # projects/, shared/projects/, temp/, scratch/ at workspace root — docsdb-owned
+    # canonical projects/, per-instance projects/staging/, temp/, scratch/ at workspace root — docsdb-owned
     (root / "projects").mkdir(parents=True, exist_ok=True)
     (root / "shared" / "projects").mkdir(parents=True, exist_ok=True)
     (root / "temp").mkdir(parents=True, exist_ok=True)
     (root / "scratch").mkdir(parents=True, exist_ok=True)
-    # misc lives as a tracked project in shared/projects/misc--{instance}/
+    # misc lives as a tracked project in projects/misc--{instance}/
     # Create the directory and auto-register it in the docsdb project registry
     # so agents can use it immediately without a manual create-project step.
     try:

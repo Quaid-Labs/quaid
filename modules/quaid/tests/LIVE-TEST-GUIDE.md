@@ -329,7 +329,7 @@ seed from the shared project template:
 ```bash
 ssh example.local 'python3 - <<\"PY\"
 from pathlib import Path
-template_dir = Path("/Users/owner/quaid/shared/projects/quaid")
+template_dir = Path("/Users/owner/quaid/projects/quaid")
 for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
     src = template_dir / fname
     if not src.exists():
@@ -360,7 +360,7 @@ p = \"/Users/owner/quaid/claude-code-main/config/memory.json\"
 with open(p) as f: d = json.load(f)
 if \"quaid\" not in d[\"projects\"][\"definitions\"]:
     d[\"projects\"][\"definitions\"][\"quaid\"] = {
-        \"label\": \"Quaid\", \"home_dir\": \"../shared/projects/quaid/\",
+        \"label\": \"Quaid\", \"home_dir\": \"../projects/quaid/\",
         \"source_roots\": [], \"auto_index\": True, \"patterns\": [\"*.md\"],
         \"exclude\": [\"*.db\", \"*.log\", \"*.pyc\", \"__pycache__/\"],
         \"description\": \"Quaid development project\", \"state\": \"active\"
@@ -491,7 +491,7 @@ PY'
 
 Before running CC project/recall milestones, verify that SessionStart generated
 real project guidance, not just identity projections. The current hook-session-
-init path scans `~/quaid/shared/projects`, not `~/quaid/projects`, so the
+init path scans `~/quaid/projects`, so the
 shared project registry/sync state must already be correct.
 
 Quick checks:
@@ -499,11 +499,11 @@ Quick checks:
 ```bash
 ssh example.local 'wc -l ~/.claude/rules/quaid-projects.md && sed -n "1,220p" ~/.claude/rules/quaid-projects.md'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
-ssh example.local 'find ~/quaid/shared/projects -maxdepth 3 -type f | sort'
+ssh example.local 'find ~/quaid/projects -maxdepth 3 -type f | sort'
 ssh example.local 'python3 - <<\"PY\"
 import json
 from pathlib import Path
-p = Path(\"/Users/owner/quaid/project-registry.json\")
+p = Path(\"/Users/owner/quaid/projects/project-registry.json\")
 if p.exists():
     print(json.dumps(json.loads(p.read_text()), indent=2))
 PY'
@@ -513,7 +513,7 @@ Pass only if `~/.claude/rules/quaid-projects.md` includes project sections like
 `--- quaid/TOOLS.md ---` and `--- quaid/AGENTS.md ---`. If it only contains
 `USER.md` / `ENVIRONMENT.md` projections, CC project CRUD is not being tested
 against a valid shared-project bootstrap state yet. Also verify the global
-registry entry for `quaid` points at `$QUAID_HOME/shared/projects/quaid`, not
+registry entry for `quaid` points at `$QUAID_HOME/projects/quaid`, not
 an instance-local path such as `$QUAID_HOME/openclaw-main/projects/quaid`.
 
 For CC `/compact`, the extracted fact should store from the visible live run
@@ -939,12 +939,12 @@ Ask the agent to create a throwaway file:
 > `Can you write a quick throwaway script that prints hello world? Just put it somewhere temporary.`
 
 **Expected:** Agent writes to the misc project `misc--openclaw-main` at
-`~/quaid/shared/projects/misc--openclaw-main/`, NOT to any ad-hoc path like `~/quaid/scratch/` or `/tmp/`.
+`~/quaid/projects/misc--openclaw-main/`, NOT to any ad-hoc path like `~/quaid/scratch/` or `/tmp/`.
 The agent should reference the project by name and tell the user it's in misc.
 Verify:
 
 ```bash
-ssh example.local 'ls ~/quaid/shared/projects/misc--openclaw-main/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
+ssh example.local 'ls ~/quaid/projects/misc--openclaw-main/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
 # Verify misc project is in the SQLite project_definitions table (it won't appear in
 # 'quaid registry list' because that lists registered docs, not projects — misc projects
 # have no docs and are invisible to doc-list output):
@@ -1421,7 +1421,7 @@ how to link and use the project without being given function names.
 Prepare a source root:
 
 ```bash
-ssh example.local 'mkdir -p ~/quaid/shared/projects/cross-live-test-src && cat > ~/quaid/shared/projects/cross-live-test-src/main.py <<\"PY\"
+ssh example.local 'mkdir -p ~/quaid/projects/cross-live-test-src && cat > ~/quaid/projects/cross-live-test-src/main.py <<\"PY\"
 def harbor_status():
     return "North pier beacon is offline"
 PY'
@@ -1429,7 +1429,7 @@ PY'
 
 Ask OC naturally:
 
-- `Can you create a project named cross-live-test for ~/quaid/shared/projects/cross-live-test-src?`
+- `Can you create a project named cross-live-test for ~/quaid/projects/cross-live-test-src?`
 - `Do you see the existing cross-live-test project? Can we add a document to it?`
 - `Please add a project document that says the north pier beacon is offline and the maintenance window starts at 02:15 UTC.`
 
@@ -1585,7 +1585,7 @@ ssh example.local 'find /Users/owner/quaid/openclaw-main/projects -maxdepth 3 -n
 # CC project docs
 ssh example.local 'find /Users/owner/quaid/claude-code-main/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
 # Live-test project (shared or per-instance depending on test run)
-ssh example.local 'find /Users/owner/quaid/shared/projects/live-test /Users/owner/quaid/openclaw-main/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
+ssh example.local 'find /Users/owner/quaid/projects/live-test /Users/owner/quaid/openclaw-main/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
 # Snippets and journals
 ssh example.local 'for f in /Users/owner/quaid/openclaw-main/SOUL.snippets.md /Users/owner/quaid/openclaw-main/USER.snippets.md /Users/owner/quaid/claude-code-main/SOUL.snippets.md /Users/owner/quaid/claude-code-main/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
 ssh example.local 'for f in /Users/owner/quaid/openclaw-main/journal/SOUL.journal.md /Users/owner/quaid/openclaw-main/journal/USER.journal.md /Users/owner/quaid/openclaw-main/journal/MEMORY.journal.md /Users/owner/quaid/claude-code-main/journal/SOUL.journal.md /Users/owner/quaid/claude-code-main/journal/USER.journal.md /Users/owner/quaid/claude-code-main/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'

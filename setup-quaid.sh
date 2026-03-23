@@ -1980,36 +1980,31 @@ except Exception as e:
 
     # Install Quaid project reference docs and constitutional guidance
     if $SYS_PROJECTS; then
-        local quaid_proj_dir="${PROJECTS_DIR}/quaid"
+        local quaid_proj_dir="${WORKSPACE_ROOT}/projects/quaid"
         mkdir -p "$quaid_proj_dir"
         local quaid_proj_src="${SCRIPT_DIR}/projects/quaid"
-        for f in TOOLS.md AGENTS.md USER.md SOUL.md MEMORY.md ARCHITECTURE.md project_onboarding.md; do
-            if [[ -f "${quaid_proj_src}/${f}" ]] && [[ ! -f "${quaid_proj_dir}/${f}" ]]; then
-                cp "${quaid_proj_src}/${f}" "${quaid_proj_dir}/${f}"
-            fi
-        done
-        if [[ ! -f "${quaid_proj_dir}/PROJECT.md" ]]; then
-            cat > "${quaid_proj_dir}/PROJECT.md" << 'PROJEOF'
-# Quaid Knowledge Layer
+        python3 - "$quaid_proj_src" "$quaid_proj_dir" <<'PY'
+import os
+import shutil
+import sys
 
-Persistent long-term knowledge layer. Stores facts, relationships, and preferences
-in a local SQLite graph database. Retrieved automatically via hybrid search.
-
-## Key Files
-- `TOOLS.md` — How to use project tools and recall paths effectively
-- `AGENTS.md` — Project behavior rules and operating guidance
-- `USER.md` — Journaling guidance for user-understanding entries
-- `SOUL.md` — Journaling guidance for agent self-reflection entries
-- `MEMORY.md` — Journaling guidance for shared-moment entries
-- `ARCHITECTURE.md` — Full system architecture and design
-- `project_onboarding.md` — Guide for discovering and registering projects
-
-## Systems
-- **Knowledge** — Fact extraction, graph storage, hybrid recall
-- **Journal** — Slow-path learning, personality evolution
-- **Projects** — Documentation tracking, staleness detection, RAG search
-- **Workspace** — Core markdown monitoring, nightly maintenance
-PROJEOF
+src, dst = sys.argv[1], sys.argv[2]
+for root, dirs, files in os.walk(src):
+    dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules"}]
+    rel = os.path.relpath(root, src)
+    target_root = dst if rel == "." else os.path.join(dst, rel)
+    os.makedirs(target_root, exist_ok=True)
+    for name in files:
+        if name.endswith(".pyc"):
+            continue
+        src_path = os.path.join(root, name)
+        dst_path = os.path.join(target_root, name)
+        if not os.path.exists(dst_path):
+            shutil.copy2(src_path, dst_path)
+PY
+        local quaid_source_root="${PLUGIN_DIR#${WORKSPACE_ROOT}/}"
+        if [[ "$quaid_source_root" == "$PLUGIN_DIR" ]]; then
+            quaid_source_root="$PLUGIN_DIR"
         fi
         # Register Quaid project in the docs registry
         (
@@ -2024,7 +2019,13 @@ sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
 try:
-    reg.create_project('quaid', label='Quaid Knowledge Layer', description='Knowledge layer reference docs and agent instructions.')
+    reg.create_project(
+        'quaid',
+        label='Quaid Knowledge Layer',
+        home_dir='projects/quaid/',
+        source_roots=[${quaid_source_root@Q}],
+        description='Quaid runtime, memory, project-doc, and adapter reference docs.',
+    )
 except ValueError:
     pass
 found = reg.auto_discover('quaid')

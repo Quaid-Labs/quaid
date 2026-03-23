@@ -22,7 +22,7 @@ _COMMANDS = [
     {
         "id": "misc_project",
         "description": "Throwaway, temp, quick, or hello-world files and scripts",
-        "hint": "Throwaway file — write to: /quaid/shared/projects/misc--test",
+        "hint": "Throwaway file — write to: /quaid/projects/misc--test",
     },
     {
         "id": "create_project",
@@ -247,14 +247,14 @@ class TestResolveCommandRegistry:
         monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
         resolved = resolve_command_registry()
         misc_entry = next(c for c in resolved if c["id"] == "misc_project")
-        expected = str(tmp_path / "shared" / "projects" / "misc--openclaw-main")
+        expected = str(tmp_path / "projects" / "misc--openclaw-main")
         assert expected in misc_entry["hint"]
 
     def test_falls_back_to_directory_scan(self, tmp_path, monkeypatch):
         """resolve_command_registry finds instance by scanning misc-- dirs."""
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
-        misc_dir = tmp_path / "shared" / "projects" / "misc--my-instance"
+        misc_dir = tmp_path / "projects" / "misc--my-instance"
         misc_dir.mkdir(parents=True)
         resolved = resolve_command_registry()
         misc_entry = next(c for c in resolved if c["id"] == "misc_project")

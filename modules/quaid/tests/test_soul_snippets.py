@@ -334,9 +334,10 @@ class TestDistillation:
                 "SOUL.md",
                 "# SOUL\nbase context\n",
                 [{"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."}],
-                project_content="# SOUL\nproject context\n",
+                project_content="# SOUL\n\n## What Belongs\n- project context\n",
             )
         assert "projects/quaid/SOUL.md" in prompt
+        assert "Reference guidance from projects/quaid/SOUL.md" in prompt
         assert "project context" in prompt
 
     def test_build_distillation_prompt_emphasizes_synthesis_over_logs(self, workspace_dir, mock_config):
@@ -350,6 +351,39 @@ class TestDistillation:
         assert "Default to EDITS, not ADDITIONS." in prompt
         assert "Never preserve chronology" in prompt
         assert "Return at most 2 additions total" in prompt
+        assert "guidance, not law" in prompt
+
+    def test_build_distillation_prompt_shows_mutable_body_separately_from_template(self, workspace_dir, mock_config):
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import build_distillation_prompt
+            project = "# SOUL\n\n## What Belongs\n- Reflection\n"
+            parent = project + "\n- New distilled body line.\n"
+            prompt = build_distillation_prompt(
+                "SOUL.md",
+                parent,
+                [{"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."}],
+                project_content=project,
+            )
+        assert "Current mutable body of SOUL.md" in prompt
+        assert "- New distilled body line." in prompt
+        assert "heuristics only" in prompt
+
+    def test_build_review_prompt_treats_template_as_guidance(self, workspace_dir, mock_config):
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import build_review_prompt
+            prompt = build_review_prompt({
+                "USER.md": {
+                    "parent_content": "# USER\n\n## Patterns\n- Existing line\n",
+                    "project_content": "# USER\n\n## What Belongs\n- Deep patterns\n",
+                    "snippets": ["Solomon values direct root-cause analysis over reassurance."],
+                    "config": mock_config.docs.core_markdown.files["USER.md"],
+                }
+            })
+        assert "Current mutable body:" in prompt
+        assert "Reference guidance from projects/quaid/USER.md" in prompt
+        assert "guidance, not law" in prompt
+        assert "Merge recurring snippets into one stronger line" in prompt
+        assert 'file="USER.md"' in prompt
 
     def test_normalize_distillation_result_drops_loggy_additions_and_caps_count(self, workspace_dir, mock_config):
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
@@ -553,10 +587,12 @@ class TestDistillation:
 
         assert result["additions"] == 1
         assert "I grow through every conversation." in (
+            workspace_dir / "identity" / "SOUL.md"
+        ).read_text()
+        assert (workspace_dir / "projects" / "quaid" / "SOUL.md").exists()
+        assert "I grow through every conversation." not in (
             workspace_dir / "projects" / "quaid" / "SOUL.md"
         ).read_text()
-        # Generated project artifact should exist
-        assert (workspace_dir / "projects" / "quaid" / "SOUL.md").exists()
 
     def test_apply_distillation_edits_plus_additions(self, workspace_dir, mock_config):
         """Regression: edits must not be lost when additions are also applied."""
@@ -1373,8 +1409,8 @@ class TestInsertIntoFile:
 
     def test_missing_file_returns_false(self, workspace_dir):
         from datastore.notedb.soul_snippets import _insert_into_file
-        result = _insert_into_file("NONEXISTENT.md", "text", "END")
-        assert result is False
+        with pytest.raises(RuntimeError, match="Identity file missing"):
+            _insert_into_file("NONEXISTENT.md", "text", "END")
 
     def test_hash_prefixed_text_gets_bullet(self, workspace_dir):
         from datastore.notedb.soul_snippets import _insert_into_file
@@ -1560,6 +1596,9 @@ class TestSnippetReview:
 
         assert result["folded"] == 1
         assert "I notice patterns in my responses." in (
+            workspace_dir / "identity" / "SOUL.md"
+        ).read_text()
+        assert "I notice patterns in my responses." not in (
             workspace_dir / "projects" / "quaid" / "SOUL.md"
         ).read_text()
 
@@ -1866,12 +1905,11 @@ class TestResolveWritableFilePath:
 class TestInsertIntoFileBugRegression:
     """Unit tests for _insert_into_file() — especially the missing-file path."""
 
-    def test_missing_file_returns_false_not_raises(self, workspace_dir):
-        """_insert_into_file must return False, not raise, when file is absent."""
+    def test_missing_file_raises_under_fail_hard(self, workspace_dir):
+        """_insert_into_file must raise loudly when fail-hard is enabled."""
         from datastore.notedb.soul_snippets import _insert_into_file
-        # Confirm no file exists
-        result = _insert_into_file("GHOST.md", "Some text.", "END")
-        assert result is False
+        with pytest.raises(RuntimeError, match="Identity file missing"):
+            _insert_into_file("GHOST.md", "Some text.", "END")
 
     def test_existing_file_returns_true(self, workspace_dir):
         """_insert_into_file returns True when target exists and insert succeeds."""

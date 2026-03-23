@@ -2955,13 +2955,13 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
         log.info(`Created identity/${f}`);
       }
     }
-    // Create misc project dir in shared/projects/misc--{instanceId}/.
+    // Create misc project dir in projects/misc--{instanceId}/.
     // Lives as a real tracked project — all registry tooling works automatically.
     for (const bucket of [`misc--${resolvedInstanceId}`]) {
-      const bucketDir = path.join(WORKSPACE, "shared", "projects", bucket);
+      const bucketDir = path.join(WORKSPACE, "projects", bucket);
       if (!fs.existsSync(bucketDir)) {
         fs.mkdirSync(bucketDir, { recursive: true });
-        log.info(`Created shared bucket dir: shared/projects/${bucket}/`);
+        log.info(`Created project bucket dir: projects/${bucket}/`);
       }
     }
   }
@@ -3041,11 +3041,11 @@ print('[+] Datastore init hooks complete')
   // Contract-owned project workspace dirs should exist after datastore init hooks.
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
   // install always yields expected workspace shape.
-  // misc is a tracked project in shared/projects/misc--{instanceId}/
+  // misc is a tracked project in projects/misc--{instanceId}/
   const instanceMiscDir = (resolvedInstanceId && resolvedInstanceId !== "standalone")
-    ? path.join(WORKSPACE, "shared", "projects", `misc--${resolvedInstanceId}`)
+    ? path.join(WORKSPACE, "projects", `misc--${resolvedInstanceId}`)
     : SCRATCH_DIR;
-  const contractOwnedDirs = [instanceProjectsDir(), TEMP_DIR, instanceMiscDir];
+  const contractOwnedDirs = Array.from(new Set([PROJECTS_DIR, instanceProjectsDir(), TEMP_DIR, instanceMiscDir]));
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   if (missingContractOwnedDirs.length > 0) {
     for (const dir of missingContractOwnedDirs) {
@@ -3299,7 +3299,7 @@ print(total)
     const existingDirs = [];
     // Scan projects/ for existing project directories
     try {
-      for (const entry of fs.readdirSync(instanceProjectsDir(), { withFileTypes: true })) {
+      for (const entry of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
         if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "staging") {
           existingDirs.push(entry.name);
         }
@@ -3321,7 +3321,7 @@ reg = DocsRegistry()
 names = ${projNames}
 total_docs = 0
 for name in names:
-    proj_dir = os.path.join(${JSON.stringify(instanceProjectsDir())}, name)
+    proj_dir = os.path.join(${JSON.stringify(PROJECTS_DIR)}, name)
     project_md = os.path.join(proj_dir, 'PROJECT.md')
     try:
         if not os.path.exists(project_md):
@@ -3353,42 +3353,13 @@ print(total_docs)
     log.info(C.dim("Your agent can discover more projects — ask it to \"set up projects\""));
 
     // Install Quaid project reference docs and constitutional guidance.
-    // shared/projects/ lives at QUAID_HOME level, shared across all instances.
-    const quaidProjDir = path.join(WORKSPACE, "shared", "projects", "quaid");
+    // Canonical projects/ lives at QUAID_HOME level, shared across all instances.
+    const quaidProjDir = path.join(WORKSPACE, "projects", "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
-    for (const f of ["TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "ENVIRONMENT.md", "ARCHITECTURE.md", "project_onboarding.md"]) {
-      const src = path.join(quaidProjSrc, f);
-      const dst = path.join(quaidProjDir, f);
-      if (fs.existsSync(src) && !fs.existsSync(dst)) {
-        fs.copyFileSync(src, dst);
-      }
-    }
-    // Create PROJECT.md for Quaid itself
-    if (!fs.existsSync(path.join(quaidProjDir, "PROJECT.md"))) {
-      fs.writeFileSync(path.join(quaidProjDir, "PROJECT.md"), [
-        "# Quaid Knowledge Layer",
-        "",
-        "Persistent long-term knowledge layer. Stores facts, relationships, and preferences",
-        "in a local SQLite graph database. Retrieved automatically via hybrid search.",
-        "",
-        "## Key Files",
-        "- `TOOLS.md` — How to use project tools and recall paths effectively",
-        "- `AGENTS.md` — Project behavior rules and operating guidance",
-        "- `USER.md` — Journaling guidance for user-understanding entries",
-        "- `SOUL.md` — Journaling guidance for agent self-reflection entries",
-        "- `ENVIRONMENT.md` — Learned behaviors, environment observations, and shared history",
-        "- `ARCHITECTURE.md` — Full system architecture and design",
-        "- `project_onboarding.md` — Guide for discovering and registering projects",
-        "",
-        "## Systems",
-        "- **Knowledge** — Fact extraction, graph storage, hybrid recall",
-        "- **Journal** — Slow-path learning, personality evolution",
-        "- **Projects** — Documentation tracking, staleness detection, RAG search",
-        "- **Workspace** — Core markdown monitoring, nightly maintenance",
-        "",
-      ].join("\n"));
-    }
+    copyMissingDirSync(quaidProjSrc, quaidProjDir);
+    const quaidSourceRoot = path.relative(WORKSPACE, PLUGIN_DIR).split(path.sep).join("/");
+    const quaidSourceRoots = JSON.stringify(quaidSourceRoot ? [quaidSourceRoot] : []);
     // Register Quaid as a project unless it was already covered by existing project scan.
     const quaidAlreadyRegisteredViaExisting = existingDirs.includes("quaid");
     const regQuaidScript = `
@@ -3399,7 +3370,13 @@ sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
 try:
-    reg.create_project('quaid', label='Quaid Knowledge Layer', home_dir='shared/projects/quaid/', description='Knowledge layer reference docs and agent instructions.')
+    reg.create_project(
+        'quaid',
+        label='Quaid Knowledge Layer',
+        home_dir='projects/quaid/',
+        source_roots=${quaidSourceRoots},
+        description='Quaid runtime, memory, project-doc, and adapter reference docs.',
+    )
 except ValueError:
     pass  # already exists
 found = reg.auto_discover('quaid')
@@ -3413,7 +3390,7 @@ print(len(found))
       log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
     }
 
-    // Register instance misc project in shared/projects/misc--{instanceId}/.
+    // Register instance misc project in projects/misc--{instanceId}/.
     // Single catch-all bucket for work without a proper project home.
     if (resolvedInstanceId && resolvedInstanceId !== "standalone") {
       const sharedBuckets = [
@@ -3430,7 +3407,7 @@ from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
 try:
     reg.create_project(${JSON.stringify(bucket.name)}, label=${JSON.stringify(bucket.label)},
-        home_dir=${JSON.stringify(`shared/projects/${bucket.name}/`)},
+        home_dir=${JSON.stringify(`projects/${bucket.name}/`)},
         description=${JSON.stringify(bucket.description)})
     print('created')
 except ValueError:
@@ -4193,6 +4170,23 @@ function copyDirSync(src, dest) {
     if (entry.isDirectory()) {
       copyDirSync(srcPath, destPath);
     } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+function copyMissingDirSync(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
+    if (entry.name === ".git") continue;
+    if (entry.name === "__pycache__") continue;
+    if (entry.name.endsWith(".pyc")) continue;
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyMissingDirSync(srcPath, destPath);
+    } else if (!fs.existsSync(destPath)) {
       fs.copyFileSync(srcPath, destPath);
     }
   }

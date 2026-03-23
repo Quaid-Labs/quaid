@@ -146,7 +146,7 @@ QUAID_INSTANCE=claude-code quaid project unlink <name>
 
 `quaid project delete <name>` is **destructive**. It:
 - Removes all instance linkages
-- Removes the canonical project directory (`shared/projects/<name>/`)
+- Removes the canonical project directory (`projects/<name>/`)
 - Purges `project_definitions` and all `doc_registry` rows for the project from SQLite
 - Destroys shadow git tracking if configured
 - Does NOT touch the user's `source_root` directory

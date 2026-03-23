@@ -215,7 +215,7 @@ Each instance should set an explicit absolute path, or a path relative to
 `QUAID_HOME` that is scoped to its instance directory. For example, two instances would use their respective instance roots:
 `QUAID_HOME/claude-code/data/memory.db` and `QUAID_HOME/openclaw/data/memory.db`.
 Separate databases mean instances do not share memory — cross-instance recall
-requires the global project registry and shared projects directory.
+requires the global project registry and canonical projects directory.
 
 ---
 
@@ -327,14 +327,13 @@ across all instances under that home:
 | Path | Purpose |
 |---|---|
 | `shared/config/memory.json` | Machine-wide shared config (embeddings, Ollama) |
-| `shared/projects/` | Canonical project directories for shared projects |
-| `shared/project-registry.json` | Global project registry cross-instances (`lib/instance.shared_registry_path()`) |
-| `project-registry.json` | Legacy top-level registry location (some adapters) |
+| `projects/` | Canonical project directories for shared projects |
+| `projects/project-registry.json` | Global project registry cross-instances (`lib/instance.shared_registry_path()`) |
 | `.env` | API key fallback file (loaded when `failHard=false`) |
 
-The shared projects directory is returned by both
+The canonical projects directory is returned by both
 `lib/instance.shared_projects_dir()` and `QuaidAdapter.projects_dir()`. Projects
-created by any instance on the machine are registered in the shared registry
+created by any instance on the machine are registered in the global registry
 so they remain discoverable across instance boundaries.
 
 ---

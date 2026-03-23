@@ -93,7 +93,7 @@ def _path_suffix_candidates(path_value: str, workspace: Optional[Path] = None) -
             pass
 
     normalized = raw.replace("\\", "/")
-    for marker in ("/projects/", "/shared/projects/"):
+    for marker in ("/projects/",):
         idx = normalized.find(marker)
         if idx >= 0:
             _add(normalized[idx + 1 :])
