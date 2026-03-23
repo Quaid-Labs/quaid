@@ -2198,6 +2198,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       // Checked each tick; times out after 60s. Empty most of the time.
       const pendingOrphanChecks = new Map<string, number>();
       const ORPHAN_CHECK_DEADLINE_MS = 60_000;
+      // Stale-sweep fallback: runs recoverStaleBuffers() every 30s to catch idle
+      // sessions that were not caught by onSessionTranscriptUpdate (e.g. when the
+      // event does not fire for a given OC version/configuration).
+      const STALE_SWEEP_INTERVAL_MS = 30_000;
+      let lastStaleRecoverMs = 0;
       const tickSessionIndex = () => {
         try {
           const data = readSessionsIndex();
@@ -2523,6 +2528,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         // Mark initial snapshot complete after the first tick so subsequent ticks
         // can distinguish genuinely new keys from the initial population.
         initialSnapshotDone = true;
+        // Stale-sweep fallback: periodically call recoverStaleBuffers() so idle
+        // sessions are caught even when onSessionTranscriptUpdate doesn't fire.
+        if (timeoutManager && Date.now() - lastStaleRecoverMs >= STALE_SWEEP_INTERVAL_MS) {
+          lastStaleRecoverMs = Date.now();
+          void timeoutManager.recoverStaleBuffers();
+        }
       };
       void tickSessionIndex();
       sessionIndexWatcherTimer = setInterval(tickSessionIndex, SESSION_INDEX_POLL_MS);

@@ -1671,6 +1671,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       let initialSnapshotDone = false;
       const pendingOrphanChecks = /* @__PURE__ */ new Map();
       const ORPHAN_CHECK_DEADLINE_MS = 6e4;
+      const STALE_SWEEP_INTERVAL_MS = 3e4;
+      let lastStaleRecoverMs = 0;
       const tickSessionIndex = () => {
         try {
           const data = readSessionsIndex();
@@ -1929,6 +1931,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           });
         }
         initialSnapshotDone = true;
+        if (timeoutManager && Date.now() - lastStaleRecoverMs >= STALE_SWEEP_INTERVAL_MS) {
+          lastStaleRecoverMs = Date.now();
+          void timeoutManager.recoverStaleBuffers();
+        }
       };
       void tickSessionIndex();
       sessionIndexWatcherTimer = setInterval(tickSessionIndex, SESSION_INDEX_POLL_MS);
