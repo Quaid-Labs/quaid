@@ -385,7 +385,7 @@ def cleanup_doc(doc_path: str, purpose: str, dry_run: bool = True) -> bool:
 
     user_message = f"DOCUMENT TO CLEAN ({doc_path}):\n\n{current_doc}"
 
-    print(f"  Calling Opus to clean up {doc_path}...")
+    print(f"  Calling deep model to clean up {doc_path}...")
     response, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=system_prompt,
@@ -410,7 +410,7 @@ def cleanup_doc(doc_path: str, purpose: str, dry_run: bool = True) -> bool:
     reduction = chars_before - chars_after
     reduction_pct = (reduction / chars_before * 100) if chars_before > 0 else 0
 
-    print(f"  Opus responded in {duration:.1f}s")
+    print(f"  Deep model responded in {duration:.1f}s")
     print(f"  Size: {chars_before} -> {chars_after} chars ({reduction:+d}, {reduction_pct:.1f}% reduction)")
 
     if dry_run:
@@ -898,7 +898,7 @@ def update_doc_from_diffs(
         f"GIT CHANGES SINCE DOC LAST UPDATED:\n\n{all_diffs}"
     )
 
-    print(f"  Calling Opus to update {doc_path}...")
+    print(f"  Calling deep model to update {doc_path}...")
     doc_update_timeout = float(os.environ.get("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", "300") or "300")
     response, duration = call_deep_reasoning(
         prompt=user_message,
@@ -921,7 +921,7 @@ def update_doc_from_diffs(
         # Remove the summary comment from the doc
         response = re.sub(r'\n*<!-- CHANGE_SUMMARY: .+? -->\n*', '', response).strip()
 
-    print(f"  Opus responded in {duration:.1f}s ({len(response)} chars)")
+    print(f"  Deep model responded in {duration:.1f}s ({len(response)} chars)")
 
     chars_after = len(response)
 
