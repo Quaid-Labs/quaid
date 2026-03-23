@@ -1070,7 +1070,7 @@ Then `/reset`.
 Check after extraction:
 
 ```bash
-ssh example.local 'tail -20 ~/quaid/openclaw-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists in instance)"'
+ssh example.local 'tail -20 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists)"'
 ```
 
 Pass criteria:
@@ -1267,17 +1267,17 @@ a failure.
 **Project logs** (written when extraction includes `project_logs` entries):
 
 ```bash
-ssh example.local 'echo "=== OC quaid PROJECT.log ==="; tail -30 ~/quaid/openclaw-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
-ssh example.local 'echo "=== CC quaid PROJECT.log ==="; tail -30 ~/quaid/claude-code-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== quaid PROJECT.log (shared) ==="; tail -30 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
 ```
 
-Pass: `projects/quaid/PROJECT.log` exists and has at least one timestamped
-entry from this test run — M8 includes a deliberate `/reset` to capture project
-context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
+Pass: `~/quaid/projects/quaid/PROJECT.log` exists and has at least one
+timestamped entry from this test run — M8 includes a deliberate `/reset` to
+capture project context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
+Note: PROJECT.log lives at the shared quaid-home path, not per-instance.
 
 Fail:
 - OC `USER.snippets.md` is absent or empty after M11 extraction
-- `projects/quaid/PROJECT.log` absent after M11's trigger step
+- `~/quaid/projects/quaid/PROJECT.log` absent after M11's trigger step
 - Any file is structurally malformed (broken JSON, truncated entries)
 
 Not a failure:
