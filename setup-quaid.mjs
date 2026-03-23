@@ -3215,7 +3215,7 @@ except Exception as e:
       return lines > 5;
     });
 
-  if (mdFiles.length > 0) {
+  if (mdFiles.length > 0 && !AGENT_MODE) {
     log.info(`Found existing workspace files: ${C.bcyan(mdFiles.join(", "))}`);
     const doMigrate = handleCancel(await confirm({
       message: "Import facts from existing files into memory? (uses LLM processing)",
@@ -3558,8 +3558,10 @@ c.close()
   s.stop(C.green("Health checks complete"));
   note(checks.join("\n"), C.bmag("STATUS"));
 
-  // Smoke test
-  if (IS_OPENCLAW) {
+  // Smoke test — gateway warmup only needed for interactive OC installs.
+  // Agent mode handles gateway lifecycle independently; Python smoke test
+  // runs directly and does not require the gateway route.
+  if (IS_OPENCLAW && !AGENT_MODE) {
     log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "validation smoke test");
   }
