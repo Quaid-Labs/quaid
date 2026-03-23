@@ -324,11 +324,12 @@ installer or inject manually.
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
 ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
-# Verify env block has QUAID_HOME, QUAID_INSTANCE, and CLAUDE_PROJECT_DIR —
-# without this the CC agent shell can derive an unpredictable silo from the
-# active project and drift back into a non-test lane.
-ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE:\",e.get(\"QUAID_INSTANCE\",\"MISSING\")); print(\"CLAUDE_PROJECT_DIR:\",e.get(\"CLAUDE_PROJECT_DIR\",\"MISSING\"))"'
-# Expected: QUAID_HOME: /Users/owner/quaid   QUAID_INSTANCE: claude-code-livetest   CLAUDE_PROJECT_DIR: /tmp/cc-livetest
+# Verify QUAID_HOME in global settings and QUAID_INSTANCE in per-project settings.
+# QUAID_INSTANCE is NOT in ~/.claude/settings.json — it is pinned per-project so
+# different CC project dirs can use different silos without cross-contamination.
+ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE (should be absent):\",e.get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
+ssh example.local 'cat /tmp/cc-livetest/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_INSTANCE (per-project):\",e.get(\"QUAID_INSTANCE\",\"MISSING\"))"'
+# Expected: QUAID_HOME: /Users/owner/quaid   and   QUAID_INSTANCE (per-project): claude-code-livetest
 ssh example.local 'ls -l ~/quaid/openclaw-livetest/identity/SOUL.md ~/quaid/claude-code-livetest/identity/SOUL.md 2>/dev/null || true'
 ```
 

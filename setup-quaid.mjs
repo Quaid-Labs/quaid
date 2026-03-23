@@ -439,7 +439,12 @@ function listExistingInstances() {
  */
 async function promptInstanceId(adapterType) {
   if (AGENT_MODE || _testAnswers) {
-    // Non-interactive: keep the adapter-derived default, no prompt.
+    // Non-interactive: honor QUAID_INSTANCE env if set explicitly, otherwise
+    // use the adapter-derived default (e.g. "openclaw-main", "claude-code-main").
+    const envInstance = String(process.env.QUAID_INSTANCE || "").trim();
+    if (envInstance && !_instanceIdOverride) {
+      _instanceIdOverride = envInstance;
+    }
     syncInstallerInstanceEnv(adapterType);
     return;
   }
@@ -3905,6 +3910,29 @@ function setupClaudeCodeHooks() {
     log.info(`Claude Code hooks configured in ${settingsPath}`);
   } else {
     log.info("Claude Code hooks already configured");
+  }
+
+  // When CLAUDE_PROJECT_DIR is set during install (e.g. livetest with an
+  // explicit project dir), pin QUAID_INSTANCE into the per-project settings
+  // so CC hooks know which silo to use when running from that project dir.
+  // This is not written for normal installs (CLAUDE_PROJECT_DIR is not set).
+  const projectDir = String(process.env.CLAUDE_PROJECT_DIR || "").trim();
+  const instanceId = String(process.env.QUAID_INSTANCE || "").trim();
+  if (projectDir && instanceId) {
+    const projectSettingsPath = path.join(projectDir, ".claude", "settings.json");
+    let projectSettings = {};
+    if (fs.existsSync(projectSettingsPath)) {
+      try {
+        projectSettings = JSON.parse(fs.readFileSync(projectSettingsPath, "utf8"));
+      } catch {}
+    }
+    if (!projectSettings.env) projectSettings.env = {};
+    if (projectSettings.env.QUAID_INSTANCE !== instanceId) {
+      projectSettings.env.QUAID_INSTANCE = instanceId;
+      fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
+      fs.writeFileSync(projectSettingsPath, JSON.stringify(projectSettings, null, 2) + "\n");
+      log.info(`Pinned QUAID_INSTANCE=${instanceId} in ${projectSettingsPath}`);
+    }
   }
 }
 
