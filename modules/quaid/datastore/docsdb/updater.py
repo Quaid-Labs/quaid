@@ -611,11 +611,14 @@ def _resolve_path(relative: str) -> Path:
     return _workspace() / relative
 
 
-def check_staleness() -> Dict[str, StalenessInfo]:
+def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:
     """Check which docs are stale relative to their source files.
 
     Uses registry source_mappings first, then falls back to config sourceMapping.
     Registry takes precedence for any overlapping doc paths.
+
+    Args:
+        project: If set, only check docs belonging to this project.
 
     Returns dict of doc_path -> StalenessInfo for stale docs only.
     """
@@ -630,20 +633,21 @@ def check_staleness() -> Dict[str, StalenessInfo]:
     try:
         from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
-        registry_mappings = registry.get_source_mappings()
+        registry_mappings = registry.get_source_mappings(project=project)
         for doc_path, sources in registry_mappings.items():
             doc_to_sources[doc_path] = sources
     except Exception as exc:
         logger.warning("Falling back to config source mappings; registry mappings unavailable: %s", exc)
 
-    # 2. Config sourceMapping (fallback for unmigrated docs)
-    source_mapping = cfg.docs.source_mapping
-    if source_mapping:
-        for src_path, mapping in source_mapping.items():
-            for doc_path in mapping.docs:
-                sources = doc_to_sources.setdefault(doc_path, [])
-                if src_path not in sources:
-                    sources.append(src_path)
+    # 2. Config sourceMapping (fallback for unmigrated docs, skip when project filter active)
+    if not project:
+        source_mapping = cfg.docs.source_mapping
+        if source_mapping:
+            for src_path, mapping in source_mapping.items():
+                for doc_path in mapping.docs:
+                    sources = doc_to_sources.setdefault(doc_path, [])
+                    if src_path not in sources:
+                        sources.append(src_path)
 
     if not doc_to_sources:
         return {}
@@ -1259,15 +1263,20 @@ def cmd_update(doc_path: str, dry_run: bool = True) -> bool:
     return update_doc_from_diffs(doc_path, purpose, info.stale_sources, dry_run=dry_run)
 
 
-def cmd_update_stale(dry_run: bool = True, trivial_only: bool = False) -> int:
+def cmd_update_stale(
+    dry_run: bool = True,
+    trivial_only: bool = False,
+    project: Optional[str] = None,
+) -> int:
     """CLI: update all stale docs from git diffs. Returns count of updated docs.
 
     Args:
         dry_run: If True, don't actually write changes.
         trivial_only: If True, only auto-update docs with trivial changes.
             Significant changes will be skipped with a warning.
+        project: If set, only process docs belonging to this project.
     """
-    stale = check_staleness()
+    stale = check_staleness(project=project)
     purposes = get_doc_purposes()
     cfg = get_config()
     max_docs = cfg.docs.max_docs_per_update
@@ -1314,7 +1323,7 @@ def cmd_update_stale(dry_run: bool = True, trivial_only: bool = False) -> int:
         from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
         rag = DocsRAG()
-        all_docs = registry.list_docs()
+        all_docs = registry.list_docs(project=project)
         candidate_paths = []
         for entry in all_docs:
             file_path = entry.get("file_path") or entry.get("path", "")
@@ -1812,6 +1821,7 @@ if __name__ == "__main__":
     stale_parser.add_argument("--apply", action="store_true", help="Apply changes")
     stale_parser.add_argument("--trivial-only", action="store_true",
                               help="Only auto-update trivial changes; skip significant ones")
+    stale_parser.add_argument("--project", help="Only process docs for this project")
 
     # update-from-transcript
     transcript_parser = subparsers.add_parser("update-from-transcript",
@@ -1853,7 +1863,8 @@ if __name__ == "__main__":
         sys.exit(0 if ok else 1)
     elif args.command == "update-stale":
         dry_run = not args.apply
-        count = cmd_update_stale(dry_run=dry_run, trivial_only=args.trivial_only)
+        count = cmd_update_stale(dry_run=dry_run, trivial_only=args.trivial_only,
+                                  project=getattr(args, "project", None))
         sys.exit(0 if count > 0 else 1)
     elif args.command == "update-from-transcript":
         dry_run = not args.apply

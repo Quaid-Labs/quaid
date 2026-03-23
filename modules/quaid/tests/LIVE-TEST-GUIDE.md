@@ -64,6 +64,106 @@ Before starting a long run, request nudges:
 TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh 5 "start nudge on window 7"
 ```
 
+## Coordinator Role (Parallel Mode)
+
+**This section is for claude-dev (window 4), which acts as test coordinator.**
+
+The default sequential procedure (OC → CC → XP in a single window) is still
+correct for a single tester. When Solomon says "run a live test", use parallel
+mode by default to cut wall-clock time roughly in half.
+
+### Parallel Spawn Procedure
+
+Spawn two independent livetester windows — one for OC, one for CC. Both use
+the same agent config from `~/quaid/util/agents/codex-livetester/`.
+
+**Step 1 — Spawn the OC livetester on window 98:**
+
+```bash
+tmux new-window -t main:98 -n "OC-livetest"
+tmux send-keys -t main:98 "cd ~/quaid/util/agents/codex-livetester && codex --yolo" Enter
+```
+
+Then send the OC-only task after the agent initializes, and start the nudge directly from the coordinator:
+
+```bash
+TMUX_MSG_SENDER=claude-dev TMUX_MSG_SOURCE=main:4.0 \
+  ~/quaid/util/scripts/tmux-msg.sh 98 \
+  "[from claude-dev @ main:4.0] Run OC M0-M13 only. Do NOT run CC milestones. Report ISSUE messages to window 4. Send STATUS when M0 is complete so CC can start."
+
+# Coordinator starts the nudge — do not ask the agent to do this
+rm -f /tmp/autonomous_mode_98.pid
+cd ~/quaid/util/scripts && nohup ./autonomous_mode.sh -w 98 -t 300 \
+  > /tmp/autonomous_mode_98_nohup.log 2>&1 & echo "nudge 98 PID=$!"
+```
+
+**Step 2 — Wait for OC M0 complete, then spawn CC livetester on window 97:**
+
+Do not spawn CC until OC M0 passes. OC M0 includes the full wipe + install,
+which CC reuses. Starting CC before OC M0 is complete risks a race on the
+wipe/install step. Window 97 is NOT created until this point.
+
+When OC reports M0 complete:
+
+```bash
+tmux new-window -t main:97 -n "CC-livetest"
+tmux send-keys -t main:97 "cd ~/quaid/util/agents/codex-livetester && codex --yolo" Enter
+```
+
+Then send the CC-only task and start the nudge directly from the coordinator:
+
+```bash
+TMUX_MSG_SENDER=claude-dev TMUX_MSG_SOURCE=main:4.0 \
+  ~/quaid/util/scripts/tmux-msg.sh 97 \
+  "[from claude-dev @ main:4.0] Run CC M0-M13 only. Wipe + install already done by OC — do NOT re-wipe. Do NOT run OC milestones. Report ISSUE messages to window 4."
+
+# Coordinator starts the nudge — do not ask the agent to do this
+rm -f /tmp/autonomous_mode_97.pid
+cd ~/quaid/util/scripts && nohup ./autonomous_mode.sh -w 97 -t 300 \
+  > /tmp/autonomous_mode_97_nohup.log 2>&1 & echo "nudge 97 PID=$!"
+```
+
+**Step 3 — OC and CC run M1-M13 in parallel.**
+
+Both windows operate independently. Each sends ISSUEs to window 4. Handle
+fixes as they come in; deploy and unblock each window independently.
+
+**Live interaction pane assignment (do not share):**
+- OC livetester (window 98) uses `main:99` for all live agent interaction
+- CC livetester (window 97) uses `main:100` for all live agent interaction
+
+Create the CC interaction pane when spawning window 97:
+```bash
+tmux new-window -t main:100 -n "CC-interact"
+```
+
+**Step 4 — XP after both M0-M13 complete.**
+
+When both windows report M0-M13 clear, assign XP to whichever window is free
+(window 98 by default):
+
+```bash
+TMUX_MSG_SENDER=claude-dev TMUX_MSG_SOURCE=main:4.0 \
+  ~/quaid/util/scripts/tmux-msg.sh 98 \
+  "[from claude-dev @ main:4.0] Both OC and CC are clear. Run XP now."
+```
+
+### Sequencing Rules
+
+- OC window 98 runs the wipe (Step 0) and install (Step 1). CC window 97 skips
+  both — the environment is already set up.
+- If OC M0 fails, do not spawn CC. Fix OC M0 first.
+- If CC M0 hangs on daemon startup, pre-start the CC daemon manually (known
+  debt: double-fork fix). See the CC M0 notes in the milestone section.
+- XP depends on both adapters being installed and healthy. Run XP only after
+  both M13s are confirmed passing.
+
+### Loop Behavior
+
+After XP passes with zero new commits, the suite is clear. If any commit was
+made during the run (either window), both windows must re-run M0-M13 from
+scratch (full wipe again) before the loop is considered clean.
+
 ## Environment
 
 Main test environment:
@@ -115,6 +215,13 @@ ssh example.local 'rm -rf ~/.openclaw/agents/main/sessions/ && echo "OC sessions
 
 ```bash
 ssh example.local 'rm -f ~/.claude/rules/quaid-projects.md && echo "CC rules cleared"'
+```
+
+**Kill the OC gateway** (the wipe removes files but does not kill the process —
+a leftover gateway will block reinstall with "port 18789 already in use"):
+
+```bash
+ssh example.local 'pkill -f "openclaw-gateway" 2>/dev/null; sleep 1 && echo "gateway killed"'
 ```
 
 ### Step 1 — Installer-Based Clean Install (mandatory)
