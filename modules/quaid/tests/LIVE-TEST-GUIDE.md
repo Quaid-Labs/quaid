@@ -1120,13 +1120,15 @@ Pass:
 - janitor completes
 - `checkpoint-all.json` exists afterward with `status: completed`
 - `janitor-stats.json` reports `success: true`
-- `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0` (snippets were reviewed)
-- `SOUL.snippets.md` line count decreased or file was cleared (entries processed)
-- if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
+- if `SOUL.snippets.md` or `USER.snippets.md` existed in the pre-state:
+  - `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0`
+  - `SOUL.snippets.md` line count decreased or file was cleared (entries processed)
+  - if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
+- if no snippet files existed in the pre-state: all snippet counters = 0 is acceptable (nothing to process)
 
 Fail:
-- snippets review task skipped entirely (all three snippet counters remain 0 and snippets file unchanged)
 - janitor exits with non-zero status
+- snippet files existed in the pre-state but all three snippet counters remain 0 and files unchanged
 
 ### M10: Docs, Health, and Session CLI
 
