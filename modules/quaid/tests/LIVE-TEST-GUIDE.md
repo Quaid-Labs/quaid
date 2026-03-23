@@ -1398,17 +1398,89 @@ fi
 '
 ```
 
+**Step 7 — provision a second OC agent and verify silo isolation:**
+
+OC agents are configured in `~/.openclaw/openclaw.json` under `agents.list`.
+There is no quaid-level create command — a new agent's silo is auto-provisioned
+on first use. Add a temporary second agent, run a call from it, verify the
+two silos don't share data, then clean up.
+
+```bash
+# Add openclaw-m12test to openclaw.json agents.list
+ssh example.local 'python3 -c "
+import json
+from pathlib import Path
+p = Path.home() / \".openclaw/openclaw.json\"
+d = json.loads(p.read_text())
+d.setdefault(\"agents\", {}).setdefault(\"list\", [])
+if not any(a.get(\"id\") == \"m12test\" for a in d[\"agents\"][\"list\"]):
+    d[\"agents\"][\"list\"].append({\"id\": \"m12test\", \"name\": \"M12 Test Agent\"})
+p.write_text(json.dumps(d, indent=2))
+print(\"added m12test to agents.list\")
+"'
+
+# Verify list_agent_instance_ids now includes openclaw-m12test
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+  python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from adaptors.factory import create_adapter
+a = create_adapter(\"openclaw\")
+ids = a.list_agent_instance_ids()
+assert \"openclaw-m12test\" in ids, f\"openclaw-m12test not in {ids}\"
+print(\"PASS: list_agent_instance_ids includes openclaw-m12test:\", ids)
+"'
+
+# Bootstrap second silo via quaid stats (auto-provisions on first use)
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
+  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | tail -5'
+
+# Verify second silo was created under shared QUAID_HOME
+ssh example.local '
+silo="$HOME/quaid/openclaw-m12test"
+for d in config data identity; do
+  [ -d "$silo/$d" ] && echo "PASS: $silo/$d exists" || echo "FAIL: $silo/$d missing"
+done'
+
+# Silo isolation: store a fact in main, verify the second silo cannot recall it
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+  ~/.openclaw/extensions/quaid/quaid store "m12-isolation-canary xyloquartz-sentinel-7749" 2>&1'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-sentinel-7749" 2>&1'
+# Expected: empty results (or "no results") — the second silo has a separate DB
+```
+
+Pass for isolation: search from `openclaw-m12test` returns no matches for the
+canary string stored in `openclaw-main`.
+
+**Step 8 — cleanup second OC agent:**
+
+```bash
+ssh example.local 'python3 -c "
+import json
+from pathlib import Path
+p = Path.home() / \".openclaw/openclaw.json\"
+d = json.loads(p.read_text())
+d[\"agents\"][\"list\"] = [a for a in d.get(\"agents\", {}).get(\"list\", []) if a.get(\"id\") != \"m12test\"]
+p.write_text(json.dumps(d, indent=2))
+print(\"removed m12test from agents.list\")
+"'
+ssh example.local 'trash ~/quaid/openclaw-m12test 2>/dev/null || rm -rf ~/quaid/openclaw-m12test; echo "silo cleaned"'
+```
+
 Pass:
 - `list_agent_instance_ids()` returns at least `["openclaw-main"]`
 - each configured agent has its own `data/` and `extraction-signals/` silo dir
 - extraction signals land under the correct per-agent dir, not a shared path
 - `quaid instances list` reports OC agent silos
 - `extraction-daemon.pid` exists and points to a live process for main
+- second agent silo is auto-provisioned under the shared `QUAID_HOME`
+- search from second silo returns no results for a fact stored in the first silo
 
 Fail:
 - `list_agent_instance_ids()` returns empty list or raises
 - signals land in a shared or flat path instead of the per-agent silo
 - daemon pid file is absent after install
+- second silo shares data with the first (canary string found in second silo)
 
 ### M13: CC Multi-Instance Verification ✓ 2026-03-15
 
@@ -1497,11 +1569,35 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m
 ssh example.local 'test ! -d ~/quaid/claude-code-m13test-dry && echo "PASS: dry-run created no silo" || echo "FAIL: dry-run created silo"'
 ```
 
-**Step 9 — cleanup:**
+**Step 9 — silo isolation: verify the new instance has a separate database:**
+
+```bash
+# Store a canary fact in the main instance
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/.openclaw/extensions/quaid/quaid store "m13-isolation-canary xyloquartz-beacon-4421" 2>&1'
+
+# Search from the new instance — should return no matches (separate DB)
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
+# Expected: empty results — the m13test silo has its own database
+
+# Confirm both instances show different stats (separate node counts)
+ssh example.local 'echo "=== main stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
+ssh example.local 'echo "=== m13test stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
+```
+
+Pass for isolation: search from `claude-code-m13test` returns no matches for the
+canary string. Stats show different node counts (main has accumulated data; m13test is empty or near-empty).
+
+**Step 10 — cleanup:**
 
 ```bash
 ssh example.local 'trash /tmp/quaid-m13-test 2>/dev/null || rm -rf /tmp/quaid-m13-test; echo "cleaned project dir"'
 ssh example.local 'trash ~/quaid/claude-code-m13test 2>/dev/null || rm -rf ~/quaid/claude-code-m13test; echo "cleaned silo"'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/.openclaw/extensions/quaid/quaid global-registry list 2>&1 | grep m13test || echo "m13test not in registry (ok)"'
 ```
 
 Pass:
@@ -1511,12 +1607,14 @@ Pass:
 - `/tmp/quaid-m13-test/.claude/settings.json` has `env.QUAID_INSTANCE == "claude-code-m13test"`
 - `quaid instances list` includes `claude-code-m13test`
 - dry-run leaves no silo on disk
+- search from new instance returns no matches for a fact stored in the main instance
 
 Fail:
 - `make_instance` errors or produces no output
 - any expected silo subdir is missing
 - settings.json absent or contains wrong instance ID
 - dry-run creates the silo
+- canary string is found in the new instance's search (shared DB leak)
 
 ## Cross-Platform Project Linking Test
 
