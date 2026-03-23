@@ -3889,7 +3889,12 @@ function setupClaudeCodeHooks() {
   if (!settings.env) settings.env = {};
   if (settings.env.QUAID_HOME !== WORKSPACE) {
     settings.env.QUAID_HOME = WORKSPACE;
-    // Remove any stale QUAID_INSTANCE that previous installs may have written
+    changed = true;
+  }
+  // Always remove QUAID_INSTANCE — it must not be baked into settings.env.
+  // Instance identity is now derived per-project at runtime via
+  // adapter.get_instance_name() reading CLAUDE_PROJECT_DIR.
+  if ("QUAID_INSTANCE" in settings.env) {
     delete settings.env.QUAID_INSTANCE;
     changed = true;
   }
