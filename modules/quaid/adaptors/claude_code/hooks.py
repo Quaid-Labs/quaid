@@ -1,39 +1,30 @@
 #!/usr/bin/env python3
-"""Claude Code hooks — auto-provision instance from PWD, then run hook."""
+"""Claude Code hooks — auto-provision instance from project root, then run hook."""
 
 import os
-import re
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 def _auto_provision_if_needed() -> None:
-    """Derive QUAID_INSTANCE from PWD and provision a silo if not yet created.
+    """Derive QUAID_INSTANCE from the CC project root and provision if needed.
 
-    Instance name is the full project path translated to a folder-safe slug.
-    The home prefix is stripped so ~/work/myapp → work-myapp.
-    Home dir itself → home. Paths outside home use the full path from root.
+    Uses the adapter's get_instance_name() which reads CLAUDE_PROJECT_DIR —
+    the env var CC injects for all hooks and Bash tool calls. This is the
+    stable project root regardless of the shell's current working directory.
 
     Skips only if QUAID_INSTANCE is already set in the environment.
     """
     if os.environ.get("QUAID_INSTANCE", "").strip():
         return
 
-    cwd = Path(os.getcwd()).resolve()
-    home = Path.home().resolve()
-
-    # Translate the full absolute path into a folder-safe slug.
-    # /Users/owner/work/myapp → users-clawdbot-work-myapp
-    slug = re.sub(r"[^a-z0-9]+", "-", str(cwd).lower()).strip("-")
-    name = slug
-
     try:
         from adaptors.claude_code.adapter import ClaudeCodeAdapter
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
 
         adapter = ClaudeCodeAdapter()
+        name = adapter.get_instance_name()
         mgr = ClaudeCodeInstanceManager(adapter)
         instance_id, was_new = mgr.auto_provision(name)
         os.environ["QUAID_INSTANCE"] = instance_id

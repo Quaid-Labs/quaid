@@ -34,6 +34,27 @@ class ClaudeCodeAdapter(QuaidAdapter):
         env = os.environ.get("QUAID_HOME", "").strip()
         return Path(env).resolve() if env else Path.home() / "quaid"
 
+    def get_instance_name(self) -> str:
+        """Derive a stable instance name from the CC project root.
+
+        Uses CLAUDE_PROJECT_DIR env var which CC injects for all hooks and
+        Bash tool calls — this is the project root regardless of the shell's
+        current working directory.
+
+        Slugifies the full absolute path so every project gets a unique,
+        human-readable silo name:
+            /Users/owner/myapp  →  users-clawdbot-myapp
+            /Users/owner/work/api  →  users-clawdbot-work-api
+
+        Falls back to os.getcwd() if CLAUDE_PROJECT_DIR is not set (e.g.
+        during testing or standalone invocation).
+        """
+        import re
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+        root = Path(project_dir).resolve() if project_dir else Path(os.getcwd()).resolve()
+        slug = re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
+        return slug
+
     def _pending_notifications_path(self) -> Path:
         """Path to the pending notifications file for deferred delivery."""
         return self.data_dir() / "cc-pending-notifications.jsonl"
