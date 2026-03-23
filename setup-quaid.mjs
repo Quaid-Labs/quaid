@@ -1648,28 +1648,49 @@ async function step1_preflight() {
       log.warn("Install Claude Code: https://docs.anthropic.com/en/docs/claude-code");
       log.warn("Continuing anyway — CLI is needed at runtime, not install time.");
     }
-    // Check OAuth credentials — prefer long-lived token from `claude setup-token`
+    // Check and store OAuth token — Quaid uses its own token file so it is not
+    // dependent on credentials.json, which can be stale or scoped incorrectly.
+    const authTokenPath = path.join(WORKSPACE, "config", "adapters", "claude-code", ".auth-token");
+    const existingFileToken = (() => {
+      try { return fs.existsSync(authTokenPath) ? fs.readFileSync(authTokenPath, "utf8").trim() : ""; }
+      catch { return ""; }
+    })();
     const envToken = (process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim();
-    const credsPath = path.join(os.homedir(), ".claude", ".credentials.json");
-    if (envToken) {
-      s.stop(C.green("Claude Code") + C.dim(" — CLAUDE_CODE_OAUTH_TOKEN set (preferred)"));
-    } else if (fs.existsSync(credsPath)) {
-      try {
-        const creds = JSON.parse(fs.readFileSync(credsPath, "utf8"));
-        if (creds?.claudeAiOauth?.accessToken) {
-          s.stop(C.green("Claude Code") + C.dim(" — OAuth credentials found"));
-          log.info("Tip: for headless/server installs, run 'claude setup-token' for a long-lived token,");
-          log.info("     then set CLAUDE_CODE_OAUTH_TOKEN in your environment.");
-        } else {
-          s.stop(C.yellow("Claude Code") + C.dim(" — no OAuth token"));
-          log.warn("Run 'claude setup-token' (preferred) or 'claude login' to authenticate.");
+    const hasToken = !!(existingFileToken || envToken);
+    s.stop(
+      hasToken
+        ? C.green("Claude Code") + C.dim(existingFileToken ? " — auth token found" : " — CLAUDE_CODE_OAUTH_TOKEN set")
+        : C.yellow("Claude Code") + C.dim(" — no auth token")
+    );
+
+    if (!AGENT_MODE) {
+      // In interactive mode: always offer to confirm or replace the token.
+      const tokenAction = hasToken
+        ? handleCancel(await select({
+            message: "Quaid OAuth token:",
+            options: [
+              { value: "keep",  label: "Use current token" },
+              { value: "reset", label: "Enter a new token" },
+            ],
+          }))
+        : "reset";
+
+      if (tokenAction === "reset") {
+        log.info(C.dim("Run `claude setup-token` in another terminal to generate a long-lived token."));
+        log.info(C.dim("Paste the token below (it will be stored at: " + authTokenPath + ")"));
+        const newToken = handleCancel(await text({
+          message: "OAuth token:",
+          placeholder: "paste token here",
+          validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
+        }));
+        if (newToken && newToken.trim()) {
+          fs.mkdirSync(path.dirname(authTokenPath), { recursive: true });
+          fs.writeFileSync(authTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
+          log.success("Token stored at " + authTokenPath);
         }
-      } catch {
-        s.stop(C.yellow("Claude Code") + C.dim(" — credentials unreadable"));
       }
-    } else {
-      s.stop(C.yellow("Claude Code") + C.dim(" — no credentials found"));
-      log.warn("Run 'claude setup-token' (preferred) or 'claude login' to authenticate.");
+    } else if (!hasToken) {
+      log.warn("No OAuth token found. Set CLAUDE_CODE_OAUTH_TOKEN or run the installer interactively.");
     }
     fs.mkdirSync(WORKSPACE, { recursive: true });
   } else if (_isPlatform("openclaw")) {
