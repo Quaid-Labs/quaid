@@ -1441,16 +1441,37 @@ for d in config data identity; do
   [ -d "$silo/$d" ] && echo "PASS: $silo/$d exists" || echo "FAIL: $silo/$d missing"
 done'
 
-# Silo isolation: store a fact in main, verify the second silo cannot recall it
+# Run a real store call from each instance — verify both work
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
-  ~/.openclaw/extensions/quaid/quaid store "m12-isolation-canary xyloquartz-sentinel-7749" 2>&1'
+  ~/.openclaw/extensions/quaid/quaid store "m12-main-canary xyloquartz-sentinel-7749" 2>&1'
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
+  ~/.openclaw/extensions/quaid/quaid store "m12-test-canary xyloquartz-m12test-8834" 2>&1'
+
+# Cross-silo isolation: each instance must NOT see the other's canary
+ssh example.local 'echo "=== main search for m12test canary (expect empty) ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m12test-8834" 2>&1'
+ssh example.local 'echo "=== m12test search for main canary (expect empty) ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
   ~/.openclaw/extensions/quaid/quaid search "xyloquartz-sentinel-7749" 2>&1'
-# Expected: empty results (or "no results") — the second silo has a separate DB
+
+# Each instance can recall its own fact
+ssh example.local 'echo "=== main recalls its own canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-sentinel-7749" 2>&1'
+ssh example.local 'echo "=== m12test recalls its own canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m12test-8834" 2>&1'
+
+# Stats from both — confirm separate node counts
+ssh example.local 'echo "=== main stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
+ssh example.local 'echo "=== m12test stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
+  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
 ```
 
-Pass for isolation: search from `openclaw-m12test` returns no matches for the
-canary string stored in `openclaw-main`.
+Pass: both instances can store and recall their own facts; neither can see the
+other's canary; stats show different node counts (separate databases).
 
 **Step 8 — cleanup second OC agent:**
 
@@ -1474,13 +1495,17 @@ Pass:
 - `quaid instances list` reports OC agent silos
 - `extraction-daemon.pid` exists and points to a live process for main
 - second agent silo is auto-provisioned under the shared `QUAID_HOME`
-- search from second silo returns no results for a fact stored in the first silo
+- `quaid store` succeeds from both instances
+- each instance can recall its own stored fact
+- neither instance can see the other's canary (cross-silo search returns empty)
+- `quaid stats` shows different node counts for each instance
 
 Fail:
 - `list_agent_instance_ids()` returns empty list or raises
 - signals land in a shared or flat path instead of the per-agent silo
 - daemon pid file is absent after install
-- second silo shares data with the first (canary string found in second silo)
+- `quaid store` fails from either instance
+- cross-silo search returns the other instance's canary (shared DB leak)
 
 ### M13: CC Multi-Instance Verification ✓ 2026-03-15
 
