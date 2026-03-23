@@ -124,14 +124,21 @@ const _QUAID_PREFIX = (() => {
 /**
  * Derive the Quaid instance ID for a given OC agent label.
  *
- * Always produces "<prefix>-<label>" (e.g. "openclaw-main", "openclaw-coding").
- * _QUAID_PREFIX is derived from QUAID_INSTANCE by stripping the "-main" suffix.
+ * When QUAID_INSTANCE is explicitly set and the requested label is "main"
+ * (the primary agent), returns _QUAID_INSTANCE directly — it IS the primary
+ * instance regardless of what suffix it carries (e.g. "openclaw-livetest").
+ * This prevents getInstanceId("main") from producing "openclaw-main" when the
+ * actual primary silo is "openclaw-livetest" or any other non-default name.
  *
- * Called frequently by the system to compute all instance-specific paths.
+ * For non-primary labels (e.g. "coding"), always produces "<prefix>-<label>".
  * When QUAID_INSTANCE is not set (legacy flat layout), returns the label as-is.
  */
 function getInstanceId(agentLabel: string = "main"): string {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+  // When the primary instance is explicitly named, "main" refers to it directly.
+  if (_QUAID_INSTANCE && label === "main") {
+    return _QUAID_INSTANCE;
+  }
   return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 

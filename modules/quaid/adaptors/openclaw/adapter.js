@@ -33,10 +33,6 @@ function _resolveWorkspace() {
   if (envQuaidWorkspace) {
     return _normalizeWorkspacePath(envQuaidWorkspace);
   }
-  const envLegacyWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
-  if (envLegacyWorkspace) {
-    return _normalizeWorkspacePath(envLegacyWorkspace);
-  }
   try {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
     if (fs.existsSync(cfgPath)) {
@@ -80,16 +76,25 @@ const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
-const _QUAID_PREFIX = _QUAID_INSTANCE.endsWith("-main") ? _QUAID_INSTANCE.slice(0, -5) : _QUAID_INSTANCE;
+const _KNOWN_ADAPTER_PREFIXES = ["claude-code", "openclaw", "standalone"];
+const _QUAID_PREFIX = (() => {
+  for (const pfx of _KNOWN_ADAPTER_PREFIXES) {
+    if (_QUAID_INSTANCE.startsWith(`${pfx}-`) || _QUAID_INSTANCE === pfx) return pfx;
+  }
+  return _QUAID_INSTANCE.endsWith("-main") ? _QUAID_INSTANCE.slice(0, -5) : _QUAID_INSTANCE;
+})();
 function getInstanceId(agentLabel = "main") {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+  if (_QUAID_INSTANCE && label === "main") {
+    return _QUAID_INSTANCE;
+  }
   return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 function getDaemonSignalDir(agentId = "main") {
   const instanceId = getInstanceId(agentId);
   return instanceId ? path.join(WORKSPACE, instanceId, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
 }
-const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
+const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
 const _recentResetSignalsWritten = /* @__PURE__ */ new Map();
 function readInstalledAtMs() {
   try {
