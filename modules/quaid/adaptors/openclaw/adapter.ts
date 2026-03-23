@@ -598,6 +598,10 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
     QUAID_HOME: WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE,
+    // Explicitly set QUAID_INSTANCE so Python subprocesses always know which
+    // agent silo they are serving. Callers pass agent-specific overrides via
+    // extra (e.g. getInstanceId(agentLabel)) when routing to a non-primary agent.
+    QUAID_INSTANCE: _QUAID_INSTANCE || undefined,
     PYTHONPATH: pyPath,
     ...extra,
   };

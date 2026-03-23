@@ -94,6 +94,18 @@ class OpenClawAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "openclaw"
 
+    def get_instance_name(self) -> str:
+        """Return the current agent's instance name.
+
+        OC resolves agent identity at the TypeScript layer (from sessions.json
+        keys) and injects QUAID_INSTANCE into Python subprocess env via
+        buildPythonEnv(). This method reads that value so Python callsites
+        have a consistent way to get the instance name across adapters.
+
+        Falls back to "openclaw-main" if QUAID_INSTANCE is not set.
+        """
+        return os.environ.get("QUAID_INSTANCE", "openclaw-main")
+
     def get_host_info(self):
         """Detect OpenClaw platform version and binary path."""
         from core.compatibility import HostInfo
