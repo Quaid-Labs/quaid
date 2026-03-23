@@ -3822,12 +3822,12 @@ function setupClaudeCodeHooks() {
 
   // Resolve the quaid binary path. Use absolute paths so multiple installs
   // can coexist — each instance's hooks point to its own quaid script.
-  // QUAID_HOME sets the instance silo; QUAID_INSTANCE is required by the
-  // Python runtime to resolve the per-instance config and identity dirs.
+  // QUAID_HOME is all that's needed here: QUAID_INSTANCE is bootstrapped at
+  // runtime by get_adapter() via adapter.get_instance_name(), which reads
+  // CLAUDE_PROJECT_DIR (CC-injected) for per-project isolation.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  const instanceId = (process.env.QUAID_INSTANCE || "claude-code-main").trim();
-  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_INSTANCE='${instanceId}'`;
+  const envPrefix = `QUAID_HOME='${WORKSPACE}'`;
 
   const desiredHooks = {
     SessionStart: [
@@ -3882,13 +3882,15 @@ function setupClaudeCodeHooks() {
     }
   }
 
-  // Also write QUAID_HOME and QUAID_INSTANCE to the env block so the CC
-  // session inherits them. Without this, Bash tool calls to quaid run
-  // without instance context and fall back to an unpredictable default.
+  // Write QUAID_HOME to the env block so all CC processes (hooks, Bash tool
+  // calls) know the workspace root. QUAID_INSTANCE is NOT written here —
+  // it is derived per-project at runtime via adapter.get_instance_name()
+  // reading CLAUDE_PROJECT_DIR, enabling per-project silo isolation.
   if (!settings.env) settings.env = {};
-  if (settings.env.QUAID_HOME !== WORKSPACE || settings.env.QUAID_INSTANCE !== instanceId) {
+  if (settings.env.QUAID_HOME !== WORKSPACE) {
     settings.env.QUAID_HOME = WORKSPACE;
-    settings.env.QUAID_INSTANCE = instanceId;
+    // Remove any stale QUAID_INSTANCE that previous installs may have written
+    delete settings.env.QUAID_INSTANCE;
     changed = true;
   }
 

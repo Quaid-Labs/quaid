@@ -1646,6 +1646,32 @@ ssh example.local 'echo "=== m13test stats ==="; QUAID_HOME=~/quaid QUAID_INSTAN
 Pass: both instances store and recall their own facts; neither sees the other's
 canary; stats show different node counts.
 
+**Step 7b — cross-project spillover proof:**
+
+Simulate a CC session in `/tmp/m13testproject` where the agent `cd`s into the
+main project root and calls `quaid store`. `CLAUDE_PROJECT_DIR` is pinned to
+`/tmp/m13testproject` so the store must land in that silo — not in main.
+
+```bash
+# Store from m13testproject context while CWD is the main quaid dev root
+ssh example.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/m13testproject \
+  ~/quaid/plugins/quaid/quaid store "spillover-canary xyloquartz-spillover-9981" 2>&1'
+
+# Must NOT appear in main silo
+ssh example.local 'echo "=== main silo: must NOT see spillover canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/quaid/plugins/quaid/quaid search "xyloquartz-spillover-9981" 2>&1'
+
+# Must appear in m13testproject silo
+ssh example.local 'echo "=== m13test silo: MUST see spillover canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
+  ~/quaid/plugins/quaid/quaid search "xyloquartz-spillover-9981" 2>&1'
+```
+
+Pass: spillover canary found only in m13testproject silo; main silo returns empty.
+Fail: spillover canary appears in main silo (CLAUDE_PROJECT_DIR not being respected as
+instance anchor — instance identity is falling back to CWD or a global setting).
+
 **Step 8 — cleanup:**
 
 ```bash
