@@ -96,6 +96,20 @@ class QuaidAdapter(abc.ABC):
         """
         return "standalone"
 
+    @abc.abstractmethod
+    def get_instance_name(self) -> str:
+        """Return the stable instance name for the current project/agent context.
+
+        Each adapter derives this from its host's identity anchor:
+        - Claude Code: slugifies CLAUDE_PROJECT_DIR (CC-injected project root)
+        - OpenClaw: reads QUAID_INSTANCE (injected by TS adapter per agent)
+        - Standalone: subclass must implement
+
+        The instance name is combined with the adapter prefix to form the full
+        QUAID_INSTANCE silo identifier (e.g. "users-clawdbot-myapp" becomes
+        "claude-code-users-clawdbot-myapp").
+        """
+
     def get_host_info(self) -> "HostInfo":
         """Return host platform name, version, and binary path.
 
