@@ -1578,9 +1578,24 @@ print(\"PASS: QUAID_INSTANCE =\", iid)
 "'
 ```
 
-**Step 7 — verify instance appears in quaid instances list:**
+**Step 7 — verify both instances appear in list_agent_instance_ids:**
+
+`list_agent_instance_ids()` now scans QUAID_HOME for `claude-code-*` silos,
+mirroring OC's `agents.list`. After `make_instance`, both main and m13test
+should appear.
 
 ```bash
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from adaptors.factory import create_adapter
+a = create_adapter(\"claude-code\")
+ids = a.list_agent_instance_ids()
+assert \"claude-code-main\" in ids, f\"claude-code-main not in {ids}\"
+assert \"claude-code-m13test\" in ids, f\"claude-code-m13test not in {ids}\"
+print(\"PASS: list_agent_instance_ids =\", ids)
+"'
+
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
   ~/.openclaw/extensions/quaid/quaid instances list 2>&1 | grep -i m13test || \
   echo "(instances list not available — check quaid version)"'
@@ -1594,27 +1609,40 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m
 ssh example.local 'test ! -d ~/quaid/claude-code-m13test-dry && echo "PASS: dry-run created no silo" || echo "FAIL: dry-run created silo"'
 ```
 
-**Step 9 — silo isolation: verify the new instance has a separate database:**
+**Step 9 — run calls from both instances and verify silo isolation:**
 
 ```bash
-# Store a canary fact in the main instance
+# Store a canary fact from each instance
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid store "m13-isolation-canary xyloquartz-beacon-4421" 2>&1'
-
-# Search from the new instance — should return no matches (separate DB)
+  ~/.openclaw/extensions/quaid/quaid store "m13-main-canary xyloquartz-beacon-4421" 2>&1'
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
-# Expected: empty results — the m13test silo has its own database
+  ~/.openclaw/extensions/quaid/quaid store "m13-test-canary xyloquartz-m13test-6612" 2>&1'
 
-# Confirm both instances show different stats (separate node counts)
+# Cross-silo isolation: each instance must NOT see the other's canary
+ssh example.local 'echo "=== main search for m13test canary (expect empty) ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
+ssh example.local 'echo "=== m13test search for main canary (expect empty) ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
+
+# Each instance can recall its own fact
+ssh example.local 'echo "=== main recalls its own canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
+ssh example.local 'echo "=== m13test recalls its own canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
+
+# Stats from both — confirm separate databases
 ssh example.local 'echo "=== main stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
   ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
 ssh example.local 'echo "=== m13test stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
   ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
 ```
 
-Pass for isolation: search from `claude-code-m13test` returns no matches for the
-canary string. Stats show different node counts (main has accumulated data; m13test is empty or near-empty).
+Pass: both instances store and recall their own facts; neither sees the other's
+canary; stats show different node counts.
 
 **Step 10 — cleanup:**
 

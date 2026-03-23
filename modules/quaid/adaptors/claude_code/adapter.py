@@ -149,13 +149,33 @@ class ClaudeCodeAdapter(QuaidAdapter):
         return self.adapter_id()  # "claude-code"
 
     def list_agent_instance_ids(self) -> list:
-        """CC is single-agent by default; returns the current instance ID.
+        """Return all known CC instance IDs under QUAID_HOME.
 
-        Per-project isolation uses a different QUAID_INSTANCE value set via
-        .claude/settings.json — e.g. "claude-code-myapp" for project isolation.
-        In that case, this returns ["claude-code-myapp"] for that project.
+        Scans QUAID_HOME for subdirectories whose name starts with the CC
+        adapter prefix (e.g. "claude-code-"), mirroring how OC reads its
+        agents.list from openclaw.json. Each CC instance silo is created by
+        make_instance and has its QUAID_INSTANCE packed into the project's
+        .claude/settings.json.
+
+        Always includes the current instance (from QUAID_INSTANCE env var)
+        even if its silo does not yet exist on disk.
         """
-        return [self.instance_id()]
+        prefix = self.agent_id_prefix() + "-"  # "claude-code-"
+        current = self.instance_id()
+        try:
+            home = self.quaid_home()
+            found = sorted(
+                d.name for d in home.iterdir()
+                if d.is_dir() and d.name.startswith(prefix)
+            )
+        except Exception:
+            found = []
+        # Ensure current instance is always present and listed first
+        if current in found:
+            found = [current] + [x for x in found if x != current]
+        else:
+            found = [current] + found
+        return found
 
     def get_instance_manager(self):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
