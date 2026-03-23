@@ -31,7 +31,7 @@ def _auto_provision_if_needed() -> None:
         path_str = str(rel)
     except ValueError:
         path_str = str(cwd).lstrip("/")
-    slug = re.sub(r"[^a-z0-9]+", "-", path_str.lower()).strip("-") or "home"
+    slug = re.sub(r"[^a-z0-9]+", "-", path_str.lower()).strip("-") or home.name.lower()
     name = slug
 
     try:
