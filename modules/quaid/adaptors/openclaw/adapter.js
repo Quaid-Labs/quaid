@@ -85,9 +85,6 @@ const _QUAID_PREFIX = (() => {
 })();
 function getInstanceId(agentLabel = "main") {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
-  if (_QUAID_INSTANCE && label === "main") {
-    return _QUAID_INSTANCE;
-  }
   return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 function getDaemonSignalDir(agentId = "main") {
@@ -98,8 +95,7 @@ const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE
 const _recentResetSignalsWritten = /* @__PURE__ */ new Map();
 function readInstalledAtMs() {
   try {
-    const instanceId = getInstanceId("main");
-    const p = instanceId ? path.join(WORKSPACE, instanceId, "data", "installed-at.json") : path.join(WORKSPACE, "data", "installed-at.json");
+    const p = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "installed-at.json") : path.join(WORKSPACE, "data", "installed-at.json");
     const raw = JSON.parse(fs.readFileSync(p, "utf8"));
     const ts = String(raw.installedAt || "").trim();
     if (ts) return new Date(ts).getTime();
@@ -344,8 +340,8 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       }
     }
   }
-  const agentLabel = sessionIdToAgentId.get(sessionId) || "main";
-  const signalDir = getDaemonSignalDir(agentLabel);
+  const agentLabel = sessionIdToAgentId.get(sessionId);
+  const signalDir = !agentLabel || agentLabel === "main" ? DAEMON_SIGNAL_DIR : getDaemonSignalDir(agentLabel);
   try {
     fs.mkdirSync(signalDir, { recursive: true });
   } catch {
@@ -1913,8 +1909,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   continue;
                 }
                 pendingOrphanChecks.delete(sid);
-                const _orphanInstanceId = getInstanceId("main");
-                const _orphanLockPath = _orphanInstanceId ? path.join(WORKSPACE, _orphanInstanceId, "data", "session-processing", `${sid}.lock`) : path.join(WORKSPACE, "data", "session-processing", `${sid}.lock`);
+                const _orphanLockPath = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "session-processing", `${sid}.lock`) : path.join(WORKSPACE, "data", "session-processing", `${sid}.lock`);
                 if (fs.existsSync(_orphanLockPath)) {
                   writeHookTrace("session_index.orphan_reset_skipped_locked", { session_id: sid });
                   console.log(`[quaid][signal] orphan reset skipped \u2014 session=${sid} already locked`);

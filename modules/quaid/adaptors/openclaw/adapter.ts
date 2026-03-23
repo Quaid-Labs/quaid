@@ -124,21 +124,12 @@ const _QUAID_PREFIX = (() => {
 /**
  * Derive the Quaid instance ID for a given OC agent label.
  *
- * When QUAID_INSTANCE is explicitly set and the requested label is "main"
- * (the primary agent), returns _QUAID_INSTANCE directly — it IS the primary
- * instance regardless of what suffix it carries (e.g. "openclaw-livetest").
- * This prevents getInstanceId("main") from producing "openclaw-main" when the
- * actual primary silo is "openclaw-livetest" or any other non-default name.
- *
- * For non-primary labels (e.g. "coding"), always produces "<prefix>-<label>".
+ * Produces "<prefix>-<label>" (e.g. "openclaw-coding") for multi-agent routing.
+ * Do NOT use this for "the current running instance" — use _QUAID_INSTANCE directly.
  * When QUAID_INSTANCE is not set (legacy flat layout), returns the label as-is.
  */
 function getInstanceId(agentLabel: string = "main"): string {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
-  // When the primary instance is explicitly named, "main" refers to it directly.
-  if (_QUAID_INSTANCE && label === "main") {
-    return _QUAID_INSTANCE;
-  }
   return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 
@@ -171,9 +162,8 @@ const _recentResetSignalsWritten = new Map<string, number>(); // session_id → 
  */
 function readInstalledAtMs(): number {
   try {
-    const instanceId = getInstanceId("main");
-    const p = instanceId
-      ? path.join(WORKSPACE, instanceId, "data", "installed-at.json")
+    const p = _QUAID_INSTANCE
+      ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "installed-at.json")
       : path.join(WORKSPACE, "data", "installed-at.json");
     const raw = JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, unknown>;
     const ts = String(raw.installedAt || "").trim();
@@ -485,9 +475,13 @@ function writeDaemonSignal(
     }
   }
 
-  // Route to the agent's own Quaid silo if known, otherwise primary instance.
-  const agentLabel = sessionIdToAgentId.get(sessionId) || "main";
-  const signalDir = getDaemonSignalDir(agentLabel);
+  // Route to the agent's own Quaid silo if known, otherwise the primary instance.
+  // For non-primary OC agents (multi-agent), derive the silo from the agent label.
+  // For the primary instance (label absent or "main"), use DAEMON_SIGNAL_DIR directly.
+  const agentLabel = sessionIdToAgentId.get(sessionId);
+  const signalDir = (!agentLabel || agentLabel === "main")
+    ? DAEMON_SIGNAL_DIR
+    : getDaemonSignalDir(agentLabel);
   try {
     fs.mkdirSync(signalDir, { recursive: true });
   } catch {}
@@ -2506,9 +2500,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 pendingOrphanChecks.delete(sid);
                 // Skip orphan reset if daemon already holds the processing lock for this session.
                 // Writing a signal while the lock is held causes unbounded signal pile-up.
-                const _orphanInstanceId = getInstanceId("main");
-                const _orphanLockPath = _orphanInstanceId
-                  ? path.join(WORKSPACE, _orphanInstanceId, "data", "session-processing", `${sid}.lock`)
+                const _orphanLockPath = _QUAID_INSTANCE
+                  ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "session-processing", `${sid}.lock`)
                   : path.join(WORKSPACE, "data", "session-processing", `${sid}.lock`);
                 if (fs.existsSync(_orphanLockPath)) {
                   writeHookTrace("session_index.orphan_reset_skipped_locked", { session_id: sid });
