@@ -524,6 +524,10 @@ class StandaloneAdapter(QuaidAdapter):
 
         return None
 
+    def get_instance_name(self) -> str:
+        """Return instance name from env, or empty string for standalone."""
+        return os.environ.get("QUAID_INSTANCE", "").strip()
+
     def get_sessions_dir(self) -> Optional[Path]:
         d = self.quaid_home() / "sessions"
         return d if d.is_dir() else None
