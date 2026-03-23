@@ -64,106 +64,6 @@ Before starting a long run, request nudges:
 TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh 5 "start nudge on window 7"
 ```
 
-## Coordinator Role (Parallel Mode)
-
-**This section is for claude-dev (window 4), which acts as test coordinator.**
-
-The default sequential procedure (OC → CC → XP in a single window) is still
-correct for a single tester. When Solomon says "run a live test", use parallel
-mode by default to cut wall-clock time roughly in half.
-
-### Parallel Spawn Procedure
-
-Spawn two independent livetester windows — one for OC, one for CC. Both use
-the same agent config from `~/quaid/util/agents/codex-livetester/`.
-
-**Step 1 — Spawn the OC livetester on window 98:**
-
-```bash
-tmux new-window -t main:98 -n "OC-livetest"
-tmux send-keys -t main:98 "cd ~/quaid/util/agents/codex-livetester && codex --yolo" Enter
-```
-
-Then send the OC-only task after the agent initializes, and start the nudge directly from the coordinator:
-
-```bash
-TMUX_MSG_SENDER=claude-dev TMUX_MSG_SOURCE=main:4.0 \
-  ~/quaid/util/scripts/tmux-msg.sh 98 \
-  "[from claude-dev @ main:4.0] Run OC M0-M13 only. Do NOT run CC milestones. Report ISSUE messages to window 4. Send STATUS when M0 is complete so CC can start."
-
-# Coordinator starts the nudge — do not ask the agent to do this
-rm -f /tmp/autonomous_mode_98.pid
-cd ~/quaid/util/scripts && nohup ./autonomous_mode.sh -w 98 -t 300 \
-  > /tmp/autonomous_mode_98_nohup.log 2>&1 & echo "nudge 98 PID=$!"
-```
-
-**Step 2 — Wait for OC M0 complete, then spawn CC livetester on window 97:**
-
-Do not spawn CC until OC M0 passes. OC M0 includes the full wipe + install,
-which CC reuses. Starting CC before OC M0 is complete risks a race on the
-wipe/install step. Window 97 is NOT created until this point.
-
-When OC reports M0 complete:
-
-```bash
-tmux new-window -t main:97 -n "CC-livetest"
-tmux send-keys -t main:97 "cd ~/quaid/util/agents/codex-livetester && codex --yolo" Enter
-```
-
-Then send the CC-only task and start the nudge directly from the coordinator:
-
-```bash
-TMUX_MSG_SENDER=claude-dev TMUX_MSG_SOURCE=main:4.0 \
-  ~/quaid/util/scripts/tmux-msg.sh 97 \
-  "[from claude-dev @ main:4.0] Run CC M0-M13 only. Wipe + install already done by OC — do NOT re-wipe. Do NOT run OC milestones. Report ISSUE messages to window 4."
-
-# Coordinator starts the nudge — do not ask the agent to do this
-rm -f /tmp/autonomous_mode_97.pid
-cd ~/quaid/util/scripts && nohup ./autonomous_mode.sh -w 97 -t 300 \
-  > /tmp/autonomous_mode_97_nohup.log 2>&1 & echo "nudge 97 PID=$!"
-```
-
-**Step 3 — OC and CC run M1-M13 in parallel.**
-
-Both windows operate independently. Each sends ISSUEs to window 4. Handle
-fixes as they come in; deploy and unblock each window independently.
-
-**Live interaction pane assignment (do not share):**
-- OC livetester (window 98) uses `main:99` for all live agent interaction
-- CC livetester (window 97) uses `main:100` for all live agent interaction
-
-Create the CC interaction pane when spawning window 97:
-```bash
-tmux new-window -t main:100 -n "CC-interact"
-```
-
-**Step 4 — XP after both M0-M13 complete.**
-
-When both windows report M0-M13 clear, assign XP to whichever window is free
-(window 98 by default):
-
-```bash
-TMUX_MSG_SENDER=claude-dev TMUX_MSG_SOURCE=main:4.0 \
-  ~/quaid/util/scripts/tmux-msg.sh 98 \
-  "[from claude-dev @ main:4.0] Both OC and CC are clear. Run XP now."
-```
-
-### Sequencing Rules
-
-- OC window 98 runs the wipe (Step 0) and install (Step 1). CC window 97 skips
-  both — the environment is already set up.
-- If OC M0 fails, do not spawn CC. Fix OC M0 first.
-- If CC M0 hangs on daemon startup, pre-start the CC daemon manually (known
-  debt: double-fork fix). See the CC M0 notes in the milestone section.
-- XP depends on both adapters being installed and healthy. Run XP only after
-  both M13s are confirmed passing.
-
-### Loop Behavior
-
-After XP passes with zero new commits, the suite is clear. If any commit was
-made during the run (either window), both windows must re-run M0-M13 from
-scratch (full wipe again) before the loop is considered clean.
-
 ## Environment
 
 Main test environment:
@@ -176,6 +76,15 @@ Target machine:
 - Host: `example.local`
 - OpenClaw workspace: `~/quaid`
 - Live interaction pane: local tmux pane `main:99`
+
+Dedicated live-test silos:
+- OC instance: `openclaw-livetest`
+- CC instance: `claude-code-livetest`
+- Fixed CC project dir: `/tmp/cc-livetest`
+
+Do not reuse `*-main` silos for live validation. The live pane must point at
+throwaway test-only silos so milestone prompts and guide/example text cannot
+contaminate Solomon's normal working memory.
 
 ## Start Condition
 
@@ -215,13 +124,6 @@ ssh example.local 'rm -rf ~/.openclaw/agents/main/sessions/ && echo "OC sessions
 
 ```bash
 ssh example.local 'rm -f ~/.claude/rules/quaid-projects.md && echo "CC rules cleared"'
-```
-
-**Kill the OC gateway** (the wipe removes files but does not kill the process —
-a leftover gateway will block reinstall with "port 18789 already in use"):
-
-```bash
-ssh example.local 'pkill -f "openclaw-gateway" 2>/dev/null; sleep 1 && echo "gateway killed"'
 ```
 
 ### Step 1 — Installer-Based Clean Install (mandatory)
@@ -344,7 +246,7 @@ Preview first:
 
 ```bash
 ssh example.local 'openclaw plugins list 2>/dev/null | grep quaid || true'
-ssh example.local 'ls -ld ~/quaid ~/quaid/openclaw-main ~/quaid/shared 2>/dev/null || true'
+ssh example.local 'ls -ld ~/quaid ~/quaid/openclaw-livetest ~/quaid/projects 2>/dev/null || true'
 ```
 
 Install with the installer script on `alfie`, using the synced local tree.
@@ -353,7 +255,7 @@ workspace files (SOUL.md, USER.md, etc.) — without it the installer runs 5
 sequential deep-reasoning calls that block M0 for several minutes:
 
 ```bash
-ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=openclaw-main node setup-quaid.mjs --agent --workspace "/Users/owner/quaid" --source local'
+ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs --agent --workspace "/Users/owner/quaid" --source local'
 ```
 
 ### Claude Code on example.local
@@ -373,7 +275,7 @@ if p.exists():
     p.write_text(json.dumps(data, indent=2))
 print("Cleared existing Quaid Claude Code hooks if present")
 PY'
-ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code-main QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/owner/quaid" --source local'
+ssh example.local 'mkdir -p /tmp/cc-livetest && cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/owner/quaid" --source local'
 ```
 
 After the installer runs, write the API-scoped OAuth token to the CC instance
@@ -390,7 +292,7 @@ ssh example.local "mkdir -p ~/quaid/config/adapters/claude-code && echo -n '$TOK
 Also verify model config was written by the installer:
 
 ```bash
-ssh example.local 'python3 -c "import json; d=json.load(open(\"/Users/owner/quaid/claude-code-main/config/memory.json\")); print(d.get(\"models\", {}))"'
+ssh example.local 'python3 -c "import json; d=json.load(open(\"/Users/owner/quaid/claude-code-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
 ```
 
 Expected output: `{'deepReasoning': 'claude-opus-4-6', 'fastReasoning': 'claude-haiku-4-5-20251001'}`.
@@ -419,14 +321,15 @@ installer or inject manually.
 ### Post-install verification
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
 ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
-# Verify env block has QUAID_HOME and QUAID_INSTANCE — without this the CC agent shell
-# has no instance context and quaid CLI calls fall back to an unpredictable default.
-ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE:\",e.get(\"QUAID_INSTANCE\",\"MISSING\"))"'
-# Expected: QUAID_HOME: /Users/owner/quaid   QUAID_INSTANCE: claude-code-main
-ssh example.local 'ls -l ~/quaid/openclaw-main/identity/SOUL.md ~/quaid/claude-code-main/identity/SOUL.md 2>/dev/null || true'
+# Verify env block has QUAID_HOME, QUAID_INSTANCE, and CLAUDE_PROJECT_DIR —
+# without this the CC agent shell can derive an unpredictable silo from the
+# active project and drift back into a non-test lane.
+ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE:\",e.get(\"QUAID_INSTANCE\",\"MISSING\")); print(\"CLAUDE_PROJECT_DIR:\",e.get(\"CLAUDE_PROJECT_DIR\",\"MISSING\"))"'
+# Expected: QUAID_HOME: /Users/owner/quaid   QUAID_INSTANCE: claude-code-livetest   CLAUDE_PROJECT_DIR: /tmp/cc-livetest
+ssh example.local 'ls -l ~/quaid/openclaw-livetest/identity/SOUL.md ~/quaid/claude-code-livetest/identity/SOUL.md 2>/dev/null || true'
 ```
 
 If either instance-local `identity/SOUL.md` is missing, the installer did not
@@ -442,7 +345,7 @@ for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
     if not src.exists():
         print(f"WARNING: template missing: {src}")
         continue
-    for instance in ("openclaw-main", "claude-code-main"):
+    for instance in ("openclaw-livetest", "claude-code-livetest"):
         dst = Path("/Users/owner/quaid") / instance / "identity" / fname
         dst.parent.mkdir(parents=True, exist_ok=True)
         if not dst.exists():
@@ -457,13 +360,13 @@ disk) for the extraction daemon to find it:
 
 ```bash
 # OC instance — CLI command (works reliably for OC)
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
 
 # CC instance — inject definition directly (CLI "already exists" false-positive
 # can occur due to config singleton state; direct injection is reliable)
 ssh example.local 'python3 -c "
 import json
-p = \"/Users/owner/quaid/claude-code-main/config/memory.json\"
+p = \"/Users/owner/quaid/claude-code-livetest/config/memory.json\"
 with open(p) as f: d = json.load(f)
 if \"quaid\" not in d[\"projects\"][\"definitions\"]:
     d[\"projects\"][\"definitions\"][\"quaid\"] = {
@@ -503,7 +406,7 @@ Then launch the subject under test:
 ```bash
 tmux send-keys -t main:99 "openclaw tui" Enter
 # or
-tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main claude --dangerously-skip-permissions" Enter
+tmux send-keys -t main:99 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
 ```
 
 Do this again whenever switching from the OpenClaw phase to the Claude Code
@@ -544,7 +447,7 @@ SSH to `example.local`, and launch `claude` from there.
 ```bash
 tmux respawn-pane -k -t main:99 'zsh -il'
 tmux send-keys -t main:99 "ssh example.local" Enter
-tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main claude --dangerously-skip-permissions" Enter
+tmux send-keys -t main:99 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
 ```
 
 **MANDATORY — set model before any CC interaction:**
@@ -570,7 +473,7 @@ tmux capture-pane -t main:99 -p | tail -30
 **Important:** For this live test flow, end the visible CC session with
 `/exit` in pane `99` to return cleanly to the remote shell. After each CC
 session end, explicitly verify that extraction happened by checking
-`~/quaid/claude-code-main/data/extraction-signals/`, the CC daemon log, or the
+`~/quaid/claude-code-livetest/data/extraction-signals/`, the CC daemon log, or the
 shared DB at `~/quaid/data/memory.db`. If a session ends cleanly but no
 `session_end` signal appears, do not assume extraction fired.
 
@@ -605,7 +508,7 @@ Quick checks:
 
 ```bash
 ssh example.local 'wc -l ~/.claude/rules/quaid-projects.md && sed -n "1,220p" ~/.claude/rules/quaid-projects.md'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
 ssh example.local 'find ~/quaid/projects -maxdepth 3 -type f | sort'
 ssh example.local 'python3 - <<\"PY\"
 import json
@@ -621,7 +524,7 @@ Pass only if `~/.claude/rules/quaid-projects.md` includes project sections like
 `USER.md` / `ENVIRONMENT.md` projections, CC project CRUD is not being tested
 against a valid shared-project bootstrap state yet. Also verify the global
 registry entry for `quaid` points at `$QUAID_HOME/projects/quaid`, not
-an instance-local path such as `$QUAID_HOME/openclaw-main/projects/quaid`.
+an instance-local path such as `$QUAID_HOME/openclaw-livetest/projects/quaid`.
 
 For CC `/compact`, the extracted fact should store from the visible live run
 without this manual fallback once the per-instance signal-dir fix is deployed.
@@ -721,17 +624,18 @@ followed by a restart — both OC and CC cache config at startup:
 
 **OC** — set config then restart OpenClaw:
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
 # Then restart OpenClaw on alfie.
 ```
 
 **CC** — set config then restart the CC daemon:
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 ```
 
-After restart, start a fresh visible CC session in main:99, mention something
+After restart, start a fresh visible CC session in main:99 from
+`/tmp/cc-livetest`, mention something
 memorable (e.g. `"My morning run route goes along the canal towpath — about 8km."`)
 then let the session idle for >1 minute without sending any further messages.
 
@@ -739,25 +643,25 @@ After the test, restore the timeout and restart again:
 
 ```bash
 # OC
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
 # Then restart OpenClaw on alfie.
 
 # CC
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 ```
 
 Pass:
 - the timeout fact is extracted with no explicit lifecycle command
 - for Claude Code, verify `quaid daemon status` points at the correct
   instance root before idling:
-  - `instance_root: /Users/owner/quaid/claude-code-main`
-  - `log_file: /Users/owner/quaid/claude-code-main/logs/daemon/extraction-daemon.log`
-  - `pid_file: /Users/owner/quaid/claude-code-main/data/extraction-daemon.pid`
+  - `instance_root: /Users/owner/quaid/claude-code-livetest`
+  - `log_file: /Users/owner/quaid/claude-code-livetest/logs/daemon/extraction-daemon.log`
+  - `pid_file: /Users/owner/quaid/claude-code-livetest/data/extraction-daemon.pid`
 
 Verify extraction happened (use `name` column, not `text`):
 ```bash
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "canal towpath"'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "canal towpath"'
 # OR direct DB check:
 ssh example.local python3 << 'EOF'
 import sqlite3
@@ -781,7 +685,7 @@ needed.
 Seed a known fact directly so you can test injection in isolation:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
 ```
 
 Start a fresh session and ask naturally — do NOT include meta-commentary about
@@ -842,10 +746,10 @@ primary pass/fail: smaller models (sonnet, haiku) miss secondary edges from
 compound facts even when the extraction prompt includes the exact example.
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa" 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David has a son named Oliver" 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David has a son named Oliver" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
 ```
 
 Check immediately:
@@ -861,8 +765,8 @@ attribute, no named-entity relationship), then run backfill and confirm it
 processes facts with zero edges:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David is 42 years old" 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is 42 years old" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
 ```
 
 Pass for Phase 2: backfill runs and reports `found N facts / created M edges`
@@ -922,7 +826,7 @@ ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FRO
 Delete each found node (replace `<id>` with actual IDs):
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid delete-node <id>'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid delete-node <id>'
 ```
 
 Verify clean:
@@ -935,7 +839,7 @@ ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FRO
 Step 2 — Restart the extraction daemon so any patched files are loaded:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon start'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start'
 ```
 
 Step 3 — Start a completely fresh OC session for seeding.
@@ -1033,7 +937,7 @@ Verify from shell:
 
 ```bash
 # Use registry list (SQLite backend) — quaid project list reads a separate JSON file not used by the agent
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
 ssh example.local 'test -f /tmp/quaid-live-src/main.py && echo source_still_exists'
 ```
 
@@ -1045,13 +949,13 @@ Ask the agent to create a throwaway file:
 
 > `Can you write a quick throwaway script that prints hello world? Just put it somewhere temporary.`
 
-**Expected:** Agent writes to the misc project `misc--openclaw-main` at
-`~/quaid/projects/misc--openclaw-main/`, NOT to any ad-hoc path like `~/quaid/scratch/` or `/tmp/`.
+**Expected:** Agent writes to the misc project `misc--openclaw-livetest` at
+`~/quaid/projects/misc--openclaw-livetest/`, NOT to any ad-hoc path like `~/quaid/scratch/` or `/tmp/`.
 The agent should reference the project by name and tell the user it's in misc.
 Verify:
 
 ```bash
-ssh example.local 'ls ~/quaid/projects/misc--openclaw-main/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
+ssh example.local 'ls ~/quaid/projects/misc--openclaw-livetest/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
 # Verify misc project is in the SQLite project_definitions table (it won't appear in
 # 'quaid registry list' because that lists registered docs, not projects — misc projects
 # have no docs and are invisible to doc-list output):
@@ -1077,7 +981,7 @@ Pass criteria:
 - **Phase 1 (hard)**: Agent creates project via CLI before writing any files in response to work directive
 - Phase 2: show, update work correctly
 - Phase 3: delete removes the project but not the source directory
-- **Phase 4 (hard)**: Throwaway file lands in `misc--openclaw-main` project, not an ad-hoc path
+- **Phase 4 (hard)**: Throwaway file lands in `misc--openclaw-livetest` project, not an ad-hoc path
 - `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
 
 Note: Phase 1 and Phase 4 are new hard requirements. If they fail, report to claude-dev before continuing.
@@ -1090,7 +994,7 @@ Before running, capture the pre-janitor artifact state:
 
 ```bash
 # Record line counts so you can verify condensation happened
-ssh example.local 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/openclaw-main/identity/SOUL.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null || echo "(absent)"'
 ```
 
 Run:
@@ -1098,48 +1002,46 @@ Run:
 ```bash
 # Dry-run must complete in ≤60s — hang here = regression in dry-run LLM/checkpoint bypass
 # Uses shell-based timeout (portable — macOS does not have the `timeout` binary)
-ssh example.local '{ cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1; } & pid=$!; (sleep 60 && kill $pid 2>/dev/null) & watcher=$!; wait $pid; ec=$?; kill $watcher 2>/dev/null; wait $watcher 2>/dev/null; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || { [ $ec -gt 128 ] && echo "FAIL: dry-run exit=$ec (killed=hang)" || echo "FAIL: dry-run exit=$ec"; }'
+ssh example.local '{ cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1; } & pid=$!; (sleep 60 && kill $pid 2>/dev/null) & watcher=$!; wait $pid; ec=$?; kill $watcher 2>/dev/null; wait $watcher 2>/dev/null; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || { [ $ec -gt 128 ] && echo "FAIL: dry-run exit=$ec (killed=hang)" || echo "FAIL: dry-run exit=$ec"; }'
 # Apply — first run can take 15–30 minutes (LLM review of accumulated memories + snippets).
 # Repeated "vec_nodes upsert recovered" and "snippet remap" lines are normal — not a hang.
 # Long silent periods (up to 10 min) are LLM calls in progress.
 # If still running after 45 minutes, report to claude-dev as a potential hang.
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
 ```
 
 After the run, verify condensation:
 
 ```bash
 # Stats: snippets_folded + snippets_rewritten + snippets_discarded should be > 0
-ssh example.local 'cat ~/quaid/openclaw-main/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
+ssh example.local 'cat ~/quaid/openclaw-livetest/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
 # Post-janitor snippet and identity state
-ssh example.local 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/openclaw-main/identity/SOUL.md 2>/dev/null'
-ssh example.local 'cat ~/quaid/openclaw-main/identity/SOUL.md 2>/dev/null | head -40'
+ssh example.local 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null'
+ssh example.local 'cat ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null | head -40'
 ```
 
 Pass:
 - janitor completes
 - `checkpoint-all.json` exists afterward with `status: completed`
 - `janitor-stats.json` reports `success: true`
-- if `SOUL.snippets.md` or `USER.snippets.md` existed in the pre-state:
-  - `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0`
-  - `SOUL.snippets.md` line count decreased or file was cleared (entries processed)
-  - if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
-- if no snippet files existed in the pre-state: all snippet counters = 0 is acceptable (nothing to process)
+- `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0` (snippets were reviewed)
+- `SOUL.snippets.md` line count decreased or file was cleared (entries processed)
+- if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
 
 Fail:
+- snippets review task skipped entirely (all three snippet counters remain 0 and snippets file unchanged)
 - janitor exits with non-zero status
-- snippet files existed in the pre-state but all three snippet counters remain 0 and files unchanged
 
 ### M10: Docs, Health, and Session CLI
 
 Run health and stats:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid health 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid stats 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid stats 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
 ```
 
 **New-doc indexing via `docs update --apply`** (tests 470f9741 fix — newly registered standalone docs
@@ -1148,13 +1050,13 @@ must be indexed without requiring `janitor --task rag`):
 ```bash
 # Write a throwaway doc and register it
 ssh example.local 'echo "# M10 test\nThe carillon clock rings at noon." > /tmp/m10-test-doc.md'
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry register /tmp/m10-test-doc.md --project quaid 2>&1'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register /tmp/m10-test-doc.md --project quaid 2>&1'
 
 # docs update must pick it up without janitor rag
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
 
 # Verify it is now searchable
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs search "carillon clock" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs search "carillon clock" 2>&1'
 
 # Cleanup
 ssh example.local 'rm -f /tmp/m10-test-doc.md'
@@ -1173,21 +1075,21 @@ a fresh extraction first to ensure at least one session is stored.
 
 ```bash
 # Step 1: Restart OC daemon so it has the latest code
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 
 # Step 2: In the OC TUI, do a quick exchange and /new to trigger extraction.
 #   Tell OC: "The session test keyword is zephyr-delta-nine."
 #   Then send /new (or /reset). Wait ~30s for daemon to process.
 
 # Step 3: Check daemon log to confirm session_logs ingest ran
-ssh example.local 'tail -20 ~/quaid/openclaw-main/logs/daemon.log 2>/dev/null || tail -20 ~/quaid/logs/daemon.log 2>/dev/null | grep -i "session_logs\|ingest\|session_end" || echo "log not found"'
+ssh example.local 'tail -20 ~/quaid/openclaw-livetest/logs/daemon.log 2>/dev/null || tail -20 ~/quaid/logs/daemon.log 2>/dev/null | grep -i "session_logs\|ingest\|session_end" || echo "log not found"'
 
 # Step 4: Check session list — should now include the freshly extracted session
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session list --limit 3 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid session list --limit 3 2>&1'
 
 # Step 5: Load the most recent session
-SESSION_ID=$(ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session list --limit 1 --json 2>&1' | python3 -c "import sys,json; rows=json.load(sys.stdin); print(rows[0]['id'] if rows else '')" 2>/dev/null)
-[ -n "$SESSION_ID" ] && ssh example.local "QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session load --session-id $SESSION_ID 2>&1 | head -40" || echo "WARN: no session ID returned"
+SESSION_ID=$(ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid session list --limit 1 --json 2>&1' | python3 -c "import sys,json; rows=json.load(sys.stdin); print(rows[0]['id'] if rows else '')" 2>/dev/null)
+[ -n "$SESSION_ID" ] && ssh example.local "QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid session load --session-id $SESSION_ID 2>&1 | head -40" || echo "WARN: no session ID returned"
 ```
 
 Pass:
@@ -1209,7 +1111,7 @@ loaded at startup; if the daemon started while M9 janitor was running the DB
 may be cached stale). Restart before triggering the trigger extraction:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 ```
 
 Then do a fresh OC session + `/reset` to trigger a full extraction cycle.
@@ -1238,11 +1140,11 @@ Purely technical messages produce `project_logs` but not `soul_snippets`.
 
 ```bash
 # OC
-ssh example.local 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
-ssh example.local 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
 # CC
-ssh example.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code-main/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
-ssh example.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code-main/USER.snippets.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
+ssh example.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
 ```
 
 Pass: OC `USER.snippets.md` has at least one entry (hard gate). `SOUL.snippets.md`
@@ -1255,8 +1157,8 @@ CC snippets may be absent on first install — they build via CC sessions.
 **Journal entries** (written when LLM includes `journal_entries`; discretionary):
 
 ```bash
-ssh example.local 'echo "=== OC journals ==="; ls ~/quaid/openclaw-main/journal/ 2>/dev/null; for f in ~/quaid/openclaw-main/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
-ssh example.local 'echo "=== CC journals ==="; ls ~/quaid/claude-code-main/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code-main/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh example.local 'echo "=== OC journals ==="; ls ~/quaid/openclaw-livetest/journal/ 2>/dev/null; for f in ~/quaid/openclaw-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh example.local 'echo "=== CC journals ==="; ls ~/quaid/claude-code-livetest/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
 ```
 
 Pass: Journal directory exists. Presence of entries is correct but not required
@@ -1267,17 +1169,16 @@ a failure.
 **Project logs** (written when extraction includes `project_logs` entries):
 
 ```bash
-ssh example.local 'echo "=== quaid PROJECT.log (shared) ==="; tail -30 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== quaid PROJECT.log ==="; tail -30 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
 ```
 
-Pass: `~/quaid/projects/quaid/PROJECT.log` exists and has at least one
-timestamped entry from this test run — M8 includes a deliberate `/reset` to
-capture project context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
-Note: PROJECT.log lives at the shared quaid-home path, not per-instance.
+Pass: `projects/quaid/PROJECT.log` exists and has at least one timestamped
+entry from this test run — M8 includes a deliberate `/reset` to capture project
+context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
 
 Fail:
 - OC `USER.snippets.md` is absent or empty after M11 extraction
-- `~/quaid/projects/quaid/PROJECT.log` absent after M11's trigger step
+- `projects/quaid/PROJECT.log` absent after M11's trigger step
 - Any file is structurally malformed (broken JSON, truncated entries)
 
 Not a failure:
@@ -1289,10 +1190,10 @@ Not a failure:
 This milestone verifies that OpenClaw's multi-agent silo structure is correct
 and that extraction signals route to the right agent's silo.
 
-**Step 1 — list_agent_instance_ids returns multiple IDs including openclaw-main:**
+**Step 1 — list_agent_instance_ids returns multiple IDs including openclaw-livetest:**
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
   python3 -c "
 import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
 from adaptors.factory import create_adapter
@@ -1300,7 +1201,7 @@ a = create_adapter(\"openclaw\")
 ids = a.list_agent_instance_ids()
 print(ids)
 assert len(ids) >= 1, \"Expected at least one agent instance ID\"
-assert \"openclaw-main\" in ids, \"openclaw-main not in IDs\"
+assert \"openclaw-livetest\" in ids, \"openclaw-livetest not in IDs\"
 print(\"PASS: list_agent_instance_ids =\", ids)
 "'
 ```
@@ -1309,7 +1210,7 @@ print(\"PASS: list_agent_instance_ids =\", ids)
 
 ```bash
 ssh example.local '
-for agent_id in openclaw-main openclaw-coding; do
+for agent_id in openclaw-livetest openclaw-coding; do
   silo="$HOME/quaid/$agent_id"
   if [ -d "$silo/data" ]; then
     echo "PASS: $silo/data exists"
@@ -1324,7 +1225,7 @@ done
 
 ```bash
 ssh example.local '
-for agent_id in openclaw-main openclaw-coding; do
+for agent_id in openclaw-livetest openclaw-coding; do
   sigdir="$HOME/quaid/$agent_id/data/extraction-signals"
   if [ -d "$sigdir" ]; then
     echo "PASS: $sigdir exists"
@@ -1345,7 +1246,7 @@ there). Instead, write a synthetic signal file directly to verify routing.
 
 ```bash
 ssh example.local '
-SIGNAL_DIR="$HOME/quaid/openclaw-main/data/extraction-signals"
+SIGNAL_DIR="$HOME/quaid/openclaw-livetest/data/extraction-signals"
 if [ ! -d "$SIGNAL_DIR" ]; then
   echo "FAIL: $SIGNAL_DIR does not exist — silo not initialised"
   exit 1
@@ -1364,7 +1265,7 @@ Pass: signal dir exists under the per-agent silo, not a shared or flat path.
 **Step 5 — quaid instances list shows OC agent silos:**
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
   ~/.openclaw/extensions/quaid/quaid instances list 2>&1 || \
   echo "(instances list not available — check quaid version)"'
 ```
@@ -1373,7 +1274,7 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main
 
 ```bash
 ssh example.local '
-pid_file="$HOME/quaid/openclaw-main/data/extraction-daemon.pid"
+pid_file="$HOME/quaid/openclaw-livetest/data/extraction-daemon.pid"
 if [ -f "$pid_file" ]; then
   pid=$(cat "$pid_file")
   if kill -0 "$pid" 2>/dev/null; then
@@ -1383,7 +1284,7 @@ if [ -f "$pid_file" ]; then
   fi
 else
   # Fallback: legacy flat instance path
-  pid_file="$HOME/quaid/openclaw-main/data/extraction-daemon.pid"
+  pid_file="$HOME/quaid/openclaw-livetest/data/extraction-daemon.pid"
   if [ -f "$pid_file" ]; then
     pid=$(cat "$pid_file")
     if kill -0 "$pid" 2>/dev/null; then
@@ -1392,184 +1293,60 @@ else
       echo "WARN: pid file at legacy path but process $pid is not running"
     fi
   else
-    echo "FAIL: no extraction-daemon.pid found under openclaw-main or openclaw"
+    echo "FAIL: no extraction-daemon.pid found under openclaw-livetest or openclaw"
   fi
 fi
 '
 ```
 
-**Step 7 — provision a second OC agent and verify silo isolation:**
-
-OC agents are configured in `~/.openclaw/openclaw.json` under `agents.list`.
-There is no quaid-level create command — a new agent's silo is auto-provisioned
-on first use. Add a temporary second agent, run a call from it, verify the
-two silos don't share data, then clean up.
-
-```bash
-# Add openclaw-m12test to openclaw.json agents.list
-ssh example.local 'python3 -c "
-import json
-from pathlib import Path
-p = Path.home() / \".openclaw/openclaw.json\"
-d = json.loads(p.read_text())
-d.setdefault(\"agents\", {}).setdefault(\"list\", [])
-if not any(a.get(\"id\") == \"m12test\" for a in d[\"agents\"][\"list\"]):
-    d[\"agents\"][\"list\"].append({\"id\": \"m12test\", \"name\": \"M12 Test Agent\"})
-p.write_text(json.dumps(d, indent=2))
-print(\"added m12test to agents.list\")
-"'
-
-# Verify list_agent_instance_ids now includes openclaw-m12test
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
-  python3 -c "
-import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
-from adaptors.factory import create_adapter
-a = create_adapter(\"openclaw\")
-ids = a.list_agent_instance_ids()
-assert \"openclaw-m12test\" in ids, f\"openclaw-m12test not in {ids}\"
-print(\"PASS: list_agent_instance_ids includes openclaw-m12test:\", ids)
-"'
-
-# Bootstrap second silo via quaid stats (auto-provisions on first use)
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
-  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | tail -5'
-
-# Verify second silo was created under shared QUAID_HOME
-ssh example.local '
-silo="$HOME/quaid/openclaw-m12test"
-for d in config data identity; do
-  [ -d "$silo/$d" ] && echo "PASS: $silo/$d exists" || echo "FAIL: $silo/$d missing"
-done'
-
-# Run a real store call from each instance — verify both work
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
-  ~/.openclaw/extensions/quaid/quaid store "m12-main-canary xyloquartz-sentinel-7749" 2>&1'
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
-  ~/.openclaw/extensions/quaid/quaid store "m12-test-canary xyloquartz-m12test-8834" 2>&1'
-
-# Cross-silo isolation: each instance must NOT see the other's canary
-ssh example.local 'echo "=== main search for m12test canary (expect empty) ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m12test-8834" 2>&1'
-ssh example.local 'echo "=== m12test search for main canary (expect empty) ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-sentinel-7749" 2>&1'
-
-# Each instance can recall its own fact
-ssh example.local 'echo "=== main recalls its own canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-sentinel-7749" 2>&1'
-ssh example.local 'echo "=== m12test recalls its own canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m12test-8834" 2>&1'
-
-# Stats from both — confirm separate node counts
-ssh example.local 'echo "=== main stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
-  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
-ssh example.local 'echo "=== m12test stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m12test \
-  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
-```
-
-Pass: both instances can store and recall their own facts; neither can see the
-other's canary; stats show different node counts (separate databases).
-
-**Step 8 — cleanup second OC agent:**
-
-```bash
-ssh example.local 'python3 -c "
-import json
-from pathlib import Path
-p = Path.home() / \".openclaw/openclaw.json\"
-d = json.loads(p.read_text())
-d[\"agents\"][\"list\"] = [a for a in d.get(\"agents\", {}).get(\"list\", []) if a.get(\"id\") != \"m12test\"]
-p.write_text(json.dumps(d, indent=2))
-print(\"removed m12test from agents.list\")
-"'
-ssh example.local 'trash ~/quaid/openclaw-m12test 2>/dev/null || rm -rf ~/quaid/openclaw-m12test; echo "silo cleaned"'
-```
-
 Pass:
-- `list_agent_instance_ids()` returns at least `["openclaw-main"]`
+- `list_agent_instance_ids()` returns at least `["openclaw-livetest"]`
 - each configured agent has its own `data/` and `extraction-signals/` silo dir
 - extraction signals land under the correct per-agent dir, not a shared path
 - `quaid instances list` reports OC agent silos
 - `extraction-daemon.pid` exists and points to a live process for main
-- second agent silo is auto-provisioned under the shared `QUAID_HOME`
-- `quaid store` succeeds from both instances
-- each instance can recall its own stored fact
-- neither instance can see the other's canary (cross-silo search returns empty)
-- `quaid stats` shows different node counts for each instance
 
 Fail:
 - `list_agent_instance_ids()` returns empty list or raises
 - signals land in a shared or flat path instead of the per-agent silo
 - daemon pid file is absent after install
-- `quaid store` fails from either instance
-- cross-silo search returns the other instance's canary (shared DB leak)
 
 ### M13: CC Multi-Instance Verification ✓ 2026-03-15
 
-This milestone verifies that the CC hook auto-provisions a new silo when
-Claude Code opens a project that has no existing instance — simulating the
-real first-use experience — and that the two silos are fully isolated.
-
-Instance names are derived from the project path slug. A project at
-`/tmp/m13testproject` (outside home) becomes `claude-code-tmp-m13testproject`.
+This milestone verifies that `quaid claudecode make_instance` creates a properly
+isolated Claude Code project instance with the correct silo structure and
+project wiring.
 
 **Step 1 — create test project dir:**
 
 ```bash
-ssh example.local 'mkdir -p /tmp/m13testproject && echo "created /tmp/m13testproject"'
+ssh example.local 'mkdir -p /tmp/quaid-m13-test && echo "created /tmp/quaid-m13-test"'
 ```
 
-**Step 2 — simulate CC hook firing from the new project dir:**
-
-This mimics what happens when a user opens CC in a new folder for the first
-time. `QUAID_INSTANCE` is not set, so `_auto_provision_if_needed()` runs and
-creates a new silo derived from the path.
+**Step 2 — run make_instance:**
 
 ```bash
-ssh example.local 'cd /tmp/m13testproject && QUAID_HOME=~/quaid \
-  python3 -c "
-import sys, os
-sys.path.insert(0, os.path.expanduser(\"~/quaid/plugins/quaid\"))
-os.environ.pop(\"QUAID_INSTANCE\", None)
-from adaptors.claude_code.hooks import _auto_provision_if_needed
-_auto_provision_if_needed()
-iid = os.environ.get(\"QUAID_INSTANCE\", \"NOT SET\")
-print(\"QUAID_INSTANCE:\", iid)
-assert iid.startswith(\"claude-code-\"), f\"Expected claude-code- prefix, got {iid!r}\"
-assert \"m13testproject\" in iid, f\"Expected path slug in id, got {iid!r}\"
-print(\"PASS: auto-provisioned\", iid)
-" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest \
+  ~/.openclaw/extensions/quaid/quaid claudecode make_instance /tmp/quaid-m13-test m13test 2>&1'
 ```
 
-Note the instance ID printed — it will be used in subsequent steps.
-Expected: `claude-code-tmp-m13testproject`
+Expected output includes:
+- `Created silo: .../claude-code-m13test`
+- `Instance ID:  claude-code-m13test`
+- `Wrote QUAID_INSTANCE=claude-code-m13test to /tmp/quaid-m13-test/.claude/settings.json`
 
-**Step 3 — verify silo created and pending notification written:**
+**Step 3 — verify silo created:**
 
 ```bash
-ssh example.local 'ls ~/quaid/claude-code-tmp-m13testproject/ && echo "PASS: silo exists"'
-ssh example.local 'python3 -c "
-import json
-from pathlib import Path
-pending = Path(\"$HOME/quaid/claude-code-tmp-m13testproject/data/cc-pending-notifications.jsonl\")
-assert pending.is_file(), f\"No pending notification file at {pending}\"
-lines = [l for l in pending.read_text().splitlines() if l.strip()]
-assert lines, \"Pending notifications file is empty\"
-msg = json.loads(lines[-1]).get(\"message\", \"\")
-assert \"provisioned\" in msg.lower(), f\"Expected provisioning message, got: {msg!r}\"
-print(\"PASS: pending notification:\", msg)
-"'
+ssh example.local 'ls ~/quaid/claude-code-m13test/ && echo "PASS: silo exists"'
 ```
 
 **Step 4 — verify silo directory structure:**
 
 ```bash
 ssh example.local '
-silo="$HOME/quaid/claude-code-tmp-m13testproject"
-for subdir in config data; do
+silo="$HOME/quaid/claude-code-m13test"
+for subdir in config data identity journal logs; do
   if [ -d "$silo/$subdir" ]; then
     echo "PASS: $silo/$subdir"
   else
@@ -1579,122 +1356,94 @@ done
 '
 ```
 
-**Step 5 — verify model config written:**
+**Step 5 — verify config/memory.json has adapter type "claude-code":**
 
 ```bash
 ssh example.local 'python3 -c "
 import json
 from pathlib import Path
-cfg = json.loads(Path(\"$HOME/quaid/claude-code-tmp-m13testproject/config/memory.json\").read_text())
-models = cfg.get(\"models\", {})
-assert models.get(\"deepReasoning\"), f\"deepReasoning not set: {models}\"
-assert models.get(\"fastReasoning\"), f\"fastReasoning not set: {models}\"
-print(\"PASS: models =\", models)
+cfg = json.loads(Path(\"$HOME/quaid/claude-code-m13test/config/memory.json\").read_text())
+adapter_type = cfg.get(\"adapter\", {}).get(\"type\", \"\")
+assert adapter_type == \"claude-code\", f\"Expected claude-code, got {adapter_type!r}\"
+print(\"PASS: adapter.type =\", adapter_type)
 "'
 ```
 
-**Step 6 — verify both instances appear in list_agent_instance_ids:**
-
-`list_agent_instance_ids()` scans QUAID_HOME for `claude-code-*` silos.
-After auto-provision, both main and the new silo should appear.
+**Step 6 — verify .claude/settings.json written with correct QUAID_INSTANCE:**
 
 ```bash
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  python3 -c "
-import sys, os; sys.path.insert(0, os.path.expanduser(\"~/quaid/plugins/quaid\"))
-from adaptors.factory import create_adapter
-a = create_adapter(\"claude-code\")
-ids = a.list_agent_instance_ids()
-assert \"claude-code-main\" in ids, f\"claude-code-main not in {ids}\"
-assert \"claude-code-tmp-m13testproject\" in ids, f\"claude-code-tmp-m13testproject not in {ids}\"
-print(\"PASS: list_agent_instance_ids =\", ids)
+ssh example.local 'python3 -c "
+import json
+from pathlib import Path
+settings = json.loads(Path(\"/tmp/quaid-m13-test/.claude/settings.json\").read_text())
+iid = settings.get(\"env\", {}).get(\"QUAID_INSTANCE\", \"\")
+assert iid == \"claude-code-m13test\", f\"Expected claude-code-m13test, got {iid!r}\"
+print(\"PASS: QUAID_INSTANCE =\", iid)
 "'
 ```
 
-**Step 7 — run calls from both instances and verify silo isolation:**
+**Step 7 — verify instance appears in quaid instances list:**
 
 ```bash
-# Store a canary fact from each instance
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/quaid/plugins/quaid/quaid store "m13-main-canary xyloquartz-beacon-4421" 2>&1'
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
-  ~/quaid/plugins/quaid/quaid store "m13-test-canary xyloquartz-m13test-6612" 2>&1'
-
-# Cross-silo isolation: each instance must NOT see the other's canary
-ssh example.local 'echo "=== main search for m13test canary (expect empty) ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/quaid/plugins/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
-ssh example.local 'echo "=== m13test search for main canary (expect empty) ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
-  ~/quaid/plugins/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
-
-# Each instance can recall its own fact
-ssh example.local 'echo "=== main recalls its own canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/quaid/plugins/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
-ssh example.local 'echo "=== m13test recalls its own canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
-  ~/quaid/plugins/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
-
-# Stats from both — confirm separate databases
-ssh example.local 'echo "=== main stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/quaid/plugins/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
-ssh example.local 'echo "=== m13test stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
-  ~/quaid/plugins/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+  ~/.openclaw/extensions/quaid/quaid instances list 2>&1 | grep -i m13test || \
+  echo "(instances list not available — check quaid version)"'
 ```
 
-Pass: both instances store and recall their own facts; neither sees the other's
-canary; stats show different node counts.
-
-**Step 7b — cross-project spillover proof:**
-
-Simulate a CC session in `/tmp/m13testproject` where the agent `cd`s into the
-main project root and calls `quaid store`. `CLAUDE_PROJECT_DIR` is pinned to
-`/tmp/m13testproject` so the store must land in that silo — not in main.
+**Step 8 — dry-run creates no silo:**
 
 ```bash
-# Store from m13testproject context while CWD is the main quaid dev root
-ssh example.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/m13testproject \
-  ~/quaid/plugins/quaid/quaid store "spillover-canary xyloquartz-spillover-9981" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest \
+  ~/.openclaw/extensions/quaid/quaid claudecode make_instance /tmp/quaid-m13-test m13test-dry --dry-run 2>&1'
+ssh example.local 'test ! -d ~/quaid/claude-code-m13test-dry && echo "PASS: dry-run created no silo" || echo "FAIL: dry-run created silo"'
+```
 
-# Must NOT appear in main silo
-ssh example.local 'echo "=== main silo: must NOT see spillover canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/quaid/plugins/quaid/quaid search "xyloquartz-spillover-9981" 2>&1'
+**Step 8b — cross-project spillover proof:**
 
-# Must appear in m13testproject silo
+Simulate a CC session in `/tmp/quaid-m13-test` that `cd`s into the main livetest root
+and calls `quaid store`. `CLAUDE_PROJECT_DIR` is pinned to `/tmp/quaid-m13-test` so the
+store must land in the m13test silo — not in the livetest silo.
+
+```bash
+# Store from m13test context while CWD is the livetest root
+ssh example.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-spillover-9981" 2>&1'
+
+# Must NOT appear in livetest silo
+ssh example.local 'echo "=== livetest silo: must NOT see spillover canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-spillover-9981" 2>&1 | tail -5'
+
+# Must appear in m13test silo
 ssh example.local 'echo "=== m13test silo: MUST see spillover canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
-  ~/quaid/plugins/quaid/quaid search "xyloquartz-spillover-9981" 2>&1'
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-spillover-9981" 2>&1 | tail -5'
 ```
 
-Pass: spillover canary found only in m13testproject silo; main silo returns empty.
-Fail: spillover canary appears in main silo (CLAUDE_PROJECT_DIR not being respected as
-instance anchor — instance identity is falling back to CWD or a global setting).
+Pass: spillover canary found only in m13test silo; livetest silo returns empty.
+Fail: spillover canary appears in livetest silo — `CLAUDE_PROJECT_DIR` is not being
+respected as the instance anchor.
 
-**Step 8 — cleanup:**
+**Step 9 — cleanup:**
 
 ```bash
-ssh example.local 'trash /tmp/m13testproject 2>/dev/null || rm -rf /tmp/m13testproject; echo "cleaned project dir"'
-ssh example.local 'trash ~/quaid/claude-code-tmp-m13testproject 2>/dev/null || rm -rf ~/quaid/claude-code-tmp-m13testproject; echo "cleaned silo"'
+ssh example.local 'trash /tmp/quaid-m13-test 2>/dev/null || rm -rf /tmp/quaid-m13-test; echo "cleaned project dir"'
+ssh example.local 'trash ~/quaid/claude-code-m13test 2>/dev/null || rm -rf ~/quaid/claude-code-m13test; echo "cleaned silo"'
 ```
 
 Pass:
-- `_auto_provision_if_needed()` sets `QUAID_INSTANCE` to a `claude-code-`-prefixed slug of the project path
-- silo directories `config/`, `data/` exist under the new instance
-- `config/memory.json` has `deepReasoning` and `fastReasoning` model IDs set
-- pending notification file written with provisioning message
-- `list_agent_instance_ids()` includes both `claude-code-main` and the new silo
-- cross-silo search returns empty in both directions
-- each instance recalls only its own canary fact
-- stats show different node counts
+- `make_instance` prints the silo path and settings confirmation
+- silo directories `config/`, `data/`, `identity/`, `journal/`, `logs/` all exist
+- `config/memory.json` has `adapter.type == "claude-code"`
+- `/tmp/quaid-m13-test/.claude/settings.json` has `env.QUAID_INSTANCE == "claude-code-m13test"`
+- `quaid instances list` includes `claude-code-m13test`
+- dry-run leaves no silo on disk
 
 Fail:
-- `_auto_provision_if_needed()` errors or leaves `QUAID_INSTANCE` unset
-- silo not created or missing expected dirs
-- no pending notification written on first provision
-- cross-silo canary found (shared DB leak)
-- `list_agent_instance_ids()` missing either instance
+- `make_instance` errors or produces no output
+- any expected silo subdir is missing
+- settings.json absent or contains wrong instance ID
+- dry-run creates the silo
 
 ## Cross-Platform Project Linking Test
 
@@ -1723,21 +1472,21 @@ Ask OC naturally:
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
 ```
 
 If the doc file exists but is not listed, register it manually:
 
 ```bash
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
 ```
 
 After the doc is registered, run `docs update --apply` to index it (new standalone docs with no
 existing chunks should be detected and indexed automatically — this is what M10 verifies):
 
 ```bash
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
 ```
 
 Expected output includes "Indexing new doc:" for the registered file. If it says "All docs up-to-date"
@@ -1747,7 +1496,7 @@ report to claude-dev.
 Then verify recall:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
 Then ask OC:
@@ -1767,9 +1516,9 @@ Ask CC naturally:
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
 Pass:
@@ -1782,17 +1531,17 @@ Each adapter maintains its own docs index. After both docs are registered, run
 `docs update --apply` on both instances so each side has both docs indexed:
 
 ```bash
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
 ```
 
 Verify cross-instance CLI recall before asking agents conversationally:
 
 ```bash
 # CC must find beacon (OC-added doc)
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 # OC must find Ember Glass (CC-added doc)
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
 If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the docs sync is not working and conversational Phase 3 will also fail.
@@ -1836,53 +1585,51 @@ Fail:
 After all milestones and the cross-platform project linking test.
 
 Instances on alfie use per-instance subdirectories under `~/quaid/`:
-- OC: `~/quaid/openclaw-main/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main`)
-- CC: `~/quaid/claude-code-main/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main`)
+- OC: `~/quaid/openclaw-livetest/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest`)
+- CC: `~/quaid/claude-code-livetest/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest`)
 
 ```bash
 # OC instance health
 ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
 ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
-ssh example.local 'ls ~/quaid/openclaw-main/journal/'
-ssh example.local 'cat ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null'
-ssh example.local 'ls -lt ~/quaid/openclaw-main/logs/ | head -20'
-ssh example.local 'cat ~/quaid/openclaw-main/config/memory.json | python3 -m json.tool | head -20'
-ssh example.local 'cat ~/quaid/openclaw-main/data/circuit-breaker.json 2>/dev/null'
-ssh example.local 'cat ~/quaid/openclaw-main/logs/janitor/checkpoint-all.json 2>/dev/null'
+ssh example.local 'ls ~/quaid/openclaw-livetest/journal/'
+ssh example.local 'cat ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null'
+ssh example.local 'ls -lt ~/quaid/openclaw-livetest/logs/ | head -20'
+ssh example.local 'cat ~/quaid/openclaw-livetest/config/memory.json | python3 -m json.tool | head -20'
+ssh example.local 'cat ~/quaid/openclaw-livetest/data/circuit-breaker.json 2>/dev/null'
+ssh example.local 'cat ~/quaid/openclaw-livetest/logs/janitor/checkpoint-all.json 2>/dev/null'
 
 # CC instance health
-ssh example.local 'sqlite3 ~/quaid/claude-code-main/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
-ssh example.local 'ls ~/quaid/claude-code-main/journal/ 2>/dev/null || echo "CC journal not found"'
+ssh example.local 'sqlite3 ~/quaid/claude-code-livetest/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
+ssh example.local 'ls ~/quaid/claude-code-livetest/journal/ 2>/dev/null || echo "CC journal not found"'
 ```
 
 Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirectory):
 
 ```bash
 # OC identity
-ssh example.local 'for f in /Users/owner/quaid/openclaw-main/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 # CC identity
-ssh example.local 'for f in /Users/owner/quaid/claude-code-main/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/claude-code-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 ```
 
 Audit project docs and snippets/journals:
 
 ```bash
-# OC project docs
-ssh example.local 'find /Users/owner/quaid/openclaw-main/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
-# CC project docs
-ssh example.local 'find /Users/owner/quaid/claude-code-main/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
-# Live-test project (shared or per-instance depending on test run)
-ssh example.local 'find /Users/owner/quaid/projects/live-test /Users/owner/quaid/openclaw-main/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
+# Shared project docs
+ssh example.local 'find /Users/owner/quaid/projects -maxdepth 3 \( -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" \) | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
+# Live-test project
+ssh example.local 'find /Users/owner/quaid/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
 # Snippets and journals
-ssh example.local 'for f in /Users/owner/quaid/openclaw-main/SOUL.snippets.md /Users/owner/quaid/openclaw-main/USER.snippets.md /Users/owner/quaid/claude-code-main/SOUL.snippets.md /Users/owner/quaid/claude-code-main/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
-ssh example.local 'for f in /Users/owner/quaid/openclaw-main/journal/SOUL.journal.md /Users/owner/quaid/openclaw-main/journal/USER.journal.md /Users/owner/quaid/openclaw-main/journal/MEMORY.journal.md /Users/owner/quaid/claude-code-main/journal/SOUL.journal.md /Users/owner/quaid/claude-code-main/journal/USER.journal.md /Users/owner/quaid/claude-code-main/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-livetest/SOUL.snippets.md /Users/owner/quaid/openclaw-livetest/USER.snippets.md /Users/owner/quaid/claude-code-livetest/SOUL.snippets.md /Users/owner/quaid/claude-code-livetest/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-livetest/journal/SOUL.journal.md /Users/owner/quaid/openclaw-livetest/journal/USER.journal.md /Users/owner/quaid/openclaw-livetest/journal/MEMORY.journal.md /Users/owner/quaid/claude-code-livetest/journal/SOUL.journal.md /Users/owner/quaid/claude-code-livetest/journal/USER.journal.md /Users/owner/quaid/claude-code-livetest/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
 # Project logs
-ssh example.local 'find /Users/owner/quaid/openclaw-main/projects /Users/owner/quaid/claude-code-main/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
+ssh example.local 'find /Users/owner/quaid/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
 ```
 
 Pass criteria:
 - per-instance identity files (`identity/SOUL.md`, `identity/USER.md`, `identity/ENVIRONMENT.md`) are present for both OC and CC; not empty placeholders
-- quaid project docs (`projects/quaid/PROJECT.md`, `TOOLS.md`, `AGENTS.md`) exist for both instances
+- shared quaid project docs (`projects/quaid/PROJECT.md`, `TOOLS.md`, `AGENTS.md`) exist and are readable from both OC and CC sessions
 - live-test project docs are coherent and point at correct paths
 - OC snippets (`SOUL.snippets.md`, `USER.snippets.md`) are present and building; CC snippets may be absent on first install and build naturally over time
 - journals look structurally sane and consistent with the run

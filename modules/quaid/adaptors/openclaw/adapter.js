@@ -450,6 +450,10 @@ function buildPythonEnv(extra = {}) {
     QUAID_HOME: WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE,
+    // Explicitly set QUAID_INSTANCE so Python subprocesses always know which
+    // agent silo they are serving. Callers pass agent-specific overrides via
+    // extra (e.g. getInstanceId(agentLabel)) when routing to a non-primary agent.
+    QUAID_INSTANCE: _QUAID_INSTANCE || void 0,
     PYTHONPATH: pyPath,
     ...extra
   };

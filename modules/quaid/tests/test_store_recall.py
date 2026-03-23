@@ -2009,6 +2009,33 @@ class TestRecallFastHookInjectContract:
 
         assert "candidate_pool" not in captured["kwargs"]
 
+    def test_vector_store_recall_fast_mode_skips_planner_without_preplanned_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall(query, **kwargs):
+            captured["query"] = query
+            captured["kwargs"] = kwargs
+            return [], {"selected_path": "vector"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            mg._vector_store_recall(
+                "What do I know about Baxter?",
+                limit=5,
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=None,
+                planner_meta=None,
+                fast_mode=True,
+                common_kwargs={"project": "quaid"},
+            )
+
+        assert captured["query"] == "What do I know about Baxter?"
+        assert captured["kwargs"]["use_routing"] is False
+        assert captured["kwargs"]["use_reranker"] is False
+        assert captured["kwargs"]["use_multi_pass"] is False
+
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
 

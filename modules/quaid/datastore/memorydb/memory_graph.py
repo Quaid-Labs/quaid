@@ -3839,11 +3839,15 @@ def _vector_store_recall(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     vector_kwargs = dict(common_kwargs or {})
     vector_kwargs.pop("candidate_pool", None)
+    # Fast explicit-store callers like OC auto-inject should not pay for the
+    # LLM fanout planner inside the hook budget. If fast-mode already has a
+    # concrete query plan, honor it; otherwise stay on the direct vector lane.
+    use_routing = (not fast_mode) or planned_queries is not None
     results, meta = recall(
         query=query,
         limit=limit,
         min_similarity=min_similarity,
-        use_routing=True,
+        use_routing=use_routing,
         use_aliases=True,
         use_intent=True,
         use_multi_pass=not fast_mode,
