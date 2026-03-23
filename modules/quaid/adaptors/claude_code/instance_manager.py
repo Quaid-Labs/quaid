@@ -125,6 +125,39 @@ class ClaudeCodeInstanceManager(InstanceManager):
         config_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
         print(f"  Model config written: deep={deep_model} fast={fast_model}")
 
+    def auto_provision(self, name: str) -> tuple:
+        """Provision a silo for the given name without touching settings.json.
+
+        Unlike make_instance, this does not write QUAID_INSTANCE to any project
+        settings file — instance identity is derived from PWD at hook runtime.
+
+        Returns:
+            (instance_id, was_new): instance ID and whether the silo was just created.
+        """
+        instance_id = self.resolve_instance_id(name)
+        silo_root = self.adapter.quaid_home() / instance_id
+        # Use config dir existence as the "silo is initialized" signal
+        was_new = not (silo_root / "config").exists()
+
+        if was_new:
+            self.create(name)
+            # Write model config inline — avoid _write_model_config() stdout
+            # prints which would corrupt hook JSON output on stdout
+            config_path = silo_root / "config" / "memory.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            cfg: dict = {}
+            if config_path.is_file():
+                try:
+                    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            models = cfg.setdefault("models", {})
+            models.setdefault("deepReasoning", self.DEFAULT_DEEP_MODEL)
+            models.setdefault("fastReasoning", self.DEFAULT_FAST_MODEL)
+            config_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+        return instance_id, was_new
+
     def _write_settings(self, project_dir: Path, instance_id: str) -> None:
         """Write QUAID_INSTANCE into <project_dir>/.claude/settings.json."""
         claude_dir = project_dir / ".claude"

@@ -1509,40 +1509,56 @@ Fail:
 
 ### M13: CC Multi-Instance Verification ✓ 2026-03-15
 
-This milestone verifies that `quaid claudecode make_instance` creates a properly
-isolated Claude Code project instance with the correct silo structure and
-project wiring.
+This milestone verifies that the CC hook auto-provisions a new silo when
+Claude Code opens a project that has no existing instance — simulating the
+real first-use experience — and that the two silos are fully isolated.
+
+Instance names are derived from the project path slug. A project at
+`/tmp/m13testproject` (outside home) becomes `claude-code-tmp-m13testproject`.
 
 **Step 1 — create test project dir:**
 
 ```bash
-ssh example.local 'mkdir -p /tmp/quaid-m13-test && echo "created /tmp/quaid-m13-test"'
+ssh example.local 'mkdir -p /tmp/m13testproject && echo "created /tmp/m13testproject"'
 ```
 
-**Step 2 — run make_instance:**
+**Step 2 — simulate CC hook firing from the new project dir:**
+
+This mimics what happens when a user opens CC in a new folder for the first
+time. `QUAID_INSTANCE` is not set, so `_auto_provision_if_needed()` runs and
+creates a new silo derived from the path.
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid claudecode make_instance /tmp/quaid-m13-test m13test 2>&1'
+ssh example.local 'cd /tmp/m13testproject && QUAID_HOME=~/quaid \
+  python3 -c "
+import sys, os
+sys.path.insert(0, os.path.expanduser(\"~/quaid/plugins/quaid\"))
+os.environ.pop(\"QUAID_INSTANCE\", None)
+from adaptors.claude_code.hooks import _auto_provision_if_needed
+_auto_provision_if_needed()
+iid = os.environ.get(\"QUAID_INSTANCE\", \"NOT SET\")
+print(\"QUAID_INSTANCE:\", iid)
+assert iid.startswith(\"claude-code-\"), f\"Expected claude-code- prefix, got {iid!r}\"
+assert \"m13testproject\" in iid, f\"Expected path slug in id, got {iid!r}\"
+print(\"PASS: auto-provisioned\", iid)
+" 2>&1'
 ```
 
-Expected output includes:
-- `Created silo: .../claude-code-m13test`
-- `Instance ID:  claude-code-m13test`
-- `Wrote QUAID_INSTANCE=claude-code-m13test to /tmp/quaid-m13-test/.claude/settings.json`
+Note the instance ID printed — it will be used in subsequent steps.
+Expected: `claude-code-tmp-m13testproject`
 
 **Step 3 — verify silo created:**
 
 ```bash
-ssh example.local 'ls ~/quaid/claude-code-m13test/ && echo "PASS: silo exists"'
+ssh example.local 'ls ~/quaid/claude-code-tmp-m13testproject/ && echo "PASS: silo exists"'
 ```
 
 **Step 4 — verify silo directory structure:**
 
 ```bash
 ssh example.local '
-silo="$HOME/quaid/claude-code-m13test"
-for subdir in config data identity journal logs; do
+silo="$HOME/quaid/claude-code-tmp-m13testproject"
+for subdir in config data; do
   if [ -d "$silo/$subdir" ]; then
     echo "PASS: $silo/$subdir"
   else
@@ -1552,122 +1568,94 @@ done
 '
 ```
 
-**Step 5 — verify config/memory.json has adapter type "claude-code":**
+**Step 5 — verify model config written:**
 
 ```bash
 ssh example.local 'python3 -c "
 import json
 from pathlib import Path
-cfg = json.loads(Path(\"$HOME/quaid/claude-code-m13test/config/memory.json\").read_text())
-adapter_type = cfg.get(\"adapter\", {}).get(\"type\", \"\")
-assert adapter_type == \"claude-code\", f\"Expected claude-code, got {adapter_type!r}\"
-print(\"PASS: adapter.type =\", adapter_type)
+cfg = json.loads(Path(\"$HOME/quaid/claude-code-tmp-m13testproject/config/memory.json\").read_text())
+models = cfg.get(\"models\", {})
+assert models.get(\"deepReasoning\"), f\"deepReasoning not set: {models}\"
+assert models.get(\"fastReasoning\"), f\"fastReasoning not set: {models}\"
+print(\"PASS: models =\", models)
 "'
 ```
 
-**Step 6 — verify .claude/settings.json written with correct QUAID_INSTANCE:**
+**Step 6 — verify both instances appear in list_agent_instance_ids:**
 
-```bash
-ssh example.local 'python3 -c "
-import json
-from pathlib import Path
-settings = json.loads(Path(\"/tmp/quaid-m13-test/.claude/settings.json\").read_text())
-iid = settings.get(\"env\", {}).get(\"QUAID_INSTANCE\", \"\")
-assert iid == \"claude-code-m13test\", f\"Expected claude-code-m13test, got {iid!r}\"
-print(\"PASS: QUAID_INSTANCE =\", iid)
-"'
-```
-
-**Step 7 — verify both instances appear in list_agent_instance_ids:**
-
-`list_agent_instance_ids()` now scans QUAID_HOME for `claude-code-*` silos,
-mirroring OC's `agents.list`. After `make_instance`, both main and m13test
-should appear.
+`list_agent_instance_ids()` scans QUAID_HOME for `claude-code-*` silos.
+After auto-provision, both main and the new silo should appear.
 
 ```bash
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
   python3 -c "
-import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/quaid/plugins/quaid\"))
 from adaptors.factory import create_adapter
 a = create_adapter(\"claude-code\")
 ids = a.list_agent_instance_ids()
 assert \"claude-code-main\" in ids, f\"claude-code-main not in {ids}\"
-assert \"claude-code-m13test\" in ids, f\"claude-code-m13test not in {ids}\"
+assert \"claude-code-tmp-m13testproject\" in ids, f\"claude-code-tmp-m13testproject not in {ids}\"
 print(\"PASS: list_agent_instance_ids =\", ids)
 "'
-
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
-  ~/.openclaw/extensions/quaid/quaid instances list 2>&1 | grep -i m13test || \
-  echo "(instances list not available — check quaid version)"'
 ```
 
-**Step 8 — dry-run creates no silo:**
-
-```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid claudecode make_instance /tmp/quaid-m13-test m13test-dry --dry-run 2>&1'
-ssh example.local 'test ! -d ~/quaid/claude-code-m13test-dry && echo "PASS: dry-run created no silo" || echo "FAIL: dry-run created silo"'
-```
-
-**Step 9 — run calls from both instances and verify silo isolation:**
+**Step 7 — run calls from both instances and verify silo isolation:**
 
 ```bash
 # Store a canary fact from each instance
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid store "m13-main-canary xyloquartz-beacon-4421" 2>&1'
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
-  ~/.openclaw/extensions/quaid/quaid store "m13-test-canary xyloquartz-m13test-6612" 2>&1'
+  ~/quaid/plugins/quaid/quaid store "m13-main-canary xyloquartz-beacon-4421" 2>&1'
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
+  ~/quaid/plugins/quaid/quaid store "m13-test-canary xyloquartz-m13test-6612" 2>&1'
 
 # Cross-silo isolation: each instance must NOT see the other's canary
 ssh example.local 'echo "=== main search for m13test canary (expect empty) ==="; \
   QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
+  ~/quaid/plugins/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
 ssh example.local 'echo "=== m13test search for main canary (expect empty) ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
+  ~/quaid/plugins/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
 
 # Each instance can recall its own fact
 ssh example.local 'echo "=== main recalls its own canary ==="; \
   QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
+  ~/quaid/plugins/quaid/quaid search "xyloquartz-beacon-4421" 2>&1'
 ssh example.local 'echo "=== m13test recalls its own canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
-  ~/.openclaw/extensions/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
+  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
+  ~/quaid/plugins/quaid/quaid search "xyloquartz-m13test-6612" 2>&1'
 
 # Stats from both — confirm separate databases
 ssh example.local 'echo "=== main stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
-ssh example.local 'echo "=== m13test stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
-  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
+  ~/quaid/plugins/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
+ssh example.local 'echo "=== m13test stats ==="; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-tmp-m13testproject \
+  ~/quaid/plugins/quaid/quaid stats 2>&1 | grep -i "node\|memory\|total" | head -5'
 ```
 
 Pass: both instances store and recall their own facts; neither sees the other's
 canary; stats show different node counts.
 
-**Step 10 — cleanup:**
+**Step 8 — cleanup:**
 
 ```bash
-ssh example.local 'trash /tmp/quaid-m13-test 2>/dev/null || rm -rf /tmp/quaid-m13-test; echo "cleaned project dir"'
-ssh example.local 'trash ~/quaid/claude-code-m13test 2>/dev/null || rm -rf ~/quaid/claude-code-m13test; echo "cleaned silo"'
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
-  ~/.openclaw/extensions/quaid/quaid global-registry list 2>&1 | grep m13test || echo "m13test not in registry (ok)"'
+ssh example.local 'trash /tmp/m13testproject 2>/dev/null || rm -rf /tmp/m13testproject; echo "cleaned project dir"'
+ssh example.local 'trash ~/quaid/claude-code-tmp-m13testproject 2>/dev/null || rm -rf ~/quaid/claude-code-tmp-m13testproject; echo "cleaned silo"'
 ```
 
 Pass:
-- `make_instance` prints the silo path and settings confirmation
-- silo directories `config/`, `data/`, `identity/`, `journal/`, `logs/` all exist
-- `config/memory.json` has `adapter.type == "claude-code"`
-- `/tmp/quaid-m13-test/.claude/settings.json` has `env.QUAID_INSTANCE == "claude-code-m13test"`
-- `quaid instances list` includes `claude-code-m13test`
-- dry-run leaves no silo on disk
-- search from new instance returns no matches for a fact stored in the main instance
+- `_auto_provision_if_needed()` sets `QUAID_INSTANCE` to a `claude-code-`-prefixed slug of the project path
+- silo directories `config/`, `data/` exist under the new instance
+- `config/memory.json` has `deepReasoning` and `fastReasoning` model IDs set
+- `list_agent_instance_ids()` includes both `claude-code-main` and the new silo
+- cross-silo search returns empty in both directions
+- each instance recalls only its own canary fact
+- stats show different node counts
 
 Fail:
-- `make_instance` errors or produces no output
-- any expected silo subdir is missing
-- settings.json absent or contains wrong instance ID
-- dry-run creates the silo
-- canary string is found in the new instance's search (shared DB leak)
+- `_auto_provision_if_needed()` errors or leaves `QUAID_INSTANCE` unset
+- silo not created or missing expected dirs
+- cross-silo canary found (shared DB leak)
+- `list_agent_instance_ids()` missing either instance
 
 ## Cross-Platform Project Linking Test
 
