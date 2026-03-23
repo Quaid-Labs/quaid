@@ -355,11 +355,6 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         self._fast_model = fast_model
         self._api_key_provider: Optional[AnthropicLLMProvider] = None
 
-    def _get_cli_provider(self) -> Optional[ClaudeCodeCLIProvider]:
-        """Layer 0: claude -p subprocess provider."""
-        p = ClaudeCodeCLIProvider()
-        return p if p._claude_bin else None
-
     def _get_api_key_provider(self) -> Optional[AnthropicLLMProvider]:
         """Layer 3: API key fallback provider."""
         if self._api_key_provider is not None:
@@ -525,20 +520,6 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
     def llm_call(self, messages, model_tier="deep",
                  max_tokens=4000, timeout=600):
         fail_hard = is_fail_hard_enabled()
-
-        # --- Layer 0: claude -p subprocess ---
-        # Skipped when QUAID_DAEMON=1: spawning a CC subprocess inside the
-        # extraction daemon creates new CC sessions that fire hooks, which start
-        # more daemons, causing an exponential process/session storm.
-        # Also skipped when failHard=True: a slow claude -p timeout would block
-        # the faster OAuth path and raise before OAuth is ever tried.
-        cli = self._get_cli_provider()
-        if cli and not os.environ.get("QUAID_DAEMON") and not fail_hard:
-            try:
-                return cli.llm_call(messages, model_tier=model_tier,
-                                    max_tokens=max_tokens, timeout=timeout)
-            except Exception as e:
-                logger.warning("[claude-code] claude -p failed (%s), trying OAuth layers", e)
 
         # --- Layer 1+2: OAuth (env token or on-disk, no refresh) ---
         try:
