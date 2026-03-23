@@ -1400,13 +1400,17 @@ ssh example.local 'test ! -d ~/quaid/claude-code-m13test-dry && echo "PASS: dry-
 
 **Step 8b — cross-project spillover proof:**
 
-Simulate a CC session in `/tmp/quaid-m13-test` that `cd`s into the main livetest root
-and calls `quaid store`. `CLAUDE_PROJECT_DIR` is pinned to `/tmp/quaid-m13-test` so the
-store must land in the m13test silo — not in the livetest silo.
+Simulate a CC session running in the m13test silo (real CC sets `QUAID_INSTANCE` via
+`settings.json` — use it explicitly here). The store must land in the m13test silo,
+not in the livetest silo.
+
+Note: `CLAUDE_PROJECT_DIR` alone is no longer sufficient to drive adapter/instance
+selection after the instance-aware config changes. Real CC sessions are covered because
+`setup-quaid.mjs` writes `QUAID_INSTANCE` into `.claude/settings.json`.
 
 ```bash
-# Store from m13test context while CWD is the livetest root
-ssh example.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+# Store from m13test silo context
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
   ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-spillover-9981" 2>&1'
 
 # Must NOT appear in livetest silo
@@ -1421,8 +1425,7 @@ ssh example.local 'echo "=== m13test silo: MUST see spillover canary ==="; \
 ```
 
 Pass: spillover canary found only in m13test silo; livetest silo returns empty.
-Fail: spillover canary appears in livetest silo — `CLAUDE_PROJECT_DIR` is not being
-respected as the instance anchor.
+Fail: spillover canary appears in livetest silo — instance isolation is broken.
 
 **Step 9 — cleanup:**
 
