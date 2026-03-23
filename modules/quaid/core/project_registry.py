@@ -97,6 +97,7 @@ def create_project(
     name: str,
     description: str = "",
     source_root: Optional[str] = None,
+    initial_instance: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Register a new project.
 
@@ -104,6 +105,9 @@ def create_project(
         name: Project name (lowercase, kebab-case)
         description: Human-readable description
         source_root: Path to user's project files (optional)
+        initial_instance: Instance ID to associate. If None, reads from
+            QUAID_INSTANCE env var. Pass explicitly when calling from silo
+            init where QUAID_INSTANCE is not yet in the environment.
 
     Returns:
         The project entry dict.
@@ -123,16 +127,16 @@ def create_project(
     adapter = get_adapter()
     canonical = quaid_projects_dir(adapter.quaid_home()) / name
 
-    try:
+    if initial_instance is not None:
+        _current_instance = initial_instance
+    else:
         from lib.instance import instance_id as _instance_id
-        _current_instance = _instance_id()
-    except Exception:
-        _current_instance = None
+        _current_instance = _instance_id()  # raises InstanceError if unset
 
     entry = {
         "canonical_path": str(canonical),
         "source_root": source_root,
-        "instances": [_current_instance] if _current_instance else [],
+        "instances": [_current_instance],
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
         "description": description,
     }

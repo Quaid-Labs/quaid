@@ -23,6 +23,7 @@ import glob as glob_mod
 import json
 import os
 import select
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -310,11 +311,6 @@ def hook_extract(args):
         except Exception as _te:
             print(f"[quaid][{label}] auth token capture failed: {_te}", file=sys.stderr)
 
-        # Do NOT call ensure_alive() here — hook_extract must exit quickly.
-        # CC cancels SessionEnd hooks that take too long. The daemon is
-        # started by session-init; signals written here will be picked up
-        # on the next daemon poll even if the daemon isn't live yet.
-
         # Determine adapter type from config for compaction control advertisement
         try:
             from lib.adapter import get_adapter
@@ -333,6 +329,29 @@ def hook_extract(args):
             supports_compaction_control=supports_compaction,
         )
         print(f"[quaid][{label}] signal written: {sig_path.name}", file=sys.stderr)
+
+        # Signal write is complete (the critical part). Now ensure the daemon
+        # is alive to process it. Run in a detached subprocess so CC cannot
+        # cancel it — the hook itself returns immediately after this Popen.
+        # Skipped for OC: the gateway manages the OC daemon lifecycle.
+        if "openclaw" not in adapter_name:
+            try:
+                _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
+                _env = {
+                    k: v for k, v in os.environ.items()
+                    if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
+                }
+                subprocess.Popen(
+                    [sys.executable, str(_daemon_script), "start"],
+                    start_new_session=True,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=_env,
+                )
+            except Exception:
+                pass  # best-effort; signal is already written
+
     except Exception as e:
         print(f"[quaid][{label}] error: {e}", file=sys.stderr)
 

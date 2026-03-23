@@ -151,7 +151,7 @@ class InstanceManager:
             misc_desc = "Scratch pad for ephemeral and temporary files."
             from core.project_registry import create_project as _cp, get_project as _gp
             if not _gp(misc_name):
-                _cp(misc_name, description=misc_desc)
+                _cp(misc_name, description=misc_desc, initial_instance=instance_id)
         except Exception as _e:
             logger.warning("misc project registration skipped at silo init: %s", _e)
 

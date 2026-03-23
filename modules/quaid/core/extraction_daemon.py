@@ -31,6 +31,7 @@ import logging.handlers
 import os
 import re
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -2334,79 +2335,44 @@ def start_daemon() -> int:
         if existing is not None:
             return existing
 
-        # Double-fork to fully detach
-        pid = os.fork()
-        if pid > 0:
-            # B005: Parent waits on first child to prevent zombie
-            os.waitpid(pid, 0)
-            # Wait briefly for grandchild to write PID. Avoid returning the
-            # first-child PID because it exits immediately and is not usable.
-            for _ in range(20):
-                time.sleep(0.1)
-                running_pid = read_pid()
-                if running_pid is not None:
-                    return running_pid
-            return -1
-
-        # First child: create new session
-        os.setsid()
-
-        # B029: Set restrictive umask for all files created by daemon
-        os.umask(0o077)
-
-        # B059: chdir to QUAID_HOME for stable cwd
-        try:
-            os.chdir(str(_quaid_home()))
-        except OSError:
-            pass
-
-        pid2 = os.fork()
-        if pid2 > 0:
-            os._exit(0)
-
-        # Second child: this is the daemon
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        try:
-            os.close(lock_fd)
-        except OSError:
-            pass
-
-        # Redirect stdio to log file
+        # Spawn daemon worker via subprocess.Popen instead of double-fork.
+        # double-fork inherits the calling process's Python state (sys.modules,
+        # open file descriptors) which causes silent failures when called from
+        # within a Claude Code hook or OC gateway process.  Popen spawns a
+        # fresh interpreter with a clean environment.
         log_file = _log_path()
-        sys.stdout.flush()
-        sys.stderr.flush()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(log_file, "a") as lf:
-            os.dup2(lf.fileno(), sys.stdout.fileno())
-            os.dup2(lf.fileno(), sys.stderr.fileno())
+        # Strip host-adapter env vars that must not be inherited by the daemon.
+        _skip_prefixes = ("OPENCLAW_",)
+        _skip_keys = {"CLAUDE_CODE_OAUTH_TOKEN"}
+        env = {
+            k: v for k, v in os.environ.items()
+            if not any(k.startswith(p) for p in _skip_prefixes)
+            and k not in _skip_keys
+        }
+        env["QUAID_DAEMON"] = "1"
 
-        # Close stdin
-        devnull = os.open(os.devnull, os.O_RDONLY)
-        os.dup2(devnull, sys.stdin.fileno())
-        os.close(devnull)
+        with open(log_file, "a") as _lf:
+            subprocess.Popen(
+                [sys.executable, str(Path(__file__)), "_worker"],
+                start_new_session=True,
+                stdout=_lf,
+                stderr=_lf,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                cwd=str(_quaid_home()),
+            )
 
-        # B027: Set up logging with rotation (10MB per file, 3 backups)
-        handler = logging.handlers.RotatingFileHandler(
-            str(log_file), maxBytes=10 * 1024 * 1024, backupCount=3,
-        )
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(name)s] %(levelname)s %(message)s"
-        ))
-        root_logger = logging.getLogger()
-        root_logger.handlers.clear()
-        root_logger.addHandler(handler)
-        root_logger.setLevel(logging.INFO)
+        # Wait for worker to write its PID file (same budget as double-fork).
+        for _ in range(20):
+            time.sleep(0.1)
+            running_pid = read_pid()
+            if running_pid is not None:
+                return running_pid
 
-        try:
-            daemon_loop()
-        except Exception as e:
-            logger.error("daemon crashed: %s", e, exc_info=True)
-        finally:
-            remove_pid()
-            os._exit(0)
+        logger.error("daemon _worker did not write PID file within 2s")
+        return -1
     finally:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -2471,6 +2437,8 @@ def main():
     subparsers.add_parser("stop", help="Stop the daemon")
     subparsers.add_parser("status", help="Check daemon status")
     subparsers.add_parser("run", help="Run in foreground (for debugging)")
+    # Internal: spawned by start_daemon() via subprocess.Popen.  Not for direct use.
+    subparsers.add_parser("_worker", help=argparse.SUPPRESS)
 
     args = parser.parse_args()
 
@@ -2490,6 +2458,29 @@ def main():
             format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
         )
         daemon_loop()
+    elif args.command == "_worker":
+        # Internal entrypoint called by start_daemon() via subprocess.Popen.
+        # Sets up file logging and runs the daemon loop directly; the caller
+        # handles process isolation via start_new_session=True.
+        _log = _log_path()
+        _log.parent.mkdir(parents=True, exist_ok=True)
+        _handler = logging.handlers.RotatingFileHandler(
+            str(_log), maxBytes=10 * 1024 * 1024, backupCount=3,
+        )
+        _handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(name)s] %(levelname)s %(message)s"
+        ))
+        _root = logging.getLogger()
+        _root.handlers.clear()
+        _root.addHandler(_handler)
+        _root.setLevel(logging.INFO)
+        try:
+            daemon_loop()
+        except Exception as _e:
+            logger.error("daemon crashed: %s", _e, exc_info=True)
+        finally:
+            remove_pid()
+            os._exit(0)
     else:
         parser.print_help()
         sys.exit(1)
