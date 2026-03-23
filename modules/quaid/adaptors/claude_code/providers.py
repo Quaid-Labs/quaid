@@ -530,14 +530,14 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         # Skipped when QUAID_DAEMON=1: spawning a CC subprocess inside the
         # extraction daemon creates new CC sessions that fire hooks, which start
         # more daemons, causing an exponential process/session storm.
+        # Also skipped when failHard=True: a slow claude -p timeout would block
+        # the faster OAuth path and raise before OAuth is ever tried.
         cli = self._get_cli_provider()
-        if cli and not os.environ.get("QUAID_DAEMON"):
+        if cli and not os.environ.get("QUAID_DAEMON") and not fail_hard:
             try:
                 return cli.llm_call(messages, model_tier=model_tier,
                                     max_tokens=max_tokens, timeout=timeout)
             except Exception as e:
-                if fail_hard:
-                    raise
                 logger.warning("[claude-code] claude -p failed (%s), trying OAuth layers", e)
 
         # --- Layer 1+2: OAuth (env token or on-disk, no refresh) ---
