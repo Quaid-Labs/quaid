@@ -67,10 +67,10 @@ def _save(data: Dict[str, Any]) -> None:
 
 
 def _adapter_name() -> str:
-    """Get current adapter instance name from config."""
+    """Get current adapter instance ID from environment."""
     try:
-        from lib.adapter import get_adapter
-        return type(get_adapter()).__name__.replace("Adapter", "").lower()
+        from lib.instance import instance_id
+        return instance_id()
     except Exception:
         return "standalone"
 
