@@ -381,7 +381,9 @@ let _platformOverride = "";
 
 // Mutable instance ID override — set by the instance ID prompt in step1().
 // Takes precedence over the adapter-derived default.
-let _instanceIdOverride = "";
+// Pre-seed from QUAID_INSTANCE env so explicit overrides (e.g. livetest) are
+// never clobbered by the first syncInstallerInstanceEnv() call.
+let _instanceIdOverride = String(process.env.QUAID_INSTANCE || "").trim();
 
 function resolvedInstallerPlatform() {
   if (_platformOverride) return _platformOverride;
@@ -439,12 +441,8 @@ function listExistingInstances() {
  */
 async function promptInstanceId(adapterType) {
   if (AGENT_MODE || _testAnswers) {
-    // Non-interactive: honor QUAID_INSTANCE env if set explicitly, otherwise
-    // use the adapter-derived default (e.g. "openclaw-main", "claude-code-main").
-    const envInstance = String(process.env.QUAID_INSTANCE || "").trim();
-    if (envInstance && !_instanceIdOverride) {
-      _instanceIdOverride = envInstance;
-    }
+    // Non-interactive: keep the adapter-derived default (or pre-seeded
+    // _instanceIdOverride if QUAID_INSTANCE was set before install), no prompt.
     syncInstallerInstanceEnv(adapterType);
     return;
   }
@@ -3224,7 +3222,8 @@ except Exception as e:
       initialValue: true,
     }));
     if (doMigrate) {
-      if (IS_OPENCLAW) {
+      const useMockCheck = process.env.QUAID_TEST_MOCK_MIGRATION === "1";
+      if (IS_OPENCLAW && !useMockCheck) {
         log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
         await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "workspace migration");
       }
