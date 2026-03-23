@@ -106,11 +106,20 @@ const BACKLOG_NOTIFY_STALE_MS = 90_000;
 // daemon's _signal_dir() = _instance_root() / "data" / "extraction-signals".
 // QUAID_INSTANCE is the current (primary) agent's full instance ID, e.g. "openclaw-main".
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
-// Prefix: strip the "-main" suffix so getInstanceId can build any agent's ID.
-// "openclaw-main" → "openclaw", "claude-code-main" → "claude-code", "openclaw" → "openclaw" (legacy).
-const _QUAID_PREFIX = _QUAID_INSTANCE.endsWith("-main")
-  ? _QUAID_INSTANCE.slice(0, -5)
-  : _QUAID_INSTANCE;
+// Prefix: the adapter name portion of QUAID_INSTANCE (e.g. "openclaw", "claude-code").
+// Strip the known adapter prefix from the front rather than stripping "-main" from the back,
+// so non-main instance labels (e.g. "openclaw-livetest") compute the right prefix too.
+// "openclaw-main"     → "openclaw"    (same as before)
+// "openclaw-livetest" → "openclaw"    (was broken: produced "openclaw-livetest")
+// "claude-code-main"  → "claude-code" (same as before)
+const _KNOWN_ADAPTER_PREFIXES = ["claude-code", "openclaw", "standalone"];
+const _QUAID_PREFIX = (() => {
+  for (const pfx of _KNOWN_ADAPTER_PREFIXES) {
+    if (_QUAID_INSTANCE.startsWith(`${pfx}-`) || _QUAID_INSTANCE === pfx) return pfx;
+  }
+  // Fallback for legacy or unknown formats: strip "-main" as before.
+  return _QUAID_INSTANCE.endsWith("-main") ? _QUAID_INSTANCE.slice(0, -5) : _QUAID_INSTANCE;
+})();
 
 /**
  * Derive the Quaid instance ID for a given OC agent label.
@@ -134,8 +143,11 @@ function getDaemonSignalDir(agentId: string = "main"): string {
     : path.join(WORKSPACE, "data", "extraction-signals");
 }
 
-// Primary instance signal dir (backward-compat constant for non-session-routed callers).
-const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
+// Primary instance signal dir — use _QUAID_INSTANCE directly so non-main
+// instance labels (e.g. "openclaw-livetest") resolve to their own silo.
+const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE
+  ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "extraction-signals")
+  : path.join(WORKSPACE, "data", "extraction-signals");
 
 // In-process dedup for reset signals: prevents multiple gateway processes (or
 // multiple bursts within the same process) from writing redundant reset signals
