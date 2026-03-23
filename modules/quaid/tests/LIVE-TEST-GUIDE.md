@@ -1547,10 +1547,21 @@ print(\"PASS: auto-provisioned\", iid)
 Note the instance ID printed — it will be used in subsequent steps.
 Expected: `claude-code-tmp-m13testproject`
 
-**Step 3 — verify silo created:**
+**Step 3 — verify silo created and pending notification written:**
 
 ```bash
 ssh example.local 'ls ~/quaid/claude-code-tmp-m13testproject/ && echo "PASS: silo exists"'
+ssh example.local 'python3 -c "
+import json
+from pathlib import Path
+pending = Path(\"$HOME/quaid/claude-code-tmp-m13testproject/data/cc-pending-notifications.jsonl\")
+assert pending.is_file(), f\"No pending notification file at {pending}\"
+lines = [l for l in pending.read_text().splitlines() if l.strip()]
+assert lines, \"Pending notifications file is empty\"
+msg = json.loads(lines[-1]).get(\"message\", \"\")
+assert \"provisioned\" in msg.lower(), f\"Expected provisioning message, got: {msg!r}\"
+print(\"PASS: pending notification:\", msg)
+"'
 ```
 
 **Step 4 — verify silo directory structure:**
@@ -1646,6 +1657,7 @@ Pass:
 - `_auto_provision_if_needed()` sets `QUAID_INSTANCE` to a `claude-code-`-prefixed slug of the project path
 - silo directories `config/`, `data/` exist under the new instance
 - `config/memory.json` has `deepReasoning` and `fastReasoning` model IDs set
+- pending notification file written with provisioning message
 - `list_agent_instance_ids()` includes both `claude-code-main` and the new silo
 - cross-silo search returns empty in both directions
 - each instance recalls only its own canary fact
@@ -1654,6 +1666,7 @@ Pass:
 Fail:
 - `_auto_provision_if_needed()` errors or leaves `QUAID_INSTANCE` unset
 - silo not created or missing expected dirs
+- no pending notification written on first provision
 - cross-silo canary found (shared DB leak)
 - `list_agent_instance_ids()` missing either instance
 

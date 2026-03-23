@@ -12,29 +12,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 def _auto_provision_if_needed() -> None:
     """Derive QUAID_INSTANCE from PWD and provision a silo if not yet created.
 
-    Instance name is derived as "<basename>-<6-char path hash>" so two folders
-    with the same name but different parent paths get distinct silos.
+    Instance name is the full project path translated to a folder-safe slug.
+    The home prefix is stripped so ~/work/myapp → work-myapp.
+    Home dir itself → home. Paths outside home use the full path from root.
 
-    Skips if:
-    - QUAID_INSTANCE is already set in the environment (explicit config wins)
-    - PWD is the user's home directory (would pollute ~/.claude/settings.json)
+    Skips only if QUAID_INSTANCE is already set in the environment.
     """
     if os.environ.get("QUAID_INSTANCE", "").strip():
         return
 
     cwd = Path(os.getcwd()).resolve()
     home = Path.home().resolve()
-    if cwd == home:
-        return  # Never auto-provision from home dir
 
-    # Translate the full path into a folder-safe name.
-    # Strip the home prefix so ~/work/myapp → work-myapp (keeps it readable).
+    # Translate the full path into a folder-safe slug.
+    # Strip home prefix so ~/work/myapp → work-myapp.
     try:
         rel = cwd.relative_to(home)
         path_str = str(rel)
     except ValueError:
         path_str = str(cwd).lstrip("/")
-    slug = re.sub(r"[^a-z0-9]+", "-", path_str.lower()).strip("-") or "project"
+    slug = re.sub(r"[^a-z0-9]+", "-", path_str.lower()).strip("-") or "home"
     name = slug
 
     try:
