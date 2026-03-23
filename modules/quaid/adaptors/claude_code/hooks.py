@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code hooks — auto-provision instance from project root, then run hook."""
+"""Claude Code hooks — auto-provision silo from project root, then run hook."""
 
 import os
 import sys
@@ -8,17 +8,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 
 def _auto_provision_if_needed() -> None:
-    """Derive QUAID_INSTANCE from the CC project root and provision if needed.
+    """Create a Quaid silo for this project if one does not exist yet.
 
-    Uses the adapter's get_instance_name() which reads CLAUDE_PROJECT_DIR —
-    the env var CC injects for all hooks and Bash tool calls. This is the
-    stable project root regardless of the shell's current working directory.
-
-    Skips only if QUAID_INSTANCE is already set in the environment.
+    get_adapter() (called by core.interface.hooks) bootstraps QUAID_INSTANCE
+    via adapter.get_instance_name() — this function only needs to ensure the
+    silo directory exists before the hook runs.
     """
-    if os.environ.get("QUAID_INSTANCE", "").strip():
-        return
-
     try:
         from adaptors.claude_code.adapter import ClaudeCodeAdapter
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
@@ -27,7 +22,6 @@ def _auto_provision_if_needed() -> None:
         name = adapter.get_instance_name()
         mgr = ClaudeCodeInstanceManager(adapter)
         instance_id, was_new = mgr.auto_provision(name)
-        os.environ["QUAID_INSTANCE"] = instance_id
 
         if was_new:
             adapter.notify(
