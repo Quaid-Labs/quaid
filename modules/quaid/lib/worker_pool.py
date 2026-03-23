@@ -32,7 +32,7 @@ def shutdown_worker_pools(wait: bool = False) -> None:
         ex.shutdown(wait=wait, cancel_futures=True)
 
 
-atexit.register(shutdown_worker_pools)
+atexit.register(shutdown_worker_pools, True)
 
 
 def run_callables(
