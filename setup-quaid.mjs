@@ -1754,8 +1754,9 @@ async function step1_preflight() {
     if (_removeOpenClawPluginsAllowQuaid()) {
       log.info("Removed stale plugins.allow entry for quaid before plugin registration");
     }
-    if (_ensureOpenClawRuntimeInstanceEnv("openclaw-main")) {
-      log.info("Seeded OpenClaw config env.vars with QUAID_INSTANCE=openclaw-main");
+    const _ocRuntimeInstance = resolvedInstallerInstanceId();
+    if (_ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance)) {
+      log.info(`Seeded OpenClaw config env.vars with QUAID_INSTANCE=${_ocRuntimeInstance}`);
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {

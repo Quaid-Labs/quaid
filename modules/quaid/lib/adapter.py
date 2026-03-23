@@ -906,6 +906,68 @@ def _read_adapter_type_from_config() -> str:
     raise RuntimeError("Adapter type could not be resolved from config.")
 
 
+def _infer_adapter_type_from_instance(instance_id: str) -> str:
+    """Infer adapter type from QUAID_INSTANCE prefix convention.
+
+    Returns the adapter type string if recognisable, or "" if unknown.
+    """
+    if instance_id.startswith("openclaw-") or instance_id == "openclaw":
+        return "openclaw"
+    if instance_id.startswith("claude-code-") or instance_id == "claude_code":
+        return "claude_code"
+    return ""
+
+
+def _auto_provision_from_env_if_needed() -> None:
+    """Scaffold a default silo when QUAID_INSTANCE is set but has no config yet.
+
+    Runs before _read_adapter_type_from_config() so first-use invocations
+    (e.g. OC session start with a fresh instance name) create the silo
+    automatically rather than hard-failing with 'no config found'.
+
+    The adapter type is inferred from the QUAID_INSTANCE prefix so no config
+    is needed to determine it.  After this returns, _read_adapter_type_from_config()
+    will find the freshly written config and proceed normally.
+    """
+    home = os.environ.get("QUAID_HOME", "").strip()
+    instance = os.environ.get("QUAID_INSTANCE", "").strip()
+    if not home or not instance:
+        return
+    silo_root = Path(home) / instance
+    if (silo_root / "config" / "memory.json").exists():
+        return  # Already initialised — nothing to do
+
+    adapter_type = _infer_adapter_type_from_instance(instance)
+    if not adapter_type:
+        return  # Unrecognised prefix — let normal flow raise with a clear error
+
+    try:
+        # Use InstanceManager base class for full silo scaffolding (dirs, DB,
+        # identity stubs, PROJECT.md).  Import lazily to avoid circular deps.
+        from lib.instance_manager import InstanceManager
+
+        class _BootstrapAdapter:
+            """Minimal adapter stand-in used only during first-use silo creation."""
+            def quaid_home(self):  # type: ignore[override]
+                return Path(home)
+            def adapter_id(self):  # type: ignore[override]
+                return adapter_type
+            def agent_id_prefix(self):  # type: ignore[override]
+                prefix_map = {"openclaw": "openclaw", "claude_code": "claude-code"}
+                return prefix_map.get(adapter_type, adapter_type)
+
+        mgr = InstanceManager(_BootstrapAdapter())  # type: ignore[arg-type]
+        prefix = mgr.adapter.agent_id_prefix()
+        label = instance[len(prefix) + 1:] if instance.startswith(f"{prefix}-") else instance
+        mgr._init_silo(silo_root, instance)
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "Auto-provisioned instance silo: %s (adapter=%s)", instance, adapter_type
+        )
+    except Exception:
+        pass  # Never block — let downstream raise with a useful message
+
+
 def get_adapter() -> QuaidAdapter:
     """Get the current adapter (resolved on first call).
 
@@ -916,6 +978,9 @@ def get_adapter() -> QuaidAdapter:
     adapter.get_instance_name() if not already set in the environment.
     This is the single place where instance identity is established —
     adapters do not need to set QUAID_INSTANCE themselves.
+
+    Auto-provisions the instance silo when QUAID_INSTANCE is set but no config
+    exists yet, so first-use invocations do not require a separate setup step.
     """
     global _adapter
     if _adapter is not None:
@@ -923,6 +988,7 @@ def get_adapter() -> QuaidAdapter:
     with _adapter_lock:
         if _adapter is not None:
             return _adapter
+        _auto_provision_from_env_if_needed()
         kind = _read_adapter_type_from_config()
         if kind == "standalone":
             _adapter = StandaloneAdapter()
