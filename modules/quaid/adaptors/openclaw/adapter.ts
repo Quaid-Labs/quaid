@@ -600,9 +600,16 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
   const pyPath = existing ? `${PYTHON_PLUGIN_ROOT}${sep}${existing}` : PYTHON_PLUGIN_ROOT;
+  // When QUAID_INSTANCE is set, Python resolves the DB path from QUAID_HOME/QUAID_INSTANCE
+  // via get_adapter().instance_root(). Do NOT override with MEMORY_DB_PATH — that would
+  // bypass the silo-specific path and point at the workspace-root legacy DB instead.
+  // Only set MEMORY_DB_PATH in the legacy flat-layout case (no QUAID_INSTANCE).
+  const memoryDbPath = _QUAID_INSTANCE
+    ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "memory.db")
+    : DB_PATH;
   return {
     ...process.env,
-    MEMORY_DB_PATH: DB_PATH,
+    MEMORY_DB_PATH: memoryDbPath,
     MEMORY_RUNTIME_DIR: QUAID_RUNTIME_DIR,
     QUAID_HOME: WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
@@ -918,7 +925,7 @@ type PluginConfig = {
 // ============================================================================
 
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
-const BEFORE_PROMPT_BUILD_DEADLINE_MS = 22_000;
+const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35_000;
 
 function getOpenClawSessionsPath(): string {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");

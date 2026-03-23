@@ -444,9 +444,10 @@ function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
   const pyPath = existing ? `${PYTHON_PLUGIN_ROOT}${sep}${existing}` : PYTHON_PLUGIN_ROOT;
+  const memoryDbPath = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "memory.db") : DB_PATH;
   return {
     ...process.env,
-    MEMORY_DB_PATH: DB_PATH,
+    MEMORY_DB_PATH: memoryDbPath,
     MEMORY_RUNTIME_DIR: QUAID_RUNTIME_DIR,
     QUAID_HOME: WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
@@ -714,7 +715,7 @@ const configSchema = Type.Object({
   autoRecall: Type.Optional(Type.Boolean({ default: true }))
 });
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
-const BEFORE_PROMPT_BUILD_DEADLINE_MS = 22e3;
+const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35e3;
 function getOpenClawSessionsPath() {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
 }
