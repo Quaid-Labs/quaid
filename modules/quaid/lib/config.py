@@ -16,7 +16,7 @@ from pathlib import Path
 def _workspace_root() -> Path:
     """Get workspace root from adapter (lazy to avoid circular import at module load)."""
     from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    return get_adapter().instance_root()
 
 
 def _get_cfg():
