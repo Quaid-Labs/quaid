@@ -12,7 +12,7 @@ E2E_INSTANCE="${QUAID_E2E_INSTANCE:-openclaw}"
 OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
 # Default E2E gate to the OpenClaw release lane we validate against in canary.
 # Keep overridable for bisects via --openclaw-ref / QUAID_E2E_OPENCLAW_REF.
-OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-v2026.3.7}"
+OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-v2026.3.22}"
 MIN_OPENCLAW_VERSION="${QUAID_E2E_MIN_OPENCLAW_VERSION:-2026.2.10}"
 
 PROFILE_TEST="${QUAID_E2E_PROFILE_TEST:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"

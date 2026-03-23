@@ -17,7 +17,7 @@ from lib.fail_policy import is_fail_hard_enabled
 class OpenClawAdapter(QuaidAdapter):
     """Adapter for running inside the OpenClaw gateway.
 
-    - Home dir: CLAWDBOT_WORKSPACE env or ${QUAID_WORKSPACE}/
+    - Home dir: QUAID_HOME env or ${QUAID_WORKSPACE}/
     - Notifications: openclaw message send CLI
     - Credentials: env var -> workspace .env
     - Sessions: ~/.openclaw/sessions/
@@ -160,9 +160,6 @@ class OpenClawAdapter(QuaidAdapter):
         where the bootstrap boundary guard expects files. NOT the same as
         quaid_home() or instance_root().
         """
-        env = os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
-        if env:
-            return Path(env).resolve()
         # Fallback: resolve workspace from gateway config when env vars are absent.
         cfg_path = Path.home() / ".openclaw" / "openclaw.json"
         if cfg_path.exists():
@@ -185,9 +182,8 @@ class OpenClawAdapter(QuaidAdapter):
             except (json.JSONDecodeError, KeyError):
                 pass
         raise RuntimeError(
-            "CLAWDBOT_WORKSPACE environment variable is not set and "
-            "could not resolve workspace from ~/.openclaw/openclaw.json. "
-            "Set CLAWDBOT_WORKSPACE or configure adapter.type=standalone in config/memory.json."
+            "Could not resolve OpenClaw workspace from ~/.openclaw/openclaw.json. "
+            "Set QUAID_HOME or configure adapter.type=standalone in config/memory.json."
         )
 
     def notify(self, message: str, channel_override: Optional[str] = None,

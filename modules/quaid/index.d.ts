@@ -4,7 +4,7 @@
  * Uses SQLite + Ollama embeddings for fully local memory storage.
  * Replaces memory-lancedb with no external API dependencies.
  */
-import type { ClawdbotPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 type PluginConfig = {
     autoCapture?: boolean;
     autoRecall?: boolean;
@@ -18,6 +18,6 @@ declare const quaidPlugin: {
         autoCapture: import("@sinclair/typebox").TOptional<import("@sinclair/typebox").TBoolean>;
         autoRecall: import("@sinclair/typebox").TOptional<import("@sinclair/typebox").TBoolean>;
     }>;
-    register(api: ClawdbotPluginApi<PluginConfig>): void;
+    register(api: OpenClawPluginApi<PluginConfig>): void;
 };
 export default quaidPlugin;

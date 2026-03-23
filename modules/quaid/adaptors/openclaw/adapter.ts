@@ -5,7 +5,7 @@
  * Replaces memory-lancedb with no external API dependencies.
  */
 
-import type { ClawdbotPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { execFileSync, spawn } from "node:child_process";
 import * as path from "node:path";
@@ -54,10 +54,6 @@ function _resolveWorkspace(): string {
   const envQuaidWorkspace = String(process.env.QUAID_WORKSPACE || "").trim();
   if (envQuaidWorkspace) {
     return _normalizeWorkspacePath(envQuaidWorkspace);
-  }
-  const envLegacyWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
-  if (envLegacyWorkspace) {
-    return _normalizeWorkspacePath(envLegacyWorkspace);
   }
 
   try {
@@ -1433,7 +1429,7 @@ const quaidPlugin = {
   kind: "memory" as const,
   configSchema,
 
-  register(api: ClawdbotPluginApi<PluginConfig>) {
+  register(api: OpenClawPluginApi<PluginConfig>) {
     console.log("[quaid] Registering local graph memory plugin");
 
     // Fail fast on model/provider/config mismatches so runtime doesn't degrade silently.
