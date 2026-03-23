@@ -51,7 +51,7 @@ from lib.project_templates import (
     replace_managed_block,
 )
 from lib.runtime_context import get_workspace_dir, get_quaid_home
-# llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
+# llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Deep Reasoning)
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
 
 def _workspace() -> Path:
@@ -95,7 +95,7 @@ def process_event(event_path: str) -> Dict:
     2. Resolve project from project_hint + files_touched
     3. Read PROJECT.md
     4. Run mtime staleness check on tracked source files
-    5. Call Opus for update decisions
+    5. Call Deep Reasoning for update decisions
     6. Apply updates
     7. Check related projects for cascade
     8. Notify user
@@ -196,7 +196,7 @@ def process_event(event_path: str) -> Dict:
         result["success"] = True
         return result
 
-    # Call Opus to decide what to update
+    # Call Deep Reasoning to decide what to update
     updates_applied = _apply_updates(
         registry, project_name, project_md_content,
         summary, stale_docs, trigger, files_touched
@@ -349,7 +349,7 @@ def _apply_updates(
     trigger: str,
     files_touched: Optional[List[str]] = None,
 ) -> List[str]:
-    """Apply doc updates using Opus for decision-making."""
+    """Apply doc updates using Deep Reasoning for decision-making."""
     updates_applied = []
 
     # Update stale docs using existing docs_updater infrastructure

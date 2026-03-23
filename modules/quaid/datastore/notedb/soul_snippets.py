@@ -10,12 +10,12 @@ Two complementary systems run simultaneously from a single extraction call:
   Keeps SOUL.md/USER.md current day-to-day.
 
 - **Journal (slow path)**: Diary-style paragraphs extracted at compaction/reset,
-  written to journal/*.journal.md, distilled weekly into core markdown via Opus
+  written to journal/*.journal.md, distilled weekly into core markdown via Deep Reasoning
   synthesis. Preserves richness for long-form inference.
 
 Entry points:
   - run_soul_snippets_review(): Nightly snippet FOLD/REWRITE/DISCARD (Task 1d-snippets)
-  - run_journal_distillation(): Weekly Opus distillation (Task 1d-journal)
+  - run_journal_distillation(): Weekly Deep Reasoning distillation (Task 1d-journal)
 """
 
 import json
@@ -856,7 +856,7 @@ def _is_distillation_due(filename: str) -> bool:
 
 
 # =============================================================================
-# Distillation (Opus synthesis)
+# Distillation (Deep Reasoning synthesis)
 # =============================================================================
 
 def _prompt_visible_body(parent_content: str, project_content: str = "") -> Tuple[str, str, str]:
@@ -905,7 +905,7 @@ def build_distillation_prompt(
     entries: List[Dict[str, Any]],
     project_content: str = "",
 ) -> str:
-    """Build the Opus prompt for distilling journal entries into core markdown."""
+    """Build the Deep Reasoning prompt for distilling journal entries into core markdown."""
     config = _get_core_markdown_config(filename)
     purpose = config.get("purpose", "")
     max_lines = config.get("maxLines", 200)
@@ -1479,7 +1479,7 @@ def _clear_processed_snippets(filename: str, processed_texts: List[str]) -> None
 
 
 def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
-    """Build Opus prompt for reviewing soul snippets."""
+    """Build Deep Reasoning prompt for reviewing soul snippets."""
     file_sections = []
     single_target = next(iter(all_snippets.keys())) if len(all_snippets) == 1 else ""
     for filename, data in all_snippets.items():
@@ -1615,7 +1615,7 @@ def apply_decisions(
     all_snippets: Dict[str, Dict[str, Any]],
     dry_run: bool = True
 ) -> Dict[str, Any]:
-    """Apply Opus decisions to parent files."""
+    """Apply Deep Reasoning decisions to parent files."""
     stats = {"folded": 0, "rewritten": 0, "discarded": 0, "skipped_at_limit": 0, "errors": []}
     processed_snippets: Dict[str, List[str]] = {}
     valid_actions = {"FOLD", "REWRITE", "DISCARD"}
@@ -1752,7 +1752,7 @@ def run_journal_distillation(
 ) -> Dict[str, Any]:
     """Main entry point for janitor Task 1d: Journal Distillation.
 
-    Reads journal entries, synthesizes themes via Opus, and updates core markdown.
+    Reads journal entries, synthesizes themes via Deep Reasoning, and updates core markdown.
 
     Args:
         dry_run: If True, report only, no changes
@@ -1887,7 +1887,7 @@ def run_journal_distillation(
                     "duration_s": float(duration or 0.0),
                 })
                 msg = f"No response for {filename} window {window_idx}/{len(windows)}"
-                print(f"  Opus distillation failed: {msg}")
+                print(f"  Deep Reasoning distillation failed:{msg}")
                 all_errors.append(msg)
                 continue
 
@@ -1910,7 +1910,7 @@ def run_journal_distillation(
                     f"Parse failed for {filename} window {window_idx}/{len(windows)}: "
                     f"{response_text[:200]}"
                 )
-                print(f"  Opus distillation failed: {msg}")
+                print(f"  Deep Reasoning distillation failed:{msg}")
                 all_errors.append(msg)
                 continue
 
@@ -1932,7 +1932,7 @@ def run_journal_distillation(
                 "edits": len(result.get("edits", []) or []),
             })
             print(
-                f"  Opus responded for {filename} window {window_idx}/{len(windows)} "
+                f"  Deep Reasoning responded for{filename} window {window_idx}/{len(windows)} "
                 f"in {float(duration or 0.0):.1f}s"
             )
             stats = apply_distillation(filename, result, dry_run=dry_run)
@@ -1946,7 +1946,7 @@ def run_journal_distillation(
 
             reasoning = result.get("reasoning", "")
             if reasoning:
-                print(f"  Opus reasoning ({filename} w{window_idx}): {reasoning[:120]}...")
+                print(f"  Deep Reasoning reasoning ({filename} w{window_idx}): {reasoning[:120]}...")
 
         if file_had_success:
             files_distilled += 1
@@ -1986,7 +1986,7 @@ def run_soul_snippets_review(
     parallel_map: Optional[Callable[..., List[Any]]] = None,
     llm_workers: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Nightly snippet review: read *.snippets.md → Opus FOLD/REWRITE/DISCARD → update core files.
+    """Nightly snippet review: read *.snippets.md → Deep Reasoning FOLD/REWRITE/DISCARD → update core files.
 
     This is the fast-path complement to journal distillation. Snippets are bullet-point
     observations that get folded into core markdown nightly, keeping SOUL.md/USER.md current.

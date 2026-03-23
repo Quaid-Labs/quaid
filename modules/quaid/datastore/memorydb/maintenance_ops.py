@@ -1620,7 +1620,7 @@ JSON array only:"""
 
 
 # =============================================================================
-# Task 4b: Resolve Contradictions (Opus-powered)
+# Task 4b: Resolve Contradictions (Deep Reasoning-powered)
 # =============================================================================
 
 def resolve_contradictions_with_opus(
@@ -1630,7 +1630,7 @@ def resolve_contradictions_with_opus(
     max_items: int = 0,
     llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, int]:
-    """Resolve pending contradictions using Opus for deep-reasoning decisions."""
+    """Resolve pending contradictions using Deep Reasoning for deep-reasoning decisions."""
     if not CONTRADICTION_ENABLED:
         print("  Contradiction resolution disabled in config")
         return {"resolved": 0, "false_positive": 0, "merged": 0, "decisions": [], "carryover": 0}
@@ -1949,7 +1949,7 @@ _SEED_RELATIONS = [
     "caused_by",
 ]
 
-# Inverse map: when Opus returns one of these, FLIP subject/object and use the canonical form.
+# Inverse map: when Deep Reasoning returns one of these, FLIP subject/object and use the canonical form.
 # Use for relations where the direction is REVERSED from canonical.
 # child_of(Alice, Carol) → parent_of(Carol, Alice) — child becomes object
 _INVERSE_MAP = {
@@ -2036,7 +2036,7 @@ def _normalize_edge(subject: str, subject_type: str, relation: str,
 def _build_relations_list(graph: MemoryGraph) -> str:
     """Build the relation types list: seed + any new types discovered in DB.
 
-    Excludes inverse/synonym keys so Opus only sees canonical forms.
+    Excludes inverse/synonym keys so Deep Reasoning only sees canonical forms.
     """
     excluded = set(_INVERSE_MAP.keys()) | set(_SYNONYM_MAP.keys()) | {"has_fact"}
     db_relations = graph.get_known_relations()
@@ -2117,7 +2117,7 @@ EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
                         metrics: JanitorMetrics,
                         relations_list: str = "") -> List[List[Dict[str, Any]]]:
-    """Extract edges from a batch of facts in a single Opus call.
+    """Extract edges from a batch of facts in a single Deep Reasoning call.
 
     Returns a list parallel to `facts` — each entry is a list of edge dicts
     (may be empty if the fact has no relationships). Supports multiple edges
@@ -2368,7 +2368,7 @@ def backfill_edges(
 
 
 # =============================================================================
-# Task 2b: Review Dedup Rejections (Opus)
+# Task 2b: Review Dedup Rejections (Deep Reasoning)
 # =============================================================================
 
 def review_dedup_rejections(
@@ -2378,7 +2378,7 @@ def review_dedup_rejections(
     max_items: int = 0,
     llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, int]:
-    """Review recent dedup rejections using Opus to catch false positives."""
+    """Review recent dedup rejections using Deep Reasoning to catch false positives."""
     metrics.start_task("dedup_review")
     results = {"reviewed": 0, "confirmed": 0, "reversed": 0, "carryover": 0}
 
@@ -2419,7 +2419,7 @@ def review_dedup_rejections(
         metrics.end_task("dedup_review")
         return results
 
-    print(f"  Reviewing {len(pending)} recent dedup rejections via Opus...")
+    print(f"  Reviewing {len(pending)} recent dedup rejections via Deep Reasoning...")
 
     builder = TokenBatchBuilder(
         model_tier='deep',
@@ -2584,7 +2584,7 @@ JSON array only:"""
 
 
 # =============================================================================
-# Task 5b: Review Decayed Memories (Opus)
+# Task 5b: Review Decayed Memories (Deep Reasoning)
 # =============================================================================
 
 def review_decayed_memories(
@@ -2594,7 +2594,7 @@ def review_decayed_memories(
     max_items: int = 0,
     llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, int]:
-    """Review memories queued for decay deletion using Opus."""
+    """Review memories queued for decay deletion using Deep Reasoning."""
     metrics.start_task("decay_review")
     results = {"reviewed": 0, "deleted": 0, "extended": 0, "pinned": 0, "carryover": 0}
 
@@ -2615,7 +2615,7 @@ def review_decayed_memories(
         metrics.end_task("decay_review")
         return results
 
-    print(f"  Reviewing {len(pending)} decayed memories via Opus...")
+    print(f"  Reviewing {len(pending)} decayed memories via Deep Reasoning...")
 
     builder = TokenBatchBuilder(
         model_tier='deep',
@@ -2992,7 +2992,7 @@ def review_pending_memories(
         }
 
     print(f"\n{'='*80}")
-    print(f"MEMORY REVIEW - {len(rows)} pending memories via Opus API")
+    print(f"MEMORY REVIEW - {len(rows)} pending memories via Deep Reasoning")
     print(f"{'='*80}")
 
     owner = _owner_display_name()

@@ -2,7 +2,7 @@
 """
 Quaid Extraction Module — Extract memories from conversation transcripts.
 
-Sends a transcript to Opus for fact/edge/snippet/journal extraction, then
+Sends a transcript to Deep Reasoning for fact/edge/snippet/journal extraction, then
 stores everything via the existing Python infrastructure.
 
 Entry points:
@@ -1128,15 +1128,15 @@ def _extract_chunk_payloads(
     )
 
     if not response_text:
-        logger.error("[extract] %s chunk %s: Opus returned no response", label, chunk_label)
+        logger.error("[extract] %s chunk %s: Deep Reasoning returned no response", label, chunk_label)
         return []
 
-    logger.info("[extract] %s chunk %s: Opus responded in %.1fs", label, chunk_label, duration)
+    logger.info("[extract] %s chunk %s: Deep Reasoning responded in %.1fs", label, chunk_label, duration)
 
     parsed = parse_json_response(response_text)
     if not isinstance(parsed, dict):
         logger.error(
-            "[extract] %s chunk %s: could not parse Opus response: %s",
+            "[extract] %s chunk %s: could not parse Deep Reasoning response: %s",
             label,
             chunk_label,
             response_text,
@@ -1950,7 +1950,7 @@ def extract_from_transcript(
     dry_run: bool = False,
     carry_facts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Extract memories from a conversation transcript using Opus.
+    """Extract memories from a conversation transcript using Deep Reasoning.
 
     Args:
         transcript: The conversation text to extract from.
@@ -2099,7 +2099,7 @@ def extract_from_transcript(
     if len(transcript_chunks) > 1:
         logger.info(f"[extract] {label}: splitting into {len(transcript_chunks)} chunks")
 
-    logger.info(f"[extract] {label}: sending {len(transcript)} chars to Opus")
+    logger.info(f"[extract] {label}: sending {len(transcript)} chars to Deep Reasoning")
 
     # Extract from each chunk, merge results
     all_facts: List[Dict] = []

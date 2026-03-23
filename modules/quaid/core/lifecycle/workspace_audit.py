@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Workspace Audit Module - Single-pass Opus review of core markdown files.
+Workspace Audit Module - Single-pass Deep Reasoning review of core markdown files.
 
 This module:
 1. Reads coreMarkdown config for file purposes and maxLines
@@ -267,7 +267,7 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
 
 
 def build_review_prompt(files_config: Dict[str, Dict[str, Any]]) -> str:
-    """Build the Opus review prompt with file purposes."""
+    """Build the Deep Reasoning review prompt with file purposes."""
 
     def _format_file_purpose(fname: str, info: Dict[str, Any]) -> str:
         max_tokens = info.get("maxTokens")
@@ -756,11 +756,11 @@ def apply_review_decisions(dry_run: bool = True,
 
 def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
     """
-    Main entry point for workspace audit — single-pass Opus review.
+    Main entry point for workspace audit — single-pass Deep Reasoning review.
 
     1. Check bloat status first
     2. Detect changed files
-    3. If changes found, read contents and call Opus for review
+    3. If changes found, read contents and call Deep Reasoning for review
     4. Parse and apply decisions immediately
     """
     _cfg = get_config()
@@ -819,7 +819,7 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
         return {"phase": "error", "error": "no readable files", "bloat_stats": bloat_stats}
 
     # Build user message with file contents and line counts
-    # Strip protected regions before sending to Opus for review
+    # Strip protected regions before sending to Deep Reasoning for review
     user_parts = [f"Review the following {len(files_content)} core markdown files:\n"]
     for filename, content in files_content.items():
         stripped_content, _ = strip_protected_regions(content)
@@ -844,7 +844,7 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
     )
 
     if not response_text:
-        print(f"  Opus returned empty response after {duration:.1f}s")
+        print(f"  Deep Reasoning returned empty response after{duration:.1f}s")
         return {"phase": "error", "error": "empty API response", "bloat_stats": bloat_stats}
 
     print(f"  Received response in {duration:.1f}s")
@@ -852,7 +852,7 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
     # Parse decisions
     decisions_data = parse_json_response(response_text)
     if not isinstance(decisions_data, dict) or "decisions" not in decisions_data:
-        print(f"  Failed to parse Opus response as decisions JSON")
+        print(f"  Failed to parse Deep Reasoning response as decisions JSON")
         logger.error(f"Invalid workspace review response: {response_text}")
         return {"phase": "error", "error": "invalid JSON response", "bloat_stats": bloat_stats}
 

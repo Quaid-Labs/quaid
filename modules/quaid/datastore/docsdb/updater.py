@@ -818,14 +818,14 @@ def update_doc_from_diffs(
 
     all_diffs = "\n\n".join(diff_sections)
 
-    # Smart staleness: classify diffs before calling Opus
+    # Smart staleness: classify diffs before calling Deep Reasoning
     # Rule-based classifier catches trivial diffs (comments, whitespace, imports)
     classification = classify_doc_change(all_diffs)
     if classification["classification"] == "trivial" and classification["confidence"] >= 0.7:
         print(f"  Skipping {doc_path} — trivial changes: {', '.join(classification['reasons'])}")
         return True  # Success — no update needed
 
-    # For borderline cases (low-confidence "significant"), use Haiku as a cheap gate.
+    # For borderline cases (low-confidence "significant"), use Fast Reasoning as a cheap gate.
     # If the diff is large, chunk it and check each chunk — if ANY says YES, proceed.
     if classification["confidence"] < 0.6:
         try:
@@ -855,10 +855,10 @@ def update_doc_from_diffs(
                 first_reason = next(
                     (r.output.strip() for r in gate_results if r.output), ""
                 )
-                print(f"  Haiku gate: skip {doc_path} — {first_reason}")
+                print(f"  Fast Reasoning gate: skip{doc_path} — {first_reason}")
                 return True
         except Exception as exc:
-            logger.warning("Haiku gate failed for %s: %s", doc_path, exc)
+            logger.warning("Fast Reasoning gate failed for %s: %s", doc_path, exc)
 
     # Check if this is a core markdown file (TOOLS.md, AGENTS.md, etc.)
     core_info = _get_core_markdown_info(doc_path)
@@ -968,7 +968,7 @@ def update_doc_from_diffs(
 
 
 def detect_changed_sources_from_transcript(transcript: str) -> List[str]:
-    """Use Haiku to detect which monitored source files were modified in a conversation.
+    """Use Fast Reasoning to detect which monitored source files were modified in a conversation.
 
     For large transcripts, chunks are processed in parallel and results merged.
     """

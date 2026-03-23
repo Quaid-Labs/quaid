@@ -933,7 +933,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # Infrastructure tasks (always run): tests, cleanup
     }
 
-    # Tasks that require an active LLM (Opus). Skipped in dry-run mode so that
+    # Tasks that require an active LLM (Deep Reasoning). Skipped in dry-run mode so that
     # dry-run completes quickly without blocking on an LLM provider. This enforces
     # the invariant stated at line 843: "dry-run never calls the LLM".
     _LLM_TASKS = frozenset({
@@ -1028,7 +1028,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print(f"  Found: {edge_result['found']}, Edges created: {edge_result['edges_created']}, Errors: {edge_result['errors']}")
             print(f"Task completed in {metrics.task_duration('edge_backfill'):.2f}s\n")
 
-        # --- Task 2: Review Pending Memories (Opus API) ---
+        # --- Task 2: Review Pending Memories (Deep Reasoning) ---
         # Memory pipeline starts here. If any task (2-6) fails,
         # remaining memory tasks are skipped and graduation is blocked.
         # Infrastructure tasks (0, 0b, 1, 7, 8) still run regardless.
@@ -1141,7 +1141,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             return result
 
         if task in ("review", "all") and _system_enabled_or_skip("review", "Task 2: Review Memories") and not _skip_if_over_budget("Task 2: Review Memories", 30):
-            print("[Task 2: Review Pending Memories - Opus API]")
+            print("[Task 2: Review Pending Memories - Deep Reasoning]")
             metrics.start_task("review")
             lifecycle_result = _run_memory_stage("review", dry_run)
             for line in lifecycle_result.logs:
@@ -1185,12 +1185,12 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.end_task("temporal_resolution")
                 print(f"Task completed in {metrics.task_duration('temporal_resolution'):.2f}s\n")
 
-        # --- Task 2b: Review Dedup Rejections (Opus) ---
+        # --- Task 2b: Review Dedup Rejections (Deep Reasoning) ---
         if task in ("dedup_review", "all") and _system_enabled_or_skip("dedup_review", "Task 2b: Dedup Review") and not _skip_if_over_budget("Task 2b: Dedup Review", 20):
             if task == "all" and not memory_pipeline_ok:
                 print("[Task 2b: Review Dedup Rejections] SKIPPED — pipeline aborted\n")
             else:
-                print("[Task 2b: Review Dedup Rejections - Opus API]")
+                print("[Task 2b: Review Dedup Rejections - Deep Reasoning]")
                 metrics.start_task("dedup_review")
                 lifecycle_result = _run_memory_stage("dedup_review", dry_run)
                 for line in lifecycle_result.logs:
@@ -1264,12 +1264,12 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.end_task("decay")
                 print(f"Task completed in {metrics.task_duration('decay'):.2f}s\n")
 
-        # --- Task 5b: Review Decayed Memories (Opus) ---
+        # --- Task 5b: Review Decayed Memories (Deep Reasoning) ---
         if task in ("decay_review", "all") and _system_enabled_or_skip("decay_review", "Task 5b: Decay Review") and not _skip_if_over_budget("Task 5b: Decay Review", 20):
             if task == "all" and not memory_pipeline_ok:
                 print("[Task 5b: Review Decayed Memories] SKIPPED — pipeline aborted\n")
             else:
-                print("[Task 5b: Review Decayed Memories - Opus API]")
+                print("[Task 5b: Review Decayed Memories - Deep Reasoning]")
                 decay_review_apply_allowed = _can_apply_scope(
                     "destructive_memory_ops",
                     "decay review decisions"
@@ -1317,10 +1317,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # before printing any output. All routines run sequentially below via the
         # `parallel_lifecycle_results.get(...) or _lifecycle_registry().run(...)` fallback.
 
-        # --- Task 1: Workspace Audit (Opus API) ---
+        # --- Task 1: Workspace Audit (Deep Reasoning) ---
         # (Runs after memory pipeline — memory tasks are higher priority under time budget)
         if task in ("workspace", "all") and _system_enabled_or_skip("workspace", "Task 1: Workspace Audit") and not _skip_if_over_budget("Task 1: Workspace Audit", 30):
-            print("[Task 1: Workspace Audit - Single-Pass Opus Review]")
+            print("[Task 1: Workspace Audit - Single-Pass Deep Reasoning Review]")
             metrics.start_task("workspace_audit")
             workspace_apply_allowed = _can_apply_scope(
                 "workspace_file_moves_deletes",
@@ -1352,7 +1352,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print(f"Task completed in {metrics.task_duration('workspace_audit'):.2f}s\n")
 
         # --- Task 1b: Documentation Staleness Check ---
-        # (Runs after memory pipeline — expensive Opus doc updates are lower priority)
+        # (Runs after memory pipeline — expensive Deep Reasoning doc updates are lower priority)
         if task in ("docs_staleness", "all") and _system_enabled_or_skip("docs_staleness", "Task 1b: Doc Staleness") and not _skip_if_over_budget("Task 1b: Doc Staleness", 60):
             print("[Task 1b: Documentation Staleness Check]")
             metrics.start_task("docs_staleness")
@@ -1396,7 +1396,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             metrics.end_task("docs_cleanup")
             print(f"Task completed in {metrics.task_duration('docs_cleanup'):.2f}s\n")
 
-        # --- Task 1d-snippets: Soul Snippets Review (Opus API, nightly) ---
+        # --- Task 1d-snippets: Soul Snippets Review (Deep Reasoning, nightly) ---
         if task in ("snippets", "all") and _system_enabled_or_skip("snippets", "Task 1d-snippets: Snippets") and not _skip_if_over_budget("Task 1d-snippets: Snippets", 30):
             print("[Task 1d-snippets: Soul Snippets Review]")
             metrics.start_task("snippets")
@@ -1418,7 +1418,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             metrics.end_task("snippets")
             print(f"Task completed in {metrics.task_duration('snippets'):.2f}s\n")
 
-        # --- Task 1d-journal: Journal Distillation (Opus API, weekly) ---
+        # --- Task 1d-journal: Journal Distillation (Deep Reasoning, weekly) ---
         if task in ("journal", "all") and _system_enabled_or_skip("journal", "Task 1d-journal: Journal") and not _skip_if_over_budget("Task 1d-journal: Journal", 30):
             print("[Task 1d-journal: Journal Distillation]")
             metrics.start_task("journal")

@@ -29,8 +29,8 @@ def update_project_docs(
 
     Called as a post-extraction hook. For each project with changes:
     1. Classify the diff (trivial vs significant)
-    2. Gate borderline cases with Haiku
-    3. Update docs with Opus only for significant changes
+    2. Gate borderline cases with Fast Reasoning
+    3. Update docs with Deep Reasoning only for significant changes
 
     Args:
         snapshots: Output from project_registry.snapshot_all_projects()
@@ -207,7 +207,7 @@ def _update_single_doc(
     current_doc = doc_path.read_text(encoding="utf-8")
     doc_name = doc_path.name
 
-    # For borderline classification, use Haiku as a cheap gate
+    # For borderline classification, use Fast Reasoning as a cheap gate
     if classification.get("confidence", 1.0) < 0.6:
         try:
             gate_prompt = (
@@ -223,12 +223,12 @@ def _update_single_doc(
                 system_prompt="Answer with YES or NO first, then one short sentence.",
             )
             if gate_response and gate_response.strip().upper().startswith("NO"):
-                logger.info("[docs-hook] Haiku gate: skip %s — %s", doc_name, gate_response.strip())
+                logger.info("[docs-hook] Fast Reasoning gate: skip %s — %s", doc_name, gate_response.strip())
                 return False
         except Exception as e:
-            logger.warning("[docs-hook] Haiku gate failed for %s: %s", doc_name, e)
+            logger.warning("[docs-hook] Fast Reasoning gate failed for %s: %s", doc_name, e)
 
-    # Call Opus for the actual update
+    # Call Deep Reasoning for the actual update
     system_prompt = (
         f"You are updating {doc_name} for a software project based on recent code changes.\n\n"
         "Analyze the changes and output ONLY the specific edits needed. "
