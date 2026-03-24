@@ -175,4 +175,12 @@ describe("lifecycle signal detection", () => {
     expect(selected.query).toBe("What do you remember about my neighbour?");
     expect(selected.source).toBe("message_received_cache");
   });
+
+  it("uses the instance silo db path for adapter python calls", () => {
+    expect(__test.resolveAdapterMemoryDbPath(
+      "/tmp/quaid-home",
+      "openclaw-livetest",
+      "/tmp/quaid-home/data/memory.db",
+    )).toBe("/tmp/quaid-home/openclaw-livetest/data/memory.db");
+  });
 });

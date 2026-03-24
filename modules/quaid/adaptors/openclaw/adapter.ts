@@ -702,6 +702,17 @@ const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOU
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 300_000);
 // QUICK_PROJECT_SUMMARY_TIMEOUT_MS removed — project events now emitted from Python extraction.
 
+function resolveAdapterMemoryDbPath(
+  workspace: string,
+  instanceId: string,
+  legacyDbPath: string,
+): string {
+  const normalizedInstance = String(instanceId || "").trim();
+  return normalizedInstance
+    ? path.join(workspace, normalizedInstance, "data", "memory.db")
+    : legacyDbPath;
+}
+
 function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
@@ -710,9 +721,7 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
   // via get_adapter().instance_root(). Do NOT override with MEMORY_DB_PATH — that would
   // bypass the silo-specific path and point at the workspace-root legacy DB instead.
   // Only set MEMORY_DB_PATH in the legacy flat-layout case (no QUAID_INSTANCE).
-  const memoryDbPath = _QUAID_INSTANCE
-    ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "memory.db")
-    : DB_PATH;
+  const memoryDbPath = resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH);
   return {
     ...process.env,
     MEMORY_DB_PATH: memoryDbPath,
@@ -1463,11 +1472,11 @@ const facade = createQuaidFacade({
   workspace: WORKSPACE,
   instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE) : undefined,
   pluginRoot: PYTHON_PLUGIN_ROOT,
-  dbPath: DB_PATH,
+  dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
   eventSource: "openclaw_adapter",
   execPython: createPythonBridgeExecutor({
     scriptPath: PYTHON_SCRIPT,
-    dbPath: DB_PATH,
+    dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
     workspace: WORKSPACE,
     pluginRoot: PYTHON_PLUGIN_ROOT,
   }),
@@ -3905,6 +3914,7 @@ export const __test = {
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
+  resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
   selectAutoInjectQuery,
   isInternalSessionContext,

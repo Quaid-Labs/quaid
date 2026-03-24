@@ -499,11 +499,15 @@ function _envTimeoutMs(name, fallbackMs) {
 }
 const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 3e5);
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 3e5);
+function resolveAdapterMemoryDbPath(workspace, instanceId, legacyDbPath) {
+  const normalizedInstance = String(instanceId || "").trim();
+  return normalizedInstance ? path.join(workspace, normalizedInstance, "data", "memory.db") : legacyDbPath;
+}
 function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
   const pyPath = existing ? `${PYTHON_PLUGIN_ROOT}${sep}${existing}` : PYTHON_PLUGIN_ROOT;
-  const memoryDbPath = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "memory.db") : DB_PATH;
+  const memoryDbPath = resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH);
   return {
     ...process.env,
     MEMORY_DB_PATH: memoryDbPath,
@@ -1105,11 +1109,11 @@ const facade = createQuaidFacade({
   workspace: WORKSPACE,
   instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE) : void 0,
   pluginRoot: PYTHON_PLUGIN_ROOT,
-  dbPath: DB_PATH,
+  dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
   eventSource: "openclaw_adapter",
   execPython: createPythonBridgeExecutor({
     scriptPath: PYTHON_SCRIPT,
-    dbPath: DB_PATH,
+    dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
     workspace: WORKSPACE,
     pluginRoot: PYTHON_PLUGIN_ROOT
   }),
@@ -3091,6 +3095,7 @@ const __test = {
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
+  resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
   selectAutoInjectQuery,
   isInternalSessionContext
