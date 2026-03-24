@@ -2052,6 +2052,35 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           // Track resolved sessionId → transcript file for daemon signals
           if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
 
+          // Seed an initial extraction cursor so the daemon's rolling poller can
+          // discover this session before any compaction fires.  before_agent_start
+          // only fires for internal per-turn agent sessions in OC — not for the
+          // persistent TUI transcript session — so we seed here instead, where
+          // both the session ID and the transcript file path are authoritative.
+          if (
+            sessionId
+            && isSystemEnabled("memory")
+            && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })
+          ) {
+            const cursorDir = path.join(WORKSPACE, "data", "session-cursors");
+            const cursorPath = path.join(cursorDir, `${sessionId}.json`);
+            if (!fs.existsSync(cursorPath)) {
+              try {
+                fs.mkdirSync(cursorDir, { recursive: true });
+                const nowIso = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+                fs.writeFileSync(cursorPath, JSON.stringify({
+                  session_id: sessionId,
+                  line_offset: 0,
+                  transcript_path: sessionFile,
+                  updated_at: nowIso,
+                }, null, 2), "utf8");
+                console.log(`[quaid][cursor] seeded rolling cursor for transcript session ${sessionId}`);
+              } catch (e) {
+                console.warn(`[quaid][cursor] cursor seed error: ${e}`);
+              }
+            }
+          }
+
           // Keep timeout extraction on the real-time path by treating transcript updates
           // as activity boundaries; stale-sweep recovery should stay a fallback only.
           if (
@@ -3028,30 +3057,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
 
-      // Seed an initial extraction cursor for the new session so the daemon's
-      // rolling-extraction poller can discover it before any compaction fires.
-      // Without this, new sessions never get a cursor file until after their
-      // first extraction event — making rolling_stage impossible.
-      if (isSystemEnabled("memory")) {
-        const cursorDir = path.join(WORKSPACE, "data", "session-cursors");
-        const cursorPath = path.join(cursorDir, `${newSessionId}.json`);
-        if (!fs.existsSync(cursorPath)) {
-          try {
-            fs.mkdirSync(cursorDir, { recursive: true });
-            const transcriptPath = path.join(getOpenClawSessionsBaseDir(), `${newSessionId}.jsonl`);
-            const nowIso = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-            fs.writeFileSync(cursorPath, JSON.stringify({
-              session_id: newSessionId,
-              line_offset: 0,
-              transcript_path: transcriptPath,
-              updated_at: nowIso,
-            }, null, 2), "utf8");
-            console.log(`[quaid][cursor] seeded rolling cursor for session ${newSessionId}`);
-          } catch (e) {
-            console.warn(`[quaid][cursor] cursor seed error: ${e}`);
-          }
-        }
-      }
     }, {
       name: "before-agent-start-session-transition",
       priority: 5,
