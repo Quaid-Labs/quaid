@@ -402,6 +402,46 @@ else:
 "'
 ```
 
+### Live-test config overrides
+
+> **Known test workaround — not a production setting.**
+> The rolling extraction threshold (`capture.chunk_tokens`) is lowered from the
+> production default of 8 000 tokens to 1 500 tokens for both test silos. This
+> ensures a normal test conversation (3–4 exchanges) crosses the threshold so
+> the rolling extraction pipeline can be verified without generating tens of
+> thousands of tokens. Do not apply this change outside of test silos.
+
+```bash
+# OC silo
+ssh example.local 'python3 -c "
+import json
+p = \"/Users/owner/quaid/openclaw-livetest/config/memory.json\"
+with open(p) as f: d = json.load(f)
+d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
+with open(p, \"w\") as f: json.dump(d, f, indent=2)
+print(\"capture.chunk_tokens set to 1500 for openclaw-livetest\")
+"'
+
+# CC silo
+ssh example.local 'python3 -c "
+import json
+p = \"/Users/owner/quaid/claude-code-livetest/config/memory.json\"
+with open(p) as f: d = json.load(f)
+d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
+with open(p, \"w\") as f: json.dump(d, f, indent=2)
+print(\"capture.chunk_tokens set to 1500 for claude-code-livetest\")
+"'
+```
+
+Verify both silos have the override:
+
+```bash
+ssh example.local 'python3 -c "import json; d=json.load(open(\"/Users/owner/quaid/openclaw-livetest/config/memory.json\")); print(\"OC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+ssh example.local 'python3 -c "import json; d=json.load(open(\"/Users/owner/quaid/claude-code-livetest/config/memory.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+```
+
+Expected: `OC chunk_tokens: 1500` and `CC chunk_tokens: 1500`.
+
 ## Execution Model
 
 ### Phase Start Reset
@@ -602,7 +642,10 @@ Procedure:
 5. Check DB for the distinctive keyword:
 
 ```bash
-ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
+# OC
+ssh example.local 'sqlite3 ~/quaid/openclaw-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
+# CC
+ssh example.local 'sqlite3 ~/quaid/claude-code-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
 ```
 
 Hook trace markers to confirm:
@@ -630,17 +673,49 @@ Pass:
 - the fact is stored from the pre-reset session
 - a snippet file (`USER.snippets.md` or `SOUL.snippets.md`) is written in the silo after extraction
 
-### M3: Extraction via `/compact`
+### M3: Extraction via `/compact` + rolling extraction
 
-Tell the agent something memorable in natural conversation, build some
-conversation context (a few exchanges), then trigger `/compact`.
+Tell the agent something memorable in natural conversation, then build enough
+context (3–4 exchanges) to cross the rolling extraction threshold (1 500 tokens
+in test silos). Then trigger `/compact`.
 Use a different distinctive detail — for example:
 `"My sister started her ceramics studio this spring, she fires everything in a
 wood-burning kiln she built herself."`
 
+After seeding the fact, continue with 2–3 follow-up exchanges to accumulate
+tokens (e.g. ask about kiln temperatures, her firing process, etc.). The daemon
+polls for chunk readiness every few seconds — by the time you send `/compact`,
+at least one rolling stage should have fired.
+
+Before `/compact` — verify rolling extraction fired during the session:
+
+```bash
+# OC
+ssh example.local 'cat ~/quaid/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
+# CC
+ssh example.local 'cat ~/quaid/claude-code-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
+```
+
+Expected: at least one line with `"event": "rolling_stage"`. If the log is empty
+or missing, the session has not yet crossed the threshold — add another exchange
+and wait ~10 seconds for the daemon to poll.
+
+After `/compact` and the extraction wait — verify the flush:
+
+```bash
+# OC
+ssh example.local 'cat ~/quaid/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | python3 -c "import sys,json; lines=[json.loads(l) for l in sys.stdin if l.strip()]; stages=[l for l in lines if l.get(\"event\")==\"rolling_stage\"]; flushes=[l for l in lines if l.get(\"event\")==\"rolling_flush\"]; print(f\"rolling_stage count: {len(stages)}, rolling_flush count: {len(flushes)}\")"'
+# CC (same pattern with claude-code-livetest path)
+```
+
 Pass:
 - the fact is stored
 - logs or hook trace show the compaction signal
+- `rolling-extraction.jsonl` contains at least one `rolling_stage` event and one `rolling_flush` event
+- rolling state file is cleared after flush:
+  ```bash
+  ssh example.local 'ls ~/quaid/openclaw-livetest/data/rolling-extraction/ 2>/dev/null || echo "(empty — correct)"'
+  ```
 
 ### M4: Timeout Extraction
 
