@@ -2285,16 +2285,10 @@ class TestRecallFastHookInjectContract:
     def test_query_requirements_treat_neighbour_queries_as_identity(self):
         import datastore.memorydb.memory_graph as mg
 
-        class _Graph:
-            def get_known_relations(self):
-                return ["neighbor_of"]
-
-        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
-             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
-            analysis = mg._derive_query_requirements(
-                "What do you remember about my neighbour?",
-                intent="GENERAL",
-            )
+        analysis = mg._derive_query_requirements(
+            "What do you remember about my neighbour?",
+            intent="GENERAL",
+        )
 
         assert "identity" in analysis["requirements"]
 
@@ -2327,7 +2321,6 @@ class TestRecallFastHookInjectContract:
             )
 
         assert stores == ["vector", "graph"]
-
     def test_query_fit_multiplier_boosts_neighbour_rows_for_social_queries(self):
         import datastore.memorydb.memory_graph as mg
 
