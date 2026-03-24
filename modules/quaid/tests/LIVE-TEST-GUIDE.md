@@ -611,12 +611,17 @@ Use FTS direct check (step 5) as the primary verification. `quaid recall "<natur
 
 ### M2: Extraction via `/reset`
 
-Tell the agent something memorable in natural conversation, then trigger `/reset`.
-Use a different distinctive detail than M1 — for example:
-`"I just booked flights to Reykjavik for the aurora season in February."`
+Tell the agent something memorable in natural conversation. Use two prompts:
+1. A personal fact — for example:
+   `"I just booked flights to Reykjavik for the aurora season in February."`
+2. A reflective question to guarantee snippet-worthy content for M9:
+   `"What do you think is your fundamental purpose?"`
+
+Then trigger `/reset`.
 
 Pass:
 - the fact is stored from the pre-reset session
+- a snippet file (`USER.snippets.md` or `SOUL.snippets.md`) is written in the silo after extraction
 
 ### M3: Extraction via `/compact`
 
@@ -1038,11 +1043,11 @@ Pass:
 - `checkpoint-all.json` exists afterward with `status: completed`
 - `janitor-stats.json` reports `success: true`
 - `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0` (snippets were reviewed)
-- `SOUL.snippets.md` line count decreased or file was cleared (entries processed)
+- `SOUL.snippets.md` or `USER.snippets.md` line count decreased or file was cleared (entries processed)
 - if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
 
 Fail:
-- snippets review task skipped entirely (all three snippet counters remain 0 and snippets file unchanged)
+- all three snippet counters remain 0 (snippet review task did not run or had nothing to process — M2 must have produced snippet files; if they are absent, that is an M2 failure, not an M9 pass)
 - janitor exits with non-zero status
 
 ### M10: Docs, Health, and Session CLI
@@ -1413,32 +1418,37 @@ ssh example.local 'test ! -d ~/quaid/claude-code-m13test-dry && echo "PASS: dry-
 
 **Step 8b — cross-project spillover proof:**
 
-Simulate a CC session running in the m13test silo (real CC sets `QUAID_INSTANCE` via
-`settings.json` — use it explicitly here). The store must land in the m13test silo,
-not in the livetest silo.
-
-Note: `CLAUDE_PROJECT_DIR` alone is no longer sufficient to drive adapter/instance
-selection after the instance-aware config changes. Real CC sessions are covered because
-`setup-quaid.mjs` writes `QUAID_INSTANCE` into `.claude/settings.json`.
+Simulate a CC session from each project dir using CLAUDE_PROJECT_DIR only — no
+QUAID_INSTANCE override. Instance identity must be derived naturally from the project
+path, exactly as a real user's CC session would behave.
 
 ```bash
-# Store from m13test silo context
-ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+# Determine what instance name the adapter derives from each project dir
+ssh example.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "instance\|silo\|owner" | head -5'
+ssh example.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/cc-livetest \
+  ~/.openclaw/extensions/quaid/quaid stats 2>&1 | grep -i "instance\|silo\|owner" | head -5'
+# Confirm the two project dirs resolve to different instance IDs before proceeding.
+
+# Store a canary from the m13test project dir
+ssh example.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
   ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-spillover-9981" 2>&1'
 
-# Must NOT appear in livetest silo
-ssh example.local 'echo "=== livetest silo: must NOT see spillover canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest \
+# Must NOT appear when accessed from livetest project dir
+ssh example.local 'echo "=== livetest project: must NOT see m13test canary ==="; \
+  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/cc-livetest \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-spillover-9981" 2>&1 | tail -5'
 
-# Must appear in m13test silo
-ssh example.local 'echo "=== m13test silo: MUST see spillover canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+# Must appear when accessed from m13test project dir
+ssh example.local 'echo "=== m13test project: MUST see its own canary ==="; \
+  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-spillover-9981" 2>&1 | tail -5'
 ```
 
-Pass: spillover canary found only in m13test silo; livetest silo returns empty.
-Fail: spillover canary appears in livetest silo — instance isolation is broken.
+Pass: two project dirs resolve to different instance IDs; canary found only in the
+m13test project; livetest project returns empty.
+Fail: both project dirs resolve to the same instance (isolation is broken at derivation);
+or canary appears when accessed from livetest project dir.
 
 **Step 9 — cleanup:**
 
@@ -1451,7 +1461,7 @@ Pass:
 - `make_instance` prints the silo path and settings confirmation
 - silo directories `config/`, `data/`, `identity/`, `journal/`, `logs/` all exist
 - `config/memory.json` has `adapter.type == "claude-code"`
-- `/tmp/quaid-m13-test/.claude/settings.json` has `env.QUAID_INSTANCE == "claude-code-m13test"`
+- `/tmp/quaid-m13-test/.claude/settings.json` exists (created by make_instance)
 - `quaid instances list` includes `claude-code-m13test`
 - dry-run leaves no silo on disk
 

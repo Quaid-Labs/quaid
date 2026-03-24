@@ -2383,6 +2383,26 @@ async function step4_embeddings() {
           log.warn(`Run 'ollama pull ${embedModel}' manually before using memory.`);
         }
       }
+
+      // Configure Ollama to keep the model loaded (OLLAMA_KEEP_ALIVE=-1).
+      // Without this, Ollama unloads the model after 5 minutes of inactivity,
+      // causing cold-start latency that can exceed hook deadlines.
+      const ollamaPlist = "/opt/homebrew/opt/ollama/homebrew.mxcl.ollama.plist";
+      if (fs.existsSync(ollamaPlist)) {
+        try {
+          // Try Set first (key exists); fall back to Add (key missing).
+          execSync(
+            `/usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:OLLAMA_KEEP_ALIVE -1" "${ollamaPlist}" 2>/dev/null` +
+            ` || /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:OLLAMA_KEEP_ALIVE string -1" "${ollamaPlist}"`,
+            { stdio: "pipe" }
+          );
+          execSync("brew services restart ollama", { stdio: "pipe", timeout: 15000 });
+          log.success("Ollama keep-alive configured — model stays loaded between calls");
+        } catch {
+          log.warn("Could not configure Ollama keep-alive automatically.");
+          log.warn("Set OLLAMA_KEEP_ALIVE=-1 in the Ollama service environment manually.");
+        }
+      }
     }
   } else {
     const proceedDegraded = handleCancel(await confirm({
