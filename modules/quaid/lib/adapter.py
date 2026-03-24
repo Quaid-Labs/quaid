@@ -957,6 +957,28 @@ def _auto_provision_from_env_if_needed() -> None:
     """
     home = os.environ.get("QUAID_HOME", "").strip()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
+
+    # When QUAID_INSTANCE is absent but CLAUDE_PROJECT_DIR is set, derive the
+    # CC instance name from the project path (same logic as _adapter_config_paths
+    # and ClaudeCodeAdapter.get_instance_name).  Setting QUAID_INSTANCE here means
+    # the silo is provisioned and _bootstrap_instance_env won't override it later.
+    if home and not instance:
+        _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+        if _cpd:
+            try:
+                from adaptors.claude_code.adapter import (
+                    instance_slug_from_project_dir as _cc_slug,
+                )
+                _slug = _cc_slug(_cpd)
+            except ImportError:
+                import re as _re
+                _slug = _re.sub(
+                    r"[^a-z0-9]+", "-", str(Path(_cpd).resolve()).lower()
+                ).strip("-")
+            if _slug:
+                instance = f"claude-code-{_slug}"
+                os.environ["QUAID_INSTANCE"] = instance
+
     if not home or not instance:
         return
     silo_root = Path(home) / instance

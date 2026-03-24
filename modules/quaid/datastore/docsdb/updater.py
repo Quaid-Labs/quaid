@@ -1276,7 +1276,9 @@ def cmd_update_stale(
             Significant changes will be skipped with a warning.
         project: If set, only process docs belonging to this project.
     """
+    print("[docs-updater][diag] calling check_staleness", flush=True)
     stale = check_staleness(project=project)
+    print(f"[docs-updater][diag] check_staleness done: stale_count={len(stale)}", flush=True)
     purposes = get_doc_purposes()
     cfg = get_config()
     max_docs = cfg.docs.max_docs_per_update
@@ -1304,7 +1306,9 @@ def cmd_update_stale(
                 conf = info.change_classification.get("confidence", 0)
                 print(f"  [{cls} change, {conf:.0%} confidence] {doc_path}")
 
+            print(f"[docs-updater][diag] update_doc_from_diffs start: {doc_path}", flush=True)
             ok = update_doc_from_diffs(doc_path, purpose, info.stale_sources, dry_run=dry_run)
+            print(f"[docs-updater][diag] update_doc_from_diffs done: {doc_path} ok={ok}", flush=True)
             if ok:
                 updated += 1
 
