@@ -561,6 +561,8 @@ _KNOWN_CAPTURE_KEYS = {
     "skip_patterns",
     "inactivity_timeout_minutes",
     "auto_compaction_on_timeout",
+    "chunk_tokens",
+    "chunk_max_lines",
     "chunk_size",
 }
 

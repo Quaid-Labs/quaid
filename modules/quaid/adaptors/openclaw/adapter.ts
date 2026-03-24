@@ -3027,6 +3027,31 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         // Seed so repeated before_agent_start fires for the same new session don't re-trigger.
         sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
+
+      // Seed an initial extraction cursor for the new session so the daemon's
+      // rolling-extraction poller can discover it before any compaction fires.
+      // Without this, new sessions never get a cursor file until after their
+      // first extraction event — making rolling_stage impossible.
+      if (isSystemEnabled("memory")) {
+        const cursorDir = path.join(WORKSPACE, "data", "session-cursors");
+        const cursorPath = path.join(cursorDir, `${newSessionId}.json`);
+        if (!fs.existsSync(cursorPath)) {
+          try {
+            fs.mkdirSync(cursorDir, { recursive: true });
+            const transcriptPath = path.join(getOpenClawSessionsBaseDir(), `${newSessionId}.jsonl`);
+            const nowIso = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+            fs.writeFileSync(cursorPath, JSON.stringify({
+              session_id: newSessionId,
+              line_offset: 0,
+              transcript_path: transcriptPath,
+              updated_at: nowIso,
+            }, null, 2), "utf8");
+            console.log(`[quaid][cursor] seeded rolling cursor for session ${newSessionId}`);
+          } catch (e) {
+            console.warn(`[quaid][cursor] cursor seed error: ${e}`);
+          }
+        }
+      }
     }, {
       name: "before-agent-start-session-transition",
       priority: 5,

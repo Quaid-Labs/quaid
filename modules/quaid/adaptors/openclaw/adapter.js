@@ -2325,6 +2325,26 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
+      if (isSystemEnabled2("memory")) {
+        const cursorDir = path.join(WORKSPACE, "data", "session-cursors");
+        const cursorPath = path.join(cursorDir, `${newSessionId}.json`);
+        if (!fs.existsSync(cursorPath)) {
+          try {
+            fs.mkdirSync(cursorDir, { recursive: true });
+            const transcriptPath = path.join(getOpenClawSessionsBaseDir(), `${newSessionId}.jsonl`);
+            const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d+Z$/, "Z");
+            fs.writeFileSync(cursorPath, JSON.stringify({
+              session_id: newSessionId,
+              line_offset: 0,
+              transcript_path: transcriptPath,
+              updated_at: nowIso
+            }, null, 2), "utf8");
+            console.log(`[quaid][cursor] seeded rolling cursor for session ${newSessionId}`);
+          } catch (e) {
+            console.warn(`[quaid][cursor] cursor seed error: ${e}`);
+          }
+        }
+      }
     }, {
       name: "before-agent-start-session-transition",
       priority: 5
