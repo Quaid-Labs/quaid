@@ -439,8 +439,13 @@ function listExistingInstances() {
  */
 async function promptInstanceId(adapterType) {
   if (AGENT_MODE || _testAnswers) {
-    // Non-interactive: keep the adapter-derived default (or pre-seeded
-    // _instanceIdOverride if QUAID_INSTANCE was set before install), no prompt.
+    // Non-interactive: honor QUAID_INSTANCE env if explicitly provided by the operator
+    // (e.g. a specific silo for a live test or agent install), otherwise use the
+    // adapter-derived default.
+    const envInstance = String(process.env.QUAID_INSTANCE || "").trim();
+    if (envInstance && !_instanceIdOverride) {
+      _instanceIdOverride = envInstance;
+    }
     syncInstallerInstanceEnv(adapterType);
     return;
   }
@@ -1116,7 +1121,11 @@ function _ensureOpenClawResponsesEndpoint() {
   }
 }
 
-function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
+function _ensureOpenClawRuntimeInstanceEnv() {
+  // QUAID_INSTANCE must NOT be written to env.vars — it is derived per-session
+  // by the OC adapter's get_instance_name() from the agent registry. Writing a
+  // static instance here would override all agents with the same name, breaking
+  // per-agent silo isolation. Only QUAID_HOME and CLAWDBOT_WORKSPACE are global.
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
   try {
@@ -1128,18 +1137,14 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
     if (!parsed.env.vars || typeof parsed.env.vars !== "object" || Array.isArray(parsed.env.vars)) {
       parsed.env.vars = {};
     }
-    const nextInstance = String(instanceId || "").trim() || "openclaw";
-    const currentInstance = String(parsed.env.vars.QUAID_INSTANCE || "").trim();
     const currentHome = String(parsed.env.vars.QUAID_HOME || "").trim();
     const currentWorkspace = String(parsed.env.vars.CLAWDBOT_WORKSPACE || "").trim();
-    if (
-      currentInstance === nextInstance
-      && currentHome === WORKSPACE
-      && currentWorkspace === WORKSPACE
-    ) {
+    const hasStaleInstance = "QUAID_INSTANCE" in parsed.env.vars;
+    if (currentHome === WORKSPACE && currentWorkspace === WORKSPACE && !hasStaleInstance) {
       return false;
     }
-    parsed.env.vars.QUAID_INSTANCE = nextInstance;
+    // Remove any baked-in QUAID_INSTANCE — per-session derivation handles this.
+    delete parsed.env.vars.QUAID_INSTANCE;
     parsed.env.vars.QUAID_HOME = WORKSPACE;
     parsed.env.vars.CLAWDBOT_WORKSPACE = WORKSPACE;
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
@@ -1752,9 +1757,8 @@ async function step1_preflight() {
     if (_removeOpenClawPluginsAllowQuaid()) {
       log.info("Removed stale plugins.allow entry for quaid before plugin registration");
     }
-    const _ocRuntimeInstance = resolvedInstallerInstanceId();
-    if (_ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance)) {
-      log.info(`Seeded OpenClaw config env.vars with QUAID_INSTANCE=${_ocRuntimeInstance}`);
+    if (_ensureOpenClawRuntimeInstanceEnv()) {
+      log.info("Seeded OpenClaw config env.vars with QUAID_HOME and CLAWDBOT_WORKSPACE (QUAID_INSTANCE excluded — derived per-session)");
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
@@ -1762,6 +1766,7 @@ async function step1_preflight() {
       const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
         log.info("Restarted OpenClaw gateway to apply endpoint config");
+        await waitForGatewayWarmup(30_000);
       } else {
         log.warn("Could not auto-restart OpenClaw gateway. Restart it manually to apply endpoint config.");
       }
@@ -3222,6 +3227,9 @@ except Exception as e:
     }
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 60_000);
     enableRequiredOpenClawHooks();
+    // enableRequiredOpenClawHooks writes openclaw.json directly, which may trigger a gateway
+    // config reload. Give the gateway time to settle before proceeding.
+    await waitForGatewayWarmup(30_000);
   }
 
   // Migration
@@ -3577,10 +3585,11 @@ c.close()
   s.stop(C.green("Health checks complete"));
   note(checks.join("\n"), C.bmag("STATUS"));
 
-  // Gateway must be reachable before the smoke test. Bail immediately if not —
-  // a missing gateway is an OpenClaw problem, not a Quaid install problem.
+  // Gateway must be reachable before the smoke test. Give it a short window to settle
+  // after any install-triggered restart before bailing — a genuinely missing gateway
+  // is an OpenClaw problem, not a Quaid install problem.
   if (IS_OPENCLAW) {
-    if (_gatewayHttpCode("/health", "GET", null) !== 200) {
+    if (!(await waitForGatewayWarmup(15_000))) {
       cancel(
         "OpenClaw gateway is not running or not reachable.\n" +
         "Start the OpenClaw gateway and re-run the installer.\n" +
