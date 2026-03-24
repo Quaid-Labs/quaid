@@ -87,7 +87,16 @@ Main test environment:
 Target machine:
 - Host: `example.local`
 - OpenClaw workspace: `~/quaid`
-- Live interaction pane: local tmux pane `main:99`
+
+Pane assignments:
+
+| Window | Agent | Role |
+|--------|-------|------|
+| `main:97` | codex-livetester (CC) | Drives CC milestones M0–M13 |
+| `main:98` | codex-livetester (OC) | Drives OC milestones M0–M13 |
+| `main:99` | live-test | Visible OC interaction pane (`openclaw tui`) |
+| `main:100` | CC-interact | Visible CC interaction pane (`claude`) |
+| `main:4` | claude-dev | Coordinator |
 
 Dedicated live-test silos:
 - OC instance: `openclaw-livetest`
@@ -446,31 +455,24 @@ Expected: `OC chunk_tokens: 1500` and `CC chunk_tokens: 1500`.
 
 ### Phase Start Reset
 
-At the start of each live interaction phase, reset local tmux pane `main:99`
-so the interface is fresh and visible.
+OC and CC run in parallel — OC uses `main:99`, CC uses `main:100`. Each pane
+must be set up before its suite starts.
 
-- OpenClaw phase start: kill and restart pane `main:99`, `ssh example.local`,
-  then launch `openclaw tui`
-- Claude Code phase start: kill and restart pane `main:99`, `ssh example.local`,
-  then launch `claude`
-
-Recommended pattern:
-
+**OC phase start** — reset `main:99`:
 ```bash
 tmux respawn-pane -k -t main:99 'zsh -il'
 tmux send-keys -t main:99 "ssh example.local" Enter
-```
-
-Then launch the subject under test:
-
-```bash
 tmux send-keys -t main:99 "openclaw tui" Enter
-# or
-tmux send-keys -t main:99 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
 ```
 
-Do this again whenever switching from the OpenClaw phase to the Claude Code
-phase, or if the pane becomes contaminated and you need a clean visible session.
+**CC phase start** — reset `main:100` (do this once OC M0 passes):
+```bash
+tmux respawn-pane -k -t main:100 'zsh -il'
+tmux send-keys -t main:100 "ssh example.local" Enter
+tmux send-keys -t main:100 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
+```
+
+Respawn the relevant pane again if it becomes contaminated mid-run.
 
 ### OpenClaw
 
@@ -603,9 +605,15 @@ change.
 
 ## OpenClaw and Claude Code Milestones
 
-Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
-Then run M11 (artifact generation) once for each platform to verify snippets,
-journals, and project logs are building from extractions.
+OC and CC run **in parallel**, not sequentially. The execution order is:
+
+1. **OC livetester (window 98)** starts M0 alone first.
+2. Once OC M0 passes, **CC livetester (window 97)** starts CC M0.
+3. Both livetester agents run their M0–M13 suites concurrently from that point.
+4. The run is not complete until **both** OC and CC have reached M13 PASS.
+
+OC milestones play out in `main:99` (openclaw tui).
+CC milestones play out in `main:100` (claude interactive).
 
 ### M1: Extraction via `/new`
 
