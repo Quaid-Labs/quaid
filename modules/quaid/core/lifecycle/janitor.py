@@ -437,12 +437,20 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
         set_token_budget(token_budget)
     else:
         reset_token_budget()
-    # Prevent concurrent janitor runs
+    # Prevent concurrent janitor runs; retry up to 30s in case a prior run is finishing
     if not _acquire_lock():
-        print("ERROR: Another janitor instance is already running. Exiting.")
-        print(f"  Lock file: {_lock_file_path()}")
-        print(f"  To force: delete the lock file and retry.")
-        return {"error": "janitor_already_running", "success": False, "applied_changes": {}, "metrics": {}}
+        _wait_secs = 5
+        _max_attempts = 6
+        for _attempt in range(_max_attempts):
+            print(f"  Another janitor is running; waiting {_wait_secs}s (attempt {_attempt + 1}/{_max_attempts})...")
+            time.sleep(_wait_secs)
+            if _acquire_lock():
+                break
+        else:
+            print("ERROR: Another janitor instance is already running. Exiting.")
+            print(f"  Lock file: {_lock_file_path()}")
+            print(f"  To force: delete the lock file and retry.")
+            return {"error": "janitor_already_running", "success": False, "applied_changes": {}, "metrics": {}}
 
     try:
         return _run_task_optimized_inner(

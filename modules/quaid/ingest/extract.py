@@ -1949,6 +1949,7 @@ def extract_from_transcript(
     write_journal: bool = True,
     dry_run: bool = False,
     carry_facts: Optional[List[Dict[str, Any]]] = None,
+    wall_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Extract memories from a conversation transcript using Deep Reasoning.
 
@@ -2114,7 +2115,7 @@ def extract_from_transcript(
         carry_facts = []
     parallel_root_workers = int(result["parallel_root_workers"] or 1)
     effective_parallel_root_workers = 1
-    extract_deadline = time.time() + _get_extract_wall_timeout_seconds()
+    extract_deadline = time.time() + (wall_timeout_seconds if wall_timeout_seconds is not None else _get_extract_wall_timeout_seconds())
 
     def _process_root_chunk(ci: int, chunk: str, local_carry_facts: List[Dict[str, Any]], telemetry: Dict[str, Any]) -> List[Dict[str, Any]]:
         return _extract_chunk_payloads(
