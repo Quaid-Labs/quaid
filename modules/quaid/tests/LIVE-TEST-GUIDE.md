@@ -118,6 +118,25 @@ targeted cleanup — stale carryover files, queue events, DB nodes, and identity
 files all contaminate test results in ways that are hard to trace. A full wipe
 is faster and safer than surgical cleanup.
 
+> **Parallel runs — CC wipe scope:** When CC M0 starts while OC is already
+> active (the normal parallel case), do **not** run the full wipe below.
+> Instead, CC-only wipe:
+> ```bash
+> ssh example.local 'rm -rf ~/quaid/claude-code-livetest && echo "CC silo wiped"'
+> ssh example.local 'python3 - <<"PY"
+> import json; from pathlib import Path
+> p = Path.home() / ".claude/settings.json"
+> if p.exists():
+>     d = json.loads(p.read_text())
+>     for ev, entries in list(d.get("hooks", {}).items()):
+>         d["hooks"][ev] = [e for e in entries if "quaid" not in str(e).lower()]
+>     p.write_text(json.dumps(d, indent=2))
+> print("CC hooks cleared")
+> PY'
+> ```
+> Leave `~/quaid/openclaw-livetest`, `~/.openclaw/extensions/quaid`, and the
+> OC gateway untouched — OC is live on all of those.
+
 **Uninstall the plugin first to remove registry entries:**
 
 ```bash
