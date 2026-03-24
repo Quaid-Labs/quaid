@@ -1322,13 +1322,19 @@ def cmd_update_stale(
     # Second pass: index registered docs that have never been indexed (no chunks).
     # A newly registered doc is effectively infinitely stale — it should be picked
     # up by 'docs update' without needing a separate 'janitor --task rag' invocation.
+    # Sort by registered_at DESC so the most recently registered docs are indexed first.
+    # Cap at max_docs to avoid indexing the entire registry on a fresh silo.
     indexed_new = 0
     try:
         from datastore.docsdb.rag import DocsRAG
         from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
         rag = DocsRAG()
-        all_docs = registry.list_docs(project=project)
+        all_docs = sorted(
+            registry.list_docs(project=project),
+            key=lambda e: e.get("registered_at") or "",
+            reverse=True,
+        )
         candidate_paths = []
         for entry in all_docs:
             file_path = entry.get("file_path") or entry.get("path", "")
@@ -1341,7 +1347,12 @@ def cmd_update_stale(
                 continue
             candidate_paths.append(file_path)
         needs_reindex = rag.needs_reindex_many(candidate_paths)
+        new_doc_budget = max(1, max_docs - updated)
+        needs_count = sum(1 for p in candidate_paths if needs_reindex.get(p, True))
+        print(f"[docs-updater][diag] new-doc pass: candidates={len(candidate_paths)} needs_reindex={needs_count} budget={new_doc_budget}", flush=True)
         for file_path in candidate_paths:
+            if indexed_new >= new_doc_budget:
+                break
             if not needs_reindex.get(file_path, True):
                 continue
             if dry_run:
