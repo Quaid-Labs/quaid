@@ -2032,7 +2032,22 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         # Check if transcript has grown past cursor
         cursor_offset = data.get("line_offset", 0)
         total_lines = count_transcript_lines(transcript_path)
-        if total_lines <= cursor_offset:
+        cursor_at_end = total_lines <= cursor_offset
+
+        # Even when all transcript content has been extracted (cursor at end),
+        # staged rolling state from prior rolling_stage cycles still needs to be
+        # flushed.  Check for a pending rolling payload so we can generate a
+        # flush signal even when there are no new lines to extract.
+        has_staged_payload = False
+        if cursor_at_end:
+            try:
+                has_staged_payload = staged_state_has_payload(
+                    read_rolling_state(session_id)
+                )
+            except Exception:
+                pass
+
+        if cursor_at_end and not has_staged_payload:
             continue
 
         # Check transcript modification time for idle detection
@@ -2053,8 +2068,9 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             continue
 
         logger.info(
-            "session %s idle for %.0fs with %d unextracted lines, generating timeout signal",
+            "session %s idle for %.0fs with %d unextracted lines%s, generating timeout signal",
             session_id, idle_seconds, total_lines - cursor_offset,
+            " (staged rolling payload pending flush)" if has_staged_payload and cursor_at_end else "",
         )
         write_signal(
             signal_type="timeout",
