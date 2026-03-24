@@ -185,7 +185,8 @@ def recall_fast(
     domain: Optional[Dict[str, bool]] = None,
     domain_boost: Optional[Union[List[str], Dict[str, float]]] = None,
     timeout_ms: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    return_meta: bool = False,
+) -> Any:
     """Fast recall for pre-injection. Parallel HyDE fanout with hard time budget.
 
     Use this for the hook-inject hot path. For deliberate recall (user-initiated
@@ -193,7 +194,7 @@ def recall_fast(
     """
     if len(query.strip().split()) < 3:
         logger.debug("[api.recall_fast] query too short (%d words), returning empty", len(query.strip().split()))
-        return []
+        return ([], None) if return_meta else []
 
     return _memory().recall_fast(
         query=query,
@@ -204,6 +205,7 @@ def recall_fast(
         domain=domain,
         domain_boost=domain_boost,
         timeout_ms=timeout_ms,
+        return_meta=return_meta,
     )
 
 
