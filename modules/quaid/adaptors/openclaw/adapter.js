@@ -60,7 +60,8 @@ function _resolvePythonPluginRoot() {
 const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
 const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
-const DB_PATH = path.join(WORKSPACE, "data/memory.db");
+const _instanceForDbPath = String(process.env.QUAID_INSTANCE || "").trim();
+const DB_PATH = _instanceForDbPath ? path.join(WORKSPACE, _instanceForDbPath, "data", "memory.db") : path.join(WORKSPACE, "data", "memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
 const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");

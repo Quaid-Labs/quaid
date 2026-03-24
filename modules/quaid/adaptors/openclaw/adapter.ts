@@ -85,7 +85,15 @@ function _resolvePythonPluginRoot(): string {
 const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
 const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
-const DB_PATH = path.join(WORKSPACE, "data/memory.db");
+// When QUAID_INSTANCE is set, the Python bridge must point MEMORY_DB_PATH at the
+// instance silo DB, not the root WORKSPACE DB.  Python reads MEMORY_DB_PATH first
+// (lib/config.py:get_db_path) before falling back to config — so setting the wrong
+// path here causes auto-inject recall to query an empty root-silo database instead
+// of the active instance silo.
+const _instanceForDbPath = String(process.env.QUAID_INSTANCE || "").trim();
+const DB_PATH = _instanceForDbPath
+  ? path.join(WORKSPACE, _instanceForDbPath, "data", "memory.db")
+  : path.join(WORKSPACE, "data", "memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
 const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");
