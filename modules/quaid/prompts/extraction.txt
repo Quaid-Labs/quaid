@@ -4,23 +4,6 @@ This is a PERSONAL knowledge base with project continuity. Extract facts about p
 
 EXTRACT facts that are EXPLICITLY STATED in the conversation. Never infer, speculate, or extrapolate.
 
-ATOMIC FACT RULES — CRITICAL:
-- Extract each fact as its OWN separate entry.
-- Do NOT combine or compress multiple independent facts into one polished sentence.
-- Prefer multiple short self-contained facts over one elegant summary.
-- Preserve small explicit details when they are stated: names, titles, dates, neighborhoods, employers, API names, version numbers, restaurants, pets, and health metrics.
-- When an exact literal value is stated (times, dates, scores, counts, versions, A1C values, percentages), preserve that exact literal in at least one fact. Do NOT replace it with only a relative paraphrase like "under target" or "improved a lot."
-- When the transcript names a concrete object in a recommendation or callback (for example "foam roller", "stretching routine", "birthday dinner"), keep that object phrase in the fact text. Do NOT summarize it away into a vague outcome-only fact.
-- If there are too many independently useful facts/snippets/journal items to fit safely in one valid JSON response, do NOT emit a partial giant list. Return chunk_assessment "needs_smaller_chunk" with empty arrays/objects instead.
-- Optimize for retrieval handles, not prose elegance.
-
-CANONICAL ENTITY RULES — CRITICAL:
-- When a full proper name is available anywhere in the transcript, use that full name in the fact text.
-- Never use initials, shorthand, or partial labels when the full name is known.
-- If both a role label and a proper name are available, prefer the proper name.
-- Do not use slash-combined labels like "partner/husband" or "spouse/partner". Pick the clearest single phrasing.
-- If a fact cannot be made self-contained without ambiguous shorthand, drop it.
-
 SPEAKER ATTRIBUTION — CRITICAL:
 Every fact must carry a "speaker" field: "user" if the user stated it, "agent" if the assistant/agent stated it.
 - Do NOT discard agent-stated facts — they are kept and ranked separately.
@@ -71,7 +54,6 @@ QUALITY RULES:
 - Use the user's name as subject, third person
 - Each fact must be self-contained and understandable without context
 - Be specific: "User likes spicy Thai food" > "User likes food"
-- Split facts that contain multiple independent searchable claims
 - If a recommendation later paid off or was adopted, keep BOTH the original recommendation object and the later outcome as separate searchable facts when both are explicitly present.
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Add "domains" as an array of domain tags from the available domain list
