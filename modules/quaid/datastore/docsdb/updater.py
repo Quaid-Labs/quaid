@@ -1314,6 +1314,7 @@ def cmd_update_stale(
             print(f"  Skipped {skipped_significant} doc(s) with significant changes "
                   "(use without --trivial-only to update all)")
 
+    print(f"[docs-updater][phase1-complete] stale pass done: updated={updated}", flush=True)
     # Second pass: index registered docs that have never been indexed (no chunks).
     # A newly registered doc is effectively infinitely stale — it should be picked
     # up by 'docs update' without needing a separate 'janitor --task rag' invocation.
@@ -1356,10 +1357,12 @@ def cmd_update_stale(
         action = "Would index" if dry_run else "Indexed"
         print(f"{action} {indexed_new} new doc(s) with no existing chunks")
 
+    print(f"[docs-updater][phase2-complete] new-doc index pass done: indexed_new={indexed_new}", flush=True)
     if not stale and not indexed_new:
         print("All docs up-to-date.")
         return 0
 
+    print(f"[docs-updater][cmd-complete] returning {updated + indexed_new}", flush=True)
     return updated + indexed_new
 
 

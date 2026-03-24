@@ -25,11 +25,20 @@ def _pool(pool_name: str, max_workers: int) -> ThreadPoolExecutor:
 
 def shutdown_worker_pools(wait: bool = False) -> None:
     """Shutdown and clear shared thread pools."""
+    import sys
     with _POOL_GUARD:
-        pools = list(_POOLS.values())
+        pool_items = list(_POOLS.items())
         _POOLS.clear()
-    for ex in pools:
+    if pool_items:
+        print(f"[worker_pool][atexit] shutting down {len(pool_items)} pool(s), wait={wait}", flush=True, file=sys.stderr)
+    for key, ex in pool_items:
+        running = getattr(ex, "_work_queue", None)
+        qsize = running.qsize() if running is not None else "?"
+        print(f"[worker_pool][atexit]   pool={key[0]!r} max_workers={key[1]} queue_depth={qsize}", flush=True, file=sys.stderr)
         ex.shutdown(wait=wait, cancel_futures=True)
+        print(f"[worker_pool][atexit]   pool={key[0]!r} shutdown complete", flush=True, file=sys.stderr)
+    if pool_items:
+        print(f"[worker_pool][atexit] all pools shut down", flush=True, file=sys.stderr)
 
 
 atexit.register(shutdown_worker_pools, True)
