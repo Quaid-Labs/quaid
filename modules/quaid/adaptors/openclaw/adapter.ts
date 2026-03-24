@@ -1926,7 +1926,11 @@ notify_user(${JSON.stringify(message)})
                 query,
                 limit: injectLimit,
                 expandGraph: false,
-                datastores: ["vector_basic", "project"],
+                // OC already injects project docs separately in before_prompt_build.
+                // Keep auto-inject memory recall focused on memory stores so a slow
+                // project search cannot consume the full hook budget and starve
+                // otherwise-fast personal memory hits like Baxter.
+                datastores: ["vector_basic"],
                 routeStores: false,
                 intent: injectIntent,
                 domain: injectDomain,
