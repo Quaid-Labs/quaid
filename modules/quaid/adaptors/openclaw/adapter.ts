@@ -3717,6 +3717,11 @@ notify_memory_extraction(
         }
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
 
+        // Snapshot the transcript synchronously before OC tears it down.
+        // writeDaemonSignal (called inside doExtraction) reads sessionTranscriptPaths,
+        // which preserveSessionTranscript updates to point at the preserved copy.
+        preserveSessionTranscript(extractionSessionId, null, "before_reset");
+
         const doExtraction = async () => {
           // before_reset can race with session teardown; queue signal for worker tick.
           if (isSystemEnabled("memory")) {

@@ -2914,6 +2914,7 @@ notify_memory_extraction(
           );
         }
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
+        preserveSessionTranscript(extractionSessionId, null, "before_reset");
         const doExtraction = async () => {
           if (isSystemEnabled2("memory")) {
             if (facade.shouldProcessLifecycleSignal(extractionSessionId, {
