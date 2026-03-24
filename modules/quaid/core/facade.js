@@ -1573,48 +1573,13 @@ Consider running: docs staleness updater (update-stale --apply)`;
     const k = Math.round(11.5 * Math.log(nodeCount) - 61.7);
     return Math.max(5, Math.min(k, 40));
   }
-  async function recallMemoryFromBridge(query, limit, opts) {
-    const rawStores = opts.stores || ["vector"];
-    const expandGraph = rawStores.includes("graph");
-    const normalizedStores = [...new Set(rawStores.map(
-      (s) => s === "vector_basic" || s === "vector_technical" ? "vector" : s
-    ))];
-    let domain = opts.domain;
-    if (!domain) {
-      if (rawStores.includes("vector_technical") && !rawStores.includes("vector_basic")) {
-        domain = { technical: true };
-      } else if (rawStores.includes("vector_basic") && !rawStores.includes("vector_technical")) {
-        domain = { personal: true };
-      }
-    }
-    const cfg = { stores: normalizedStores, limit };
-    if (domain) cfg["domain_filter"] = domain;
-    if (opts.domainBoost) cfg["domain_boost"] = opts.domainBoost;
-    if (opts.project) cfg["project"] = opts.project;
-    if (opts.dateFrom) cfg["date_from"] = opts.dateFrom;
-    if (opts.dateTo) cfg["date_to"] = opts.dateTo;
-    if (opts.fast) cfg["fast"] = true;
-    if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
-    if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
-      cfg["candidate_pool"] = opts.candidatePool;
-    }
-    try {
-      const args = [query, JSON.stringify(cfg), "--json"];
-      const output = await datastoreBridge.recall(args);
-      const results = parseMemoryResults(output, expandGraph);
-      if (!expandGraph) return results.map((r) => ({ ...r, via: "vector" }));
-      return results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
-    } catch (err) {
-      if (deps.isFailHardEnabled()) throw err;
-      console.error("[quaid][facade] recall error:", err.message);
-      return [];
-    }
-  }
-  function parseMemoryResults(output, expandGraph) {
+  function parseMemoryBridgePayload(output, expandGraph) {
     const results = [];
-    if (!output || !output.trim()) return results;
+    let meta = null;
+    if (!output || !output.trim()) return { results, meta };
     try {
       const parsed = JSON.parse(output);
+      meta = parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.meta && typeof parsed.meta === "object" ? parsed.meta : null;
       const items = Array.isArray(parsed) ? parsed : parsed?.results || parsed?.items || parsed?.direct_results || [];
       for (const item of items) {
         if (!item || typeof item !== "object") continue;
@@ -1693,6 +1658,47 @@ Consider running: docs staleness updater (update-stale --apply)`;
         }
       }
     }
+    return { results, meta };
+  }
+  async function recallMemoryFromBridgeDetailed(query, limit, opts) {
+    const rawStores = opts.stores || ["vector"];
+    const expandGraph = rawStores.includes("graph");
+    const normalizedStores = [...new Set(rawStores.map(
+      (s) => s === "vector_basic" || s === "vector_technical" ? "vector" : s
+    ))];
+    let domain = opts.domain;
+    if (!domain) {
+      if (rawStores.includes("vector_technical") && !rawStores.includes("vector_basic")) {
+        domain = { technical: true };
+      } else if (rawStores.includes("vector_basic") && !rawStores.includes("vector_technical")) {
+        domain = { personal: true };
+      }
+    }
+    const cfg = { stores: normalizedStores, limit };
+    if (domain) cfg["domain_filter"] = domain;
+    if (opts.domainBoost) cfg["domain_boost"] = opts.domainBoost;
+    if (opts.project) cfg["project"] = opts.project;
+    if (opts.dateFrom) cfg["date_from"] = opts.dateFrom;
+    if (opts.dateTo) cfg["date_to"] = opts.dateTo;
+    if (opts.fast) cfg["fast"] = true;
+    if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
+    if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
+      cfg["candidate_pool"] = opts.candidatePool;
+    }
+    try {
+      const args = [query, JSON.stringify(cfg), "--json"];
+      const output = await datastoreBridge.recall(args);
+      const payload = parseMemoryBridgePayload(output, expandGraph);
+      const results = !expandGraph ? payload.results.map((r) => ({ ...r, via: "vector" })) : payload.results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
+      return { results, meta: payload.meta };
+    } catch (err) {
+      if (deps.isFailHardEnabled()) throw err;
+      console.error("[quaid][facade] recall error:", err.message);
+      return { results: [], meta: null };
+    }
+  }
+  async function recallMemoryFromBridge(query, limit, opts) {
+    const { results } = await recallMemoryFromBridgeDetailed(query, limit, opts);
     return results;
   }
   function recallFromJournal(query, limit, journalDir) {
@@ -2036,6 +2042,40 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       });
     };
     return runRecall(query);
+  }
+  async function recallWithDiagnostics(opts) {
+    const {
+      query,
+      limit = 10,
+      expandGraph = true,
+      graphDepth = 1,
+      datastores,
+      routeStores,
+      reasoning = "fast",
+      domain = { all: true },
+      domainBoost,
+      project,
+      dateFrom,
+      dateTo
+    } = opts;
+    const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
+    const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
+    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph"]);
+    if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {
+      const { results: results2, meta } = await recallMemoryFromBridgeDetailed(query, limit, {
+        stores: selectedStores,
+        domain,
+        domainBoost,
+        project,
+        dateFrom,
+        dateTo,
+        depth: graphDepth,
+        fast: reasoning === "fast"
+      });
+      return { results: results2, diagnostics: { meta } };
+    }
+    const results = await recall(opts);
+    return { results, diagnostics: null };
   }
   function isLowInformationEntityNode(result) {
     if ((result.via || "vector") === "graph" || result.category === "graph") return false;
@@ -2543,6 +2583,7 @@ ${combined}` : combined;
     },
     // Recall
     recall,
+    recallWithDiagnostics,
     recallWithToolRetry,
     formatMemoriesForInjection,
     formatRecallToolResponse,

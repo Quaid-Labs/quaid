@@ -151,6 +151,10 @@ export type AutoInjectionPreparation = {
   uniqueSessionId: string;
 };
 
+export type RecallDiagnostics = {
+  meta: Record<string, unknown> | null;
+};
+
 export type JanitorNudgeOptions = {
   statePath: string;
   pendingInstallMigrationPath: string;
@@ -229,6 +233,7 @@ export type QuaidFacade = {
 
   // --- Recall (routed via orchestrator) ---
   recall: (opts: FacadeRecallOptions) => Promise<MemoryResult[]>;
+  recallWithDiagnostics: (opts: FacadeRecallOptions) => Promise<{ results: MemoryResult[]; diagnostics: RecallDiagnostics | null }>;
   recallWithToolRetry: (opts: FacadeRecallOptions) => Promise<MemoryResult[]>;
   formatMemoriesForInjection: (memories: MemoryResult[]) => string;
   formatRecallToolResponse: (results: MemoryResult[]) => {
@@ -2190,11 +2195,109 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   // Bridge recall helper (calls datastoreBridge.recall with JSON config)
   // -------------------------------------------------------------------------
 
-  async function recallMemoryFromBridge(
+  function parseMemoryBridgePayload(output: string, expandGraph: boolean): {
+    results: MemoryResult[];
+    meta: Record<string, unknown> | null;
+  } {
+    const results: MemoryResult[] = [];
+    let meta: Record<string, unknown> | null = null;
+    if (!output || !output.trim()) return { results, meta };
+
+    try {
+      const parsed = JSON.parse(output);
+      meta = parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.meta && typeof parsed.meta === "object"
+        ? parsed.meta as Record<string, unknown>
+        : null;
+      const items = Array.isArray(parsed) ? parsed : (parsed?.results || parsed?.items || parsed?.direct_results || []);
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        const text = String(item.text || "").trim();
+        if (!text) continue;
+
+        const domains = (() => {
+          if (Array.isArray(item.domains)) return item.domains.map((d: unknown) => String(d || "").trim()).filter(Boolean);
+          if (typeof item.domains === "string") {
+            try { const p = JSON.parse(item.domains); if (Array.isArray(p)) return p; } catch {}
+          }
+          return undefined;
+        })();
+
+        results.push({
+          text,
+          category: String(item.category || "fact"),
+          similarity: Number(item.similarity) || 0.5,
+          id: item.id ? String(item.id) : undefined,
+          domains,
+          sourceType: item.source_type || item.sourceType || undefined,
+          extractionConfidence: typeof item.extraction_confidence === "number" ? item.extraction_confidence : undefined,
+          createdAt: item.created_at || item.createdAt || undefined,
+          validFrom: item.valid_from || item.validFrom || undefined,
+          validUntil: item.valid_until || item.validUntil || undefined,
+          privacy: item.privacy || undefined,
+          ownerId: item.owner_id || item.ownerId || undefined,
+          via: expandGraph ? undefined : "vector",
+          speaker: item.speaker || undefined,
+        });
+      }
+
+      if (expandGraph) {
+        const rels = parsed?.relationships || parsed?.graph_results || [];
+        for (const r of rels) {
+          if (!r || typeof r !== "object") continue;
+          const id = typeof r.id === "string" ? r.id : (typeof r.id === "number" ? String(r.id) : "");
+          const name = typeof r.name === "string" ? r.name : "";
+          const relation = typeof r.relation === "string" ? r.relation : "";
+          const direction = typeof r.direction === "string" ? r.direction : "out";
+          const sourceName = typeof r.source_name === "string" ? r.source_name : "";
+          if (!id || !name || !relation || !sourceName) continue;
+
+          const text = direction === "in"
+            ? `${name} --${relation}--> ${sourceName}`
+            : `${sourceName} --${relation}--> ${name}`;
+
+          results.push({
+            text,
+            category: "graph",
+            similarity: 0.75,
+            id,
+            relation,
+            direction,
+            sourceName,
+            via: "graph",
+          });
+        }
+      }
+    } catch {
+      for (const line of output.split("\n")) {
+        if (line.startsWith("[direct]")) {
+          const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
+          if (match) {
+            results.push({
+              text: match[3].trim(),
+              category: match[2],
+              similarity: parseFloat(match[1]),
+              via: "vector",
+            });
+          }
+        } else if (line.startsWith("[graph]")) {
+          results.push({
+            text: line.substring(7).trim(),
+            category: "graph",
+            similarity: 0.75,
+            via: "graph",
+          });
+        }
+      }
+    }
+
+    return { results, meta };
+  }
+
+  async function recallMemoryFromBridgeDetailed(
     query: string,
     limit: number,
     opts: RecallMemoryOpts,
-  ): Promise<MemoryResult[]> {
+  ): Promise<{ results: MemoryResult[]; meta: Record<string, unknown> | null }> {
     const rawStores = opts.stores || ["vector"];
     const expandGraph = rawStores.includes("graph");
 
@@ -2229,106 +2332,24 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     try {
       const args: string[] = [query, JSON.stringify(cfg), "--json"];
       const output = await datastoreBridge.recall(args);
-      const results = parseMemoryResults(output, expandGraph);
-      if (!expandGraph) return results.map((r) => ({ ...r, via: "vector" as const }));
-      return results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
+      const payload = parseMemoryBridgePayload(output, expandGraph);
+      const results = !expandGraph
+        ? payload.results.map((r) => ({ ...r, via: "vector" as const }))
+        : payload.results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
+      return { results, meta: payload.meta };
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;
       console.error("[quaid][facade] recall error:", (err as Error).message);
-      return [];
+      return { results: [], meta: null };
     }
   }
 
-  function parseMemoryResults(output: string, expandGraph: boolean): MemoryResult[] {
-    const results: MemoryResult[] = [];
-    if (!output || !output.trim()) return results;
-
-    try {
-      const parsed = JSON.parse(output);
-      const items = Array.isArray(parsed) ? parsed : (parsed?.results || parsed?.items || parsed?.direct_results || []);
-      for (const item of items) {
-        if (!item || typeof item !== "object") continue;
-        const text = String(item.text || "").trim();
-        if (!text) continue;
-
-        const domains = (() => {
-          if (Array.isArray(item.domains)) return item.domains.map((d: unknown) => String(d || "").trim()).filter(Boolean);
-          if (typeof item.domains === "string") {
-            try { const p = JSON.parse(item.domains); if (Array.isArray(p)) return p; } catch {}
-          }
-          return undefined;
-        })();
-
-        results.push({
-          text,
-          category: String(item.category || "fact"),
-          similarity: Number(item.similarity) || 0.5,
-          id: item.id ? String(item.id) : undefined,
-          domains,
-          sourceType: item.source_type || item.sourceType || undefined,
-          extractionConfidence: typeof item.extraction_confidence === "number" ? item.extraction_confidence : undefined,
-          createdAt: item.created_at || item.createdAt || undefined,
-          validFrom: item.valid_from || item.validFrom || undefined,
-          validUntil: item.valid_until || item.validUntil || undefined,
-          privacy: item.privacy || undefined,
-          ownerId: item.owner_id || item.ownerId || undefined,
-          via: expandGraph ? undefined : "vector",
-          speaker: item.speaker || undefined,
-        });
-      }
-
-      // Parse graph relationships if present
-      if (expandGraph) {
-        const rels = parsed?.relationships || parsed?.graph_results || [];
-        for (const r of rels) {
-          if (!r || typeof r !== "object") continue;
-          const id = typeof r.id === "string" ? r.id : (typeof r.id === "number" ? String(r.id) : "");
-          const name = typeof r.name === "string" ? r.name : "";
-          const relation = typeof r.relation === "string" ? r.relation : "";
-          const direction = typeof r.direction === "string" ? r.direction : "out";
-          const sourceName = typeof r.source_name === "string" ? r.source_name : "";
-          if (!id || !name || !relation || !sourceName) continue;
-
-          const text = direction === "in"
-            ? `${name} --${relation}--> ${sourceName}`
-            : `${sourceName} --${relation}--> ${name}`;
-
-          results.push({
-            text,
-            category: "graph",
-            similarity: 0.75,
-            id,
-            relation,
-            direction,
-            sourceName,
-            via: "graph",
-          });
-        }
-      }
-    } catch {
-      // Fallback: line format
-      for (const line of output.split("\n")) {
-        if (line.startsWith("[direct]")) {
-          const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
-          if (match) {
-            results.push({
-              text: match[3].trim(),
-              category: match[2],
-              similarity: parseFloat(match[1]),
-              via: "vector",
-            });
-          }
-        } else if (line.startsWith("[graph]")) {
-          results.push({
-            text: line.substring(7).trim(),
-            category: "graph",
-            similarity: 0.75,
-            via: "graph",
-          });
-        }
-      }
-    }
-
+  async function recallMemoryFromBridge(
+    query: string,
+    limit: number,
+    opts: RecallMemoryOpts,
+  ): Promise<MemoryResult[]> {
+    const { results } = await recallMemoryFromBridgeDetailed(query, limit, opts);
     return results;
   }
 
@@ -2676,6 +2697,32 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     };
 
     return runRecall(query);
+  }
+
+  async function recallWithDiagnostics(opts: FacadeRecallOptions): Promise<{ results: MemoryResult[]; diagnostics: RecallDiagnostics | null }> {
+    const {
+      query, limit = 10, expandGraph = true, graphDepth = 1,
+      datastores, routeStores, reasoning = "fast", domain = { all: true }, domainBoost, project,
+      dateFrom, dateTo,
+    } = opts;
+    const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
+    const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
+    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph"]);
+    if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {
+      const { results, meta } = await recallMemoryFromBridgeDetailed(query, limit, {
+        stores: selectedStores,
+        domain,
+        domainBoost,
+        project,
+        dateFrom,
+        dateTo,
+        depth: graphDepth,
+        fast: reasoning === "fast",
+      });
+      return { results, diagnostics: { meta } };
+    }
+    const results = await recall(opts);
+    return { results, diagnostics: null };
   }
 
   function isLowInformationEntityNode(result: MemoryResult): boolean {
@@ -3320,6 +3367,7 @@ ${lines.join("\n")}
 
     // Recall
     recall,
+    recallWithDiagnostics,
     recallWithToolRetry,
     formatMemoriesForInjection,
     formatRecallToolResponse,

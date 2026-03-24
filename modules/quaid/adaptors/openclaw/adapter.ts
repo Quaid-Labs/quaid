@@ -690,6 +690,83 @@ function writeHookTrace(event: string, data: Record<string, unknown> = {}): void
   }
 }
 
+function summarizeRecallResults(results: any[], limit: number = 5): Array<Record<string, unknown>> {
+  return (Array.isArray(results) ? results : [])
+    .slice(0, Math.max(1, limit))
+    .map((row: any) => ({
+      id: typeof row?.id === "string" ? row.id : undefined,
+      text: String(row?.text || "").trim().slice(0, 180),
+      similarity: Number.isFinite(Number(row?.similarity)) ? Number(Number(row.similarity).toFixed(3)) : undefined,
+      category: typeof row?.category === "string" ? row.category : undefined,
+      via: typeof row?.via === "string" ? row.via : undefined,
+      extraction_confidence: Number.isFinite(Number(row?.extractionConfidence))
+        ? Number(Number(row.extractionConfidence).toFixed(3))
+        : undefined,
+      created_at: typeof row?.createdAt === "string" ? row.createdAt : undefined,
+    }));
+}
+
+function summarizeRecallDiagnostics(diagnostics: unknown): Record<string, unknown> | null {
+  const meta = diagnostics && typeof diagnostics === "object" && !Array.isArray(diagnostics)
+    ? (diagnostics as Record<string, any>).meta
+    : null;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const qualityGate = meta.quality_gate && typeof meta.quality_gate === "object" && !Array.isArray(meta.quality_gate)
+    ? meta.quality_gate
+    : {};
+  const evaluation = qualityGate.evaluation && typeof qualityGate.evaluation === "object" && !Array.isArray(qualityGate.evaluation)
+    ? qualityGate.evaluation
+    : {};
+  const turnDetails = Array.isArray(meta.turn_details) ? meta.turn_details : [];
+  const firstTurn = turnDetails.length > 0 && turnDetails[0] && typeof turnDetails[0] === "object" ? turnDetails[0] : {};
+  const planner = firstTurn.planner && typeof firstTurn.planner === "object" && !Array.isArray(firstTurn.planner)
+    ? firstTurn.planner
+    : {};
+  const storeRuns = Array.isArray(meta.store_runs) ? meta.store_runs : [];
+  const phases = meta.phases_ms && typeof meta.phases_ms === "object" && !Array.isArray(meta.phases_ms)
+    ? meta.phases_ms
+    : {};
+  return {
+    mode: typeof meta.mode === "string" ? meta.mode : undefined,
+    stop_reason: typeof meta.stop_reason === "string" ? meta.stop_reason : undefined,
+    selected_path: typeof meta.selected_path === "string" ? meta.selected_path : undefined,
+    planned_stores: Array.isArray(meta.planned_stores) ? meta.planned_stores.slice(0, 8) : undefined,
+    planned_project: typeof meta.planned_project === "string" ? meta.planned_project : undefined,
+    planner: {
+      bailout_reason: typeof planner.bailout_reason === "string" ? planner.bailout_reason : undefined,
+      planner_profile: typeof planner.planner_profile === "string" ? planner.planner_profile : undefined,
+      queries_count: Number.isFinite(Number(planner.queries_count)) ? Number(planner.queries_count) : undefined,
+      used_llm: typeof planner.used_llm === "boolean" ? planner.used_llm : undefined,
+    },
+    store_runs: storeRuns.slice(0, 6).map((run: any) => ({
+      store: typeof run?.store === "string" ? run.store : undefined,
+      result_count: Number.isFinite(Number(run?.result_count)) ? Number(run.result_count) : undefined,
+      total_ms: Number.isFinite(Number(run?.total_ms)) ? Number(run.total_ms) : undefined,
+      selected_path: typeof run?.selected_path === "string" ? run.selected_path : undefined,
+    })),
+    quality_gate: {
+      fast_drill_candidate: typeof qualityGate.fast_drill_candidate === "boolean" ? qualityGate.fast_drill_candidate : undefined,
+      fast_drill_enabled: typeof qualityGate.fast_drill_enabled === "boolean" ? qualityGate.fast_drill_enabled : undefined,
+      fast_drill_reasons: Array.isArray(qualityGate.fast_drill_reasons) ? qualityGate.fast_drill_reasons.slice(0, 8) : undefined,
+      requirements: Array.isArray(evaluation.requirements) ? evaluation.requirements.slice(0, 8) : undefined,
+      covered_terms_ratio: Number.isFinite(Number(evaluation.covered_terms_ratio))
+        ? Number(Number(evaluation.covered_terms_ratio).toFixed(3))
+        : undefined,
+      top_similarity: Number.isFinite(Number(evaluation.top_similarity))
+        ? Number(Number(evaluation.top_similarity).toFixed(3))
+        : undefined,
+    },
+    phases_ms: {
+      total_ms: Number.isFinite(Number(phases.total_ms)) ? Number(phases.total_ms) : undefined,
+      store_plan_wall_ms: Number.isFinite(Number(phases.store_plan_wall_ms)) ? Number(phases.store_plan_wall_ms) : undefined,
+      planner_ms: Number.isFinite(Number(phases.planner_ms)) ? Number(phases.planner_ms) : undefined,
+      reranker_ms: Number.isFinite(Number(phases.reranker_ms)) ? Number(phases.reranker_ms) : undefined,
+    },
+  };
+}
+
 function _envTimeoutMs(name: string, fallbackMs: number): number {
   const raw = Number(process.env[name] || "");
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -1913,6 +1990,7 @@ notify_user(${JSON.stringify(message)})
         }
         _beforePromptBuildInFlight = true;
         let allMemories: any[];
+        let recallDiagnostics: Record<string, unknown> | null = null;
         try {
           let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
           const deadline = new Promise<[any[]]>(resolve => {
@@ -1954,7 +2032,13 @@ notify_user(${JSON.stringify(message)})
           // Cancel the deadline timer if recall completed first; prevents a ghost
           // deadline_hit trace from firing 10s after recall already succeeded.
           if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-          writeHookTrace("hook.recall_done", { count: allMemories.length, elapsed_ms: Date.now() - recallStartMs });
+          recallDiagnostics = summarizeRecallDiagnostics((allMemories as any)?.__quaidRecallDiagnostics || null);
+          writeHookTrace("hook.recall_done", {
+            count: allMemories.length,
+            elapsed_ms: Date.now() - recallStartMs,
+            diagnostics: recallDiagnostics,
+            top_results: summarizeRecallResults(allMemories),
+          });
         } finally {
           _beforePromptBuildInFlight = false;
         }
@@ -1964,6 +2048,7 @@ notify_user(${JSON.stringify(message)})
             query: query.slice(0, 80),
             source: querySource,
             msg_count: eventMessages.length,
+            diagnostics: recallDiagnostics,
           });
         }
 
@@ -1981,10 +2066,21 @@ notify_user(${JSON.stringify(message)})
             source: querySource,
             recall_count: Array.isArray(allMemories) ? allMemories.length : 0,
             msg_count: eventMessages.length,
+            diagnostics: recallDiagnostics,
+            top_results: summarizeRecallResults(allMemories),
           });
           return withDocs({ prependContext: event.prependContext });
         }
         const { toInject, prependContext: memoriesBlock } = injection;
+        writeHookTrace("hook.before_prompt_build.injection_ready", {
+          query: query.slice(0, 80),
+          source: querySource,
+          recall_count: Array.isArray(allMemories) ? allMemories.length : 0,
+          inject_count: toInject.length,
+          inject_limit: injectLimit,
+          diagnostics: recallDiagnostics,
+          top_results: summarizeRecallResults(toInject),
+        });
         // Inject memories into system context rather than the human turn.
         // System-level injection (appendSystemContext) is treated as authoritative by the
         // model. Human-turn injection (prependContext) is treated as user-provided context
@@ -3186,9 +3282,33 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         datastoreOptions,
         failOpen: opts.failOpen,
       };
-      return sourceTag === "tool"
-        ? facade.recallWithToolRetry(recallOpts)
-        : facade.recall(recallOpts);
+      const recallResponse = (sourceTag !== "tool" && !(routeStores ?? false))
+        ? await facade.recallWithDiagnostics(recallOpts)
+        : {
+            results: await (sourceTag === "tool"
+              ? facade.recallWithToolRetry(recallOpts)
+              : facade.recall(recallOpts)),
+            diagnostics: null,
+          };
+      const results = Array.isArray(recallResponse.results) ? recallResponse.results : [];
+      writeHookTrace("hook.recall_pipeline", {
+        source: sourceTag,
+        query_preview: String(query || "").slice(0, 160),
+        datastores: Array.isArray(datastores) ? datastores : [],
+        routed: Boolean(routeStores ?? false),
+        reasoning,
+        result_count: results.length,
+        diagnostics: summarizeRecallDiagnostics(recallResponse.diagnostics),
+        top_results: summarizeRecallResults(results),
+      });
+      if (recallResponse.diagnostics) {
+        Object.defineProperty(results, "__quaidRecallDiagnostics", {
+          value: recallResponse.diagnostics,
+          enumerable: false,
+          configurable: true,
+        });
+      }
+      return results;
     }
 
     // Read messages from a session JSONL file
@@ -3916,6 +4036,8 @@ export const __test = {
   isAutoInjectEnabled,
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
+  summarizeRecallDiagnostics,
+  summarizeRecallResults,
   selectAutoInjectQuery,
   isInternalSessionContext,
 };

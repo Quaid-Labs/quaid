@@ -490,6 +490,63 @@ function writeHookTrace(event, data = {}) {
     );
   }
 }
+function summarizeRecallResults(results, limit = 5) {
+  return (Array.isArray(results) ? results : []).slice(0, Math.max(1, limit)).map((row) => ({
+    id: typeof row?.id === "string" ? row.id : void 0,
+    text: String(row?.text || "").trim().slice(0, 180),
+    similarity: Number.isFinite(Number(row?.similarity)) ? Number(Number(row.similarity).toFixed(3)) : void 0,
+    category: typeof row?.category === "string" ? row.category : void 0,
+    via: typeof row?.via === "string" ? row.via : void 0,
+    extraction_confidence: Number.isFinite(Number(row?.extractionConfidence)) ? Number(Number(row.extractionConfidence).toFixed(3)) : void 0,
+    created_at: typeof row?.createdAt === "string" ? row.createdAt : void 0
+  }));
+}
+function summarizeRecallDiagnostics(diagnostics) {
+  const meta = diagnostics && typeof diagnostics === "object" && !Array.isArray(diagnostics) ? diagnostics.meta : null;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const qualityGate = meta.quality_gate && typeof meta.quality_gate === "object" && !Array.isArray(meta.quality_gate) ? meta.quality_gate : {};
+  const evaluation = qualityGate.evaluation && typeof qualityGate.evaluation === "object" && !Array.isArray(qualityGate.evaluation) ? qualityGate.evaluation : {};
+  const turnDetails = Array.isArray(meta.turn_details) ? meta.turn_details : [];
+  const firstTurn = turnDetails.length > 0 && turnDetails[0] && typeof turnDetails[0] === "object" ? turnDetails[0] : {};
+  const planner = firstTurn.planner && typeof firstTurn.planner === "object" && !Array.isArray(firstTurn.planner) ? firstTurn.planner : {};
+  const storeRuns = Array.isArray(meta.store_runs) ? meta.store_runs : [];
+  const phases = meta.phases_ms && typeof meta.phases_ms === "object" && !Array.isArray(meta.phases_ms) ? meta.phases_ms : {};
+  return {
+    mode: typeof meta.mode === "string" ? meta.mode : void 0,
+    stop_reason: typeof meta.stop_reason === "string" ? meta.stop_reason : void 0,
+    selected_path: typeof meta.selected_path === "string" ? meta.selected_path : void 0,
+    planned_stores: Array.isArray(meta.planned_stores) ? meta.planned_stores.slice(0, 8) : void 0,
+    planned_project: typeof meta.planned_project === "string" ? meta.planned_project : void 0,
+    planner: {
+      bailout_reason: typeof planner.bailout_reason === "string" ? planner.bailout_reason : void 0,
+      planner_profile: typeof planner.planner_profile === "string" ? planner.planner_profile : void 0,
+      queries_count: Number.isFinite(Number(planner.queries_count)) ? Number(planner.queries_count) : void 0,
+      used_llm: typeof planner.used_llm === "boolean" ? planner.used_llm : void 0
+    },
+    store_runs: storeRuns.slice(0, 6).map((run) => ({
+      store: typeof run?.store === "string" ? run.store : void 0,
+      result_count: Number.isFinite(Number(run?.result_count)) ? Number(run.result_count) : void 0,
+      total_ms: Number.isFinite(Number(run?.total_ms)) ? Number(run.total_ms) : void 0,
+      selected_path: typeof run?.selected_path === "string" ? run.selected_path : void 0
+    })),
+    quality_gate: {
+      fast_drill_candidate: typeof qualityGate.fast_drill_candidate === "boolean" ? qualityGate.fast_drill_candidate : void 0,
+      fast_drill_enabled: typeof qualityGate.fast_drill_enabled === "boolean" ? qualityGate.fast_drill_enabled : void 0,
+      fast_drill_reasons: Array.isArray(qualityGate.fast_drill_reasons) ? qualityGate.fast_drill_reasons.slice(0, 8) : void 0,
+      requirements: Array.isArray(evaluation.requirements) ? evaluation.requirements.slice(0, 8) : void 0,
+      covered_terms_ratio: Number.isFinite(Number(evaluation.covered_terms_ratio)) ? Number(Number(evaluation.covered_terms_ratio).toFixed(3)) : void 0,
+      top_similarity: Number.isFinite(Number(evaluation.top_similarity)) ? Number(Number(evaluation.top_similarity).toFixed(3)) : void 0
+    },
+    phases_ms: {
+      total_ms: Number.isFinite(Number(phases.total_ms)) ? Number(phases.total_ms) : void 0,
+      store_plan_wall_ms: Number.isFinite(Number(phases.store_plan_wall_ms)) ? Number(phases.store_plan_wall_ms) : void 0,
+      planner_ms: Number.isFinite(Number(phases.planner_ms)) ? Number(phases.planner_ms) : void 0,
+      reranker_ms: Number.isFinite(Number(phases.reranker_ms)) ? Number(phases.reranker_ms) : void 0
+    }
+  };
+}
 function _envTimeoutMs(name, fallbackMs) {
   const raw = Number(process.env[name] || "");
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -1456,6 +1513,7 @@ notify_user(${JSON.stringify(message)})
         }
         _beforePromptBuildInFlight = true;
         let allMemories;
+        let recallDiagnostics = null;
         try {
           let deadlineTimer;
           const deadline = new Promise((resolve) => {
@@ -1489,7 +1547,13 @@ notify_user(${JSON.stringify(message)})
             deadline
           ]);
           if (deadlineTimer !== void 0) clearTimeout(deadlineTimer);
-          writeHookTrace("hook.recall_done", { count: allMemories.length, elapsed_ms: Date.now() - recallStartMs });
+          recallDiagnostics = summarizeRecallDiagnostics(allMemories?.__quaidRecallDiagnostics || null);
+          writeHookTrace("hook.recall_done", {
+            count: allMemories.length,
+            elapsed_ms: Date.now() - recallStartMs,
+            diagnostics: recallDiagnostics,
+            top_results: summarizeRecallResults(allMemories)
+          });
         } finally {
           _beforePromptBuildInFlight = false;
         }
@@ -1497,7 +1561,8 @@ notify_user(${JSON.stringify(message)})
           writeHookTrace("hook.before_prompt_build.recall_empty", {
             query: query.slice(0, 80),
             source: querySource,
-            msg_count: eventMessages.length
+            msg_count: eventMessages.length,
+            diagnostics: recallDiagnostics
           });
         }
         const injection = facade.prepareAutoInjectionContext({
@@ -1513,11 +1578,22 @@ notify_user(${JSON.stringify(message)})
             query: query.slice(0, 80),
             source: querySource,
             recall_count: Array.isArray(allMemories) ? allMemories.length : 0,
-            msg_count: eventMessages.length
+            msg_count: eventMessages.length,
+            diagnostics: recallDiagnostics,
+            top_results: summarizeRecallResults(allMemories)
           });
           return withDocs({ prependContext: event.prependContext });
         }
         const { toInject, prependContext: memoriesBlock } = injection;
+        writeHookTrace("hook.before_prompt_build.injection_ready", {
+          query: query.slice(0, 80),
+          source: querySource,
+          recall_count: Array.isArray(allMemories) ? allMemories.length : 0,
+          inject_count: toInject.length,
+          inject_limit: injectLimit,
+          diagnostics: recallDiagnostics,
+          top_results: summarizeRecallResults(toInject)
+        });
         appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${memoriesBlock}` : memoriesBlock;
@@ -2466,7 +2542,29 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         datastoreOptions,
         failOpen: opts.failOpen
       };
-      return sourceTag === "tool" ? facade.recallWithToolRetry(recallOpts) : facade.recall(recallOpts);
+      const recallResponse = sourceTag !== "tool" && !(routeStores ?? false) ? await facade.recallWithDiagnostics(recallOpts) : {
+        results: await (sourceTag === "tool" ? facade.recallWithToolRetry(recallOpts) : facade.recall(recallOpts)),
+        diagnostics: null
+      };
+      const results = Array.isArray(recallResponse.results) ? recallResponse.results : [];
+      writeHookTrace("hook.recall_pipeline", {
+        source: sourceTag,
+        query_preview: String(query || "").slice(0, 160),
+        datastores: Array.isArray(datastores) ? datastores : [],
+        routed: Boolean(routeStores ?? false),
+        reasoning,
+        result_count: results.length,
+        diagnostics: summarizeRecallDiagnostics(recallResponse.diagnostics),
+        top_results: summarizeRecallResults(results)
+      });
+      if (recallResponse.diagnostics) {
+        Object.defineProperty(results, "__quaidRecallDiagnostics", {
+          value: recallResponse.diagnostics,
+          enumerable: false,
+          configurable: true
+        });
+      }
+      return results;
     }
     const extractMemoriesFromMessages = async (messages, label, sessionId) => {
       console.log(`[quaid][extract] start label=${label} session=${sessionId || "unknown"} message_count=${messages.length}`);
@@ -3097,6 +3195,8 @@ const __test = {
   isAutoInjectEnabled,
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
+  summarizeRecallDiagnostics,
+  summarizeRecallResults,
   selectAutoInjectQuery,
   isInternalSessionContext
 };

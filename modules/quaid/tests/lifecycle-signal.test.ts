@@ -183,4 +183,51 @@ describe("lifecycle signal detection", () => {
       "/tmp/quaid-home/data/memory.db",
     )).toBe("/tmp/quaid-home/openclaw-livetest/data/memory.db");
   });
+
+  it("summarizes recall diagnostics for hook tracing", () => {
+    expect(__test.summarizeRecallDiagnostics({
+      meta: {
+        mode: "fast",
+        stop_reason: "quality_gate_complete",
+        planned_stores: ["vector"],
+        planned_project: null,
+        store_runs: [{ store: "vector", result_count: 2, total_ms: 41, selected_path: "vector" }],
+        turn_details: [{ planner: { bailout_reason: "preserve_short_exact_query", planner_profile: "fast", queries_count: 1, used_llm: false } }],
+        quality_gate: {
+          fast_drill_candidate: true,
+          fast_drill_enabled: false,
+          fast_drill_reasons: ["low_entity_coverage"],
+          evaluation: { requirements: ["identity"], covered_terms_ratio: 0.25, top_similarity: 0.44 },
+        },
+        phases_ms: { total_ms: 41, store_plan_wall_ms: 41 },
+      },
+    })).toEqual({
+      mode: "fast",
+      stop_reason: "quality_gate_complete",
+      selected_path: undefined,
+      planned_stores: ["vector"],
+      planned_project: undefined,
+      planner: {
+        bailout_reason: "preserve_short_exact_query",
+        planner_profile: "fast",
+        queries_count: 1,
+        used_llm: false,
+      },
+      store_runs: [{ store: "vector", result_count: 2, total_ms: 41, selected_path: "vector" }],
+      quality_gate: {
+        fast_drill_candidate: true,
+        fast_drill_enabled: false,
+        fast_drill_reasons: ["low_entity_coverage"],
+        requirements: ["identity"],
+        covered_terms_ratio: 0.25,
+        top_similarity: 0.44,
+      },
+      phases_ms: {
+        total_ms: 41,
+        store_plan_wall_ms: 41,
+        planner_ms: undefined,
+        reranker_ms: undefined,
+      },
+    });
+  });
 });

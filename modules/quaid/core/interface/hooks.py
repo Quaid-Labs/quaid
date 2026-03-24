@@ -99,6 +99,103 @@ def _format_project_docs(docs_bundle: Dict) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def _hook_trace_path() -> Path:
+    workspace = str(
+        os.environ.get("QUAID_HOME")
+        or os.environ.get("QUAID_WORKSPACE")
+        or os.environ.get("CLAWDBOT_WORKSPACE")
+        or os.getcwd()
+    ).strip()
+    instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    root = Path(workspace).expanduser()
+    if instance:
+        root = root / instance
+    return root / "logs" / "quaid-hook-trace.jsonl"
+
+
+def _write_hook_trace(event: str, payload: dict | None = None) -> None:
+    trace_path = _hook_trace_path()
+    entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": event,
+        **(payload or {}),
+    }
+    try:
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        with trace_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _summarize_recall_results(memories: List[Dict], limit: int = 5) -> List[Dict]:
+    out: List[Dict] = []
+    for mem in list(memories or [])[: max(1, limit)]:
+        if not isinstance(mem, dict):
+            continue
+        out.append({
+            "id": mem.get("id"),
+            "text": str(mem.get("text", "")).strip()[:180],
+            "similarity": round(float(mem.get("similarity", 0) or 0), 3),
+            "category": mem.get("category"),
+            "via": mem.get("via"),
+            "extraction_confidence": mem.get("extraction_confidence"),
+            "created_at": mem.get("created_at") or mem.get("createdAt"),
+        })
+    return out
+
+
+def _summarize_recall_meta(meta: dict | None) -> dict | None:
+    if not isinstance(meta, dict):
+        return None
+    quality_gate = meta.get("quality_gate") if isinstance(meta.get("quality_gate"), dict) else {}
+    evaluation = quality_gate.get("evaluation") if isinstance(quality_gate.get("evaluation"), dict) else {}
+    turn_details = meta.get("turn_details") if isinstance(meta.get("turn_details"), list) else []
+    first_turn = turn_details[0] if turn_details and isinstance(turn_details[0], dict) else {}
+    planner = first_turn.get("planner") if isinstance(first_turn.get("planner"), dict) else {}
+    store_runs = meta.get("store_runs") if isinstance(meta.get("store_runs"), list) else []
+    phases = meta.get("phases_ms") if isinstance(meta.get("phases_ms"), dict) else {}
+    return {
+        "mode": meta.get("mode"),
+        "stop_reason": meta.get("stop_reason"),
+        "selected_path": meta.get("selected_path"),
+        "planned_stores": list(meta.get("planned_stores") or [])[:8] if isinstance(meta.get("planned_stores"), list) else None,
+        "planned_project": meta.get("planned_project"),
+        "planner": {
+            "bailout_reason": planner.get("bailout_reason"),
+            "planner_profile": planner.get("planner_profile"),
+            "queries_count": planner.get("queries_count"),
+            "used_llm": planner.get("used_llm"),
+        },
+        "store_runs": [
+            {
+                "store": run.get("store"),
+                "result_count": run.get("result_count"),
+                "total_ms": run.get("total_ms"),
+                "selected_path": run.get("selected_path"),
+            }
+            for run in store_runs[:6]
+            if isinstance(run, dict)
+        ],
+        "quality_gate": {
+            "fast_drill_candidate": quality_gate.get("fast_drill_candidate"),
+            "fast_drill_enabled": quality_gate.get("fast_drill_enabled"),
+            "fast_drill_reasons": list(quality_gate.get("fast_drill_reasons") or [])[:8]
+            if isinstance(quality_gate.get("fast_drill_reasons"), list) else None,
+            "requirements": list(evaluation.get("requirements") or [])[:8]
+            if isinstance(evaluation.get("requirements"), list) else None,
+            "covered_terms_ratio": evaluation.get("covered_terms_ratio"),
+            "top_similarity": evaluation.get("top_similarity"),
+        },
+        "phases_ms": {
+            "total_ms": phases.get("total_ms"),
+            "store_plan_wall_ms": phases.get("store_plan_wall_ms"),
+            "planner_ms": phases.get("planner_ms"),
+            "reranker_ms": phases.get("reranker_ms"),
+        },
+    }
+
+
 def hook_inject(args):
     """Recall memories for each user message and inject as context.
 
@@ -161,22 +258,48 @@ def hook_inject(args):
 
         owner = _get_owner_id()
         memories = []
+        recall_meta = None
         docs_bundle = None
+        _write_hook_trace("hook.inject.start", {
+            "query": query[:160],
+            "session_id": session_id,
+        })
         with ThreadPoolExecutor(max_workers=2) as pool:
-            mem_future = pool.submit(recall_fast, query=query, owner_id=owner, limit=10)
+            mem_future = pool.submit(
+                lambda: recall_fast(query=query, owner_id=owner, limit=10, return_meta=True)
+            )
             docs_future = pool.submit(projects_search_docs, query=query, limit=3)
             try:
-                memories = mem_future.result()
+                mem_result = mem_future.result()
+                if isinstance(mem_result, tuple) and len(mem_result) == 2:
+                    memories, recall_meta = mem_result
+                else:
+                    memories = mem_result
             except RuntimeError:
                 raise
             except Exception:
                 memories = []
+                recall_meta = None
             try:
                 docs_bundle = docs_future.result()
             except RuntimeError:
                 raise
             except Exception:
                 docs_bundle = None
+
+        _write_hook_trace("hook.inject.recall_done", {
+            "query": query[:160],
+            "session_id": session_id,
+            "count": len(memories or []),
+            "top_results": _summarize_recall_results(memories),
+            "diagnostics": _summarize_recall_meta(recall_meta),
+        })
+        _write_hook_trace("hook.inject.docs_done", {
+            "query": query[:160],
+            "session_id": session_id,
+            "project": (docs_bundle or {}).get("project") if isinstance(docs_bundle, dict) else None,
+            "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
+        })
 
         context_parts = []
 
@@ -190,9 +313,22 @@ def hook_inject(args):
             context_parts.append(docs_context)
 
         if not context_parts:
+            _write_hook_trace("hook.inject.empty", {
+                "query": query[:160],
+                "session_id": session_id,
+                "recall_count": len(memories or []),
+                "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
+            })
             return
 
         context = "\n\n".join(context_parts)
+        _write_hook_trace("hook.inject.context_emitted", {
+            "query": query[:160],
+            "session_id": session_id,
+            "recall_count": len(memories or []),
+            "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
+            "context_len": len(context),
+        })
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",

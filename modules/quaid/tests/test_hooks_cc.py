@@ -396,6 +396,25 @@ class TestHookInjectRecallResilience:
         assert "South Austin" in context
         assert "[Quaid Project Docs" not in context
 
+    def test_recall_telemetry_helpers_summarize_meta_and_rows(self):
+        from core.interface import hooks
+
+        recall_rows = [{"text": "My neighbour won a chili cook-off with a secret brisket recipe", "similarity": 0.62, "category": "fact"}]
+        recall_meta = {
+            "mode": "fast",
+            "stop_reason": "quality_gate_complete",
+            "planned_stores": ["vector"],
+            "store_runs": [{"store": "vector", "result_count": 1, "total_ms": 38, "selected_path": "vector"}],
+            "quality_gate": {"evaluation": {"covered_terms_ratio": 0.5, "top_similarity": 0.62}},
+        }
+
+        summarized_rows = hooks._summarize_recall_results(recall_rows)
+        summarized_meta = hooks._summarize_recall_meta(recall_meta)
+
+        assert summarized_rows[0]["text"].startswith("My neighbour won a chili cook-off")
+        assert summarized_meta["planned_stores"] == ["vector"]
+        assert summarized_meta["store_runs"][0]["store"] == "vector"
+
 
 
 # ===========================================================================
