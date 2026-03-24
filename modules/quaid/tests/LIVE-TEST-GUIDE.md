@@ -136,6 +136,12 @@ is faster and safer than surgical cleanup.
 > ```
 > Leave `~/quaid/openclaw-livetest`, `~/.openclaw/extensions/quaid`, and the
 > OC gateway untouched — OC is live on all of those.
+>
+> After the CC installer completes, **also apply the chunk_tokens override**
+> (same step as the full M0 post-install — do not skip it in the parallel path):
+> ```bash
+> ssh example.local 'python3 -c "import json; p=\"/Users/owner/quaid/claude-code-livetest/config/memory.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
+> ```
 
 **Uninstall the plugin first to remove registry entries:**
 
