@@ -1557,7 +1557,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const timeoutActivitySessionId = sessionId;
           if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
           if (sessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })) {
-            const cursorDir = path.join(WORKSPACE, "data", "session-cursors");
+            const instanceRoot = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE) : WORKSPACE;
+            const cursorDir = path.join(instanceRoot, "data", "session-cursors");
             const cursorPath = path.join(cursorDir, `${sessionId}.json`);
             if (!fs.existsSync(cursorPath)) {
               try {

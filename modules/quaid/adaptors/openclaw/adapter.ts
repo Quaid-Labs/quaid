@@ -2062,7 +2062,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             && isSystemEnabled("memory")
             && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })
           ) {
-            const cursorDir = path.join(WORKSPACE, "data", "session-cursors");
+            // Cursor must go in the instance silo, not WORKSPACE root.
+            // Mirror the Python daemon: instance_root = QUAID_HOME / QUAID_INSTANCE.
+            const instanceRoot = _QUAID_INSTANCE
+              ? path.join(WORKSPACE, _QUAID_INSTANCE)
+              : WORKSPACE;
+            const cursorDir = path.join(instanceRoot, "data", "session-cursors");
             const cursorPath = path.join(cursorDir, `${sessionId}.json`);
             if (!fs.existsSync(cursorPath)) {
               try {
