@@ -261,6 +261,13 @@ ssh example.local 'openclaw plugins list 2>/dev/null | grep quaid || true'
 ssh example.local 'ls -ld ~/quaid ~/quaid/openclaw-livetest ~/quaid/projects 2>/dev/null || true'
 ```
 
+Ensure the OpenClaw gateway is running before installing — the installer will
+bail immediately if it is not:
+
+```bash
+ssh example.local 'pgrep -f openclaw-gateway > /dev/null 2>&1 || (nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &); for i in $(seq 1 30); do curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break || sleep 2; done'
+```
+
 Install with the installer script on `alfie`, using the synced local tree.
 Use `QUAID_TEST_MOCK_MIGRATION=1` to skip LLM-based migration of existing
 workspace files (SOUL.md, USER.md, etc.) — without it the installer runs 5
