@@ -311,7 +311,7 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_get_config.return_value = SimpleNamespace(
-            capture=SimpleNamespace(enabled=False, chunk_tokens=30000)
+            capture=SimpleNamespace(enabled=False, chunk_tokens=8000)
         )
         result = extract_from_transcript(
             transcript="User: remember this detail\n\nAssistant: ok",
@@ -328,7 +328,7 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_get_config.return_value = SimpleNamespace(
-            capture=SimpleNamespace(enabled=True, chunk_tokens=30000, skip_patterns=[r"HEARTBEAT"])
+            capture=SimpleNamespace(enabled=True, chunk_tokens=8000, skip_patterns=[r"HEARTBEAT"])
         )
         result = extract_from_transcript(
             transcript="HEARTBEAT ping\nHEARTBEAT_OK",
@@ -1308,7 +1308,7 @@ class TestExtractFromTranscript:
             "facts": [{"text": "User likes jasmine tea in the morning", "category": "fact", "domains": ["personal"]}]
         }), 1.0)
         cfg = SimpleNamespace(
-            capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_tokens=30000),
+            capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_tokens=8000),
             retrieval=SimpleNamespace(domains={}),
             users=SimpleNamespace(default_owner="test-user"),
             docs=SimpleNamespace(
@@ -1545,10 +1545,15 @@ class TestExtractFromTranscript:
 
         giant_chunk = "User: " + ("large context " * 20000)
 
+        chunk_calls = []
+
         def _chunk_side_effect(text, max_tokens, split_on):
-            if max_tokens == 30000:
+            chunk_calls.append(int(max_tokens))
+            if len(chunk_calls) == 1:
+                assert max_tokens == 8000
                 return [giant_chunk]
-            if max_tokens == 8000:
+            if len(chunk_calls) == 2:
+                assert max_tokens == 8000
                 return [
                     "User: Maya lives in Austin.",
                     "User: Maya works at Stripe.",

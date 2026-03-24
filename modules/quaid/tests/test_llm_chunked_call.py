@@ -9,6 +9,7 @@ from lib.llm_chunked_call import (
     waterfall_llm_call,
     merge_parallel_results,
     _load_content,
+    _get_configured_chunk_tokens,
     _DEFAULT_LLM_CHUNK_TOKENS,
 )
 from lib.batch_utils import ChunkResult
@@ -30,6 +31,18 @@ class TestLoadContent:
     def test_nonexistent_path_treated_as_string(self):
         result = _load_content("/nonexistent/path/that/is/not/a/file.txt")
         assert result == "/nonexistent/path/that/is/not/a/file.txt"
+
+
+class TestConfiguredChunkTokens:
+    def test_prefers_capture_chunk_tokens(self):
+        with patch("config.get_config") as mock_get_config:
+            mock_get_config.return_value = MagicMock(capture=MagicMock(chunk_tokens=8000, chunk_size=12000))
+            assert _get_configured_chunk_tokens() == 8000
+
+    def test_uses_legacy_chunk_size_without_char_conversion(self):
+        with patch("config.get_config") as mock_get_config:
+            mock_get_config.return_value = MagicMock(capture=MagicMock(chunk_tokens=0, chunk_size=8000))
+            assert _get_configured_chunk_tokens() == 8000
 
 
 class TestParallelLlmCall:

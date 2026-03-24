@@ -2083,10 +2083,10 @@ def extract_from_transcript(
         capture_cfg = get_config().capture
         chunk_tokens = int(getattr(capture_cfg, "chunk_tokens", 0) or 0)
         if chunk_tokens <= 0:
-            chunk_tokens = 30_000
+            chunk_tokens = 8_000
     except Exception as exc:
-        logger.warning("[extract] capture chunk budget config read failed; defaulting to 30000 tokens: %s", exc)
-        chunk_tokens = 30_000
+        logger.warning("[extract] capture chunk budget config read failed; defaulting to 8000 tokens: %s", exc)
+        chunk_tokens = 8_000
     # Use batch_utils for consistent chunking across the codebase.
     # chunk_text_by_tokens splits on \n\n (turn boundaries) and uses
     # token estimation instead of raw char count.

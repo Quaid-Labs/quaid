@@ -591,7 +591,7 @@ class TestRollingExtraction:
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
 
         captured = []
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=30000: 2)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 2)
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
         monkeypatch.setattr(
             extraction_daemon,

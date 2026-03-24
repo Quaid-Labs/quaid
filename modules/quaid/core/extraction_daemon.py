@@ -1082,7 +1082,7 @@ def count_transcript_lines(transcript_path: str) -> int:
         return 0
 
 
-def _get_capture_chunk_tokens(default: int = 30_000) -> int:
+def _get_capture_chunk_tokens(default: int = 8_000) -> int:
     """Read the live extraction chunk budget from config."""
     try:
         from config import get_config

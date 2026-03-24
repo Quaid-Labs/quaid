@@ -352,8 +352,9 @@ own content is always included in full; only overflow subagents are deferred.
 `extract_from_transcript()` chunks the transcript at turn boundaries (`\n\n`) using
 `lib.batch_utils.chunk_text_by_tokens()`:
 
-- Default chunk size: `capture.chunk_size` chars (default 30,000), converted to
-  approximate tokens at `chunk_size // 4`.
+- Default chunk size: `capture.chunk_tokens` tokens (default 8,000).
+- Legacy `capture.chunk_size` / `chunkSize` is still accepted for old configs, but it
+  now mirrors the same token budget instead of using a char-to-token heuristic.
 - Maximum chunks per extraction: 10. Transcripts exceeding this are capped (the oldest
   content in the window is what gets cut — the cursor already excluded all previously
   extracted content).
@@ -816,8 +817,7 @@ circular imports.
 |----------|-------|-------------|
 | `MAX_EXTRACT_WALL_SECONDS` | 600.0 | Total wall-clock budget for one extraction |
 | `MAX_CHUNKS` | 10 | Max chunks per transcript |
-| Default chunk size | 30,000 chars | From `capture.chunk_size` config |
-| Chunk token estimate | `chunk_size // 4` | Passed to `chunk_text_by_tokens()` |
+| Default chunk size | 8,000 tokens | From `capture.chunk_tokens` config |
 | Max Opus tokens per chunk | 6,144 | Response `max_tokens` |
 
 ### Configuration keys
@@ -825,7 +825,8 @@ circular imports.
 | Key | Description |
 |-----|-------------|
 | `capture.enabled` | If false, extraction is skipped entirely |
-| `capture.chunk_size` | Target chars per extraction chunk (default 30,000) |
+| `capture.chunk_tokens` | Target tokens per extraction chunk (default 8,000) |
+| `capture.chunk_size` | Legacy alias; mirrored to the same token budget for old configs |
 | `capture.inactivity_timeout_minutes` | Idle timeout for daemon-generated timeout signals (default 30) |
 | `capture.skip_patterns` | List of regex patterns; matching transcript lines are removed before extraction |
 | `retrieval.domains` | Active domain definitions (used to validate extracted fact domains) |

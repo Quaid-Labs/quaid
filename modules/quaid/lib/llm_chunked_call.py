@@ -41,10 +41,11 @@ def _get_configured_chunk_tokens() -> int:
     try:
         from config import get_config
         cfg = get_config()
-        # Use capture.chunk_size (chars) and convert to approximate tokens
-        chunk_chars = getattr(getattr(cfg, "capture", None), "chunk_size", 0)
-        if chunk_chars and int(chunk_chars) > 0:
-            return int(chunk_chars) // 4  # ~4 chars per token
+        capture = getattr(cfg, "capture", None)
+        for attr in ("chunk_tokens", "chunk_size"):
+            raw = getattr(capture, attr, 0) if capture is not None else 0
+            if raw and int(raw) > 0:
+                return max(1000, int(raw))
     except Exception:
         pass
     return _DEFAULT_LLM_CHUNK_TOKENS
