@@ -382,6 +382,13 @@ let _platformOverride = "";
 // Mutable instance ID override — set by the instance ID prompt in step1().
 // Takes precedence over the adapter-derived default.
 let _instanceIdOverride = "";
+// In agent mode, seed the override immediately from QUAID_INSTANCE env so that
+// early module-level calls to syncInstallerInstanceEnv() (e.g. PY_ENV_SETUP)
+// use the operator-specified instance rather than the platform default.
+if (AGENT_MODE) {
+  const _envInstance = String(process.env.QUAID_INSTANCE || "").trim();
+  if (_envInstance) _instanceIdOverride = _envInstance;
+}
 
 function resolvedInstallerPlatform() {
   if (_platformOverride) return _platformOverride;
