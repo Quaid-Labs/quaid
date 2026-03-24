@@ -1128,11 +1128,13 @@ function _ensureOpenClawResponsesEndpoint() {
   }
 }
 
-function _ensureOpenClawRuntimeInstanceEnv() {
-  // QUAID_INSTANCE must NOT be written to env.vars — it is derived per-session
-  // by the OC adapter's get_instance_name() from the agent registry. Writing a
-  // static instance here would override all agents with the same name, breaking
-  // per-agent silo isolation. Only QUAID_HOME and CLAWDBOT_WORKSPACE are global.
+function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
+  // QUAID_INSTANCE in env.vars is the gateway-level default used by the quaid
+  // plugin at startup (before any per-agent session context exists). Per-agent
+  // calls inject their own QUAID_INSTANCE via buildPythonEnv() in the TS
+  // adapter, which takes precedence because _bootstrap_instance_env() in Python
+  // uses setdefault semantics (skips if already set). So this value does NOT
+  // break per-agent isolation — it is only the fallback for plugin startup.
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
   try {
@@ -1144,14 +1146,14 @@ function _ensureOpenClawRuntimeInstanceEnv() {
     if (!parsed.env.vars || typeof parsed.env.vars !== "object" || Array.isArray(parsed.env.vars)) {
       parsed.env.vars = {};
     }
+    const nextInstance = String(instanceId || "").trim() || "openclaw";
+    const currentInstance = String(parsed.env.vars.QUAID_INSTANCE || "").trim();
     const currentHome = String(parsed.env.vars.QUAID_HOME || "").trim();
     const currentWorkspace = String(parsed.env.vars.CLAWDBOT_WORKSPACE || "").trim();
-    const hasStaleInstance = "QUAID_INSTANCE" in parsed.env.vars;
-    if (currentHome === WORKSPACE && currentWorkspace === WORKSPACE && !hasStaleInstance) {
+    if (currentInstance === nextInstance && currentHome === WORKSPACE && currentWorkspace === WORKSPACE) {
       return false;
     }
-    // Remove any baked-in QUAID_INSTANCE — per-session derivation handles this.
-    delete parsed.env.vars.QUAID_INSTANCE;
+    parsed.env.vars.QUAID_INSTANCE = nextInstance;
     parsed.env.vars.QUAID_HOME = WORKSPACE;
     parsed.env.vars.CLAWDBOT_WORKSPACE = WORKSPACE;
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
@@ -1764,8 +1766,9 @@ async function step1_preflight() {
     if (_removeOpenClawPluginsAllowQuaid()) {
       log.info("Removed stale plugins.allow entry for quaid before plugin registration");
     }
-    if (_ensureOpenClawRuntimeInstanceEnv()) {
-      log.info("Seeded OpenClaw config env.vars with QUAID_HOME and CLAWDBOT_WORKSPACE (QUAID_INSTANCE excluded — derived per-session)");
+    const _ocRuntimeInstance = resolvedInstallerInstanceId();
+    if (_ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance)) {
+      log.info(`Seeded OpenClaw config env.vars with QUAID_INSTANCE=${_ocRuntimeInstance} (gateway default for plugin startup; per-agent calls override via buildPythonEnv)`);
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
