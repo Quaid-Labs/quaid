@@ -24,6 +24,18 @@ This is black-box testing:
 - If you ever find yourself running `node setup-quaid.mjs` without an
   `ssh example.local` prefix, STOP immediately — you are on the wrong machine.
 
+**DO NOT CORRUPT THE TEST:**
+A failure is a signal. Fix what is broken — do not make the test easier to
+pass. These are different things. Wrong responses to a failure include:
+- Relaxing a test criterion because it is hard to satisfy
+- Hardcoding env vars or instance names to force a specific identity
+- Skipping safety checks because they fail in the test environment
+- Disabling a code path because it causes a timeout
+- Ruling PASS-WITH-NOTE to avoid doing work
+
+This test simulates real user behavior. Any change that makes the test pass
+by diverging from real behavior hides a bug instead of fixing it.
+
 - Use this document as the source of truth for the live test procedure.
 - Start from a clean install unless the user explicitly says to skip it.
 - Run the live test from the `canary` branch. Verify the checkout before
