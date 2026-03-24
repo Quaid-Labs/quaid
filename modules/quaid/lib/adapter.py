@@ -835,6 +835,17 @@ def _adapter_config_paths() -> List[Path]:
     if home and instance:
         paths.append(Path(home) / instance / "config" / "memory.json")
 
+    # Secondary: CLAUDE_PROJECT_DIR-derived instance path when QUAID_INSTANCE is not
+    # yet set.  Instance derivation normally happens after config is found (in
+    # _bootstrap_instance_env), so we eagerly compute the slug here to avoid the
+    # chicken-and-egg failure where the config search misses the silo directory.
+    if home and not instance:
+        import re as _re
+        _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+        if _cpd:
+            _slug = _re.sub(r"[^a-z0-9]+", "-", _cpd.lower()).strip("-")
+            paths.append(Path(home) / f"claude-code-{_slug}" / "config" / "memory.json")
+
     # Legacy: flat QUAID_HOME/config/memory.json
     if home:
         paths.append(Path(home) / "config" / "memory.json")
