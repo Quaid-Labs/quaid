@@ -840,38 +840,26 @@ def _adapter_config_paths() -> List[Path]:
     # _bootstrap_instance_env), so we eagerly resolve the instance name here to
     # avoid the chicken-and-egg failure where the config search misses the silo.
     #
-    # Resolution order:
-    #   1. Read .claude/settings.json in the project dir (written by installer —
-    #      contains {"env": {"QUAID_INSTANCE": "<explicit-name>"}}).  This is the
-    #      authoritative source when an explicit name was given at install time.
-    #   2. Fall back to slug derivation for auto-provisioned silos where the name
-    #      was never written to settings.json.
+    # Delegates to the CC adapter's module-level instance_slug_from_project_dir()
+    # so the derivation (including platform-specific .resolve() for macOS /tmp
+    # symlinks) is defined once and owned by the CC adapter.  Falls back to an
+    # inline equivalent if the CC adapter module is not importable.
     if home and not instance:
         _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         if _cpd:
-            _instance_from_settings: Optional[str] = None
-            _settings_path = Path(_cpd) / ".claude" / "settings.json"
-            if _settings_path.exists():
-                try:
-                    _settings_data = json.loads(
-                        _settings_path.read_text(encoding="utf-8")
-                    )
-                    _instance_from_settings = (
-                        _settings_data.get("env", {}).get("QUAID_INSTANCE", "").strip()
-                        or None
-                    )
-                except Exception:
-                    pass
-            if _instance_from_settings:
-                paths.append(
-                    Path(home) / _instance_from_settings / "config" / "memory.json"
+            try:
+                from adaptors.claude_code.adapter import (
+                    instance_slug_from_project_dir as _cc_slug,
                 )
-            else:
+                _slug = _cc_slug(_cpd)
+            except ImportError:
                 import re as _re
-                _slug = _re.sub(r"[^a-z0-9]+", "-", _cpd.lower()).strip("-")
-                paths.append(
-                    Path(home) / f"claude-code-{_slug}" / "config" / "memory.json"
-                )
+                _slug = _re.sub(
+                    r"[^a-z0-9]+", "-", str(Path(_cpd).resolve()).lower()
+                ).strip("-")
+            paths.append(
+                Path(home) / f"claude-code-{_slug}" / "config" / "memory.json"
+            )
 
     # Legacy: flat QUAID_HOME/config/memory.json
     if home:

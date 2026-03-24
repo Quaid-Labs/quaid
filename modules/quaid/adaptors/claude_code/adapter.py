@@ -21,6 +21,19 @@ from lib.adapter import QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
 
 
+def instance_slug_from_project_dir(project_dir: str) -> str:
+    """Derive a stable instance slug from a CC project directory path.
+
+    Resolves symlinks before slugifying so that paths pointing to the same
+    directory (e.g. /tmp → /private/tmp on macOS) always produce the same
+    slug.  Module-level so lib.adapter._adapter_config_paths() can import
+    this without instantiating the adapter.
+    """
+    import re
+    root = Path(project_dir).resolve() if project_dir else Path(os.getcwd()).resolve()
+    return re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
+
+
 class ClaudeCodeAdapter(QuaidAdapter):
     """Adapter for running Quaid inside Claude Code sessions."""
 
@@ -41,19 +54,12 @@ class ClaudeCodeAdapter(QuaidAdapter):
         Bash tool calls — this is the project root regardless of the shell's
         current working directory.
 
-        Slugifies the full absolute path so every project gets a unique,
-        human-readable silo name:
-            /Users/owner/myapp  →  users-clawdbot-myapp
-            /Users/owner/work/api  →  users-clawdbot-work-api
-
-        Falls back to os.getcwd() if CLAUDE_PROJECT_DIR is not set (e.g.
-        during testing or standalone invocation).
+        Delegates to the module-level instance_slug_from_project_dir() so the
+        derivation logic is defined once and can be called without instantiation
+        (used by lib.adapter._adapter_config_paths() for early config resolution).
         """
-        import re
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
-        root = Path(project_dir).resolve() if project_dir else Path(os.getcwd()).resolve()
-        slug = re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
-        return slug
+        return instance_slug_from_project_dir(project_dir)
 
     def _pending_notifications_path(self) -> Path:
         """Path to the pending notifications file for deferred delivery."""
