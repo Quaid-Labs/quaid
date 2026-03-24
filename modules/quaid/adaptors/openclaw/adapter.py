@@ -441,32 +441,56 @@ class OpenClawAdapter(QuaidAdapter):
     def list_agent_instance_ids(self) -> list:
         """Return fully-prefixed Quaid instance IDs for all OC agents.
 
-        Reads agents.list from openclaw.json and prefixes each with the
-        adapter's instance prefix. Always returns at least ["<prefix>-main"].
+        Unions two sources:
+        1. agents.list from openclaw.json (registered OC agents)
+        2. Silo directories under quaid_home() matching the "{prefix}-*" pattern
+           (covers silos created via QUAID_INSTANCE that were never registered
+           as OC agents, e.g. openclaw-livetest)
 
-        Examples: ["openclaw-main", "openclaw-coding", "openclaw-work"]
+        Always returns at least ["<prefix>-main"], with "main" first.
+
+        Examples: ["openclaw-main", "openclaw-coding", "openclaw-livetest"]
         """
         prefix = self.agent_id_prefix()
+
+        # Source 1: OC agent registry
+        labels: list[str] = []
         cfg_path = self.get_gateway_config_path()
-        if not cfg_path:
-            return [f"{prefix}-main"]
+        if cfg_path:
+            try:
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+                agents_list = cfg.get("agents", {}).get("list", []) or []
+                labels = [
+                    str(a.get("id", "")).strip().lower()
+                    for a in agents_list
+                    if isinstance(a, dict) and a.get("id")
+                ]
+            except (json.JSONDecodeError, IOError, KeyError):
+                pass
+
+        # Source 2: silo directories under quaid_home()
+        silo_prefix = f"{prefix}-"
         try:
-            with open(cfg_path) as f:
-                cfg = json.load(f)
-            agents_list = cfg.get("agents", {}).get("list", []) or []
-            labels = [
-                str(a.get("id", "")).strip().lower()
-                for a in agents_list
-                if isinstance(a, dict) and a.get("id")
-            ]
-            if not labels:
-                return [f"{prefix}-main"]
-            # Ensure "main" is always first
-            if "main" in labels:
-                labels = ["main"] + [l for l in labels if l != "main"]
-            return [f"{prefix}-{label}" for label in labels]
-        except (json.JSONDecodeError, IOError, KeyError):
+            home = self.quaid_home()
+            for entry in home.iterdir():
+                if entry.is_dir() and entry.name.startswith(silo_prefix):
+                    label = entry.name[len(silo_prefix):]
+                    if label and label not in labels:
+                        labels.append(label)
+        except (OSError, RuntimeError):
+            pass
+
+        if not labels:
             return [f"{prefix}-main"]
+
+        # Ensure "main" is always first
+        if "main" in labels:
+            labels = ["main"] + [l for l in labels if l != "main"]
+        elif "main" not in labels:
+            labels = ["main"] + labels
+
+        return [f"{prefix}-{label}" for label in labels]
 
     # ---- Internal helpers ----
 
