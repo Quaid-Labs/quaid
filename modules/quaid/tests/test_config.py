@@ -621,7 +621,9 @@ class TestConfigLoading:
                 cfg = load_config()
                 assert cfg.core.parallel.llm_workers == 4
                 assert cfg.core.parallel.embedding_workers == 6
-                assert cfg.core.parallel.lifecycle_prepass_timeout_seconds == 300
+                assert cfg.core.parallel.lifecycle_prepass_timeout_seconds == 1200
+                assert cfg.janitor.task_timeout_minutes == 240
+                assert cfg.docs.update_timeout_seconds == 480
         finally:
             config._config = old_config
 
@@ -646,7 +648,7 @@ class TestConfigLoading:
                 assert cfg.core.parallel.llm_workers == 4
                 assert cfg.core.parallel.embedding_workers == 6
                 assert cfg.core.parallel.lifecycle_prepass_workers == 3
-                assert cfg.core.parallel.lifecycle_prepass_timeout_seconds == 300
+                assert cfg.core.parallel.lifecycle_prepass_timeout_seconds == 1200
                 assert cfg.core.parallel.lock_wait_seconds == 120
         finally:
             config._config = old_config

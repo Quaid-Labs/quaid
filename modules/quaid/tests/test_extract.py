@@ -264,11 +264,11 @@ class TestParseSessionJsonl:
 # ---------------------------------------------------------------------------
 
 class TestExtractFromTranscript:
-    def test_extract_wall_timeout_defaults_to_600(self, monkeypatch):
+    def test_extract_wall_timeout_defaults_to_2400(self, monkeypatch):
         from ingest.extract import _get_extract_wall_timeout_seconds
 
         monkeypatch.delenv("QUAID_EXTRACT_WALL_TIMEOUT", raising=False)
-        assert _get_extract_wall_timeout_seconds() == 600.0
+        assert _get_extract_wall_timeout_seconds() == 2400.0
 
     def test_extract_wall_timeout_respects_env_override(self, monkeypatch):
         from ingest.extract import _get_extract_wall_timeout_seconds

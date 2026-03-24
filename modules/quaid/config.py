@@ -168,7 +168,7 @@ class CoreParallelConfig:
     embedding_workers: int = 6
     task_workers: Dict[str, int] = field(default_factory=dict)
     lifecycle_prepass_workers: int = 3
-    lifecycle_prepass_timeout_seconds: int = 300
+    lifecycle_prepass_timeout_seconds: int = 1200
     lifecycle_prepass_timeout_retries: int = 1
     lock_enforcement_enabled: bool = True
     lock_wait_seconds: int = 120
@@ -192,7 +192,7 @@ class JanitorConfig:
         "workspace_file_moves_deletes": "ask",
         "destructive_memory_ops": "auto",
     })
-    task_timeout_minutes: int = 60
+    task_timeout_minutes: int = 240
     run_tests: bool = False  # Only enable in dev (or set QUAID_DEV=1)
     opus_review: OpusReviewConfig = field(default_factory=OpusReviewConfig)
     dedup: DedupConfig = field(default_factory=DedupConfig)
@@ -318,7 +318,7 @@ class DocsConfig:
     auto_update_on_compact: bool = True
     max_docs_per_update: int = 3
     staleness_check_enabled: bool = True
-    update_timeout_seconds: int = 120  # Timeout for Opus doc updates
+    update_timeout_seconds: int = 480  # Timeout for Opus/Sonnet doc updates
     notify_on_update: bool = True  # Notify user when docs are auto-updated
     source_mapping: Dict[str, SourceMapping] = field(default_factory=dict)
     doc_purposes: Dict[str, str] = field(default_factory=dict)
@@ -1029,9 +1029,9 @@ def _load_config_inner() -> MemoryConfig:
         lifecycle_prepass_timeout_seconds=_coerce_positive_int(
             parallel_data.get(
                 'lifecycle_prepass_timeout_seconds',
-                parallel_data.get('lifecyclePrepassTimeoutSeconds', 300),
+                parallel_data.get('lifecyclePrepassTimeoutSeconds', 1200),
             ),
-            300,
+            1200,
         ),
         lifecycle_prepass_timeout_retries=_coerce_nonnegative_int(
             parallel_data.get(
@@ -1088,7 +1088,10 @@ def _load_config_inner() -> MemoryConfig:
                                           config_data.get('janitor', {}).get('approvalPolicies', {})
                                           .get('destructiveMemoryOps', 'auto'))),
         },
-        task_timeout_minutes=config_data.get('janitor', {}).get('task_timeout_minutes', 60),
+        task_timeout_minutes=config_data.get('janitor', {}).get(
+            'task_timeout_minutes',
+            config_data.get('janitor', {}).get('taskTimeoutMinutes', 240),
+        ),
         run_tests=config_data.get('janitor', {}).get('run_tests',
                   config_data.get('janitor', {}).get('runTests', False)),
         opus_review=opus_review,
@@ -1223,7 +1226,10 @@ def _load_config_inner() -> MemoryConfig:
         auto_update_on_compact=docs_data.get('auto_update_on_compact', True),
         max_docs_per_update=docs_data.get('max_docs_per_update', 3),
         staleness_check_enabled=docs_data.get('staleness_check_enabled', True),
-        update_timeout_seconds=docs_data.get('update_timeout_seconds', 120),
+        update_timeout_seconds=docs_data.get(
+            'update_timeout_seconds',
+            docs_data.get('updateTimeoutSeconds', 480),
+        ),
         notify_on_update=docs_data.get('notify_on_update', True),
         source_mapping=source_mapping,
         doc_purposes=docs_data.get('doc_purposes', {}),

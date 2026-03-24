@@ -49,7 +49,7 @@ from lib.domain_text import normalize_domain_id
 logger = logging.getLogger(__name__)
 _memory = get_memory_service()
 
-DEFAULT_EXTRACT_WALL_SECONDS = 600.0
+DEFAULT_EXTRACT_WALL_SECONDS = 2400.0
 EXTRACT_RETRY_TARGET_TOKENS = 8000
 MIN_EXTRACT_RETRY_TOKENS = 4000
 MAX_EXTRACT_SPLIT_DEPTH = 4
@@ -1124,7 +1124,7 @@ def _extract_chunk_payloads(
         prompt=user_message,
         system_prompt=system_prompt,
         max_tokens=6144,
-        timeout=min(600.0, remaining),
+        timeout=max(1.0, remaining),
     )
 
     if not response_text:
