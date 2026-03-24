@@ -381,9 +381,7 @@ let _platformOverride = "";
 
 // Mutable instance ID override — set by the instance ID prompt in step1().
 // Takes precedence over the adapter-derived default.
-// Pre-seed from QUAID_INSTANCE env so explicit overrides (e.g. livetest) are
-// never clobbered by the first syncInstallerInstanceEnv() call.
-let _instanceIdOverride = String(process.env.QUAID_INSTANCE || "").trim();
+let _instanceIdOverride = "";
 
 function resolvedInstallerPlatform() {
   if (_platformOverride) return _platformOverride;
@@ -3559,12 +3557,17 @@ c.close()
   s.stop(C.green("Health checks complete"));
   note(checks.join("\n"), C.bmag("STATUS"));
 
-  // Smoke test — gateway warmup only needed for interactive OC installs.
-  // Agent mode handles gateway lifecycle independently; Python smoke test
-  // runs directly and does not require the gateway route.
-  if (IS_OPENCLAW && !AGENT_MODE) {
-    log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
-    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "validation smoke test");
+  // Gateway must be reachable before the smoke test. Bail immediately if not —
+  // a missing gateway is an OpenClaw problem, not a Quaid install problem.
+  if (IS_OPENCLAW) {
+    if (_gatewayHttpCode("/health", "GET", null) !== 200) {
+      cancel(
+        "OpenClaw gateway is not running or not reachable.\n" +
+        "Start the OpenClaw gateway and re-run the installer.\n" +
+        "This is not a Quaid issue — Quaid requires the OC gateway to be up before installing."
+      );
+      process.exit(1);
+    }
   }
   s.start("Smoke test (store + recall)...");
   const smokeSafeId = owner.id.replace(/'/g, "\\'");
@@ -3914,28 +3917,6 @@ function setupClaudeCodeHooks() {
     log.info("Claude Code hooks already configured");
   }
 
-  // When CLAUDE_PROJECT_DIR is set during install (e.g. livetest with an
-  // explicit project dir), pin QUAID_INSTANCE into the per-project settings
-  // so CC hooks know which silo to use when running from that project dir.
-  // This is not written for normal installs (CLAUDE_PROJECT_DIR is not set).
-  const projectDir = String(process.env.CLAUDE_PROJECT_DIR || "").trim();
-  const instanceId = String(process.env.QUAID_INSTANCE || "").trim();
-  if (projectDir && instanceId) {
-    const projectSettingsPath = path.join(projectDir, ".claude", "settings.json");
-    let projectSettings = {};
-    if (fs.existsSync(projectSettingsPath)) {
-      try {
-        projectSettings = JSON.parse(fs.readFileSync(projectSettingsPath, "utf8"));
-      } catch {}
-    }
-    if (!projectSettings.env) projectSettings.env = {};
-    if (projectSettings.env.QUAID_INSTANCE !== instanceId) {
-      projectSettings.env.QUAID_INSTANCE = instanceId;
-      fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
-      fs.writeFileSync(projectSettingsPath, JSON.stringify(projectSettings, null, 2) + "\n");
-      log.info(`Pinned QUAID_INSTANCE=${instanceId} in ${projectSettingsPath}`);
-    }
-  }
 }
 
 async function tryBrewInstall(pkg, label) {
