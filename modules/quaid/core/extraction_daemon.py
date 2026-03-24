@@ -1590,7 +1590,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
             chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
             chunks_total = int(stage_result.get("chunks_total", 0) or 0)
-            if chunks_total > 0 and chunks_processed < chunks_total:
+            unclassified_empty = int(stage_result.get("unclassified_empty_payloads", 0) or 0)
+            if chunks_total > 0 and (chunks_processed + unclassified_empty) < chunks_total:
                 raise RuntimeError(
                     f"rolling extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
                 )
@@ -1692,7 +1693,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
             chunks_processed = int(tail_result.get("chunks_processed", 0) or 0)
             chunks_total = int(tail_result.get("chunks_total", 0) or 0)
-            if chunks_total > 0 and chunks_processed < chunks_total:
+            unclassified_empty = int(tail_result.get("unclassified_empty_payloads", 0) or 0)
+            if chunks_total > 0 and (chunks_processed + unclassified_empty) < chunks_total:
                 raise RuntimeError(
                     f"flush extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
                 )
