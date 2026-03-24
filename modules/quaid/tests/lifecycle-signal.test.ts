@@ -148,4 +148,31 @@ describe("lifecycle signal detection", () => {
       { sessionId: "86bea2fc-b843-43b8-94bb-7ffb9a0e9d17" },
     )).toBe(false);
   });
+
+  it("extracts auto-inject query from direct event text when prompt/messages are empty", () => {
+    const selected = __test.selectAutoInjectQuery(
+      {
+        text: "What do you know about my dog Baxter?",
+        prompt: "",
+        messages: [],
+      },
+      null,
+      1_000,
+    );
+    expect(selected.query).toBe("What do you know about my dog Baxter?");
+    expect(selected.source).toBe("event_text_scrubbed");
+  });
+
+  it("falls back to fresh message_received cache when prompt/messages are empty", () => {
+    const selected = __test.selectAutoInjectQuery(
+      {
+        prompt: "",
+        messages: [],
+      },
+      { text: "What do you remember about my neighbour?", seenAtMs: 9_500 },
+      10_000,
+    );
+    expect(selected.query).toBe("What do you remember about my neighbour?");
+    expect(selected.source).toBe("message_received_cache");
+  });
 });

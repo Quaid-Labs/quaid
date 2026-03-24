@@ -130,6 +130,64 @@ function isAutoInjectEnabled(config = getMemoryConfig()) {
   const configured = config?.retrieval?.autoInject;
   return configured !== false;
 }
+function scrubAutoInjectQuery(raw) {
+  return String(raw || "").replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
+}
+function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now()) {
+  const rawPrompt = String(event?.prompt || "").trim();
+  const eventMessages = Array.isArray(event?.messages) ? event.messages : [];
+  const eventTextRaw = String(
+    facade.getMessageText(event?.message || event) || event?.text || event?.content || ""
+  ).trim();
+  const eventTextScrubbed = scrubAutoInjectQuery(eventTextRaw);
+  const extractFromOCPromptJson = (raw) => {
+    try {
+      const m = raw.match(/^```[\w]*\r?\n([\s\S]+?)\r?\n```/m);
+      if (!m) return "";
+      const obj = JSON.parse(m[1]);
+      const msgs = obj?.messages ?? obj?.prompt?.messages ?? [];
+      const last = [...msgs].reverse().find((x) => x?.role === "user");
+      if (!last) return "";
+      const c = last.content;
+      const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("") : "";
+      return scrubAutoInjectQuery(text).slice(0, 500);
+    } catch {
+      return "";
+    }
+  };
+  if (eventTextScrubbed.length >= 3 && !eventTextScrubbed.startsWith("/")) {
+    return { query: eventTextScrubbed.slice(0, 500), source: "event_text_scrubbed", rawPrompt };
+  }
+  if (lastUserMessageQuery && nowMs - lastUserMessageQuery.seenAtMs <= 1e4 && lastUserMessageQuery.text.length >= 3) {
+    return {
+      query: lastUserMessageQuery.text.slice(0, 500),
+      source: "message_received_cache",
+      rawPrompt
+    };
+  }
+  const scrubbed = scrubAutoInjectQuery(rawPrompt);
+  if (scrubbed.length >= 3) {
+    return { query: scrubbed.slice(0, 500), source: "rawPrompt_scrubbed", rawPrompt };
+  }
+  const jsonExtracted = extractFromOCPromptJson(rawPrompt);
+  if (jsonExtracted.length >= 3) {
+    return { query: jsonExtracted, source: "oc_prompt_json", rawPrompt };
+  }
+  const lastUserMsg = eventMessages.slice().reverse().find((m) => m?.role === "user");
+  if (lastUserMsg) {
+    const c = lastUserMsg.content;
+    const raw = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n") : "";
+    const query = scrubAutoInjectQuery(raw).slice(0, 500);
+    if (query.length >= 3) {
+      return { query, source: "event.messages", rawPrompt };
+    }
+  }
+  return {
+    query: rawPrompt.slice(0, 500),
+    source: rawPrompt ? "rawPrompt_raw" : "empty",
+    rawPrompt
+  };
+}
 function readSessionsIndex() {
   try {
     const sessionsPath = getOpenClawSessionsPath();
@@ -1342,73 +1400,30 @@ notify_user(${JSON.stringify(message)})
       });
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
-      const rawPrompt = String(event.prompt || "").trim();
-      if (rawPrompt.length < 5) {
-        return withDocs({ prependContext: event.prependContext });
-      }
       try {
-        const scrubQuery = (raw) => raw.replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
-        const extractFromOCPromptJson = (raw) => {
-          try {
-            const m = raw.match(/^```[\w]*\r?\n([\s\S]+?)\r?\n```/m);
-            if (!m) return "";
-            const obj = JSON.parse(m[1]);
-            const msgs = obj?.messages ?? obj?.prompt?.messages ?? [];
-            const last = [...msgs].reverse().find((x) => x?.role === "user");
-            if (!last) return "";
-            const c = last.content;
-            const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("") : "";
-            return scrubQuery(text).slice(0, 500);
-          } catch {
-            return "";
-          }
-        };
-        let query = "";
-        let querySource = "unknown";
+        let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
+          event,
+          lastUserMessageQuery
+        );
         const eventMessages = Array.isArray(event.messages) ? event.messages : [];
-        const scrubbed = scrubQuery(rawPrompt);
-        if (scrubbed.length >= 3) {
-          query = scrubbed;
-          querySource = "rawPrompt_scrubbed";
-        } else {
-          const jsonExtracted = extractFromOCPromptJson(rawPrompt);
-          if (jsonExtracted.length >= 3) {
-            query = jsonExtracted;
-            querySource = "oc_prompt_json";
-          } else {
-            const lastUserMsg = eventMessages.slice().reverse().find((m) => m?.role === "user");
-            if (lastUserMsg) {
-              const c = lastUserMsg.content;
-              const raw = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n") : "";
-              query = scrubQuery(raw);
-              querySource = "event.messages";
-            }
-          }
-        }
-        if (query.length < 3) {
-          const umq = lastUserMessageQuery;
-          if (umq && Date.now() - umq.seenAtMs <= 1e4 && umq.text.length >= 3) {
-            query = umq.text.slice(0, 500);
-            querySource = "message_received_cache";
-          } else {
-            query = rawPrompt;
-            querySource = "rawPrompt_raw";
-          }
-        }
-        if (query.length > 500) {
-          query = query.slice(0, 500);
-        }
         writeHookTrace("hook.before_prompt_build.query_extracted", {
           query: query.slice(0, 80),
           source: querySource,
           msg_count: eventMessages.length,
           raw_prefix: rawPrompt.slice(0, 80)
         });
+        if (query.length < 3) {
+          writeHookTrace("hook.before_prompt_build.query_empty", {
+            source: querySource,
+            raw_prefix: rawPrompt.slice(0, 80),
+            msg_count: eventMessages.length
+          });
+          return withDocs({ prependContext: event.prependContext });
+        }
         const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
         if (STARTUP_SKIP_RE.test(query)) {
-          const jsonRecovered = extractFromOCPromptJson(rawPrompt);
-          const rawRecovered = jsonRecovered.length >= 3 ? jsonRecovered : scrubQuery(rawPrompt);
-          const recoveredSource = rawRecovered === jsonRecovered ? "oc_prompt_json_recovered" : "rawPrompt_recovered";
+          const rawRecovered = scrubAutoInjectQuery(rawPrompt);
+          const recoveredSource = "rawPrompt_recovered";
           if (rawRecovered.length >= 3 && !STARTUP_SKIP_RE.test(rawRecovered) && !rawRecovered.startsWith("Extract memorable facts") && !facade.isInternalMaintenancePrompt(rawRecovered)) {
             query = rawRecovered;
             querySource = recoveredSource;
@@ -1470,6 +1485,13 @@ notify_user(${JSON.stringify(message)})
         } finally {
           _beforePromptBuildInFlight = false;
         }
+        if (!Array.isArray(allMemories) || allMemories.length === 0) {
+          writeHookTrace("hook.before_prompt_build.recall_empty", {
+            query: query.slice(0, 80),
+            source: querySource,
+            msg_count: eventMessages.length
+          });
+        }
         const injection = facade.prepareAutoInjectionContext({
           allMemories,
           eventMessages: event.messages || [],
@@ -1478,7 +1500,15 @@ notify_user(${JSON.stringify(message)})
           injectLimit,
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
         });
-        if (!injection) return withDocs({ prependContext: event.prependContext });
+        if (!injection) {
+          writeHookTrace("hook.before_prompt_build.injection_skipped", {
+            query: query.slice(0, 80),
+            source: querySource,
+            recall_count: Array.isArray(allMemories) ? allMemories.length : 0,
+            msg_count: eventMessages.length
+          });
+          return withDocs({ prependContext: event.prependContext });
+        }
         const { toInject, prependContext: memoriesBlock } = injection;
         appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
@@ -3057,6 +3087,8 @@ const __test = {
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
+  scrubAutoInjectQuery,
+  selectAutoInjectQuery,
   isInternalSessionContext
 };
 export {

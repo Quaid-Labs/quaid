@@ -223,6 +223,104 @@ function isAutoInjectEnabled(config: Record<string, any> = getMemoryConfig()): b
   return configured !== false;
 }
 
+type LastUserMessageQuery = { text: string; seenAtMs: number } | null;
+
+function scrubAutoInjectQuery(raw: string): string {
+  return String(raw || "")
+    // Strip our own prior injections that OC persists back into future turns
+    .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
+    .replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "")
+    // Strip OC metadata block BEFORE bracket-strip so that when raw starts
+    // with "Sender (untrusted metadata):...json...[Wed...] message", the [Wed...]
+    // prefix becomes leading after metadata removal and is caught by the bracket step.
+    .replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
+    // Strip leading code fence blocks (OC JSON metadata wrapper)
+    .replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "")
+    // Strip OC metadata prefix patterns (timestamp brackets, separators)
+    .replace(/^System:\s*/i, "")
+    .replace(/^\s*(\[.*?\]\s*)+/s, "")
+    .replace(/^---\s*/m, "")
+    .trim();
+}
+
+function selectAutoInjectQuery(
+  event: any,
+  lastUserMessageQuery: LastUserMessageQuery,
+  nowMs: number = Date.now(),
+): { query: string; source: string; rawPrompt: string } {
+  const rawPrompt = String(event?.prompt || "").trim();
+  const eventMessages: any[] = Array.isArray(event?.messages) ? event.messages : [];
+
+  const eventTextRaw = String(
+    facade.getMessageText(event?.message || event) ||
+    event?.text ||
+    event?.content ||
+    ""
+  ).trim();
+  const eventTextScrubbed = scrubAutoInjectQuery(eventTextRaw);
+
+  const extractFromOCPromptJson = (raw: string): string => {
+    try {
+      const m = raw.match(/^```[\w]*\r?\n([\s\S]+?)\r?\n```/m);
+      if (!m) return "";
+      const obj = JSON.parse(m[1]);
+      const msgs: any[] = obj?.messages ?? obj?.prompt?.messages ?? [];
+      const last = [...msgs].reverse().find((x: any) => x?.role === "user");
+      if (!last) return "";
+      const c = last.content;
+      const text = typeof c === "string" ? c
+        : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("")
+        : "";
+      return scrubAutoInjectQuery(text).slice(0, 500);
+    } catch {
+      return "";
+    }
+  };
+
+  // Prefer direct hook payload text first — this recovers fresh-session OC turns
+  // where before_prompt_build arrives with messages=0 and event.prompt is empty/stale.
+  if (eventTextScrubbed.length >= 3 && !eventTextScrubbed.startsWith("/")) {
+    return { query: eventTextScrubbed.slice(0, 500), source: "event_text_scrubbed", rawPrompt };
+  }
+
+  // Next prefer the most recent user text captured by message_received if it is fresh.
+  if (lastUserMessageQuery && (nowMs - lastUserMessageQuery.seenAtMs) <= 10_000 && lastUserMessageQuery.text.length >= 3) {
+    return {
+      query: lastUserMessageQuery.text.slice(0, 500),
+      source: "message_received_cache",
+      rawPrompt,
+    };
+  }
+
+  const scrubbed = scrubAutoInjectQuery(rawPrompt);
+  if (scrubbed.length >= 3) {
+    return { query: scrubbed.slice(0, 500), source: "rawPrompt_scrubbed", rawPrompt };
+  }
+
+  const jsonExtracted = extractFromOCPromptJson(rawPrompt);
+  if (jsonExtracted.length >= 3) {
+    return { query: jsonExtracted, source: "oc_prompt_json", rawPrompt };
+  }
+
+  const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
+  if (lastUserMsg) {
+    const c = lastUserMsg.content;
+    const raw = typeof c === "string" ? c
+      : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
+      : "";
+    const query = scrubAutoInjectQuery(raw).slice(0, 500);
+    if (query.length >= 3) {
+      return { query, source: "event.messages", rawPrompt };
+    }
+  }
+
+  return {
+    query: rawPrompt.slice(0, 500),
+    source: rawPrompt ? "rawPrompt_raw" : "empty",
+    rawPrompt,
+  };
+}
+
 function readSessionsIndex(): Record<string, any> {
   try {
     const sessionsPath = getOpenClawSessionsPath();
@@ -1725,100 +1823,12 @@ notify_user(${JSON.stringify(message)})
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
 
-      const rawPrompt = String(event.prompt || "").trim();
-      if (rawPrompt.length < 5) {
-        return withDocs({ prependContext: event.prependContext });
-      }
-
       try {
-        // Scrub OC wrapper noise and our own prior injections from a candidate query string.
-        const scrubQuery = (raw: string): string => raw
-          // Strip our own prior injections that OC persists back into future turns
-          .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
-          .replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "")
-          // Strip OC metadata block BEFORE bracket-strip so that when rawPrompt starts
-          // with "Sender (untrusted metadata):...json...[Wed...] message", the [Wed...]
-          // prefix becomes leading after metadata removal and is caught by the bracket step.
-          .replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
-          // Strip leading code fence blocks (OC JSON metadata wrapper)
-          .replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "")
-          // Strip OC metadata prefix patterns (timestamp brackets, separators)
-          .replace(/^System:\s*/i, "")
-          .replace(/^\s*(\[.*?\]\s*)+/s, "")
-          .replace(/^---\s*/m, "")
-          .trim();
-
-        // Try to extract the last user message from OC's JSON-wrapped event.prompt.
-        // OC wraps the full prompt in a ```json...``` code fence. The JSON messages array
-        // contains the CURRENT user message and is always up-to-date at hook invocation
-        // time. event.messages, by contrast, is updated via transcript_update which fires
-        // a few milliseconds AFTER before_prompt_build — making it stale on the first
-        // message of a new turn (e.g. after /new, event.messages shows /new as the last
-        // user message even though the actual current message is something else entirely).
-        const extractFromOCPromptJson = (raw: string): string => {
-          try {
-            const m = raw.match(/^```[\w]*\r?\n([\s\S]+?)\r?\n```/m);
-            if (!m) return "";
-            const obj = JSON.parse(m[1]);
-            const msgs: any[] = obj?.messages ?? obj?.prompt?.messages ?? [];
-            const last = [...msgs].reverse().find((x: any) => x?.role === "user");
-            if (!last) return "";
-            const c = last.content;
-            const text = typeof c === "string" ? c
-              : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("")
-              : "";
-            return scrubQuery(text).slice(0, 500);
-          } catch {
-            return "";
-          }
-        };
-
-        // Primary: scrubQuery(rawPrompt) — strips the OC metadata wrapper and timestamp
-        // prefix from event.prompt to extract the actual current user message. This is
-        // always up-to-date because event.prompt is the live current prompt.
-        // event.messages is stale on turn N+1: transcript_update fires a few milliseconds
-        // AFTER before_prompt_build, so event.messages still shows the prior turn's last
-        // user message. extractFromOCPromptJson is retained as a secondary check for
-        // sessions that wrap messages in a JSON array (some OC session types).
-        let query = "";
-        let querySource = "unknown";
+        let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
+          event,
+          lastUserMessageQuery,
+        );
         const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
-        const scrubbed = scrubQuery(rawPrompt);
-        if (scrubbed.length >= 3) {
-          query = scrubbed;
-          querySource = "rawPrompt_scrubbed";
-        } else {
-          const jsonExtracted = extractFromOCPromptJson(rawPrompt);
-          if (jsonExtracted.length >= 3) {
-            query = jsonExtracted;
-            querySource = "oc_prompt_json";
-          } else {
-            const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
-            if (lastUserMsg) {
-              const c = lastUserMsg.content;
-              const raw = typeof c === "string" ? c
-                : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
-                : "";
-              query = scrubQuery(raw);
-              querySource = "event.messages";
-            }
-          }
-        }
-        if (query.length < 3) {
-          // Last resort: use the text captured from message_received (fires before
-          // before_prompt_build with the actual current user message). Only use if
-          // captured within the last 10 seconds to avoid stale cross-turn pollution.
-          const umq = lastUserMessageQuery;
-          if (umq && (Date.now() - umq.seenAtMs) <= 10_000 && umq.text.length >= 3) {
-            query = umq.text.slice(0, 500);
-            querySource = "message_received_cache";
-          } else {
-            query = rawPrompt;
-            querySource = "rawPrompt_raw";
-          }
-        }
-        // Cap query length — embedding a 2000-char polluted string is wasteful
-        if (query.length > 500) { query = query.slice(0, 500); }
 
         writeHookTrace("hook.before_prompt_build.query_extracted", {
           query: query.slice(0, 80),
@@ -1826,6 +1836,15 @@ notify_user(${JSON.stringify(message)})
           msg_count: eventMessages.length,
           raw_prefix: rawPrompt.slice(0, 80),
         });
+
+        if (query.length < 3) {
+          writeHookTrace("hook.before_prompt_build.query_empty", {
+            source: querySource,
+            raw_prefix: rawPrompt.slice(0, 80),
+            msg_count: eventMessages.length,
+          });
+          return withDocs({ prependContext: event.prependContext });
+        }
 
         // Skip system/internal prompts, slash commands, and OC gateway error messages.
         // oc_prompt_json is the primary source (always current); this fallback handles
@@ -1835,9 +1854,8 @@ notify_user(${JSON.stringify(message)})
         if (STARTUP_SKIP_RE.test(query)) {
           // Try to recover from rawPrompt directly (handles "[Tue ...] <user msg>" format
           // where scrubQuery strips the leading timestamp bracket).
-          const jsonRecovered = extractFromOCPromptJson(rawPrompt);
-          const rawRecovered = jsonRecovered.length >= 3 ? jsonRecovered : scrubQuery(rawPrompt);
-          const recoveredSource = rawRecovered === jsonRecovered ? "oc_prompt_json_recovered" : "rawPrompt_recovered";
+          const rawRecovered = scrubAutoInjectQuery(rawPrompt);
+          const recoveredSource = "rawPrompt_recovered";
           if (rawRecovered.length >= 3 && !STARTUP_SKIP_RE.test(rawRecovered) &&
               !rawRecovered.startsWith("Extract memorable facts") &&
               !facade.isInternalMaintenancePrompt(rawRecovered)) {
@@ -1928,6 +1946,14 @@ notify_user(${JSON.stringify(message)})
           _beforePromptBuildInFlight = false;
         }
 
+        if (!Array.isArray(allMemories) || allMemories.length === 0) {
+          writeHookTrace("hook.before_prompt_build.recall_empty", {
+            query: query.slice(0, 80),
+            source: querySource,
+            msg_count: eventMessages.length,
+          });
+        }
+
         const injection = facade.prepareAutoInjectionContext({
           allMemories,
           eventMessages: event.messages || [],
@@ -1936,7 +1962,15 @@ notify_user(${JSON.stringify(message)})
           injectLimit,
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
         });
-        if (!injection) return withDocs({ prependContext: event.prependContext });
+        if (!injection) {
+          writeHookTrace("hook.before_prompt_build.injection_skipped", {
+            query: query.slice(0, 80),
+            source: querySource,
+            recall_count: Array.isArray(allMemories) ? allMemories.length : 0,
+            msg_count: eventMessages.length,
+          });
+          return withDocs({ prependContext: event.prependContext });
+        }
         const { toInject, prependContext: memoriesBlock } = injection;
         // Inject memories into system context rather than the human turn.
         // System-level injection (appendSystemContext) is treated as authoritative by the
@@ -3867,5 +3901,7 @@ export const __test = {
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
+  scrubAutoInjectQuery,
+  selectAutoInjectQuery,
   isInternalSessionContext,
 };
