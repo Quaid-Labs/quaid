@@ -3843,7 +3843,7 @@ def _vector_store_recall(
         query=query,
         limit=limit,
         min_similarity=min_similarity,
-        use_routing=True,
+        use_routing=not fast_mode,
         use_aliases=True,
         use_intent=True,
         use_multi_pass=not fast_mode,
