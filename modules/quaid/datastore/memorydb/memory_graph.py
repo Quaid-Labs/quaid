@@ -2576,32 +2576,11 @@ def graph_aware_recall(
     expand_from: List[str] = []  # Node IDs to expand from
     seen_ids: set = set()
 
-<<<<<<< HEAD
     # Determine which relations to expand based on currently active graph relations
     matched_relations = _relation_matches_for_query(query)
     expand_relations = matched_relations or None
     if _has_generic_graph_signal(query):
         graph_depth = max(graph_depth, 2)
-=======
-    # Determine which relations to expand based on query
-    query_lower = query.lower()
-    if any(kw in query_lower for kw in ["family", "parent", "mom", "dad", "sister", "brother", "sibling", "child", "kids", "relative", "nephew", "niece", "uncle", "aunt", "cousin"]):
-        # Family-focused query: only expand family relations
-        expand_relations = ["parent_of", "sibling_of", "spouse_of", "family_of", "child_of", "related_to"]
-    elif any(kw in query_lower for kw in ["pet", "dog", "cat", "animal"]):
-        # Pet-focused query
-        expand_relations = ["has_pet"]
-    elif any(kw in query_lower for kw in ["friend", "contact", "know", "neighbor", "neighbour", "next door"]):
-        # Social-focused query
-        expand_relations = ["friend_of", "knows", "colleague_of", "neighbor_of"]
-    elif any(kw in query_lower for kw in ["why", "reason", "cause", "because", "how come", "led to", "due to"]):
-        # Causal query: traverse causal edges (deeper for multi-hop explanations)
-        expand_relations = ["caused_by", "led_to", "resulted_in"]
-        graph_depth = max(graph_depth, 2)  # Causal chains are inherently multi-hop
-    else:
-        # General query: all relations but limit results
-        expand_relations = None  # No filter, but we'll limit below
->>>>>>> fix(runtime): boost neighbor auto recall ranking
 
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
