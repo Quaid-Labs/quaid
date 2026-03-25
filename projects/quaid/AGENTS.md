@@ -90,7 +90,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - **Edges** are created at extraction time and linked to source facts.
 - **Janitor** runs nightly: reviews pending, merges duplicates (Ebbinghaus decay), monitors core files.
 - **Soul snippets** (fast path) — bullet observations distilled into SOUL.md, USER.md, ENVIRONMENT.md by janitor.
-- **Journal** (slow path) — diary paragraphs distilled by Opus monthly.
+- **Journal** (slow path) — diary paragraphs distilled by deep reasoning agent weekly.
 
 ---
 
