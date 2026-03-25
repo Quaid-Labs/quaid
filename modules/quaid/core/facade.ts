@@ -3281,20 +3281,19 @@ ${lines.join("\n")}
   }
 
   async function _buildRuntimeContextBlock(): Promise<string> {
-    const lines: string[] = [];
-    const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
-    lines.push("[Quaid runtime]");
-    if (instanceId) {
-      lines.push(`instance: ${instanceId}`);
-    }
-    lines.push(`home: ${deps.workspace}`);
     const domains = _loadRuntimeDomains();
-    lines.push(`active domains: ${domains.length ? domains.join(", ") : "(none registered)"}`);
     const relationTypes = await _loadRuntimeRelationTypes();
-    lines.push(
-      `active graph relation types: ${relationTypes.length ? relationTypes.join(", ") : "(none observed yet)"}`,
-    );
-    return `${lines.join("\n")}\n`;
+    const lines: string[] = [];
+    if (domains.length) {
+      lines.push(`active domains: ${domains.join(", ")}`);
+    }
+    if (relationTypes.length) {
+      lines.push(`active graph relation types: ${relationTypes.join(", ")}`);
+    }
+    if (!lines.length) {
+      return "";
+    }
+    return ["[Quaid runtime]", ...lines].join("\n");
   }
 
   async function injectProjectContext(existingContext?: string): Promise<string | undefined> {

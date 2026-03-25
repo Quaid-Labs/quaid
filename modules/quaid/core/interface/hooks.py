@@ -133,27 +133,16 @@ def _load_runtime_relation_types() -> List[str]:
 
 
 def _build_runtime_context_block() -> str:
-    workspace = str(
-        os.environ.get("QUAID_HOME")
-        or os.environ.get("QUAID_WORKSPACE")
-        or os.environ.get("CLAWDBOT_WORKSPACE")
-        or os.getcwd()
-    ).strip()
-    instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    lines: List[str] = []
     domains = _load_runtime_domains()
     relation_types = _load_runtime_relation_types()
-    lines = [
-        "--- runtime-metadata ---",
-        "[Quaid runtime]",
-    ]
-    if instance:
-        lines.append(f"instance: {instance}")
-    lines.append(f"home: {workspace}")
-    lines.append(f"active domains: {', '.join(domains) if domains else '(none registered)'}")
-    lines.append(
-        f"active graph relation types: {', '.join(relation_types) if relation_types else '(none observed yet)'}"
-    )
-    return "\n".join(lines)
+    if domains:
+        lines.append(f"active domains: {', '.join(domains)}")
+    if relation_types:
+        lines.append(f"active graph relation types: {', '.join(relation_types)}")
+    if not lines:
+        return ""
+    return "[Quaid runtime]\n" + "\n".join(lines)
 
 
 def _hook_trace_path() -> Path:
