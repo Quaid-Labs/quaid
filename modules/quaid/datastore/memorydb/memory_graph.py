@@ -678,6 +678,50 @@ class MemoryGraph:
         stats["warmed"] = len(writes)
         return stats
 
+    def retry_missing_embeddings(self, limit: int = 20) -> int:
+        """Compute and store embeddings for nodes that were stored without one.
+
+        Called by the daemon periodically to recover facts that were stored when
+        the embedding provider (Ollama) was temporarily unavailable.
+        Returns the count of nodes that were successfully updated.
+        """
+        updated = 0
+        try:
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, text FROM nodes WHERE embedding IS NULL AND state = 'active' LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        except Exception:
+            return 0
+
+        for row in rows:
+            node_id = row["id"]
+            text = row["text"] or ""
+            if not text.strip():
+                continue
+            try:
+                embedding = self.get_embedding(text)
+                if embedding is None:
+                    continue
+                packed = self._pack_embedding(embedding)
+                with self._get_conn() as conn:
+                    conn.execute(
+                        "UPDATE nodes SET embedding = ? WHERE id = ?",
+                        (packed, node_id),
+                    )
+                    try:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                            (node_id, packed),
+                        )
+                    except Exception:
+                        pass  # vec_nodes may not exist yet — will be backfilled at next init
+                updated += 1
+            except Exception:
+                continue
+        return updated
+
     def _pack_embedding(self, embedding: List[float]) -> bytes:
         """Pack embedding as binary blob. Delegates to lib.embeddings."""
         return _lib_pack_embedding(embedding)

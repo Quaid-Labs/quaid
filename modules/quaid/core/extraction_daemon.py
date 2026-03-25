@@ -2272,6 +2272,23 @@ def _index_one_stale_doc() -> bool:
     return False
 
 
+def _retry_missing_embeddings() -> int:
+    """Retry embeddings for nodes stored without one (e.g. when Ollama was down).
+
+    Called every ~5 minutes from the daemon loop. Returns count of nodes updated.
+    """
+    try:
+        from datastore.memorydb.memory_graph import MemoryGraph
+        graph = MemoryGraph()
+        count = graph.retry_missing_embeddings(limit=20)
+        if count:
+            logger.info("[daemon] embed-retry: backfilled %d missing embedding(s)", count)
+        return count
+    except Exception as e:
+        logger.debug("[daemon] embed-retry failed: %s", e)
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Orphaned session sweep (runs on session-init)
 # ---------------------------------------------------------------------------
@@ -2364,7 +2381,9 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 
     last_idle_check = 0.0
     last_stale_doc_check = 0.0
+    last_embed_retry_check = 0.0
     _STALE_DOC_CHECK_INTERVAL = 60.0  # check for stale docs every 60s
+    _EMBED_RETRY_INTERVAL = 300.0  # retry missing embeddings every 5 minutes
 
     # Initialize version watcher and janitor scheduler
     from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
@@ -2463,6 +2482,14 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.debug("stale doc indexing failed: %s", e)
                 last_stale_doc_check = now
+
+            # Periodic embedding retry — backfill facts stored without embeddings
+            if now - last_embed_retry_check > _EMBED_RETRY_INTERVAL:
+                try:
+                    _retry_missing_embeddings()
+                except Exception as e:
+                    logger.debug("embed retry failed: %s", e)
+                last_embed_retry_check = now
 
             time.sleep(poll_interval)
 

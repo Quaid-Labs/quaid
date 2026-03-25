@@ -1314,15 +1314,45 @@ def cmd_update_stale(
             print(f"  Skipped {skipped_significant} doc(s) with significant changes "
                   "(use without --trivial-only to update all)")
 
-    # New-doc embedding/indexing is handled by the daemon's periodic stale-doc
-    # checker (_index_one_stale_doc), which indexes one doc per cycle (~60s).
-    # This avoids blocking the CLI with Ollama embedding calls.
+    # Also index any docs that were registered but never indexed (last_indexed_at IS NULL).
+    # These are invisible to the staleness check (which requires source_files), so the
+    # daemon's periodic stale-doc indexer is the only other path — but that runs one doc
+    # per 60s cycle and may take minutes to catch up. Index them immediately here instead.
+    newly_indexed = 0
+    never_indexable = 0
+    try:
+        from datastore.docsdb.registry import DocsRegistry
+        from datastore.docsdb.rag import DocsRAG
+        registry = DocsRegistry()
+        rag = DocsRAG()
+        all_docs = registry.list_docs(project=project)
+        never_indexed = [
+            e for e in all_docs
+            if not e.get("last_indexed_at") and Path(e.get("file_path", "")).exists()
+        ]
+        never_indexable = len(never_indexed[:max_docs])
+        if never_indexed:
+            if dry_run:
+                print(f"\nWould index {never_indexable} never-indexed doc(s)")
+            else:
+                for entry in never_indexed[:max_docs]:
+                    fp = entry.get("file_path", "")
+                    try:
+                        chunks = rag.index_document(fp)
+                        print(f"  Indexed: {fp} ({chunks} chunks)")
+                        newly_indexed += 1
+                    except Exception as e:
+                        logger.warning("failed to index %s: %s", fp, e)
+                if newly_indexed:
+                    print(f"\nIndexed {newly_indexed} never-indexed doc(s)")
+    except Exception as e:
+        logger.warning("never-indexed doc scan failed: %s", e)
 
-    if not stale and not updated:
+    if not stale and not updated and not newly_indexed and not never_indexable:
         print("All docs up-to-date.")
         return 0
 
-    return updated
+    return updated + newly_indexed
 
 
 def cmd_update_from_transcript(transcript_path: str, dry_run: bool = True, max_docs: int = 3) -> int:
