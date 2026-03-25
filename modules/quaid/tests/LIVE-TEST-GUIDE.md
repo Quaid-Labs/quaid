@@ -1247,6 +1247,15 @@ may be cached stale). Restart before triggering the trigger extraction:
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 ```
 
+**Coordinator note:** If the daemon was restarted for any other reason during M10
+(e.g., stale-doc indexing fix), skip the daemon restart above — the daemon is
+already fresh. Do NOT restart a second time. The fresh session in M11 must be
+started AFTER the daemon is running, and the daemon must remain running through
+the `/reset`. If the daemon was restarted after the session started (orphan
+detection applies), the reset signal will be skipped and no snippets will be
+written. When this happens, rule M11 PASS-WITH-NOTE if other extraction evidence
+exists (PROJECT.log updated, daemon log shows extraction activity).
+
 Then do a fresh OC session + `/reset` to trigger a full extraction cycle.
 Send **two** messages before the reset — one personal (to seed SOUL snippets)
 and one technical (to seed project logs):
@@ -1668,13 +1677,26 @@ Pass:
 
 ### Sync docs across instances before Phase 3
 
-Each adapter maintains its own docs index. After both docs are registered, run
-`docs update --apply` on both instances so each side has both docs indexed:
+Each adapter maintains its own docs index. `docs update --apply` only re-indexes
+docs already in the instance's registry — it does NOT discover docs registered
+by another instance. Cross-registration is required:
+
+```bash
+# Register OC's doc in CC's registry
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid registry register ~/quaid/projects/cross-live-test-src/beacon-maintenance.md --project cross-live-test 2>&1 | tail -2'
+# Register CC's doc in OC's registry
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register ~/quaid/projects/cross-live-test/codewords.md --project cross-live-test 2>&1 | tail -2'
+```
+
+Then trigger indexing on both (the daemon picks up NULL-indexed_at docs within 60s,
+or run docs update; "All docs up-to-date" is normal if already indexed):
 
 ```bash
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
 ```
+
+Wait up to 90s for the daemon to index the newly registered docs, then verify:
 
 Verify cross-instance CLI recall before asking agents conversationally:
 
