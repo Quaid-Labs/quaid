@@ -19,19 +19,7 @@ from typing import Optional
 
 from lib.adapter import QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
-
-
-def instance_slug_from_project_dir(project_dir: str) -> str:
-    """Derive a stable instance slug from a CC project directory path.
-
-    Resolves symlinks before slugifying so that paths pointing to the same
-    directory (e.g. /tmp → /private/tmp on macOS) always produce the same
-    slug.  Module-level so lib.adapter._adapter_config_paths() can import
-    this without instantiating the adapter.
-    """
-    import re
-    root = Path(project_dir).resolve() if project_dir else Path(os.getcwd()).resolve()
-    return re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
+from lib.instance import instance_slug_from_project_dir
 
 
 class ClaudeCodeAdapter(QuaidAdapter):

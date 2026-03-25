@@ -437,13 +437,16 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
         set_token_budget(token_budget)
     else:
         reset_token_budget()
-    # Prevent concurrent janitor runs; retry up to 30s in case a prior run is finishing
+    # Prevent concurrent janitor runs; retry up to 30s in case a prior run is finishing.
+    # Uses threading.Event().wait() instead of time.sleep() so the wait is
+    # interruptible by signals and other threads.
     if not _acquire_lock():
         _wait_secs = 5
         _max_attempts = 6
+        _interrupt = threading.Event()
         for _attempt in range(_max_attempts):
             print(f"  Another janitor is running; waiting {_wait_secs}s (attempt {_attempt + 1}/{_max_attempts})...")
-            time.sleep(_wait_secs)
+            _interrupt.wait(timeout=_wait_secs)
             if _acquire_lock():
                 break
         else:

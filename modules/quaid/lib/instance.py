@@ -27,6 +27,19 @@ RESERVED_INSTANCE_NAMES = frozenset({
 })
 
 
+def instance_slug_from_project_dir(project_dir: str) -> str:
+    """Derive a stable instance slug from a project directory path.
+
+    Resolves symlinks before slugifying so that paths pointing to the same
+    directory (e.g. /tmp -> /private/tmp on macOS) always produce the same
+    slug.  This is the single source of truth for project-dir-to-slug
+    conversion — all callers (adapter, config search, auto-provision) must
+    use this function, not inline regex.
+    """
+    root = Path(project_dir).resolve() if project_dir else Path(os.getcwd()).resolve()
+    return re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
+
+
 class InstanceError(Exception):
     """Raised when instance resolution or validation fails."""
 

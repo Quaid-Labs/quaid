@@ -1592,10 +1592,32 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
             chunks_total = int(stage_result.get("chunks_total", 0) or 0)
             unclassified_empty = int(stage_result.get("unclassified_empty_payloads", 0) or 0)
-            if chunks_total > 0 and (chunks_processed + unclassified_empty) < chunks_total:
+            if unclassified_empty > 0:
+                _empty_retries = int(staged_state.get("empty_chunk_retries", 0) or 0) + 1
+                _max_empty_retries = 3
+                logger.error(
+                    "[%s] session %s: %d/%d chunks returned empty payloads "
+                    "(possible provider outage or data loss); retry %d/%d",
+                    label, session_id, unclassified_empty, chunks_total,
+                    _empty_retries, _max_empty_retries,
+                )
+                if _empty_retries < _max_empty_retries:
+                    staged_state["empty_chunk_retries"] = _empty_retries
+                    write_rolling_state(session_id, staged_state)
+                    raise RuntimeError(
+                        f"rolling extraction has {unclassified_empty} empty chunk(s) "
+                        f"(retry {_empty_retries}/{_max_empty_retries}); preserving signal for retry"
+                    )
+                logger.error(
+                    "[%s] session %s: PERMANENT DATA LOSS — %d chunk(s) could not be extracted "
+                    "after %d retries; proceeding with partial results",
+                    label, session_id, unclassified_empty, _max_empty_retries,
+                )
+            if chunks_total > 0 and chunks_processed < chunks_total and unclassified_empty == 0:
                 raise RuntimeError(
                     f"rolling extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
                 )
+            staged_state.pop("empty_chunk_retries", None)
             staged_state = merge_staged_payloads(staged_state, stage_result)
             staged_state["processed_line_offset"] = cursor_offset + len(new_lines)
             staged_state["transcript_path"] = transcript_path
@@ -1695,7 +1717,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             chunks_processed = int(tail_result.get("chunks_processed", 0) or 0)
             chunks_total = int(tail_result.get("chunks_total", 0) or 0)
             unclassified_empty = int(tail_result.get("unclassified_empty_payloads", 0) or 0)
-            if chunks_total > 0 and (chunks_processed + unclassified_empty) < chunks_total:
+            if unclassified_empty > 0:
+                logger.error(
+                    "[%s] session %s: FLUSH — %d/%d chunks returned empty payloads "
+                    "(possible provider outage or data loss); proceeding with partial results",
+                    label, session_id, unclassified_empty, chunks_total,
+                )
+            if chunks_total > 0 and chunks_processed < chunks_total and unclassified_empty == 0:
                 raise RuntimeError(
                     f"flush extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
                 )

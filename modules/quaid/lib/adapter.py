@@ -840,23 +840,13 @@ def _adapter_config_paths() -> List[Path]:
     # _bootstrap_instance_env), so we eagerly resolve the instance name here to
     # avoid the chicken-and-egg failure where the config search misses the silo.
     #
-    # Delegates to the CC adapter's module-level instance_slug_from_project_dir()
-    # so the derivation (including platform-specific .resolve() for macOS /tmp
-    # symlinks) is defined once and owned by the CC adapter.  Falls back to an
-    # inline equivalent if the CC adapter module is not importable.
+    # Uses the canonical slug derivation in lib.instance (single source of truth
+    # for project-dir-to-slug conversion).
     if home and not instance:
         _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         if _cpd:
-            try:
-                from adaptors.claude_code.adapter import (
-                    instance_slug_from_project_dir as _cc_slug,
-                )
-                _slug = _cc_slug(_cpd)
-            except ImportError:
-                import re as _re
-                _slug = _re.sub(
-                    r"[^a-z0-9]+", "-", str(Path(_cpd).resolve()).lower()
-                ).strip("-")
+            from lib.instance import instance_slug_from_project_dir
+            _slug = instance_slug_from_project_dir(_cpd)
             paths.append(
                 Path(home) / f"claude-code-{_slug}" / "config" / "memory.json"
             )
@@ -965,16 +955,8 @@ def _auto_provision_from_env_if_needed() -> None:
     if home and not instance:
         _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         if _cpd:
-            try:
-                from adaptors.claude_code.adapter import (
-                    instance_slug_from_project_dir as _cc_slug,
-                )
-                _slug = _cc_slug(_cpd)
-            except ImportError:
-                import re as _re
-                _slug = _re.sub(
-                    r"[^a-z0-9]+", "-", str(Path(_cpd).resolve()).lower()
-                ).strip("-")
+            from lib.instance import instance_slug_from_project_dir
+            _slug = instance_slug_from_project_dir(_cpd)
             if _slug:
                 instance = f"claude-code-{_slug}"
                 os.environ["QUAID_INSTANCE"] = instance

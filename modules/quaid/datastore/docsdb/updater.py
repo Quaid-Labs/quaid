@@ -1276,9 +1276,7 @@ def cmd_update_stale(
             Significant changes will be skipped with a warning.
         project: If set, only process docs belonging to this project.
     """
-    print("[docs-updater][diag] calling check_staleness", flush=True)
     stale = check_staleness(project=project)
-    print(f"[docs-updater][diag] check_staleness done: stale_count={len(stale)}", flush=True)
     purposes = get_doc_purposes()
     cfg = get_config()
     max_docs = cfg.docs.max_docs_per_update
@@ -1306,9 +1304,7 @@ def cmd_update_stale(
                 conf = info.change_classification.get("confidence", 0)
                 print(f"  [{cls} change, {conf:.0%} confidence] {doc_path}")
 
-            print(f"[docs-updater][diag] update_doc_from_diffs start: {doc_path}", flush=True)
             ok = update_doc_from_diffs(doc_path, purpose, info.stale_sources, dry_run=dry_run)
-            print(f"[docs-updater][diag] update_doc_from_diffs done: {doc_path} ok={ok}", flush=True)
             if ok:
                 updated += 1
 
@@ -1318,7 +1314,6 @@ def cmd_update_stale(
             print(f"  Skipped {skipped_significant} doc(s) with significant changes "
                   "(use without --trivial-only to update all)")
 
-    print(f"[docs-updater][phase1-complete] stale pass done: updated={updated}", flush=True)
     # Second pass: index registered docs that have never been indexed (no chunks).
     # A newly registered doc is effectively infinitely stale — it should be picked
     # up by 'docs update' without needing a separate 'janitor --task rag' invocation.
@@ -1348,8 +1343,6 @@ def cmd_update_stale(
             candidate_paths.append(file_path)
         needs_reindex = rag.needs_reindex_many(candidate_paths)
         new_doc_budget = max(1, max_docs - updated)
-        needs_count = sum(1 for p in candidate_paths if needs_reindex.get(p, True))
-        print(f"[docs-updater][diag] new-doc pass: candidates={len(candidate_paths)} needs_reindex={needs_count} budget={new_doc_budget}", flush=True)
         for file_path in candidate_paths:
             if indexed_new >= new_doc_budget:
                 break
@@ -1372,12 +1365,10 @@ def cmd_update_stale(
         action = "Would index" if dry_run else "Indexed"
         print(f"{action} {indexed_new} new doc(s) with no existing chunks")
 
-    print(f"[docs-updater][phase2-complete] new-doc index pass done: indexed_new={indexed_new}", flush=True)
     if not stale and not indexed_new:
         print("All docs up-to-date.")
         return 0
 
-    print(f"[docs-updater][cmd-complete] returning {updated + indexed_new}", flush=True)
     return updated + indexed_new
 
 

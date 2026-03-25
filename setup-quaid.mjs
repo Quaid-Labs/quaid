@@ -1129,12 +1129,28 @@ function _ensureOpenClawResponsesEndpoint() {
 }
 
 function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
-  // QUAID_INSTANCE in env.vars is the gateway-level default used by the quaid
-  // plugin at startup (before any per-agent session context exists). Per-agent
-  // calls inject their own QUAID_INSTANCE via buildPythonEnv() in the TS
-  // adapter, which takes precedence because _bootstrap_instance_env() in Python
-  // uses setdefault semantics (skips if already set). So this value does NOT
-  // break per-agent isolation — it is only the fallback for plugin startup.
+  // ─── QUAID_INSTANCE Lifecycle ──────────────────────────────────────────────
+  //
+  // QUAID_INSTANCE has two resolution tiers:
+  //
+  //   1. GATEWAY DEFAULT (this code):
+  //      Written to openclaw.json env.vars at install time. Used by the quaid
+  //      plugin at gateway startup, before any per-agent session context exists.
+  //      This is the "fallback identity" — it answers "which silo am I?" when
+  //      no per-call override is present.
+  //
+  //   2. PER-CALL OVERRIDE (runtime):
+  //      Each per-agent call injects its own QUAID_INSTANCE via buildPythonEnv()
+  //      in the OC TS adapter. Python's _bootstrap_instance_env() uses setdefault
+  //      semantics — it skips if QUAID_INSTANCE is already set in the process env.
+  //      So the per-call value always wins over the gateway default.
+  //
+  // For Claude Code: QUAID_INSTANCE is derived from CLAUDE_PROJECT_DIR via
+  // lib.instance.instance_slug_from_project_dir() — no gateway default needed.
+  //
+  // This value does NOT break per-agent isolation. It is only the fallback for
+  // plugin startup and for calls that don't provide their own override.
+  // ──────────────────────────────────────────────────────────────────────────
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
   try {
