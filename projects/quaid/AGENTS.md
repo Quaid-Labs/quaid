@@ -113,8 +113,8 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - If you are actively working on a project, load that project's `PROJECT.md` first. Treat it as the overview and navigation map before wandering the tree.
 - Always use memory/project tools before claiming missing context.
 - Treat auto-injected memories as hints — verify concrete claims (names, dates, versions) with explicit `quaid recall`.
-- Use `quaid docs search` for codebase/architecture questions. Docs retrieval will try to infer the relevant project and include its `PROJECT.md` when possible.
-- Use `quaid recall --docs` for a single pass across both memories and docs.
+- Use `quaid recall "query" '{"stores":["docs"]}'` for codebase/architecture questions. Docs retrieval will try to infer the relevant project and include its `PROJECT.md` when possible.
+- Use `quaid recall "query" '{"stores":["vector","graph","docs"]}'` for a single pass across memories and docs.
 
 **Memory retention boundary**
 - Only information you state explicitly in assistant messages is reliably retained as memory.

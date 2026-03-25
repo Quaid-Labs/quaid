@@ -7,7 +7,6 @@
 #   quaid stats
 #   quaid get-edges <node_id>
 #   quaid janitor --task all --dry-run
-#   quaid docs search "query"
 #   quaid docs check
 #   quaid registry list --project quaid
 #   quaid doctor
