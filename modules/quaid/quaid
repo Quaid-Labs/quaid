@@ -128,12 +128,12 @@ print(json.dumps(register_domain(name, desc), indent=2))
     SUBCMD="${1:-help}"
     shift 2>/dev/null || true
     case "$SUBCMD" in
-      search)  exec python3 "$SCRIPT_DIR/datastore/docsdb/rag.py" search "$@" ;;
       list)    exec python3 "$SCRIPT_DIR/datastore/docsdb/registry.py" list "$@" ;;
       check)   exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
       update)  exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@" ;;
       changelog) exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
-      *)       echo "Usage: quaid docs {search|list|check|update|changelog} [args...]"; exit 1 ;;
+      search)  echo "quaid docs search is removed. Use: quaid recall \"<query>\" '{\"stores\":[\"docs\"]}'" >&2; exit 1 ;;
+      *)       echo "Usage: quaid docs {list|check|update|changelog} [args...]"; exit 1 ;;
     esac
     ;;
 
@@ -358,7 +358,6 @@ PYEOF
     echo "  daemon [cmd]         Extraction daemon (start|stop|status|run)"
     echo ""
     echo "Docs:"
-    echo "  docs search <query>  Search RAG docs"
     echo "  docs list            List registered docs"
     echo "  docs check           Check doc staleness"
     echo "  docs update --apply  Update stale docs"

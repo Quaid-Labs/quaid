@@ -1189,14 +1189,14 @@ ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.opencl
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
 
 # Verify it is now searchable
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs search "carillon clock" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "carillon clock" '"'"'{"stores":["docs"]}'"'"' 2>&1'
 
 # Cleanup
 ssh example.local 'rm -f /tmp/m10-test-doc.md'
 ```
 
 Pass for new-doc test: `docs update --apply` output includes "Indexing new doc:" (not "all up-to-date"),
-and `docs search "carillon clock"` returns the doc.
+and `recall "carillon clock" '{"stores":["docs"]}'` returns the doc.
 Fail: "All docs up-to-date" with no indexing = regression in new-doc detection.
 
 **Session CLI** (tests that extracted sessions are accessible via CLI):
@@ -1717,7 +1717,7 @@ Ask CC (use content-specific phrasing so the model matches the doc, not just PRO
 
 If that still returns nothing, try the explicit fallback:
 
-- `Run: quaid docs search "north pier beacon" --project cross-live-test`
+- `Run: quaid recall "north pier beacon" '{"stores":["docs"],"project":"cross-live-test"}'`
 
 Ask OC:
 
@@ -1729,7 +1729,7 @@ Optional provenance follow-up if needed:
 
 Note: The query framing "What did the project say about X?" semantically matches PROJECT.md
 files in the vector index, not content docs. Content-specific or explicit tool-call prompts
-reliably surface the right doc. If the agent answers correctly via explicit docs search that
+reliably surface the right doc. If the agent answers correctly via explicit recall that
 is still a PASS (grounded in Quaid, not disk browsing).
 
 Pass:
