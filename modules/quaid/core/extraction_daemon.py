@@ -2396,16 +2396,28 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             for sig in signals:
                 try:
                     process_signal(sig)
-                except _ProviderUnavailableError:
-                    # Confirmed provider outage — let the daemon die cleanly.
-                    # Cursors and rolling state are on disk; ensure_alive auto-restarts
-                    # the daemon on the next hook call (which can only happen when the
-                    # provider is back, since the user can't chat without it).
-                    logger.critical(
-                        "Provider unavailable — daemon shutting down for auto-restart "
-                        "(signals preserved on disk for next startup)"
+                except _ProviderUnavailableError as pue:
+                    # Provider is confirmed down (retryable HTTP codes exhausted).
+                    # Default: log clearly and let the natural retry loop handle it —
+                    # the signal stays preserved, daemon retries next poll cycle.
+                    # Optional: daemon.shutdown_on_provider_outage=true kills the
+                    # daemon so ensure_alive cold-starts it on the next hook call.
+                    _shutdown_on_outage = False
+                    try:
+                        from config import get_config as _gc
+                        _shutdown_on_outage = bool(getattr(_gc().daemon, "shutdown_on_provider_outage", False))
+                    except Exception:
+                        pass
+                    if _shutdown_on_outage:
+                        logger.critical(
+                            "Provider unavailable — daemon shutting down for auto-restart "
+                            "(daemon.shutdown_on_provider_outage=true; signals preserved on disk)"
+                        )
+                        raise
+                    logger.error(
+                        "Provider unavailable — will retry on next poll cycle "
+                        "(signal preserved): %s", pue,
                     )
-                    raise
                 except Exception as e:
                     logger.error("failed processing signal: %s", e, exc_info=True)
                     # Preserve the signal for a future retry. Outer-loop exceptions

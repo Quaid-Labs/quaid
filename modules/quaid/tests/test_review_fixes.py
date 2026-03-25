@@ -61,23 +61,37 @@ class TestProviderUnavailableError:
         from lib.llm_clients import ProviderUnavailableError
         assert not issubclass(ProviderUnavailableError, RuntimeError)
 
-    def test_daemon_does_not_catch_provider_error(self, monkeypatch):
-        """ProviderUnavailableError should propagate out of daemon_loop."""
+    def test_daemon_retries_provider_error_by_default(self, monkeypatch):
+        """ProviderUnavailableError should NOT kill daemon by default — retry loop handles it."""
         from lib.llm_clients import ProviderUnavailableError
         from core import extraction_daemon
 
+        process_calls = 0
+
+        class _StopLoop(Exception):
+            pass
+
         def fake_process_signal(_sig):
+            nonlocal process_calls
+            process_calls += 1
             raise ProviderUnavailableError("provider down")
+
+        def fake_sleep(_s):
+            if process_calls >= 1:
+                raise _StopLoop()
 
         monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
         monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [{"type": "rolling"}])
         monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
-        monkeypatch.setattr(extraction_daemon.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
         monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_a, **_k: None)
 
-        with pytest.raises(ProviderUnavailableError, match="provider down"):
+        # Should NOT raise ProviderUnavailableError — it should be caught and retried.
+        # We stop the loop via _StopLoop from fake_sleep.
+        with pytest.raises(_StopLoop):
             extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+        assert process_calls >= 1
 
 
 # ---------------------------------------------------------------------------
