@@ -44,6 +44,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # Ensure plugin root is importable (B060)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from lib.llm_clients import ProviderUnavailableError as _ProviderUnavailableError
+
 logger = logging.getLogger("quaid.daemon")
 
 # Valid signal types (B062)
@@ -1649,44 +1651,23 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             _failed_chunks = chunks_total - chunks_processed - unclassified_empty
             if _failed_chunks > 0:
-                # Provider error: LLM call failed (timeout, HTTP error, connection
-                # refused). Time-window retry for up to 6 hours — survives multi-hour
-                # provider outages. The daemon's natural poll interval provides backoff.
-                _PROVIDER_RETRY_WINDOW_SECONDS = 6 * 3600  # 6 hours
-                _first_seen = float(staged_state.get("provider_error_first_seen", 0) or 0)
-                _now = time.time()
-                if _first_seen == 0:
-                    _first_seen = _now
-                    staged_state["provider_error_first_seen"] = _first_seen
-                _elapsed = _now - _first_seen
-                _elapsed_min = _elapsed / 60
+                # Confirmed provider outages raise ProviderUnavailableError from
+                # call_llm, which propagates up and kills the daemon (auto-restarts
+                # on next hook call). If we reach this point, it means chunks failed
+                # for a non-provider reason (deadline exhaustion, extraction bug).
+                # Save transcript for janitor recovery and proceed.
                 logger.error(
-                    "[%s] session %s: %d/%d chunks failed (provider error); "
-                    "failing for %.0f min — will retry up to %dh",
+                    "[%s] session %s: %d/%d chunks failed extraction "
+                    "(non-provider failure); saving transcript for janitor recovery",
                     label, session_id, _failed_chunks, chunks_total,
-                    _elapsed_min, _PROVIDER_RETRY_WINDOW_SECONDS // 3600,
-                )
-                if _elapsed < _PROVIDER_RETRY_WINDOW_SECONDS:
-                    write_rolling_state(session_id, staged_state)
-                    raise RuntimeError(
-                        f"rolling extraction has {_failed_chunks} failed chunk(s) "
-                        f"(provider error, failing for {_elapsed_min:.0f} min); "
-                        f"preserving signal for retry"
-                    )
-                # Retry window exhausted — save transcript for deferred extraction
-                logger.error(
-                    "[%s] session %s: DEFERRED — %d chunk(s) could not be extracted "
-                    "after %.1fh of retries; saving transcript for janitor recovery",
-                    label, session_id, _failed_chunks, _elapsed / 3600,
                 )
                 _save_deferred_extraction(
                     session_id=session_id,
                     transcript_text=transcript_text,
                     owner_id=owner,
                     label=label,
-                    reason=f"provider_error_exhausted_after_{_elapsed / 3600:.1f}h",
+                    reason=f"non_provider_failure_{_failed_chunks}_of_{chunks_total}_chunks",
                 )
-            staged_state.pop("provider_error_first_seen", None)
             staged_state = merge_staged_payloads(staged_state, stage_result)
             staged_state["processed_line_offset"] = cursor_offset + len(new_lines)
             staged_state["transcript_path"] = transcript_path
@@ -1794,38 +1775,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             _failed_chunks = chunks_total - chunks_processed - unclassified_empty
             if _failed_chunks > 0:
-                _PROVIDER_RETRY_WINDOW_SECONDS = 6 * 3600
-                _first_seen = float(staged_state.get("provider_error_first_seen", 0) or 0)
-                _now = time.time()
-                if _first_seen == 0:
-                    _first_seen = _now
-                    staged_state["provider_error_first_seen"] = _first_seen
-                _elapsed = _now - _first_seen
-                _elapsed_min = _elapsed / 60
+                # Provider outages raise ProviderUnavailableError and kill the daemon
+                # before we get here. This path handles non-provider failures only.
                 logger.error(
-                    "[%s] session %s: FLUSH — %d/%d chunks failed (provider error); "
-                    "failing for %.0f min — will retry up to %dh",
+                    "[%s] session %s: FLUSH — %d/%d chunks failed extraction "
+                    "(non-provider failure); saving transcript for janitor recovery",
                     label, session_id, _failed_chunks, chunks_total,
-                    _elapsed_min, _PROVIDER_RETRY_WINDOW_SECONDS // 3600,
-                )
-                if _elapsed < _PROVIDER_RETRY_WINDOW_SECONDS:
-                    write_rolling_state(session_id, staged_state)
-                    raise RuntimeError(
-                        f"flush extraction has {_failed_chunks} failed chunk(s) "
-                        f"(provider error, failing for {_elapsed_min:.0f} min); "
-                        f"preserving signal for retry"
-                    )
-                logger.error(
-                    "[%s] session %s: DEFERRED — FLUSH — %d chunk(s) could not be "
-                    "extracted after %.1fh; saving transcript for janitor recovery",
-                    label, session_id, _failed_chunks, _elapsed / 3600,
                 )
                 _save_deferred_extraction(
                     session_id=session_id,
                     transcript_text=transcript_text,
                     owner_id=owner,
                     label=label,
-                    reason=f"flush_provider_error_exhausted_after_{_elapsed / 3600:.1f}h",
+                    reason=f"flush_non_provider_failure_{_failed_chunks}_of_{chunks_total}_chunks",
                 )
         extract_wall = time.time() - extract_started_at
         usage_after_extract = _read_usage_totals()
@@ -2376,6 +2338,16 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             for sig in signals:
                 try:
                     process_signal(sig)
+                except _ProviderUnavailableError:
+                    # Confirmed provider outage — let the daemon die cleanly.
+                    # Cursors and rolling state are on disk; ensure_alive auto-restarts
+                    # the daemon on the next hook call (which can only happen when the
+                    # provider is back, since the user can't chat without it).
+                    logger.critical(
+                        "Provider unavailable — daemon shutting down for auto-restart "
+                        "(signals preserved on disk for next startup)"
+                    )
+                    raise
                 except Exception as e:
                     logger.error("failed processing signal: %s", e, exc_info=True)
                     # Preserve the signal for a future retry. Outer-loop exceptions

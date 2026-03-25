@@ -34,6 +34,16 @@ from prompt_sets import get_prompt
 
 logger = logging.getLogger(__name__)
 
+
+class ProviderUnavailableError(Exception):
+    """Raised when the LLM provider is confirmed unavailable after retries.
+
+    This is distinct from RuntimeError so callers can choose to let it propagate
+    instead of catching it. The daemon uses this to shut down cleanly on confirmed
+    provider outages — ensure_alive auto-restarts it on the next hook call (which
+    can only happen when the provider is back, since the user can't chat without it).
+    """
+
 # Timeouts (seconds)
 # Allow runtime overrides for bounded e2e/CI lanes without changing defaults.
 DEEP_REASONING_TIMEOUT = float(os.environ.get("QUAID_DEEP_REASONING_TIMEOUT", "600"))
@@ -644,6 +654,22 @@ def call_llm(system_prompt: str, user_message: str,
 
     duration = time.time() - start_time
     logger.error("[llm_clients] LLM error: %s", last_error)
+
+    # Determine if this is a confirmed provider outage (retryable HTTP codes
+    # exhausted) vs. a bug or config error in our code.
+    _is_provider_outage = False
+    if isinstance(last_error, (TimeoutError, ConnectionError, OSError)):
+        _is_provider_outage = True
+    elif isinstance(last_error, urllib.error.HTTPError):
+        _is_provider_outage = last_error.code in _RETRYABLE_HTTP_CODES
+
+    if _is_provider_outage:
+        raise ProviderUnavailableError(
+            f"Provider unavailable after {retries + 1} attempts "
+            f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
+            f"error={last_error})"
+        ) from last_error
+
     if is_fail_hard_enabled():
         err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
         raise RuntimeError(
