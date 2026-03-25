@@ -1271,11 +1271,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-    # Consume all duplicate signals for this session now that we hold the lock.
-    # Any other queued signals targeting the same session_id are redundant —
-    # this extraction will process the content once and advance the cursor.
-    # Draining them here prevents the daemon from scheduling N-1 follow-up
-    # extraction passes after this one completes.
+    # Consume duplicate signals for this session now that we hold the lock.
+    # Signals with the same or lower priority are redundant — this extraction
+    # will process the content and advance the cursor. Higher-priority signals
+    # (e.g. a rolling signal pending while a reset is processing) are preserved
+    # so they can stage content before the next flush.
+    _current_priority = _SIGNAL_PRIORITY.get(signal_type, 99)
     try:
         _current_sig_path = signal_data.get("_signal_path", "")
         for _dup_f in list(_signal_dir().iterdir()):
@@ -1284,6 +1285,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             try:
                 _dup = json.loads(_dup_f.read_text(encoding="utf-8"))
                 if _dup.get("session_id") == session_id:
+                    _dup_priority = _SIGNAL_PRIORITY.get(_dup.get("type", ""), 99)
+                    if _dup_priority < _current_priority:
+                        # Higher-priority signal (e.g. rolling) — preserve it so it
+                        # can stage content before this flush processes.
+                        continue
                     _dup["_signal_path"] = str(_dup_f)
                     mark_signal_processed(_dup)
             except (json.JSONDecodeError, OSError):
@@ -1300,6 +1306,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     cursor_data = read_cursor(session_id)
     cursor_offset = int(cursor_data["line_offset"] or 0)
     cursor_transcript = cursor_data["transcript_path"]
+
+    # Write a preliminary cursor entry before extraction begins so that
+    # check_idle_sessions() can discover this session even if the daemon is
+    # killed before extraction completes. The cursor is updated to the real
+    # offset at the end of a successful extraction (line ~1860).
+    if not cursor_transcript and transcript_path:
+        try:
+            write_cursor(session_id, cursor_offset, transcript_path)
+        except Exception:
+            pass
+
     if cursor_transcript and cursor_transcript != transcript_path:
         # A .jsonl → .jsonl.reset.<ts> rename is OC's /reset backup mechanism.
         # The content up to cursor_offset is identical in the backup file, so
