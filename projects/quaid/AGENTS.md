@@ -123,7 +123,7 @@ All files go inside a tracked quaid project OR are registered into one. `/tmp/` 
 - See the **File Placement — MANDATORY RULES** section above for decision tree and examples.
 
 **Cross-instance**
-- When OC and CC share a machine, both use the same `QUAID_HOME`.
+- Multiple platforms may be using Quaid on the same machine (e.g. OpenClaw, Claude Code, or others) — each gets its own instance silo under the shared `QUAID_HOME`.
 - Use `quaid project link/unlink` for cross-instance project participation.
 - `quaid project delete` is destructive — prefer `unlink` if you only want to leave the project.
 
