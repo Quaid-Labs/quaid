@@ -44,8 +44,6 @@ quaid stats
 
 **Output flags:** `--json` (machine-readable), `--debug` (scoring breakdown)
 
-**store categories:** `preference`, `fact`, `decision`, `entity`, `other`
-
 ---
 
 ## Domains

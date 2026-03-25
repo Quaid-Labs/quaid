@@ -40,6 +40,13 @@ When a `<injected_memories>` block appears in your context, it contains facts au
    ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
    # THEN write files / spawn sub-agents
    ```
+4. **User specifies a path outside the project system** → write there, then register the file so the project tracks it:
+   ```bash
+   # Write the file at the user's requested path (e.g. ~/my-scripts/tool.py)
+   # Then link it into the owning project:
+   ~/.openclaw/extensions/quaid/quaid registry register ~/my-scripts/tool.py --project <name>
+   ```
+   Always tell the user the file is tracked via the registry even though it lives outside the project directory.
 
 **Example — user asks for a throwaway script:**
 > "Can you write a quick hello world script?"
@@ -132,9 +139,10 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 
 **Project and file placement**
 
-All files go inside a tracked quaid project. `/tmp/` is never acceptable, even for throwaway work.
+All files go inside a tracked quaid project OR are registered into one. `/tmp/` is never acceptable, even for throwaway work.
 - Misc project: `misc--$QUAID_INSTANCE` at `$QUAID_HOME/projects/misc--$QUAID_INSTANCE/` — use this for throwaway/one-off work. It is pre-created.
 - New work: create a project first (`quaid registry create-project`), then write files.
+- User specifies a path outside the project system: write there, then `quaid registry register <path> --project <name>` to link it.
 - See the **File Placement — MANDATORY RULES** section above for decision tree and examples.
 
 **Cross-instance**
