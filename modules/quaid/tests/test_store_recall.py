@@ -2282,6 +2282,70 @@ class TestRecallFastHookInjectContract:
         assert analysis["enumeration_like"] is True
         assert "enumeration" in analysis["requirements"]
 
+    def test_query_requirements_treat_neighbour_queries_as_identity(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return ["neighbor_of"]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            analysis = mg._derive_query_requirements(
+                "What do you remember about my neighbour?",
+                intent="GENERAL",
+            )
+
+        assert "identity" in analysis["requirements"]
+
+    def test_relation_matches_use_live_relation_types_without_static_keyword_lists(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return ["depends_on"]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            matched = mg._relation_matches_for_query(
+                "What does the billing engine depend on?",
+            )
+
+        assert "depends_on" in matched
+
+    def test_infer_recall_store_defaults_routes_graph_from_live_relation_types(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return ["depends_on"]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, _ = mg._infer_recall_store_defaults(
+                "What does the billing engine depend on?",
+            )
+
+        assert stores == ["vector", "graph"]
+
+    def test_query_fit_multiplier_boosts_neighbour_rows_for_social_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node(
+            id="n-neighbour",
+            type="Fact",
+            name="Solomon's neighbour Priya grows chili peppers on her balcony.",
+            attributes={},
+        )
+
+        mult = mg._compute_query_fit_multiplier(
+            "What do you remember about my neighbour?",
+            node,
+            node.attributes,
+            intent="GENERAL",
+        )
+
+        assert mult >= 1.05
     def test_query_fit_multiplier_boosts_enumeration_rows_for_list_queries(self):
         import datastore.memorydb.memory_graph as mg
 

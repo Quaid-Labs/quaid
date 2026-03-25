@@ -26,7 +26,7 @@ __all__ = [
     "ensure_keywords_for_relation", "get_edge_keywords", "store_edge_keywords",
     "delete_edges_by_source_fact", "seed_edge_keywords_from_db",
     "generate_keywords_for_relation", "get_all_edge_keywords_flat",
-    "invalidate_edge_keywords_cache",
+    "invalidate_edge_keywords_cache", "list_relation_types",
     # Entity summaries
     "get_entity_summary", "generate_entity_summary", "summarize_all_entities",
     # Query utilities
@@ -2105,12 +2105,6 @@ class MemoryGraph:
 # Pronouns that indicate the query is about the owner
 _OWNER_PRONOUNS = {"my", "mine", "our", "ours", "me", "i", "we", "i'm", "i've", "i'd"}
 
-# Family-related edge types for priority expansion
-_FAMILY_RELATIONS = {
-    "parent_of", "sibling_of", "spouse_of", "family_of", "has_pet",
-    "friend_of", "child_of", "knows", "related_to"
-}
-
 # Cached edge keywords (loaded once, refreshed on demand)
 _edge_keywords_cache: Optional[Dict[str, set]] = None
 _edge_keywords_all: Optional[set] = None  # Flattened set of all keywords
@@ -2171,6 +2165,85 @@ def invalidate_edge_keywords_cache():
     global _edge_keywords_cache, _edge_keywords_all
     _edge_keywords_cache = None
     _edge_keywords_all = None
+
+
+_RELATION_TOKEN_STOPWORDS = {
+    "of", "to", "at", "in", "on", "by", "with", "for", "from", "the",
+    "a", "an", "is", "are", "was", "were", "has",
+}
+
+
+def list_relation_types(include_keyword_only: bool = True) -> List[str]:
+    """Return the active graph relation types known to the runtime."""
+    relations: set[str] = set()
+    try:
+        relations.update(str(rel or "").strip() for rel in get_graph().get_known_relations())
+    except Exception:
+        pass
+    try:
+        for rel in get_edge_keywords().keys():
+            clean = str(rel or "").strip()
+            if clean and (include_keyword_only or clean in relations):
+                relations.add(clean)
+    except Exception:
+        pass
+    return sorted(rel for rel in relations if rel)
+
+
+def _relation_tokens_for_runtime() -> Dict[str, set[str]]:
+    out: Dict[str, set[str]] = {}
+    for relation in list_relation_types():
+        tokens: set[str] = set()
+        for token in str(relation).lower().replace("-", "_").split("_"):
+            token = token.strip()
+            if len(token) < 3 or token in _RELATION_TOKEN_STOPWORDS:
+                continue
+            tokens.add(token)
+            if token == "neighbor":
+                tokens.add("neighbour")
+            elif token == "neighbour":
+                tokens.add("neighbor")
+            if token.endswith("ies") and len(token) > 4:
+                tokens.add(token[:-3] + "y")
+            elif token.endswith("s") and len(token) > 4:
+                tokens.add(token[:-1])
+        if tokens:
+            out[relation] = tokens
+    return out
+
+
+def _relation_matches_for_query(query: str) -> List[str]:
+    lowered = str(query or "").lower()
+    if not lowered.strip():
+        return []
+    words = set(re.findall(r"[a-z0-9_'-]+", lowered))
+    matches: set[str] = set()
+    keyword_map = get_edge_keywords()
+    for relation, keywords in keyword_map.items():
+        for keyword in keywords or []:
+            normalized = str(keyword or "").strip().lower()
+            if not normalized:
+                continue
+            if " " in normalized:
+                if normalized in lowered:
+                    matches.add(relation)
+                    break
+            elif normalized in words:
+                matches.add(relation)
+                break
+    relation_tokens = _relation_tokens_for_runtime()
+    for relation, tokens in relation_tokens.items():
+        if words & tokens:
+            matches.add(relation)
+    return sorted(matches)
+
+
+def _has_generic_graph_signal(query: str) -> bool:
+    lowered = str(query or "").lower()
+    return bool(re.search(
+        r"\b(relationship|related|connected|connection|hierarchy|depends|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|reports?\s+to)\b",
+        lowered,
+    ))
 
 
 def store_edge_keywords(relation: str, keywords: List[str], description: str = "") -> bool:
@@ -2276,14 +2349,16 @@ def should_expand_graph(query: str) -> bool:
         True if graph expansion would likely be beneficial.
     """
     query_lower = query.lower()
-    words = set(re.sub(r'[^\w\s]', '', query_lower).split())
 
-    # 1. Check against edge keywords (fast set intersection)
-    all_keywords = get_all_edge_keywords_flat()
-    if words & all_keywords:
+    # 1. Check live relation keywords / relation names
+    if _relation_matches_for_query(query):
         return True
 
-    # 2. Check for pronouns + known person names
+    # 2. Check generic graph-shaped intent
+    if _has_generic_graph_signal(query_lower):
+        return True
+
+    # 3. Check for pronouns + known person names
     # "I'm meeting Jane" - is Jane a Person node?
     if has_owner_pronoun(query):
         # Extract capitalized words (potential names)
@@ -2501,24 +2576,11 @@ def graph_aware_recall(
     expand_from: List[str] = []  # Node IDs to expand from
     seen_ids: set = set()
 
-    # Determine which relations to expand based on query
-    query_lower = query.lower()
-    if any(kw in query_lower for kw in ["family", "parent", "mom", "dad", "sister", "brother", "sibling", "child", "kids", "relative", "nephew", "niece", "uncle", "aunt", "cousin"]):
-        # Family-focused query: only expand family relations
-        expand_relations = ["parent_of", "sibling_of", "spouse_of", "family_of", "child_of", "related_to"]
-    elif any(kw in query_lower for kw in ["pet", "dog", "cat", "animal"]):
-        # Pet-focused query
-        expand_relations = ["has_pet"]
-    elif any(kw in query_lower for kw in ["friend", "contact", "know"]):
-        # Social-focused query
-        expand_relations = ["friend_of", "knows", "colleague_of"]
-    elif any(kw in query_lower for kw in ["why", "reason", "cause", "because", "how come", "led to", "due to"]):
-        # Causal query: traverse causal edges (deeper for multi-hop explanations)
-        expand_relations = ["caused_by", "led_to", "resulted_in"]
-        graph_depth = max(graph_depth, 2)  # Causal chains are inherently multi-hop
-    else:
-        # General query: all relations but limit results
-        expand_relations = None  # No filter, but we'll limit below
+    # Determine which relations to expand based on currently active graph relations
+    matched_relations = _relation_matches_for_query(query)
+    expand_relations = matched_relations or None
+    if _has_generic_graph_signal(query):
+        graph_depth = max(graph_depth, 2)
 
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
@@ -5539,6 +5601,8 @@ def _extract_distinctive_query_terms(query: str, *, limit: int = 8) -> List[str]
 def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str, Any]:
     lower = str(query or "").lower()
     query_terms = _extract_distinctive_query_terms(query)
+    relation_matches = _relation_matches_for_query(query)
+    graph_like = bool(relation_matches) or _has_generic_graph_signal(query)
     assistant_like = bool(re.search(r"\b(agent|assistant|ai)\b", lower))
     current_like = bool(
         re.search(r"\b(current|currently|latest|now|today|most recent|as of|still|yet)\b", lower)
@@ -5573,8 +5637,8 @@ def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str,
         _add("assistant_source")
     if temporal_like:
         _add("temporal")
-    if intent == "WHO" or re.search(
-        r"\b(who|partner|wife|husband|mom|mother|dad|father|sister|brother|friend|coworker|manager|pet|dog|cat|child|children|son|daughter|nephew|niece|family|name)\b",
+    if intent == "WHO" or graph_like or re.search(
+        r"\b(who|name|pet|dog|cat|manager|coworker|colleague|contact)\b",
         lower,
     ):
         _add("identity")
@@ -5587,6 +5651,8 @@ def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str,
         _add("organization")
     if intent == "WHY" or re.search(r"\b(why|reason|motivat|cause|caused|led to|due to|so that)\b", lower):
         _add("causal")
+    if graph_like:
+        _add("graph")
     if enumeration_like:
         _add("enumeration")
     if intent == "PROJECT" or re.search(
@@ -5602,6 +5668,8 @@ def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str,
         "current_like": current_like,
         "progression_like": progression_like,
         "enumeration_like": enumeration_like,
+        "graph_like": graph_like,
+        "relation_matches": relation_matches,
         "query_terms": query_terms,
     }
 
@@ -6257,10 +6325,7 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
         lowered,
     ))
-    graph_like = bool(_re.search(
-        r"\b(relationship|related|who is|how is|brother|sister|mother|mom|father|dad|partner|wife|husband|uncle|aunt|nephew|niece|family|caused|because|why did|why does)\b",
-        lowered,
-    ))
+    graph_like = bool(_relation_matches_for_query(text)) or _has_generic_graph_signal(text)
     mixed_memory_docs = docs_like and bool(_re.search(
         r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",
         lowered,
@@ -9428,6 +9493,9 @@ if __name__ == "__main__":
         ek_gen_p = ek_sub.add_parser("generate", help="Generate keywords for a relation using LLM")
         ek_gen_p.add_argument("relation", help="Relation name")
 
+        relation_types_p = subparsers.add_parser("relation-types", help="List active graph relation types")
+        relation_types_p.add_argument("--json", action="store_true", help="JSON output")
+
         # --- add-alias ---
         add_alias_p = subparsers.add_parser("add-alias", help="Add an entity alias")
         add_alias_p.add_argument("alias", help="The alias name (e.g., 'Sol')")
@@ -9659,6 +9727,16 @@ if __name__ == "__main__":
                 else:
                     print("Failed to generate keywords")
                     sys.exit(1)
+
+        elif args.command == "relation-types":
+            relation_types = list_relation_types()
+            if args.json:
+                print(json.dumps(relation_types))
+            elif relation_types:
+                for relation in relation_types:
+                    print(relation)
+            else:
+                print("No active relation types found")
 
         elif args.command == "decay":
             result = decay_memories()

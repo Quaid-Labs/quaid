@@ -99,6 +99,63 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("injectProjectContext adds runtime metadata and strips TOOLS domain block", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-context-"));
+    const projectsDir = path.join(workspace, "shared", "projects", "quaid");
+    const identityDir = path.join(workspace, "instance-a", "identity");
+    await mkdir(projectsDir, { recursive: true });
+    await mkdir(identityDir, { recursive: true });
+    await writeFile(path.join(identityDir, "USER.md"), "User likes coffee", "utf8");
+    await writeFile(
+      path.join(projectsDir, "TOOLS.md"),
+      [
+        "# Tools",
+        "",
+        "before domains",
+        "<!-- AUTO-GENERATED:DOMAIN-LIST:START -->",
+        "Available domains:",
+        "- `personal`: personal stuff",
+        "<!-- AUTO-GENERATED:DOMAIN-LIST:END -->",
+        "",
+        "after domains",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(path.join(projectsDir, "AGENTS.md"), "# Agents\nStatic guidance", "utf8");
+
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "relation-types") {
+        return JSON.stringify(["neighbor_of", "parent_of"]);
+      }
+      return "{}";
+    });
+
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      instanceRoot: path.join(workspace, "instance-a"),
+      execPython,
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: {
+          failHard: false,
+          domains: { personal: "personal", technical: "technical" },
+        },
+      })),
+    }));
+
+    const out = await facade.injectProjectContext(undefined);
+    expect(out).toContain("[Quaid runtime]");
+    expect(out).toContain("instance: instance-a");
+    expect(out).toContain("active domains: personal, technical");
+    expect(out).toContain("active graph relation types: neighbor_of, parent_of");
+    expect(out).toContain("--- quaid/TOOLS.md ---");
+    expect(out).toContain("before domains");
+    expect(out).toContain("after domains");
+    expect(out).not.toContain("AUTO-GENERATED:DOMAIN-LIST");
+    expect(out).not.toContain("Available domains:");
+
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("initializeDatastoreIfMissing creates db dir and calls init callback once", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-db-init-"));
     const dbPath = path.join(workspace, "data", "memory.db");

@@ -14,6 +14,10 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 - Items marked (uncertain) have lower extraction confidence. Only run `memory_recall` if results are marked (uncertain) or the match seems only loosely related to the question.
 - Dates shown are when the fact was recorded.
 - **Topic licensing:** knowing a sensitive detail does not make it on-topic. For light prompts, acknowledgments, or vague openings, do not volunteer private health, finances, conflicts, or emotionally loaded history unless the user clearly opens that topic.
+- Auto-injected memory is optimized for latency, not completeness. Treat it as a fast hint layer rather than authoritative proof that no better answer exists.
+- A known blind spot of auto-injection is graph-derived recall: answers that require combining stored relationships, hierarchy, ownership, causality, dependencies, or part-whole structure may be missing even when the underlying evidence exists in memory.
+- If injected context does not clearly answer a relationship-shaped or graph-shaped question, prefer an explicit `quaid recall` instead of assuming the injected block is exhaustive.
+- Quaid may provide a runtime metadata block listing currently active domains and graph relation types. Use that runtime block to judge whether an explicit graph-oriented recall is likely to help.
 
 ---
 

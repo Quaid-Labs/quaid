@@ -22,6 +22,7 @@ const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
 const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
 const COMPACTION_NOTIFY_BATCH_MS = 1e4;
 const COMPACTION_NOTIFY_BATCH_MAX_MS = 45e3;
+const TOOLS_DOMAIN_BLOCK_RE = /<!-- AUTO-GENERATED:DOMAIN-LIST:START -->[\s\S]*?<!-- AUTO-GENERATED:DOMAIN-LIST:END -->\n*/g;
 const RECALL_RETRY_STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -2465,7 +2466,52 @@ ${header}${journalContent}` : `${header}${journalContent}`;
   function notImplemented(name) {
     throw new Error(`[quaid][facade] ${name} is not yet implemented \u2014 scheduled for a future PR`);
   }
-  function injectProjectContext(existingContext) {
+  function _stripInjectedToolsDomainBlock(docFile, content) {
+    if (docFile !== "TOOLS.md") {
+      return content;
+    }
+    return content.replace(TOOLS_DOMAIN_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function _loadRuntimeDomains() {
+    const defs = deps.getMemoryConfig()?.retrieval?.domains;
+    if (!defs || typeof defs !== "object") {
+      return [];
+    }
+    return Object.keys(defs).map((key) => String(key || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }
+  async function _loadRuntimeRelationTypes() {
+    try {
+      const raw = await deps.execPython("relation-types", ["--json"]);
+      const parsed = JSON.parse(String(raw || "[]"));
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed.map((item) => String(item || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    } catch (err) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      return [];
+    }
+  }
+  async function _buildRuntimeContextBlock() {
+    const lines = [];
+    const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
+    lines.push("[Quaid runtime]");
+    if (instanceId) {
+      lines.push(`instance: ${instanceId}`);
+    }
+    lines.push(`home: ${deps.workspace}`);
+    const domains = _loadRuntimeDomains();
+    lines.push(`active domains: ${domains.length ? domains.join(", ") : "(none registered)"}`);
+    const relationTypes = await _loadRuntimeRelationTypes();
+    lines.push(
+      `active graph relation types: ${relationTypes.length ? relationTypes.join(", ") : "(none observed yet)"}`
+    );
+    return `${lines.join("\n")}
+`;
+  }
+  async function injectProjectContext(existingContext) {
     let prepend = existingContext;
     try {
       const sections = [];
@@ -2498,7 +2544,7 @@ ${content}`);
           const filePath = path.join(projectsDir, projectName, docFile);
           if (fs.existsSync(filePath)) {
             try {
-              const content = fs.readFileSync(filePath, "utf8").trim();
+              const content = _stripInjectedToolsDomainBlock(docFile, fs.readFileSync(filePath, "utf8").trim());
               if (content) sections.push(`--- ${projectName}/${docFile} ---
 ${content}`);
             } catch {
@@ -2507,10 +2553,8 @@ ${content}`);
         }
       }
       if (sections.length === 0) return prepend;
-      const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
-      const runtimeMeta = instanceId ? `[Quaid runtime: instance=${instanceId}, home=${deps.workspace}]
-` : "";
-      const combined = "# Quaid Context\n\n" + runtimeMeta + sections.join("\n\n") + "\n";
+      const runtimeMeta = await _buildRuntimeContextBlock();
+      const combined = "# Quaid Context\n\n" + runtimeMeta + "\n" + sections.join("\n\n") + "\n";
       prepend = prepend ? `${prepend}
 
 ${combined}` : combined;

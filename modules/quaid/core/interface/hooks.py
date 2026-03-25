@@ -22,6 +22,7 @@ import fcntl
 import glob as glob_mod
 import json
 import os
+import re
 import select
 import subprocess
 import sys
@@ -66,6 +67,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from lib.adapter import get_owner_id as _get_owner_id
 
 
+_TOOLS_DOMAIN_BLOCK_RE = re.compile(
+    r"<!-- AUTO-GENERATED:DOMAIN-LIST:START -->.*?<!-- AUTO-GENERATED:DOMAIN-LIST:END -->\n*",
+    flags=re.DOTALL,
+)
+
+
 def _format_memories(memories: List[Dict]) -> str:
     """Format recalled memories as readable context text."""
     if not memories:
@@ -97,6 +104,56 @@ def _format_project_docs(docs_bundle: Dict) -> str:
         label = f" (from {source})" if source else ""
         lines.append(f"  {i}. {text}{label} (relevance: {sim:.2f})")
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _strip_tools_domain_block(doc_file: str, content: str) -> str:
+    if doc_file != "TOOLS.md":
+        return content
+    return re.sub(_TOOLS_DOMAIN_BLOCK_RE, "", content).strip()
+
+
+def _load_runtime_domains() -> List[str]:
+    try:
+        from config import get_config
+        defs = getattr(get_config(), "retrieval", None)
+        domains = getattr(defs, "domains", {}) if defs is not None else {}
+        if isinstance(domains, dict):
+            return sorted(str(key).strip() for key in domains.keys() if str(key).strip())
+    except Exception:
+        pass
+    return []
+
+
+def _load_runtime_relation_types() -> List[str]:
+    try:
+        from datastore.memorydb.memory_graph import list_relation_types
+        return list_relation_types()
+    except Exception:
+        return []
+
+
+def _build_runtime_context_block() -> str:
+    workspace = str(
+        os.environ.get("QUAID_HOME")
+        or os.environ.get("QUAID_WORKSPACE")
+        or os.environ.get("CLAWDBOT_WORKSPACE")
+        or os.getcwd()
+    ).strip()
+    instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    domains = _load_runtime_domains()
+    relation_types = _load_runtime_relation_types()
+    lines = [
+        "--- runtime-metadata ---",
+        "[Quaid runtime]",
+    ]
+    if instance:
+        lines.append(f"instance: {instance}")
+    lines.append(f"home: {workspace}")
+    lines.append(f"active domains: {', '.join(domains) if domains else '(none registered)'}")
+    lines.append(
+        f"active graph relation types: {', '.join(relation_types) if relation_types else '(none observed yet)'}"
+    )
+    return "\n".join(lines)
 
 
 def _hook_trace_path() -> Path:
@@ -694,7 +751,7 @@ def hook_session_init(args):
         for doc_file in ("TOOLS.md", "AGENTS.md"):
             fpath = project_dir / doc_file
             if fpath.is_file():
-                content = fpath.read_text(encoding="utf-8").strip()
+                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
                 if content:
                     sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
 
@@ -702,7 +759,7 @@ def hook_session_init(args):
         for doc_file in ("TOOLS.md", "AGENTS.md"):
             fpath = project_dir / doc_file
             if fpath.is_file():
-                content = fpath.read_text(encoding="utf-8").strip()
+                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
                 if content:
                     sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
 
@@ -729,6 +786,9 @@ def hook_session_init(args):
             sections.append(f"--- adapter-cli ---\n{cli_snippet.strip()}")
     except Exception as e:
         print(f"[quaid][session-init] adapter CLI snippet error: {e}", file=sys.stderr)
+
+    if sections:
+        sections.insert(0, _build_runtime_context_block())
 
     if not sections:
         print("[quaid][session-init] no project docs found", file=sys.stderr)

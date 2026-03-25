@@ -1850,7 +1850,7 @@ notify_user(${JSON.stringify(message)})
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
-            const projectDocs = facade.injectProjectContext(undefined);
+            const projectDocs = await facade.injectProjectContext(undefined);
             if (projectDocs) {
               appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });

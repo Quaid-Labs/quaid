@@ -323,6 +323,7 @@ export type QuaidFacade = {
   // --- Project catalog ---
   getProjectCatalog: () => Array<{ name: string; description: string }>;
   getProjectNames: () => string[];
+  injectProjectContext: (existingContext?: string) => Promise<string | undefined>;
 
   // --- Guidance rendering ---
   renderDatastoreGuidance: () => string;
@@ -401,6 +402,7 @@ const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
 const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
 const COMPACTION_NOTIFY_BATCH_MS = 10_000;
 const COMPACTION_NOTIFY_BATCH_MAX_MS = 45_000;
+const TOOLS_DOMAIN_BLOCK_RE = /<!-- AUTO-GENERATED:DOMAIN-LIST:START -->[\s\S]*?<!-- AUTO-GENERATED:DOMAIN-LIST:END -->\n*/g;
 const RECALL_RETRY_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
   "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
@@ -3241,7 +3243,61 @@ ${lines.join("\n")}
   // Project context injection for OC before_agent_start
   // -------------------------------------------------------------------------
 
-  function injectProjectContext(existingContext?: string): string | undefined {
+  function _stripInjectedToolsDomainBlock(docFile: string, content: string): string {
+    if (docFile !== "TOOLS.md") {
+      return content;
+    }
+    return content.replace(TOOLS_DOMAIN_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  function _loadRuntimeDomains(): string[] {
+    const defs = deps.getMemoryConfig()?.retrieval?.domains;
+    if (!defs || typeof defs !== "object") {
+      return [];
+    }
+    return Object.keys(defs)
+      .map((key) => String(key || "").trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  async function _loadRuntimeRelationTypes(): Promise<string[]> {
+    try {
+      const raw = await deps.execPython("relation-types", ["--json"]);
+      const parsed = JSON.parse(String(raw || "[]"));
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .map((item: unknown) => String(item || "").trim())
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b));
+    } catch (err: unknown) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      return [];
+    }
+  }
+
+  async function _buildRuntimeContextBlock(): Promise<string> {
+    const lines: string[] = [];
+    const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
+    lines.push("[Quaid runtime]");
+    if (instanceId) {
+      lines.push(`instance: ${instanceId}`);
+    }
+    lines.push(`home: ${deps.workspace}`);
+    const domains = _loadRuntimeDomains();
+    lines.push(`active domains: ${domains.length ? domains.join(", ") : "(none registered)"}`);
+    const relationTypes = await _loadRuntimeRelationTypes();
+    lines.push(
+      `active graph relation types: ${relationTypes.length ? relationTypes.join(", ") : "(none observed yet)"}`,
+    );
+    return `${lines.join("\n")}\n`;
+  }
+
+  async function injectProjectContext(existingContext?: string): Promise<string | undefined> {
     let prepend = existingContext;
     try {
       const sections: string[] = [];
@@ -3275,7 +3331,7 @@ ${lines.join("\n")}
           const filePath = path.join(projectsDir, projectName, docFile);
           if (fs.existsSync(filePath)) {
             try {
-              const content = fs.readFileSync(filePath, "utf8").trim();
+              const content = _stripInjectedToolsDomainBlock(docFile, fs.readFileSync(filePath, "utf8").trim());
               if (content) sections.push(`--- ${projectName}/${docFile} ---\n${content}`);
             } catch { /* skip unreadable */ }
           }
@@ -3283,11 +3339,8 @@ ${lines.join("\n")}
       }
 
       if (sections.length === 0) return prepend;
-      const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
-      const runtimeMeta = instanceId
-        ? `[Quaid runtime: instance=${instanceId}, home=${deps.workspace}]\n`
-        : "";
-      const combined = "# Quaid Context\n\n" + runtimeMeta + sections.join("\n\n") + "\n";
+      const runtimeMeta = await _buildRuntimeContextBlock();
+      const combined = "# Quaid Context\n\n" + runtimeMeta + "\n" + sections.join("\n\n") + "\n";
       prepend = prepend ? `${prepend}\n\n${combined}` : combined;
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;

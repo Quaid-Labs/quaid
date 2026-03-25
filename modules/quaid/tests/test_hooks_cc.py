@@ -553,6 +553,49 @@ class TestHookSessionInitRegistryAugmentation:
         assert "quaid/TOOLS.md" in content
         assert "use quaid recall" in content
 
+    def test_runtime_metadata_block_and_domain_block_stripping(self, tmp_path, monkeypatch):
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        proj = projects_dir / "quaid"
+        proj.mkdir()
+        (proj / "TOOLS.md").write_text(
+            "\n".join(
+                [
+                    "# Tools",
+                    "before domains",
+                    "<!-- AUTO-GENERATED:DOMAIN-LIST:START -->",
+                    "Available domains:",
+                    "- `personal`: personal stuff",
+                    "<!-- AUTO-GENERATED:DOMAIN-LIST:END -->",
+                    "after domains",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        from core.interface import hooks
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "cc-test")
+        monkeypatch.setattr(hooks, "_load_runtime_domains", lambda: ["personal", "technical"])
+        monkeypatch.setattr(hooks, "_load_runtime_relation_types", lambda: ["neighbor_of", "parent_of"])
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s4b", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None
+        assert "[Quaid runtime]" in content
+        assert "instance: cc-test" in content
+        assert "active domains: personal, technical" in content
+        assert "active graph relation types: neighbor_of, parent_of" in content
+        assert "before domains" in content
+        assert "after domains" in content
+        assert "AUTO-GENERATED:DOMAIN-LIST" not in content
+        assert "Available domains:" not in content
+
     def test_agents_md_content_in_output(self, tmp_path, monkeypatch):
         """AGENTS.md content from a project directory is present in the output file."""
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
