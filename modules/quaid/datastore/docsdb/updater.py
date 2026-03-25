@@ -1855,9 +1855,9 @@ if __name__ == "__main__":
         sys.exit(0 if ok else 1)
     elif args.command == "update-stale":
         dry_run = not args.apply
-        count = cmd_update_stale(dry_run=dry_run, trivial_only=args.trivial_only,
-                                  project=getattr(args, "project", None))
-        sys.exit(0 if count > 0 else 1)
+        cmd_update_stale(dry_run=dry_run, trivial_only=args.trivial_only,
+                         project=getattr(args, "project", None))
+        sys.exit(0)
     elif args.command == "update-from-transcript":
         dry_run = not args.apply
         count = cmd_update_from_transcript(
