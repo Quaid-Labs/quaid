@@ -375,6 +375,50 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> Non
         logger.error("cursor write failed for %s: %s", session_id, e)
 
 
+def _deferred_extraction_dir() -> Path:
+    d = _instance_root() / "data" / "deferred-extractions"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _save_deferred_extraction(
+    *,
+    session_id: str,
+    transcript_text: str,
+    owner_id: str,
+    label: str,
+    reason: str,
+) -> None:
+    """Save an unextracted transcript chunk for later janitor recovery.
+
+    Written when a provider outage exhausts the 6-hour retry window.
+    The janitor's deferred_extraction task picks these up and retries
+    extraction when the provider is back.
+    """
+    ts = int(time.time())
+    filename = f"{session_id}_{ts}.json"
+    path = _deferred_extraction_dir() / filename
+    payload = {
+        "session_id": session_id,
+        "owner_id": owner_id,
+        "label": label,
+        "reason": reason,
+        "saved_at": ts,
+        "transcript_text": transcript_text,
+    }
+    try:
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        logger.warning(
+            "[daemon] saved deferred extraction for session %s: %s (%d chars)",
+            session_id, path, len(transcript_text),
+        )
+    except Exception as e:
+        logger.error(
+            "[daemon] failed to save deferred extraction for session %s: %s",
+            session_id, e,
+        )
+
+
 def _rolling_state_dir() -> Path:
     d = _instance_root() / "data" / "rolling-extraction"
     d.mkdir(parents=True, exist_ok=True)
@@ -1593,39 +1637,56 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             chunks_total = int(stage_result.get("chunks_total", 0) or 0)
             unclassified_empty = int(stage_result.get("unclassified_empty_payloads", 0) or 0)
             if unclassified_empty > 0:
-                # Time-window retry: keep retrying for up to 6 hours (survives
-                # multi-hour provider outages). The daemon's natural poll interval
-                # provides backoff between attempts — no explicit sleep needed.
-                _EMPTY_RETRY_WINDOW_SECONDS = 6 * 3600  # 6 hours
-                _first_seen = float(staged_state.get("empty_chunk_first_seen", 0) or 0)
+                # Model responded but produced no extractable signal and didn't
+                # explicitly say "nothing_usable". This is a model quality issue,
+                # not a provider error — the LLM ran, it just didn't find facts.
+                # Count as processed; the extraction prompt should return
+                # "nothing_usable" for genuinely empty content.
+                logger.warning(
+                    "[%s] session %s: %d/%d chunks returned empty payloads "
+                    "(model responded but no extractable signal); counting as processed",
+                    label, session_id, unclassified_empty, chunks_total,
+                )
+            _failed_chunks = chunks_total - chunks_processed - unclassified_empty
+            if _failed_chunks > 0:
+                # Provider error: LLM call failed (timeout, HTTP error, connection
+                # refused). Time-window retry for up to 6 hours — survives multi-hour
+                # provider outages. The daemon's natural poll interval provides backoff.
+                _PROVIDER_RETRY_WINDOW_SECONDS = 6 * 3600  # 6 hours
+                _first_seen = float(staged_state.get("provider_error_first_seen", 0) or 0)
                 _now = time.time()
                 if _first_seen == 0:
                     _first_seen = _now
-                    staged_state["empty_chunk_first_seen"] = _first_seen
+                    staged_state["provider_error_first_seen"] = _first_seen
                 _elapsed = _now - _first_seen
                 _elapsed_min = _elapsed / 60
                 logger.error(
-                    "[%s] session %s: %d/%d chunks returned empty payloads "
-                    "(possible provider outage or data loss); failing for %.0f min",
-                    label, session_id, unclassified_empty, chunks_total, _elapsed_min,
+                    "[%s] session %s: %d/%d chunks failed (provider error); "
+                    "failing for %.0f min — will retry up to %dh",
+                    label, session_id, _failed_chunks, chunks_total,
+                    _elapsed_min, _PROVIDER_RETRY_WINDOW_SECONDS // 3600,
                 )
-                if _elapsed < _EMPTY_RETRY_WINDOW_SECONDS:
+                if _elapsed < _PROVIDER_RETRY_WINDOW_SECONDS:
                     write_rolling_state(session_id, staged_state)
                     raise RuntimeError(
-                        f"rolling extraction has {unclassified_empty} empty chunk(s) "
-                        f"(failing for {_elapsed_min:.0f} min, will retry up to "
-                        f"{_EMPTY_RETRY_WINDOW_SECONDS // 3600}h); preserving signal"
+                        f"rolling extraction has {_failed_chunks} failed chunk(s) "
+                        f"(provider error, failing for {_elapsed_min:.0f} min); "
+                        f"preserving signal for retry"
                     )
+                # Retry window exhausted — save transcript for deferred extraction
                 logger.error(
-                    "[%s] session %s: PERMANENT DATA LOSS — %d chunk(s) could not be "
-                    "extracted after %.1fh of retries; proceeding with partial results",
-                    label, session_id, unclassified_empty, _elapsed / 3600,
+                    "[%s] session %s: DEFERRED — %d chunk(s) could not be extracted "
+                    "after %.1fh of retries; saving transcript for janitor recovery",
+                    label, session_id, _failed_chunks, _elapsed / 3600,
                 )
-            if chunks_total > 0 and chunks_processed < chunks_total and unclassified_empty == 0:
-                raise RuntimeError(
-                    f"rolling extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
+                _save_deferred_extraction(
+                    session_id=session_id,
+                    transcript_text=transcript_text,
+                    owner_id=owner,
+                    label=label,
+                    reason=f"provider_error_exhausted_after_{_elapsed / 3600:.1f}h",
                 )
-            staged_state.pop("empty_chunk_first_seen", None)
+            staged_state.pop("provider_error_first_seen", None)
             staged_state = merge_staged_payloads(staged_state, stage_result)
             staged_state["processed_line_offset"] = cursor_offset + len(new_lines)
             staged_state["transcript_path"] = transcript_path
@@ -1726,34 +1787,45 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             chunks_total = int(tail_result.get("chunks_total", 0) or 0)
             unclassified_empty = int(tail_result.get("unclassified_empty_payloads", 0) or 0)
             if unclassified_empty > 0:
-                _EMPTY_RETRY_WINDOW_SECONDS = 6 * 3600
-                _first_seen = float(staged_state.get("empty_chunk_first_seen", 0) or 0)
+                logger.warning(
+                    "[%s] session %s: FLUSH — %d/%d chunks returned empty payloads "
+                    "(model responded but no extractable signal); counting as processed",
+                    label, session_id, unclassified_empty, chunks_total,
+                )
+            _failed_chunks = chunks_total - chunks_processed - unclassified_empty
+            if _failed_chunks > 0:
+                _PROVIDER_RETRY_WINDOW_SECONDS = 6 * 3600
+                _first_seen = float(staged_state.get("provider_error_first_seen", 0) or 0)
                 _now = time.time()
                 if _first_seen == 0:
                     _first_seen = _now
-                    staged_state["empty_chunk_first_seen"] = _first_seen
+                    staged_state["provider_error_first_seen"] = _first_seen
                 _elapsed = _now - _first_seen
                 _elapsed_min = _elapsed / 60
                 logger.error(
-                    "[%s] session %s: FLUSH — %d/%d chunks returned empty payloads "
-                    "(possible provider outage or data loss); failing for %.0f min",
-                    label, session_id, unclassified_empty, chunks_total, _elapsed_min,
+                    "[%s] session %s: FLUSH — %d/%d chunks failed (provider error); "
+                    "failing for %.0f min — will retry up to %dh",
+                    label, session_id, _failed_chunks, chunks_total,
+                    _elapsed_min, _PROVIDER_RETRY_WINDOW_SECONDS // 3600,
                 )
-                if _elapsed < _EMPTY_RETRY_WINDOW_SECONDS:
+                if _elapsed < _PROVIDER_RETRY_WINDOW_SECONDS:
                     write_rolling_state(session_id, staged_state)
                     raise RuntimeError(
-                        f"flush extraction has {unclassified_empty} empty chunk(s) "
-                        f"(failing for {_elapsed_min:.0f} min, will retry up to "
-                        f"{_EMPTY_RETRY_WINDOW_SECONDS // 3600}h); preserving signal"
+                        f"flush extraction has {_failed_chunks} failed chunk(s) "
+                        f"(provider error, failing for {_elapsed_min:.0f} min); "
+                        f"preserving signal for retry"
                     )
                 logger.error(
-                    "[%s] session %s: PERMANENT DATA LOSS — FLUSH — %d chunk(s) could not be "
-                    "extracted after %.1fh of retries; proceeding with partial results",
-                    label, session_id, unclassified_empty, _elapsed / 3600,
+                    "[%s] session %s: DEFERRED — FLUSH — %d chunk(s) could not be "
+                    "extracted after %.1fh; saving transcript for janitor recovery",
+                    label, session_id, _failed_chunks, _elapsed / 3600,
                 )
-            if chunks_total > 0 and chunks_processed < chunks_total and unclassified_empty == 0:
-                raise RuntimeError(
-                    f"flush extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
+                _save_deferred_extraction(
+                    session_id=session_id,
+                    transcript_text=transcript_text,
+                    owner_id=owner,
+                    label=label,
+                    reason=f"flush_provider_error_exhausted_after_{_elapsed / 3600:.1f}h",
                 )
         extract_wall = time.time() - extract_started_at
         usage_after_extract = _read_usage_totals()
