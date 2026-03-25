@@ -1632,7 +1632,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 session_id=session_id,
                 dry_run=True,
                 carry_facts=list(staged_state.get("carry_facts", []) or []),
-                wall_timeout_seconds=330.0,
+                wall_timeout_seconds=600.0,
             )
             stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
             chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
