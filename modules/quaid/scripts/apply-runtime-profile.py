@@ -362,7 +362,7 @@ def _apply_quaid(quaid_cfg: Dict[str, Any]) -> None:
         "deepReasoningModelClasses",
         {
             "openai": "gpt-5.3-codex",
-            "anthropic": "claude-opus-4-6",
+            "anthropic": "claude-haiku-4-5",  # HARD RULE: haiku for both fast+deep on Anthropic
             "openai-compatible": "gpt-4.1",
         },
     )
