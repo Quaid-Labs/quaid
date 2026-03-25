@@ -132,7 +132,6 @@ print(json.dumps(register_domain(name, desc), indent=2))
       check)   exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
       update)  exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@" ;;
       changelog) exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
-      search)  echo "quaid docs search is removed. Use: quaid recall \"<query>\" '{\"stores\":[\"docs\"]}'" >&2; exit 1 ;;
       *)       echo "Usage: quaid docs {list|check|update|changelog} [args...]"; exit 1 ;;
     esac
     ;;
