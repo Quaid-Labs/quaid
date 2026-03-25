@@ -4,7 +4,7 @@
 
 This document is the single authoritative reference for the Quaid memory system. It covers system architecture and design decisions (formerly `memory-system-design.md`), full implementation details for all modules, hooks, and shared libraries (formerly `memory-local-implementation.md`), and the complete SQLite schema DDL for all tables (formerly `memory-schema.md`). For day-to-day operations see `memory-operations-guide.md`. For deduplication internals see `memory-deduplication-system.md`.
 
-**Status:** Production Ready (updated 2026-02-08)
+**Status:** Production Ready (updated 2026-03-25)
 **Location:** `modules/quaid/`
 **Codename:** Total Recall (quaid)
 *Design doc created: 2026-01-31 | Updated: 2026-02-08 | Status: Phase 6 complete — search batches 1-4, Ebbinghaus decay, projects system, append-only project logs*
@@ -98,7 +98,7 @@ Agent receives results with similarity %, extraction_confidence
                                        → journal_entries → journal/*.journal.md diary files
 ```
 
-> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env). Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via Opus with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
+> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env), latency-capped, and intentionally incomplete. The fast auto-inject lane keeps a short bounded planner budget and may miss graph-derived answers even when the underlying evidence exists in memory. Core now injects a runtime metadata block with active domains and active graph relation types so the model can decide when an explicit recall is warranted. Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via Opus with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
 
 ### Privacy Tiers
 
@@ -122,7 +122,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 6. **Composite scoring** — 60% relevance + 20% recency + 15% access frequency + 5% extraction confidence
 7. **Temporal validity** — expired facts penalized, future facts deprioritized
 8. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
-9. **Multi-hop traversal** — bidirectional graph traversal, depth=2, hop score decay 0.7^depth
+9. **Multi-hop traversal** — bidirectional graph traversal, depth=2, hop score decay 0.7^depth, triggered from live relation types plus stored edge-keyword metadata rather than only fixed lexical buckets
 10. **Access tracking** — increments access_count and accessed_at on returned results
 
 ### Decay System (Ebbinghaus)
@@ -348,6 +348,7 @@ Key search functions:
 - `store_edge_keywords(relation, keywords, description)` — stores trigger keywords for a relation type
 - `generate_keywords_for_relation(relation)` — uses LLM to generate keywords for new relation types
 - `invalidate_edge_keywords_cache()` — clears cache after adding new keywords
+- `list_relation_types()` — returns the live relation type inventory used by runtime metadata injection and graph-aware query routing
 
 **High-level API:**
 - `recall(query, limit, privacy, owner_id, current_session_id, compaction_time, date_from, date_to)` — returns results with `extraction_confidence`, `created_at`, `valid_from`, `valid_until`, `privacy`, `owner_id`, `domains`, `project`. Runs hybrid search + raw FTS on unrouted query to catch proper nouns. Results pass through `_sanitize_for_context()` which strips injection patterns from recalled text before it enters the agent's context window. Recalled facts are tagged with `[MEMORY]` prefix in output. **Date range filtering:** optional `date_from` and `date_to` parameters (YYYY-MM-DD) filter results by `created_at` date, applied before limit truncation (so limit returns N results within range). Results without dates are included by default. **Domain filtering:** results are filtered by the provided domain map when present.
@@ -393,6 +394,7 @@ python3 memory_graph.py search "query" --owner <user> --limit 50 \
   [--current-session-id ID] [--compaction-time ISO] \
   [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD]
 python3 memory_graph.py search-graph-aware "query" --owner <user> --limit 50 --json
+python3 memory_graph.py relation-types --json
 python3 memory_graph.py store "text" --owner <user> --category fact \
   [--confidence 0.9] [--extraction-confidence 0.9] [--session-id ID] \
   [--privacy shared] [--speaker "User"] [--status pending] \
@@ -431,7 +433,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 - **Gateway restart recovery:** Detects unextracted sessions from before the restart and auto-recovers missed memories. Checks for sessions with messages but no corresponding extraction event, then triggers extraction for each.
 
 **Hooks:**
-- `before_agent_start` — optional auto-injection pipeline (gated by config/env)
+- `before_agent_start` — optional auto-injection pipeline (gated by config/env). Fast path is latency-bounded and should be treated as a hint surface rather than exhaustive recall.
 - `agent_end` — inactivity-timeout extraction (per-message classifier deprecated)
 - `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Combined fact+edge extraction runs across transcript chunks with carry-forward context.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
 - `before_reset` — same extraction as compaction, triggered on `/new` or `/reset`
@@ -652,7 +654,7 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 **`core/contracts/`, `core/plugins/`:** Defines the protocol surfaces that all datastores implement.
 - `core/contracts/plugin_contract.py` — `PluginContractBase` ABC with seven executable surfaces: `on_init`, `on_config`, `on_status`, `on_dashboard`, `on_maintenance`, `on_tool_runtime`, `on_health`.
 - `core/contracts/memory.py` — `MemoryServicePort` Protocol (structural typing) defining the store/recall/search/create_edge/forget/stats/domain API that all memory service implementations must satisfy.
-- `core/plugins/memorydb_contract.py` — MemoryDB contract. Notable: domain lifecycle (schema/table sync and TOOLS domain block sync) is datastore-owned and implemented here, invoked by core plugin contract execution. Uses `lib/domain_runtime.publish_domains_to_runtime_config` and `lib/tools_domain_sync.sync_tools_domain_block`.
+- `core/plugins/memorydb_contract.py` — MemoryDB contract. Notable: domain lifecycle (schema/table sync and TOOLS domain block sync) is datastore-owned and implemented here, invoked by core plugin contract execution. Uses `lib/domain_runtime.publish_domains_to_runtime_config` and `lib/tools_domain_sync.sync_tools_domain_block`. The synced `TOOLS.md` block remains useful for docs/CLI visibility, but live domains and graph relation types are injected separately through runtime metadata at context-build time.
 - `core/plugins/docsdb_contract.py` — DocsDB contract; handles docs workspace init (`projects/`, `temp/`, `scratch/` directory initialization).
 - `core/plugins/notedb_contract.py` — NoteDB contract; minimal stub (all hooks return `ready: True`; dashboard disabled).
 - `core/services/memory_service.py` — `DatastoreMemoryService` class implementing `MemoryServicePort`; core-side composition point wrapping `datastore.facade` behind identity enforcement (`identity_runtime` assertion, privacy policy, write contract).

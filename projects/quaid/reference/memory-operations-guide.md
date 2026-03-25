@@ -14,6 +14,11 @@ and the systems you operate. Without it, every conversation starts from zero.
 2. **Docs/RAG** (searched on demand): `projects/<project>/` docs with deep technical references, queried with `projects_search` or `datastore/docsdb/rag.py`.
 3. **Memory DB** (semantic recall): SQLite graph of user facts, preferences, and relationships queried via `memory_recall`.
 
+Runtime-injected metadata is a separate surface from the static markdown/docs set.
+Active domains and active graph relation types are injected dynamically by core at
+runtime so the model can see what is currently live without treating `TOOLS.md`
+as the source of truth for dynamic state.
+
 **Key distinction:** Memory is for user/domain facts. Architecture and implementation details live in project docs.
 
 ### Memory Lifecycle
@@ -56,6 +61,7 @@ cd modules/quaid
 # Memory recall and graph-aware lookup
 python3 datastore/memorydb/memory_graph.py search "query" --owner quaid --limit 50
 python3 datastore/memorydb/memory_graph.py search-graph-aware "query" --owner quaid --limit 50 --json
+python3 datastore/memorydb/memory_graph.py relation-types --json
 
 # Memory write/delete
 python3 datastore/memorydb/memory_graph.py store "text" --owner quaid --category fact
@@ -74,13 +80,19 @@ python3 core/lifecycle/janitor.py --task all --apply
 
 - Prefer `projects_search` for architecture/process/codebase questions.
 - Prefer `memory_recall` for user facts, decisions, and timelines.
+- Treat auto-injected memory as a fast hint layer, not proof that no better answer exists.
+- If injected memory does not clearly answer a relationship-shaped, hierarchy-shaped, or graph-derived question, do an explicit `memory_recall`.
 - For relationship questions, use graph expansion (`search-graph-aware` or `options.graph.expand=true`).
+- If core injected a runtime metadata block with active graph relation types, use that block to judge whether graph-oriented recall is likely to help.
 
 ### Domain Filters
 
 - Default recall behavior is `{ "all": true }`.
 - To scope results, set explicit domains (for example `{ "technical": true }`).
 - If any explicit domain is true, `all` is ignored and only selected domains are returned.
+- The current active domain inventory is injected dynamically at runtime. Do not
+  treat the auto-generated domain block in `TOOLS.md` as the live runtime source
+  of truth.
 
 ### See Also
 
