@@ -1314,62 +1314,15 @@ def cmd_update_stale(
             print(f"  Skipped {skipped_significant} doc(s) with significant changes "
                   "(use without --trivial-only to update all)")
 
-    # Second pass: index registered docs that have never been indexed (no chunks).
-    # A newly registered doc is effectively infinitely stale — it should be picked
-    # up by 'docs update' without needing a separate 'janitor --task rag' invocation.
-    # Sort by registered_at DESC so the most recently registered docs are indexed first.
-    # Cap at max_docs to avoid indexing the entire registry on a fresh silo.
-    indexed_new = 0
-    try:
-        from datastore.docsdb.rag import DocsRAG
-        from datastore.docsdb.registry import DocsRegistry
-        registry = DocsRegistry()
-        rag = DocsRAG()
-        all_docs = sorted(
-            registry.list_docs(project=project),
-            key=lambda e: e.get("registered_at") or "",
-            reverse=True,
-        )
-        candidate_paths = []
-        for entry in all_docs:
-            file_path = entry.get("file_path") or entry.get("path", "")
-            if not file_path:
-                continue
-            if not Path(file_path).exists():
-                continue
-            # Skip docs already handled by the stale pass above
-            if file_path in stale:
-                continue
-            candidate_paths.append(file_path)
-        needs_reindex = rag.needs_reindex_many(candidate_paths)
-        new_doc_budget = max(1, max_docs - updated)
-        for file_path in candidate_paths:
-            if indexed_new >= new_doc_budget:
-                break
-            if not needs_reindex.get(file_path, True):
-                continue
-            if dry_run:
-                print(f"  Would index new doc: {file_path}")
-                indexed_new += 1
-            else:
-                print(f"  Indexing new doc: {file_path}")
-                try:
-                    rag.index_document(file_path)
-                    indexed_new += 1
-                except Exception as exc:
-                    print(f"  WARNING: failed to index {file_path}: {exc}")
-    except Exception as exc:
-        print(f"  WARNING: new-doc indexing pass failed: {exc}")
+    # New-doc embedding/indexing is handled by the daemon's periodic stale-doc
+    # checker (_index_one_stale_doc), which indexes one doc per cycle (~60s).
+    # This avoids blocking the CLI with Ollama embedding calls.
 
-    if indexed_new:
-        action = "Would index" if dry_run else "Indexed"
-        print(f"{action} {indexed_new} new doc(s) with no existing chunks")
-
-    if not stale and not indexed_new:
+    if not stale and not updated:
         print("All docs up-to-date.")
         return 0
 
-    return updated + indexed_new
+    return updated
 
 
 def cmd_update_from_transcript(transcript_path: str, dry_run: bool = True, max_docs: int = 3) -> int:

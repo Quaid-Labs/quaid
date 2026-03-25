@@ -2217,6 +2217,62 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stale-doc indexing (runs periodically in daemon loop)
+# ---------------------------------------------------------------------------
+
+
+def _index_one_stale_doc() -> bool:
+    """Index one stale registered doc, if any. Returns True if a doc was indexed.
+
+    Called every ~60s from the daemon loop. Indexes docs one at a time so they
+    trickle into the search index continuously rather than in large batches.
+    This replaces the new-doc indexing pass in cmd_update_stale.
+    """
+    try:
+        from datastore.docsdb.rag import DocsRAG
+        from datastore.docsdb.registry import DocsRegistry
+    except ImportError:
+        return False
+
+    registry = DocsRegistry()
+    rag = DocsRAG()
+
+    # Get all registered docs, sorted by registered_at DESC so newly registered
+    # docs are indexed first.
+    all_docs = sorted(
+        registry.list_docs(),
+        key=lambda e: e.get("registered_at") or "",
+        reverse=True,
+    )
+
+    candidate_paths = []
+    for entry in all_docs:
+        file_path = entry.get("file_path") or entry.get("path", "")
+        if not file_path:
+            continue
+        if not Path(file_path).exists():
+            continue
+        candidate_paths.append(file_path)
+
+    if not candidate_paths:
+        return False
+
+    needs = rag.needs_reindex_many(candidate_paths)
+    for file_path in candidate_paths:
+        if not needs.get(file_path, True):
+            continue
+        try:
+            chunks = rag.index_document(file_path)
+            logger.info("[daemon] indexed stale doc: %s (%d chunks)", file_path, chunks)
+            return True
+        except Exception as e:
+            logger.warning("[daemon] failed to index stale doc %s: %s", file_path, e)
+            return False
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Orphaned session sweep (runs on session-init)
 # ---------------------------------------------------------------------------
 
@@ -2307,6 +2363,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
     signal.signal(signal.SIGINT, handle_sigterm)
 
     last_idle_check = 0.0
+    last_stale_doc_check = 0.0
+    _STALE_DOC_CHECK_INTERVAL = 60.0  # check for stale docs every 60s
 
     # Initialize version watcher and janitor scheduler
     from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
@@ -2385,6 +2443,14 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 janitor_scheduler.tick()
             except Exception as e:
                 logger.debug("janitor scheduler tick failed: %s", e)
+
+            # Periodic stale-doc indexing — index one stale doc per cycle
+            if now - last_stale_doc_check > _STALE_DOC_CHECK_INTERVAL:
+                try:
+                    _index_one_stale_doc()
+                except Exception as e:
+                    logger.debug("stale doc indexing failed: %s", e)
+                last_stale_doc_check = now
 
             time.sleep(poll_interval)
 
