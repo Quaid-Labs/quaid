@@ -1593,31 +1593,39 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             chunks_total = int(stage_result.get("chunks_total", 0) or 0)
             unclassified_empty = int(stage_result.get("unclassified_empty_payloads", 0) or 0)
             if unclassified_empty > 0:
-                _empty_retries = int(staged_state.get("empty_chunk_retries", 0) or 0) + 1
-                _max_empty_retries = 3
+                # Time-window retry: keep retrying for up to 6 hours (survives
+                # multi-hour provider outages). The daemon's natural poll interval
+                # provides backoff between attempts — no explicit sleep needed.
+                _EMPTY_RETRY_WINDOW_SECONDS = 6 * 3600  # 6 hours
+                _first_seen = float(staged_state.get("empty_chunk_first_seen", 0) or 0)
+                _now = time.time()
+                if _first_seen == 0:
+                    _first_seen = _now
+                    staged_state["empty_chunk_first_seen"] = _first_seen
+                _elapsed = _now - _first_seen
+                _elapsed_min = _elapsed / 60
                 logger.error(
                     "[%s] session %s: %d/%d chunks returned empty payloads "
-                    "(possible provider outage or data loss); retry %d/%d",
-                    label, session_id, unclassified_empty, chunks_total,
-                    _empty_retries, _max_empty_retries,
+                    "(possible provider outage or data loss); failing for %.0f min",
+                    label, session_id, unclassified_empty, chunks_total, _elapsed_min,
                 )
-                if _empty_retries < _max_empty_retries:
-                    staged_state["empty_chunk_retries"] = _empty_retries
+                if _elapsed < _EMPTY_RETRY_WINDOW_SECONDS:
                     write_rolling_state(session_id, staged_state)
                     raise RuntimeError(
                         f"rolling extraction has {unclassified_empty} empty chunk(s) "
-                        f"(retry {_empty_retries}/{_max_empty_retries}); preserving signal for retry"
+                        f"(failing for {_elapsed_min:.0f} min, will retry up to "
+                        f"{_EMPTY_RETRY_WINDOW_SECONDS // 3600}h); preserving signal"
                     )
                 logger.error(
-                    "[%s] session %s: PERMANENT DATA LOSS — %d chunk(s) could not be extracted "
-                    "after %d retries; proceeding with partial results",
-                    label, session_id, unclassified_empty, _max_empty_retries,
+                    "[%s] session %s: PERMANENT DATA LOSS — %d chunk(s) could not be "
+                    "extracted after %.1fh of retries; proceeding with partial results",
+                    label, session_id, unclassified_empty, _elapsed / 3600,
                 )
             if chunks_total > 0 and chunks_processed < chunks_total and unclassified_empty == 0:
                 raise RuntimeError(
                     f"rolling extraction incomplete ({chunks_processed}/{chunks_total}); preserving signal for retry"
                 )
-            staged_state.pop("empty_chunk_retries", None)
+            staged_state.pop("empty_chunk_first_seen", None)
             staged_state = merge_staged_payloads(staged_state, stage_result)
             staged_state["processed_line_offset"] = cursor_offset + len(new_lines)
             staged_state["transcript_path"] = transcript_path
@@ -1718,10 +1726,30 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             chunks_total = int(tail_result.get("chunks_total", 0) or 0)
             unclassified_empty = int(tail_result.get("unclassified_empty_payloads", 0) or 0)
             if unclassified_empty > 0:
+                _EMPTY_RETRY_WINDOW_SECONDS = 6 * 3600
+                _first_seen = float(staged_state.get("empty_chunk_first_seen", 0) or 0)
+                _now = time.time()
+                if _first_seen == 0:
+                    _first_seen = _now
+                    staged_state["empty_chunk_first_seen"] = _first_seen
+                _elapsed = _now - _first_seen
+                _elapsed_min = _elapsed / 60
                 logger.error(
                     "[%s] session %s: FLUSH — %d/%d chunks returned empty payloads "
-                    "(possible provider outage or data loss); proceeding with partial results",
-                    label, session_id, unclassified_empty, chunks_total,
+                    "(possible provider outage or data loss); failing for %.0f min",
+                    label, session_id, unclassified_empty, chunks_total, _elapsed_min,
+                )
+                if _elapsed < _EMPTY_RETRY_WINDOW_SECONDS:
+                    write_rolling_state(session_id, staged_state)
+                    raise RuntimeError(
+                        f"flush extraction has {unclassified_empty} empty chunk(s) "
+                        f"(failing for {_elapsed_min:.0f} min, will retry up to "
+                        f"{_EMPTY_RETRY_WINDOW_SECONDS // 3600}h); preserving signal"
+                    )
+                logger.error(
+                    "[%s] session %s: PERMANENT DATA LOSS — FLUSH — %d chunk(s) could not be "
+                    "extracted after %.1fh of retries; proceeding with partial results",
+                    label, session_id, unclassified_empty, _elapsed / 3600,
                 )
             if chunks_total > 0 and chunks_processed < chunks_total and unclassified_empty == 0:
                 raise RuntimeError(
