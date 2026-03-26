@@ -324,6 +324,9 @@ auto-registered.
 │    └─ UserPromptSubmit → hook-inject                                    │
 │         ├─ drain pending notifications → prepend to context             │
 │         ├─ recall_fast(prompt, limit=10)                                │
+│         ├─ build_system_context_block() → [Quaid runtime] header        │
+│         │    (instance, active domains, graph relation types,           │
+│         │     linked project names/paths + notes to query explicitly)   │
 │         └─ return {additionalContext: "[Quaid Memory Context]\n ..."}   │
 │              (injected into Claude's context for this turn)             │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -417,9 +420,12 @@ hooks; the Python layer handles extraction signaling.
 |---|---|---|
 | Hook system | Native CC settings.json hooks | Gateway plugin hook registration |
 | Memory inject | `additionalContext` JSON envelope | Prompt build callback in TS |
+| Cursor seed | `hook_session_init` (session start) | `hook_inject` (first user message) |
 | Compaction trigger | CC-driven `PreCompact` | User `/compact`, auto-compaction |
 | Reset trigger | `SessionEnd` | `session_end` + `before_reset` compat |
 | Compaction control | CC controls timing | OC `supports_compaction_control=True` |
+
+**OC cursor seed timing note:** For OpenClaw, the flat-path session cursor (`sessions_dir/{session_id}.jsonl`) is seeded in `hook_inject` on the first user message, not at session start. This ensures the transcript file exists before the cursor is written — seeding at session start risked the idle-discovery check finding the cursor before any content arrived, causing premature extraction.
 | Notifications | Deferred via `cc-pending-notifications.jsonl` | Live via `openclaw message send` CLI |
 | Tool registration | None — CC agents use `quaid` CLI via Bash tool | None — OC tool registration was removed; agents use `quaid` CLI |
 

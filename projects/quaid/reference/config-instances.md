@@ -33,6 +33,23 @@ shared  projects  config  data  logs  temp  tmp  quaid  plugins  lib  core
 docs  assets  release  scripts  test  tests  benchmark  node_modules
 ```
 
+### Platform prefix ownership contract
+
+Each platform adapter owns a namespace prefix. The installer (`setup-quaid.mjs`)
+enforces this via `_assertInstancePrefix(instanceId, platformPrefix)` before
+writing any instance into a gateway config:
+
+| Platform | Required prefix |
+|----------|----------------|
+| OpenClaw | `openclaw-` |
+| Claude Code | `claude-code-` |
+
+A gateway config writer must reject any instance whose ID does not start with
+its platform's prefix. This prevents cross-platform contamination — for example,
+a CC install cannot accidentally seed a `claude-code-*` instance name into the
+OC gateway's env vars. Future platforms should follow the same pattern with
+their own prefix namespace.
+
 ### Instance detection
 
 `lib/instance.instance_id()` reads `QUAID_INSTANCE` from the environment.

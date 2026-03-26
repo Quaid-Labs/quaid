@@ -413,7 +413,7 @@ quaid recall "query" --docs                          # Memory + docs combined
 
 # --- Staleness ---
 quaid docs check                                     # Show stale doc/source pairs
-quaid docs update --apply                            # Trigger Opus update on stale docs
+quaid docs update --apply                            # Trigger Opus update on stale docs (exits 0 whether docs updated or already current)
 quaid docs update --apply --trivial-only             # Only trivial changes
 
 # --- Cleanup ---
