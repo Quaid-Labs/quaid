@@ -2078,7 +2078,7 @@ async function step3_models() {
 
   let highModel, lowModel;
   if (provider === "anthropic") {
-    highModel = "claude-opus-4-6";
+    highModel = "claude-haiku-4-5";  // HARD RULE: haiku for both fast+deep
     lowModel = "claude-haiku-4-5";
   } else if (provider === "ollama") {
     highModel = "llama3.1:70b";
