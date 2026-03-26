@@ -1736,6 +1736,13 @@ files in the vector index, not content docs. Content-specific or explicit tool-c
 reliably surface the right doc. If the agent answers correctly via explicit recall that
 is still a PASS (grounded in Quaid, not disk browsing).
 
+Note: Cold-query natural path misses (e.g. "What does Ember Glass mean?" with no project
+mention) are expected and not a bug. The system context injection provides a linked-project
+list with a note to query explicitly — but the agent needs a project name or enough context
+signal in the query to know where to look. For a cold term to surface naturally it would
+need to be mentioned in that project's AGENTS.md or TOOLS.md (always-loaded context).
+The pass criteria above use project-scoped phrasing for this reason.
+
 Pass:
 - CC can answer from the OC-added doc
 - OC can answer from the CC-added doc
