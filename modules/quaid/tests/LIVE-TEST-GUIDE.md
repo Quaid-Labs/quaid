@@ -348,9 +348,10 @@ Also verify model config was written by the installer:
 ssh example.local 'python3 -c "import json; d=json.load(open(\"/Users/owner/quaid/claude-code-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
 ```
 
-Expected output: `{'deepReasoning': 'claude-opus-4-6', 'fastReasoning': 'claude-haiku-4-5-20251001'}`.
-If models are missing or empty, the daemon will raise `RuntimeError` at call time — re-run the
-installer or inject manually.
+Expected output: `{'deepReasoning': 'claude-haiku-4-5', 'fastReasoning': 'claude-haiku-4-5'}`.
+**HARD RULE:** both must be `claude-haiku-4-5`. If either shows `opus` or `sonnet`, re-run the
+installer or patch manually before proceeding. If models are missing or empty, the daemon will
+raise `RuntimeError` at call time.
 
 > **QUAID_DAEMON guard — hook storm prevention:** The CC daemon and hook entry
 > point both set `QUAID_DAEMON=1` on startup. This env var tells the LLM
