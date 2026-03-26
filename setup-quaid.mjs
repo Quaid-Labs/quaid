@@ -1128,6 +1128,26 @@ function _ensureOpenClawResponsesEndpoint() {
   }
 }
 
+// ─── Instance Prefix Contract ─────────────────────────────────────────────────
+// Every platform's gateway/config writer MUST enforce prefix ownership:
+// only instance names that start with the platform's own prefix may be written
+// into that platform's gateway default. Any foreign prefix is silently rejected.
+//
+// This prevents cross-contamination when multiple adapters are installed on the
+// same machine (e.g. OC + CC + future platforms). Each adapter owns its prefix
+// namespace exclusively:
+//   openclaw  → "openclaw-*"
+//   claude-code → "claude-code-*"   (derives instance from CLAUDE_PROJECT_DIR; no gateway default)
+//   <future>  → "<platform>-*"
+//
+// When adding a new platform's gateway-default writer, always call
+// _assertInstancePrefix(instanceId, "<platform>") before writing.
+// ─────────────────────────────────────────────────────────────────────────────
+function _assertInstancePrefix(instanceId, platformPrefix) {
+  const id = String(instanceId || "").trim();
+  return id.startsWith(platformPrefix);
+}
+
 function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
   // ─── QUAID_INSTANCE Lifecycle ──────────────────────────────────────────────
   //
@@ -1163,10 +1183,8 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
       parsed.env.vars = {};
     }
     const nextInstance = String(instanceId || "").trim() || "openclaw";
-    // Only write OC-prefixed instance names into the OC gateway default.
-    // Any instance that doesn't start with "openclaw" belongs to a different
-    // adapter (CC, standalone, etc.) and must never be seeded here.
-    if (!nextInstance.startsWith("openclaw")) return false;
+    // Enforce prefix ownership: OC gateway only accepts openclaw-prefixed instances.
+    if (!_assertInstancePrefix(nextInstance, "openclaw")) return false;
     const currentInstance = String(parsed.env.vars.QUAID_INSTANCE || "").trim();
     const currentHome = String(parsed.env.vars.QUAID_HOME || "").trim();
     const currentWorkspace = String(parsed.env.vars.CLAWDBOT_WORKSPACE || "").trim();
