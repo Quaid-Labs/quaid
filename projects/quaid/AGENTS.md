@@ -15,10 +15,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 - Dates shown are when the fact was recorded.
 - Auto-injected memories are optimized for fast direct matches. They can miss answers that depend on query rewriting, graph traversal, or combining multiple stored relationships.
 - If injected memories already clearly answer the question, answer directly. Do not ignore strong injected evidence just because explicit recall is available.
-- Quaid injects a `[Quaid runtime]` metadata block into every session. It contains: the current instance name, active memory domains, active graph relation types, and linked project names/paths. Two runtime notes accompany it:
-  - *"Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly."*
-  - *"Preinject does not cover project or docs detail. If a query depends on these projects, files, paths, tests, bugs, or architecture docs, use project recall explicitly."*
-- The runtime block is a hint index, not injected content. Seeing a relation type or project name means it exists and can be queried — it does not mean the answer is already in context. For graph questions use `quaid recall` with graph traversal; for project/docs questions use `quaid docs search` or a project-scoped recall. Cold terms (e.g. a codeword not mentioned in AGENTS.md or TOOLS.md) will not surface via auto-injection; they require an explicit lookup.
+- Quaid may provide a runtime metadata block listing active domains and active graph relation types. If a question appears to depend on relationships, hierarchy, dependency structure, or other link-based reasoning, and injected memories do not clearly answer it, an explicit `quaid recall` may help.
 - **Topic licensing:** knowing a sensitive detail does not make it on-topic. For light prompts, acknowledgments, or vague openings, do not volunteer private health, finances, conflicts, or emotionally loaded history unless the user clearly opens that topic.
 
 ---
