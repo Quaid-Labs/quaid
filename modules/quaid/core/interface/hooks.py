@@ -682,6 +682,19 @@ def hook_session_init(args):
                             break
                 except Exception:
                     pass
+                # Fallback: predict path for adapters with flat session dirs
+                # (e.g. OC: ~/.openclaw/sessions/{id}.jsonl). Write the cursor
+                # even if the file doesn't exist yet so the daemon knows about
+                # the session before any reset/compaction signal arrives.
+                if not transcript_path:
+                    try:
+                        from lib.adapter import get_adapter
+                        sessions_dir = get_adapter().get_sessions_dir()
+                        if sessions_dir:
+                            predicted = Path(sessions_dir) / f"{current_session_id}.jsonl"
+                            transcript_path = str(predicted)
+                    except Exception:
+                        pass
                 if transcript_path:
                     write_cursor(current_session_id, 0, transcript_path)
                     print(f"[quaid][session-init] seeded cursor for {current_session_id}", file=sys.stderr)

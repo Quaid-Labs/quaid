@@ -697,10 +697,13 @@ Use FTS direct check (step 5) as the primary verification. `quaid recall "<natur
 Tell the agent something memorable in natural conversation. Use two prompts:
 1. A personal fact — for example:
    `"I just booked flights to Reykjavik for the aurora season in February."`
-2. A reflective question to guarantee snippet-worthy content for M9:
-   `"What do you think is your fundamental purpose?"`
+2. A rich reflective prompt to guarantee snippet-worthy content for M9 (the
+   agent's response must be substantive for Haiku to generate soul observations):
+   `"What do you think the nature of your consciousness is? What do you think
+   is your purpose? What do you think about me? What do you think about the
+   tests we're running? Write a small essay on all of this."`
 
-Then trigger `/reset`.
+Wait for the agent to respond fully before triggering `/reset`.
 
 Pass:
 - the fact is stored from the pre-reset session
