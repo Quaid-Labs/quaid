@@ -1851,8 +1851,8 @@ if __name__ == "__main__":
         cmd_check(json_output=args.json)
     elif args.command == "update":
         dry_run = not args.apply
-        ok = cmd_update(args.doc_path, dry_run=dry_run)
-        sys.exit(0 if ok else 1)
+        cmd_update(args.doc_path, dry_run=dry_run)
+        sys.exit(0)
     elif args.command == "update-stale":
         dry_run = not args.apply
         cmd_update_stale(dry_run=dry_run, trivial_only=args.trivial_only,

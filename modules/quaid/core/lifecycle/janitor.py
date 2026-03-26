@@ -1902,5 +1902,13 @@ if __name__ == "__main__":
     _atomic_write_json(Path(stats_file), stats_data)
     print(f"\n📊 Stats written to {stats_file}")
     
+    # Shut down the global LLM scheduler's thread pool before exiting.
+    # Without this, non-daemon executor threads block Python from exiting cleanly.
+    try:
+        from core.llm.scheduler import reset_global_llm_scheduler
+        reset_global_llm_scheduler(wait=False)
+    except Exception:
+        pass
+
     # Exit with error code if janitor failed
     exit(0 if result["success"] else 1)
