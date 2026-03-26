@@ -1163,11 +1163,10 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
       parsed.env.vars = {};
     }
     const nextInstance = String(instanceId || "").trim() || "openclaw";
-    // Never write a claude-code-style instance name into the OC gateway default.
-    // If the resolved instance looks like a CC silo (contains "claude-code"), skip.
-    // This guards against running the installer with QUAID_INSTANCE=claude-code-*
-    // on a machine that also has OC installed.
-    if (nextInstance.includes("claude-code")) return false;
+    // Only write OC-prefixed instance names into the OC gateway default.
+    // Any instance that doesn't start with "openclaw" belongs to a different
+    // adapter (CC, standalone, etc.) and must never be seeded here.
+    if (!nextInstance.startsWith("openclaw")) return false;
     const currentInstance = String(parsed.env.vars.QUAID_INSTANCE || "").trim();
     const currentHome = String(parsed.env.vars.QUAID_HOME || "").trim();
     const currentWorkspace = String(parsed.env.vars.CLAWDBOT_WORKSPACE || "").trim();
