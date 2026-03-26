@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Any
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
+from datastore.docsdb.system_context import (
+    build_system_context_metadata as build_docsdb_system_context_metadata,
+)
 
 
 def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
@@ -59,35 +60,6 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
         pass  # Standalone/misconfigured — installer handles it
 
 
-def _current_instance_id() -> str:
-    try:
-        from lib.adapter import get_adapter
-        instance = str(get_adapter().instance_id() or "").strip()
-        if instance:
-            return instance
-    except Exception:
-        pass
-    return str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
-
-
-def _linked_projects() -> list[dict[str, str]]:
-    from core.project_registry import list_projects
-
-    current_instance = _current_instance_id()
-    rows: list[dict[str, str]] = []
-    for name, entry in (list_projects() or {}).items():
-        path_str = str(entry.get("canonical_path", "") or "").strip()
-        instances = [str(item).strip() for item in list(entry.get("instances", []) or []) if str(item).strip()]
-        if not path_str:
-            continue
-        if current_instance:
-            if not instances or current_instance not in instances:
-                continue
-        rows.append({"name": str(name).strip(), "path": path_str})
-    rows.sort(key=lambda row: (0 if row["name"] == "quaid" else 1, row["name"]))
-    return rows
-
-
 class DocsDbPluginContract(PluginContractBase):
     def on_init(self, ctx: PluginHookContext) -> None:
         _ensure_project_workspace_dirs(ctx)
@@ -115,27 +87,9 @@ class DocsDbPluginContract(PluginContractBase):
         _ = ctx
         return {"healthy": True}
 
-    def get_system_context_metadata(self, ctx: PluginHookContext) -> dict[str, Any]:
+    def get_system_context_metadata(self, ctx: PluginHookContext) -> dict[str, object]:
         _ = ctx
-        projects = _linked_projects()
-        if not projects:
-            return {}
-        rendered = "; ".join(f"{item['name']} ({item['path']})" for item in projects)
-        return {
-            "entries": [
-                {
-                    "key": "linked_projects",
-                    "label": "linked projects",
-                    "value": rendered,
-                    "note": (
-                        "Preinject does not cover project or docs detail. "
-                        "If a query depends on these projects, files, paths, tests, bugs, or architecture docs, "
-                        "use project recall explicitly."
-                    ),
-                    "order": 30,
-                }
-            ]
-        }
+        return build_docsdb_system_context_metadata()
 
 
 _CONTRACT = DocsDbPluginContract()

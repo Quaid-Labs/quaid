@@ -1,5 +1,6 @@
 from core.plugins.docsdb_contract import DocsDbPluginContract
 from core.runtime.plugins import PluginHookContext, PluginManifest
+from datastore.docsdb.system_context import build_system_context_metadata
 
 
 def _ctx(workspace_root: str) -> PluginHookContext:
@@ -38,9 +39,20 @@ def test_docsdb_contract_on_config_ensures_project_workspace_dirs(tmp_path):
 
 def test_docsdb_contract_get_system_context_metadata(monkeypatch, tmp_path):
     contract = DocsDbPluginContract()
-    monkeypatch.setattr("core.plugins.docsdb_contract._current_instance_id", lambda: "openclaw-main")
     monkeypatch.setattr(
-        "core.project_registry.list_projects",
+        "core.plugins.docsdb_contract.build_docsdb_system_context_metadata",
+        lambda: {"entries": [{"key": "ok", "label": "ok", "value": "delegated"}]},
+    )
+
+    payload = contract.get_system_context_metadata(_ctx(str(tmp_path)))
+
+    assert payload == {"entries": [{"key": "ok", "label": "ok", "value": "delegated"}]}
+
+
+def test_build_docsdb_system_context_metadata(monkeypatch, tmp_path):
+    monkeypatch.setattr("datastore.docsdb.system_context.current_instance_id", lambda: "openclaw-main")
+    monkeypatch.setattr(
+        "datastore.docsdb.system_context.list_projects",
         lambda: {
             "quaid": {
                 "canonical_path": str(tmp_path / "shared" / "projects" / "quaid"),
@@ -57,7 +69,7 @@ def test_docsdb_contract_get_system_context_metadata(monkeypatch, tmp_path):
         },
     )
 
-    payload = contract.get_system_context_metadata(_ctx(str(tmp_path)))
+    payload = build_system_context_metadata()
 
     assert payload == {
         "entries": [
