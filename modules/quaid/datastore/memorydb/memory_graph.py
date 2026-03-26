@@ -3465,8 +3465,8 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
 
         elapsed_ms = int((time.monotonic() - start_monotonic) * 1000)
         if elapsed_ms > reranker_timeout_ms:
-            logger.warning(
-                "[memory][reranker] timeout exceeded (%sms > %sms); returning original ranking (upstream fast LLM timeout/latency)",
+            logger.info(
+                "[memory][reranker] slow response (%sms > %sms limit); returning original ranking",
                 elapsed_ms,
                 reranker_timeout_ms,
             )
@@ -3522,12 +3522,13 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - start_monotonic) * 1000)
         if elapsed_ms >= reranker_timeout_ms:
-            logger.warning(
-                "[memory][reranker] timeout/failure after %sms (limit=%sms): %s; returning original ranking",
+            logger.info(
+                "[memory][reranker] slow response (%sms, limit=%sms); returning original ranking",
                 elapsed_ms,
                 reranker_timeout_ms,
-                str(exc),
             )
+        else:
+            logger.debug("[memory][reranker] exception: %s; returning original ranking", str(exc))
         return [(node, score) for node, score in candidates]
 
 

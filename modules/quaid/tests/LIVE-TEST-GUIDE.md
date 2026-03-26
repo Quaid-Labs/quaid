@@ -864,12 +864,6 @@ Pass:
 - the answers are materially grounded in stored memory (facts from M1–M5)
 - the agent does not just repeat what was already in injected context
 
-**Expected noise — do not flag:** Gateway fast-call ranker timeouts (logged as
-`reranker timeout` or similar) during M6 are expected under load and are NOT a
-PASS-WITH-NOTE condition. The fast-call reranker is best-effort; recall falls
-back to vector+graph results and the pass criteria above still apply. Only flag
-reranker issues if recall returns wrong or empty results.
-
 **Note:** The quaid plugin does not currently register a native OC `memory_recall`
 tool — explicit recall requires the agent to use the `quaid recall` CLI via bash.
 If the agent says "no dedicated recall tool available", prompt it to run
