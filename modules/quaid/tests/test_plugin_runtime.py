@@ -1294,6 +1294,88 @@ def test_run_plugin_contract_surface_collect_health_returns_results(tmp_path: Pa
             sys.path.remove(str(tmp_path))
 
 
+def test_collect_datastore_system_context_metadata_returns_results(tmp_path: Path):
+    pkg = tmp_path / "ctxpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True}\n"
+        "    def get_system_context_metadata(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"entries\": [{\"key\": \"linked_projects\", \"label\": \"linked projects\", \"value\": \"quaid (/tmp/quaid)\", \"order\": 30}]}\n"
+        "_CONTRACT = _Contract()\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "datastore.ctx",
+            "plugin_type": "datastore",
+            "module": "ctxpkg.impl",
+            "capabilities": {
+                **_datastore_caps("Context DS"),
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from core.runtime.plugins import collect_datastore_system_context_metadata
+
+        errs, warns, results = collect_datastore_system_context_metadata(
+            registry=registry,
+            slots={"datastores": ["datastore.ctx"]},
+            config={},
+            plugin_config={},
+            workspace_root=str(tmp_path),
+            strict=True,
+        )
+        assert errs == []
+        assert warns == []
+        assert results == [
+            (
+                "datastore.ctx",
+                {"entries": [{"key": "linked_projects", "label": "linked projects", "value": "quaid (/tmp/quaid)", "order": 30}]},
+            )
+        ]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_run_plugin_contract_surface_collect_dashboard_returns_results(tmp_path: Path):
     pkg = tmp_path / "dashpkg"
     pkg.mkdir(parents=True)

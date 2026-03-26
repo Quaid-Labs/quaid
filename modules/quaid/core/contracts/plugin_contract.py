@@ -38,3 +38,8 @@ class PluginContractBase(ABC):
     @abstractmethod
     def on_health(self, ctx: PluginHookContext) -> dict[str, Any]:
         """Return health probe payload for liveness/readiness checks."""
+
+    def get_system_context_metadata(self, ctx: PluginHookContext) -> dict[str, Any]:
+        """Optional runtime metadata exposed to system-context prompt builders."""
+        _ = ctx
+        return {}

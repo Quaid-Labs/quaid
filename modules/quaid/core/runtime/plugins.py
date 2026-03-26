@@ -802,6 +802,56 @@ def run_plugin_contract_surface_collect(
     return errors, warnings, results
 
 
+def collect_datastore_system_context_metadata(
+    *,
+    registry: PluginRegistry,
+    slots: Optional[Dict[str, Any]],
+    config: Any,
+    plugin_config: Optional[Dict[str, Any]] = None,
+    workspace_root: Optional[str] = None,
+    strict: bool = True,
+) -> Tuple[List[str], List[str], List[Tuple[str, Any]]]:
+    errors: List[str] = []
+    warnings: List[str] = []
+    results: List[Tuple[str, Any]] = []
+    cfg_map = plugin_config if isinstance(plugin_config, dict) else {}
+    root = str(workspace_root or _workspace_root())
+
+    for plugin_id in _iter_active_plugin_ids(slots, registry=registry):
+        record = registry.get(plugin_id)
+        if not record or record.manifest.plugin_type != "datastore":
+            continue
+        try:
+            _validate_contract_instance(record.manifest)
+            mod = importlib.import_module(record.manifest.module)
+            contract_obj = getattr(mod, "_CONTRACT", None)
+            if contract_obj is None:
+                raise ValueError(
+                    f"plugin '{plugin_id}' module '{record.manifest.module}' must export _CONTRACT"
+                )
+            getter = getattr(contract_obj, "get_system_context_metadata", None)
+            if not callable(getter):
+                continue
+            ctx = PluginHookContext(
+                plugin=record.manifest,
+                config=config,
+                plugin_config=dict(cfg_map.get(plugin_id, {}) or {}),
+                workspace_root=root,
+                payload={},
+            )
+            result = getter(ctx)
+            if result:
+                results.append((plugin_id, result))
+        except Exception as exc:
+            msg = f"Plugin '{plugin_id}' system-context metadata failed: {exc}"
+            if strict:
+                errors.append(msg)
+                break
+            warnings.append(msg)
+
+    return errors, warnings, results
+
+
 def get_runtime_registry() -> Optional[PluginRegistry]:
     with _RUNTIME_LOCK:
         return _RUNTIME_REGISTRY

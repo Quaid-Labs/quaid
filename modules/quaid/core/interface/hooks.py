@@ -112,37 +112,10 @@ def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     return re.sub(_TOOLS_DOMAIN_BLOCK_RE, "", content).strip()
 
 
-def _load_runtime_domains() -> List[str]:
-    try:
-        from config import get_config
-        defs = getattr(get_config(), "retrieval", None)
-        domains = getattr(defs, "domains", {}) if defs is not None else {}
-        if isinstance(domains, dict):
-            return sorted(str(key).strip() for key in domains.keys() if str(key).strip())
-    except Exception:
-        pass
-    return []
-
-
-def _load_runtime_relation_types() -> List[str]:
-    try:
-        from datastore.memorydb.memory_graph import list_relation_types
-        return list_relation_types()
-    except Exception:
-        return []
-
-
 def _build_runtime_context_block() -> str:
-    lines: List[str] = []
-    domains = _load_runtime_domains()
-    relation_types = _load_runtime_relation_types()
-    if domains:
-        lines.append(f"active domains: {', '.join(domains)}")
-    if relation_types:
-        lines.append(f"active graph relation types: {', '.join(relation_types)}")
-    if not lines:
-        return ""
-    return "[Quaid runtime]\n" + "\n".join(lines)
+    from core.runtime.system_context import build_system_context_block
+
+    return build_system_context_block()
 
 
 def _hook_trace_path() -> Path:

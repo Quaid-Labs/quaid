@@ -2472,42 +2472,15 @@ ${header}${journalContent}` : `${header}${journalContent}`;
     }
     return content.replace(TOOLS_DOMAIN_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
   }
-  function _loadRuntimeDomains() {
-    const defs = deps.getMemoryConfig()?.retrieval?.domains;
-    if (!defs || typeof defs !== "object") {
-      return [];
-    }
-    return Object.keys(defs).map((key) => String(key || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
-  }
-  async function _loadRuntimeRelationTypes() {
+  async function _buildRuntimeContextBlock() {
     try {
-      const raw = await deps.execPython("relation-types", ["--json"]);
-      const parsed = JSON.parse(String(raw || "[]"));
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-      return parsed.map((item) => String(item || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+      return String(await deps.execPython("system-context-metadata", []) || "").trim();
     } catch (err) {
       if (deps.isFailHardEnabled()) {
         throw err;
       }
-      return [];
-    }
-  }
-  async function _buildRuntimeContextBlock() {
-    const domains = _loadRuntimeDomains();
-    const relationTypes = await _loadRuntimeRelationTypes();
-    const lines = [];
-    if (domains.length) {
-      lines.push(`active domains: ${domains.join(", ")}`);
-    }
-    if (relationTypes.length) {
-      lines.push(`active graph relation types: ${relationTypes.join(", ")}`);
-    }
-    if (!lines.length) {
       return "";
     }
-    return ["[Quaid runtime]", ...lines].join("\n");
   }
   async function injectProjectContext(existingContext) {
     let prepend = existingContext;

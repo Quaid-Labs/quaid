@@ -124,8 +124,16 @@ describe("QuaidFacade", () => {
     await writeFile(path.join(projectsDir, "AGENTS.md"), "# Agents\nStatic guidance", "utf8");
 
     const execPython = vi.fn(async (command: string) => {
-      if (command === "relation-types") {
-        return JSON.stringify(["neighbor_of", "parent_of"]);
+      if (command === "system-context-metadata") {
+        return [
+          "[Quaid runtime]",
+          "instance: instance-a",
+          "active domains: personal, technical",
+          "active graph relation types: neighbor_of, parent_of",
+          "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
+          "linked projects: quaid (/tmp/workspace/shared/projects/quaid); misc--instance-a (/tmp/workspace/shared/projects/misc--instance-a)",
+          "runtime note: Preinject does not cover project or docs detail. If a query depends on these projects, files, paths, tests, bugs, or architecture docs, use project recall explicitly.",
+        ].join("\n");
       }
       return "{}";
     });
@@ -147,6 +155,8 @@ describe("QuaidFacade", () => {
     expect(out).toContain("instance: instance-a");
     expect(out).toContain("active domains: personal, technical");
     expect(out).toContain("active graph relation types: neighbor_of, parent_of");
+    expect(out).toContain("linked projects: quaid (/tmp/workspace/shared/projects/quaid); misc--instance-a (/tmp/workspace/shared/projects/misc--instance-a)");
+    expect(out).toContain("Preinject does not cover project or docs detail.");
     expect(out).toContain("--- quaid/TOOLS.md ---");
     expect(out).toContain("before domains");
     expect(out).toContain("after domains");

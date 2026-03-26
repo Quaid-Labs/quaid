@@ -573,13 +573,21 @@ class TestHookSessionInitRegistryAugmentation:
             encoding="utf-8",
         )
 
-        from core.interface import hooks
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "cc-test")
-        monkeypatch.setattr(hooks, "_load_runtime_domains", lambda: ["personal", "technical"])
-        monkeypatch.setattr(hooks, "_load_runtime_relation_types", lambda: ["neighbor_of", "parent_of"])
 
-        with patch("core.project_registry.list_projects", return_value={}):
+        runtime_block = "\n".join([
+            "[Quaid runtime]",
+            "instance: cc-test",
+            "active domains: personal, technical",
+            "active graph relation types: neighbor_of, parent_of",
+            "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
+            "linked projects: quaid (/tmp/quaid); misc--cc-test (/tmp/misc)",
+            "runtime note: Preinject does not cover project or docs detail. If a query depends on these projects, files, paths, tests, bugs, or architecture docs, use project recall explicitly.",
+        ])
+
+        with patch("core.runtime.system_context.build_system_context_block", return_value=runtime_block), \
+             patch("core.project_registry.list_projects", return_value={}):
             _, _, content = _run_hook_session_init(
                 {"session_id": "s4b", "cwd": str(tmp_path)},
                 monkeypatch=monkeypatch,
@@ -591,6 +599,8 @@ class TestHookSessionInitRegistryAugmentation:
         assert "instance: cc-test" in content
         assert "active domains: personal, technical" in content
         assert "active graph relation types: neighbor_of, parent_of" in content
+        assert "linked projects: quaid (/tmp/quaid); misc--cc-test (/tmp/misc)" in content
+        assert "Preinject does not cover project or docs detail." in content
         assert "before domains" in content
         assert "after domains" in content
         assert "AUTO-GENERATED:DOMAIN-LIST" not in content

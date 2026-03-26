@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
@@ -18,6 +18,7 @@ from datastore.memorydb.domain_registry import (
     load_active_domains,
     normalize_domain_map,
 )
+from datastore.memorydb.memory_graph import list_relation_types
 from lib.config import get_db_path
 from lib.domain_runtime import publish_domains_to_runtime_config
 from lib.tools_domain_sync import sync_tools_domain_block
@@ -56,6 +57,11 @@ def _sync_domains(ctx: PluginHookContext) -> None:
         raise RuntimeError("memorydb domain registry is empty and could not be initialized")
     _publish_domains_to_runtime_config(ctx, domains)
     sync_tools_domain_block(domains=domains, workspace=Path(ctx.workspace_root))
+
+
+def _system_context_domains(ctx: PluginHookContext) -> list[str]:
+    domains = load_active_domains(_resolve_db_path(ctx), bootstrap_if_empty=False)
+    return sorted(str(key).strip() for key in domains.keys() if str(key).strip())
 
 
 class MemoryDbPluginContract(PluginContractBase):
@@ -116,6 +122,30 @@ class MemoryDbPluginContract(PluginContractBase):
 
     def on_health(self, ctx: PluginHookContext) -> dict:
         return {"healthy": True, "status": self.on_status(ctx)}
+
+    def get_system_context_metadata(self, ctx: PluginHookContext) -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        domains = _system_context_domains(ctx)
+        relation_types = list_relation_types()
+        if domains:
+            entries.append({
+                "key": "domains",
+                "label": "active domains",
+                "value": ", ".join(domains),
+                "order": 10,
+            })
+        if relation_types:
+            entries.append({
+                "key": "graph_relation_types",
+                "label": "active graph relation types",
+                "value": ", ".join(relation_types),
+                "note": (
+                    "Preinject does not cover graph structure or edge traversal. "
+                    "If a query depends on these relations, use graph recall explicitly."
+                ),
+                "order": 20,
+            })
+        return {"entries": entries}
 
 
 _CONTRACT = MemoryDbPluginContract()

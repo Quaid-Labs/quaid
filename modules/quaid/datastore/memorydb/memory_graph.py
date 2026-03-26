@@ -9541,6 +9541,12 @@ if __name__ == "__main__":
         relation_types_p = subparsers.add_parser("relation-types", help="List active graph relation types")
         relation_types_p.add_argument("--json", action="store_true", help="JSON output")
 
+        system_context_p = subparsers.add_parser(
+            "system-context-metadata",
+            help="Render aggregated runtime metadata for system prompt builders",
+        )
+        system_context_p.add_argument("--json", action="store_true", help="JSON output")
+
         # --- add-alias ---
         add_alias_p = subparsers.add_parser("add-alias", help="Add an entity alias")
         add_alias_p.add_argument("alias", help="The alias name (e.g., 'Sol')")
@@ -9782,6 +9788,14 @@ if __name__ == "__main__":
                     print(relation)
             else:
                 print("No active relation types found")
+
+        elif args.command == "system-context-metadata":
+            from core.runtime.system_context import build_system_context_block, collect_system_context_metadata
+
+            if args.json:
+                print(json.dumps(collect_system_context_metadata(), indent=2, sort_keys=True))
+            else:
+                print(build_system_context_block())
 
         elif args.command == "decay":
             result = decay_memories()
