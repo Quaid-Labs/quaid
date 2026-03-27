@@ -8,7 +8,7 @@ Replace `<version>` below with the actual release tag (e.g. `v0.2.15-alpha`).
   - `tests/test_providers.py`
   - `tests/test_soul_snippets.py`
 - Run e2e bootstrap flow at least once with quiet notifications.
-- Confirm `~/quaid/dev` is clean (`git status`).
+- Confirm the configured `paths.devRoot` checkout is clean (`git status`).
 
 ## 2) Docs and messaging
 - Confirm README + roadmap match current alpha posture.
@@ -33,4 +33,5 @@ Replace `<version>` below with the actual release tag (e.g. `v0.2.15-alpha`).
 
 ## 5) Post-release
 - Open follow-up tracking issue for top alpha hardening work.
-- Confirm bootstrap repo updates are also pushed from `~/quaid/bootstrap` (separate repo).
+- Confirm bootstrap repo updates are also pushed from the configured
+  `paths.developmentDirectory/bootstrap` checkout (separate repo).

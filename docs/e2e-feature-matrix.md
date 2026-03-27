@@ -47,7 +47,8 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 11. Bootstrap collision recovery
    - If worktree bootstrap fails with a workspace "already exists" collision after wipe, runner performs one forced cleanup + retry automatically.
 12. Workspace teardown reliability
-   - Successful runs now retry workspace deletion (`~/quaid/e2e-test`) to handle transient file-creation races during shutdown.
+   - Successful runs now retry workspace deletion for the configured runtime
+     workspace to handle transient file-creation races during shutdown.
 13. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
    - Validates recovery after forced gateway restart mid-session.
    - Validates live turns under janitor pressure.
@@ -103,6 +104,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 7. `--quick-bootstrap`
    - Skip OpenClaw source refresh/install for faster local loops.
 8. `--reuse-workspace`
-   - Reuse existing `~/quaid/e2e-test` when possible; fallback to clean bootstrap on mismatch.
+   - Reuse the configured runtime workspace when possible; fallback to clean
+     bootstrap on mismatch.
 9. `--runtime-budget-profile`, `--runtime-budget-seconds`
    - Enable explicit runtime regression gates for nightly and long suites.

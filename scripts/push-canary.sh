@@ -34,38 +34,8 @@ if git rev-parse --verify "$REMOTE_MAIN_REF" >/dev/null 2>&1 && git rev-parse --
   fi
 fi
 
-scan_patterns=(
-  'owner'
-  'owner'
-  'user:owner'
-  '<redacted>'
-  '<telegram-id>'
-  'alfie\.local'
-  '/Users/owner/'
-  '/Users/solomon/'
-  'clawdbot@testbench\.local'
-  '\bSolomon\b'
-)
-scan_files=()
-while IFS= read -r file; do
-  case "$file" in
-    README.md|NOTICE|scripts/push-canary.sh)
-      continue
-      ;;
-  esac
-  scan_files+=("$file")
-done < <(git ls-files)
-
-pattern_regex="$(printf '%s\n' "${scan_patterns[@]}" | paste -sd'|' -)"
-tmp_scan="$(mktemp /tmp/quaid-push-canary-scan.XXXXXX)"
-
 echo "[push-canary] privacy scan"
-if ((${#scan_files[@]})) && rg -n -S -e "$pattern_regex" "${scan_files[@]}" >"$tmp_scan" 2>/dev/null; then
-  cat "$tmp_scan" >&2
-  rm -f "$tmp_scan"
-  die "tracked tree still contains blocked private/local markers"
-fi
-rm -f "$tmp_scan"
+node scripts/privacy-audit.mjs --tree-only
 
 echo "[push-canary] ownership / attribution"
 node scripts/release-owner-check.mjs

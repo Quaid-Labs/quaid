@@ -15,12 +15,12 @@ Tracks repository hygiene actions while separating Quaid source from OpenClaw ru
 
 ## Relocated Outside `dev`
 
-Moved GitHub-facing top-level docs to `~/quaid`:
-- `~/quaid/README.md`
-- `~/quaid/ROADMAP.md`
-- `~/quaid/TODO.md`
+Moved GitHub-facing top-level docs to the development workspace root:
+- `<developmentDirectory>/README.md`
+- `<developmentDirectory>/ROADMAP.md`
+- `<developmentDirectory>/TODO.md`
 
-Copied major GitHub reference docs to `~/quaid/docs/github/`:
+Copied major GitHub reference docs to `<developmentDirectory>/docs/github/`:
 - `AI-REFERENCE.md`
 - `ARCHITECTURE.md`
 - `BENCHMARKS.md`
@@ -38,6 +38,7 @@ If a file is machine-local, user-local, gateway-runtime output, or migration scr
 
 ## Dev/Test Policy
 
-- `~/quaid/dev` is source-only (what gets committed/pushed).
-- Run installs/tests in `~/quaid/test` (bootstrap/worktree runtime lane), not in `dev`.
+- `paths.devRoot` is source-only (what gets committed/pushed).
+- Run installs/tests in `paths.developmentDirectory/test` (bootstrap/worktree
+  runtime lane), not in `dev`.
 - Keep dependency/runtime artifacts out of version control via root `.gitignore`.

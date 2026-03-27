@@ -17,6 +17,8 @@ cp .quaid-dev.example.json .quaid-dev.local.json
 All paths inside `.quaid-dev.local.json` resolve from `paths.devRoot`.
 
 - `devRoot` should point at the repo root for the current dev checkout
+- `developmentDirectory` should point at the parent dev workspace that holds
+  sibling checkouts such as `dev`, `test`, `bootstrap`, and `openclaw-source`
 - use relative paths such as `../test` and `../openclaw-source`
 - do not hardcode `~/quaid/` or `/Users/<name>/...` in tracked docs or scripts
 
@@ -26,6 +28,7 @@ Example:
 {
   "paths": {
     "devRoot": ".",
+    "developmentDirectory": "..",
     "runtimeWorkspace": "../test",
     "openclawSource": "../openclaw-source"
   },
@@ -39,13 +42,15 @@ Example:
 ```
 
 This keeps the dev tree portable if the checkout moves to a different parent
-directory such as `~/quaid-dev/`.
+directory such as `~/quaidcode/`.
 
 ## Supported Fields
 
 `paths`
 
 - `devRoot`: repo root used for resolving other relative paths
+- `developmentDirectory`: parent workspace for dev-only siblings (`dev`, `test`,
+  `bootstrap`, `openclaw-source`, `backups`)
 - `runtimeWorkspace`: runtime/test workspace path
 - `openclawSource`: local OpenClaw checkout path
 
@@ -74,6 +79,13 @@ directory such as `~/quaid-dev/`.
 - keep the key files outside the repo or otherwise untracked
 - store the secret values in those files, not in tracked JSON
 
+`privacy`
+
+- `blockedStrings`: local-only leak markers to scan for in tracked files and
+  reachable git history before release or canary push
+- use this for legacy Telegram ids, old hostnames, historical absolute paths,
+  and old private handles that must not remain reachable on GitHub
+
 ## Consumers
 
 These repo tools read `.quaid-dev.local.json` today:
@@ -81,6 +93,7 @@ These repo tools read `.quaid-dev.local.json` today:
 - `modules/quaid/scripts/bootstrap-local.sh`
 - `modules/quaid/scripts/run-quaid-e2e.sh`
 - `modules/quaid/scripts/apply-runtime-profile.py`
+- `scripts/privacy-audit.mjs`
 - `scripts/release-owner-check.mjs`
 - `scripts/push-canary.sh`
 
@@ -99,3 +112,8 @@ Keep these out of tracked files:
 
 Tracked files should use generic placeholders and relative paths rooted at
 `devRoot`.
+
+Before release, keep `privacy.blockedStrings` in your ignored local config up to
+date with any legacy private markers that were ever pushed. The privacy audit
+uses that local list to block release/canary while leaked history is still
+reachable.

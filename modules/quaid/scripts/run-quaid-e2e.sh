@@ -8,16 +8,17 @@ ENV_FILE="${QUAID_E2E_ENV_FILE:-${PLUGIN_ROOT}/.env.e2e}"
 CODE_ROOT_DEFAULT="$(cd "${BOOTSTRAP_ROOT}/../.." && pwd)"
 DEV_LOCAL_CONFIG="${QUAID_DEV_LOCAL_CONFIG:-${CODE_ROOT_DEFAULT}/.quaid-dev.local.json}"
 DEV_WS_DEFAULT="${CODE_ROOT_DEFAULT}"
-E2E_WS_DEFAULT="${CODE_ROOT_DEFAULT}/../test"
+DEVELOPMENT_DIR_DEFAULT="$(cd "${CODE_ROOT_DEFAULT}/.." && pwd)"
+E2E_WS_DEFAULT="${DEVELOPMENT_DIR_DEFAULT}/test"
 E2E_INSTANCE="${QUAID_E2E_INSTANCE:-openclaw}"
-OPENCLAW_SOURCE_DEFAULT="${CODE_ROOT_DEFAULT}/../openclaw-source"
+OPENCLAW_SOURCE_DEFAULT="${DEVELOPMENT_DIR_DEFAULT}/openclaw-source"
 # Default E2E gate to the OpenClaw release lane we validate against in canary.
 # Keep overridable for bisects via --openclaw-ref / QUAID_E2E_OPENCLAW_REF.
 OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-v2026.3.22}"
 MIN_OPENCLAW_VERSION="${QUAID_E2E_MIN_OPENCLAW_VERSION:-2026.2.10}"
 
-PROFILE_TEST="${QUAID_E2E_PROFILE_TEST:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
-PROFILE_SRC="${QUAID_E2E_PROFILE_SRC:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
+PROFILE_TEST="${QUAID_E2E_PROFILE_TEST:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.template.quaid.json}"
+PROFILE_SRC="${QUAID_E2E_PROFILE_SRC:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.template.quaid.json}"
 TMP_PROFILE_BASE="$(mktemp /tmp/quaid-e2e-profile.XXXXXX)"
 TMP_PROFILE="${TMP_PROFILE_BASE}.json"
 mv "$TMP_PROFILE_BASE" "$TMP_PROFILE"
@@ -97,16 +98,19 @@ def resolve(raw: str, base: Path) -> str:
     return str((base / candidate).resolve())
 
 dev_root = Path(resolve(paths.get("devRoot", "."), code_root) or code_root)
-runtime_workspace = resolve(paths.get("runtimeWorkspace", ""), dev_root)
-openclaw_source = resolve(paths.get("openclawSource", ""), dev_root)
+development_directory = Path(resolve(paths.get("developmentDirectory", ".."), dev_root) or dev_root.parent)
+runtime_workspace = resolve(paths.get("runtimeWorkspace", ""), dev_root) or str((development_directory / "test").resolve())
+openclaw_source = resolve(paths.get("openclawSource", ""), dev_root) or str((development_directory / "openclaw-source").resolve())
 print(str(dev_root))
+print(str(development_directory))
 print(runtime_workspace)
 print(openclaw_source)
 PY
 )
   [[ -n "${_dev_cfg_values[0]:-}" ]] && DEV_WS_DEFAULT="${_dev_cfg_values[0]}"
-  [[ -n "${_dev_cfg_values[1]:-}" ]] && E2E_WS_DEFAULT="${_dev_cfg_values[1]}"
-  [[ -n "${_dev_cfg_values[2]:-}" ]] && OPENCLAW_SOURCE_DEFAULT="${_dev_cfg_values[2]}"
+  [[ -n "${_dev_cfg_values[1]:-}" ]] && DEVELOPMENT_DIR_DEFAULT="${_dev_cfg_values[1]}"
+  [[ -n "${_dev_cfg_values[2]:-}" ]] && E2E_WS_DEFAULT="${_dev_cfg_values[2]}"
+  [[ -n "${_dev_cfg_values[3]:-}" ]] && OPENCLAW_SOURCE_DEFAULT="${_dev_cfg_values[3]}"
   LOCAL_CONFIG_ARGS=(--local-config "$DEV_LOCAL_CONFIG")
 fi
 
@@ -503,7 +507,7 @@ skip_e2e() {
   echo "[e2e] SKIP_REASON:${reason}" >&2
   echo "[e2e] SKIP: bootstrap e2e prerequisites are not available in this environment." >&2
   echo "[e2e] To enable e2e auth-path tests:" >&2
-  echo "[e2e]   1) Set QUAID_BOOTSTRAP_ROOT (default: ~/quaid/bootstrap)." >&2
+  echo "[e2e]   1) Set QUAID_BOOTSTRAP_ROOT or use paths.developmentDirectory/bootstrap in local dev config." >&2
   echo "[e2e]   2) Copy modules/quaid/scripts/e2e.env.example to modules/quaid/.env.e2e and set keys as needed." >&2
   echo "[e2e]   3) Required keys by path:" >&2
   echo "[e2e]      - openai-api: OPENAI_API_KEY" >&2

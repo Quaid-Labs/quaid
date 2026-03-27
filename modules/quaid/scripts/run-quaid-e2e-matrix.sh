@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="${SCRIPT_DIR}/run-quaid-e2e.sh"
 BOOTSTRAP_ROOT="${QUAID_BOOTSTRAP_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
-PROFILE_PATH="${QUAID_E2E_PROFILE_PATH:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
+PROFILE_PATH="${QUAID_E2E_PROFILE_PATH:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.template.quaid.json}"
 PATH_TIMEOUT_SEC="${QUAID_E2E_PATH_TIMEOUT_SEC:-1800}"
 
 PATHS=("openai-oauth" "openai-api" "anthropic-oauth" "anthropic-api")

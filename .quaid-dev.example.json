@@ -1,6 +1,7 @@
 {
   "paths": {
     "devRoot": ".",
+    "developmentDirectory": "..",
     "runtimeWorkspace": "../test",
     "openclawSource": "../openclaw-source"
   },
@@ -28,5 +29,8 @@
       "primaryKeyPath": "../secrets/anthropic-primary.txt",
       "secondaryKeyPath": "../secrets/anthropic-secondary.txt"
     }
+  },
+  "privacy": {
+    "blockedStrings": []
   }
 }

@@ -241,4 +241,4 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
 ## Bootstrap Ownership
 - Runtime/bootstrap orchestration remains in the machine-local bootstrap repo (path set via `QUAID_BOOTSTRAP_ROOT`).
 - Quaid now keeps E2E entrypoints in `modules/quaid/scripts` so full test runs can execute from dev/test directly.
-- `~/quaid/dev` must not store local secrets or host-specific credential material.
+- `paths.devRoot` must not store local secrets or host-specific credential material.

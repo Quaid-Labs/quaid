@@ -18,7 +18,8 @@ destructive command sequences in an untracked companion file such as
 ## Local Setup
 
 - Copy `.quaid-dev.example.json` to `.quaid-dev.local.json`.
-- Set `paths.devRoot`, `paths.runtimeWorkspace`, and `paths.openclawSource`.
+- Set `paths.devRoot`, `paths.developmentDirectory`, `paths.runtimeWorkspace`,
+  and `paths.openclawSource`.
 - Set `liveTest.remoteHost` and `liveTest.remoteWorkspace` for your lab host.
 - Keep any machine-specific install, wipe, restart, SSH, or tmux commands in
   `LIVE-TEST-GUIDE.local.md` or another ignored local note.

@@ -78,14 +78,28 @@ def _resolve_dev_root(local_cfg: Dict[str, Any], code_root: Path) -> Path:
     return code_root
 
 
+def _resolve_development_directory(local_cfg: Dict[str, Any], code_root: Path) -> Path:
+    dev_root = _resolve_dev_root(local_cfg, code_root)
+    paths_cfg = local_cfg.get("paths")
+    if isinstance(paths_cfg, dict):
+        raw = paths_cfg.get("developmentDirectory")
+        if isinstance(raw, str) and raw.strip():
+            return Path(_resolve_path(raw.strip(), dev_root))
+    return dev_root.parent
+
+
 def _apply_local_dev_overrides(profile: Dict[str, Any], local_cfg: Dict[str, Any]) -> None:
     if not local_cfg:
         return
 
     paths_cfg = local_cfg.get("paths") if isinstance(local_cfg.get("paths"), dict) else {}
     identity_cfg = local_cfg.get("identity") if isinstance(local_cfg.get("identity"), dict) else {}
+    dev_root = _resolve_dev_root(local_cfg, _code_root())
+    development_dir = _resolve_development_directory(local_cfg, _code_root())
 
     runtime_workspace = str(paths_cfg.get("runtimeWorkspace", "")).strip()
+    if not runtime_workspace:
+        runtime_workspace = os.path.relpath(development_dir / "test", dev_root)
     if runtime_workspace:
         profile.setdefault("runtime", {})["workspace"] = runtime_workspace
         openclaw_cfg = profile.setdefault("openclaw", {})

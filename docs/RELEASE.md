@@ -60,6 +60,30 @@ node scripts/release-owner-check.mjs
 If an unpushed commit was created with any other identity, amend or rewrite it
 before any canary push or release step.
 
+## Privacy Guard
+
+Release and canary checks read local blocked markers from
+`.quaid-dev.local.json` and fail if those values appear in:
+
+- tracked files, or
+- reachable git history
+
+Populate `.quaid-dev.local.json` with any legacy leaked values under
+`privacy.blockedStrings`, in addition to the live local values already present
+in `paths`, `identity.telegramAllowFrom`, and `liveTest.remoteHost`.
+
+Validate manually with:
+
+```bash
+node scripts/privacy-audit.mjs
+```
+
+If the privacy audit fails on reachable history, launch stays blocked until you:
+
+1. rewrite the affected GitHub branch history,
+2. force-push the rewritten branches, and
+3. ask GitHub Support to purge cached blobs/search results for the removed data.
+
 ## Pre-Push Checklist
 
 Run:
@@ -75,12 +99,13 @@ to the concrete release version when the recorded live-clear SHA matches `HEAD`.
 This runs:
 
 1. docs consistency
-2. release evidence check (`unit` + `ci` + `xp` must be recorded against HEAD)
-3. compatibility promotion (`openclaw` + `claude-code` live clears must exist, be install-verified, and match HEAD)
-4. release metadata/version consistency
-5. ownership/attribution verification
-6. strict TypeScript/JavaScript runtime pair check
-7. quaid release gate (targeted runtime regressions)
+2. privacy audit (tracked tree plus reachable git history against local blocked markers)
+3. release evidence check (`unit` + `ci` + `xp` must be recorded against HEAD)
+4. compatibility promotion (`openclaw` + `claude-code` live clears must exist, be install-verified, and match HEAD)
+5. release metadata/version consistency
+6. ownership/attribution verification
+7. strict TypeScript/JavaScript runtime pair check
+8. quaid release gate (targeted runtime regressions)
 
 ## Release Decision Flow
 

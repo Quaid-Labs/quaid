@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CODE_ROOT_DEFAULT="$(cd "${ROOT_DIR}/../.." && pwd)"
-PROFILE="${ROOT_DIR}/profiles/runtime-profile.local.quaid.json"
+PROFILE="${ROOT_DIR}/profiles/runtime-profile.template.quaid.json"
 LOCAL_CONFIG="${QUAID_DEV_LOCAL_CONFIG:-${CODE_ROOT_DEFAULT}/.quaid-dev.local.json}"
 WIPE=false
 AUTH_PROVIDER=""
@@ -90,7 +90,7 @@ usage() {
 Usage: $(basename "$0") [options]
 
 Options:
-  --profile <path>       Profile JSON (default: profiles/runtime-profile.local.quaid.json)
+  --profile <path>       Profile JSON (default: profiles/runtime-profile.template.quaid.json)
   --local-config <path>  Repo-local dev config JSON (default: .quaid-dev.local.json at dev root)
   --wipe                 Move existing runtime workspace to timestamped backup first
   --auth-provider <id>   Auth provider to apply: anthropic|openai
@@ -101,7 +101,7 @@ Options:
   --worktree-test-branch <b> Branch to use inside runtime workspace (default: test-runtime)
   --detach-worktree      Leave runtime workspace detached (legacy behavior)
   --worktree-remote <r>  Remote to fetch before creating worktree (default: origin)
-  --openclaw-source <p>  OpenClaw source checkout path (default: ../openclaw-source from devRoot)
+  --openclaw-source <p>  OpenClaw source checkout path (default: openclaw-source under developmentDirectory)
   --openclaw-ref <ref>   OpenClaw git ref/tag/sha to checkout (e.g. v2026.3.7)
   --no-openclaw-refresh  Skip refreshing OpenClaw source checkout
   --no-openclaw-install  Skip installing OpenClaw CLI from source
@@ -147,6 +147,7 @@ if [[ "$LOCAL_CONFIG" != /* ]]; then
   LOCAL_CONFIG="${CODE_ROOT_DEFAULT}/${LOCAL_CONFIG}"
 fi
 CODE_ROOT="$CODE_ROOT_DEFAULT"
+DEVELOPMENT_DIRECTORY="$(cd "${CODE_ROOT_DEFAULT}/.." && pwd)"
 BOOTSTRAP_OWNER_FROM_CONFIG=""
 if [[ -f "$LOCAL_CONFIG" ]]; then
   mapfile -t _dev_cfg_values < <(python3 - "$LOCAL_CONFIG" "$CODE_ROOT_DEFAULT" <<'PY'
@@ -169,21 +170,27 @@ def resolve(raw: str, base: Path) -> str:
     return str((base / candidate).resolve())
 
 dev_root = Path(resolve(paths.get("devRoot", "."), code_root) or code_root)
-runtime_workspace = resolve(paths.get("runtimeWorkspace", ""), dev_root)
-openclaw_source = resolve(paths.get("openclawSource", ""), dev_root)
+development_directory = Path(resolve(paths.get("developmentDirectory", ".."), dev_root) or dev_root.parent)
+runtime_workspace = resolve(paths.get("runtimeWorkspace", ""), dev_root) or str((development_directory / "test").resolve())
+openclaw_source = resolve(paths.get("openclawSource", ""), dev_root) or str((development_directory / "openclaw-source").resolve())
 bootstrap_owner = str(identity.get("bootstrapOwnerName", "")).strip()
 
 print(str(dev_root))
+print(str(development_directory))
 print(runtime_workspace)
 print(openclaw_source)
 print(bootstrap_owner)
 PY
 )
   [[ -n "${_dev_cfg_values[0]:-}" ]] && CODE_ROOT="${_dev_cfg_values[0]}"
-  if [[ "$OPENCLAW_SOURCE_EXPLICIT" != true && -n "${_dev_cfg_values[2]:-}" ]]; then
-    OPENCLAW_SOURCE="${_dev_cfg_values[2]}"
+  [[ -n "${_dev_cfg_values[1]:-}" ]] && DEVELOPMENT_DIRECTORY="${_dev_cfg_values[1]}"
+  if [[ "$OPENCLAW_SOURCE_EXPLICIT" != true && -n "${_dev_cfg_values[3]:-}" ]]; then
+    OPENCLAW_SOURCE="${_dev_cfg_values[3]}"
   fi
-  BOOTSTRAP_OWNER_FROM_CONFIG="${_dev_cfg_values[3]:-}"
+  BOOTSTRAP_OWNER_FROM_CONFIG="${_dev_cfg_values[4]:-}"
+fi
+if [[ -z "${QUAID_BACKUP_ROOT:-}" ]]; then
+  BACKUP_ROOT="${DEVELOPMENT_DIRECTORY}/backups"
 fi
 
 if [[ "$PROFILE" != /* ]]; then
@@ -202,15 +209,32 @@ from pathlib import Path
 profile_path = Path(sys.argv[1])
 local_cfg_path = Path(sys.argv[2])
 code_root = Path(sys.argv[3]).resolve()
+
+def resolve(raw: str, base: Path) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    candidate = Path(text).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((base / candidate).resolve())
+
 profile = json.load(profile_path.open("r", encoding="utf-8"))
 workspace_raw = str((profile.get("runtime") or {}).get("workspace", "")).strip()
 if local_cfg_path.exists():
     data = json.load(local_cfg_path.open("r", encoding="utf-8"))
     paths = data.get("paths") if isinstance(data.get("paths"), dict) else {}
+    dev_root = Path(resolve(paths.get("devRoot", "."), code_root) or code_root)
+    development_directory = Path(resolve(paths.get("developmentDirectory", ".."), dev_root) or dev_root.parent)
     workspace_raw = str(paths.get("runtimeWorkspace", workspace_raw)).strip()
+else:
+    dev_root = code_root
+    development_directory = code_root.parent
+if not workspace_raw:
+    workspace_raw = str((development_directory / "test").resolve())
 candidate = Path(workspace_raw).expanduser()
 if not candidate.is_absolute():
-    candidate = (code_root / candidate).resolve()
+    candidate = (dev_root / candidate).resolve()
 print(candidate)
 PY
 )"
