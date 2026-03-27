@@ -11,7 +11,7 @@ const VALID_HOSTS = new Set(["openclaw", "claude-code"]);
 
 function usage() {
   console.log(`Usage:
-  node scripts/record-compatibility-clear.mjs --host <openclaw|claude-code> --host-version <version> [--notes <text>] [--install-verified true|false]
+  node scripts/record-compatibility-clear.mjs --host <openclaw|claude-code> --host-version <version> [--sha <commit>] [--notes <text>] [--install-verified true|false]
 `);
 }
 
@@ -85,7 +85,13 @@ if (!hostVersion) {
   die("--host-version is required");
 }
 
-const head = gitRequired(["rev-parse", "HEAD"], "git rev-parse HEAD");
+const clearSha = String(
+  opts.sha || gitRequired(["rev-parse", "HEAD"], "git rev-parse HEAD")
+).trim();
+if (!clearSha) {
+  die("could not resolve compatibility clear sha");
+}
+gitRequired(["rev-parse", "--verify", clearSha], `git rev-parse --verify ${clearSha}`);
 const data = JSON.parse(fs.readFileSync(COMPAT_PATH, "utf8"));
 const matrix = Array.isArray(data.matrix) ? data.matrix : [];
 
@@ -100,7 +106,7 @@ const nextMatrix = matrix.filter((entry) => {
 nextMatrix.push({
   host,
   host_range: hostVersion,
-  quaid_range: head,
+  quaid_range: clearSha,
   status: "compatible",
   notes,
   message: "",
@@ -115,5 +121,5 @@ data.updated_at = todayIso();
 atomicWriteJson(COMPAT_PATH, data);
 
 console.log(
-  `[compat-clear] recorded ${host} host_version=${hostVersion} quaid_sha=${head} install_verified=${installVerified}`
+  `[compat-clear] recorded ${host} host_version=${hostVersion} quaid_sha=${clearSha} install_verified=${installVerified}`
 );

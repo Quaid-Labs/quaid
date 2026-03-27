@@ -125,8 +125,8 @@ node scripts/release-evidence.mjs record ci
 node scripts/release-evidence.mjs record xp
 ```
 
-Record host compatibility only after the full current live suite is green and
-the release-target SHA has been chosen:
+Record host compatibility after the host lane is green and Solomon has reviewed
+the clear run and accepted it as real:
 
 ```bash
 node scripts/record-compatibility-clear.mjs --host openclaw --host-version 2026.3.23 --install-verified true
@@ -141,10 +141,14 @@ For live clears:
   - `Quaid/OpenClaw`
   - `Quaid/Claude Code`
 - XP is part of release readiness, but it does not create its own compatibility row.
-- Live clears write the chosen release-target `HEAD` SHA into `compatibility.json` on `canary`.
+- Live clears write the accepted cleared runtime SHA into `compatibility.json` on `canary`.
+- If `HEAD` has already moved by the time the live lane records the clear, pass
+  `--sha <cleared-runtime-sha>` so the row reflects what was actually tested.
 - `bash scripts/release-check.sh` rewrites those SHA placeholders to the released Quaid version when the clear SHA still matches release `HEAD`, or when Solomon has locally approved the post-clear delta with `scripts/release-approve-delta.mjs`.
 - Promoted rows keep a `validated_sha` marker, so future release runs can tell whether the current matrix is fresh or only reflects an older clear.
-- Do not write compatibility rows for a live run that cleared against one SHA while the intended release target has already moved to another.
+- If the cleared SHA is behind the intended release target, the live lane should
+  record it after Solomon accepts the clear, then report the mismatch; release
+  decides whether that delta needs a rerun or can be explicitly approved.
 
 ## E2E Policy
 

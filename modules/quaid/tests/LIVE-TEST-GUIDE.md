@@ -35,11 +35,15 @@ destructive command sequences in an untracked companion file such as
 ## Compatibility Update Rule
 
 - Treat compatibility as a live-test output, not as a separate matrix promise.
-- Only update `compatibility.json` after the full current live suite is green.
+- Only update `compatibility.json` after the full current live suite is green
+  and Solomon has reviewed the clear run and accepted it as a real clear.
 - Record host clears separately for `Quaid/OpenClaw` and `Quaid/Claude Code`.
 - XP is part of release readiness, but it does not create its own compatibility row.
-- Use `node scripts/record-compatibility-clear.mjs` to write the current Quaid
-  release-target `HEAD` SHA as the pending `quaid_range` for the cleared host pair.
+- Do not wait for release-SHA reconciliation once Solomon has accepted the clear.
+- Use `node scripts/record-compatibility-clear.mjs` to write the cleared runtime
+  SHA as the pending `quaid_range` for the host pair.
+- If `HEAD` has already moved for docs, release, or other non-live work, pass
+  `--sha <cleared-runtime-sha>` explicitly.
 - Pass `--install-verified true` only if M0/install completed cleanly without
   manual config patching.
 - Release flow will rewrite the SHA to the real release version only if the
@@ -47,6 +51,6 @@ destructive command sequences in an untracked companion file such as
   marker so later release runs can detect stale clears.
 - Do not update compatibility entries for partial clears, failed runs, or
   single-adapter-only validation.
-- Do not update compatibility entries until the release target SHA is the one
-  you intend to ship; if the cleared run and current target differ, reconcile
-  that first and then decide whether another live pass is needed.
+- If the cleared SHA is behind the intended release target, report that
+  immediately so release can decide whether to rerun, approve the post-clear
+  delta, or hold.
