@@ -392,33 +392,15 @@ class ClaudeCodeAdapter(QuaidAdapter):
         return self.build_transcript(messages)
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
-        from adaptors.claude_code.providers import ClaudeCodeCLIProvider, ClaudeCodeOAuthLLMProvider
+        from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider
         try:
             from config import get_config
             cfg = get_config()
             deep = cfg.models.deep_reasoning or None
             fast = cfg.models.fast_reasoning or None
-            provider = (cfg.models.llm_provider or "").lower()
         except Exception:
             deep = None
             fast = None
-            provider = ""
-        if provider == "anthropic":
-            import os
-            from lib.providers import AnthropicLLMProvider
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            return AnthropicLLMProvider(
-                api_key=api_key,
-                deep_model=deep or "claude-haiku-4-5",
-                fast_model=fast or "claude-haiku-4-5",
-            )
-        # Default: use CC CLI provider (delegates auth to the installed 'claude' binary)
-        cli = ClaudeCodeCLIProvider(
-            deep_model=deep or "claude-haiku-4-5",
-            fast_model=fast or "claude-haiku-4-5",
-        )
-        if cli._claude_bin:
-            return cli
         return ClaudeCodeOAuthLLMProvider(deep_model=deep, fast_model=fast)
 
 
