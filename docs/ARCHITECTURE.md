@@ -407,7 +407,7 @@ edges                   -- Relationships between nodes
   source_fact_id FK -> nodes(id) ON DELETE SET NULL
 
 nodes_fts               -- FTS5 virtual table (Porter stemming, name + keywords)
-vec_nodes               -- sqlite-vec ANN index (float32 vectors)
+vec_nodes               -- sqlite-vec ANN index (float32 vectors) [created at runtime during first embedding backfill]
 
 contradictions          -- Detected conflicting facts (pending/resolved/false_positive)
 dedup_log               -- All dedup decisions (for review)

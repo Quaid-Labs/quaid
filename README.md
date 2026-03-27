@@ -146,6 +146,7 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 ## Requirements
 
+- Node.js 18+
 - Python 3.10+
 - SQLite 3.35+
 - [Ollama](https://ollama.ai) (for local embeddings)

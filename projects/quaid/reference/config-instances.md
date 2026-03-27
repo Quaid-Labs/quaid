@@ -224,11 +224,12 @@ p = Path(str(cfg.database.path)).expanduser()
 return p if p.is_absolute() else _workspace_root() / p
 ```
 
-`_workspace_root()` here calls `get_adapter().quaid_home()` (the QUAID_HOME
-root). With the default relative path this produces `QUAID_HOME/data/memory.db`.
+`_workspace_root()` calls `get_adapter().instance_root()` (the per-instance
+silo root, e.g. `QUAID_HOME/claude-code/`). With the default relative path
+this produces `QUAID_HOME/<instance_id>/data/memory.db`.
 
-Each instance should set an explicit absolute path, or a path relative to
-`QUAID_HOME` that is scoped to its instance directory. For example, two instances would use their respective instance roots:
+Each instance should set an explicit absolute path, or a path relative to its
+instance directory. For example, two instances would use their respective instance roots:
 `QUAID_HOME/claude-code/data/memory.db` and `QUAID_HOME/openclaw/data/memory.db`.
 Separate databases mean instances do not share memory — cross-instance recall
 requires the global project registry and canonical projects directory.
@@ -280,7 +281,8 @@ quaid config set ollama.embeddingModel qwen3-embedding:8b --shared
 quaid config set capture.inactivityTimeoutMinutes 30 --instance claude-code
 
 # Store a long-lived auth token for the active adapter
-quaid config set-auth <token>
+# Note: set-auth is not yet routed through the quaid wrapper; use direct Python CLI:
+python3 config_cli.py set-auth <token>
 ```
 
 ### `config set` value coercion rules
@@ -388,8 +390,9 @@ QUAID_HOME=/your/quaid/home
 /your/quaid/home/
   shared/
     config/memory.json          ← shared embeddings/Ollama config
+  projects/
     project-registry.json       ← registry visible to all instances
-    projects/                   ← shared project canonical dirs
+    <project-name>/             ← shared project canonical dirs
   openclaw/
     config/memory.json          ← openclaw instance config
     data/memory.db              ← openclaw's private memory DB

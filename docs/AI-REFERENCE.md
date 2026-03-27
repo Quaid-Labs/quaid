@@ -87,7 +87,7 @@ Write request
 | `adaptors/openclaw/adapter.py` | OpenClaw-specific adapter | `OpenClawAdapter`, sessions from `~/.openclaw/sessions/`, notifications via `openclaw message send` CLI |
 | `adaptors/openclaw/maintenance.py` | OpenClaw lifecycle registrations | `register_lifecycle_routines()` (workspace audit) |
 | `adaptors/claude_code/adapter.py` | Claude Code adapter | `ClaudeCodeAdapter`, sessions from `~/.claude/projects/`, deferred notifications via pending file, OAuth token auth |
-| `adaptors/claude_code/hooks.py` | Backwards-compatible shim for CC hooks | Delegates to `core.interface.hooks.main` |
+| `adaptors/claude_code/hooks.py` | Backwards-compatible shim for CC hooks | Auto-provisions a new instance silo on first invocation if needed, then delegates to `core.interface.hooks.main` |
 | `core/interface/hooks.py` | Adapter-agnostic hook entry points (SOURCE OF TRUTH for hooks) | `hook_inject`, `hook_inject_compact`, `hook_extract`, `hook_session_init`, `hook_subagent_start`, `hook_subagent_stop` |
 
 ### Shared Library (`lib/`)
@@ -184,12 +184,13 @@ The write is idempotent — if content is unchanged the file is not touched, pre
 
 ### Auth Token
 
-The Claude Code adapter requires a long-lived OAuth token for daemon-mode API calls. Setup:
+The Claude Code adapter requires a long-lived OAuth token for daemon-mode API calls (nightly janitor, extraction daemon). For interactive sessions, `hook-session-init` **automatically refreshes** `.auth-token` from `CLAUDE_CODE_OAUTH_TOKEN` on every CC session start — the manual step below is only needed for daemon processes that run outside an active CC session.
 
 ```bash
 claude setup-token    # Generate token
-quaid config set-auth <token>  # Store it for the active adapter instance
+python3 config_cli.py set-auth <token>  # Store it for the active adapter instance
 ```
+> **Note:** `quaid config set-auth` is not yet routed through the `quaid` wrapper script (it prints a usage error). Use the direct Python CLI above until this is fixed.
 
 ---
 
@@ -317,8 +318,8 @@ Config is loaded from `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json` (the per-i
 ```
 config/memory.json
   models                   -- Model IDs, context windows, max output tokens
-    fastReasoning           -- "claude-haiku-4-5" (Haiku)
-    deepReasoning          -- "claude-opus-4-6" (Opus)
+    fastReasoning           -- "default" (resolved at runtime; CC adapter default: "claude-haiku-4-5-20251001")
+    deepReasoning          -- "default" (resolved at runtime; CC adapter default: "claude-sonnet-4-6")
     fastReasoningContext    -- 200000
     deepReasoningContext   -- 200000
     fastReasoningMaxOutput  -- 8192
@@ -453,6 +454,7 @@ Merges are crash-safe, executed in single database transactions.
 | Task | Name | Purpose | LLM Cost |
 |------|------|---------|----------|
 | 0b | embeddings | Backfill missing embeddings | Free (local Ollama) |
+| 0c | edges | Backfill missing relationship edges from stored facts | Free |
 | 2 | review | Opus reviews pending facts | ~$0.01-0.05 per batch |
 | 2a | temporal | Resolve relative dates (no LLM) | Free |
 | 2b | dedup_review | Review dedup rejections (Opus) | ~$0.01-0.05 |
@@ -716,7 +718,7 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `OPENCLAW_GATEWAY_TOKEN` | Override OC gateway auth token. | Read from `~/.openclaw/openclaw.json` |
 | `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/<instance_id>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
-| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from env or `.env` file in adapter workspace |
+| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from env; `.env` file at `QUAID_HOME/.env` is a fallback only when `retrieval.fail_hard=false` |
 | `OPENAI_API_KEY` | OpenAI API key (for benchmark judging) | Must be set explicitly |
 | `QUAID_DEV` | Enable dev mode (unit tests in janitor, verbose output) | Not set |
 | `QUAID_QUIET` | Suppress informational config messages | Not set |
@@ -724,7 +726,7 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `QUAID_RULES_DIR` | Override `.claude/rules/` directory for CC `hook-session-init` output | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |
 
-API key fallback chain for Python adapters: `ANTHROPIC_API_KEY` env var -> `.env` file in adapter workspace root. In OC, the Python adapter also resolves credentials from `~/.openclaw/agents/main/agent/auth-profiles.json` (gateway credential store) for internal LLM calls. There is no macOS Keychain fallback in any adapter.
+API key fallback chain for Python adapters: `ANTHROPIC_API_KEY` env var -> `.env` file at `QUAID_HOME/.env` (only attempted when `retrieval.fail_hard=false`; skipped in the default strict mode). In OC, the Python adapter also resolves credentials from `~/.openclaw/agents/main/agent/auth-profiles.json` (gateway credential store) for internal LLM calls. There is no macOS Keychain fallback in any adapter.
 
 OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthropic API directly). CC uses OAuth direct API via `ClaudeCodeOAuthLLMProvider`. The active LLM provider for each adapter is determined by `adapter.type` in `config/memory.json` and resolved through the facade tier system (`deep`/`fast`).
 
@@ -893,7 +895,7 @@ python3 core/lifecycle/janitor.py --task all --apply
 - Evolved: sqlite-vec vectors, FTS5, graph traversal, janitor pipeline
 - 81+ bugs fixed across 9 production rounds + 3 stress test rounds + 1 journal round + 6 benchmark analysis rounds
 - Key architectural milestones: crash-safe merges, dual learning system, RRF fusion, BEAM graph search, prompt caching, output-aware batching, extraction daemon, standalone CLI
-- ~39K lines of code: 18K Python, 13K tests, 5K TS/JS, 3.1K vitest
+- Large codebase: production Python, TypeScript, and extensive test suites across all layers
 
 ---
 

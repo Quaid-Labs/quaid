@@ -13,7 +13,7 @@ Quaid organizes data into five layers:
 
 | # | Layer | What | Who writes | Who reads |
 |---|-------|------|-----------|-----------|
-| 1 | Base context | Platform's native context files (CLAUDE.md, OC's SOUL/USER/MEMORY) | Human + LLM | Platform + Quaid (slim only) |
+| 1 | Base context | Platform's native context files (CLAUDE.md, OC's SOUL/USER/ENVIRONMENT) | Human + LLM | Platform + Quaid (slim only) |
 | 2 | Generated identity | Quaid's per-instance identity (snippets, journals) | Quaid janitor | Platform (via injection) |
 | 3 | Project docs | Documentation indexed into docsdb/RAG | LLM + human | Quaid retrieval |
 | 4 | Project context | Injected markdown (TOOLS.md, AGENTS.md) | Quaid janitor | Platform (via bootstrap/hooks) |
@@ -36,7 +36,7 @@ are.
 | Adapter | Files | Location |
 |---------|-------|----------|
 | Claude Code | `CLAUDE.md` | Project working directory (user's cwd) |
-| OpenClaw | `SOUL.md`, `USER.md`, `MEMORY.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TODO.md` | OC workspace root (`~/.openclaw/workspace/`) |
+| OpenClaw | `SOUL.md`, `USER.md`, `ENVIRONMENT.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TODO.md` | OC workspace root (`~/.openclaw/workspace/`) |
 | Future adapter | Whatever the platform uses | Adapter declares it |
 
 **Rules**:

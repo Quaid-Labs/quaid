@@ -130,7 +130,7 @@ To change the shared embedding model after install, edit `<QUAID_HOME>/shared/co
 - On macOS, the janitor is scheduled via a launchd plist (`~/Library/LaunchAgents/com.quaid.janitor.plist`).
   It runs `quaid janitor --task all --apply --time-budget 3600` at the configured hour (default 4:30 AM).
   Logs go to `<QUAID_HOME>/logs/janitor/launchd.log` and `launchd-err.log`.
-  The plist embeds `QUAID_HOME` and uses the Claude Code OAuth token — no API key env var is needed.
+  The plist embeds `QUAID_HOME` and `PYTHONPATH`. At runtime, the adapter reads the Claude Code OAuth token from `~/.claude/.credentials.json` (auto-refreshed by `hook-session-init`) or from `.auth-token` if pre-stored via `python3 config_cli.py set-auth` — no API key env var is needed.
   Check status: `launchctl list | grep quaid`
   Unload: `launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist`
 - The installer creates a per-instance identity directory at `<QUAID_HOME>/claude-code/identity/`
@@ -139,8 +139,7 @@ To change the shared embedding model after install, edit `<QUAID_HOME>/shared/co
 ## OpenClaw-specific Notes
 
 - Installer now attempts to auto-heal missing `agents.list` in `~/.openclaw/openclaw.json`.
-- Required hooks are enabled explicitly during install:
-  - `bootstrap-extra-files`
+- Installer sets `allowPromptInjection: true` in the plugin config so `before_prompt_build` can inject memory context into prompts.
 
 ## Minimal Non-interactive Command
 
@@ -261,7 +260,6 @@ After install — OpenClaw adapter:
 
 ```bash
 openclaw hooks list
-openclaw hooks enable bootstrap-extra-files
 ```
 
 After install — Claude Code adapter:
