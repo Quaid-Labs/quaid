@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="${1:-github}"
 TARGET_BRANCH="canary"
 BRANCH="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD)"
+REMOTE_MAIN_REF="${REMOTE}/main"
+REMOTE_CANARY_REF="${REMOTE}/${TARGET_BRANCH}"
 
 die() {
   echo "[push-canary] ERROR: $*" >&2
@@ -24,6 +26,13 @@ if [[ -n "$(git -C "$ROOT_DIR" status --porcelain)" ]]; then
 fi
 
 cd "$ROOT_DIR"
+
+if git rev-parse --verify "$REMOTE_MAIN_REF" >/dev/null 2>&1 && git rev-parse --verify "$REMOTE_CANARY_REF" >/dev/null 2>&1; then
+  history_scan="$(git log --format='%an%x09%ae%x09%cn%x09%ce' "${REMOTE_MAIN_REF}..${REMOTE_CANARY_REF}" | rg -n '(^|	)(Clawdbot|clawdbot@testbench\.local)(	|$)' || true)"
+  if [[ -n "$history_scan" ]]; then
+    die "target ${REMOTE_CANARY_REF} still contains Clawdbot/local-email commit attribution; rewrite canary history before pushing new commits"
+  fi
+fi
 
 scan_patterns=(
   'owner'

@@ -126,6 +126,7 @@ This script:
 - refuses pushes from non-`canary` branches
 - refuses `main` pushes
 - requires a clean worktree
+- refuses to push on top of a `canary` branch whose unique history still contains banned local/bot attribution
 - scans tracked files for local/private markers before push
 - runs the canary-safe identity/docs/runtime checks
 - pushes only to `github canary`
