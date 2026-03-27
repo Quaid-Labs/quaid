@@ -102,7 +102,7 @@ To change the shared embedding model after install, edit `<QUAID_HOME>/shared/co
 
 ## Environment Variables (optional)
 
-- `QUAID_WORKSPACE` or `QUAID_HOME`: explicit workspace/home path override (highest priority, same as `--workspace`)
+- `QUAID_HOME`: explicit workspace/home path override (highest priority). **Do NOT set this globally in your shell profile** (e.g., `~/.zshrc`) — the hooks/installer manage it per-invocation. Setting it globally causes all adapter instances to share the same silo, corrupting cross-adapter isolation.
 - `QUAID_INSTANCE`: pre-set instance identifier; installer skips the instance prompt and uses this value directly (e.g. `openclaw`, `claude-code`)
 - `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint (auto-detected when OpenClaw is installed)
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults

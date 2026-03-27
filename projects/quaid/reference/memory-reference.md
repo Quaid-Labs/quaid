@@ -1388,7 +1388,7 @@ Controls lifecycle routine concurrency and resource locking:
       "llmWorkers": 4,
       "embeddingWorkers": 6,
       "lifecyclePrepassWorkers": 3,
-      "lifecyclePrepassTimeoutSeconds": 300,
+      "lifecyclePrepassTimeoutSeconds": 1200,
       "lifecyclePrepassTimeoutRetries": 1,
       "lockEnforcementEnabled": true,
       "lockWaitSeconds": 120,

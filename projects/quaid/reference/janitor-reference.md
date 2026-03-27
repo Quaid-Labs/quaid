@@ -434,7 +434,7 @@ The janitor dispatches maintenance tasks through a `LifecycleRegistry` — a plu
 
 **Resource locking:** Routines declare `write_resources` at registration (or use defaults in `_DEFAULT_WRITE_RESOURCES`). The registry acquires these locks before running the routine (skipped in dry-run). Lock timeout is `core.parallel.lockWaitSeconds` (default 120s). See `core.parallel` config in `memory-reference.md` for full lock config.
 
-**Parallel routine execution:** `run_many()` executes multiple routines concurrently up to `max_workers`. Overall timeout defaults to `core.parallel.lifecyclePrepassTimeoutSeconds` (300s). Timed-out routines are cancelled and recorded as errors.
+**Parallel routine execution:** `run_many()` executes multiple routines concurrently up to `max_workers`. Overall timeout defaults to `core.parallel.lifecyclePrepassTimeoutSeconds` (1200s). Timed-out routines are cancelled and recorded as errors.
 
 **Parallel telemetry:** Set `QUAID_LIFECYCLE_PARALLEL_TELEMETRY=1` to append per-event JSONL rows to `logs/janitor/lifecycle-parallel-telemetry.jsonl` (events: `run_start`, `task_submit`, `task_done`, `task_timeout`, `task_error`, `run_end`). Off by default.
 
@@ -485,7 +485,7 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 | `decay` | decay task | Decay rates, thresholds |
 | `dedup` | duplicates | Similarity threshold, batch size |
 | `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` | all LLM tasks | Provider→tier model-class maps used when tier is `default` |
-| `core.parallel` | lifecycle registry | Concurrency, timeouts, and locking for lifecycle routines — `lifecyclePrepassWorkers` (default 3), `lifecyclePrepassTimeoutSeconds` (default 300), `lifecyclePrepassTimeoutRetries` (default 1), `lockWaitSeconds` (default 120), `lockRequireRegistration` (default true). All keys accept snake_case aliases. |
+| `core.parallel` | lifecycle registry | Concurrency, timeouts, and locking for lifecycle routines — `lifecyclePrepassWorkers` (default 3), `lifecyclePrepassTimeoutSeconds` (default 1200), `lifecyclePrepassTimeoutRetries` (default 1), `lockWaitSeconds` (default 120), `lockRequireRegistration` (default true). All keys accept snake_case aliases. |
 
 Model names are resolved from `config/memory.json` by model tier, then routed through adapter/provider dispatch using active gateway provider/auth state.
 
