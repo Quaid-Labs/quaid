@@ -84,6 +84,9 @@ If the privacy audit fails on reachable history, launch stays blocked until you:
 2. force-push the rewritten branches, and
 3. ask GitHub Support to purge cached blobs/search results for the removed data.
 
+See [PRIVACY-HISTORY-SCRUB.md](./PRIVACY-HISTORY-SCRUB.md) for the rewrite and
+support-purge runbook.
+
 ## Pre-Push Checklist
 
 Run:

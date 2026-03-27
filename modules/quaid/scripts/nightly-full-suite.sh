@@ -1,9 +1,48 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_ROOT="${QUAID_REPO_ROOT:-${HOME}/quaid/dev}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+REPO_ROOT="${QUAID_REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
 E2E_SCRIPT="${REPO_ROOT}/modules/quaid/scripts/run-quaid-e2e.sh"
-LOG_DIR="${QUAID_NIGHTLY_LOG_DIR:-${HOME}/quaid/logs/nightly-e2e}"
+DEFAULT_DEV_DIR="$(python3 - "$REPO_ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1]).resolve()
+config_path = repo_root / ".quaid-dev.local.json"
+
+def resolve(raw, base):
+    text = (raw or "").strip()
+    if not text:
+        return base
+    if text.startswith("~/"):
+        return Path.home() / text[2:]
+    path = Path(text)
+    return path if path.is_absolute() else (base / path)
+
+if not config_path.exists():
+    print(repo_root.parent)
+    raise SystemExit(0)
+
+try:
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+except Exception:
+    print(repo_root.parent)
+    raise SystemExit(0)
+
+paths = payload.get("paths") if isinstance(payload, dict) else {}
+if not isinstance(paths, dict):
+    print(repo_root.parent)
+    raise SystemExit(0)
+
+dev_root = resolve(paths.get("devRoot"), repo_root).resolve() if paths.get("devRoot") else repo_root
+development_directory = resolve(paths.get("developmentDirectory"), dev_root).resolve() if paths.get("developmentDirectory") else dev_root.parent
+print(development_directory)
+PY
+)"
+LOG_DIR="${QUAID_NIGHTLY_LOG_DIR:-${DEFAULT_DEV_DIR}/logs/nightly-e2e}"
 TS="$(date +%Y%m%d-%H%M%S)"
 RUN_LOG="${LOG_DIR}/nightly-${TS}.log"
 SUMMARY_PATH="${LOG_DIR}/nightly-${TS}.summary.json"

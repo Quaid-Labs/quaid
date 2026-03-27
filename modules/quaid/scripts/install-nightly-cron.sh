@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_ROOT="${QUAID_REPO_ROOT:-${HOME}/quaid/dev}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+REPO_ROOT="${QUAID_REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
 RUNNER="${REPO_ROOT}/modules/quaid/scripts/nightly-full-suite.sh"
 CRON_TAG="# QUAID_NIGHTLY_E2E"
 CRON_EXPR="0 3 * * *"

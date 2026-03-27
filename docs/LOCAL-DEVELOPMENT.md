@@ -93,6 +93,7 @@ These repo tools read `.quaid-dev.local.json` today:
 - `modules/quaid/scripts/bootstrap-local.sh`
 - `modules/quaid/scripts/run-quaid-e2e.sh`
 - `modules/quaid/scripts/apply-runtime-profile.py`
+- `modules/quaid/scripts/nightly-full-suite.sh`
 - `scripts/privacy-audit.mjs`
 - `scripts/release-owner-check.mjs`
 - `scripts/push-canary.sh`

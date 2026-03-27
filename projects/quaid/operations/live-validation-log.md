@@ -125,7 +125,7 @@ Both OC and CC share `QUAID_HOME=<your-quaid-home>`.
 | M3/rate-limit: Repeated 429 retries exhaust the OAuth account hourly budget | Low | Test infra issue — each failed retry adds to rate-limit pressure. Use longer backoffs (15-30 min) when hitting hard account limits, and skip to non-LLM milestones (M9, M10) while waiting. |
 | M8: Neither OC nor CC `before_agent_start` injects Quaid TOOLS.md (project CLI guide) into agent context | High | Agent created plain folders/files instead of using `quaid project create`/`link`/`registry register`. CC session-init writes `.claude/rules/quaid-projects.md` but that only covers CC identity files; project CLI guide is missing from both. OC needs equivalent TOOLS.md injection in `before_agent_start`. |
 | CC extraction daemon always used `claude-opus-4-6` regardless of config | High | `adaptors/claude_code/adapter.py` `get_llm_provider()` called `ClaudeCodeOAuthLLMProvider()` with no args, defaulting to Opus. Fixed to read `deepReasoning`/`fastReasoning` from config. |
-| Installer: `setup-quaid.mjs` and `lib/` are at `~/quaid/dev/` root, not `modules/quaid/` | Low | LIVE-TEST-GUIDE.md rsync command and installer path corrected. |
+| Installer: `setup-quaid.mjs` and `lib/` are at the configured `paths.devRoot`, not `modules/quaid/` | Low | LIVE-TEST-GUIDE.md rsync command and installer path corrected. |
 | M7: stale graph edges from prior test run (Oliver) persisted between runs | Low | No wipe between runs. Janitor would clean on next nightly run. Not a current-run extraction failure. |
 
 ### Results
