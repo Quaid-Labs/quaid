@@ -5,11 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BOOTSTRAP_ROOT="${QUAID_BOOTSTRAP_ROOT:-${PLUGIN_ROOT}}"
 ENV_FILE="${QUAID_E2E_ENV_FILE:-${PLUGIN_ROOT}/.env.e2e}"
-
-E2E_WS="${HOME}/quaid/test"
-DEV_WS="${HOME}/quaid/dev"
+CODE_ROOT_DEFAULT="$(cd "${BOOTSTRAP_ROOT}/../.." && pwd)"
+DEV_LOCAL_CONFIG="${QUAID_DEV_LOCAL_CONFIG:-${CODE_ROOT_DEFAULT}/.quaid-dev.local.json}"
+DEV_WS_DEFAULT="${CODE_ROOT_DEFAULT}"
+E2E_WS_DEFAULT="${HOME}/quaid/test"
 E2E_INSTANCE="${QUAID_E2E_INSTANCE:-openclaw}"
-OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
+OPENCLAW_SOURCE_DEFAULT="${HOME}/quaid/openclaw-source"
 # Default E2E gate to the OpenClaw release lane we validate against in canary.
 # Keep overridable for bisects via --openclaw-ref / QUAID_E2E_OPENCLAW_REF.
 OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-v2026.3.22}"
@@ -74,6 +75,44 @@ CURRENT_STAGE="init"
 E2E_STATUS="running"
 E2E_FAIL_LINE=""
 E2E_FAIL_REASON=""
+LOCAL_CONFIG_ARGS=()
+
+if [[ -f "$DEV_LOCAL_CONFIG" ]]; then
+  mapfile -t _dev_cfg_values < <(python3 - "$DEV_LOCAL_CONFIG" "$CODE_ROOT_DEFAULT" <<'PY'
+import json, sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1]).expanduser()
+code_root = Path(sys.argv[2]).resolve()
+data = json.load(cfg_path.open("r", encoding="utf-8"))
+paths = data.get("paths") if isinstance(data.get("paths"), dict) else {}
+
+def resolve(raw: str, base: Path) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    candidate = Path(text).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((base / candidate).resolve())
+
+dev_root = Path(resolve(paths.get("devRoot", "."), code_root) or code_root)
+runtime_workspace = resolve(paths.get("runtimeWorkspace", ""), dev_root)
+openclaw_source = resolve(paths.get("openclawSource", ""), dev_root)
+print(str(dev_root))
+print(runtime_workspace)
+print(openclaw_source)
+PY
+)
+  [[ -n "${_dev_cfg_values[0]:-}" ]] && DEV_WS_DEFAULT="${_dev_cfg_values[0]}"
+  [[ -n "${_dev_cfg_values[1]:-}" ]] && E2E_WS_DEFAULT="${_dev_cfg_values[1]}"
+  [[ -n "${_dev_cfg_values[2]:-}" ]] && OPENCLAW_SOURCE_DEFAULT="${_dev_cfg_values[2]}"
+  LOCAL_CONFIG_ARGS=(--local-config "$DEV_LOCAL_CONFIG")
+fi
+
+E2E_WS="${QUAID_E2E_WORKSPACE:-${E2E_WS_DEFAULT}}"
+DEV_WS="${QUAID_E2E_DEV_WS:-${DEV_WS_DEFAULT}}"
+OPENCLAW_SOURCE="${QUAID_E2E_OPENCLAW_SOURCE:-${OPENCLAW_SOURCE_DEFAULT}}"
 
 STAGE_bootstrap="pending"
 STAGE_bootstrap_START_EPOCH=0
@@ -984,7 +1023,7 @@ enable_required_openclaw_hooks() {
 restore_test_gateway() {
   set +e
   echo "[e2e] Restoring gateway config to test workspace..."
-  python3 "${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" --profile "$PROFILE_TEST" --auth-path "$AUTH_PATH" >/dev/null 2>&1
+  python3 "${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" --profile "$PROFILE_TEST" --auth-path "$AUTH_PATH" "${LOCAL_CONFIG_ARGS[@]}" >/dev/null 2>&1
   openclaw gateway stop >/dev/null 2>&1 || true
   set -e
   start_gateway_safe
@@ -1252,6 +1291,9 @@ run_bootstrap() {
     --worktree-source "$DEV_WS"
     --worktree-test-branch "e2e-runtime"
   )
+  if [[ ${#LOCAL_CONFIG_ARGS[@]} -gt 0 ]]; then
+    args+=("${LOCAL_CONFIG_ARGS[@]}")
+  fi
   if [[ -n "$OPENCLAW_REF" ]]; then
     args+=(--openclaw-ref "$OPENCLAW_REF")
   fi

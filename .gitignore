@@ -67,3 +67,4 @@ skills/**/.clawdhub/
 # Benchmark harness now lives in ~/agentlife-benchmark, not this repo.
 agentlife/eval/
 pytest-runner/
+.quaid-dev.local.json

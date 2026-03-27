@@ -1,0 +1,26 @@
+{
+  "paths": {
+    "devRoot": ".",
+    "runtimeWorkspace": "../test",
+    "openclawSource": "../openclaw-source"
+  },
+  "identity": {
+    "bootstrapOwnerName": "Test Operator",
+    "releaseOwnerName": "Your Name",
+    "releaseOwnerEmail": "you@example.com",
+    "defaultOwnerId": "operator",
+    "personNodeName": "Test Operator",
+    "speakers": [
+      "Operator",
+      "Test Operator"
+    ],
+    "telegramAllowFrom": [
+      "1000000000"
+    ],
+    "userSummary": "Primary operator: Test Operator. The operator is a software developer."
+  },
+  "liveTest": {
+    "remoteHost": "localhost",
+    "remoteWorkspace": "../test-remote"
+  }
+}

@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const expectedName = process.env.QUAID_OWNER_NAME || 'solstead';
-const expectedEmail =
-  process.env.QUAID_OWNER_EMAIL || '168413654+solstead@users.noreply.github.com';
-const allowedIdentityPairs = new Set([
-  `${expectedName}\x00${expectedEmail}`,
-  // Transition alias: older canonical identity used in prior public commits.
-  'Solomon Steadman\x00solstead@users.noreply.github.com',
-]);
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, '..');
+const rawLocalConfigPath = process.env.QUAID_DEV_LOCAL_CONFIG || path.join(repoRoot, '.quaid-dev.local.json');
+const localConfigPath = path.isAbsolute(rawLocalConfigPath)
+  ? rawLocalConfigPath
+  : path.resolve(repoRoot, rawLocalConfigPath);
 
-const bannedMessagePatterns = [
-  /co-authored-by:/i,
-  /claude code/i,
-  /\balfie\b/i,
-  /clawdbot@testbench\.local/i,
-];
+function loadLocalConfig(configPath) {
+  try {
+    if (!fs.existsSync(configPath)) return {};
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 function run(cmd) {
   return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -36,17 +40,37 @@ function fail(lines) {
   process.exit(1);
 }
 
-const failures = [];
-
 const localName = runAllowFail('git config user.name');
 const localEmail = runAllowFail('git config user.email');
+const localConfig = loadLocalConfig(localConfigPath);
+const identityConfig =
+  localConfig.identity && typeof localConfig.identity === 'object' ? localConfig.identity : {};
+const expectedName =
+  process.env.QUAID_OWNER_NAME || String(identityConfig.releaseOwnerName || '').trim() || (localName.ok ? localName.out : '');
+const expectedEmail =
+  process.env.QUAID_OWNER_EMAIL || String(identityConfig.releaseOwnerEmail || '').trim() || (localEmail.ok ? localEmail.out : '');
+const configuredIdentity = Boolean(process.env.QUAID_OWNER_NAME || process.env.QUAID_OWNER_EMAIL || identityConfig.releaseOwnerName || identityConfig.releaseOwnerEmail);
+const allowedIdentityPairs = new Set([`${expectedName}\x00${expectedEmail}`]);
+const bannedMessagePatterns = [
+  /co-authored-by:/i,
+  /claude code/i,
+  /\b[a-z0-9._-]+\.local\b/i,
+  /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.local\b/i,
+];
+const failures = [];
 
-if (!localName.ok || localName.out !== expectedName) {
+if (!expectedName || !expectedEmail) {
+  fail([
+    'release owner identity is unset; configure git user.name/user.email or set it in .quaid-dev.local.json',
+  ]);
+}
+
+if (configuredIdentity && (!localName.ok || localName.out !== expectedName)) {
   failures.push(
     `git config user.name is "${localName.ok ? localName.out : '(unset)'}", expected "${expectedName}"`,
   );
 }
-if (!localEmail.ok || localEmail.out !== expectedEmail) {
+if (configuredIdentity && (!localEmail.ok || localEmail.out !== expectedEmail)) {
   failures.push(
     `git config user.email is "${localEmail.ok ? localEmail.out : '(unset)'}", expected "${expectedEmail}"`,
   );

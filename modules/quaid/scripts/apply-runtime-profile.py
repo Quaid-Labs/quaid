@@ -36,6 +36,102 @@ def _deep_merge_dict(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]
     return dst
 
 
+def _code_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_path(value: str, base_dir: Path) -> str:
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((base_dir / candidate).resolve())
+
+
+def _resolve_config_path(raw: str, base_dir: Path) -> Path:
+    return Path(_resolve_path(raw, base_dir))
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for entry in value:
+        text = str(entry).strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _load_local_config(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    data = _load_json(path)
+    return data if isinstance(data, dict) else {}
+
+
+def _resolve_dev_root(local_cfg: Dict[str, Any], code_root: Path) -> Path:
+    paths_cfg = local_cfg.get("paths")
+    if isinstance(paths_cfg, dict):
+        raw = paths_cfg.get("devRoot")
+        if isinstance(raw, str) and raw.strip():
+            return Path(_resolve_path(raw.strip(), code_root))
+    return code_root
+
+
+def _apply_local_dev_overrides(profile: Dict[str, Any], local_cfg: Dict[str, Any]) -> None:
+    if not local_cfg:
+        return
+
+    paths_cfg = local_cfg.get("paths") if isinstance(local_cfg.get("paths"), dict) else {}
+    identity_cfg = local_cfg.get("identity") if isinstance(local_cfg.get("identity"), dict) else {}
+
+    runtime_workspace = str(paths_cfg.get("runtimeWorkspace", "")).strip()
+    if runtime_workspace:
+        profile.setdefault("runtime", {})["workspace"] = runtime_workspace
+        openclaw_cfg = profile.setdefault("openclaw", {})
+        openclaw_cfg.setdefault("agentDefaults", {})["workspace"] = runtime_workspace
+        for agent_cfg in openclaw_cfg.get("agentList", []):
+            if isinstance(agent_cfg, dict):
+                agent_cfg["workspace"] = runtime_workspace
+        profile.setdefault("quaid", {})["configPath"] = str(Path(runtime_workspace) / "config" / "memory.json")
+        profile.setdefault("secrets", {})["writeEnvFile"] = str(Path(runtime_workspace) / ".env")
+
+    owner_id = str(identity_cfg.get("defaultOwnerId", "operator")).strip() or "operator"
+    speakers = _normalize_string_list(identity_cfg.get("speakers"))
+    person_node_name = str(identity_cfg.get("personNodeName", "")).strip()
+    if not person_node_name:
+        person_node_name = speakers[0] if speakers else "Test Operator"
+    if not speakers:
+        speakers = [person_node_name]
+    user_summary = str(
+        identity_cfg.get(
+            "userSummary",
+            f"Primary operator: {person_node_name}. The operator is a software developer.",
+        )
+    ).strip()
+    telegram_allow = _normalize_string_list(identity_cfg.get("telegramAllowFrom"))
+
+    profile.setdefault("runtime", {}).setdefault("coreMarkdown", {})["USER.md"] = f"# User\n\n{user_summary}\n"
+
+    openclaw_cfg = profile.setdefault("openclaw", {})
+    openclaw_cfg.setdefault("telegram", {})
+    if telegram_allow:
+        openclaw_cfg["telegram"]["allowFrom"] = telegram_allow
+
+    quaid_cfg = profile.setdefault("quaid", {})
+    users_cfg = quaid_cfg.setdefault("users", {})
+    users_cfg["defaultOwner"] = owner_id
+    channels: Dict[str, Any] = {"cli": ["*"]}
+    if telegram_allow:
+        channels["telegram"] = telegram_allow
+    identity_entry: Dict[str, Any] = {
+        "channels": channels,
+        "speakers": speakers,
+        "personNodeName": person_node_name,
+    }
+    users_cfg["identities"] = {owner_id: identity_entry}
+
+
 def _provider_from_profile(profile_id: str, profile: Dict[str, Any]) -> str:
     provider = profile.get("provider")
     if isinstance(provider, str) and provider.strip():
@@ -133,8 +229,8 @@ def _ensure_dirs(root: Path, entries: list[str]) -> None:
         (root / entry).mkdir(parents=True, exist_ok=True)
 
 
-def _apply_runtime(runtime_cfg: Dict[str, Any]) -> Path:
-    workspace = Path(runtime_cfg["workspace"]).expanduser()
+def _apply_runtime(runtime_cfg: Dict[str, Any], dev_root: Path) -> Path:
+    workspace = _resolve_config_path(str(runtime_cfg["workspace"]), dev_root)
     workspace.mkdir(parents=True, exist_ok=True)
     _ensure_dirs(workspace, runtime_cfg.get("createDirs", []))
     for filename, content in runtime_cfg.get("coreMarkdown", {}).items():
@@ -148,10 +244,12 @@ def _apply_openclaw(
     workspace: Path,
     selector: Dict[str, Optional[str]],
     selector_label: Optional[str],
+    dev_root: Path,
 ) -> None:
-    config_path = Path(
-        openclaw_cfg.get("configPath", "~/.openclaw/openclaw.json")
-    ).expanduser()
+    config_path = _resolve_config_path(
+        str(openclaw_cfg.get("configPath", "~/.openclaw/openclaw.json")),
+        dev_root,
+    )
     existing = _load_json(config_path) if config_path.exists() else {}
 
     existing.setdefault("agents", {})
@@ -175,7 +273,7 @@ def _apply_openclaw(
 
     default_workspace = defaults.get("workspace")
     if isinstance(default_workspace, str) and default_workspace.strip():
-        resolved_default_workspace = str(Path(default_workspace).expanduser())
+        resolved_default_workspace = _resolve_path(default_workspace, dev_root)
     else:
         resolved_default_workspace = str(workspace)
     existing["agents"]["defaults"]["workspace"] = resolved_default_workspace
@@ -197,7 +295,7 @@ def _apply_openclaw(
         if agent_cfg.get("name"):
             merged["name"] = agent_cfg["name"]
         if agent_cfg.get("workspace"):
-            merged["workspace"] = str(Path(agent_cfg["workspace"]).expanduser())
+            merged["workspace"] = _resolve_path(str(agent_cfg["workspace"]), dev_root)
         else:
             merged["workspace"] = str(workspace)
         if family is not None and defaults.get("modelPrimary"):
@@ -331,11 +429,11 @@ def _apply_openclaw(
         os.chmod(auth_store_path, 0o600)
 
 
-def _apply_quaid(quaid_cfg: Dict[str, Any]) -> None:
+def _apply_quaid(quaid_cfg: Dict[str, Any], dev_root: Path) -> None:
     if not quaid_cfg.get("enabled", True):
         return
-    template_path = Path(quaid_cfg["templatePath"]).expanduser()
-    config_path = Path(quaid_cfg["configPath"]).expanduser()
+    template_path = _resolve_config_path(str(quaid_cfg["templatePath"]), dev_root)
+    config_path = _resolve_config_path(str(quaid_cfg["configPath"]), dev_root)
 
     if template_path.exists():
         config = _load_json(template_path)
@@ -409,12 +507,12 @@ def _apply_quaid(quaid_cfg: Dict[str, Any]) -> None:
     _write_json(config_path, config)
 
 
-def _apply_secrets(secrets_cfg: Dict[str, Any]) -> None:
+def _apply_secrets(secrets_cfg: Dict[str, Any], dev_root: Path) -> None:
     env_path = secrets_cfg.get("writeEnvFile")
     env_map = secrets_cfg.get("env", {})
     if not env_path or not isinstance(env_map, dict) or not env_map:
         return
-    out_path = Path(env_path).expanduser()
+    out_path = _resolve_config_path(str(env_path), dev_root)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"{k}={v}" for k, v in env_map.items()]
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -440,20 +538,33 @@ def main() -> int:
         default=None,
         help="Exact auth path to load (provider + auth mode).",
     )
+    parser.add_argument(
+        "--local-config",
+        default=None,
+        help="Optional repo-local dev config JSON (defaults to .quaid-dev.local.json at devRoot if present).",
+    )
     args = parser.parse_args()
 
     selector = _resolve_auth_selector(args.auth_provider, args.auth_path)
-
-    profile_path = Path(args.profile).expanduser()
+    code_root = _code_root()
+    profile_path = _resolve_config_path(args.profile, code_root)
     profile = _load_json(profile_path)
+    local_config_arg = args.local_config or os.environ.get("QUAID_DEV_LOCAL_CONFIG", "")
+    local_config_path = _resolve_config_path(local_config_arg, code_root) if local_config_arg else (code_root / ".quaid-dev.local.json")
+    local_cfg = _load_local_config(local_config_path)
+    dev_root = _resolve_dev_root(local_cfg, code_root)
+    _apply_local_dev_overrides(profile, local_cfg)
 
-    workspace = _apply_runtime(profile["runtime"])
+    workspace = _apply_runtime(profile["runtime"], dev_root)
     selector_label = args.auth_path or args.auth_provider
-    _apply_openclaw(profile["openclaw"], workspace, selector, selector_label)
-    _apply_quaid(profile["quaid"])
-    _apply_secrets(profile.get("secrets", {}))
+    _apply_openclaw(profile["openclaw"], workspace, selector, selector_label, dev_root)
+    _apply_quaid(profile["quaid"], dev_root)
+    _apply_secrets(profile.get("secrets", {}), dev_root)
 
     print(f"Applied runtime profile: {profile_path}")
+    if local_cfg:
+        print(f"Loaded local dev config: {local_config_path}")
+    print(f"Dev root: {dev_root}")
     print(f"Workspace: {workspace}")
     provider_msg = selector_label if selector_label else "profile default"
     print("Updated: OpenClaw config, Quaid config, core markdown, optional .env")

@@ -3,7 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CODE_ROOT_DEFAULT="$(cd "${ROOT_DIR}/../.." && pwd)"
 PROFILE="${ROOT_DIR}/profiles/runtime-profile.local.quaid.json"
+LOCAL_CONFIG="${QUAID_DEV_LOCAL_CONFIG:-${CODE_ROOT_DEFAULT}/.quaid-dev.local.json}"
 WIPE=false
 AUTH_PROVIDER=""
 AUTH_PATH=""
@@ -14,6 +16,7 @@ WORKTREE_BRANCH=""
 WORKTREE_TEST_BRANCH="test-runtime"
 WORKTREE_DETACH=false
 WORKTREE_REMOTE="origin"
+OPENCLAW_SOURCE_EXPLICIT=false
 BACKUP_ROOT="${HOME}/quaid/backups"
 PREBOOTSTRAP_MAX_BACKUPS="${QUAID_PREBOOTSTRAP_MAX_BACKUPS:-3}"
 OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
@@ -88,6 +91,7 @@ Usage: $(basename "$0") [options]
 
 Options:
   --profile <path>       Profile JSON (default: profiles/runtime-profile.local.quaid.json)
+  --local-config <path>  Repo-local dev config JSON (default: .quaid-dev.local.json at dev root)
   --wipe                 Move existing runtime workspace to timestamped backup first
   --auth-provider <id>   Auth provider to apply: anthropic|openai
   --auth-path <id>       Auth path to apply: openai-oauth|openai-api|anthropic-oauth|anthropic-api
@@ -107,6 +111,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile) PROFILE="$2"; shift 2 ;;
+    --local-config) LOCAL_CONFIG="$2"; shift 2 ;;
     --wipe) WIPE=true; shift ;;
     --auth-provider) AUTH_PROVIDER="$2"; shift 2 ;;
     --auth-path) AUTH_PATH="$2"; shift 2 ;;
@@ -116,7 +121,7 @@ while [[ $# -gt 0 ]]; do
     --worktree-test-branch) WORKTREE_TEST_BRANCH="$2"; shift 2 ;;
     --detach-worktree) WORKTREE_DETACH=true; shift ;;
     --worktree-remote) WORKTREE_REMOTE="$2"; shift 2 ;;
-    --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
+    --openclaw-source) OPENCLAW_SOURCE="$2"; OPENCLAW_SOURCE_EXPLICIT=true; shift 2 ;;
     --openclaw-ref) OPENCLAW_REF="$2"; shift 2 ;;
     --no-openclaw-refresh) OPENCLAW_REFRESH=false; shift ;;
     --no-openclaw-install) OPENCLAW_INSTALL=false; shift ;;
@@ -138,15 +143,82 @@ if [[ -n "$AUTH_PROVIDER" ]] && [[ -n "$AUTH_PATH" ]]; then
   exit 1
 fi
 
+if [[ "$LOCAL_CONFIG" != /* ]]; then
+  LOCAL_CONFIG="${CODE_ROOT_DEFAULT}/${LOCAL_CONFIG}"
+fi
+CODE_ROOT="$CODE_ROOT_DEFAULT"
+BOOTSTRAP_OWNER_FROM_CONFIG=""
+if [[ -f "$LOCAL_CONFIG" ]]; then
+  mapfile -t _dev_cfg_values < <(python3 - "$LOCAL_CONFIG" "$CODE_ROOT_DEFAULT" <<'PY'
+import json, sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1]).expanduser()
+code_root = Path(sys.argv[2]).resolve()
+data = json.load(cfg_path.open("r", encoding="utf-8"))
+paths = data.get("paths") if isinstance(data.get("paths"), dict) else {}
+identity = data.get("identity") if isinstance(data.get("identity"), dict) else {}
+
+def resolve(raw: str, base: Path) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    candidate = Path(text).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((base / candidate).resolve())
+
+dev_root = Path(resolve(paths.get("devRoot", "."), code_root) or code_root)
+runtime_workspace = resolve(paths.get("runtimeWorkspace", ""), dev_root)
+openclaw_source = resolve(paths.get("openclawSource", ""), dev_root)
+bootstrap_owner = str(identity.get("bootstrapOwnerName", "")).strip()
+
+print(str(dev_root))
+print(runtime_workspace)
+print(openclaw_source)
+print(bootstrap_owner)
+PY
+)
+  [[ -n "${_dev_cfg_values[0]:-}" ]] && CODE_ROOT="${_dev_cfg_values[0]}"
+  if [[ "$OPENCLAW_SOURCE_EXPLICIT" != true && -n "${_dev_cfg_values[2]:-}" ]]; then
+    OPENCLAW_SOURCE="${_dev_cfg_values[2]}"
+  fi
+  BOOTSTRAP_OWNER_FROM_CONFIG="${_dev_cfg_values[3]:-}"
+fi
+
+if [[ "$PROFILE" != /* ]]; then
+  PROFILE="${CODE_ROOT}/${PROFILE}"
+fi
+
 if [[ ! -f "$PROFILE" ]]; then
   echo "Profile not found: $PROFILE" >&2
   exit 1
 fi
 
-WORKSPACE="$(python3 -c 'import json,sys,pathlib; raw=json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["workspace"]; print(pathlib.Path(str(raw)).expanduser())' "$PROFILE")"
+WORKSPACE="$(python3 - "$PROFILE" "$LOCAL_CONFIG" "$CODE_ROOT" <<'PY'
+import json, sys
+from pathlib import Path
+
+profile_path = Path(sys.argv[1])
+local_cfg_path = Path(sys.argv[2])
+code_root = Path(sys.argv[3]).resolve()
+profile = json.load(profile_path.open("r", encoding="utf-8"))
+workspace_raw = str((profile.get("runtime") or {}).get("workspace", "")).strip()
+if local_cfg_path.exists():
+    data = json.load(local_cfg_path.open("r", encoding="utf-8"))
+    paths = data.get("paths") if isinstance(data.get("paths"), dict) else {}
+    workspace_raw = str(paths.get("runtimeWorkspace", workspace_raw)).strip()
+candidate = Path(workspace_raw).expanduser()
+if not candidate.is_absolute():
+    candidate = (code_root / candidate).resolve()
+print(candidate)
+PY
+)"
 if [[ -z "$WORKTREE_SOURCE" ]]; then
   WORKSPACE_PARENT="$(dirname "$WORKSPACE")"
-  if is_git_repo_or_worktree "${WORKSPACE_PARENT}/dev"; then
+  if is_git_repo_or_worktree "$CODE_ROOT"; then
+    WORKTREE_SOURCE="$CODE_ROOT"
+  elif is_git_repo_or_worktree "${WORKSPACE_PARENT}/dev"; then
     WORKTREE_SOURCE="${WORKSPACE_PARENT}/dev"
   elif is_git_repo_or_worktree "${WORKSPACE}-dev-clean"; then
     WORKTREE_SOURCE="${WORKSPACE}-dev-clean"
@@ -323,6 +395,9 @@ if is_git_repo_or_worktree "$WORKSPACE"; then
 fi
 
 APPLY_ARGS=(--profile "$PROFILE")
+if [[ -f "$LOCAL_CONFIG" ]]; then
+  APPLY_ARGS+=(--local-config "$LOCAL_CONFIG")
+fi
 if [[ -n "$AUTH_PROVIDER" ]]; then
   APPLY_ARGS+=(--auth-provider "$AUTH_PROVIDER")
 fi
@@ -349,7 +424,7 @@ if [[ -f "${MODULE_DIR}/package.json" ]]; then
   echo "Linked plugin dir before installer: ${PLUGIN_DIR} -> ../modules/quaid"
 fi
 
-INSTALL_OWNER_NAME="${QUAID_BOOTSTRAP_OWNER_NAME:-Solomon Steadman}"
+INSTALL_OWNER_NAME="${QUAID_BOOTSTRAP_OWNER_NAME:-${BOOTSTRAP_OWNER_FROM_CONFIG:-Test Operator}}"
 INSTALLER_MJS="${WORKTREE_SOURCE}/setup-quaid.mjs"
 if [[ ! -f "${INSTALLER_MJS}" ]] && [[ -f "${WORKSPACE}/setup-quaid.mjs" ]]; then
   INSTALLER_MJS="${WORKSPACE}/setup-quaid.mjs"

@@ -914,7 +914,7 @@ class DocsRAG:
                         "content": content,
                         "source": source_file,
                         "section_header": section_header,
-                        "similarity": rank_score,
+                        "similarity": min(1.0, rank_score),
                         "chunk_index": row[2],  # chunk_index
                         "project": inferred_project,
                     })

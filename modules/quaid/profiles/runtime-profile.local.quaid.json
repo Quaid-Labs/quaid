@@ -1,6 +1,6 @@
 {
   "runtime": {
-    "workspace": "~/quaid/test",
+    "workspace": "../test",
     "createDirs": [
       "config",
       "data",
@@ -17,7 +17,7 @@
     "coreMarkdown": {
       "IDENTITY.md": "# Identity\n\nName: Bert\nRole: Local testbed runtime assistant.\n",
       "SOUL.md": "# Soul\n\nYou are a testbed bot for validating in-development code and system behavior. Be explicit about what you are doing, why, and what you observe. Prioritize debugging clarity, reproducibility, and actionable diagnostics over polish.\n",
-      "USER.md": "# User\n\nPrimary operator: Solomon Steadman. Solomon is a software developer.\n",
+      "USER.md": "# User\n\nPrimary operator: Test Operator. The operator is a software developer.\n",
       "ENVIRONMENT.md": "# Environment\n\nFunctional behaviors, environmental context, and shared history.\n",
       "TOOLS.md": "# Tools\n\nRuntime tool references.\n",
       "AGENTS.md": "# Agents\n\nRuntime operating instructions.\n",
@@ -28,14 +28,14 @@
   "openclaw": {
     "configPath": "~/.openclaw/openclaw.json",
     "agentDefaults": {
-      "workspace": "~/quaid/test",
+      "workspace": "../test",
       "modelPrimary": "anthropic/claude-haiku-4-5"
     },
     "agentList": [
       {
         "id": "main",
         "name": "Bert",
-        "workspace": "~/quaid/test",
+        "workspace": "../test",
         "modelPrimary": "anthropic/claude-haiku-4-5",
         "default": true
       }
@@ -47,7 +47,7 @@
       "streamMode": "partial",
       "botToken": "REPLACE_ME",
       "allowFrom": [
-        "<telegram-id>"
+        "1000000000"
       ]
     },
     "authProfiles": {
@@ -80,8 +80,8 @@
   },
   "quaid": {
     "enabled": true,
-    "configPath": "~/quaid/test/config/memory.json",
-    "templatePath": "~/quaid/dev/modules/quaid/config/memory.json",
+    "configPath": "../test/config/memory.json",
+    "templatePath": "modules/quaid/config/memory.json",
     "adapterType": "openclaw",
     "models": {
       "llmProvider": "default",
@@ -107,27 +107,27 @@
       "embeddingDim": 768
     },
     "users": {
-      "defaultOwner": "solomon",
+      "defaultOwner": "operator",
       "identities": {
-        "solomon": {
+        "operator": {
           "channels": {
             "telegram": [
-              "<telegram-id>"
+              "1000000000"
             ],
             "cli": [
               "*"
             ]
           },
           "speakers": [
-            "Solomon",
-            "Solomon Steadman"
+            "Operator",
+            "Test Operator"
           ]
         }
       }
     }
   },
   "secrets": {
-    "writeEnvFile": "~/quaid/test/.env",
+    "writeEnvFile": "../test/.env",
     "env": {
       "ANTHROPIC_API_KEY": "REPLACE_ME",
       "OPENAI_API_KEY": "REPLACE_ME",
