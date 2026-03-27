@@ -281,8 +281,7 @@ quaid config set ollama.embeddingModel qwen3-embedding:8b --shared
 quaid config set capture.inactivityTimeoutMinutes 30 --instance claude-code
 
 # Store a long-lived auth token for the active adapter
-# Note: set-auth is not yet routed through the quaid wrapper; use direct Python CLI:
-python3 config_cli.py set-auth <token>
+quaid config set-auth <token>
 ```
 
 ### `config set` value coercion rules
@@ -477,10 +476,11 @@ The adapter type is read from `config/memory.json` at startup by
 Search path for adapter config (priority order):
 
 1. `QUAID_HOME/<QUAID_INSTANCE>/config/memory.json`
-2. `QUAID_HOME/config/memory.json` (legacy flat layout)
-3. `QUAID_WORKSPACE/config/memory.json` or `CLAWDBOT_WORKSPACE/config/memory.json`
-4. `./config/memory.json` (cwd)
-5. `./memory-config.json` (cwd)
+2. `QUAID_HOME/claude-code-<slug>/config/memory.json` when `QUAID_INSTANCE` is unset and `CLAUDE_PROJECT_DIR` is set
+3. `QUAID_HOME/config/memory.json` (legacy flat layout)
+4. `QUAID_WORKSPACE/config/memory.json` or `CLAWDBOT_WORKSPACE/config/memory.json`
+5. `./config/memory.json` (cwd)
+6. `./memory-config.json` (cwd)
 
 The first file found that contains a non-empty `adapter.type` wins. Quaid
 fails with a descriptive error if no adapter type can be resolved.

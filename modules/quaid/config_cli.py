@@ -266,7 +266,7 @@ def _print_summary(path: Path, data: dict[str, Any], label: str = "") -> None:
     print(f"strict privacy:   {_get(data, 'privacy.enforceStrictFilters', _get(data, 'privacy.enforce_strict_filters', True))}")
     print(f"core parallel:    {_get(data, 'core.parallel.enabled', True)}")
     print(f"llm workers:      {_get(data, 'core.parallel.llmWorkers', _get(data, 'core.parallel.llm_workers', 4))}")
-    print(f"embedding workers:{_get(data, 'core.parallel.embeddingWorkers', _get(data, 'core.parallel.embedding_workers', 4))}")
+    print(f"embedding workers:{_get(data, 'core.parallel.embeddingWorkers', _get(data, 'core.parallel.embedding_workers', 6))}")
     print(f"idle timeout:     {_get(data, 'capture.inactivity_timeout_minutes', _get(data, 'capture.inactivityTimeoutMinutes', 60))}m")
     print(f"plugin adapter:   {_get(data, 'plugins.slots.adapter', '(none)')}")
     print(f"plugin ingest:    {_get(data, 'plugins.slots.ingest', [])}")
@@ -378,7 +378,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = int(_get(staged, "core.parallel.llmWorkers", _get(staged, "core.parallel.llm_workers", 4)))
                 _set(staged, "core.parallel.llmWorkers", _prompt_int("core.parallel.llmWorkers", cur))
             elif choice == "10":
-                cur = int(_get(staged, "core.parallel.embeddingWorkers", _get(staged, "core.parallel.embedding_workers", 4)))
+                cur = int(_get(staged, "core.parallel.embeddingWorkers", _get(staged, "core.parallel.embedding_workers", 6)))
                 _set(staged, "core.parallel.embeddingWorkers", _prompt_int("core.parallel.embeddingWorkers", cur))
             elif choice == "11":
                 _edit_plugin_config(staged, path)

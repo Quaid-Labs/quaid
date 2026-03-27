@@ -30,8 +30,8 @@ QUAID_VERSION="0.2.15-alpha"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
 # Gateway PR #13287 — required hooks for knowledge extraction
-# These features land in OpenClaw after version 2026.2.9
-MIN_GATEWAY_VERSION="2026.2.10"
+# These features land in OpenClaw after version 2026.3.6
+MIN_GATEWAY_VERSION="2026.3.7"
 HOOKS_PR_URL="https://github.com/openclaw/openclaw/pull/13287"
 # Hooks merged into OpenClaw main via PR #13287 (Feb 2026)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

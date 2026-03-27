@@ -287,8 +287,8 @@ function coreLlmWorkers(cfg) {
 }
 
 function coreEmbeddingWorkers(cfg) {
-  const raw = getPath(cfg, "core.parallel.embeddingWorkers", getPath(cfg, "core.parallel.embedding_workers", 4));
-  return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 4;
+  const raw = getPath(cfg, "core.parallel.embeddingWorkers", getPath(cfg, "core.parallel.embedding_workers", 6));
+  return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 6;
 }
 
 function coreLifecyclePrepassWorkers(cfg) {

@@ -10,7 +10,7 @@
 #   quaid docs check
 #   quaid registry list --project quaid
 #   quaid doctor
-#   quaid config [show|edit|path|set <key> <value>]
+#   quaid config [show|edit|path|set <key> <value>|set-auth <token>]
 #   quaid help
 #
 # This is a convenience wrapper around the Python modules.
@@ -321,8 +321,11 @@ PYEOF
         fi
         exec python3 "$CONFIG_PY" set "$@"
         ;;
+      set-auth)
+        exec python3 "$CONFIG_PY" set-auth "$@"
+        ;;
       *)
-        echo "Usage: quaid config [show|edit|path|set <dotted.key> <value>] [--shared | --instance <id>]"
+        echo "Usage: quaid config [show|edit|path|set <dotted.key> <value>|set-auth <token>] [--shared | --instance <id>]"
         exit 1
         ;;
     esac
@@ -394,6 +397,7 @@ PYEOF
     echo "  config edit          Interactive config editor"
     echo "  config path          Show active config file path"
     echo "  config set k v       Set value by dotted key path"
+    echo "  config set-auth tok  Store a long-lived adapter auth token"
     echo "  --shared             Target machine-wide shared config (embeddings, ollama)"
     echo "  --instance <id>      Target a specific instance's config"
     echo ""
