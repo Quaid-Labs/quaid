@@ -13,6 +13,7 @@ data/*.db-*
 *.pem
 .env
 .env.*
+.auth-token
 # Logs
 *.log
 logs/
