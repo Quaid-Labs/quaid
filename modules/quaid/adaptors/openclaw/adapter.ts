@@ -719,6 +719,9 @@ function summarizeRecallDiagnostics(diagnostics: unknown): Record<string, unknow
   const evaluation = qualityGate.evaluation && typeof qualityGate.evaluation === "object" && !Array.isArray(qualityGate.evaluation)
     ? qualityGate.evaluation
     : {};
+  const memoryQuality = meta.memory_quality && typeof meta.memory_quality === "object" && !Array.isArray(meta.memory_quality)
+    ? meta.memory_quality
+    : {};
   const turnDetails = Array.isArray(meta.turn_details) ? meta.turn_details : [];
   const firstTurn = turnDetails.length > 0 && turnDetails[0] && typeof turnDetails[0] === "object" ? turnDetails[0] : {};
   const planner = firstTurn.planner && typeof firstTurn.planner === "object" && !Array.isArray(firstTurn.planner)
@@ -757,6 +760,13 @@ function summarizeRecallDiagnostics(diagnostics: unknown): Record<string, unknow
       top_similarity: Number.isFinite(Number(evaluation.top_similarity))
         ? Number(Number(evaluation.top_similarity).toFixed(3))
         : undefined,
+    },
+    memory_quality: {
+      surface_quality: typeof memoryQuality.surface_quality === "string" ? memoryQuality.surface_quality : undefined,
+      another_recall_may_help: typeof memoryQuality.another_recall_may_help === "boolean"
+        ? memoryQuality.another_recall_may_help
+        : undefined,
+      signals: Array.isArray(memoryQuality.signals) ? memoryQuality.signals.slice(0, 8) : undefined,
     },
     phases_ms: {
       total_ms: Number.isFinite(Number(phases.total_ms)) ? Number(phases.total_ms) : undefined,

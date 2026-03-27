@@ -508,6 +508,7 @@ function summarizeRecallDiagnostics(diagnostics) {
   }
   const qualityGate = meta.quality_gate && typeof meta.quality_gate === "object" && !Array.isArray(meta.quality_gate) ? meta.quality_gate : {};
   const evaluation = qualityGate.evaluation && typeof qualityGate.evaluation === "object" && !Array.isArray(qualityGate.evaluation) ? qualityGate.evaluation : {};
+  const memoryQuality = meta.memory_quality && typeof meta.memory_quality === "object" && !Array.isArray(meta.memory_quality) ? meta.memory_quality : {};
   const turnDetails = Array.isArray(meta.turn_details) ? meta.turn_details : [];
   const firstTurn = turnDetails.length > 0 && turnDetails[0] && typeof turnDetails[0] === "object" ? turnDetails[0] : {};
   const planner = firstTurn.planner && typeof firstTurn.planner === "object" && !Array.isArray(firstTurn.planner) ? firstTurn.planner : {};
@@ -538,6 +539,11 @@ function summarizeRecallDiagnostics(diagnostics) {
       requirements: Array.isArray(evaluation.requirements) ? evaluation.requirements.slice(0, 8) : void 0,
       covered_terms_ratio: Number.isFinite(Number(evaluation.covered_terms_ratio)) ? Number(Number(evaluation.covered_terms_ratio).toFixed(3)) : void 0,
       top_similarity: Number.isFinite(Number(evaluation.top_similarity)) ? Number(Number(evaluation.top_similarity).toFixed(3)) : void 0
+    },
+    memory_quality: {
+      surface_quality: typeof memoryQuality.surface_quality === "string" ? memoryQuality.surface_quality : void 0,
+      another_recall_may_help: typeof memoryQuality.another_recall_may_help === "boolean" ? memoryQuality.another_recall_may_help : void 0,
+      signals: Array.isArray(memoryQuality.signals) ? memoryQuality.signals.slice(0, 8) : void 0
     },
     phases_ms: {
       total_ms: Number.isFinite(Number(phases.total_ms)) ? Number(phases.total_ms) : void 0,

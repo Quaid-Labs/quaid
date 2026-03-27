@@ -409,6 +409,7 @@ class TestHookInjectRecallResilience:
             "planned_stores": ["vector"],
             "store_runs": [{"store": "vector", "result_count": 1, "total_ms": 38, "selected_path": "vector"}],
             "quality_gate": {"evaluation": {"covered_terms_ratio": 0.5, "top_similarity": 0.62}},
+            "memory_quality": {"surface_quality": "mixed", "another_recall_may_help": True, "signals": ["needs_validation"]},
         }
 
         summarized_rows = hooks._summarize_recall_results(recall_rows)
@@ -417,6 +418,7 @@ class TestHookInjectRecallResilience:
         assert summarized_rows[0]["text"].startswith("My neighbour won a chili cook-off")
         assert summarized_meta["planned_stores"] == ["vector"]
         assert summarized_meta["store_runs"][0]["store"] == "vector"
+        assert summarized_meta["memory_quality"]["surface_quality"] == "mixed"
 
 
 

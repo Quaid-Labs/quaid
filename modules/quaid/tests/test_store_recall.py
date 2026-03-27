@@ -842,6 +842,63 @@ class TestStoreDedup:
             with pytest.raises(RuntimeError, match="fail-hard mode is enabled"):
                 store("Owner's mother's name is Wendy", owner_id="quaid")
 
+    def test_dedup_telemetry_tracks_in_place_subsume_updates(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        from types import SimpleNamespace
+
+        graph, _ = _make_graph(tmp_path)
+        base_text = "Maya has a dog"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store(base_text, owner_id="quaid", skip_dedup=True)
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        vec_meta = {
+            "vec_query_count": 1,
+            "vec_candidates_returned": 1,
+            "vec_candidate_limit": 64,
+            "vec_limit_hits": 0,
+        }
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", True), \
+             patch(
+                 "datastore.memorydb.memory_graph._get_memory_config",
+                 return_value=SimpleNamespace(
+                     janitor=SimpleNamespace(
+                         dedup=SimpleNamespace(
+                             auto_reject_threshold=0.98,
+                             gray_zone_low=0.88,
+                             llm_verify_enabled=True,
+                         )
+                     )
+                 ),
+             ), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 return_value=([(existing_row, 0.95)], vec_meta),
+             ), \
+             patch(
+                 "datastore.memorydb.memory_graph._llm_dedup_check_many",
+                 return_value={
+                     1: {
+                         "is_same": True,
+                         "subsumes": "a_subsumes_b",
+                         "reasoning": "new text contains the old fact plus more detail",
+                     }
+                 },
+             ), \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=False):
+            result = store("Maya has a dog named Baxter", owner_id="quaid")
+
+        assert result["status"] == "updated"
+        assert result["dedup_telemetry"]["llm_same_hits"] == 1
+        assert result["dedup_telemetry"]["llm_subsume_update_hits"] == 1
+        assert result["dedup_telemetry"]["llm_subsume_keep_hits"] == 0
+
 
 # ---------------------------------------------------------------------------
 # Prompt injection blocklist
@@ -1605,6 +1662,62 @@ class TestRecallTelemetry:
         assert meta["quality_gate"]["fast_drill_enabled"] is False
         assert "fast_drill_queries" not in meta["quality_gate"]
 
+    def test_recall_fast_exposes_memory_quality_note_for_conflicted_surface(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "a",
+                "text": "Maya worked at TechFlow as a PM.",
+                "category": "fact",
+                "similarity": 0.91,
+                "created_at": "2026-01-10T00:00:00Z",
+            },
+            {
+                "id": "b",
+                "text": "Maya joined Stripe as a senior PM.",
+                "category": "fact",
+                "similarity": 0.89,
+                "created_at": "2026-03-22T00:00:00Z",
+            },
+        ]
+
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["Where does Maya work right now?"],
+                {
+                    "query": "Where does Maya work right now?",
+                    "used_llm": True,
+                    "bailout_reason": None,
+                    "queries_count": 1,
+                    "elapsed_ms": 12,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            return_value=(rows, {"phases_ms": {"total_ms": 42, "store_plan_wall_ms": 42}}, None),
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                False,
+                mg._evaluate_quality_gate_readiness("Where does Maya work right now?", rows, intent="WHERE", limit=2),
+                [],
+                "WHERE",
+            ),
+        ):
+            _out, meta = mg.recall_fast("Where does Maya work right now?", limit=2, return_meta=True)
+
+        assert meta["memory_quality"]["surface_quality"] == "conflicted"
+        assert meta["memory_quality"]["another_recall_may_help"] is True
+        assert "Another recall pass may help" in meta["memory_quality"]["note"]
+
     def test_plan_fanout_queries_fast_profile_prompt_is_conservative(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -2150,6 +2263,45 @@ class TestRecallFastHookInjectContract:
         assert gate["ready"] is False
         assert gate["needs_validation"] is True
 
+    def test_memory_quality_marks_current_query_with_close_temporal_competitors_as_conflicted(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "Maya worked at TechFlow as a PM.",
+                "category": "fact",
+                "similarity": 0.91,
+                "created_at": "2026-01-10T00:00:00Z",
+            },
+            {
+                "text": "Maya joined Stripe as a senior PM.",
+                "category": "fact",
+                "similarity": 0.89,
+                "created_at": "2026-03-22T00:00:00Z",
+            },
+        ]
+        gate = mg._evaluate_quality_gate_readiness(
+            "Where does Maya work right now?",
+            rows,
+            intent="WHERE",
+            limit=2,
+        )
+        quality = mg._summarize_memory_quality(
+            "Where does Maya work right now?",
+            rows,
+            gate_eval=gate,
+            intent="WHERE",
+            limit=2,
+        )
+
+        assert gate["top_similarity"] == 0.91
+        assert gate["close_competitor_count"] == 2
+        assert gate["temporal_span_days"] >= 30
+        assert quality["surface_quality"] == "conflicted"
+        assert quality["another_recall_may_help"] is True
+        assert "mixed_temporal_candidates" in quality["signals"]
+        assert "Another recall pass may help" in quality["note"]
+
     def test_requirement_refinement_queries_are_disabled(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -2415,6 +2567,89 @@ class TestRecallFastHookInjectContract:
         assert gate["enumeration_like"] is True
         assert "enumeration" in gate["requirements"]
         assert gate["needs_validation"] is False
+
+    def test_preserve_exact_low_information_entity_hits_for_identity_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        mike = {"text": "Mike", "category": "person", "similarity": 0.944}
+        descriptive_other = {"text": "Maya's colleague D", "category": "person", "similarity": 0.910}
+
+        assert mg._is_low_information_entity_result(mike) is True
+        assert mg._is_low_information_entity_result(descriptive_other) is False
+        assert mg._should_preserve_low_information_entity_result(
+            mike,
+            "Who is Mike?",
+            intent="WHO",
+        ) is True
+        assert mg._should_preserve_low_information_entity_result(
+            descriptive_other,
+            "Who is Mike?",
+            intent="WHO",
+        ) is False
+
+    def test_expand_anchor_rows_uses_beam_scoring_without_llm_in_cheap_mode(self):
+        import datastore.memorydb.memory_graph as mg
+
+        related = mg.Node.create(type="Person", name="David")
+        related.created_at = "2026-03-20T00:00:00Z"
+        related.extraction_confidence = 0.88
+
+        class _Graph:
+            def beam_search_graph(self, **kwargs):
+                assert kwargs["start_id"] == "mike-node"
+                assert kwargs["allow_llm_rerank"] is False
+                return [(related, "sibling_of", "in", 1, [], 0.82)]
+
+        anchors, expanded = mg._expand_high_confidence_entity_anchors(
+            _Graph(),
+            "Who is Mike?",
+            [
+                {"id": "mike-node", "text": "Mike", "category": "person", "similarity": 0.944},
+                {"id": "other", "text": "Older fact", "category": "fact", "similarity": 0.72},
+            ],
+            intent="WHO",
+            limit=5,
+            expansion_mode="cheap",
+            max_anchor_count=1,
+            expansion_limit_per_anchor=1,
+        )
+
+        assert [row["text"] for row in anchors] == ["Mike"]
+        assert expanded[0]["via"] == "graph_anchor_expansion"
+        assert expanded[0]["anchor_id"] == "mike-node"
+        assert expanded[0]["anchor_text"] == "Mike"
+        assert expanded[0]["text"] == "David → sibling_of → Mike"
+
+    def test_select_final_recall_rows_reserves_anchor_expansions_within_limit(self):
+        import datastore.memorydb.memory_graph as mg
+
+        anchor = {"id": "mike-node", "text": "Mike", "category": "person", "similarity": 0.944}
+        rows = [
+            anchor,
+            {"id": "fact-1", "text": "Top fact", "category": "fact", "similarity": 0.93},
+            {
+                "id": "david-node",
+                "text": "David → sibling_of → Mike",
+                "category": "person",
+                "similarity": 0.68,
+                "via": "graph_anchor_expansion",
+                "_graph_anchor_expansion": True,
+                "anchor_id": "mike-node",
+                "anchor_text": "Mike",
+            },
+            {"id": "fact-2", "text": "Second fact", "category": "fact", "similarity": 0.92},
+        ]
+
+        selected = mg._select_final_recall_rows(
+            rows,
+            limit=3,
+            anchor_rows=[anchor],
+            expansion_limit_per_anchor=1,
+        )
+
+        assert len(selected) == 3
+        assert any(row.get("id") == "mike-node" for row in selected)
+        assert any(row.get("via") == "graph_anchor_expansion" for row in selected)
 
 # ---------------------------------------------------------------------------
 # Domain filter normalization — unit tests for _normalize_domain_filter

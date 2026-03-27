@@ -53,7 +53,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Set
 
 from lib.config import get_db_path, get_ollama_url
 from lib.database import get_connection as _lib_get_connection, has_vec as _lib_has_vec
@@ -1687,6 +1687,7 @@ class MemoryGraph:
         relations: Optional[List[str]] = None,
         hop_decay: float = 0.7,
         config_retrieval=None,
+        allow_llm_rerank: bool = True,
     ) -> List[tuple]:
         """Scored BEAM search on the memory graph.
 
@@ -1813,7 +1814,7 @@ class MemoryGraph:
 
                 # Adaptive LLM reranking: only when candidates exceed beam slots
                 # (i.e., truncation would happen — the heuristic alone picks winners)
-                if len(next_candidates) > beam_width:
+                if allow_llm_rerank and len(next_candidates) > beam_width:
                     rerank_count = min(2 * beam_width, len(next_candidates))
                     to_rerank = next_candidates[:rerank_count]
                     rest = next_candidates[rerank_count:]
@@ -5014,14 +5015,45 @@ def _recall_once(
             return True
         output = [r for r in output if _in_date_range(r)]
 
+    anchor_expansion_mode = "cheap" if not include_graph_traversal else "rich"
+    max_anchor_count = 1 if anchor_expansion_mode == "cheap" else 2
+    expansion_limit_per_anchor = 1 if anchor_expansion_mode == "cheap" else 2
+    anchor_rows, anchor_expansions = _expand_high_confidence_entity_anchors(
+        graph,
+        clean_query,
+        output,
+        intent=intent,
+        limit=limit,
+        expansion_mode=anchor_expansion_mode,
+        max_anchor_count=max_anchor_count,
+        expansion_limit_per_anchor=expansion_limit_per_anchor,
+    )
+    anchor_ids = {
+        str(row.get("id") or "").strip()
+        for row in anchor_rows
+        if str(row.get("id") or "").strip()
+    }
+
     # Hide low-information standalone entity nodes (e.g., single names) when
-    # we have more informative factual/relational results. Keep as fallback.
+    # we have more informative factual/relational results. Keep as fallback,
+    # but preserve any top-K node we decided to expand into a dedicated graph
+    # anchor block.
     low_info = [r for r in output if _is_low_information_entity_result(r)]
     informative = [r for r in output if not _is_low_information_entity_result(r)]
+    preserved_low_info = [
+        r for r in low_info
+        if (
+            _should_preserve_low_information_entity_result(r, clean_query, intent=intent)
+            or str(r.get("id") or "").strip() in anchor_ids
+        )
+    ]
     if informative:
-        output = informative
+        output = informative + preserved_low_info
     else:
         output = low_info
+
+    if anchor_expansions:
+        output.extend(anchor_expansions)
 
     # Sort by similarity and limit
     scope_filters = {
@@ -5069,7 +5101,12 @@ def _recall_once(
             output = participant_filtered
 
     output.sort(key=lambda x: x["similarity"], reverse=True)
-    final_output = output[:limit]
+    final_output = _select_final_recall_rows(
+        output,
+        limit=limit,
+        anchor_rows=anchor_rows,
+        expansion_limit_per_anchor=expansion_limit_per_anchor,
+    )
     _phase_ms["filtering_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Update access stats for returned results (feeds into Ebbinghaus decay)
@@ -5779,6 +5816,28 @@ def _query_term_overlap(row: Dict[str, Any], query_terms: List[str]) -> int:
     return sum(1 for term in query_terms if term in text)
 
 
+def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            return datetime.fromisoformat(raw[:10])
+        except Exception:
+            return None
+
+
+def _collect_recall_temporal_markers(row: Dict[str, Any]) -> List[datetime]:
+    markers: List[datetime] = []
+    for key in ("valid_from", "created_at", "valid_until"):
+        parsed = _parse_recall_timestamp((row or {}).get(key))
+        if parsed is not None:
+            markers.append(parsed)
+    return markers
+
+
 def _evaluate_quality_gate_readiness(
     query: str,
     results: List[Dict[str, Any]],
@@ -5794,7 +5853,29 @@ def _evaluate_quality_gate_readiness(
     overlap_ratio = (best_overlap / len(query_terms)) if query_terms else 1.0
     min_overlap = 0 if not query_terms else (1 if len(query_terms) <= 2 else 2)
     lexical_ready = (best_overlap >= min_overlap) if min_overlap else bool(sample)
+    similarities = sorted(
+        (
+            float((row or {}).get("similarity", 0.0) or 0.0)
+            for row in sample
+            if isinstance(row, dict)
+        ),
+        reverse=True,
+    )
+    top_similarity = similarities[0] if similarities else 0.0
+    close_competitor_count = (
+        sum(1 for sim in similarities if (top_similarity - sim) <= 0.05)
+        if similarities
+        else 0
+    )
     temporal_rows = sum(1 for row in sample if _row_matches_requirement(row, "temporal"))
+    temporal_markers: List[datetime] = []
+    for row in sample:
+        temporal_markers.extend(_collect_recall_temporal_markers(row))
+    temporal_span_days = 0
+    if len(temporal_markers) >= 2:
+        latest = max(temporal_markers)
+        earliest = min(temporal_markers)
+        temporal_span_days = abs((latest - earliest).days)
     requirement_rows = {
         requirement: sum(1 for row in sample if _row_matches_requirement(row, requirement))
         for requirement in analysis.get("requirements") or []
@@ -5815,16 +5896,93 @@ def _evaluate_quality_gate_readiness(
         "query_terms": query_terms,
         "best_overlap": best_overlap,
         "overlap_ratio": round(overlap_ratio, 3),
+        "covered_terms_ratio": round(overlap_ratio, 3),
         "min_overlap": min_overlap,
         "lexical_ready": lexical_ready,
+        "top_similarity": round(top_similarity, 3),
+        "close_competitor_count": close_competitor_count,
         "temporal_like": analysis["temporal_like"],
         "temporal_rows": temporal_rows,
+        "temporal_span_days": temporal_span_days,
         "current_like": analysis["current_like"],
         "progression_like": analysis["progression_like"],
         "enumeration_like": analysis.get("enumeration_like", False),
         "ready": ready,
         "needs_validation": needs_validation,
         "unresolved": unresolved,
+    }
+
+
+def _summarize_memory_quality(
+    query: str,
+    results: List[Dict[str, Any]],
+    *,
+    gate_eval: Optional[Dict[str, Any]] = None,
+    intent: str = "GENERAL",
+    limit: int = 5,
+) -> Dict[str, Any]:
+    gate = dict(gate_eval or _evaluate_quality_gate_readiness(query, results, intent=intent, limit=limit))
+    sample = list(results or [])[: max(limit, 8)]
+    top_similarity = float(gate.get("top_similarity", 0.0) or 0.0)
+    close_competitor_count = int(gate.get("close_competitor_count", 0) or 0)
+    temporal_span_days = int(gate.get("temporal_span_days", 0) or 0)
+    overlap_ratio = float(gate.get("overlap_ratio", 0.0) or 0.0)
+    needs_validation = bool(gate.get("needs_validation"))
+    ready = bool(gate.get("ready"))
+    current_like = bool(gate.get("current_like"))
+    progression_like = bool(gate.get("progression_like"))
+
+    low_similarity = bool(sample) and top_similarity < 0.60
+    ambiguity_risk = bool(sample) and needs_validation and close_competitor_count >= 2 and overlap_ratio < 0.85
+    mixed_temporal_candidates = (
+        bool(sample)
+        and (current_like or progression_like)
+        and close_competitor_count >= 2
+        and temporal_span_days >= 30
+    )
+
+    signals: List[str] = []
+    if not ready:
+        signals.append("low_query_term_coverage")
+    if needs_validation:
+        signals.append("needs_validation")
+    if close_competitor_count >= 2:
+        signals.append("close_competitors")
+    if temporal_span_days >= 30:
+        signals.append("wide_temporal_span")
+    if mixed_temporal_candidates:
+        signals.append("mixed_temporal_candidates")
+    if low_similarity:
+        signals.append("low_similarity")
+
+    surface_quality = "good"
+    if not sample:
+        surface_quality = "empty"
+    elif not ready or low_similarity:
+        surface_quality = "low"
+    elif mixed_temporal_candidates or ambiguity_risk:
+        surface_quality = "conflicted"
+    elif needs_validation:
+        surface_quality = "mixed"
+
+    another_recall_may_help = surface_quality in {"low", "mixed", "conflicted"}
+    note: Optional[str] = None
+    if another_recall_may_help:
+        if surface_quality == "conflicted":
+            note = "Retrieved memory for this topic looks conflicted. Another recall pass may help if exactness matters."
+        elif surface_quality == "low":
+            note = "Retrieved memory for this topic looks low-confidence. Another recall pass may help if exactness matters."
+        else:
+            note = "Retrieved memory for this topic looks under-validated. Another recall pass may help if exactness matters."
+
+    return {
+        "surface_quality": surface_quality,
+        "another_recall_may_help": another_recall_may_help,
+        "signals": signals,
+        "top_similarity": round(top_similarity, 3),
+        "close_competitor_count": close_competitor_count,
+        "temporal_span_days": temporal_span_days,
+        "note": note,
     }
 
 
@@ -6687,6 +6845,13 @@ def recall_fast(
         "fast_drill_reasons": fast_drill_reasons,
         "fast_drill_enabled": fast_drill_enabled,
     }
+    meta["memory_quality"] = _summarize_memory_quality(
+        query,
+        rows,
+        gate_eval=gate_eval,
+        intent=gate_intent,
+        limit=effective_limit,
+    )
 
     if should_fast_drill and fast_drill_enabled:
         preserved_exact_fast_path = str((planner_meta or {}).get("bailout_reason") or "") == "preserve_short_exact_query"
@@ -6820,6 +6985,13 @@ def recall_fast(
                 "fast_drill_enabled": True,
                 "fast_drill_queries": list(drill_queries),
             }
+            meta["memory_quality"] = _summarize_memory_quality(
+                query,
+                rows,
+                gate_eval=meta["quality_gate"]["evaluation"],
+                intent=gate_intent,
+                limit=effective_limit,
+            )
     _attach_recall_meta(rows, meta)
     return (rows, meta) if return_meta else rows
 
@@ -7377,6 +7549,13 @@ def recall(
                 "result_count": len(merged),
                 "evaluation": gate_eval,
             },
+            "memory_quality": _summarize_memory_quality(
+                query,
+                final,
+                gate_eval=gate_eval,
+                intent=gate_intent,
+                limit=limit,
+            ),
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
         }
@@ -7599,6 +7778,7 @@ def recall(
         for turn in turn_phase_details
     )
     non_parallel_overhead_ms = max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms - total_post_merge_refine_ms)
+    final_gate_eval = _evaluate_quality_gate_readiness(query, final, intent=gate_intent, limit=limit)
     meta = {
         "mode": "deliberate",
         "query": query,
@@ -7625,8 +7805,15 @@ def recall(
             "met": stop_reason == "quality_gate_met",
             "top_score": round(top_score, 3),
             "result_count": len(merged),
-            "evaluation": _evaluate_quality_gate_readiness(query, final, intent=gate_intent, limit=limit),
+            "evaluation": final_gate_eval,
         },
+        "memory_quality": _summarize_memory_quality(
+            query,
+            final,
+            gate_eval=final_gate_eval,
+            intent=gate_intent,
+            limit=limit,
+        ),
         "stop_reason": stop_reason,
         "bailout_counts": bailout_counts,
         "fanout_count": len(turn_phase_details[0]["fanout"]["queries"]) if turn_phase_details else 0,
@@ -7679,6 +7866,233 @@ def _is_low_information_entity_result(result: Dict[str, Any]) -> bool:
     if len(words) > 2:
         return False
     return _LOW_INFO_ENTITY_TEXT_RE.fullmatch(text) is not None
+
+
+def _should_preserve_low_information_entity_result(
+    result: Dict[str, Any],
+    query: str,
+    *,
+    intent: Optional[str] = None,
+) -> bool:
+    """Keep exact-name entity stubs for direct identity/relation lookups."""
+    if not _is_low_information_entity_result(result):
+        return False
+    query_text = str(query or "").strip()
+    if not query_text:
+        return False
+    if intent is None:
+        try:
+            intent, _ = classify_intent(query_text)
+        except Exception:
+            intent = "GENERAL"
+    if intent not in {"WHO", "RELATION"} and not re.search(r"\bwho\b", query_text, re.IGNORECASE):
+        return False
+
+    query_terms = {
+        re.sub(r"[^a-z0-9]+", "", term.lower())
+        for term in _extract_distinctive_query_terms(query_text, limit=8)
+        if term
+    }
+    entity_text = " ".join(str(result.get("text", "")).split()).strip().lower()
+    entity_norm = re.sub(r"[^a-z0-9]+", "", entity_text)
+    if not entity_norm or not query_terms:
+        return False
+    if entity_norm in query_terms:
+        return True
+
+    entity_parts = [
+        re.sub(r"[^a-z0-9]+", "", token.lower())
+        for token in entity_text.split()
+        if token
+    ]
+    return bool(entity_parts) and all(part in query_terms for part in entity_parts)
+
+
+def _expand_high_confidence_entity_anchors(
+    graph: "MemoryGraph",
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    intent: Optional[str] = None,
+    limit: int = 5,
+    expansion_mode: str = "cheap",
+    max_anchor_count: int = 2,
+    expansion_limit_per_anchor: int = 2,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Expand top-K graph anchors with a bounded one-hop graph walk."""
+    query_text = str(query or "").strip()
+    if not query_text:
+        return [], []
+    if intent is None:
+        try:
+            intent, _ = classify_intent(query_text)
+        except Exception:
+            intent = "GENERAL"
+
+    ranked_rows = sorted(
+        [row for row in rows if isinstance(row, dict)],
+        key=lambda item: float(item.get("similarity", 0.0) or 0.0),
+        reverse=True,
+    )[: max(0, int(limit or 0))]
+    anchors: List[Tuple[Dict[str, Any], float]] = []
+    for row in ranked_rows:
+        if not _is_low_information_entity_result(row):
+            continue
+        anchor_id = str(row.get("id") or "").strip()
+        anchor_text = " ".join(str(row.get("text", "")).split()).strip()
+        if not anchor_id or not anchor_text:
+            continue
+        anchors.append((row, float(row.get("similarity", 0.0) or 0.0)))
+        if len(anchors) >= max_anchor_count:
+            break
+    if not anchors:
+        return [], []
+
+    expanded: List[Dict[str, Any]] = []
+    preserved_anchor_rows: List[Dict[str, Any]] = []
+    seen_ids = {str(r.get("id") or "") for r in rows if str(r.get("id") or "")}
+    for anchor_row, anchor_score in anchors:
+        anchor_id = str(anchor_row.get("id") or "").strip()
+        anchor_text = " ".join(str(anchor_row.get("text", "")).split()).strip()
+        if not anchor_id or not anchor_text:
+            continue
+        preserved_anchor_rows.append(anchor_row)
+        try:
+            beam_width = 8 if expansion_mode == "cheap" else 4
+            max_results = 8 if expansion_mode == "cheap" else 6
+            related = graph.beam_search_graph(
+                query=query_text,
+                start_id=anchor_id,
+                beam_width=beam_width,
+                max_depth=1,
+                max_results=max_results,
+                intent=intent,
+                allow_llm_rerank=(expansion_mode != "cheap"),
+            )
+        except Exception:
+            continue
+        added_for_anchor = 0
+        for rel_node, relation, direction, hop_depth, path, beam_score in related:
+            if rel_node.id in seen_ids:
+                continue
+            seen_ids.add(rel_node.id)
+            rel_score = max(0.0, float(anchor_score) * max(0.0, float(beam_score or 0.0)))
+            rel_attrs = rel_node.attributes if isinstance(rel_node.attributes, dict) else {}
+            if path:
+                path_parts = [f"{node_name} --{edge_rel}-->" for node_name, edge_rel in path]
+                graph_path = " ".join(path_parts) + " " + rel_node.name
+            elif str(direction or "").lower() == "in":
+                graph_path = f"{rel_node.name} --{relation}--> {anchor_text}"
+            else:
+                graph_path = f"{anchor_text} --{relation}--> {rel_node.name}"
+            if str(direction or "").lower() == "in":
+                text = f"{rel_node.name} → {relation} → {anchor_text}"
+            else:
+                text = f"{anchor_text} → {relation} → {rel_node.name}"
+            expanded.append({
+                "text": _sanitize_for_context(text),
+                "category": rel_node.type.lower(),
+                "similarity": round(rel_score, 3),
+                "verified": rel_node.verified,
+                "pinned": rel_node.pinned,
+                "id": rel_node.id,
+                "via": "graph_anchor_expansion",
+                "via_relation": relation,
+                "hop_depth": hop_depth,
+                "graph_path": graph_path,
+                "_graph_anchor_expansion": True,
+                "anchor_id": anchor_id,
+                "anchor_text": anchor_text,
+                "anchor_similarity": round(anchor_score, 3),
+                "anchor_category": str(anchor_row.get("category") or "").lower() or "entity",
+                "domains": _domains_from_attrs(rel_attrs),
+                "project": rel_attrs.get("project"),
+                "source_type": rel_attrs.get("source_type"),
+                "created_at": getattr(rel_node, "created_at", None),
+                "valid_from": getattr(rel_node, "valid_from", None),
+                "valid_until": getattr(rel_node, "valid_until", None),
+                "extraction_confidence": getattr(rel_node, "extraction_confidence", None),
+                "privacy": getattr(rel_node, "privacy", None),
+                "owner_id": getattr(rel_node, "owner_id", None),
+            })
+            added_for_anchor += 1
+            if added_for_anchor >= max(1, int(expansion_limit_per_anchor or 1)):
+                break
+    return preserved_anchor_rows, expanded
+
+
+def _is_graph_anchor_expansion_row(result: Dict[str, Any]) -> bool:
+    return bool(result.get("_graph_anchor_expansion")) or str(result.get("via") or "").strip().lower() == "graph_anchor_expansion"
+
+
+def _recall_row_identity(result: Dict[str, Any]) -> str:
+    if _is_graph_anchor_expansion_row(result):
+        return "|".join([
+            "graph_anchor_expansion",
+            str(result.get("anchor_id") or ""),
+            str(result.get("id") or ""),
+            str(result.get("via_relation") or ""),
+            str(result.get("text") or ""),
+        ])
+    row_id = str(result.get("id") or "").strip()
+    if row_id:
+        return row_id
+    return str(result.get("text") or "")
+
+
+def _select_final_recall_rows(
+    rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+    anchor_rows: Optional[List[Dict[str, Any]]] = None,
+    expansion_limit_per_anchor: int = 2,
+) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    regular_rows = [row for row in rows if not _is_graph_anchor_expansion_row(row)]
+    expansion_rows = [row for row in rows if _is_graph_anchor_expansion_row(row)]
+    regular_rows.sort(key=lambda item: float(item.get("similarity", 0.0) or 0.0), reverse=True)
+    expansion_rows.sort(key=lambda item: float(item.get("similarity", 0.0) or 0.0), reverse=True)
+
+    selected: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+
+    def _push(row: Dict[str, Any]) -> bool:
+        key = _recall_row_identity(row)
+        if key in seen_keys:
+            return False
+        selected.append(row)
+        seen_keys.add(key)
+        return True
+
+    grouped_expansions: Dict[str, List[Dict[str, Any]]] = {}
+    for row in expansion_rows:
+        anchor_key = str(row.get("anchor_id") or row.get("anchor_text") or "")
+        grouped_expansions.setdefault(anchor_key, []).append(row)
+
+    normalized_anchor_rows: List[Dict[str, Any]] = []
+    for row in anchor_rows or []:
+        if isinstance(row, dict):
+            normalized_anchor_rows.append(row)
+
+    for anchor in normalized_anchor_rows:
+        if len(selected) >= limit:
+            break
+        if not _push(anchor):
+            continue
+        anchor_key = str(anchor.get("id") or anchor.get("text") or "")
+        for expansion in grouped_expansions.get(anchor_key, [])[: max(1, int(expansion_limit_per_anchor or 1))]:
+            if len(selected) >= limit:
+                break
+            _push(expansion)
+
+    for row in regular_rows:
+        if len(selected) >= limit:
+            break
+        _push(row)
+
+    return sorted(selected, key=lambda item: float(item.get("similarity", 0.0) or 0.0), reverse=True)[:limit]
 
 
 def _sanitize_for_context(text: str) -> str:
@@ -8016,6 +8430,9 @@ def store(
         "gray_zone_rows": 0,
         "llm_checks": 0,
         "llm_same_hits": 0,
+        "llm_accept_hits": 0,
+        "llm_subsume_update_hits": 0,
+        "llm_subsume_keep_hits": 0,
         "llm_different_hits": 0,
         "fallback_reject_hits": 0,
         "auto_reject_hits": 0,
@@ -8338,8 +8755,10 @@ def store(
                             decision = "llm_reject"
                             if subsumes == "a_subsumes_b":
                                 decision = "llm_subsume_update"
+                                dedup_telemetry["llm_subsume_update_hits"] += 1
                             elif subsumes == "b_subsumes_a":
                                 decision = "llm_subsume_keep"
+                                dedup_telemetry["llm_subsume_keep_hits"] += 1
                             log_dedup_decision(graph, text, existing.id, existing.name,
                                                sim, decision,
                                                llm_reasoning=llm_result.get("reasoning"),
@@ -8376,6 +8795,7 @@ def store(
                                 "confirmation_count": existing.confirmation_count,
                             })
                         dedup_telemetry["llm_different_hits"] += 1
+                        dedup_telemetry["llm_accept_hits"] += 1
                         log_dedup_decision(graph, text, existing.id, existing.name,
                                            sim, "llm_accept",
                                            llm_reasoning=llm_result.get("reasoning"),

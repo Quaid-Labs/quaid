@@ -102,6 +102,13 @@ export type MemoryResult = {
   direction?: string;
   sourceName?: string;
   via?: string;
+  viaRelation?: string;
+  hopDepth?: number;
+  graphPath?: string;
+  graphExpansionAnchorId?: string;
+  graphExpansionAnchorText?: string;
+  graphExpansionAnchorSimilarity?: number;
+  graphExpansionAnchorCategory?: string;
   speaker?: string;
 };
 
@@ -2738,6 +2745,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return false;
   }
 
+  function isGraphAnchorExpansion(result: MemoryResult): boolean {
+    return String(result.via || "").toLowerCase() === "graph_anchor_expansion";
+  }
+
   function getConfiguredDomainIds(): string[] {
     try {
       const defs = deps.getMemoryConfig()?.retrieval?.domains;
@@ -2908,25 +2919,103 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function formatMemoriesForInjection(memories: MemoryResult[]): string {
     if (!memories.length) return "";
+    const firstRecallMeta = memories.find((m) => {
+      const meta = (m as any)?._recall_meta;
+      return meta && typeof meta === "object" && !Array.isArray(meta);
+    }) as any;
+    const memoryQuality = firstRecallMeta?._recall_meta?.memory_quality
+      && typeof firstRecallMeta._recall_meta.memory_quality === "object"
+      && !Array.isArray(firstRecallMeta._recall_meta.memory_quality)
+      ? firstRecallMeta._recall_meta.memory_quality
+      : null;
+    const qualityNote = typeof memoryQuality?.note === "string"
+      ? memoryQuality.note.trim()
+      : "";
+    const formatTemporalLabel = (memory: MemoryResult): string => {
+      if (memory.validFrom || memory.validUntil) {
+        const from = memory.validFrom ? memory.validFrom.split("T")[0] : "";
+        const until = memory.validUntil ? memory.validUntil.split("T")[0] : "";
+        if (from && until) return `valid ${from} to ${until}`;
+        if (from) return `valid since ${from}`;
+        if (until) return `valid until ${until}`;
+      }
+      if (memory.createdAt) return `recorded ${memory.createdAt.split("T")[0]}`;
+      return "";
+    };
+    const sortTimestampDesc = (value?: string): number => {
+      if (!value) return Number.NEGATIVE_INFINITY;
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    };
     const sorted = [...memories].sort((a, b) => {
-      if (!a.createdAt && !b.createdAt) return 0;
-      if (!a.createdAt) return -1;
-      if (!b.createdAt) return 1;
-      return a.createdAt.localeCompare(b.createdAt);
+      const simDelta = Number(b.similarity || 0) - Number(a.similarity || 0);
+      if (Math.abs(simDelta) > 1e-9) return simDelta;
+      return sortTimestampDesc(b.createdAt) - sortTimestampDesc(a.createdAt);
     });
-    const graphNodeHits = sorted.filter((m) => isLowInformationEntityNode(m));
-    const regularMemories = sorted.filter((m) => !isLowInformationEntityNode(m));
-    const lines = regularMemories.map((m) => {
+    const formatMemoryLine = (m: MemoryResult, label = m.category): string => {
       const conf = m.extractionConfidence ?? 0.5;
-      const timestamp = m.createdAt ? ` (${m.createdAt.split("T")[0]})` : "";
+      const similarityLabel = Number.isFinite(Number(m.similarity))
+        ? ` [sim:${Math.round(Number(m.similarity || 0) * 100)}%]`
+        : "";
+      const confidenceLabel = Number.isFinite(Number(m.extractionConfidence))
+        ? ` [conf:${Math.round(Number(m.extractionConfidence || 0) * 100)}%]`
+        : "";
+      const temporalLabel = formatTemporalLabel(m);
+      const timestamp = temporalLabel ? ` (${temporalLabel})` : "";
       const domainLabel = Array.isArray(m.domains) && m.domains.length
         ? ` [domains:${m.domains.join(",")}]`
         : "";
       if (conf < 0.4) {
-        return `- [${m.category}]${timestamp}${domainLabel} (uncertain) ${m.text}`;
+        return `- [${label}]${similarityLabel}${confidenceLabel}${timestamp}${domainLabel} (uncertain) ${m.text}`;
       }
-      return `- [${m.category}]${timestamp}${domainLabel} ${m.text}`;
-    });
+      return `- [${label}]${similarityLabel}${confidenceLabel}${timestamp}${domainLabel} ${m.text}`;
+    };
+    const graphAnchorExpansions = sorted.filter((m) => isGraphAnchorExpansion(m));
+    const graphExpansionAnchorKeys = new Set(
+      graphAnchorExpansions.map((m) => String(m.graphExpansionAnchorId || m.graphExpansionAnchorText || "").trim()).filter(Boolean),
+    );
+    const graphNodeHits = sorted.filter((m) =>
+      isLowInformationEntityNode(m)
+      && !isGraphAnchorExpansion(m)
+      && !graphExpansionAnchorKeys.has(String(m.id || m.text || "").trim()),
+    );
+    const regularMemories = sorted.filter((m) => !isLowInformationEntityNode(m) && !isGraphAnchorExpansion(m));
+    const lines = regularMemories.map((m) => formatMemoryLine(m));
+    if (qualityNote) {
+      lines.unshift(`- [memory-quality] ${qualityNote}`);
+    }
+    if (graphAnchorExpansions.length > 0) {
+      const grouped = new Map<string, { anchorText: string; anchorSimilarity?: number; rows: MemoryResult[] }>();
+      for (const row of graphAnchorExpansions) {
+        const key = String(row.graphExpansionAnchorId || row.graphExpansionAnchorText || row.text || "").trim();
+        if (!key) continue;
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.rows.push(row);
+          if ((row.graphExpansionAnchorSimilarity || 0) > (existing.anchorSimilarity || 0)) {
+            existing.anchorSimilarity = row.graphExpansionAnchorSimilarity;
+          }
+          continue;
+        }
+        grouped.set(key, {
+          anchorText: String(row.graphExpansionAnchorText || row.sourceName || row.text || "").trim(),
+          anchorSimilarity: row.graphExpansionAnchorSimilarity,
+          rows: [row],
+        });
+      }
+      if (grouped.size > 0) {
+        lines.push(`- [graph-expansion-block] First-order graph expansions from top node matches:`);
+        for (const group of grouped.values()) {
+          const anchorSim = Number.isFinite(Number(group.anchorSimilarity))
+            ? ` [sim:${Math.round(Number(group.anchorSimilarity || 0) * 100)}%]`
+            : "";
+          lines.push(`- [graph-expansion-anchor]${anchorSim} ${group.anchorText}`);
+          for (const row of group.rows) {
+            lines.push(formatMemoryLine(row, "graph-expansion-hit"));
+          }
+        }
+      }
+    }
     if (graphNodeHits.length > 0) {
       const packed = graphNodeHits
         .slice(0, 8)
@@ -2949,7 +3038,8 @@ ${lines.join("\n")}
     };
   } {
     const vectorResults = results.filter((r) => isVectorRecallResult(r));
-    const graphResults = results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
+    const graphExpansionResults = results.filter((r) => isGraphAnchorExpansion(r));
+    const graphResults = results.filter((r) => ((r.via || "") === "graph" || r.category === "graph") && !isGraphAnchorExpansion(r));
     const journalResults = results.filter((r) => (r.via || "") === "journal");
     const projectResults = results.filter((r) => (r.via || "") === "project");
 
@@ -2987,15 +3077,23 @@ ${lines.join("\n")}
         text += `${i + 1}. [MEMORY] ${r.text}\n`;
       });
     }
-    if (journalResults.length > 0) {
+    if (graphExpansionResults.length > 0) {
       if (vectorResults.length > 0 || graphResults.length > 0) text += "\n";
+      text += "**Graph Anchor Expansions:**\n";
+      graphExpansionResults.forEach((r, i) => {
+        const anchor = r.graphExpansionAnchorText || r.sourceName || "anchor";
+        text += `${i + 1}. [MEMORY] [anchor:${anchor}] ${r.text}\n`;
+      });
+    }
+    if (journalResults.length > 0) {
+      if (vectorResults.length > 0 || graphResults.length > 0 || graphExpansionResults.length > 0) text += "\n";
       text += "**Journal Signals:**\n";
       journalResults.forEach((r, i) => {
         text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)\n`;
       });
     }
     if (projectResults.length > 0) {
-      if (vectorResults.length > 0 || graphResults.length > 0 || journalResults.length > 0) text += "\n";
+      if (vectorResults.length > 0 || graphResults.length > 0 || graphExpansionResults.length > 0 || journalResults.length > 0) text += "\n";
       text += "**Project Knowledge:**\n";
       projectResults.forEach((r, i) => {
         text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)\n`;
@@ -3005,7 +3103,7 @@ ${lines.join("\n")}
       text,
       breakdown: {
         vector_count: vectorResults.length,
-        graph_count: graphResults.length,
+        graph_count: graphResults.length + graphExpansionResults.length,
         journal_count: journalResults.length,
         project_count: projectResults.length,
       },
@@ -3041,7 +3139,7 @@ ${lines.join("\n")}
     const classified = results.map((r) => {
       const via = String(r.via || "").trim().toLowerCase();
       const category = String(r.category || "").trim().toLowerCase();
-      if (via === "graph" || category === "graph") return "graph" as const;
+      if (via === "graph" || via === "graph_anchor_expansion" || category === "graph") return "graph" as const;
       if (via === "journal") return "journal" as const;
       if (via === "project") return "project" as const;
       // Backward-compatible default: missing/unknown via counts as vector.

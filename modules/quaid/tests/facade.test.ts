@@ -723,7 +723,7 @@ describe("QuaidFacade", () => {
     expect(execPython).toHaveBeenCalledTimes(2);
   });
 
-  it("formatMemoriesForInjection sorts by date and includes domain/confidence markers", () => {
+  it("formatMemoriesForInjection sorts by relevance, then recency, and includes temporal markers", () => {
     const facade = createQuaidFacade(makeMockDeps({
       getMemoryConfig: vi.fn(() => ({
         retrieval: { domains: { technical: {}, personal: {} } },
@@ -739,6 +739,12 @@ describe("QuaidFacade", () => {
         domains: ["technical"],
       },
       {
+        text: "Same score newer fact",
+        category: "fact",
+        similarity: 0.65,
+        createdAt: "2026-01-03T00:00:00Z",
+      },
+      {
         text: "New uncertain fact",
         category: "fact",
         similarity: 0.65,
@@ -746,13 +752,65 @@ describe("QuaidFacade", () => {
         extractionConfidence: 0.2,
         domains: ["personal"],
       },
+      {
+        text: "Validity-only fact",
+        category: "fact",
+        similarity: 0.6,
+        validFrom: "2026-02-01T00:00:00Z",
+        validUntil: "2026-02-20T00:00:00Z",
+      },
     ]);
     expect(out).toContain("<injected_memories>");
     expect(out).toContain("</injected_memories>");
-    expect(out).toContain("- [fact] (2026-01-01) [domains:technical] Older fact");
-    expect(out).toContain("- [fact] (2026-01-02) [domains:personal] (uncertain) New uncertain fact");
+    expect(out).toContain("- [fact] [sim:70%] (recorded 2026-01-01) [domains:technical] Older fact");
+    expect(out).toContain("- [fact] [sim:65%] (recorded 2026-01-03) Same score newer fact");
+    expect(out).toContain("- [fact] [sim:65%] [conf:20%] (recorded 2026-01-02) [domains:personal] (uncertain) New uncertain fact");
+    expect(out).toContain("- [fact] [sim:60%] (valid 2026-02-01 to 2026-02-20) Validity-only fact");
     expect(out).toContain("[graph-node-hits] Entity node references");
-    expect(out.indexOf("Older fact")).toBeLessThan(out.indexOf("New uncertain fact"));
+    expect(out.indexOf("Older fact")).toBeLessThan(out.indexOf("Same score newer fact"));
+    expect(out.indexOf("Same score newer fact")).toBeLessThan(out.indexOf("New uncertain fact"));
+  });
+
+  it("formatMemoriesForInjection renders graph anchor expansions in a dedicated block", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const out = facade.formatMemoriesForInjection([
+      { id: "mike-node", text: "Mike", category: "person", similarity: 0.94 },
+      {
+        id: "david-node",
+        text: "David → sibling_of → Mike",
+        category: "person",
+        similarity: 0.68,
+        via: "graph_anchor_expansion",
+        graphExpansionAnchorId: "mike-node",
+        graphExpansionAnchorText: "Mike",
+        graphExpansionAnchorSimilarity: 0.94,
+        createdAt: "2026-03-20T00:00:00Z",
+      },
+    ]);
+
+    expect(out).toContain("[graph-expansion-block] First-order graph expansions from top node matches:");
+    expect(out).toContain("[graph-expansion-anchor] [sim:94%] Mike");
+    expect(out).toContain("- [graph-expansion-hit] [sim:68%] (recorded 2026-03-20) David → sibling_of → Mike");
+    expect(out).not.toContain("[graph-node-hits] Entity node references (not standalone facts): Mike");
+  });
+
+  it("formatMemoriesForInjection surfaces memory quality notes from recall metadata", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const out = facade.formatMemoriesForInjection([
+      {
+        text: "Maya joined Stripe as a senior PM.",
+        category: "fact",
+        similarity: 0.89,
+        createdAt: "2026-03-22T00:00:00Z",
+        _recall_meta: {
+          memory_quality: {
+            note: "Retrieved memory for this topic looks conflicted. Another recall pass may help if exactness matters.",
+          },
+        },
+      } as any,
+    ]);
+
+    expect(out).toContain("- [memory-quality] Retrieved memory for this topic looks conflicted.");
   });
 
   // -----------------------------------------------------------------------

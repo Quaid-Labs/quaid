@@ -169,6 +169,7 @@ def _summarize_recall_meta(meta: dict | None) -> dict | None:
         return None
     quality_gate = meta.get("quality_gate") if isinstance(meta.get("quality_gate"), dict) else {}
     evaluation = quality_gate.get("evaluation") if isinstance(quality_gate.get("evaluation"), dict) else {}
+    memory_quality = meta.get("memory_quality") if isinstance(meta.get("memory_quality"), dict) else {}
     turn_details = meta.get("turn_details") if isinstance(meta.get("turn_details"), list) else []
     first_turn = turn_details[0] if turn_details and isinstance(turn_details[0], dict) else {}
     planner = first_turn.get("planner") if isinstance(first_turn.get("planner"), dict) else {}
@@ -205,6 +206,12 @@ def _summarize_recall_meta(meta: dict | None) -> dict | None:
             if isinstance(evaluation.get("requirements"), list) else None,
             "covered_terms_ratio": evaluation.get("covered_terms_ratio"),
             "top_similarity": evaluation.get("top_similarity"),
+        },
+        "memory_quality": {
+            "surface_quality": memory_quality.get("surface_quality"),
+            "another_recall_may_help": memory_quality.get("another_recall_may_help"),
+            "signals": list(memory_quality.get("signals") or [])[:8]
+            if isinstance(memory_quality.get("signals"), list) else None,
         },
         "phases_ms": {
             "total_ms": phases.get("total_ms"),
