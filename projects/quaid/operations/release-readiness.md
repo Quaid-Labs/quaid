@@ -14,7 +14,14 @@ Recommended framing:
 - Deterministic integration and mock-core tests in place.
 - E2E bootstrap/runtime flow exists with verification.
 - Provider abstraction is substantially improved and testable.
-- M0–M7 live validation passed on OC 3.11 and CC (2026-03-13). See `operations/live-validation-log.md`.
+- Historical live-validation baselines exist, but release approval now follows
+  the full current live suite rather than any fixed milestone cutoff.
+- Final release approval requires:
+  - full current test bar
+  - full current live suite clear, using the current definition in
+    `modules/quaid/tests/LIVE-TEST-GUIDE.md`
+  - SHA comparison between the cleared run and current `HEAD`, with Solomon
+    deciding whether any post-clear changes are acceptable
 - Installer: instance ID prompt, shared embeddings config, `quaid instances list`, `quaid config edit --shared/--instance` — all shipped.
 - Compatibility matrix populated for v0.2.15-alpha.
 

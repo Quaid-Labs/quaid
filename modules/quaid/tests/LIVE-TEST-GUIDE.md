@@ -29,14 +29,17 @@ destructive command sequences in an untracked companion file such as
 - Re-run a failed milestone after any fix.
 - Record final live-test results in a sanitized log entry without private host or
   operator details.
+- Do not call the run "release-ready" until the full current live suite is
+  complete, including XP.
 
 ## Compatibility Update Rule
 
 - Treat compatibility as a live-test output, not as a separate matrix promise.
-- Only update `compatibility.json` after a full live clear.
+- Only update `compatibility.json` after the full current live suite is green.
 - Record host clears separately for `Quaid/OpenClaw` and `Quaid/Claude Code`.
+- XP is part of release readiness, but it does not create its own compatibility row.
 - Use `node scripts/record-compatibility-clear.mjs` to write the current Quaid
-  `HEAD` SHA as the pending `quaid_range` for the cleared host pair.
+  release-target `HEAD` SHA as the pending `quaid_range` for the cleared host pair.
 - Pass `--install-verified true` only if M0/install completed cleanly without
   manual config patching.
 - Release flow will rewrite the SHA to the real release version only if the
@@ -44,3 +47,6 @@ destructive command sequences in an untracked companion file such as
   marker so later release runs can detect stale clears.
 - Do not update compatibility entries for partial clears, failed runs, or
   single-adapter-only validation.
+- Do not update compatibility entries until the release target SHA is the one
+  you intend to ship; if the cleared run and current target differ, reconcile
+  that first and then decide whether another live pass is needed.

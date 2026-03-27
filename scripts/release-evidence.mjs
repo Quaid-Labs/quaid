@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const EVIDENCE_PATH = process.env.QUAID_RELEASE_EVIDENCE_PATH || path.join(ROOT, "release-evidence.json");
-const VALID_SLOTS = new Set(["unit", "ci"]);
+const VALID_SLOTS = new Set(["unit", "ci", "xp"]);
 
 function usage() {
   console.log(`Usage:
   node scripts/release-evidence.mjs show
-  node scripts/release-evidence.mjs check [--require unit,ci]
-  node scripts/release-evidence.mjs record <unit|ci> [--sha <commit>] [--notes <text>]
+  node scripts/release-evidence.mjs check [--require unit,ci,xp]
+  node scripts/release-evidence.mjs record <unit|ci|xp> [--sha <commit>] [--notes <text>]
 `);
 }
 
@@ -54,6 +54,7 @@ function defaultData() {
     evidence: {
       unit: { sha: null, recorded_at: null, notes: "" },
       ci: { sha: null, recorded_at: null, notes: "" },
+      xp: { sha: null, recorded_at: null, notes: "" },
     },
   };
 }
@@ -147,7 +148,7 @@ function commandRecord(slot, opts) {
 }
 
 function commandCheck(opts) {
-  const required = String(opts.require || "unit,ci")
+  const required = String(opts.require || "unit,ci,xp")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);

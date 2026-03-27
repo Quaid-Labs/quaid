@@ -49,4 +49,10 @@ Use this as the go/no-go gate for prelaunch and release candidates.
 
 - Branch clean and pushed.
 - Release notes and known issues updated.
+- Full current live suite passes before release approval, using the current
+  definition in `modules/quaid/tests/LIVE-TEST-GUIDE.md`.
+- After the live suite clears, compare the cleared SHA against current `HEAD`
+  and list any post-clear changes for Solomon before release approval.
+- Compatibility rows are written only for OpenClaw and Claude Code, and only
+  after the full live suite is green and the release-target SHA is fixed.
 - Benchmark lane notified only after all above gates pass.

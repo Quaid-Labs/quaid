@@ -75,12 +75,34 @@ to the concrete release version when the recorded live-clear SHA matches `HEAD`.
 This runs:
 
 1. docs consistency
-2. release evidence check (`unit` + `ci` must be recorded against HEAD)
+2. release evidence check (`unit` + `ci` + `xp` must be recorded against HEAD)
 3. compatibility promotion (`openclaw` + `claude-code` live clears must exist, be install-verified, and match HEAD)
 4. release metadata/version consistency
 5. ownership/attribution verification
 6. strict TypeScript/JavaScript runtime pair check
 7. quaid release gate (targeted runtime regressions)
+
+## Release Decision Flow
+
+Treat release as a manual approval step, not as an automatic outcome of a green
+script.
+
+Flow:
+
+1. Solomon says "let's do a release".
+2. Run the full current test bar and fix issues as needed.
+3. The full bar includes:
+   - unit and CI gates
+   - the full current live suite, as defined by [LIVE-TEST-GUIDE.md](../modules/quaid/tests/LIVE-TEST-GUIDE.md)
+4. After the suite is green, compare the cleared live-test SHA against current
+   `HEAD`.
+5. Report the exact post-clear delta to Solomon as:
+   - "ready for release, but these changes landed after the clear"
+6. Solomon decides whether the delta is acceptable for release or whether more
+   testing/work is required.
+
+Do not treat a partially cleared live run as release-ready.
+Do not treat compatibility rows alone as release approval.
 
 ## Evidence Recording
 
@@ -89,9 +111,11 @@ Record unit and CI evidence after the corresponding gates pass:
 ```bash
 node scripts/release-evidence.mjs record unit
 node scripts/release-evidence.mjs record ci
+node scripts/release-evidence.mjs record xp
 ```
 
-Record host compatibility only after a full live clear:
+Record host compatibility only after the full current live suite is green and
+the release-target SHA has been chosen:
 
 ```bash
 node scripts/record-compatibility-clear.mjs --host openclaw --host-version 2026.3.23 --install-verified true
@@ -102,15 +126,24 @@ For live clears:
 
 - `--install-verified true` means M0/install produced a clean silo with no manual patching.
 - If a live run required a manual config patch, record it with `--install-verified false`; release promotion will block until the install path is re-cleared or manually accepted with a code change.
-- Live clears write the current `HEAD` SHA into `compatibility.json` on `canary`.
+- Compatibility rows are only for host pairs:
+  - `Quaid/OpenClaw`
+  - `Quaid/Claude Code`
+- XP is part of release readiness, but it does not create its own compatibility row.
+- Live clears write the chosen release-target `HEAD` SHA into `compatibility.json` on `canary`.
 - `bash scripts/release-check.sh` rewrites those SHA placeholders to the released Quaid version only when the clear SHA still matches release `HEAD`.
 - Promoted rows keep a `validated_sha` marker, so future release runs can tell whether the current matrix is fresh or only reflects an older clear.
+- Do not write compatibility rows for a live run that cleared against one SHA while the intended release target has already moved to another.
 
 ## E2E Policy
 
 E2E is diagnostic coverage now, not release truth.
 
-- Blocking release truth is: unit evidence, CI evidence, OpenClaw full live clear, Claude Code full live clear.
+- Blocking release truth is:
+  - unit evidence
+  - CI evidence
+  - XP evidence
+  - a full current live-suite clear, as defined by [LIVE-TEST-GUIDE.md](../modules/quaid/tests/LIVE-TEST-GUIDE.md)
 - Keep E2E for nightly or warning-only coverage until it is removed or rebuilt.
 
 ## Canary Pushes

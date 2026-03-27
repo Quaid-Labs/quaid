@@ -2,6 +2,11 @@
 
 Records of manual live validation runs against real adapter instances.
 
+This file is a historical record, not the source of truth for the current
+release bar. The current live-suite definition lives in
+`modules/quaid/tests/LIVE-TEST-GUIDE.md`, and release approval follows
+`docs/RELEASE.md`.
+
 ---
 
 
