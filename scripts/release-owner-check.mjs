@@ -57,7 +57,7 @@ const allowedIdentityPairs = new Set([`${expectedName}\x00${expectedEmail}`]);
 const bannedMessagePatterns = [
   /co-authored-by:/i,
   /claude code/i,
-  /\b[a-z0-9._-]+\.local\b/i,
+  /\b[a-z0-9][a-z0-9._-]*\.local(?=$|[\s,;:)\]}>/"'`])/i,
   /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.local\b/i,
 ];
 const failures = [];
