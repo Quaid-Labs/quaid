@@ -18,8 +18,13 @@ node scripts/github-protect-main.mjs --repo quaid-labs/quaid
 
 ## Ownership Guard
 
-Quaid release commits should be attributed to the release owner configured in
-local git config, `.quaid-dev.local.json`, or explicit `QUAID_OWNER_*` env vars.
+Quaid release commits must always use this exact public-safe identity:
+
+- `Solomon Steadman <168413654+solstead@users.noreply.github.com>`
+
+`scripts/release-owner-check.mjs` enforces that exact identity. Do not override
+it with a different name or email in git config, `.quaid-dev.local.json`, or
+`QUAID_OWNER_*` env vars.
 
 Validate ownership/attribution on local commits:
 
@@ -35,24 +40,25 @@ This check verifies:
 - commit messages do not include blocked co-author/bot tags
 - commit messages do not include local-only host or email markers
 
-You can override expected values for a different release owner:
+If you keep a repo-local development config, it must use that same identity:
 
 ```bash
-QUAID_OWNER_NAME="Your Name" \
-QUAID_OWNER_EMAIL="you@users.noreply.github.com" \
+git config user.name "Solomon Steadman"
+git config user.email "168413654+solstead@users.noreply.github.com"
 node scripts/release-owner-check.mjs
 ```
-
-If you keep a repo-local development config, set the release owner there:
 
 ```json
 {
   "identity": {
-    "releaseOwnerName": "Your Name",
-    "releaseOwnerEmail": "you@users.noreply.github.com"
+    "releaseOwnerName": "Solomon Steadman",
+    "releaseOwnerEmail": "168413654+solstead@users.noreply.github.com"
   }
 }
 ```
+
+If an unpushed commit was created with any other identity, amend or rewrite it
+before any canary push or release step.
 
 ## Pre-Push Checklist
 

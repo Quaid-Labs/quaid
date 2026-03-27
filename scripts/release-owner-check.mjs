@@ -11,6 +11,8 @@ const rawLocalConfigPath = process.env.QUAID_DEV_LOCAL_CONFIG || path.join(repoR
 const localConfigPath = path.isAbsolute(rawLocalConfigPath)
   ? rawLocalConfigPath
   : path.resolve(repoRoot, rawLocalConfigPath);
+const REQUIRED_OWNER_NAME = 'Solomon Steadman';
+const REQUIRED_OWNER_EMAIL = '168413654+solstead@users.noreply.github.com';
 
 function loadLocalConfig(configPath) {
   try {
@@ -49,11 +51,8 @@ const localEmail = runAllowFail('git config user.email');
 const localConfig = loadLocalConfig(localConfigPath);
 const identityConfig =
   localConfig.identity && typeof localConfig.identity === 'object' ? localConfig.identity : {};
-const expectedName =
-  process.env.QUAID_OWNER_NAME || String(identityConfig.releaseOwnerName || '').trim() || (localName.ok ? localName.out : '');
-const expectedEmail =
-  process.env.QUAID_OWNER_EMAIL || String(identityConfig.releaseOwnerEmail || '').trim() || (localEmail.ok ? localEmail.out : '');
-const configuredIdentity = Boolean(process.env.QUAID_OWNER_NAME || process.env.QUAID_OWNER_EMAIL || identityConfig.releaseOwnerName || identityConfig.releaseOwnerEmail);
+const expectedName = REQUIRED_OWNER_NAME;
+const expectedEmail = REQUIRED_OWNER_EMAIL;
 const allowedIdentityPairs = new Set([`${expectedName}\x00${expectedEmail}`]);
 const bannedMessagePatterns = [
   /co-authored-by:/i,
@@ -63,24 +62,39 @@ const bannedMessagePatterns = [
 ];
 const failures = [];
 
-if (!expectedName || !expectedEmail) {
-  fail([
-    'release owner identity is unset; configure git user.name/user.email or set it in .quaid-dev.local.json',
-  ]);
-}
-
 if (isLocalOnlyEmail(expectedEmail)) {
   failures.push(
     `release owner email "${expectedEmail}" is local-only; set a public-safe email before release/canary push`,
   );
 }
 
-if (configuredIdentity && (!localName.ok || localName.out !== expectedName)) {
+if (process.env.QUAID_OWNER_NAME && process.env.QUAID_OWNER_NAME !== expectedName) {
+  failures.push(
+    `QUAID_OWNER_NAME is "${process.env.QUAID_OWNER_NAME}", but Quaid commits must use "${expectedName}"`,
+  );
+}
+if (process.env.QUAID_OWNER_EMAIL && process.env.QUAID_OWNER_EMAIL !== expectedEmail) {
+  failures.push(
+    `QUAID_OWNER_EMAIL is "${process.env.QUAID_OWNER_EMAIL}", but Quaid commits must use "${expectedEmail}"`,
+  );
+}
+if (identityConfig.releaseOwnerName && String(identityConfig.releaseOwnerName).trim() !== expectedName) {
+  failures.push(
+    `.quaid-dev.local.json releaseOwnerName is "${String(identityConfig.releaseOwnerName).trim()}", expected "${expectedName}"`,
+  );
+}
+if (identityConfig.releaseOwnerEmail && String(identityConfig.releaseOwnerEmail).trim() !== expectedEmail) {
+  failures.push(
+    `.quaid-dev.local.json releaseOwnerEmail is "${String(identityConfig.releaseOwnerEmail).trim()}", expected "${expectedEmail}"`,
+  );
+}
+
+if (!localName.ok || localName.out !== expectedName) {
   failures.push(
     `git config user.name is "${localName.ok ? localName.out : '(unset)'}", expected "${expectedName}"`,
   );
 }
-if (configuredIdentity && (!localEmail.ok || localEmail.out !== expectedEmail)) {
+if (!localEmail.ok || localEmail.out !== expectedEmail) {
   failures.push(
     `git config user.email is "${localEmail.ok ? localEmail.out : '(unset)'}", expected "${expectedEmail}"`,
   );

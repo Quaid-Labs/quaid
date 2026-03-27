@@ -6,8 +6,8 @@
   },
   "identity": {
     "bootstrapOwnerName": "Test Operator",
-    "releaseOwnerName": "Your Name",
-    "releaseOwnerEmail": "you@example.com",
+    "releaseOwnerName": "Solomon Steadman",
+    "releaseOwnerEmail": "168413654+solstead@users.noreply.github.com",
     "defaultOwnerId": "operator",
     "personNodeName": "Test Operator",
     "speakers": [
