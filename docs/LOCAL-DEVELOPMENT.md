@@ -28,6 +28,12 @@ Example:
     "devRoot": ".",
     "runtimeWorkspace": "../test",
     "openclawSource": "../openclaw-source"
+  },
+  "auth": {
+    "anthropic": {
+      "primaryKeyPath": "../secrets/anthropic-primary.txt",
+      "secondaryKeyPath": "../secrets/anthropic-secondary.txt"
+    }
   }
 }
 ```
@@ -60,6 +66,14 @@ directory such as `~/quaid-dev/`.
 - `remoteHost`: live-test target host, such as `localhost` or a private lab host
 - `remoteWorkspace`: remote runtime workspace path
 
+`auth`
+
+- `anthropic.primaryKeyPath`: local path to the primary Anthropic key file
+- `anthropic.secondaryKeyPath`: local path to the secondary Anthropic key file
+- resolve these paths from `paths.devRoot`
+- keep the key files outside the repo or otherwise untracked
+- store the secret values in those files, not in tracked JSON
+
 ## Consumers
 
 These repo tools read `.quaid-dev.local.json` today:
@@ -69,6 +83,9 @@ These repo tools read `.quaid-dev.local.json` today:
 - `modules/quaid/scripts/apply-runtime-profile.py`
 - `scripts/release-owner-check.mjs`
 - `scripts/push-canary.sh`
+
+Benchmark and local automation tooling may also read the `auth` section for
+provider key paths.
 
 ## Public Repo Rule
 

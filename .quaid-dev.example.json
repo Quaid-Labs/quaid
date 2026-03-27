@@ -22,5 +22,11 @@
   "liveTest": {
     "remoteHost": "localhost",
     "remoteWorkspace": "../test-remote"
+  },
+  "auth": {
+    "anthropic": {
+      "primaryKeyPath": "../secrets/anthropic-primary.txt",
+      "secondaryKeyPath": "../secrets/anthropic-secondary.txt"
+    }
   }
 }
