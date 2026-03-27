@@ -40,6 +40,7 @@ destructive command sequences in an untracked companion file such as
 - Pass `--install-verified true` only if M0/install completed cleanly without
   manual config patching.
 - Release flow will rewrite the SHA to the real release version only if the
-  cleared SHA still matches release `HEAD`.
+  cleared SHA still matches release `HEAD`, and it will keep a `validated_sha`
+  marker so later release runs can detect stale clears.
 - Do not update compatibility entries for partial clears, failed runs, or
   single-adapter-only validation.

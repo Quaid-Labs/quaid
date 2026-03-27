@@ -69,16 +69,50 @@ if (!releaseVersion) {
 const matrix = Array.isArray(compat.matrix) ? compat.matrix : [];
 const pendingRows = matrix.filter((entry) => entry.pending_release === true || isShaPlaceholder(entry.quaid_range));
 
+function compatibleRowsForHost(host) {
+  return matrix.filter(
+    (entry) =>
+      (entry.host || "").trim() === host &&
+      String(entry.quaid_range || "").trim() === releaseVersion &&
+      String(entry.status || "").trim() === "compatible"
+  );
+}
+
 if (pendingRows.length === 0) {
   for (const host of REQUIRED_HOSTS) {
-    const promoted = matrix.some(
-      (entry) =>
-        (entry.host || "").trim() === host &&
-        String(entry.quaid_range || "").trim() === releaseVersion
-    );
-    if (!promoted) {
-      die(`missing pending or promoted compatibility row for host '${host}' and Quaid ${releaseVersion}`);
+    const compatibleRows = compatibleRowsForHost(host);
+    if (compatibleRows.length === 0) {
+      const legacyCompatible = matrix.some(
+        (entry) =>
+          (entry.host || "").trim() === host &&
+          String(entry.status || "").trim() === "compatible"
+      );
+      if (legacyCompatible) {
+        die(
+          `host '${host}' only has legacy non-SHA compatibility rows; run a fresh full live clear to record SHA-backed evidence`
+        );
+      }
+      die(`missing pending or promoted compatible row for host '${host}' and Quaid ${releaseVersion}`);
     }
+    const validated = compatibleRows
+      .map((entry) => String(entry.validated_sha || "").trim())
+      .filter(Boolean);
+    if (validated.length === 0) {
+      die(
+        `host '${host}' only has legacy compatibility rows for Quaid ${releaseVersion}; run a fresh full live clear to record SHA-backed evidence`
+      );
+    }
+    if (validated.some((sha) => sha === head)) {
+      continue;
+    }
+    const matchingAncestor = validated.find((sha) => isAncestor(sha, head));
+    if (matchingAncestor) {
+      const delta = commitsSince(matchingAncestor, head);
+      die(
+        `host '${host}' compatibility was last cleared at ${matchingAncestor}, not current HEAD ${head}; commits since clear:\n${delta || "(none)"}`
+      );
+    }
+    die(`host '${host}' has compatibility rows, but none point to an ancestor of release HEAD ${head}`);
   }
   console.log(`[release-compat] already promoted for Quaid ${releaseVersion}`);
   process.exit(0);
@@ -130,7 +164,12 @@ for (const entry of matrix) {
     promotedRows.push(entry);
     continue;
   }
-  const nextEntry = { ...entry, quaid_range: releaseVersion };
+  const nextEntry = {
+    ...entry,
+    quaid_range: releaseVersion,
+    validated_sha: String(entry.quaid_range || "").trim(),
+    validated_at: entry.cleared_at || new Date().toISOString(),
+  };
   delete nextEntry.pending_release;
   delete nextEntry.install_verified;
   delete nextEntry.cleared_at;
@@ -138,7 +177,7 @@ for (const entry of matrix) {
 }
 
 const deduped = [];
-const seen = new Set();
+const seen = new Map();
 for (const entry of promotedRows) {
   const key = [
     String(entry.host || "").trim(),
@@ -146,9 +185,27 @@ for (const entry of promotedRows) {
     String(entry.quaid_range || "").trim(),
     String(entry.status || "").trim(),
   ].join("|");
-  if (seen.has(key)) continue;
-  seen.add(key);
-  deduped.push(entry);
+  const existingIndex = seen.get(key);
+  if (existingIndex === undefined) {
+    seen.set(key, deduped.length);
+    deduped.push(entry);
+    continue;
+  }
+
+  const existing = deduped[existingIndex];
+  const existingScore = Number(Boolean(existing.validated_sha)) + Number(Boolean(existing.validated_at));
+  const nextScore = Number(Boolean(entry.validated_sha)) + Number(Boolean(entry.validated_at));
+  if (nextScore > existingScore) {
+    deduped[existingIndex] = entry;
+    continue;
+  }
+  if (nextScore === existingScore) {
+    const existingStamp = String(existing.validated_at || "");
+    const nextStamp = String(entry.validated_at || "");
+    if (nextStamp > existingStamp) {
+      deduped[existingIndex] = entry;
+    }
+  }
 }
 
 compat.matrix = deduped;

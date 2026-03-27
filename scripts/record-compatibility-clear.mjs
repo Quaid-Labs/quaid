@@ -91,6 +91,7 @@ const matrix = Array.isArray(data.matrix) ? data.matrix : [];
 
 const nextMatrix = matrix.filter((entry) => {
   if ((entry.host || "").trim() !== host) return true;
+  if ((entry.host_range || "").trim() === hostVersion) return false;
   if (entry.pending_release === true) return false;
   if (isShaPlaceholder(entry.quaid_range)) return false;
   return true;

@@ -62,6 +62,10 @@ Run:
 bash scripts/release-check.sh
 ```
 
+Run this before the final release commit.
+It may rewrite pending SHA-based compatibility rows in `compatibility.json`
+to the concrete release version when the recorded live-clear SHA matches `HEAD`.
+
 This runs:
 
 1. docs consistency
@@ -94,6 +98,7 @@ For live clears:
 - If a live run required a manual config patch, record it with `--install-verified false`; release promotion will block until the install path is re-cleared or manually accepted with a code change.
 - Live clears write the current `HEAD` SHA into `compatibility.json` on `canary`.
 - `bash scripts/release-check.sh` rewrites those SHA placeholders to the released Quaid version only when the clear SHA still matches release `HEAD`.
+- Promoted rows keep a `validated_sha` marker, so future release runs can tell whether the current matrix is fresh or only reflects an older clear.
 
 ## E2E Policy
 
@@ -129,13 +134,17 @@ Build installer artifact locally:
 
 ## Optional: Git Hook
 
-Install a local `pre-push` hook if you want release checks to run automatically:
+Do not use `bash scripts/release-check.sh` as a generic `pre-push` hook for final
+release work, because it can update tracked release metadata.
+
+If you want a lightweight automated pre-push guard, use the non-mutating release
+verification step instead:
 
 ```bash
 cat > .git/hooks/pre-push <<'HOOK'
 #!/usr/bin/env bash
 set -euo pipefail
-bash scripts/release-check.sh
+node scripts/release-verify.mjs
 HOOK
 chmod +x .git/hooks/pre-push
 ```
