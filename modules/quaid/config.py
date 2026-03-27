@@ -193,6 +193,8 @@ class JanitorConfig:
         "destructive_memory_ops": "auto",
     })
     task_timeout_minutes: int = 240
+    scheduled_hour: int = 4   # Hour of day (0-23) for scheduled janitor run
+    window_hours: int = 2     # Allowed window in hours after scheduled_hour
     run_tests: bool = False  # Only enable in dev (or set QUAID_DEV=1)
     opus_review: OpusReviewConfig = field(default_factory=OpusReviewConfig)
     dedup: DedupConfig = field(default_factory=DedupConfig)
@@ -345,6 +347,7 @@ class ProjectsConfig:
     staging_dir: str = "projects/staging/"
     definitions: Dict[str, ProjectDefinition] = field(default_factory=dict)
     default_project: str = "default"
+    log_token_budget: int = 0  # Token budget for project log rotation (0 = use DEFAULT_LOG_TOKEN_BUDGET)
 
 
 @dataclass
