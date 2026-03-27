@@ -1188,12 +1188,24 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
     const currentInstance = String(parsed.env.vars.QUAID_INSTANCE || "").trim();
     const currentHome = String(parsed.env.vars.QUAID_HOME || "").trim();
     const currentWorkspace = String(parsed.env.vars.CLAWDBOT_WORKSPACE || "").trim();
-    if (currentInstance === nextInstance && currentHome === WORKSPACE && currentWorkspace === WORKSPACE) {
+    const currentInstanceTop = String(parsed.env.QUAID_INSTANCE || "").trim();
+    const currentHomeTop = String(parsed.env.QUAID_HOME || "").trim();
+    if (
+      currentInstance === nextInstance &&
+      currentHome === WORKSPACE &&
+      currentWorkspace === WORKSPACE &&
+      currentInstanceTop === nextInstance &&
+      currentHomeTop === WORKSPACE
+    ) {
       return false;
     }
+    // Write to env.vars (per-process env block read by the OC Python plugin layer)
     parsed.env.vars.QUAID_INSTANCE = nextInstance;
     parsed.env.vars.QUAID_HOME = WORKSPACE;
     parsed.env.vars.CLAWDBOT_WORKSPACE = WORKSPACE;
+    // Also write to top-level env keys (read by OC gateway for plugin startup env)
+    parsed.env.QUAID_INSTANCE = nextInstance;
+    parsed.env.QUAID_HOME = WORKSPACE;
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
     fs.renameSync(tmpPath, cfgPath);
     return true;
