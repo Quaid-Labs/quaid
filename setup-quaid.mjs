@@ -4302,7 +4302,9 @@ function copyDirSync(src, dest) {
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
       copyDirSync(srcPath, destPath);
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() || entry.isSymbolicLink()) {
+      // copyFileSync follows symlinks (dereferences to real content) — this is
+      // intentional so that the dest dir contains real files, not broken links.
       fs.copyFileSync(srcPath, destPath);
     }
   }
@@ -4323,7 +4325,7 @@ function copyMissingDirSync(src, dest) {
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
       copyMissingDirSync(srcPath, destPath);
-    } else if (entry.isFile() && !fs.existsSync(destPath)) {
+    } else if ((entry.isFile() || entry.isSymbolicLink()) && !fs.existsSync(destPath)) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
