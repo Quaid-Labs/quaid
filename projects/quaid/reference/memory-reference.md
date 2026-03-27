@@ -1448,7 +1448,7 @@ The embedding model was upgraded from nomic-embed-text (768-dim) → qwen3-embed
     },
     "deepReasoningModelClasses": {
       "openai": "gpt-5.3-codex",
-      "anthropic": "claude-opus-4-6"
+      "anthropic": "claude-sonnet-4-6"
     }
   }
 }

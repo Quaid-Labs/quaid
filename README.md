@@ -83,7 +83,7 @@ Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (AC
 | LangMem | 58.1% | GPT-4o-mini |
 | OpenAI Memory | 52.9% | GPT-4o-mini |
 
-With Opus answering (recommended production config): **75.0%**
+Higher-cost Opus answer runs reached **75.0%**. The current OpenClaw default is **Sonnet for deep reasoning + Haiku for fast reasoning**.
 
 **Token efficiency:** Quaid retrieves about 10 relevant facts per query, averaging **about 200 tokens** of injected memory context. That's it. No raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a fast-reasoning LLM reranker call (about $0.01).
 

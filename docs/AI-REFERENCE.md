@@ -318,7 +318,7 @@ Config is loaded from `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json` (the per-i
 ```
 config/memory.json
   models                   -- Model IDs, context windows, max output tokens
-    fastReasoning           -- "default" (resolved at runtime; CC adapter default: "claude-haiku-4-5-20251001")
+    fastReasoning           -- "default" (resolved at runtime; CC adapter default: "claude-haiku-4-5")
     deepReasoning          -- "default" (resolved at runtime; CC adapter default: "claude-sonnet-4-6")
     fastReasoningContext    -- 200000
     deepReasoningContext   -- 200000
@@ -818,12 +818,12 @@ OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthr
 | LangMem | 58.1% | GPT-4o-mini | Apr 2025 numbers |
 | OpenAI | 52.9% | GPT-4o-mini | Apr 2025 numbers |
 | Quaid + Journal + Haiku | 74.48% +/- 0.05 | Haiku | Best Haiku result, nearly matches Opus at ~46% cost |
-| **Quaid + Opus** | **75.00%** | **Opus** | **Production config** |
+| **Quaid + Opus** | **75.00%** | **Opus** | **Higher-cost reference run** |
 | v2 Standard (full janitor) | 69.11% +/- 0.17 | Haiku | Regression from dedup merge bug (since fixed) |
 | Full-context Haiku | 79.59% +/- 0.17 | Haiku | Upper bound (no knowledge layer) |
 | Full-context Opus | 86.62% +/- 0.09 | Opus | Upper bound (no knowledge layer) |
 
-**Key insight:** Journal + Haiku (74.5%) nearly matches v1 Opus (75.0%) at roughly 46% of the cost. Journal helps most on temporal questions (+7.6pp) and single-hop questions (+6.8pp).
+**Key insight:** Journal + Haiku (74.5%) nearly matches v1 Opus (75.0%) at roughly 46% of the cost. Journal helps most on temporal questions (+7.6pp) and single-hop questions (+6.8pp). Current OpenClaw default: Sonnet for deep reasoning, Haiku for fast reasoning.
 
 **Benchmark code:** See `benchmark/agentlife/` and [docs/BENCHMARKS.md](BENCHMARKS.md) for full methodology.
 

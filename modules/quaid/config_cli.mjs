@@ -399,7 +399,7 @@ function modelOptions(cfg, tier) {
   const value = tier === "deep" ? "models.deepReasoning" : "models.fastReasoning";
   const isAnthropic = effective.startsWith("anthropic");
   const fallback = isAnthropic
-    ? (tier === "deep" ? ["claude-opus-4-6", "claude-opus-4-5"] : ["claude-haiku-4-5", "claude-sonnet-4-20250514"])
+    ? (tier === "deep" ? ["claude-sonnet-4-6", "claude-opus-4-6"] : ["claude-haiku-4-5", "claude-sonnet-4-6"])
     : (tier === "deep" ? ["gpt-5.3-codex", "gpt-5.2-codex", "gpt-4o"] : ["gpt-5.1-codex-mini", "gpt-4o-mini"]);
   const mapKey = tier === "deep" ? "models.deepReasoningModelClasses" : "models.fastReasoningModelClasses";
   const mappedForProvider = String(getPath(cfg, `${mapKey}.${effective}`, "") || "").trim();

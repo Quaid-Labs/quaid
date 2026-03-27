@@ -20,11 +20,11 @@ We evaluate Quaid using **Mem0's exact methodology** -- same judge model (GPT-4o
 | Zep | 66.0% | GPT-4o-mini | Apr 2025 |
 | LangMem | 58.1% | GPT-4o-mini | Apr 2025 |
 | OpenAI Memory | 52.9% | GPT-4o-mini | Apr 2025 |
-| **Quaid (Opus answers)** | **75.0%** | **Opus** | **Recommended production config** |
+| **Quaid (Opus answers)** | **75.0%** | **Opus** | **Higher-cost reference run** |
 
 Full-context baselines (upper bound, no knowledge layer): Haiku 79.6%, Opus 86.6%.
 
-The shipping configuration uses Opus for both extraction and answer generation. Quaid achieves 88.3% of full-context Haiku performance (fair comparison) and 86.6% of full-context Opus performance while injecting only the relevant memories.
+The current OpenClaw default uses Sonnet for deep reasoning tasks and Haiku for fast reasoning tasks. The Opus row is a higher-cost reference run, not the shipped default. Quaid achieves 88.3% of full-context Haiku performance (fair comparison) and 86.6% of full-context Opus performance on that reference run while injecting only the relevant memories.
 
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
 
@@ -46,7 +46,7 @@ Reported competitor numbers evolve quickly and vary by model/backbone, so treat 
 | Open-domain | 96 | 58.0% | 58.7% | **72.9%** | **75.7%** | **76.6%** |
 | **Overall** | **1540** | **75.0%** | **70.3%** | **66.9%** | **68.9%** | **66.0%** |
 
-All competitor systems use GPT-4o-mini for answer generation. Quaid (Haiku) is the fair comparison row; Quaid (Opus) reflects the recommended production config.
+All competitor systems use GPT-4o-mini for answer generation. Quaid (Haiku) is the fair comparison row; Quaid (Opus) is a higher-cost reference run.
 
 ### Where Quaid Wins
 
@@ -74,7 +74,7 @@ Percentage of full-context baseline performance retained (higher is better):
 | Open-domain | 94.2% | 91.3% |
 | **Overall** | **88.3%** | **86.6%** |
 
-The recommended Opus configuration captures 86.6% of full-context performance while injecting only the relevant memories -- typically a few thousand tokens instead of the entire transcript.
+The higher-cost Opus configuration captures 86.6% of full-context performance while injecting only the relevant memories -- typically a few thousand tokens instead of the entire transcript.
 
 Values over 100% mean Quaid's structured memory **outperforms** having the full raw transcript (temporal queries benefit from date normalization).
 
@@ -163,9 +163,9 @@ Quaid processes **full conversation transcripts end-to-end** -- not pre-atomized
 | Category 5 excluded | Yes | Yes | Yes |
 | Overall score | Weighted mean | Weighted mean | Yes |
 | Multiple trials | 10 | 3 | Partial |
-| Answer model | GPT-4o-mini | Haiku (fair) / Opus (production) | Disclosed |
+| Answer model | GPT-4o-mini | Haiku (fair) / Opus (reference) | Disclosed |
 
-Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (similar tier, fair comparison) and Opus answers (recommended production config).
+Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (similar tier, fair comparison) and Opus answers (higher-cost reference run).
 
 ---
 

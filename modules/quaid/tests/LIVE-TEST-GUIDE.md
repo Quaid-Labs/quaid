@@ -348,8 +348,8 @@ Also verify model config was written by the installer:
 ssh example.local 'python3 -c "import json; d=json.load(open(\"/Users/owner/quaid/claude-code-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
 ```
 
-Expected output: `{'deepReasoning': 'claude-haiku-4-5', 'fastReasoning': 'claude-haiku-4-5'}`.
-**HARD RULE:** both must be `claude-haiku-4-5`. If either shows `opus` or `sonnet`, re-run the
+Expected output: `{'deepReasoning': 'claude-sonnet-4-6', 'fastReasoning': 'claude-haiku-4-5'}`.
+**HARD RULE:** deep must be `claude-sonnet-4-6` and fast must be `claude-haiku-4-5`. If the installer writes anything else, re-run the
 installer or patch manually before proceeding. If models are missing or empty, the daemon will
 raise `RuntimeError` at call time.
 

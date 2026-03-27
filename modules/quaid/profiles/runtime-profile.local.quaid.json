@@ -97,7 +97,7 @@
         {
           "provider": "anthropic",
           "fastReasoning": "claude-haiku-4-5",
-          "deepReasoning": "claude-haiku-4-5"
+          "deepReasoning": "claude-sonnet-4-6"
         }
       ]
     },

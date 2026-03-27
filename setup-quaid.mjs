@@ -2100,7 +2100,8 @@ async function step3_models() {
 
   let highModel, lowModel;
   if (provider === "anthropic") {
-    highModel = "claude-haiku-4-5";  // HARD RULE: haiku for both fast+deep
+    // Current OpenClaw default: Sonnet for deep reasoning, Haiku for fast.
+    highModel = "claude-sonnet-4-6";
     lowModel = "claude-haiku-4-5";
   } else if (provider === "ollama") {
     highModel = "llama3.1:70b";
