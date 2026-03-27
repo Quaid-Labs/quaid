@@ -16,7 +16,7 @@ Recommended framing:
 - Provider abstraction is substantially improved and testable.
 - M0–M7 live validation passed on OC 3.11 and CC (2026-03-13). See `operations/live-validation-log.md`.
 - Installer: instance ID prompt, shared embeddings config, `quaid instances list`, `quaid config edit --shared/--instance` — all shipped.
-- Compatibility matrix populated for v0.3.0.
+- Compatibility matrix populated for v0.2.15-alpha.
 
 ### Hold for broader release until
 - Command API path fully replaces slash-text fallback paths.

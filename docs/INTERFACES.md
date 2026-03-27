@@ -34,7 +34,7 @@ This keeps migration risk low while locking extension contracts before public ex
 
 - Source: `core/knowledge-stores.ts`
 - Discovery:
-  - Adapter memory tool guidance (`memory_recall` tool description)
+  - CLI: `quaid recall` (primary agent surface; tool registration was removed)
   - Orchestrator internals use registry keys/options
 
 ### Event Capabilities

@@ -336,8 +336,8 @@ auto-registered.
 │    └─ hook-extract --precompact                                         │
 │         ├─ ensure daemon alive                                          │
 │         └─ write_signal(type="compaction", session_id, transcript_path)│
-│              → QUAID_HOME/data/extraction-signals/<ts>_<pid>_<uuid>_   │
-│                 compaction.json                                         │
+│              → QUAID_HOME/<instance>/data/extraction-signals/          │
+│                 <ts>_<pid>_<uuid>_compaction.json                      │
 │    (Extraction daemon picks up signal asynchronously)                   │
 │    └─ Daemon reads transcript from cursor offset                        │
 │         ├─ chunks transcript (waterfall batching)                       │
@@ -397,7 +397,8 @@ hooks; the Python layer handles extraction signaling.
 │    └─ before_compaction (TS)                                            │
 │         ├─ filter conversation messages (remove system/heartbeat noise) │
 │         └─ writeDaemonSignal(session_id, "compaction", {source: ...})   │
-│              → QUAID_HOME/data/extraction-signals/<ts>_compaction.json  │
+│              → QUAID_HOME/<instance>/data/extraction-signals/           │
+│                 <ts>_compaction.json                                    │
 │    (OC sets supports_compaction_control=True — daemon may ask OC to    │
 │     force a /compact if extraction warrants it)                        │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -437,13 +438,13 @@ hooks; the Python layer handles extraction signaling.
 
 ### Signal directory
 
-Signals are written at the **QUAID_HOME level** (not per-instance):
+Signals are written at the **per-instance level** (not shared across adapters):
 
 ```
-$QUAID_HOME/data/extraction-signals/
+$QUAID_HOME/<instance>/data/extraction-signals/
 ```
 
-This directory is shared across adapter instances and the extraction daemon.
+Each adapter instance writes to its own signal directory under its instance root.
 
 ### Signal file format
 
@@ -647,7 +648,7 @@ Each adapter instance on a machine has its own `QUAID_HOME` silo.
 | CC settings (hook registration) | `~/.claude/settings.json` |
 | CC rules file (session context) | `<project-cwd>/.claude/rules/quaid-projects.md` |
 | CC instance silo | `$QUAID_HOME/` |
-| Extraction signals dir | `$QUAID_HOME/data/extraction-signals/` |
+| Extraction signals dir | `$QUAID_HOME/<instance>/data/extraction-signals/` |
 | Session cursors dir | `$QUAID_HOME/<instance>/data/session-cursors/` |
 | Subagent registry dir | `$QUAID_HOME/data/subagent-registry/` |
 | CC pending notifications | `$QUAID_HOME/<instance>/data/cc-pending-notifications.jsonl` |

@@ -73,7 +73,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 Then search:
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid docs search 'memory extraction' --project oc-test-proj"
+  ~/.local/bin/quaid recall 'memory extraction' '{\"stores\":[\"docs\"],\"project\":\"oc-test-proj\"}'"
 ```
 
 **Expected:** At least one hit; `/tmp/oc-test-doc.md` near the top.
@@ -180,7 +180,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 Then search:
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
-  ~/.local/bin/quaid docs search 'session extraction' --project cc-test-proj"
+  ~/.local/bin/quaid recall 'session extraction' '{\"stores\":[\"docs\"],\"project\":\"cc-test-proj\"}'"
 ```
 
 **Expected:** At least one hit; `/tmp/cc-test-doc.md` near the top.
@@ -327,7 +327,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 
 # CC searches for OC's doc
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
-  ~/.local/bin/quaid docs search 'memory architecture' --project shared-xp-proj"
+  ~/.local/bin/quaid recall 'memory architecture' '{\"stores\":[\"docs\"],\"project\":\"shared-xp-proj\"}'"
 ```
 
 **Expected:** OC doc (`/tmp/oc-xp-doc.md`) appears in CC's search results.
@@ -338,7 +338,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid docs search 'session extraction' --project shared-xp-proj"
+  ~/.local/bin/quaid recall 'session extraction' '{\"stores\":[\"docs\"],\"project\":\"shared-xp-proj\"}'"
 ```
 
 **Expected:** CC doc (`/tmp/cc-xp-doc.md`) appears in OC's search results.

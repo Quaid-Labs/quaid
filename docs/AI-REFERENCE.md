@@ -639,6 +639,8 @@ quaid stats                   # Database statistics
 quaid health                  # Detailed KB health metrics
 quaid janitor [opts]          # Run janitor pipeline (--dry-run, --task <name>)
 quaid event [subcmd]          # Event bus (emit/list/process/capabilities)
+quaid compat [subcmd]         # Compatibility check (status/check/matrix)
+quaid docs changelog          # View doc update history
 ```
 
 ### Python Module CLIs (Advanced)
@@ -648,7 +650,6 @@ All commands run from the `modules/quaid/` directory.
 ```bash
 # Memory operations
 python3 datastore/memorydb/memory_graph.py store "fact text" --owner default --category preference
-python3 datastore/memorydb/memory_graph.py search "query" --owner default --limit 10
 python3 datastore/memorydb/memory_graph.py recall "query"   # Recall memories
 python3 datastore/memorydb/memory_graph.py stats
 python3 datastore/memorydb/memory_graph.py get-edges <node_id>
@@ -733,8 +734,8 @@ OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthr
 
 ### Overview
 
-- Current baseline: 1224 selected pytest tests (+333 deselected) and 222 vitest tests
-- All tests passing as of Feb 2026
+- Current baseline: 2,236 selected pytest tests (+312 deselected) and 333 vitest tests
+- All tests passing as of Mar 2026
 
 ### Test Files (pytest)
 

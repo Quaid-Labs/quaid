@@ -61,7 +61,7 @@ and `quaid registry register` to register files.
 Search the memory graph for any previously mentioned projects:
 
 ```bash
-cd modules/quaid && python3 datastore/memorydb/memory_graph.py search "project" --owner <OWNER> --limit 10
+cd modules/quaid && python3 datastore/memorydb/memory_graph.py recall "project" --owner <OWNER> --limit 10
 ```
 
 If results mention specific project names or paths, note them.

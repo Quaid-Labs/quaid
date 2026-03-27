@@ -185,7 +185,7 @@ export QUAID_HOME=~/.quaid QUAID_INSTANCE=openclaw
 quaid project create <name> && quaid project list
 
 # CC
-export QUAID_HOME=~/quaid QUAID_INSTANCE=claudecode
+export QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code
 quaid project create <name> && quaid project list
 
 # Global (either machine)

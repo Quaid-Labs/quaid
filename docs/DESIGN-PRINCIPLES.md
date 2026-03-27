@@ -38,7 +38,6 @@ Everything Quaid does should be invisible to the human by default:
 
 - **Git tracking**: Shadow git for change detection. No `.git` in user space.
   No git commands, messages, or concepts surfaced.
-- **Sync engines**: Background file sync between adapters. Never mentioned.
 - **Ignore patterns**: LLM-managed with defensive defaults. The human never
   sees `.gitignore` or exclude lists.
 - **Directory structures**: The LLM tells the human "I saved your itinerary

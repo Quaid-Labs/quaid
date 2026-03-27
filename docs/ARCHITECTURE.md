@@ -465,7 +465,7 @@ In practice, extraction (write) and retrieval (read) can run simultaneously. The
 
 ## 5. Janitor Pipeline (Nightly Maintenance)
 
-The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 18 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
+The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 19 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
 
 ### Execution Order
 
@@ -476,6 +476,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 | Task | Purpose | LLM? |
 |------|---------|------|
 | embeddings | Backfill missing embeddings via Ollama | No |
+| edges | Backfill missing relationship edges from stored facts | No |
 
 **Phase 2: Memory Pipeline** (fail-fast -- if any task fails, remaining memory tasks are skipped)
 

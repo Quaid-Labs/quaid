@@ -53,6 +53,7 @@ The janitor requires LLM access for review/dedup/docs tasks. Provider/model rout
 | # | Task | LLM | Category | Description |
 |---|------|-----|----------|-------------|
 | 0b | **embeddings** | None | Infra | Backfill missing embeddings |
+| 0c | **edges** | None | Infra | Backfill missing relationship edges from stored facts |
 | 2 | **review** | Opus | Memory | Batch-review pending memories (KEEP/DELETE/FIX/MERGE/MOVE_TO_PROJECT) |
 | 2a | **temporal** | None | Memory | Resolve relative dates (tomorrow, yesterday) to absolute |
 | 2b | **dedup_review** | Opus | Memory | Auto-confirm hash_exact entries, review embedding-based rejections (catch false positives) |

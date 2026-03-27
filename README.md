@@ -64,8 +64,6 @@ node setup-quaid.mjs --source github --ref <commit-sha>
 
 ---
 
-## Benchmarks
-
 ## How Quaid Is Different
 
 - **Local-first by default:** memory graph, embeddings, and maintenance run on your machine.
@@ -167,7 +165,7 @@ Known limitations for **v0.2.15-alpha**:
 - Windows is not supported. macOS and Linux only.
 - OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
 
-The system is backed by over 1,800 tests in the default gate (1,547 selected pytest + 331 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md). LongMemEval integration is implemented and smoke-tested; full benchmark runs are pending.
+The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md). LongMemEval integration is implemented and smoke-tested; full benchmark runs are pending.
 
 GitHub Actions CI runs automated checks on pushes/PRs including runtime pair sync, docs/release consistency, linting, runtime build, isolated Python unit suites, and the full gate (`run-all-tests --full`) with the bootstrap E2E auth matrix enabled.
 

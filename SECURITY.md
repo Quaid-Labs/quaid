@@ -11,7 +11,7 @@ Report privately to the maintainer with:
 - Impact assessment (what can be accessed or changed)
 - Suggested mitigation (if available)
 
-Include your Quaid version and host mode (`openclaw`, `mcp`, `cli`) when possible.
+Include your Quaid version and host mode (`openclaw`, `claude-code`, `cli`) when possible.
 
 ## Scope Notes
 

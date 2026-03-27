@@ -57,6 +57,7 @@ This runs:
 2. release metadata/version consistency
 3. ownership/attribution verification
 4. strict TypeScript/JavaScript runtime pair check
+5. quaid release gate (version tag + known-issue checks)
 
 ## Tarball Build
 
