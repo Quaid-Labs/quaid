@@ -236,14 +236,14 @@ def test_memory_service_search_passes_identity_scope_to_datastore(monkeypatch):
         viewer_entity_id="user:a",
         source_channel="telegram",
         source_conversation_id="chat-1",
-        source_author_id="<redacted>",
+        source_author_id="operator-alias",
         subject_entity_id="user:a",
         participant_entity_ids=["user:a", "agent:bert"],
     )
     assert [row["id"] for row in out] == ["1"]
     assert captured["source_channel"] == "telegram"
     assert captured["source_conversation_id"] == "chat-1"
-    assert captured["source_author_id"] == "<redacted>"
+    assert captured["source_author_id"] == "operator-alias"
     assert captured["subject_entity_id"] == "user:a"
     assert captured["participant_entity_ids"] == ["user:a", "agent:bert"]
 

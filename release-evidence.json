@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "updated_at": null,
+  "evidence": {
+    "unit": {
+      "sha": null,
+      "recorded_at": null,
+      "notes": ""
+    },
+    "ci": {
+      "sha": null,
+      "recorded_at": null,
+      "notes": ""
+    }
+  }
+}

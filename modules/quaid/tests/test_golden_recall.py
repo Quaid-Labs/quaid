@@ -230,9 +230,9 @@ class TestGoldenRecall:
                 min_similarity=0.0,
             )
         # Non-existent owner should get no results (or only shared/public)
-        solomon_results = _run_recall(graph, "Quaid coffee")
+        owner_results = _run_recall(graph, "Quaid coffee")
         # At minimum, the wrong-owner results should be no more than quaid's
-        assert len(results) <= len(solomon_results)
+        assert len(results) <= len(owner_results)
 
 
 # ---------------------------------------------------------------------------

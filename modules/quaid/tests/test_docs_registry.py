@@ -167,7 +167,7 @@ class TestRegisterAndGet:
             project="test-project",
             source_channel="telegram",
             source_conversation_id="group-42",
-            source_author_id="<redacted>",
+            source_author_id="operator-alias",
             speaker_entity_id="entity:fatman",
             subject_entity_id="entity:albert",
             conversation_id="conv:group-42",
@@ -180,7 +180,7 @@ class TestRegisterAndGet:
         assert entry is not None
         assert entry["source_channel"] == "telegram"
         assert entry["source_conversation_id"] == "group-42"
-        assert entry["source_author_id"] == "<redacted>"
+        assert entry["source_author_id"] == "operator-alias"
         assert entry["speaker_entity_id"] == "entity:fatman"
         assert entry["subject_entity_id"] == "entity:albert"
         assert entry["conversation_id"] == "conv:group-42"
@@ -433,12 +433,12 @@ class TestUpdateMetadata:
             "docs/test.md",
             source_channel="  Telegram  ",
             source_conversation_id="  chat-1  ",
-            source_author_id="  <redacted>  ",
+            source_author_id="  operator-alias  ",
         )
         entry = r.get("docs/test.md")
         assert entry["source_channel"] == "telegram"
         assert entry["source_conversation_id"] == "chat-1"
-        assert entry["source_author_id"] == "<redacted>"
+        assert entry["source_author_id"] == "operator-alias"
 
 
 class TestUpdateTimestamps:

@@ -734,7 +734,7 @@ class TestStoreDedup:
             pytest.skip("sqlite-vec not available in this environment")
 
         graph, _ = _make_graph(tmp_path)
-        text = "Solomon's mother's name is Wendy"
+        text = "Owner's mother's name is Wendy"
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
@@ -749,7 +749,7 @@ class TestStoreDedup:
         from datastore.memorydb.memory_graph import store
 
         graph, _ = _make_graph(tmp_path)
-        base_text = "Wendy is Solomon's mother's name"
+        base_text = "Wendy is Owner's mother's name"
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             created = store(base_text, owner_id="quaid", skip_dedup=True)
@@ -776,7 +776,7 @@ class TestStoreDedup:
                  side_effect=AssertionError("FTS should not be consulted when vec candidates succeed"),
              ), \
              patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=True):
-            result = store("Solomon's mother's name is Wendy", owner_id="quaid")
+            result = store("Owner's mother's name is Wendy", owner_id="quaid")
 
         assert vec_spy.call_count == 1
         assert result["status"] == "duplicate"
@@ -787,7 +787,7 @@ class TestStoreDedup:
         from datastore.memorydb.memory_graph import store
 
         graph, _ = _make_graph(tmp_path)
-        base_text = "Wendy is Solomon's mother's name"
+        base_text = "Wendy is Owner's mother's name"
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             created = store(base_text, owner_id="quaid", skip_dedup=True)
@@ -819,7 +819,7 @@ class TestStoreDedup:
                  return_value=([(existing_row, 0.995)], fts_meta),
              ) as fts_spy, \
              patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=True):
-            result = store("Solomon's mother's name is Wendy", owner_id="quaid")
+            result = store("Owner's mother's name is Wendy", owner_id="quaid")
 
         assert fts_spy.call_count == 1
         assert result["status"] == "duplicate"
@@ -840,7 +840,7 @@ class TestStoreDedup:
              ), \
              patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
             with pytest.raises(RuntimeError, match="fail-hard mode is enabled"):
-                store("Solomon's mother's name is Wendy", owner_id="quaid")
+                store("Owner's mother's name is Wendy", owner_id="quaid")
 
 
 # ---------------------------------------------------------------------------
@@ -2064,7 +2064,7 @@ class TestRecallFastHookInjectContract:
                     },
                     {
                         "id": "fact-2",
-                        "text": "Solomon has a sister named Diana",
+                        "text": "Owner has a sister named Diana",
                         "category": "fact",
                         "similarity": 0.76,
                     },
@@ -2093,7 +2093,7 @@ class TestRecallFastHookInjectContract:
                 "my family",
                 stores=["vector", "graph"],
                 limit=4,
-                owner_id="solomon",
+                owner_id="owner",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=["my family"],
@@ -2327,7 +2327,7 @@ class TestRecallFastHookInjectContract:
         node = mg.Node(
             id="n-neighbour",
             type="Fact",
-            name="Solomon's neighbour Priya grows chili peppers on her balcony.",
+            name="Owner's neighbour Priya grows chili peppers on her balcony.",
             attributes={},
         )
 

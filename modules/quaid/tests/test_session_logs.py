@@ -39,7 +39,7 @@ def test_session_log_index_list_load_search(monkeypatch, tmp_path):
         source_channel="telegram",
         conversation_id="chat-123",
         participant_ids=["quaid", "user:owner"],
-        participant_aliases={"<redacted>": "user:owner"},
+        participant_aliases={"operator-alias": "user:owner"},
         message_count=4,
     )
     assert out["status"] == "indexed"

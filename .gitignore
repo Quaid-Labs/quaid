@@ -37,6 +37,7 @@ __pycache__/
 *.bak
 *.backup*
 /tmp/
+.ci-local-logs/
 # Local test files (untracked scratch space)
 /tests/
 # Dynamic data (regenerated)
@@ -68,3 +69,6 @@ skills/**/.clawdhub/
 agentlife/eval/
 pytest-runner/
 .quaid-dev.local.json
+release-evidence.json.tmp-*.json
+compatibility.json.tmp-*.json
+modules/quaid/tests/LIVE-TEST-GUIDE.local.md

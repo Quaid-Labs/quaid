@@ -104,18 +104,18 @@ class TestStoreRecallRoundTrip:
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             scoped = store(
-                text="Solomon likes pourover coffee beans",
+                text="Owner likes pourover coffee beans",
                 category="fact",
                 owner_id="quaid",
                 source_channel="telegram",
                 source_conversation_id="chat-1",
-                source_author_id="<redacted>",
+                source_author_id="operator-alias",
                 actor_id="user:owner",
                 subject_entity_id="user:owner",
                 skip_dedup=True,
             )
             unscoped = store(
-                text="Solomon uses a hand grinder daily",
+                text="Owner uses a hand grinder daily",
                 category="fact",
                 owner_id="quaid",
                 skip_dedup=True,
@@ -145,7 +145,7 @@ class TestStoreRecallRoundTrip:
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             scoped = store(
-                text="Albert and Solomon planned benchmark smoke tests",
+                text="Albert and Owner planned benchmark smoke tests",
                 category="fact",
                 owner_id="quaid",
                 participant_entity_ids=["user:albert", "user:owner"],

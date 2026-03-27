@@ -8,9 +8,9 @@ ENV_FILE="${QUAID_E2E_ENV_FILE:-${PLUGIN_ROOT}/.env.e2e}"
 CODE_ROOT_DEFAULT="$(cd "${BOOTSTRAP_ROOT}/../.." && pwd)"
 DEV_LOCAL_CONFIG="${QUAID_DEV_LOCAL_CONFIG:-${CODE_ROOT_DEFAULT}/.quaid-dev.local.json}"
 DEV_WS_DEFAULT="${CODE_ROOT_DEFAULT}"
-E2E_WS_DEFAULT="${HOME}/quaid/test"
+E2E_WS_DEFAULT="${CODE_ROOT_DEFAULT}/../test"
 E2E_INSTANCE="${QUAID_E2E_INSTANCE:-openclaw}"
-OPENCLAW_SOURCE_DEFAULT="${HOME}/quaid/openclaw-source"
+OPENCLAW_SOURCE_DEFAULT="${CODE_ROOT_DEFAULT}/../openclaw-source"
 # Default E2E gate to the OpenClaw release lane we validate against in canary.
 # Keep overridable for bisects via --openclaw-ref / QUAID_E2E_OPENCLAW_REF.
 OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-v2026.3.22}"
@@ -159,7 +159,7 @@ NOTE:
 
 Options:
   --auth-path <id>       Auth path for bootstrap profile (openai-oauth|openai-api|anthropic-oauth|anthropic-api; default: openai-api)
-  --keep-on-success      Do not delete ~/quaid/test after successful run
+  --keep-on-success      Do not delete the configured runtime workspace after successful run
   --skip-janitor         Skip janitor phase
   --skip-llm-smoke       Skip gateway LLM smoke call
   --skip-live-events     Skip live command/timeout hook validation
@@ -174,10 +174,10 @@ Options:
   --runtime-budget-profile <p> Runtime budget profile: auto|off|quick|deep (default: auto)
   --runtime-budget-seconds <n>  Explicit runtime budget override in seconds (0 disables override)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
-  --openclaw-source <p>  OpenClaw source repo path (default: ~/quaid/openclaw-source)
+  --openclaw-source <p>  OpenClaw source repo path (default: ../openclaw-source from dev root)
   --openclaw-ref <ref>   OpenClaw git ref/tag/sha to test (default: env QUAID_E2E_OPENCLAW_REF)
   --quick-bootstrap      Skip OpenClaw source refresh/install during bootstrap (faster local loops)
-  --reuse-workspace      Reuse existing ~/quaid/test workspace when possible (fast path)
+  --reuse-workspace      Reuse existing configured runtime workspace when possible (fast path)
   -h, --help             Show this help
 USAGE
 }
@@ -1023,7 +1023,11 @@ enable_required_openclaw_hooks() {
 restore_test_gateway() {
   set +e
   echo "[e2e] Restoring gateway config to test workspace..."
-  python3 "${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" --profile "$PROFILE_TEST" --auth-path "$AUTH_PATH" "${LOCAL_CONFIG_ARGS[@]}" >/dev/null 2>&1
+  local restore_args=()
+  if [[ ${#LOCAL_CONFIG_ARGS[@]} -gt 0 ]]; then
+    restore_args=("${LOCAL_CONFIG_ARGS[@]}")
+  fi
+  python3 "${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" --profile "$PROFILE_TEST" --auth-path "$AUTH_PATH" "${restore_args[@]}" >/dev/null 2>&1
   openclaw gateway stop >/dev/null 2>&1 || true
   set -e
   start_gateway_safe

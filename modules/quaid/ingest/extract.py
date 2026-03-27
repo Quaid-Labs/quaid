@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
@@ -63,6 +64,11 @@ def _load_soul_snippets_module():
         return _SOUL_SNIPPETS_MODULE
     _SOUL_SNIPPETS_MODULE = soul_snippets_runtime
     return _SOUL_SNIPPETS_MODULE
+
+
+def _content_hash(text: str) -> str:
+    normalized = " ".join(str(text or "").lower().split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _get_extract_wall_timeout_seconds() -> float:
@@ -1279,9 +1285,10 @@ def apply_extracted_payloads(
     else:
         allowed = set(allowed_domains or set())
 
+    chunks_total = int(result.get("chunks_total", 0) or 0)
+    chunk_suffix = f" from {chunks_total} chunks" if chunks_total > 1 else ""
     logger.info(
-        f"[extract] {label}: LLM returned {len(facts)} candidate facts"
-        f"{f' from {result.get('chunks_total', 0)} chunks' if int(result.get('chunks_total', 0) or 0) > 1 else ''}"
+        f"[extract] {label}: LLM returned {len(facts)} candidate facts{chunk_suffix}"
     )
     result.setdefault("dedup_hash_exact_hits", 0)
     result.setdefault("dedup_scanned_rows", 0)
@@ -1528,7 +1535,7 @@ def apply_extracted_payloads(
         text_hash_preview = None
         if text:
             try:
-                text_hash_preview = content_hash(str(text))[:12]
+                text_hash_preview = _content_hash(text)[:12]
             except Exception:
                 text_hash_preview = None
         _write_publish_trace(

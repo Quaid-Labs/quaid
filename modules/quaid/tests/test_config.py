@@ -1063,20 +1063,20 @@ class TestConfigLoading:
             config_file = tmp_path / "memory.json"
             config_file.write_text(json.dumps({
                 "users": {
-                    "defaultOwner": "owner",
+                    "defaultOwner": "ownerUser",
                     "identities": {
-                        "owner": {
+                        "ownerUser": {
                             "channels": {"cli": ["*"]},
-                            "speakers": ["Solomon"],
-                            "personNodeName": "Solomon",
+                            "speakers": ["Owner"],
+                            "personNodeName": "Owner",
                         }
                     },
                 }
             }))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
-                assert "owner" in cfg.users.identities
-                assert "solomon_steadman" not in cfg.users.identities
+                assert "ownerUser" in cfg.users.identities
+                assert "owner_user" not in cfg.users.identities
         finally:
             config._config = old_config
 

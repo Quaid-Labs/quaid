@@ -13,7 +13,7 @@ describe('Memory Store', () => {
   })
 
   it('stores a memory with correct metadata', async () => {
-    const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    const result = await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
     
     expect(result.id).toBeDefined()
     expect(result.content || result.name).toContain('Quaid')
@@ -22,7 +22,7 @@ describe('Memory Store', () => {
   })
 
   it('generates embedding of correct dimension', async () => {
-    const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    const result = await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
 
     expect(result.embedding).toBeDefined()
     if (Array.isArray(result.embedding)) {
@@ -33,15 +33,15 @@ describe('Memory Store', () => {
   })
 
   it('sets default confidence for manual stores', async () => {
-    const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    const result = await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
     
     expect(result.confidence).toBeCloseTo(0.5, 1)
   })
 
   it('accepts verified flag', async () => {
     const result = await memory.store(
-      fixtures.solomonFact.content, 
-      fixtures.solomonFact.owner,
+      fixtures.ownerFact.content,
+      fixtures.ownerFact.owner,
       { verified: true }
     )
     
@@ -50,8 +50,8 @@ describe('Memory Store', () => {
 
   it('accepts pinned flag', async () => {
     const result = await memory.store(
-      fixtures.solomonFact.content, 
-      fixtures.solomonFact.owner,
+      fixtures.ownerFact.content,
+      fixtures.ownerFact.owner,
       { pinned: true }
     )
     
@@ -94,8 +94,8 @@ describe('Memory Store', () => {
 
   it('accepts custom confidence values', async () => {
     const result = await memory.store(
-      fixtures.solomonFact.content,
-      fixtures.solomonFact.owner,
+      fixtures.ownerFact.content,
+      fixtures.ownerFact.owner,
       { confidence: 0.8 }
     )
     

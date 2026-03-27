@@ -233,12 +233,12 @@ class TestOwnerResolution:
             """
             {
               "adapter": {"type": "claude-code"},
-              "users": {"defaultOwner": "owner"}
+              "users": {"defaultOwner": "owner-user"}
             }
             """.strip()
         )
         reload_config()
-        assert get_owner_id() == "owner"
+        assert get_owner_id() == "owner-user"
 
 
 # ---------------------------------------------------------------------------
@@ -393,9 +393,9 @@ class TestOpenClawAdapter:
                 "lastTo": "heartbeat",
                 "updatedAt": 100,
             },
-            "agent:main:telegram:direct:<telegram-id>": {
+            "agent:main:telegram:direct:1000000000": {
                 "lastChannel": "telegram",
-                "lastTo": "telegram:<telegram-id>",
+                "lastTo": "telegram:1000000000",
                 "lastAccountId": "default",
                 "updatedAt": 200,
             },
@@ -405,8 +405,8 @@ class TestOpenClawAdapter:
         info = adapter.get_last_channel()
         assert info is not None
         assert info.channel == "telegram"
-        assert info.target == "telegram:<telegram-id>"
-        assert info.session_key == "agent:main:telegram:direct:<telegram-id>"
+        assert info.target == "telegram:1000000000"
+        assert info.session_key == "agent:main:telegram:direct:1000000000"
 
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".openclaw" / "sessions"
@@ -708,9 +708,9 @@ class TestNotifyEdgeCases:
                 "lastTo": "heartbeat",
                 "updatedAt": 100,
             },
-            "agent:main:telegram:direct:<telegram-id>": {
+            "agent:main:telegram:direct:1000000000": {
                 "lastChannel": "telegram",
-                "lastTo": "telegram:<telegram-id>",
+                "lastTo": "telegram:1000000000",
                 "lastAccountId": "default",
                 "updatedAt": 200,
             },
@@ -727,7 +727,7 @@ class TestNotifyEdgeCases:
             channel_idx = cmd.index("--channel")
             target_idx = cmd.index("--target")
             assert cmd[channel_idx + 1] == "telegram"
-            assert cmd[target_idx + 1] == "telegram:<telegram-id>"
+            assert cmd[target_idx + 1] == "telegram:1000000000"
 
     def test_notify_non_default_account(self, monkeypatch):
         """Non-default account_id adds --account flag."""

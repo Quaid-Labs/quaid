@@ -14,7 +14,7 @@ describe('Deduplication', () => {
 
   it('handles similar content without exact duplication errors', async () => {
     // skipDedup: testing that similar content CAN be stored when dedup is bypassed
-    await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner, { skipDedup: true })
+    await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner, { skipDedup: true })
     
     // Store similar but not identical content
     const result = await memory.store(fixtures.similarFact.content, fixtures.similarFact.owner, { skipDedup: true })
@@ -24,7 +24,7 @@ describe('Deduplication', () => {
   })
 
   it('stores genuinely different content without issues', async () => {
-    await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
     await memory.store(fixtures.coffeePreference.content, fixtures.coffeePreference.owner)
     
     // Should have both memories searchable
@@ -36,7 +36,7 @@ describe('Deduplication', () => {
   })
 
   it('handles exact duplicate attempts gracefully', async () => {
-    await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
     
     // Attempt to store exact duplicate
     const duplicateAttempt = async () => {
@@ -62,14 +62,14 @@ describe('Deduplication', () => {
     expect(yuniCoffee.id).toBeDefined()
     
     // Both should be searchable by their respective owners
-    const solomonResults = await memory.search('coffee', 'quaid')
+    const ownerResults = await memory.search('coffee', 'quaid')
     const yuniResults = await memory.search('coffee', 'melina')
     
-    expect(solomonResults.length).toBeGreaterThan(0)
+    expect(ownerResults.length).toBeGreaterThan(0)
     expect(yuniResults.length).toBeGreaterThan(0)
     
     // Verify owner isolation
-    for (const result of solomonResults) {
+    for (const result of ownerResults) {
       expect(result.owner || result.owner_id).toBe('quaid')
     }
     for (const result of yuniResults) {

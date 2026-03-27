@@ -179,8 +179,8 @@ files.
 **Registration**: The LLM registers a source root with a project via CLI or API:
 
 ```bash
-quaid project create myapp --source-root /Users/solomon/code/myapp
-quaid project update myapp --source-root /Users/solomon/code/myapp  # add later
+quaid project create myapp --source-root ./myapp
+quaid project update myapp --source-root ./myapp  # add later
 ```
 
 **Rules**:

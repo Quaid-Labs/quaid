@@ -40,6 +40,10 @@ function fail(lines) {
   process.exit(1);
 }
 
+function isLocalOnlyEmail(email) {
+  return /\.local\s*$/i.test(String(email || '').trim());
+}
+
 const localName = runAllowFail('git config user.name');
 const localEmail = runAllowFail('git config user.email');
 const localConfig = loadLocalConfig(localConfigPath);
@@ -65,6 +69,12 @@ if (!expectedName || !expectedEmail) {
   ]);
 }
 
+if (isLocalOnlyEmail(expectedEmail)) {
+  failures.push(
+    `release owner email "${expectedEmail}" is local-only; set a public-safe email before release/canary push`,
+  );
+}
+
 if (configuredIdentity && (!localName.ok || localName.out !== expectedName)) {
   failures.push(
     `git config user.name is "${localName.ok ? localName.out : '(unset)'}", expected "${expectedName}"`,
@@ -73,6 +83,11 @@ if (configuredIdentity && (!localName.ok || localName.out !== expectedName)) {
 if (configuredIdentity && (!localEmail.ok || localEmail.out !== expectedEmail)) {
   failures.push(
     `git config user.email is "${localEmail.ok ? localEmail.out : '(unset)'}", expected "${expectedEmail}"`,
+  );
+}
+if (localEmail.ok && isLocalOnlyEmail(localEmail.out)) {
+  failures.push(
+    `git config user.email is "${localEmail.out}", which is local-only and not valid for public release/canary push`,
   );
 }
 
@@ -106,10 +121,16 @@ if (!raw.ok) {
         `${id}: author is "${authorName} <${authorEmail}>", expected one of allowed owner identities`,
       );
     }
+    if (isLocalOnlyEmail(authorEmail)) {
+      failures.push(`${id}: author email "${authorEmail}" is local-only`);
+    }
     if (!allowedIdentityPairs.has(`${committerName}\x00${committerEmail}`)) {
       failures.push(
         `${id}: committer is "${committerName} <${committerEmail}>", expected one of allowed owner identities`,
       );
+    }
+    if (isLocalOnlyEmail(committerEmail)) {
+      failures.push(`${id}: committer email "${committerEmail}" is local-only`);
     }
     const message = `${subject}\n${body}`;
     for (const pattern of bannedMessagePatterns) {

@@ -139,7 +139,7 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
             "source_channel": "telegram",
             "conversation_id": "group-1",
             "participant_ids": ["user:owner", "agent:quaid"],
-            "participant_aliases": {"<redacted>": "user:owner"},
+            "participant_aliases": {"operator-alias": "user:owner"},
             "message_count": 12,
             "topic_hint": "tracking session behavior",
         },

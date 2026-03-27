@@ -365,7 +365,7 @@ export async function cleanupTestMemory(memory?: TestMemoryInterface): Promise<v
 
 // Test fixtures
 export const fixtures = {
-  solomonFact: {
+  ownerFact: {
     content: 'Quaid is engaged to Melina',
     owner: 'quaid'
   },

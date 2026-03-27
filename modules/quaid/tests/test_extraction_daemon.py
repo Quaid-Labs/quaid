@@ -637,7 +637,7 @@ class TestRollingExtraction:
             encoding="utf-8",
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
-        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Solomon")
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
 
         real_registry = sys.modules.get("core.subagent_registry")
         real_adapter = sys.modules.get("lib.adapter")
@@ -678,17 +678,17 @@ class TestRollingExtraction:
             "facts_stored": 1,
             "facts_skipped": 0,
             "edges_created": 0,
-            "facts": [{"text": "Solomon has a sister named Diana", "status": "would_store", "edges": []}],
+            "facts": [{"text": "Owner has a sister named Diana", "status": "would_store", "edges": []}],
             "snippets": {},
             "journal": {},
             "project_logs": {},
             "project_log_metrics": {},
             "dry_run": True,
-            "raw_facts": [{"text": "Solomon has a sister named Diana", "category": "fact", "domains": ["personal"], "extraction_confidence": "high"}],
+            "raw_facts": [{"text": "Owner has a sister named Diana", "category": "fact", "domains": ["personal"], "extraction_confidence": "high"}],
             "raw_snippets": {},
             "raw_journal": {},
             "raw_project_logs": {},
-            "carry_facts": [{"text": "Solomon has a sister named Diana"}],
+            "carry_facts": [{"text": "Owner has a sister named Diana"}],
             "carry_duplicate_facts_dropped": 2,
             "chunks_processed": 1,
             "chunks_total": 1,
@@ -752,8 +752,8 @@ class TestRollingExtraction:
                 "facts_stored": 1,
                 "facts_skipped": 0,
                 "edges_created": 0,
-                "facts": [{"text": "Solomon has a sister named Diana", "status": "stored", "edges": []}],
-                "snippets": {"USER.md": ["Diana is Solomon's sister"]},
+                "facts": [{"text": "Owner has a sister named Diana", "status": "stored", "edges": []}],
+                "snippets": {"USER.md": ["Diana is Owner's sister"]},
                 "journal": {"USER.md": "Family note."},
                 "project_logs": {"quaid": ["Investigated family recall flow"]},
                 "project_log_metrics": {"entries_seen": 1, "entries_written": 1, "projects_updated": 1},
@@ -897,7 +897,7 @@ class TestRollingExtraction:
             encoding="utf-8",
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
-        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Solomon")
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
 
         real_registry = sys.modules.get("core.subagent_registry")
         real_adapter = sys.modules.get("lib.adapter")
@@ -937,17 +937,17 @@ class TestRollingExtraction:
             "facts_stored": 1,
             "facts_skipped": 0,
             "edges_created": 0,
-            "facts": [{"text": "Solomon has a sister named Diana", "status": "would_store", "edges": []}],
+            "facts": [{"text": "Owner has a sister named Diana", "status": "would_store", "edges": []}],
             "snippets": {},
             "journal": {},
             "project_logs": {},
             "project_log_metrics": {},
             "dry_run": True,
-            "raw_facts": [{"text": "Solomon has a sister named Diana", "category": "fact", "domains": ["personal"], "extraction_confidence": "high"}],
+            "raw_facts": [{"text": "Owner has a sister named Diana", "category": "fact", "domains": ["personal"], "extraction_confidence": "high"}],
             "raw_snippets": {},
             "raw_journal": {},
             "raw_project_logs": {},
-            "carry_facts": [{"text": "Solomon has a sister named Diana"}],
+            "carry_facts": [{"text": "Owner has a sister named Diana"}],
             "carry_duplicate_facts_dropped": 0,
             "chunks_processed": 1,
             "chunks_total": 1,

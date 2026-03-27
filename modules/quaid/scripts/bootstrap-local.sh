@@ -17,9 +17,9 @@ WORKTREE_TEST_BRANCH="test-runtime"
 WORKTREE_DETACH=false
 WORKTREE_REMOTE="origin"
 OPENCLAW_SOURCE_EXPLICIT=false
-BACKUP_ROOT="${HOME}/quaid/backups"
 PREBOOTSTRAP_MAX_BACKUPS="${QUAID_PREBOOTSTRAP_MAX_BACKUPS:-3}"
-OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
+BACKUP_ROOT="${QUAID_BACKUP_ROOT:-${CODE_ROOT_DEFAULT}/backups}"
+OPENCLAW_SOURCE="${CODE_ROOT_DEFAULT}/../openclaw-source"
 OPENCLAW_REPO_URL="${OPENCLAW_REPO_URL:-https://github.com/openclaw/openclaw.git}"
 OPENCLAW_REF="${OPENCLAW_REF:-}"
 OPENCLAW_REFRESH=true
@@ -101,7 +101,7 @@ Options:
   --worktree-test-branch <b> Branch to use inside runtime workspace (default: test-runtime)
   --detach-worktree      Leave runtime workspace detached (legacy behavior)
   --worktree-remote <r>  Remote to fetch before creating worktree (default: origin)
-  --openclaw-source <p>  OpenClaw source checkout path (default: ~/quaid/openclaw-source)
+  --openclaw-source <p>  OpenClaw source checkout path (default: ../openclaw-source from devRoot)
   --openclaw-ref <ref>   OpenClaw git ref/tag/sha to checkout (e.g. v2026.3.7)
   --no-openclaw-refresh  Skip refreshing OpenClaw source checkout
   --no-openclaw-install  Skip installing OpenClaw CLI from source

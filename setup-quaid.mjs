@@ -2023,7 +2023,7 @@ async function step2_owner() {
   const display = handleCancel(await text({
     message: "What is your name so we can tag your memories?",
     initialValue: seedName || undefined,
-    placeholder: "Solomon",
+    placeholder: "Your Name",
     validate: (v) => String(v || "").trim().length === 0 ? "Name is required" : undefined,
   }));
   const id = ownerIdFromDisplayName(display);
@@ -4278,15 +4278,19 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
 function copyDirSync(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === "node_modules") continue;
-    if (entry.name === ".git") continue;
-    if (entry.name === "__pycache__") continue;
-    if (entry.name.endsWith(".pyc")) continue;
+    if (
+      entry.name === "node_modules"
+      || entry.name === ".git"
+      || entry.name === "__pycache__"
+      || entry.name === ".pytest_cache"
+      || entry.name === ".tmp"
+      || entry.name.endsWith(".pyc")
+    ) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
       copyDirSync(srcPath, destPath);
-    } else {
+    } else if (entry.isFile()) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
@@ -4295,15 +4299,19 @@ function copyDirSync(src, dest) {
 function copyMissingDirSync(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === "node_modules") continue;
-    if (entry.name === ".git") continue;
-    if (entry.name === "__pycache__") continue;
-    if (entry.name.endsWith(".pyc")) continue;
+    if (
+      entry.name === "node_modules"
+      || entry.name === ".git"
+      || entry.name === "__pycache__"
+      || entry.name === ".pytest_cache"
+      || entry.name === ".tmp"
+      || entry.name.endsWith(".pyc")
+    ) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
       copyMissingDirSync(srcPath, destPath);
-    } else if (!fs.existsSync(destPath)) {
+    } else if (entry.isFile() && !fs.existsSync(destPath)) {
       fs.copyFileSync(srcPath, destPath);
     }
   }

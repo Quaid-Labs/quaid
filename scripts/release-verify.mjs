@@ -28,6 +28,17 @@ try {
   version = String(pkg.version || '').trim();
   if (!version) errors.push('modules/quaid/package.json: missing version');
 
+  const compatibility = JSON.parse(read('compatibility.json'));
+  const pendingCompat = Array.isArray(compatibility.matrix)
+    ? compatibility.matrix.filter((entry) => {
+        const range = String(entry?.quaid_range || '').trim();
+        return entry?.pending_release === true || /^[0-9a-f]{7,40}$/i.test(range);
+      })
+    : [];
+  if (pendingCompat.length > 0) {
+    errors.push('compatibility.json still contains pending SHA compatibility rows; run release compatibility promotion first');
+  }
+
   const versionFile = read('modules/quaid/VERSION').trim();
   if (versionFile !== version) {
     errors.push(`modules/quaid/VERSION (${versionFile}) != package.json (${version})`);

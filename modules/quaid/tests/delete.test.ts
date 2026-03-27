@@ -13,7 +13,7 @@ describe('Memory Delete', () => {
   })
 
   it('hard deletes memory from database', async () => {
-    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    const stored = await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
 
     await memory.delete(stored.id)
 
@@ -24,7 +24,7 @@ describe('Memory Delete', () => {
   })
 
   it('completely removes memory on delete', async () => {
-    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    const stored = await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
 
     await memory.delete(stored.id)
 
@@ -58,7 +58,7 @@ describe('Memory Delete', () => {
   })
 
   it('supports forget operation for permanent deletion', async () => {
-    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    const stored = await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
     
     await memory.forget(stored.id)
     
@@ -72,17 +72,17 @@ describe('Memory Delete', () => {
   })
 
   it('handles empty reason gracefully', async () => {
-    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
+    const stored = await memory.store(fixtures.ownerFact.content, fixtures.ownerFact.owner)
     
     await expect(memory.delete(stored.id, '')).resolves.toBeUndefined()
   })
 
   it('deletion API removes the target memory id', async () => {
-    const solomonMemory = await memory.store(fixtures.solomonFact.content, 'quaid')
+    const ownerMemory = await memory.store(fixtures.ownerFact.content, 'quaid')
 
     // Current test helper API does not pass a caller owner, so delete is ID-scoped.
-    await memory.delete(solomonMemory.id)
+    await memory.delete(ownerMemory.id)
 
-    await expect(memory.getRaw(solomonMemory.id)).rejects.toThrow()
+    await expect(memory.getRaw(ownerMemory.id)).rejects.toThrow()
   })
 })

@@ -642,7 +642,7 @@ class TestMergeOwnerInheritance:
         merged = graph.get_node(result["id"])
         assert merged.owner_id == "testuser"
 
-    def test_does_not_hardcode_solomon(self, tmp_path):
+    def test_does_not_hardcode_specific_owner(self, tmp_path):
         from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Alice prefers tea over coffee morning", owner_id="alice")

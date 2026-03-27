@@ -37,7 +37,7 @@ def test_search_applies_identity_scope_filters(monkeypatch):
                 attributes={
                     "source_channel": "telegram",
                     "source_conversation_id": "chat-1",
-                    "source_author_id": "<redacted>",
+                    "source_author_id": "operator-alias",
                     "subject_entity_id": "user:a",
                     "participant_entity_ids": ["user:a", "agent:bert"],
                 },
@@ -64,7 +64,7 @@ def test_search_applies_identity_scope_filters(monkeypatch):
         owner_id="user:a",
         source_channel="telegram",
         source_conversation_id="chat-1",
-        source_author_id="<redacted>",
+        source_author_id="operator-alias",
         subject_entity_id="user:a",
         participant_entity_ids=["agent:bert"],
     )

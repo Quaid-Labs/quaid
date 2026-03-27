@@ -295,16 +295,16 @@ describe("QuaidFacade", () => {
         users: {
           defaultOwner: "quaid",
           identities: {
-            solomon: {
-              speakers: ["Solomon"],
+            owner: {
+              speakers: ["Owner"],
               channels: { telegram: ["*"] },
             },
           },
         },
       })),
     }));
-    expect(facade.resolveOwner("Solomon", "discord")).toBe("solomon");
-    expect(facade.resolveOwner("AnyUser", "telegram")).toBe("solomon");
+    expect(facade.resolveOwner("Owner", "discord")).toBe("owner");
+    expect(facade.resolveOwner("AnyUser", "telegram")).toBe("owner");
     expect(facade.resolveOwner("Unknown", "discord")).toBe("quaid");
   });
 

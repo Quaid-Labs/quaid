@@ -105,11 +105,11 @@ describe('Pinned Memories', () => {
     await memory.store('Quaid pinned secret', 'quaid', { pinned: true })
     await memory.store('Melina pinned secret', 'melina', { pinned: true })
     
-    const solomonResults = await memory.search('pinned secret', 'quaid')
+    const ownerResults = await memory.search('pinned secret', 'quaid')
     const yuniResults = await memory.search('pinned secret', 'melina')
     
     // Each owner should only see their own pinned memories
-    for (const result of solomonResults) {
+    for (const result of ownerResults) {
       const owner = result.owner || result.owner_id
       expect(owner).toBe('quaid')
     }

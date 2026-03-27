@@ -73,10 +73,10 @@ describe('Confidence Decay', () => {
     await memory.runDecay()
     
     // Both owners' memories should still be accessible
-    const solomonResults = await memory.search('decay test', 'quaid')
+    const ownerResults = await memory.search('decay test', 'quaid')
     const yuniResults = await memory.search('decay test', 'melina')
     
-    expect(solomonResults.length).toBeGreaterThan(0)
+    expect(ownerResults.length).toBeGreaterThan(0)
     expect(yuniResults.length).toBeGreaterThan(0)
   })
 

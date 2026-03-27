@@ -37,7 +37,7 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
         source_channel="telegram",
         conversation_id="chat-42",
         participant_ids=["user:owner", "agent:quaid"],
-        participant_aliases={"<redacted>": "user:owner"},
+        participant_aliases={"operator-alias": "user:owner"},
         message_count=2,
         topic_hint="hello",
     )
@@ -90,8 +90,8 @@ def test_call_session_logs_cli_uses_module_entrypoint(monkeypatch, tmp_path):
 
 
 def test_normalize_participant_aliases_accepts_json_object_string():
-    out = session_logs_ingest._normalize_participant_aliases('{" <redacted> ":" user:owner ","":"x"}')
-    assert out == {"<redacted>": "user:owner"}
+    out = session_logs_ingest._normalize_participant_aliases('{" operator-alias ":" user:owner ","":"x"}')
+    assert out == {"operator-alias": "user:owner"}
 
 
 def test_normalize_participant_aliases_rejects_non_object_json():

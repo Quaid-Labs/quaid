@@ -7,6 +7,12 @@ PLUGIN_DIR="$ROOT_DIR/modules/quaid"
 echo "[release-check] docs consistency"
 node "$ROOT_DIR/scripts/check-docs-consistency.mjs"
 
+echo "[release-check] release evidence"
+node "$ROOT_DIR/scripts/release-evidence.mjs" check
+
+echo "[release-check] compatibility promotion"
+node "$ROOT_DIR/scripts/release-promote-compatibility.mjs"
+
 echo "[release-check] release consistency"
 node "$ROOT_DIR/scripts/release-verify.mjs"
 

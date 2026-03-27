@@ -30,7 +30,7 @@ Full M0–M7 live test run against OC 3.11 (<oc-host>) and CC (local testbench).
 | M4 | /new session signal | ✅ | N/A | CC has no `/new`; session boundary is new Claude Code session. Not directly testable in-session. |
 | M5 | Memory injection | ✅ | ✅ | 6 memories injected via `[Quaid Memory Context]` blocks per message |
 | M6 | Deliberate recall | ✅ | ✅ | |
-| M7 | Graph edges | ✅ | ✅ | 10 edges verified via `quaid get-edges` CLI; Marcus→Solomon (sibling_of), Marcus→OHSU (works_at), etc. |
+| M7 | Graph edges | ✅ | ✅ | 10 edges verified via `quaid get-edges` CLI; Marcus→Owner (sibling_of), Marcus→employer (works_at), etc. |
 
 *M3 on CC: `PreCompact` hook writes `compaction.json` signal to `data/extraction-signals/`; ingest pipeline confirmed via `run_extract_from_transcript` synchronous call.
 
@@ -108,7 +108,7 @@ Both OC and CC share `QUAID_HOME=<your-quaid-home>`.
 
 ---
 
-## 2026-03-14 — M1–M10 OC Live Test (canary, example.local)
+## 2026-03-14 — M1–M10 OC Live Test (canary, <oc-host>)
 
 ### Bugs Found
 
@@ -137,20 +137,20 @@ Both OC and CC share `QUAID_HOME=<your-quaid-home>`.
 
 ### Environment Blocker
 
-The example.local OC instance uses Solomon's Claude.ai OAuth token (`sk-ant-oat01`). The M3 retry storm (multiple failed attempts before the adapter.js rebuild fix) exhausted the account's daily rate-limit budget. After the budget was consumed, even bare single-turn Haiku calls returned 429 immediately. This persisted for 1.5+ hours with no recovery.
+The `<oc-host>` OC instance used the operator's Claude.ai OAuth path during this run. The M3 retry storm (multiple failed attempts before the adapter.js rebuild fix) exhausted the account's daily rate-limit budget. After the budget was consumed, even bare single-turn Haiku calls returned 429 immediately. This persisted for 1.5+ hours with no recovery.
 
-**Test infra recommendation:** Add a dedicated Anthropic API key for live test runs. The `QUAID_TEST_API_KEY` env var (or a dedicated test-only key in `~/.openclaw/agents/main/agent/auth-profiles.json`) should be used for live test sessions to avoid consuming Solomon's personal account quota.
+**Test infra recommendation:** Add a dedicated Anthropic API key for live test runs. The `QUAID_TEST_API_KEY` env var (or a dedicated test-only key in `~/.openclaw/agents/main/agent/auth-profiles.json`) should be used for live test sessions to avoid consuming a maintainer's personal account quota.
 
 ### Follow-up items
 
 - Wire TOOLS.md injection into OC `before_agent_start` (prependContext), matching CC's session-init hook path.
 - Add DB wipe step to LIVE-TEST-GUIDE.md pre-run checklist to avoid stale edge contamination across runs.
-- Add dedicated test API key configuration to the test environment on alfie.
+- Add dedicated test API key configuration to the test environment on the live-test host.
 - LIVE-TEST-GUIDE.md: note that `retrieval.autoInject` must be `false` for M3 (no LLM calls during signal test) and re-enabled before M5.
 
 ---
 
-## 2026-03-14 — M1 OC Second Run (canary, example.local, fresh reinstall)
+## 2026-03-14 — M1 OC Second Run (canary, <oc-host>, fresh reinstall)
 
 ### Bugs Found
 
@@ -186,7 +186,7 @@ The example.local OC instance uses Solomon's Claude.ai OAuth token (`sk-ant-oat0
 
 ---
 
-## 2026-03-14 — M5–M6 OC Resume (canary, example.local)
+## 2026-03-14 — M5–M6 OC Resume (canary, <oc-host>)
 
 ### Bugs Found
 
@@ -203,7 +203,7 @@ The example.local OC instance uses Solomon's Claude.ai OAuth token (`sk-ant-oat0
 
 ### Diagnostics
 
-- `quaid recall "niece"` on alfie returns correct facts (`User has a niece`, `Users niece Anne is 7 years old and loves drawing`) even while gateway logs show reranker timeouts.
+- `quaid recall "niece"` on the live-test host returns correct facts (`User has a niece`, `Users niece Anne is 7 years old and loves drawing`) even while gateway logs show reranker timeouts.
 - Reranker SIGTERM is a transient OC infra issue; Quaid recall degrades gracefully (skips reranking, returns vector results).
 - M5 still blocked by OAuth rate limit (429 before first LLM turn).
 

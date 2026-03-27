@@ -1219,7 +1219,7 @@ class TestExtractFromTranscript:
             subject_entity_id="user:owner",
             source_channel="telegram",
             source_conversation_id="chat-1",
-            source_author_id="<redacted>",
+            source_author_id="operator-alias",
         )
 
         kwargs = mock_store.call_args.kwargs
@@ -1227,7 +1227,7 @@ class TestExtractFromTranscript:
         assert kwargs["subject_entity_id"] == "user:owner"
         assert kwargs["source_channel"] == "telegram"
         assert kwargs["source_conversation_id"] == "chat-1"
-        assert kwargs["source_author_id"] == "<redacted>"
+        assert kwargs["source_author_id"] == "operator-alias"
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")

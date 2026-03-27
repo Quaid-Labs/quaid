@@ -154,8 +154,8 @@ class TestHookInjectCursorSeeding:
     ):
         """When rglob finds nothing (race), derive path from cwd encoding."""
         session_id = "raceXYZ"
-        cwd = "/Users/owner/quaid/dev"
-        expected_encoded = cwd.replace("/", "-")  # "-Users-clawdbot-quaid-dev"
+        cwd = "/tmp/quaid-dev"
+        expected_encoded = cwd.replace("/", "-")  # "-tmp-quaid-dev"
         expected_path = str(Path(str(sessions_dir)) / expected_encoded / f"{session_id}.jsonl")
 
         written = {}
