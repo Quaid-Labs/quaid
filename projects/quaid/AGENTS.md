@@ -127,6 +127,13 @@ All files go inside a tracked quaid project OR are registered into one. `/tmp/` 
 - Use `quaid project link/unlink` for cross-instance project participation.
 - `quaid project delete` is destructive — prefer `unlink` if you only want to leave the project.
 
+**Project docs are eventually consistent — not real-time**
+- When a file is written or changed, it is NOT immediately visible via `quaid docs search` or `quaid recall`.
+- The pipeline is: file change → daemon picks it up → embedding → RAG index. This takes time (seconds to minutes depending on daemon polling interval and queue depth).
+- **If two agents are working on the same project simultaneously**, one agent's writes will not be visible to the other until the daemon has processed and indexed them. Do not assume a file another agent just wrote is already in the search index.
+- When you need the current content of a file another agent recently wrote, read the file directly rather than relying on docs search.
+- `quaid docs check` shows which registered docs are stale (not yet re-indexed). `quaid docs update --apply` can force a re-index if you need the index to be current before a search.
+
 ---
 
 ## Core Files (always loaded)
