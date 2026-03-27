@@ -460,7 +460,7 @@ def _apply_quaid(quaid_cfg: Dict[str, Any], dev_root: Path) -> None:
         "deepReasoningModelClasses",
         {
             "openai": "gpt-5.3-codex",
-            "anthropic": "claude-sonnet-4-6",
+            "anthropic": "claude-haiku-4-5",
             "openai-compatible": "gpt-4.1",
         },
     )

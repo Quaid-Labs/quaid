@@ -24,7 +24,7 @@ function buildFallbackMemoryConfig(): any {
       deepReasoning: "default",
       fastReasoning: "default",
       deepReasoningModelClasses: {
-        anthropic: "claude-sonnet-4-6",
+        anthropic: "claude-haiku-4-5",
         openai: "gpt-5",
         "openai-compatible": "gpt-4.1",
       },

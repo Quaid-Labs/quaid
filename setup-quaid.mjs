@@ -2112,8 +2112,8 @@ async function step3_models() {
 
   let highModel, lowModel;
   if (provider === "anthropic") {
-    // Current OpenClaw default: Sonnet for deep reasoning, Haiku for fast.
-    highModel = "claude-sonnet-4-6";
+    // Quaid default: Haiku for both reasoning tiers to preserve API quota.
+    highModel = "claude-haiku-4-5";
     lowModel = "claude-haiku-4-5";
   } else if (provider === "ollama") {
     highModel = "llama3.1:70b";
