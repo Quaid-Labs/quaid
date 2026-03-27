@@ -210,8 +210,7 @@ The full config is a `MemoryConfig` dataclass. Key sections:
   "projects":      { ... },
   "users":         { "defaultOwner": "...", "identities": { ... } },
   "database":      { "path": "data/memory.db" },
-  "logging":       { "level": "info", ... },
-  "retrieval":     { ... }
+  "logging":       { "level": "info", ... }
 }
 ```
 
@@ -402,7 +401,7 @@ QUAID_HOME=/your/quaid/home
 ```
 
 Each instance has its own isolated database. The shared project registry
-ensures that `quaid docs search` and `quaid registry list` see the same
+ensures that `quaid recall` (docs store) and `quaid registry list` see the same
 projects from any instance. Embeddings must use the same model (enforced by
 `shared/config/memory.json`) so that cross-instance doc search produces
 comparable vectors.

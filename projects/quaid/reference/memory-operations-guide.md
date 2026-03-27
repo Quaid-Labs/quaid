@@ -1,8 +1,5 @@
 # Memory & Documentation System
 
-> Migrated from `TOOLS.md` on 2026-02-06
-> Reason: Detailed operational guide with CLI examples - too long for every turn. Keep just the three-layer summary and tool table, link to this doc
-
 ## Memory & Documentation System
 
 This is the core system that gives you persistent understanding of Quaid's world

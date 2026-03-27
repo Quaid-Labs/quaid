@@ -134,7 +134,7 @@ To change the shared embedding model after install, edit `<QUAID_HOME>/shared/co
   Check status: `launchctl list | grep quaid`
   Unload: `launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist`
 - The installer creates a per-instance identity directory at `<QUAID_HOME>/claude-code/identity/`
-  for `USER.md`, `SOUL.md`, and `MEMORY.md`.
+  for `USER.md`, `SOUL.md`, and `ENVIRONMENT.md`.
 
 ## OpenClaw-specific Notes
 

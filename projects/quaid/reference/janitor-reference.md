@@ -1,6 +1,6 @@
 # Janitor (Sandman) Reference
 <!-- PURPOSE: Complete reference for nightly janitor pipeline: task list, schedule, thresholds, fail-fast, edge normalization, cost tracking -->
-<!-- SOURCES: core/lifecycle/janitor.py, core/lifecycle/workspace_audit.py, adaptors/openclaw/adapter.ts, lib/adapter.py, lib/providers.py -->
+<!-- SOURCES: core/lifecycle/janitor.py, core/lifecycle/workspace_audit.py, adaptors/openclaw/adapter.ts, adaptors/openclaw/adapter.py, adaptors/openclaw/providers.py -->
 
 Nightly memory maintenance pipeline. Cleans, decays, deduplicates, processes docs/project updates, and maintains memory quality.
 
@@ -8,7 +8,7 @@ Nightly memory maintenance pipeline. Cleans, decays, deduplicates, processes doc
 - **Cron name:** `sandman`
 - **Time:** 4:30 AM Asia/Makassar (WITA)
 - **Script:** `modules/quaid/core/lifecycle/janitor.py`
-- **Logs:** `logs/janitor.log` (structured JSON)
+- **Logs:** `logs/janitor/janitor.log` (structured JSON)
 - **Stats:** `logs/janitor-stats.json` (run metrics + API cost)
 - **Session:** `isolated` (dedicated session per run, not the main interactive session)
 

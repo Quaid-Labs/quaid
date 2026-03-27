@@ -66,7 +66,7 @@ is always deferred — CC fires and forgets.
 
 The daemon's main loop runs a periodic idle check (`check_idle_sessions()`). Any session
 whose transcript has grown past its cursor and has not been modified for
-`capture.inactivity_timeout_minutes` (default: 30) gets a synthetic `"timeout"` signal
+`capture.inactivity_timeout_minutes` (default: 60) gets a synthetic `"timeout"` signal
 written. This catches sessions that end without firing a Stop hook (e.g. process kill).
 
 ### Orphan sweep (session-init-initiated)
@@ -263,7 +263,7 @@ Signal file
       → project logs emitted
   → cursor advanced
   → carryover updated or cleared
-  → post-extraction: sync_all_projects(), snapshot_all_projects()
+  → post-extraction: snapshot_all_projects(), update_project_docs()
   → notification sent (Telegram / pending file)
 ```
 
@@ -384,7 +384,7 @@ The carry context includes up to 40 high-confidence facts, formatted as:
 Opus is called via `call_deep_reasoning()` with:
 - `max_tokens=6144` per chunk
 - `timeout=min(600.0, remaining_budget)`
-- Total extraction wall-clock budget: 600 seconds (`MAX_EXTRACT_WALL_SECONDS`)
+- Total extraction wall-clock budget: 2400 seconds (`DEFAULT_EXTRACT_WALL_SECONDS`)
 
 If Opus returns non-JSON prose, a one-pass repair is attempted via `call_fast_reasoning()`
 before the chunk is skipped.
@@ -478,9 +478,8 @@ On success:
 
 After a successful extraction, the daemon runs:
 
-1. `sync_all_projects()` — copies project context files to adapter workspaces.
-2. `snapshot_all_projects()` — takes a shadow git snapshot for projects with `source_root`.
-3. `update_project_docs()` — updates stale doc chunks from shadow git diffs.
+1. `snapshot_all_projects()` — takes a shadow git snapshot for projects with `source_root`.
+2. `update_project_docs()` — updates stale doc chunks from shadow git diffs.
 
 ---
 
@@ -774,7 +773,7 @@ quaid daemon status
 quaid daemon run            # foreground, debugging only
 
 # Project docs
-quaid docs search "query"
+quaid recall "query" '{"stores":["docs"]}'
 quaid docs check
 quaid docs update --apply
 quaid registry list
@@ -808,15 +807,13 @@ circular imports.
 |----------|-------|-------------|
 | `VALID_SIGNAL_TYPES` | `("compaction", "reset", "session_end", "timeout")` | Accepted signal types |
 | `MAX_TRANSCRIPT_LINES` | 50,000 | Max lines read per extraction |
-| `MAX_CARRYOVER_FACTS` | 50 | Max facts kept in carryover file |
 | `MAX_SIGNALS_PER_POLL` | 100 | Max signals processed per poll cycle |
 
 ### Extraction constants (`ingest/extract.py`)
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `MAX_EXTRACT_WALL_SECONDS` | 600.0 | Total wall-clock budget for one extraction |
-| `MAX_CHUNKS` | 10 | Max chunks per transcript |
+| `DEFAULT_EXTRACT_WALL_SECONDS` | 2400.0 | Total wall-clock budget for one extraction |
 | Default chunk size | 8,000 tokens | From `capture.chunk_tokens` config |
 | Max Opus tokens per chunk | 6,144 | Response `max_tokens` |
 
@@ -827,7 +824,7 @@ circular imports.
 | `capture.enabled` | If false, extraction is skipped entirely |
 | `capture.chunk_tokens` | Target tokens per extraction chunk (default 8,000) |
 | `capture.chunk_size` | Legacy alias; mirrored to the same token budget for old configs |
-| `capture.inactivity_timeout_minutes` | Idle timeout for daemon-generated timeout signals (default 30) |
+| `capture.inactivity_timeout_minutes` | Idle timeout for daemon-generated timeout signals (default 60) |
 | `capture.skip_patterns` | List of regex patterns; matching transcript lines are removed before extraction |
 | `retrieval.domains` | Active domain definitions (used to validate extracted fact domains) |
 | `retrieval.fail_hard` / `retrieval.failHard` | If true, fail-hard on retrieval/LLM errors |

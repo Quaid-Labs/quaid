@@ -14,7 +14,7 @@ This document is for engineers who want to understand how the system works.
 2. [Extraction Pipeline](#2-extraction-pipeline)
 3. [Retrieval Pipeline](#3-retrieval-pipeline)
 4. [Database](#4-database)
-5. [Janitor Pipeline](#5-janitor-pipeline)
+5. [Janitor Pipeline](#5-janitor-pipeline-nightly-maintenance)
 6. [Error Handling & Resilience](#6-error-handling--resilience)
 7. [Dual Learning System](#7-dual-learning-system)
 8. [Projects System](#8-projects-system)
@@ -61,7 +61,7 @@ Quaid exposes its knowledge layer through three interfaces: a **CLI** (standalon
 
 **Retrieval** -- Fires before each agent turn (OpenClaw / Claude Code) or via `quaid recall` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
-Project knowledge retrieval remains a first-class path: host adapters expose `projects_search` where appropriate, and the CLI exposes the same capability through `quaid docs search`.
+Project knowledge retrieval remains a first-class path: host adapters expose `projects_search` where appropriate, and the CLI exposes the same capability through `quaid recall "query" '{"stores": ["docs"]}'`.
 
 ### TypeScript Layer: Facade and Knowledge Engine
 
@@ -118,7 +118,7 @@ Conversation messages
   [Janitor]  Nightly: review, dedup, decay, workspace audit
         |
         +---> nodes promoted to status: active
-        +---> duplicates merged, contradictions resolved
+        +---> duplicates merged (contradiction resolution disabled by default)
         +---> snippets folded into SOUL.md / USER.md
         +---> journal distilled into core markdown
         +---> datastore-owned maintenance routines executed via core lifecycle registry
@@ -145,7 +145,7 @@ All three paths converge on the same extraction logic and produce identical resu
 
 ### Extraction Steps
 
-1. **Transcript preparation** -- The input is normalized to a human-readable transcript. JSONL session files are parsed (handling both wrapped `{"type": "message", "message": {...}}` and direct `{"role": ..., "content": ...}` formats). Plain text is passed through as-is. In the OpenClaw path, queued memory notes (from the `memory_note` tool) are prepended.
+1. **Transcript preparation** -- The input is normalized to a human-readable transcript. JSONL session files are parsed (handling both wrapped `{"type": "message", "message": {...}}` and direct `{"role": ..., "content": ...}` formats). Plain text is passed through as-is. In the OpenClaw path, any queued pre-extraction content is prepended.
 
 2. **LLM extraction** -- Deep-reasoning LLM extraction processes the transcript in bounded chunks (with carry-forward context) and produces:
    - **Facts**: Structured observations with name, category, confidence, speaker, knowledge_type
@@ -156,7 +156,7 @@ All three paths converge on the same extraction logic and produce identical resu
 3. **Fact storage** -- Each fact is stored via the core memory service (`core/services/memory_service.py`), whose default implementation delegates to memorydb:
    - Content hash computed (SHA256) for exact-dedup before embedding
    - Embedding generated via Ollama (local, no API cost)
-   - Semantic dedup check against existing facts (cosine similarity > 0.95)
+   - Semantic dedup check against existing facts (three-zone: auto-reject ≥0.98, LLM verify 0.88–0.98, store <0.88)
    - If duplicate found: confirmation count incremented, confidence boosted
    - Datastore-owned dedup paths preserve metadata flags like `source_type` and `domains`
    - If new: stored with `status="pending"`, awaiting janitor review
@@ -217,6 +217,7 @@ _SYNONYM_MAP = {
 _SYMMETRIC_RELATIONS = frozenset([
     "spouse_of", "partner_of", "sibling_of", "friend_of",
     "neighbor_of", "colleague_of", "related_to", "knows",
+    "family_of",
 ])
 ```
 
@@ -231,7 +232,7 @@ Every fact records where it came from:
 
 ## 3. Retrieval Pipeline
 
-Retrieval runs before each agent turn via the `before_agent_start` hook. The agent's message is used as a query against the memory graph.
+Retrieval runs before each agent turn via the `before_prompt_build` hook. The agent's message is used as a query against the memory graph.
 
 ### Pipeline Flow
 
@@ -243,7 +244,7 @@ User message
     |
 [2] Resolve entity aliases (e.g. short names -> canonical names)
     |
-[3] Classify intent (WHO, WHEN, WHERE, WHAT, PREFERENCE, RELATION, WHY, GENERAL)
+[3] Classify intent (WHO, WHEN, WHERE, WHAT, PREFERENCE, RELATION, WHY, PROJECT; GENERAL is the fallback)
     |
 [4] HyDE expansion: fast-reasoning LLM rephrases question as declarative statement
     |     "Where does Quaid's wife live?" -> "Quaid's wife lives in..."
@@ -626,7 +627,7 @@ Nightly janitor (task 1d-snippets):
     - DISCARD: redundant or low-value
     |
     v
-Approved snippets merged into SOUL.md, USER.md, MEMORY.md
+Approved snippets merged into SOUL.md, USER.md, ENVIRONMENT.md
 ```
 
 Snippet format (in `*.snippets.md`):

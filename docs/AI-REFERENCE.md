@@ -178,7 +178,7 @@ There is no `PostCompact` hook wired. `hook-inject-compact` exists as a callable
 1. Calls `ensure_alive()` to start the extraction daemon if needed.
 2. Sweeps orphaned sessions from previous runs (queues extraction for any transcript with un-extracted content past the cursor).
 3. Seeds an extraction cursor for the current session so the daemon can discover it for timeout-based extraction.
-4. Scans `$QUAID_HOME/shared/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `MEMORY.md`) from `$QUAID_HOME/<INSTANCE_ID>/identity/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
+4. Scans `$QUAID_HOME/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_HOME/<INSTANCE_ID>/identity/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
 
 The write is idempotent — if content is unchanged the file is not touched, preventing unnecessary prompt cache invalidation. Claude Code auto-loads `rules/*.md` and preserves them through compaction (unlike `additionalContext` which is lost on compaction).
 
@@ -298,7 +298,7 @@ $QUAID_HOME/
     ├── identity/                    # Quaid-managed identity files
     │   ├── USER.md
     │   ├── SOUL.md
-    │   └── MEMORY.md
+    │   └── ENVIRONMENT.md
     ├── journal/                     # Journal files (journal/*.journal.md, archive/)
     ├── logs/                        # Structured JSONL logs, janitor checkpoints
     └── *.snippets.md                # Soul snippet staging files
@@ -456,8 +456,8 @@ Merges are crash-safe, executed in single database transactions.
 | 2 | review | Opus reviews pending facts | ~$0.01-0.05 per batch |
 | 2a | temporal | Resolve relative dates (no LLM) | Free |
 | 2b | dedup_review | Review dedup rejections (Opus) | ~$0.01-0.05 |
-| 3+4 | duplicates/contradictions | Shared recall pass, then dedup + contradiction detection | ~$0.01-0.05 |
-| 4b | contradictions (resolve) | Resolve contradictions (Opus) | ~$0.01-0.05 |
+| 3+4 | duplicates/contradictions | Shared recall pass, then dedup (contradiction detection decommissioned) | ~$0.01-0.05 |
+| 4b | contradictions (resolve) | **Disabled by default** (`janitor.contradiction.enabled=false`) | — |
 | 5 | decay | Ebbinghaus confidence decay | Free |
 | 5b | decay_review | Review decayed memories (Opus) | ~$0.01-0.05 |
 | 1 | workspace | Core markdown review (Opus) | ~$0.05 |
@@ -624,7 +624,7 @@ quaid recall <query>          # Recall memories (semantic + graph + rerank)
 quaid recall <query>          # Recall pipeline helper
 quaid get-node <id>           # Get a memory by ID
 quaid get-edges <id>          # Get edges for a memory node
-quaid docs search <query>     # Search project documentation
+quaid recall <query> '{"stores":["docs"]}'  # Search project documentation
 
 # Manage
 quaid forget [query]          # Delete a memory (--id <id>)
@@ -649,7 +649,7 @@ All commands run from the `modules/quaid/` directory.
 # Memory operations
 python3 datastore/memorydb/memory_graph.py store "fact text" --owner default --category preference
 python3 datastore/memorydb/memory_graph.py search "query" --owner default --limit 10
-python3 datastore/memorydb/memory_graph.py recall "query" --docs   # Recall + docs search
+python3 datastore/memorydb/memory_graph.py recall "query"   # Recall memories
 python3 datastore/memorydb/memory_graph.py stats
 python3 datastore/memorydb/memory_graph.py get-edges <node_id>
 

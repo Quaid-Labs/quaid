@@ -262,12 +262,11 @@ def search_docs(
 
 **CLI search invocation:**
 ```bash
-quaid docs search "query"
-quaid docs search "query" --project quaid
-quaid docs search "query" --project quaid --docs "architecture.md,api-reference.md"
+quaid recall "query" '{"stores":["docs"]}'
+quaid recall "query" '{"stores":["docs"]}' --project quaid
 ```
 
-`quaid recall "query" --docs` combines memory recall and docs search in a single call.
+`quaid recall "query"` (without store filter) combines memory recall and docs search in a single call.
 
 ---
 
@@ -406,10 +405,9 @@ python3 datastore/docsdb/rag.py reindex --all        # Force full reindex
 python3 datastore/docsdb/rag.py stats                # Index statistics
 
 # --- Search ---
-quaid docs search "query"
-quaid docs search "query" --project <name>
-quaid docs search "query" --project <name> --docs "file1.md,file2.md"
-quaid recall "query" --docs                          # Memory + docs combined
+quaid recall "query" '{"stores":["docs"]}'                          # Docs search
+quaid recall "query" '{"stores":["docs"]}' --project <name>        # Project-scoped
+quaid recall "query"                                                # Memory + docs combined
 
 # --- Staleness ---
 quaid docs check                                     # Show stale doc/source pairs

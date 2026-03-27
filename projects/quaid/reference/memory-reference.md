@@ -128,7 +128,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 ### Decay System (Ebbinghaus)
 
 - **Formula:** `R = 2^(-t / half_life)` with access-scaled half-life
-- `half_life = 60d × (1 + 0.15 × access_count) × (2 if verified)`
+- `half_life = 60d × (1 + 0.15 × access_count) × (1 + 0.5 × storage_strength) × (2 if verified)`
 - Pinned memories never decay; frequently accessed memories decay slower
 - Below threshold: queued for Opus review (DELETE/EXTEND/PIN), not silently deleted
 
@@ -188,7 +188,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - [x] Agent-driven recall (auto-injection optional via config/env)
 - [x] Projects system: registry, event processing, auto-discover
 - [x] Mock embeddings for testing (`MOCK_EMBEDDINGS=1`)
-- [x] 1400+ tests in default gate (1224 selected pytest + 222 vitest)
+- [x] 1800+ tests in default gate (1547 selected pytest + 331 vitest)
 
 ### Recent Capabilities (Feb 2026)
 
@@ -434,7 +434,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 
 **Hooks:**
 - `before_agent_start` — optional auto-injection pipeline (gated by config/env). Fast path is latency-bounded and should be treated as a hint surface rather than exhaustive recall.
-- `agent_end` — inactivity-timeout extraction (per-message classifier deprecated)
+- `agent_end` — disabled; was inactivity-timeout extraction (replaced by session_end + compaction hooks)
 - `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Combined fact+edge extraction runs across transcript chunks with carry-forward context.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
 - `before_reset` — same extraction as compaction, triggered on `/new` or `/reset`
 
@@ -506,7 +506,7 @@ where `N` is the total node count. The result is clamped to runtime bounds [5, 4
 
 ### 2.5 Memory Recall — Agent-Driven (2026-02-06)
 
-> **Auto-injection is optional.** The `before_agent_start` handler runs only when enabled via config/env. Memory recall remains agent-driven via the `memory_recall` tool.
+> **Auto-injection is optional.** The `before_prompt_build` handler runs only when enabled via config/env. Memory recall is also agent-driven via `quaid recall` CLI.
 
 **Why optional:** Automatic injection on every message can produce low-quality matches. Short messages like "ok", "B", "yes" have meaningless embeddings that match random facts. The agent understands context better than any heuristic.
 
@@ -552,7 +552,7 @@ The previous per-message approach (Haiku classifier on each message pair) was:
 **Current extraction** happens in `before_compaction` and `before_reset` hooks via Opus (full transcript), plus inactivity-timeout extraction when enabled. **Combined fact+edge extraction** performs both fact extraction and relationship detection in a chunked deep-reasoning loop for efficiency and context-window safety.
 
 Capture timeout config keys:
-- `capture.inactivity_timeout_minutes` (default `120`): minutes of inactivity before timeout extraction runs (`0` disables timeout extraction).
+- `capture.inactivity_timeout_minutes` (default `60`): minutes of inactivity before timeout extraction runs (`0` disables timeout extraction).
 - `capture.auto_compaction_on_timeout` (default `true`): when timeout extraction runs, whether to trigger gateway compaction automatically after extraction.
 
 ### 2.7 Shared Library (`lib/`)
@@ -1203,7 +1203,7 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
 );
 ```
 
-Used by the RAG search pipeline (`quaid docs search`). Indexing by one adapter makes chunks
+Used by the RAG search pipeline (`quaid recall '{"stores":["docs"]}'`). Indexing by one adapter makes chunks
 searchable by both adapters on the same machine (shared DB). Reindex with:
 `python3 datastore/docsdb/rag.py reindex --all`
 

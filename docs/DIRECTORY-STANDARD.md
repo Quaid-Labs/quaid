@@ -70,8 +70,8 @@ identity/
   SOUL.snippets.md     # Pending personality snippets
   USER.md              # Generated user profile
   USER.snippets.md     # Pending user snippets
-  MEMORY.md            # Core memories
-  MEMORY.snippets.md   # Pending memory snippets
+  ENVIRONMENT.md       # Learned behaviors and environment context
+  ENVIRONMENT.snippets.md # Pending environment snippets
 ```
 
 **Rules**:
@@ -172,7 +172,7 @@ documents, creative work. This is the user's stuff, not Quaid's.
 Trip/`, a git repo, a shared drive — Quaid doesn't dictate this.
 
 **Quaid's role**: Track changes via shadow git (see
-[Project System Spec](../projects/quaid/reference/projects-reference.md#shadow-git-tracking)). Index
+[Project System Spec](../projects/quaid/reference/projects-reference.md#4-shadow-git)). Index
 relevant files into docsdb. Never move, rename, or restructure the user's
 files.
 
@@ -207,13 +207,13 @@ QUAID_HOME/                              # e.g. ~/quaid/
     identity/                            # Layer 2: CC generated identity
       SOUL.md
       USER.md
-      MEMORY.md
+      ENVIRONMENT.md
       *.snippets.md
   openclaw/
     identity/                            # Layer 2: OC generated identity
       SOUL.md
       USER.md
-      MEMORY.md
+      ENVIRONMENT.md
       *.snippets.md
   projects/
     <name>/
@@ -265,7 +265,7 @@ must be inside this boundary.
 
 ```
 ~/.openclaw/workspace/
-  SOUL.md, USER.md, MEMORY.md   → Layer 1: base context (OC-native)
+  SOUL.md, USER.md, ENVIRONMENT.md   → Layer 1: base context (OC-native)
   plugins/quaid/
     projects/<name>/
       TOOLS.md                   → Layer 4: synced copy (read-only)

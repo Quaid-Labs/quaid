@@ -4,14 +4,13 @@
 **Status:** Authoritative consolidated reference
 
 This document is the single reference for the Quaid projects system. It covers
-architecture, both registries, the full lifecycle, shadow git, the sync engine,
-the project updater, the CLI, cross-instance workflow, and key invariants.
+architecture, both registries, the full lifecycle, shadow git, the project updater,
+the CLI, cross-instance workflow, and key invariants.
 
 Source modules covered here:
 - `core/project_registry.py`
 - `core/project_registry_cli.py`
 - `core/shadow_git.py`
-- `core/sync_engine.py`
 - `datastore/docsdb/registry.py` (`DocsRegistry`)
 - `datastore/docsdb/project_updater.py`
 - `lib/project_registry.py`
@@ -214,8 +213,6 @@ Steps executed in order:
 7. If `source_root` provided: initializes `ShadowGit` and calls `sg.snapshot()` for
    initial baseline. Failure here is warned but does not abort project creation.
 8. Writes entry to `project-registry.json` (atomic with file lock).
-9. Calls `sync_all_projects()` — propagates new project dir to adapters that need sync
-   (e.g. OpenClaw). Failure is warned but does not abort.
 
 Returns the entry dict.
 
@@ -608,122 +605,6 @@ what to add by inspecting the project directory structure.
 
 ---
 
-## 5. Sync Engine
-
-**Location:** `core/sync_engine.py`
-
-### 5.1 Purpose
-
-Copy project bootstrap files (`TOOLS.md`, `AGENTS.md`, etc.) from the canonical
-location (`QUAID_HOME/projects/<name>/`) to adapter workspaces that have boundary
-constraints. Claude Code reads directly from `QUAID_HOME`. OpenClaw requires copies
-inside its workspace boundary.
-
-### 5.2 Why It Exists
-
-OpenClaw's `ExtraBootstrapFiles` hook enforces a workspace boundary via
-`openBoundaryFile()` → `realpathSync()`. Files must resolve inside
-`~/.openclaw/workspace/`. Quaid's canonical project location is outside this boundary.
-
-Tested on OC 2026.3.7 (Node 25.6.1):
-- Symlinked directories: `fs.glob()` does NOT traverse them
-- Symlinked files (target outside workspace): boundary guard rejects them
-- Symlinked files (target inside workspace): works
-- Direct absolute paths outside workspace: boundary guard rejects them
-- **Copies inside workspace**: works (this is what the sync engine does)
-
-### 5.3 Architecture
-
-```
-                    QUAID_HOME/projects/myapp/TOOLS.md  (canonical)
-                              |
-                    Sync Engine (core)
-                    /                    \
-          [CC: direct read]     [OC: copy to workspace]
-                                         |
-                    ~/.openclaw/workspace/plugins/quaid/projects/myapp/TOOLS.md
-```
-
-### 5.4 Sync Rules
-
-1. **One-directional**: canonical → adapter workspace. Never the reverse.
-2. **mtime-based**: only copy if canonical is newer than the workspace copy.
-3. **Daemon-triggered**: runs on each daemon tick for projects with OC instances.
-4. **Bootstrap files only**: `TOOLS.md`, `AGENTS.md`, and other files matching
-   `SYNCABLE_NAMES`. Not the full project dir. `PROJECT.md` and doc content in
-   `docs/` are not synced (they are either read directly or indexed separately).
-5. **Read-only marker**: synced directories contain a `README.md` explaining
-   where the canonical files live and that local edits will be overwritten.
-6. **Adapter-requested**: the adapter declares it needs sync via its plugin
-   contract. Core provides the service. Adapters that read directly (CC)
-   don't request it.
-
-### 5.5 `sync_project(canonical_dir, target_dir, project_name)`
-
-```python
-SYNCABLE_NAMES = frozenset({
-    "TOOLS.md", "AGENTS.md", "SOUL.md", "USER.md",
-    "ENVIRONMENT.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md",
-})
-
-def sync_project(canonical_dir: Path, target_dir: Path, project_name: str) -> SyncResult:
-    """Sync one project's bootstrap files from canonical to target."""
-    # For each name in SYNCABLE_NAMES:
-    #   - If canonical file missing and target exists: remove target
-    #   - If target mtime >= canonical mtime: skip
-    #   - Otherwise: copy with shutil.copy2 (preserves mtime)
-    # Writes a README.md in the target project dir pointing to canonical location.
-    # Returns SyncResult(project, copied, skipped, removed, errors)
-```
-
-### 5.6 `sync_all_projects()`
-
-```python
-def sync_all_projects() -> List[SyncResult]:
-    """Sync all registered projects to all adapters that need it.
-
-    Calls adapter.get_context_sync_target(); if None, adapter reads directly
-    (no sync needed). Iterates canonical projects dir and syncs each project.
-    Also cleans up stale target dirs for projects that no longer exist.
-    """
-```
-
-### 5.7 Adapter Contract
-
-```python
-class QuaidAdapter:
-    def get_context_sync_target(self) -> Optional[Path]:
-        """Return the directory where bootstrap files should be synced.
-
-        Returns None if this adapter reads directly from QUAID_HOME
-        (no sync needed). Returns a path if files must be copied into
-        the adapter's workspace.
-        """
-        return None  # Default: no sync needed
-
-class OpenClawAdapter(QuaidAdapter):
-    def get_context_sync_target(self) -> Optional[Path]:
-        return Path.home() / ".openclaw" / "workspace" / "plugins" / "quaid" / "projects"
-
-class ClaudeCodeAdapter(QuaidAdapter):
-    def get_context_sync_target(self) -> Optional[Path]:
-        return None  # CC reads directly from QUAID_HOME
-```
-
-### 5.8 When `sync_all_projects()` Is Called
-
-- After `create_project()` — to immediately propagate the new project dir.
-- On daemon tick (extraction daemon main loop).
-- Manually via `quaid project sync`.
-
-### 5.9 Stale Target Cleanup
-
-After syncing, `_cleanup_stale_targets()` removes synced project dirs in the target
-that no longer have a corresponding canonical source. This fires when a project is
-deleted and a sync cycle runs.
-
----
-
 ## 6. Project Updater
 
 **Location:** `datastore/docsdb/project_updater.py`
@@ -918,7 +799,7 @@ quaid project create <name> [--description "Display Name"] [--source-root /path]
 ```
 Creates `QUAID_HOME/projects/<name>/` with `PROJECT.md` and `docs/` subdir.
 Registers the project in `QUAID_HOME/projects/project-registry.json` and the SQLite
-`project_definitions` table. Also triggers `sync_all_projects()`.
+`project_definitions` table.
 
 Note: The older `quaid registry create-project <name> --label "..."` command still
 works (routes through `datastore/docsdb/registry.py`) but `quaid project create` is
@@ -964,12 +845,6 @@ Always verify with `quaid project show <name>` before deleting.
 quaid project snapshot [<name>]   # All projects or named project
 ```
 
-#### Sync to adapter workspaces
-```bash
-quaid project sync
-```
-Pushes bootstrap files to adapter workspaces. Same as `sync_all_projects()`.
-
 #### Full function table for `core/project_registry_cli.py`
 
 | Subcommand | Function | Notes |
@@ -982,7 +857,6 @@ Pushes bootstrap files to adapter workspaces. Same as `sync_all_projects()`.
 | `unlink <name>` | `unlink_project()` | Removes current instance |
 | `delete <name>` | `delete_project()` | Full cleanup |
 | `snapshot [<name>]` | `snapshot_all_projects()` or single | Shadow git snapshot |
-| `sync` | `sync_all_projects()` | Push to adapter workspaces |
 
 ### 7.2 Doc Registry (`quaid registry` / `quaid docs`)
 
@@ -1000,8 +874,8 @@ Accepts absolute paths or paths relative to the workspace root.
 
 #### Search project docs (semantic RAG)
 ```bash
-quaid docs search "query" --project <name>
-quaid docs search "query"                   # search all projects
+quaid recall "query" '{"stores":["docs"]}' --project <name>
+quaid recall "query" '{"stores":["docs"]}'   # search all projects
 ```
 Requires embeddings (Ollama running locally or on a configured embedding server). Returns ranked chunks with similarity scores.
 
@@ -1082,8 +956,7 @@ When OpenClaw and Claude Code share the same `QUAID_HOME` (same machine):
 
 - **Sync target:** Adapters declare whether they need file sync via
   `adapter.get_context_sync_target()`. Claude Code returns `None` (reads directly
-  from `QUAID_HOME`). OpenClaw returns a workspace path — files are copied to it
-  by `sync_engine.sync_all_projects()`.
+  from `QUAID_HOME`). OpenClaw returns a workspace path for bootstrap file copies.
 
 ### Step-by-step example
 
@@ -1104,8 +977,8 @@ QUAID_INSTANCE=claude-code quaid project link my-proj
 QUAID_INSTANCE=claude-code quaid registry register /path/to/cc-doc.md --project my-proj
 
 # Both adapters can now search all docs
-QUAID_INSTANCE=openclaw quaid docs search "query" --project my-proj    # sees CC doc too
-QUAID_INSTANCE=claude-code quaid docs search "query" --project my-proj  # sees OC doc too
+QUAID_INSTANCE=openclaw quaid recall "query" '{"stores":["docs"]}' --project my-proj    # sees CC doc too
+QUAID_INSTANCE=claude-code quaid recall "query" '{"stores":["docs"]}' --project my-proj  # sees OC doc too
 
 # CC leaves the project (without deleting it)
 QUAID_INSTANCE=claude-code quaid project unlink my-proj
