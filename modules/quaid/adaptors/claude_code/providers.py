@@ -1,16 +1,14 @@
 """LLM providers for the Claude Code adapter.
 
 Authentication layers (tried in order):
-  0. claude -p subprocess  — delegates auth to the installed CC binary (primary)
   1a. CLAUDE_CODE_OAUTH_TOKEN env var  — explicit override
   1b. .auth-token file  — long-lived token written by install/hooks
   2. ~/.claude/.credentials.json  — on-disk OAuth token (read-only, no refresh)
   3. ANTHROPIC_API_KEY env var  — direct API key fallback
 
-Layer 0 is the preferred path for a standard CC installation. The credentials.json
-tokens (layer 2) are web-scoped and cannot be used directly for API calls; the
-refresh flow is intentionally omitted to avoid interfering with CC's own token
-management.
+The credentials.json tokens (layer 2) are web-scoped and cannot be used directly
+for API calls; the refresh flow is intentionally omitted to avoid interfering with
+CC's own token management.
 
 Fail-hard behavior:
   - failHard=true:  fail immediately at the first gate that fails, no fallback
@@ -20,8 +18,6 @@ Fail-hard behavior:
 import json
 import logging
 import os
-import shutil
-import subprocess
 import sys
 import time
 import urllib.error
@@ -235,99 +231,6 @@ def _warn_api_key_fallback() -> None:
 class _OAuthUnavailable(Exception):
     """Internal signal: OAuth path failed, try next layer."""
     pass
-
-
-class ClaudeCodeCLIProvider(LLMProvider):
-    """Layer 0: LLM calls via 'claude -p' subprocess.
-
-    Delegates authentication entirely to the installed Claude Code binary.
-    No token management required — CC handles its own OAuth flow.
-    This is the primary provider for standard CC installations.
-    """
-
-    _TIER_TO_MODEL = {"deep": "opus", "fast": "haiku"}
-    _SEARCH_PATHS = ("/opt/homebrew/bin/claude", "/usr/local/bin/claude")
-
-    def __init__(self, claude_bin: Optional[str] = None,
-                 deep_model: Optional[str] = None,
-                 fast_model: Optional[str] = None):
-        self._claude_bin = claude_bin or shutil.which("claude") or next(
-            (p for p in self._SEARCH_PATHS if os.path.isfile(p)), None
-        )
-        self._deep_model = deep_model
-        self._fast_model = fast_model
-
-    def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
-        if not self._claude_bin:
-            raise RuntimeError("claude binary not found in PATH")
-
-        system = next((m["content"] for m in messages if m.get("role") == "system"), "")
-        user = next((m["content"] for m in messages if m.get("role") == "user"), "")
-        if not user:
-            raise ValueError("No user message")
-
-        if model_tier == "fast" and self._fast_model:
-            model = self._fast_model
-        elif model_tier == "deep" and self._deep_model:
-            model = self._deep_model
-        else:
-            model = self._TIER_TO_MODEL.get(model_tier, "opus")
-        cmd = [
-            self._claude_bin, "-p", user,
-            "--model", model,
-            "--output-format", "json",
-            "--no-session-persistence",
-            "--dangerously-skip-permissions",
-        ]
-        if system:
-            cmd += ["--system-prompt", system]
-
-        start = time.time()
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout,
-                env={**os.environ, "PATH": os.environ.get("PATH", "") +
-                     ":/opt/homebrew/bin:/usr/local/bin"},
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"claude -p timed out after {timeout}s") from exc
-
-        duration = time.time() - start
-
-        if not proc.stdout.strip():
-            raise RuntimeError(
-                f"claude -p produced no output (rc={proc.returncode}): "
-                f"{proc.stderr[:300]}"
-            )
-
-        try:
-            data = json.loads(proc.stdout)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"claude -p non-JSON output: {proc.stdout[:200]}"
-            ) from exc
-
-        if data.get("is_error"):
-            raise RuntimeError(f"claude -p error: {data.get('result', '')[:300]}")
-
-        usage = data.get("usage", {})
-        return LLMResult(
-            text=data.get("result", ""),
-            duration=duration,
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
-            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-            cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
-            model=model,
-            truncated=data.get("stop_reason", "") == "max_tokens",
-        )
-
-    def get_profiles(self):
-        available = bool(self._claude_bin)
-        return {
-            "deep": {"model": "claude-sonnet-4-6", "available": available},
-            "fast": {"model": "claude-haiku-4-5", "available": available},
-        }
 
 
 class ClaudeCodeOAuthLLMProvider(LLMProvider):
@@ -558,7 +461,6 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         # All layers exhausted
         raise RuntimeError(
             "All LLM auth methods failed.\n"
-            "  Layer 0: claude -p failed or claude binary not found\n"
             "  Layer 1a: CLAUDE_CODE_OAUTH_TOKEN env var not set\n"
             "  Layer 1b: No adapter auth token (run 'quaid config set-auth <token>')\n"
             "  Layer 2: On-disk OAuth token not usable (web-scoped)\n"
