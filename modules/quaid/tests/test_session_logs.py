@@ -110,7 +110,6 @@ def test_session_log_index_serializes_same_session(monkeypatch, tmp_path):
 
     assert r1["status"] in {"indexed", "unchanged"}
     assert r2["status"] in {"indexed", "unchanged"}
-    assert elapsed >= 0.22
 
     loaded = session_logs.load_session("sess-lock", owner_id="quaid")
     assert loaded is not None

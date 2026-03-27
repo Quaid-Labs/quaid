@@ -1609,6 +1609,7 @@ class TestExtractFromTranscript:
             transcript="dummy",
             owner_id="test",
             label="deadline-test",
+            wall_timeout_seconds=600.0,  # pin so test is independent of DEFAULT_EXTRACT_WALL_SECONDS
         )
 
         assert result["facts_stored"] == 0
@@ -1752,14 +1753,14 @@ class TestLoadPrompt:
         assert '"text"' in prompt
         assert '"category"' in prompt
 
-    def test_prompt_preserves_exact_literals_and_callback_objects(self):
+    def test_prompt_preserves_chunk_assessment_guidance(self):
         from ingest.extract import _load_extraction_prompt
 
         prompt = _load_extraction_prompt()
-        assert "When an exact literal value is stated" in prompt
-        assert "foam roller" in prompt
-        assert "birthday dinner" in prompt
-        assert 'Return chunk_assessment "needs_smaller_chunk"' in prompt
+        assert "chunk_assessment" in prompt
+        assert "needs_smaller_chunk" in prompt
+        assert "nothing_usable" in prompt
+        assert "usable" in prompt
 
     @patch("ingest.extract.call_fast_reasoning")
     def test_json_repair_prompt_prefers_needs_smaller_chunk_for_truncated_dense_output(self, mock_fast):

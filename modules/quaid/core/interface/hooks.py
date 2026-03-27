@@ -300,15 +300,11 @@ def hook_inject(args):
                     memories, recall_meta = mem_result
                 else:
                     memories = mem_result
-            except RuntimeError:
-                raise
             except Exception:
                 memories = []
                 recall_meta = None
             try:
                 docs_bundle = docs_future.result()
-            except RuntimeError:
-                raise
             except Exception:
                 docs_bundle = None
 

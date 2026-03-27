@@ -33,13 +33,14 @@ def _run_hook_inject(hook_input: dict, *, monkeypatch, patches: dict | None = No
     """
     from core.interface import hooks
 
-    stdin_text = json.dumps(hook_input)
     captured_out = io.StringIO()
     captured_err = io.StringIO()
 
     extra_patches = patches or {}
 
-    with patch("core.interface.hooks.sys.stdin", io.StringIO(stdin_text)), \
+    # Patch _read_stdin_json directly to bypass select/fcntl which don't work
+    # with io.StringIO in tests.
+    with patch("core.interface.hooks._read_stdin_json", return_value=hook_input), \
          patch("core.interface.hooks.sys.stdout", captured_out), \
          patch("core.interface.hooks.sys.stderr", captured_err):
         for attr, val in extra_patches.items():
@@ -263,8 +264,10 @@ class TestHookInjectCursorSeeding:
                 monkeypatch=monkeypatch,
             )
 
-        # rglob found nothing and cwd was empty, so write_cursor should not have been called
-        assert "path" not in written, "write_cursor must not be called when cwd is empty and rglob misses"
+        # rglob found nothing, cwd was empty — OC flat-path fallback fires:
+        # sessions_dir/{session_id}.jsonl is used as the predicted path.
+        expected_flat = str(sessions_dir / f"{session_id}.jsonl")
+        assert written.get("path") == expected_flat
 
 
 # ===========================================================================

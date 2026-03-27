@@ -29,6 +29,11 @@ def test_memorydb_contract_get_system_context_metadata(monkeypatch):
         seen["db_path"] = str(db_path)
         return {"entries": [{"key": "ok", "label": "ok", "value": "delegated"}]}
 
+    from pathlib import Path as _Path
+    monkeypatch.setattr(
+        "core.plugins.memorydb_contract.get_db_path",
+        lambda: _Path("/tmp/quaid-workspace/data/memory.db"),
+    )
     monkeypatch.setattr(
         "core.plugins.memorydb_contract.build_memorydb_system_context_metadata",
         _fake_builder,

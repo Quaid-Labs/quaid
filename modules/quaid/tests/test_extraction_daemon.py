@@ -50,12 +50,14 @@ def test_start_daemon_returns_negative_one_when_pid_file_never_appears(monkeypat
         read_pid_calls += 1
         return None
 
+    class _FakePopen:
+        pid = 99999
+        def __init__(self, *_args, **_kwargs):
+            pass
+
     monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
-    monkeypatch.setattr(extraction_daemon.os, "open", lambda *_args, **_kwargs: 11)
-    monkeypatch.setattr(extraction_daemon.fcntl, "flock", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(extraction_daemon.os, "close", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(extraction_daemon.os, "fork", lambda: 12345)
-    monkeypatch.setattr(extraction_daemon.os, "waitpid", lambda *_args, **_kwargs: (12345, 0))
+    monkeypatch.setattr(extraction_daemon, "_log_path", lambda: tmp_path / "daemon.log")
+    monkeypatch.setattr(extraction_daemon.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(extraction_daemon.time, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(extraction_daemon, "read_pid", fake_read_pid)
 

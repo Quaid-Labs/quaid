@@ -261,13 +261,22 @@ class TestOpenClawAdapter:
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
-        with pytest.raises(RuntimeError, match="CLAWDBOT_WORKSPACE"):
+        with pytest.raises(RuntimeError, match="QUAID_HOME|openclaw.json"):
             adapter.oc_workspace()
 
-    def test_oc_workspace_env_override(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+    def test_oc_workspace_reads_agent_list_workspace(self, tmp_path, monkeypatch):
+        """Reads workspace from agents.list[default=True] in openclaw.json."""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        workspace = tmp_path / "agent-workspace"
+        workspace.mkdir()
+        cfg_dir = tmp_path / ".openclaw"
+        cfg_dir.mkdir()
+        import json
+        (cfg_dir / "openclaw.json").write_text(json.dumps({
+            "agents": {"list": [{"id": "main", "default": True, "workspace": str(workspace)}]}
+        }))
         adapter = OpenClawAdapter()
-        assert adapter.oc_workspace() == tmp_path
+        assert adapter.oc_workspace() == workspace
 
     def test_oc_workspace_fallback_to_openclaw_json(self, tmp_path, monkeypatch):
         """When CLAWDBOT_WORKSPACE unset, falls back to ~/.openclaw/openclaw.json."""
@@ -331,7 +340,13 @@ class TestOpenClawAdapter:
         assert adapter.get_api_key("ANTHROPIC_API_KEY") == "sk-env-key"
 
     def test_get_api_key_from_env_file(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        import json as _json
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        cfg_dir = tmp_path / ".openclaw"
+        cfg_dir.mkdir()
+        (cfg_dir / "openclaw.json").write_text(_json.dumps({
+            "agents": {"defaults": {"workspace": str(tmp_path)}}
+        }))
         monkeypatch.delenv("TEST_KEY", raising=False)
         (tmp_path / ".env").write_text("TEST_KEY=sk-from-ws-env\n")
         adapter = OpenClawAdapter()
@@ -592,17 +607,20 @@ class TestEmptyEnvVars:
         assert adapter.quaid_home() == Path.home() / "quaid"
 
     def test_empty_clawdbot_workspace_raises(self, monkeypatch, tmp_path):
+        # CLAWDBOT_WORKSPACE is no longer read by the OC adapter; the error
+        # comes from missing openclaw.json when no workspace can be resolved.
         monkeypatch.setenv("CLAWDBOT_WORKSPACE", "")
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
-        with pytest.raises(RuntimeError, match="CLAWDBOT_WORKSPACE"):
+        with pytest.raises(RuntimeError, match="openclaw.json"):
             adapter.oc_workspace()
 
     def test_whitespace_clawdbot_workspace_raises(self, monkeypatch, tmp_path):
+        # Same as above — whitespace CLAWDBOT_WORKSPACE is also ignored.
         monkeypatch.setenv("CLAWDBOT_WORKSPACE", "   ")
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
-        with pytest.raises(RuntimeError, match="CLAWDBOT_WORKSPACE"):
+        with pytest.raises(RuntimeError, match="openclaw.json"):
             adapter.oc_workspace()
 
 
@@ -1119,7 +1137,7 @@ class TestAdapterIntegration:
         (data_dir / "memory.db").touch()
 
         from lib.config import _workspace_root
-        assert _workspace_root() == tmp_path
+        assert _workspace_root() == standalone.instance_root()
 
     def test_config_paths_use_adapter(self, standalone, tmp_path):
         """config.py should search for config in adapter-relative paths."""

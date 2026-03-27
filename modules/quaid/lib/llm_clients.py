@@ -664,6 +664,13 @@ def call_llm(system_prompt: str, user_message: str,
         _is_provider_outage = last_error.code in _RETRYABLE_HTTP_CODES
 
     if _is_provider_outage:
+        if is_fail_hard_enabled():
+            err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
+            raise RuntimeError(
+                "LLM call failed after retries while failHard is enabled "
+                f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
+                f"error_type={err_type}, error={last_error})."
+            ) from last_error
         raise ProviderUnavailableError(
             f"Provider unavailable after {retries + 1} attempts "
             f"(provider={provider_name}, tier={resolved_tier}, model={model}, "

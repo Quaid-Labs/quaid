@@ -70,8 +70,8 @@ class TestProjectSystemE2E:
         assert get_project("my-app") is not None
         assert entry["source_root"] == str(project_env["user_code"])
 
-        # Canonical dir created with structure
-        canonical = project_env["quaid_home"] / "shared" / "projects" / "my-app"
+        # Canonical dir created with structure (quaid_projects_dir uses quaid_home/projects/)
+        canonical = project_env["quaid_home"] / "projects" / "my-app"
         assert canonical.is_dir()
         assert (canonical / "docs").is_dir()
         assert (canonical / "PROJECT.md").is_file()

@@ -368,7 +368,9 @@ class TestCheckpointBehavior:
             ),
         )
 
-        result = janitor.run_task_optimized("all", dry_run=True, resume_checkpoint=False)
+        # Checkpoint writes only happen when not dry_run (b75af9f3)
+        monkeypatch.setenv("QUAID_JANITOR_SKIP_NOTIFY", "1")
+        result = janitor.run_task_optimized("all", dry_run=False, resume_checkpoint=False)
 
         # At minimum: initial write (status=running) + final write (status=completed/failed)
         assert len(checkpoint_writes) >= 2, f"Expected >= 2 checkpoint writes, got: {len(checkpoint_writes)}"
@@ -420,7 +422,9 @@ class TestCheckpointBehavior:
 
         monkeypatch.setattr("core.lifecycle.janitor_lifecycle.LifecycleRegistry.run", _fake_run)
 
-        janitor.run_task_optimized("all", dry_run=True, resume_checkpoint=False)
+        # Checkpoint writes only happen when not dry_run (b75af9f3)
+        monkeypatch.setenv("QUAID_JANITOR_SKIP_NOTIFY", "1")
+        janitor.run_task_optimized("all", dry_run=False, resume_checkpoint=False)
 
         # Verify the checkpoint structure is valid
         assert checkpoints, "At least one checkpoint must be written for task=all"
@@ -470,7 +474,9 @@ class TestCheckpointBehavior:
 
         monkeypatch.setattr("core.lifecycle.janitor_lifecycle.LifecycleRegistry.run", _fake_run)
 
-        result = janitor.run_task_optimized("all", dry_run=True, resume_checkpoint=False)
+        # Checkpoint writes and LLM tasks only run when not dry_run (b75af9f3)
+        monkeypatch.setenv("QUAID_JANITOR_SKIP_NOTIFY", "1")
+        result = janitor.run_task_optimized("all", dry_run=False, resume_checkpoint=False)
 
         assert result["success"] is False, "Expected success=False when snippets has errors"
         if checkpoints:
@@ -576,7 +582,7 @@ class TestJanitorCompleteSuccessFlag:
 
         monkeypatch.setattr("core.lifecycle.janitor_lifecycle.LifecycleRegistry.run", _fake_run)
 
-        result = janitor.run_task_optimized("snippets", dry_run=True, resume_checkpoint=False)
+        result = janitor.run_task_optimized("snippets", dry_run=False, resume_checkpoint=False)
         assert result["success"] is False
 
     def test_success_false_when_snippets_stage_has_errors_in_all_task(self, monkeypatch, tmp_path):
@@ -610,8 +616,9 @@ class TestJanitorCompleteSuccessFlag:
             )
 
         monkeypatch.setattr("core.lifecycle.janitor_lifecycle.LifecycleRegistry.run", _fake_run)
+        monkeypatch.setenv("QUAID_JANITOR_SKIP_NOTIFY", "1")
 
-        result = janitor.run_task_optimized("all", dry_run=True, resume_checkpoint=False)
+        result = janitor.run_task_optimized("all", dry_run=False, resume_checkpoint=False)
         assert result["success"] is False
 
     def test_janitor_complete_logs_success_false_on_error_count(self, monkeypatch, tmp_path):
@@ -632,7 +639,7 @@ class TestJanitorCompleteSuccessFlag:
 
         monkeypatch.setattr("core.lifecycle.janitor_lifecycle.LifecycleRegistry.run", _fake_run)
 
-        janitor.run_task_optimized("snippets", dry_run=True, resume_checkpoint=False)
+        janitor.run_task_optimized("snippets", dry_run=False, resume_checkpoint=False)
 
         complete_events = [e for e in logged_events if e.get("event") == "janitor_complete"]
         assert complete_events, "janitor_complete must be logged"

@@ -470,16 +470,20 @@ class TestCallLlmProvider:
                 llm_clients.call_llm("system", "user", max_retries=0)
 
     def test_returns_none_on_persistent_error_when_failhard_disabled(self, test_adapter):
-        """Persistent provider failures should degrade to None when failHard is disabled."""
+        """Persistent provider outages raise ProviderUnavailableError when failHard is disabled.
+
+        Callers (e.g. daemon) catch ProviderUnavailableError to implement retry/fallback logic.
+        """
         import core.llm.clients as llm_clients
+        from lib.llm_clients import ProviderUnavailableError
 
         def always_fail(*_args, **_kwargs):
             raise ConnectionError("persistent failure")
 
         test_adapter._llm.llm_call = always_fail
         with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
-            result, _duration = llm_clients.call_llm("system", "user", max_retries=0)
-        assert result is None
+            with pytest.raises(ProviderUnavailableError):
+                llm_clients.call_llm("system", "user", max_retries=0)
 
     def test_no_response_raises_when_failhard_enabled(self, test_adapter):
         """Provider null responses must fail hard when failHard is enabled."""

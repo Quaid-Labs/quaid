@@ -101,7 +101,7 @@ class TestSignalCycle:
         for sig_type in ("compaction", "reset", "session_end", "timeout"):
             path = daemon.write_signal(
                 signal_type=sig_type,
-                session_id="sess-valid",
+                session_id=f"sess-valid-{sig_type}",
                 transcript_path="/tmp/x.jsonl",
             )
             data = json.loads(path.read_text())
