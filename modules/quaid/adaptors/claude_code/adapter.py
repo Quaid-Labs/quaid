@@ -392,7 +392,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         return self.build_transcript(messages)
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
-        from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider
+        from adaptors.claude_code.providers import ClaudeCodeCLIProvider, ClaudeCodeOAuthLLMProvider
         try:
             from config import get_config
             cfg = get_config()
@@ -412,6 +412,13 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 deep_model=deep or "claude-haiku-4-5",
                 fast_model=fast or "claude-haiku-4-5",
             )
+        # Default: use CC CLI provider (delegates auth to the installed 'claude' binary)
+        cli = ClaudeCodeCLIProvider(
+            deep_model=deep or "claude-haiku-4-5",
+            fast_model=fast or "claude-haiku-4-5",
+        )
+        if cli._claude_bin:
+            return cli
         return ClaudeCodeOAuthLLMProvider(deep_model=deep, fast_model=fast)
 
 

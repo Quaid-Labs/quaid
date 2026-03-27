@@ -248,10 +248,14 @@ class ClaudeCodeCLIProvider(LLMProvider):
     _TIER_TO_MODEL = {"deep": "opus", "fast": "haiku"}
     _SEARCH_PATHS = ("/opt/homebrew/bin/claude", "/usr/local/bin/claude")
 
-    def __init__(self, claude_bin: Optional[str] = None):
+    def __init__(self, claude_bin: Optional[str] = None,
+                 deep_model: Optional[str] = None,
+                 fast_model: Optional[str] = None):
         self._claude_bin = claude_bin or shutil.which("claude") or next(
             (p for p in self._SEARCH_PATHS if os.path.isfile(p)), None
         )
+        self._deep_model = deep_model
+        self._fast_model = fast_model
 
     def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
         if not self._claude_bin:
@@ -262,7 +266,12 @@ class ClaudeCodeCLIProvider(LLMProvider):
         if not user:
             raise ValueError("No user message")
 
-        model = self._TIER_TO_MODEL.get(model_tier, "opus")
+        if model_tier == "fast" and self._fast_model:
+            model = self._fast_model
+        elif model_tier == "deep" and self._deep_model:
+            model = self._deep_model
+        else:
+            model = self._TIER_TO_MODEL.get(model_tier, "opus")
         cmd = [
             self._claude_bin, "-p", user,
             "--model", model,
