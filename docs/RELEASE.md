@@ -101,6 +101,17 @@ Flow:
 6. Solomon decides whether the delta is acceptable for release or whether more
    testing/work is required.
 
+If Solomon approves a post-clear delta, record that local approval before the
+final release check:
+
+```bash
+node scripts/release-approve-delta.mjs --notes "Solomon approved the post-clear release delta"
+```
+
+This writes `.release-approval.local.json` (ignored by git). It does not change
+the cleared SHAs; it only tells the release checks that Solomon explicitly
+approved releasing the current `HEAD` on top of those already-cleared commits.
+
 Do not treat a partially cleared live run as release-ready.
 Do not treat compatibility rows alone as release approval.
 
@@ -131,7 +142,7 @@ For live clears:
   - `Quaid/Claude Code`
 - XP is part of release readiness, but it does not create its own compatibility row.
 - Live clears write the chosen release-target `HEAD` SHA into `compatibility.json` on `canary`.
-- `bash scripts/release-check.sh` rewrites those SHA placeholders to the released Quaid version only when the clear SHA still matches release `HEAD`.
+- `bash scripts/release-check.sh` rewrites those SHA placeholders to the released Quaid version when the clear SHA still matches release `HEAD`, or when Solomon has locally approved the post-clear delta with `scripts/release-approve-delta.mjs`.
 - Promoted rows keep a `validated_sha` marker, so future release runs can tell whether the current matrix is fresh or only reflects an older clear.
 - Do not write compatibility rows for a live run that cleared against one SHA while the intended release target has already moved to another.
 

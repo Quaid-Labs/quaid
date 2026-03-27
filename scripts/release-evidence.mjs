@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const EVIDENCE_PATH = process.env.QUAID_RELEASE_EVIDENCE_PATH || path.join(ROOT, "release-evidence.json");
+const APPROVAL_PATH =
+  process.env.QUAID_RELEASE_APPROVAL_PATH || path.join(ROOT, ".release-approval.local.json");
 const VALID_SLOTS = new Set(["unit", "ci", "xp"]);
 
 function usage() {
@@ -76,6 +78,52 @@ function loadEvidence() {
     };
   }
   return data;
+}
+
+function loadApproval() {
+  if (!fs.existsSync(APPROVAL_PATH)) {
+    return {
+      schema_version: 1,
+      approved_head: null,
+      approved_at: null,
+      approved_by: "",
+      notes: "",
+      evidence: {},
+      compatibility: {},
+    };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(APPROVAL_PATH, "utf8"));
+    return raw && typeof raw === "object"
+      ? {
+          schema_version: Number(raw.schema_version || 1),
+          approved_head: typeof raw.approved_head === "string" ? raw.approved_head.trim() : null,
+          approved_at: typeof raw.approved_at === "string" ? raw.approved_at.trim() : null,
+          approved_by: typeof raw.approved_by === "string" ? raw.approved_by : "",
+          notes: typeof raw.notes === "string" ? raw.notes : "",
+          evidence: raw.evidence && typeof raw.evidence === "object" ? raw.evidence : {},
+          compatibility: raw.compatibility && typeof raw.compatibility === "object" ? raw.compatibility : {},
+        }
+      : {
+          schema_version: 1,
+          approved_head: null,
+          approved_at: null,
+          approved_by: "",
+          notes: "",
+          evidence: {},
+          compatibility: {},
+        };
+  } catch {
+    return {
+      schema_version: 1,
+      approved_head: null,
+      approved_at: null,
+      approved_by: "",
+      notes: "",
+      evidence: {},
+      compatibility: {},
+    };
+  }
 }
 
 function atomicWriteJson(targetPath, data) {
@@ -160,6 +208,7 @@ function commandCheck(opts) {
 
   const head = gitRequired(["rev-parse", "HEAD"], "git rev-parse HEAD");
   const data = loadEvidence();
+  const approval = loadApproval();
   const failures = [];
 
   for (const slot of required) {
@@ -174,6 +223,14 @@ function commandCheck(opts) {
     }
     if (!isAncestor(entry.sha, head)) {
       failures.push(`${slot}: evidence sha ${entry.sha} is not an ancestor of HEAD ${head}`);
+      continue;
+    }
+    if (
+      approval.approved_head === head &&
+      typeof approval.evidence?.[slot] === "string" &&
+      approval.evidence[slot].trim() === entry.sha
+    ) {
+      console.log(`[release-evidence] ${slot}: approved ancestor ${entry.sha} for HEAD ${head}`);
       continue;
     }
     const delta = commitsSince(entry.sha, head);

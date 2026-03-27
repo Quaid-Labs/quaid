@@ -70,6 +70,7 @@ skills/**/.clawdhub/
 agentlife/eval/
 pytest-runner/
 .quaid-dev.local.json
+.release-approval.local.json
 release-evidence.json.tmp-*.json
 compatibility.json.tmp-*.json
 modules/quaid/tests/LIVE-TEST-GUIDE.local.md

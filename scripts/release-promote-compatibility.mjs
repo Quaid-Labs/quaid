@@ -8,6 +8,8 @@ const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const COMPAT_PATH = process.env.QUAID_COMPATIBILITY_PATH || path.join(ROOT, "compatibility.json");
 const PKG_PATH = path.join(ROOT, "modules", "quaid", "package.json");
+const APPROVAL_PATH =
+  process.env.QUAID_RELEASE_APPROVAL_PATH || path.join(ROOT, ".release-approval.local.json");
 const REQUIRED_HOSTS = ["openclaw", "claude-code"];
 
 function die(message, code = 1) {
@@ -57,10 +59,57 @@ function atomicWriteJson(targetPath, data) {
   fs.renameSync(tmpPath, targetPath);
 }
 
+function loadApproval() {
+  if (!fs.existsSync(APPROVAL_PATH)) {
+    return {
+      schema_version: 1,
+      approved_head: null,
+      approved_at: null,
+      approved_by: "",
+      notes: "",
+      evidence: {},
+      compatibility: {},
+    };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(APPROVAL_PATH, "utf8"));
+    return raw && typeof raw === "object"
+      ? {
+          schema_version: Number(raw.schema_version || 1),
+          approved_head: typeof raw.approved_head === "string" ? raw.approved_head.trim() : null,
+          approved_at: typeof raw.approved_at === "string" ? raw.approved_at.trim() : null,
+          approved_by: typeof raw.approved_by === "string" ? raw.approved_by : "",
+          notes: typeof raw.notes === "string" ? raw.notes : "",
+          evidence: raw.evidence && typeof raw.evidence === "object" ? raw.evidence : {},
+          compatibility: raw.compatibility && typeof raw.compatibility === "object" ? raw.compatibility : {},
+        }
+      : {
+          schema_version: 1,
+          approved_head: null,
+          approved_at: null,
+          approved_by: "",
+          notes: "",
+          evidence: {},
+          compatibility: {},
+        };
+  } catch {
+    return {
+      schema_version: 1,
+      approved_head: null,
+      approved_at: null,
+      approved_by: "",
+      notes: "",
+      evidence: {},
+      compatibility: {},
+    };
+  }
+}
+
 const compat = JSON.parse(fs.readFileSync(COMPAT_PATH, "utf8"));
 const pkg = JSON.parse(fs.readFileSync(PKG_PATH, "utf8"));
 const releaseVersion = String(pkg.version || "").trim();
 const head = gitRequired(["rev-parse", "HEAD"], "git rev-parse HEAD");
+const approval = loadApproval();
 
 if (!releaseVersion) {
   die("package version is empty");
@@ -107,6 +156,13 @@ if (pendingRows.length === 0) {
     }
     const matchingAncestor = validated.find((sha) => isAncestor(sha, head));
     if (matchingAncestor) {
+      if (
+        approval.approved_head === head &&
+        typeof approval.compatibility?.[host] === "string" &&
+        approval.compatibility[host].trim() === matchingAncestor
+      ) {
+        continue;
+      }
       const delta = commitsSince(matchingAncestor, head);
       die(
         `host '${host}' compatibility was last cleared at ${matchingAncestor}, not current HEAD ${head}; commits since clear:\n${delta || "(none)"}`
@@ -141,6 +197,13 @@ for (const entry of pendingRows) {
   }
   if (!isAncestor(clearSha, head)) {
     failures.push(`${host}: clear sha ${clearSha} is not an ancestor of release HEAD ${head}`);
+    continue;
+  }
+  if (
+    approval.approved_head === head &&
+    typeof approval.compatibility?.[host] === "string" &&
+    approval.compatibility[host].trim() === clearSha
+  ) {
     continue;
   }
   const delta = commitsSince(clearSha, head);
