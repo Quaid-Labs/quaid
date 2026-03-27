@@ -2285,7 +2285,7 @@ def _relation_matches_for_query(query: str) -> List[str]:
 def _has_generic_graph_signal(query: str) -> bool:
     lowered = str(query or "").lower()
     return bool(re.search(
-        r"\b(relationship|related|connected|connection|hierarchy|depends|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|reports?\s+to)\b",
+        r"\b(relation|relationship|related|connected|connection|hierarchy|depends|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|reports?\s+to)\b",
         lowered,
     ))
 
