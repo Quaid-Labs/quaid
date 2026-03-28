@@ -1304,10 +1304,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         pass
 
     if not transcript_path or not os.path.isfile(transcript_path):
-        logger.warning("[%s] transcript not found: %s", label, transcript_path)
-        mark_signal_processed(signal_data)
-        _release_session_processing_lock(session_id, lock_fd)
-        return
+        # OC /new renames the session file to .jsonl.reset.<timestamp> — check for that backup.
+        _reset_found = False
+        if transcript_path and transcript_path.endswith(".jsonl"):
+            import glob as _glob
+            _reset_pattern = transcript_path[:-len(".jsonl")] + ".jsonl.reset.*"
+            _reset_candidates = sorted(_glob.glob(_reset_pattern))
+            if _reset_candidates:
+                transcript_path = _reset_candidates[-1]
+                _reset_found = True
+                logger.info("[%s] transcript renamed to reset backup, using: %s", label, transcript_path)
+        if not _reset_found:
+            logger.warning("[%s] transcript not found: %s", label, transcript_path)
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(session_id, lock_fd)
+            return
 
     cursor_data = read_cursor(session_id)
     cursor_offset = int(cursor_data["line_offset"] or 0)
