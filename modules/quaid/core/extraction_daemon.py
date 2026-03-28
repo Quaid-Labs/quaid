@@ -61,6 +61,12 @@ _SIGNAL_PRIORITY = {
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
+# Tracks sessions that have already had a cursor-at-end timeout signal fired.
+# Prevents repeated signals for sessions where rolling extracted all content
+# and the cursor never advances again (e.g. session ended without /exit).
+# Cleared per-session when the cursor advances past the previously-seen end.
+_cursor_end_timeout_fired: set = set()
+
 # Max lines to read from a transcript per extraction (B033)
 MAX_TRANSCRIPT_LINES = 50_000
 
@@ -2142,6 +2148,11 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         total_lines = count_transcript_lines(transcript_path)
         cursor_at_end = total_lines <= cursor_offset
 
+        # If cursor has advanced past a previously-seen end, reset the "fired" marker
+        # so new content can trigger a fresh timeout signal if needed.
+        if not cursor_at_end:
+            _cursor_end_timeout_fired.discard(session_id)
+
         # Even when all transcript content has been extracted (cursor at end),
         # staged rolling state from prior rolling_stage cycles still needs to be
         # flushed.  Check for a pending rolling payload so we can generate a
@@ -2158,25 +2169,29 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if cursor_at_end and not has_staged_payload:
             # All content already extracted via rolling, but session may be idle without /exit.
             # Fire timeout signal to trigger autocompaction for genuinely idle sessions.
-            try:
-                idle_mtime = os.path.getmtime(transcript_path)
-            except OSError:
-                continue
-            if (
-                idle_mtime >= installed_at_ts
-                and (now - idle_mtime) >= timeout_seconds
-                and session_id not in pending_session_ids
-            ):
-                logger.info(
-                    "session %s idle for %.0fs with cursor at end, generating timeout signal for autocompaction",
-                    session_id,
-                    now - idle_mtime,
-                )
-                write_signal(
-                    signal_type="timeout",
-                    session_id=session_id,
-                    transcript_path=transcript_path,
-                )
+            # Only fires once per session — _cursor_end_timeout_fired prevents repeated signals
+            # for sessions where rolling already extracted all content and cursor never advances.
+            if session_id not in _cursor_end_timeout_fired:
+                try:
+                    idle_mtime = os.path.getmtime(transcript_path)
+                except OSError:
+                    continue
+                if (
+                    idle_mtime >= installed_at_ts
+                    and (now - idle_mtime) >= timeout_seconds
+                    and session_id not in pending_session_ids
+                ):
+                    logger.info(
+                        "session %s idle for %.0fs with cursor at end, generating timeout signal for autocompaction",
+                        session_id,
+                        now - idle_mtime,
+                    )
+                    write_signal(
+                        signal_type="timeout",
+                        session_id=session_id,
+                        transcript_path=transcript_path,
+                    )
+                    _cursor_end_timeout_fired.add(session_id)
             continue
 
         # Check transcript modification time for idle detection
