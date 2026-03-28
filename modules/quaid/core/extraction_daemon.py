@@ -2097,14 +2097,28 @@ def _read_installed_at() -> float:
 
 
 def _get_idle_timeout_minutes(default: int = 30) -> int:
-    """Read timeout minutes from live config with a safe fallback."""
+    """Read timeout minutes from live config with a safe fallback.
+
+    Reads the raw JSON config files directly to bypass the module-level config
+    cache.  The daemon is a long-running process; the timeout setting may be
+    written after the daemon starts, and get_config() would return the stale
+    cached value for the lifetime of the process.
+    """
     try:
-        from config import get_config
-        cfg = get_config()
-        capture = getattr(cfg, "capture", None)
-        raw = getattr(capture, "inactivity_timeout_minutes", default) if capture is not None else default
-        minutes = int(raw)
-        return max(0, minutes)
+        import json as _json
+        from config import _config_paths
+        raw: int = default
+        for _cp in reversed(list(_config_paths())):
+            if _cp.exists():
+                try:
+                    _data = _json.loads(_cp.read_text(encoding="utf-8"))
+                    _capture = _data.get("capture", {})
+                    _v = _capture.get("inactivity_timeout_minutes") or _capture.get("inactivityTimeoutMinutes")
+                    if _v is not None:
+                        raw = _v
+                except Exception:
+                    pass
+        return max(0, int(raw))
     except Exception:
         return default
 
