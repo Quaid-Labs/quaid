@@ -222,6 +222,11 @@ describe("lifecycle signal detection", () => {
         covered_terms_ratio: 0.25,
         top_similarity: 0.44,
       },
+      memory_quality: {
+        surface_quality: undefined,
+        another_recall_may_help: undefined,
+        signals: undefined,
+      },
       phases_ms: {
         total_ms: 41,
         store_plan_wall_ms: 41,

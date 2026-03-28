@@ -20,13 +20,18 @@ def active_domains(*, db_path: Path | None = None) -> list[str]:
     return sorted(str(key).strip() for key in domains.keys() if str(key).strip())
 
 
+def list_relation_types() -> list[str]:
+    """Small indirection to keep contract tests monkeypatchable."""
+    from datastore.memorydb.memory_graph import list_relation_types as _list_relation_types
+
+    return _list_relation_types()
+
+
 def build_system_context_metadata(*, db_path: Path | None = None) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     domains = active_domains(db_path=db_path)
     relation_types: list[str] = []
     try:
-        from datastore.memorydb.memory_graph import list_relation_types
-
         relation_types = list_relation_types()
     except Exception:
         relation_types = []
