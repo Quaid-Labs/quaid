@@ -1568,8 +1568,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if not rolling_mode and transcript_text.strip():
             # Guard against post-compaction status lines or other metadata-only content
             # (e.g. "Compacted (17k -> 2.1k)") that aren't extractable conversations.
-            # 200 chars is safely below any real conversation with facts worth extracting.
-            _MIN_EXTRACTABLE_CHARS = 200
+            # 50 chars is enough to skip pure metadata lines (~25 chars) without
+            # silently dropping short but valid user messages.
+            _MIN_EXTRACTABLE_CHARS = 50
             transcript_len = len(transcript_text.strip())
             if transcript_len < _MIN_EXTRACTABLE_CHARS:
                 if staged_state_has_payload(staged_state):
