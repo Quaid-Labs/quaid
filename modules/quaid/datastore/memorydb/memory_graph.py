@@ -3887,10 +3887,22 @@ def _harmonize_store_plan_meta(
 def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
     docs = _validate_docs_bundle(bundle)
     out: List[Dict[str, Any]] = []
+    # Keep docs payloads bounded so a single docs-heavy recall cannot flood
+    # answer context with tens of thousands of chars.
+    per_chunk_char_cap = 900
+    total_char_budget = 9000
+    consumed_chars = 0
     for chunk in docs["chunks"][:limit]:
         text = " ".join(str(chunk.get("content") or "").split()).strip()
         if not text:
             continue
+        if len(text) > per_chunk_char_cap:
+            text = text[: per_chunk_char_cap - 1].rstrip() + "…"
+        if consumed_chars + len(text) > total_char_budget:
+            remaining = total_char_budget - consumed_chars
+            if remaining <= 160:
+                break
+            text = text[: remaining - 1].rstrip() + "…"
         source = str(chunk.get("source") or "").strip()
         section = str(chunk.get("section_header") or "").strip()
         prefix = f"[docs] {source}"
@@ -3902,6 +3914,9 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
             "category": "docs",
             "source_type": "docs",
         })
+        consumed_chars += len(text)
+        if consumed_chars >= total_char_budget:
+            break
     return out
 
 
@@ -4094,7 +4109,7 @@ def _run_recall_store_plan(
                 store,
                 handler(
                     query,
-                    limit=max(1, min(limit, 6 if fast_mode else limit)),
+                    limit=max(1, min(limit, 6 if fast_mode else 8)),
                     project=planned_project,
                 ),
             ))
@@ -10509,14 +10524,22 @@ if __name__ == "__main__":
                     docs_opts = store_opts.get("docs", {})
                     doc_project = docs_opts.get("project", cfg.get("project"))
                     doc_limit = docs_opts.get("limit", limit if not want_memory else 3)
+                    # Cap direct docs-only recall fanout to prevent large context
+                    # floods when tool-planned docs queries are broad.
+                    if not want_memory:
+                        doc_limit = min(int(doc_limit), 8)
                     doc_filters = docs_opts.get("docs", cfg.get("docs"))
                     if isinstance(doc_filters, str):
                         doc_filters = [d.strip() for d in doc_filters.split(",") if d.strip()]
+                    doc_min_similarity = docs_opts.get("min_similarity", cfg.get("min_similarity", 0.30))
+                    if not want_memory:
+                        # Tool/docs-only retrieval should stay high precision.
+                        doc_min_similarity = max(float(doc_min_similarity), 0.45)
                     _rag = _DocsRAG()
                     doc_results = _rag.search_docs_bundle(
                         query=query,
-                        limit=max(1, min(doc_limit, 20)),
-                        min_similarity=docs_opts.get("min_similarity", cfg.get("min_similarity", 0.30)),
+                        limit=max(1, min(doc_limit, 8)),
+                        min_similarity=doc_min_similarity,
                         project=doc_project if doc_project else None,
                         docs=doc_filters,
                     )
