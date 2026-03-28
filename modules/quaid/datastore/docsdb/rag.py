@@ -565,6 +565,24 @@ class DocsRAG:
                     "INSERT OR REPLACE INTO vec_doc_chunks(chunk_id, embedding) VALUES (?, ?)",
                     [(chunk_id, packed_embedding) for chunk_id, _, _, _, _, packed_embedding in prepared_chunks],
                 )
+                # Verify the vec entry was actually created. The INSERT can partially
+                # succeed (creating the rowid shadow entry without updating the HNSW
+                # index) and leave the doc unfindable via vector search. If the entry
+                # is absent, clear chunks_created so last_indexed_at is NOT set and
+                # the doc will be re-indexed on the next run.
+                first_chunk_id = prepared_chunks[0][0]
+                vec_row = conn.execute(
+                    "SELECT COUNT(*) FROM vec_doc_chunks_rowids WHERE id = ?",
+                    (first_chunk_id,),
+                ).fetchone()
+                if not vec_row or vec_row[0] == 0:
+                    logger.warning(
+                        "[docs] vec INSERT appeared to succeed but %s is absent from "
+                        "vec_doc_chunks_rowids; last_indexed_at will NOT be set so the "
+                        "doc is re-indexed on the next run",
+                        file_path,
+                    )
+                    chunks_created = 0
         
         logger.info("[docs] Indexed %s chunks from %s", chunks_created, file_path)
 
