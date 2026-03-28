@@ -2156,6 +2156,27 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 pass
 
         if cursor_at_end and not has_staged_payload:
+            # All content already extracted via rolling, but session may be idle without /exit.
+            # Fire timeout signal to trigger autocompaction for genuinely idle sessions.
+            try:
+                idle_mtime = os.path.getmtime(transcript_path)
+            except OSError:
+                continue
+            if (
+                idle_mtime >= installed_at_ts
+                and (now - idle_mtime) >= timeout_seconds
+                and session_id not in pending_session_ids
+            ):
+                logger.info(
+                    "session %s idle for %.0fs with cursor at end, generating timeout signal for autocompaction",
+                    session_id,
+                    now - idle_mtime,
+                )
+                write_signal(
+                    signal_type="timeout",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                )
             continue
 
         # Check transcript modification time for idle detection
