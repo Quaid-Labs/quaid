@@ -434,6 +434,6 @@ CREATE TABLE IF NOT EXISTS doc_update_log (
 -- Initialize metadata
 INSERT OR IGNORE INTO metadata (key, value) VALUES
     ('schema_version', '6'),
-    ('embedding_model', 'qwen3-embedding:8b'),
-    ('embedding_dim', '4096'),
+    ('embedding_model', 'nomic-embed-text:latest'),
+    ('embedding_dim', '768'),
     ('last_seed', NULL);
