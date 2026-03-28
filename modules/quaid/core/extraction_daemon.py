@@ -1259,6 +1259,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 try:
                     other = json.loads(f.read_text(encoding="utf-8"))
                     if other.get("session_id") == session_id:
+                        # Do not discard a compaction/reset signal just because a
+                        # rolling signal is already queued — compaction/reset must
+                        # survive to flush staged facts (B009).
+                        other_type = other.get("type", "")
+                        if signal_type in ("compaction", "reset") and other_type == "rolling":
+                            continue
                         mark_signal_processed(signal_data)
                         break
                 except (json.JSONDecodeError, OSError):
