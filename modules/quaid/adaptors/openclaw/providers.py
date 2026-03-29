@@ -102,8 +102,10 @@ class GatewayLLMProvider(LLMProvider):
         start_time: float,
     ) -> LLMResult:
         model = self._resolve_model_for_tier(model_tier)
+        # v2026.3.28+: gateway /v1/responses only accepts "openclaw" as model name;
+        # it routes to the OC agent's configured model internally.
         body = json.dumps({
-            "model": model,
+            "model": "openclaw",
             "instructions": system_prompt,
             "input": user_message,
             "max_output_tokens": max_tokens,
