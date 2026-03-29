@@ -30,6 +30,18 @@ Quaid is an agentic-system independent knowledge layer by design, with adapters 
 - **Claude Code adapter** — hook-driven integration with durable session-init and daemon signaling
 - **CLI** — direct operational control for extraction, recall, janitor, docs, and events
 
+**Platform compatibility (quick view):**
+
+| Capability | OpenClaw | Claude Code |
+|---|---|---|
+| Hook-based auto extraction | Yes | Yes |
+| Compaction extraction trigger | Yes | Yes |
+| Compaction control (wait-for-extract before compact) | **Yes** | **No** |
+| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No |
+| Programmatic compaction RPC | Yes | No |
+
+Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+
 Runtime event capabilities are discoverable via `quaid event capabilities` so orchestration can adapt to host/runtime support instead of assuming fixed behavior.
 
 ---
@@ -175,6 +187,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
 - [AgentLife Overview](docs/AGENTLIFE.md) — What AgentLife measures and why it exists
 - [AgentLife Technical Report](docs/AGENTLIFE-TECHNICAL-REPORT.md) — Full matrix, run IDs, and methodology
+- [Platform Compatibility](docs/COMPATIBILITY.md) — OC vs CC capability matrix
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Interface Contract](docs/INTERFACES.md) — CLI/adapter capability model and event contract
