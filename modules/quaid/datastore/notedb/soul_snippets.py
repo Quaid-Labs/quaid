@@ -24,7 +24,8 @@ import os
 import re
 import shutil
 import tempfile
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone as _tz
+UTC = _tz.utc
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
