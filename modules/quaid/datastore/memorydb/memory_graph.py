@@ -55,7 +55,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Set
 
-from lib.config import get_db_path, get_ollama_url
+from lib.config import get_db_path, get_ollama_url, get_embedding_dim as _get_configured_embedding_dim
 from lib.database import get_connection as _lib_get_connection, has_vec as _lib_has_vec
 from datastore.memorydb.domain_registry import (
     ensure_domain_tables as _ensure_domain_registry_tables,
@@ -445,31 +445,71 @@ class MemoryGraph:
     def _init_vec_index(self):
         """Create vec_nodes virtual table and backfill from existing embeddings.
 
-        The table dimension is detected from actual stored embeddings rather than
-        config, so tests with smaller embeddings work correctly.  If no embeddings
-        exist yet, table creation is deferred to the first add_node/update_node call.
+        Uses the configured embedding dimension (from config) as the source of
+        truth for the table schema.  If vec_nodes already exists but was created
+        with the wrong dimension (e.g. from a stale daemon using a different
+        model), the table is dropped and recreated at the correct dimension and
+        any embeddings stored at the wrong dimension are nulled out so they get
+        re-embedded on the next janitor embeddings run.
         """
+        configured_dim = _get_configured_embedding_dim()
+
         with self._get_conn() as conn:
-            # Check if vec_nodes already exists
+            # Check if vec_nodes already exists and at what dimension.
+            table_exists = False
             try:
                 conn.execute("SELECT COUNT(*) FROM vec_nodes")
                 table_exists = True
             except sqlite3.OperationalError:
-                table_exists = False
+                pass
+
+            if table_exists:
+                # Verify the existing table was created with the correct dimension.
+                existing_dim: Optional[int] = None
+                try:
+                    import re as _re
+                    row = conn.execute(
+                        "SELECT sql FROM sqlite_master WHERE name = 'vec_nodes'"
+                    ).fetchone()
+                    if row and row[0]:
+                        m = _re.search(r'float\[(\d+)\]', row[0])
+                        if m:
+                            existing_dim = int(m.group(1))
+                except Exception:
+                    pass
+
+                if existing_dim is not None and existing_dim != configured_dim:
+                    logger.warning(
+                        "vec_nodes dimension mismatch: table=%d configured=%d — "
+                        "dropping and rebuilding; nulling out %d-dim embeddings",
+                        existing_dim,
+                        configured_dim,
+                        existing_dim,
+                    )
+                    conn.execute("DROP TABLE vec_nodes")
+                    # Null out all embeddings that were stored at the wrong dimension
+                    # so they will be re-embedded on the next janitor embeddings run.
+                    conn.execute(
+                        "UPDATE nodes SET embedding = NULL WHERE length(embedding) / 4 = ?",
+                        (existing_dim,),
+                    )
+                    table_exists = False
 
             if not table_exists:
-                # Detect dimension from first existing embedding in the DB
+                # Defer table creation until at least one embedding is available.
+                has_any = False
                 try:
-                    sample = conn.execute(
-                        "SELECT embedding FROM nodes WHERE embedding IS NOT NULL LIMIT 1"
-                    ).fetchone()
+                    has_any = bool(conn.execute(
+                        "SELECT 1 FROM nodes WHERE embedding IS NOT NULL LIMIT 1"
+                    ).fetchone())
                 except sqlite3.OperationalError:
                     return  # Schema not initialized yet — defer vec setup
-                if not sample:
+                if not has_any:
                     return  # No embeddings yet — defer table creation
-                dim = len(sample["embedding"]) // 4  # 4 bytes per float32
                 conn.execute(
-                    f"CREATE VIRTUAL TABLE vec_nodes USING vec0(node_id TEXT PRIMARY KEY, embedding float[{dim}] distance_metric=cosine)"
+                    f"CREATE VIRTUAL TABLE vec_nodes USING vec0("
+                    f"node_id TEXT PRIMARY KEY, "
+                    f"embedding float[{configured_dim}] distance_metric=cosine)"
                 )
 
             # Backfill: insert any nodes with embeddings not yet in vec_nodes
@@ -504,15 +544,17 @@ class MemoryGraph:
     def _ensure_vec_table(self, conn, embedding: List[float]) -> None:
         """Lazily create vec_nodes table if it doesn't exist yet.
 
-        Uses the dimension of the provided embedding so tests with smaller
-        vectors work without config overrides.
+        Uses the configured embedding dimension as the source of truth so that
+        the schema is always consistent with the active embedding model.
         """
         try:
             conn.execute("SELECT 1 FROM vec_nodes LIMIT 0")
         except sqlite3.OperationalError:
-            dim = len(embedding)
+            dim = _get_configured_embedding_dim()
             conn.execute(
-                f"CREATE VIRTUAL TABLE vec_nodes USING vec0(node_id TEXT PRIMARY KEY, embedding float[{dim}] distance_metric=cosine)"
+                f"CREATE VIRTUAL TABLE vec_nodes USING vec0("
+                f"node_id TEXT PRIMARY KEY, "
+                f"embedding float[{dim}] distance_metric=cosine)"
             )
 
     # ==========================================================================
