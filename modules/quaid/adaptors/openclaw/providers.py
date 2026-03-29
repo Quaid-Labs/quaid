@@ -108,7 +108,7 @@ class GatewayLLMProvider(LLMProvider):
             "input": user_message,
             "max_output_tokens": max_tokens,
         }).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "x-openclaw-scopes": "operator.write"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         req = urllib.request.Request(
@@ -153,7 +153,7 @@ class GatewayLLMProvider(LLMProvider):
             "max_tokens": max_tokens,
         }).encode("utf-8")
 
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "x-openclaw-scopes": "operator.write"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
 
