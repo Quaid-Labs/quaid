@@ -7,7 +7,8 @@ Hosted benchmark pages:
 - https://quaid.ai/benchmarks/agentlife/technical-report
 
 Technical source of truth (runbook with full matrix/run IDs):
-- `/Users/clawdbot/agentlife-benchmark/published/runbooks/release-candidate/AGENTLIFE_RELEASE_CANDIDATE_20260328.md`
+- `agentlife-benchmark/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md`
+- `agentlife-benchmark/published/runbooks/release-candidate/AGENTLIFE_RELEASE_CANDIDATE_20260328.md`
 
 ## Scope
 
