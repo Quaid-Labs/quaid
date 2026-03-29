@@ -1013,3 +1013,62 @@ class TestReviewFixTransaction:
         assert node_row["name"] == "Original fact text"
         assert node_row["status"] == "active"
         assert old_edge_count == 1
+
+
+class TestCreateEdgeCoParentInference:
+    def test_parent_edge_infers_coparent_from_existing_spouse(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_coparent_parent.db")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            create_edge("David", "spouse_of", "Lisa", owner_id="quaid")
+            result = create_edge("David", "parent_of", "Oliver", owner_id="quaid")
+
+        assert result["status"] == "created"
+        assert result.get("inferred_edges_created", 0) >= 1
+
+        david = graph.find_node_by_name("David")
+        lisa = graph.find_node_by_name("Lisa")
+        oliver = graph.find_node_by_name("Oliver")
+        assert david and lisa and oliver
+
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM edges
+                WHERE source_id = ? AND target_id = ? AND relation = 'parent_of'
+                LIMIT 1
+                """,
+                (lisa.id, oliver.id),
+            ).fetchone()
+        assert row is not None
+
+    def test_spouse_edge_infers_coparent_for_existing_children(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_coparent_spouse.db")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            create_edge("David", "parent_of", "Oliver", owner_id="quaid")
+            result = create_edge("David", "spouse_of", "Lisa", owner_id="quaid")
+
+        assert result["status"] == "created"
+        assert result.get("inferred_edges_created", 0) >= 1
+
+        lisa = graph.find_node_by_name("Lisa")
+        oliver = graph.find_node_by_name("Oliver")
+        assert lisa and oliver
+
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM edges
+                WHERE source_id = ? AND target_id = ? AND relation = 'parent_of'
+                LIMIT 1
+                """,
+                (lisa.id, oliver.id),
+            ).fetchone()
+        assert row is not None

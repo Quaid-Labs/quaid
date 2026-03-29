@@ -9251,6 +9251,85 @@ def create_edge(
                         "Vector index upsert failed during create_edge while fail-hard mode is enabled"
                     ) from exc
 
+    def _edge_exists(conn: sqlite3.Connection, source_id: str, target_id: str, rel: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM edges WHERE source_id = ? AND target_id = ? AND relation = ? LIMIT 1",
+            (source_id, target_id, rel),
+        ).fetchone()
+        return row is not None
+
+    def _insert_parent_edge_if_missing(
+        conn: sqlite3.Connection,
+        parent_id: str,
+        child_id: str,
+        source_fact_id: Optional[str],
+    ) -> bool:
+        if _edge_exists(conn, parent_id, child_id, "parent_of"):
+            return False
+        inferred = Edge.create(
+            source_id=parent_id,
+            target_id=child_id,
+            relation="parent_of",
+            source_fact_id=source_fact_id,
+            attributes={"inferred_by": "co_parent_rule"},
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO edges
+            (id, source_id, target_id, relation, attributes, weight,
+             valid_from, valid_until, created_at, source_fact_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                inferred.id,
+                inferred.source_id,
+                inferred.target_id,
+                inferred.relation,
+                json.dumps(inferred.attributes),
+                inferred.weight,
+                inferred.valid_from,
+                inferred.valid_until,
+                inferred.created_at or datetime.now().isoformat(),
+                inferred.source_fact_id,
+            ),
+        )
+        return True
+
+    def _spouse_ids(conn: sqlite3.Connection, person_id: str) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT source_id, target_id
+            FROM edges
+            WHERE relation IN ('spouse_of', 'partner_of')
+              AND (source_id = ? OR target_id = ?)
+            """,
+            (person_id, person_id),
+        ).fetchall()
+        out: List[str] = []
+        seen: set = set()
+        for row in rows:
+            sid = str(row["source_id"])
+            tid = str(row["target_id"])
+            other = tid if sid == person_id else sid
+            if other and other != person_id and other not in seen:
+                seen.add(other)
+                out.append(other)
+        return out
+
+    def _children_of(conn: sqlite3.Connection, parent_id: str) -> List[str]:
+        rows = conn.execute(
+            "SELECT target_id FROM edges WHERE relation = 'parent_of' AND source_id = ?",
+            (parent_id,),
+        ).fetchall()
+        out: List[str] = []
+        seen: set = set()
+        for row in rows:
+            cid = str(row["target_id"])
+            if cid and cid not in seen:
+                seen.add(cid)
+                out.append(cid)
+        return out
+
     conn_ctx = nullcontext(_conn) if _conn is not None else graph._get_conn()
     with conn_ctx as conn:
         # Find or create subject entity
@@ -9310,13 +9389,38 @@ def create_edge(
         ))
         _mark_phase("insert_edge", p0)
 
+        # Co-parent inference:
+        # spouse/partner + parent_of => infer the counterpart parent_of edge.
+        inferred_edges_created = 0
+        p0 = time.perf_counter() if telemetry_enabled else 0.0
+        try:
+            if relation == "parent_of":
+                for spouse_id in _spouse_ids(conn, subject.id):
+                    if _insert_parent_edge_if_missing(conn, spouse_id, obj.id, source_fact_id):
+                        inferred_edges_created += 1
+            elif relation in {"spouse_of", "partner_of"}:
+                for child_id in _children_of(conn, subject.id):
+                    if _insert_parent_edge_if_missing(conn, obj.id, child_id, source_fact_id):
+                        inferred_edges_created += 1
+                for child_id in _children_of(conn, obj.id):
+                    if _insert_parent_edge_if_missing(conn, subject.id, child_id, source_fact_id):
+                        inferred_edges_created += 1
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Co-parent inference failed during create_edge while fail-hard mode is enabled"
+                ) from exc
+            logger.warning("create_edge co-parent inference failed: %s", exc)
+        _mark_phase("infer_coparent", p0)
+
         result = {
             "edge_id": edge.id,
             "status": "created",
             "subject_id": subject.id,
             "object_id": obj.id,
             "subject_created": subject_created,
-            "object_created": object_created
+            "object_created": object_created,
+            "inferred_edges_created": inferred_edges_created,
         }
         if telemetry_enabled:
             total_ms = round((time.perf_counter() - edge_t0) * 1000.0, 2)
