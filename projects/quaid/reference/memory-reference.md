@@ -18,7 +18,7 @@ This document is the single authoritative reference for the Quaid memory system.
 The knowledge layer is a graph-based personal knowledge base using SQLite + Ollama embeddings, fully local for storage and search. LLM calls are provider-agnostic at core level and are resolved through the adapter/provider layer (gateway + config-driven deep/fast model tiers). Ollama is used for embeddings only.
 
 **Key design decisions:**
-- Local-first: Ollama for embeddings only (`qwen3-embedding:8b`, 4096-dim), SQLite for storage
+- Local-first: Ollama for embeddings only (`nomic-embed-text`, 768-dim), SQLite for storage
 - Graph structure: nodes (facts, people, preferences) + edges (relationships)
 - Hybrid search: semantic similarity + full-text keyword search with proper noun boosting
 - Privacy-aware: per-fact privacy tiers (private/shared/public) with owner-based filtering
@@ -62,7 +62,7 @@ HyDE query expansion (route_query) — rephrases question as declarative stateme
      │  falls back to original query on LLM failure
      ▼
 Parallel search (ThreadPoolExecutor)
-  ├── Semantic: cosine similarity on qwen3-embedding:8b (4096-dim)
+  ├── Semantic: cosine similarity on nomic-embed-text (768-dim)
   └── BM25: FTS5 full-text search with proper noun weighting
      │
      ▼
@@ -148,7 +148,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 
 #### Phase 2: Graph Store (DONE)
 - [x] SQLite schema with nodes, edges, FTS5, metadata
-- [x] Ollama embeddings (originally nomic-embed-text 768-dim, now qwen3-embedding:8b 4096-dim)
+- [x] Ollama embeddings (`nomic-embed-text`, 768-dim default)
 - [x] Entity extraction via Claude Haiku
 - [x] Relationship extraction via janitor edges task
 - [x] Hybrid search (semantic + FTS + edge traversal)
@@ -219,7 +219,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - All paths, models, and settings are centralized in `config/memory.json` — see `config.py` for dataclass definitions
 - Database path: `config.database.path` (default: `data/memory.db`, SQLite + WAL)
 - Archive DB: `config.database.archivePath` (default: `data/memory_archive.db`)
-- Embeddings: `config.ollama.url` (default: `http://localhost:11434`) with `config.ollama.embeddingModel` (default: `qwen3-embedding:8b`, 4096-dim)
+- Embeddings: `config.ollama.url` (default: `http://localhost:11434`) with `config.ollama.embeddingModel` (default: `nomic-embed-text`, 768-dim)
 - Shared library in `modules/quaid/lib/` — config, database, embeddings, similarity, tokens, archive
 - Env var overrides for testing: `MEMORY_DB_PATH`, `MEMORY_ARCHIVE_DB_PATH`, `OLLAMA_URL`, `CLAWDBOT_WORKSPACE`
 
@@ -240,7 +240,7 @@ Graph database schema with the following tables (full DDL in [Section 3](#3-sche
 
 **Nodes table:**
 - `id` (UUID), `type`, `name`, `attributes` (JSON)
-- `embedding` (4096-dim float32 blob for qwen3-embedding:8b)
+- `embedding` (768-dim float32 blob for nomic-embed-text)
 - `verified` (0=auto-extracted, 1=confirmed), `pinned` (never decays)
 - `confidence` (0-1 score), `extraction_confidence` (0-1, how confident the classifier was)
 - `source`, `source_id` (provenance tracking), `speaker` (who stated the fact)
@@ -281,7 +281,7 @@ Python module providing:
 **Module exports:** Defines `__all__` for explicit public API boundaries, clarifying which functions are intended for external use vs. internal implementation details.
 
 **Embedding:**
-- `get_embedding(text)` — calls Ollama qwen3-embedding:8b (4096-dim, 75.22 MTEB score). Supports `MOCK_EMBEDDINGS=1` env var for testing (deterministic 128-dim vectors from content hash).
+- `get_embedding(text)` — calls Ollama nomic-embed-text (768-dim). Supports `MOCK_EMBEDDINGS=1` env var for testing (deterministic 128-dim vectors from content hash).
 - `cosine_similarity(a, b)` — vector similarity (numpy-accelerated)
 - Embedding cache: DB-backed, avoids redundant Ollama calls for previously seen text
 - Binary packing/unpacking for SQLite storage
@@ -324,7 +324,7 @@ The search system uses a multi-stage pipeline with RRF fusion:
 - **Fact quality metric** — nodes include a quality score used during BEAM expansion to prioritize high-quality facts
 
 Key search functions:
-- `search_semantic(query, ...)` — cosine similarity on qwen3-embedding:8b embeddings with bounded fallback (200 rows when 0 FTS results)
+- `search_semantic(query, ...)` — cosine similarity on nomic-embed-text embeddings with bounded fallback (200 rows when 0 FTS results)
 - `search_fts(query)` — BM25 via FTS5 with proper noun prioritization
 - `search_hybrid()` — parallel semantic + FTS with RRF fusion and composite scoring
 - `search_graph_aware(query, ...)` — enhanced search with pronoun resolution, entity detection, and bidirectional edge traversal
@@ -664,7 +664,7 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 ## 3. Schema Reference
 
 > Auto-generated from `modules/quaid/datastore/memorydb/schema.sql` — 2026-02-27
-> Schema version: 6 | Embedding model: qwen3-embedding:8b (4096-dim)
+> Schema version: 6 | Embedding model: nomic-embed-text (768-dim)
 
 ### 3.1 Nodes — All Memory Entities
 
@@ -674,7 +674,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     type TEXT NOT NULL,                     -- Person, Place, Project, Event, Fact, Preference, Concept
     name TEXT NOT NULL,                     -- Display name / main content
     attributes TEXT DEFAULT '{}',           -- JSON blob for type-specific data
-    embedding BLOB,                         -- 4096-dim float32 array (qwen3-embedding:8b)
+    embedding BLOB,                         -- 768-dim float32 array (nomic-embed-text)
 
     -- Verification and quality
     verified INTEGER DEFAULT 0,             -- 0=auto-extracted, 1=user confirmed (slower decay)
@@ -1088,8 +1088,8 @@ CREATE TABLE IF NOT EXISTS metadata (
 
 -- Seeded values:
 -- schema_version = '6'
--- embedding_model = 'qwen3-embedding:8b'
--- embedding_dim = '4096'
+-- embedding_model = 'nomic-embed-text'
+-- embedding_dim = '768'
 ```
 
 ### 3.14 Janitor Metadata and Runs
@@ -1423,15 +1423,15 @@ Embeddings config lives in `QUAID_HOME/shared/config/memory.json` — written on
 {
   "ollama": {
     "url": "http://localhost:11434",
-    "embeddingModel": "qwen3-embedding:8b",
-    "embeddingDim": 4096
+    "embeddingModel": "nomic-embed-text",
+    "embeddingDim": 768
   }
 }
 ```
 
 To change the embedding model: `quaid config edit --shared`
 
-The embedding model was upgraded from nomic-embed-text (768-dim) → qwen3-embedding:0.6b → **qwen3-embedding:8b** (4096-dim, 75.22 MTEB score). The higher-dimensional embeddings provide significantly better semantic matching quality.
+Default embedding model is **nomic-embed-text** (768-dim). Other models can be selected via shared config when needed for specific recall/latency tradeoffs.
 
 ### 4.6 Provider and Model Config
 

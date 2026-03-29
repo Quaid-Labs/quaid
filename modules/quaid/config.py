@@ -266,8 +266,8 @@ class DatabaseConfig:
 @dataclass
 class OllamaConfig:
     url: str = "http://localhost:11434"
-    embedding_model: str = "qwen3-embedding:8b"
-    embedding_dim: int = 4096
+    embedding_model: str = "nomic-embed-text"
+    embedding_dim: int = 768
 
 
 @dataclass
@@ -1357,8 +1357,8 @@ def _load_config_inner() -> MemoryConfig:
     ollama_data = config_data.get('ollama', {})
     ollama = OllamaConfig(
         url=ollama_data.get('url', 'http://localhost:11434'),
-        embedding_model=ollama_data.get('embedding_model', ollama_data.get('embeddingModel', 'qwen3-embedding:8b')),
-        embedding_dim=ollama_data.get('embedding_dim', ollama_data.get('embeddingDim', 4096)),
+        embedding_model=ollama_data.get('embedding_model', ollama_data.get('embeddingModel', 'nomic-embed-text')),
+        embedding_dim=ollama_data.get('embedding_dim', ollama_data.get('embeddingDim', 768)),
     )
 
     # Parse rag config

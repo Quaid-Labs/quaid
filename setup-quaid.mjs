@@ -577,8 +577,8 @@ const C = {
 
 // Known embedding models: model name → { dim, ramGB, quality }
 const EMBED_MODELS = {
-  "qwen3-embedding:8b":  { dim: 4096, ramGB: 6,   quality: "Best", rank: 1 },
-  "nomic-embed-text":    { dim: 768,  ramGB: 1.5, quality: "Good", rank: 2 },
+  "nomic-embed-text":    { dim: 768,  ramGB: 1.5, quality: "Best", rank: 1 },
+  "qwen3-embedding:8b":  { dim: 4096, ramGB: 6,   quality: "High", rank: 2 },
   "bge-large":           { dim: 1024, ramGB: 1.2, quality: "Good", rank: 3 },
   "mxbai-embed-large":   { dim: 1024, ramGB: 1.2, quality: "Good", rank: 4 },
   "all-minilm":          { dim: 384,  ramGB: 0.5, quality: "Basic", rank: 5 },
@@ -2271,7 +2271,6 @@ async function step4_embeddings() {
   const { total: totalRam, free: freeRam } = getSystemRAM();
   log.info(C.dim(`System RAM: ${totalRam}GB total, ~${freeRam}GB available`));
   const recommendedByRam =
-    (freeRam >= 8 || totalRam >= 24) ? "qwen3-embedding:8b" :
     (freeRam >= 4 || totalRam >= 12) ? "nomic-embed-text" :
     "all-minilm";
   log.info(C.dim(`Recommended embedding by RAM: ${recommendedByRam}`));

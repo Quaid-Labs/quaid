@@ -259,7 +259,7 @@ function setCaptureTimeoutMinutes(cfg, minutes) {
 }
 
 function effectiveEmbeddingModel(cfg, provider) {
-  if (provider === "ollama") return String(getPath(cfg, "ollama.embeddingModel", "qwen3-embedding:8b"));
+  if (provider === "ollama") return String(getPath(cfg, "ollama.embeddingModel", "nomic-embed-text"));
   if (provider === "openai") return "provider-default";
   return "provider-default";
 }
@@ -643,13 +643,13 @@ async function runEdit() {
       const next = await chooseWithCustom(
         "ollama.embeddingModel",
         [
-          { value: "qwen3-embedding:8b", label: "qwen3-embedding:8b", hint: "high-quality local embedding" },
-          { value: "nomic-embed-text", label: "nomic-embed-text", hint: "fast baseline" },
+          { value: "nomic-embed-text", label: "nomic-embed-text", hint: "default local embedding" },
+          { value: "qwen3-embedding:8b", label: "qwen3-embedding:8b", hint: "high-quality, higher RAM use" },
           { value: "bge-large", label: "bge-large" },
           { value: "mxbai-embed-large", label: "mxbai-embed-large" },
           { value: "all-minilm", label: "all-minilm" },
         ],
-        getPath(cfg, "ollama.embeddingModel", "qwen3-embedding:8b"),
+        getPath(cfg, "ollama.embeddingModel", "nomic-embed-text"),
       );
       setPath(cfg, "ollama.embeddingModel", next);
     } else if (menu === "notify") {

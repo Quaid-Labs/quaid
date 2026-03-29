@@ -25,7 +25,7 @@ Quaid is a graph-based persistent knowledge layer for AI agents. It ships with d
 - **Interfaces:** CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks), Claude Code adapter/hooks
 - **Backend:** Python modules for graph operations, extraction, retrieval, maintenance, docs, and project tracking
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
-- **Embeddings:** Ollama local server (qwen3-embedding:8b, 4096 dimensions)
+- **Embeddings:** Ollama local server (nomic-embed-text, 768 dimensions)
 - **LLM calls:** Anthropic API (Opus for deep-reasoning, Haiku for fast-reasoning / reranking)
 - **Config:** JSON config file at `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json`
 
@@ -348,7 +348,7 @@ config/memory.json
   projects                 -- Projects system (definitions, staging dir)
   users                    -- Owner identity mapping
     identities.<owner>.personNodeName -- Maps owner to person node name
-  ollama                   -- URL, embedding model (qwen3-embedding:8b), embedding dim (4096)
+  ollama                   -- URL, embedding model (nomic-embed-text), embedding dim (768)
 ```
 
 Additional keys worth knowing:

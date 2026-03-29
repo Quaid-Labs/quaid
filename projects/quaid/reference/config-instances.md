@@ -280,7 +280,7 @@ quaid config edit --instance claude-code
 # Set a single key by dotted path (auto-coerces: int/float/bool/JSON/string)
 quaid config set retrieval.fail_hard false
 quaid config set models.llmProvider claude-code
-quaid config set ollama.embeddingModel qwen3-embedding:8b --shared
+quaid config set ollama.embeddingModel nomic-embed-text --shared
 quaid config set capture.inactivityTimeoutMinutes 30 --instance claude-code
 
 # Store a long-lived auth token for the active adapter

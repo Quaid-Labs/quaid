@@ -1502,9 +1502,7 @@ step4_embeddings() {
     if [[ "$total_ram_gb" -gt 0 ]]; then
         info "System RAM: ${total_ram_gb}GB total, ~${free_ram_gb}GB available"
     fi
-    if [[ "$free_ram_gb" -ge 8 ]] || [[ "$total_ram_gb" -ge 24 ]]; then
-        info "Recommended embedding by RAM: qwen3-embedding:8b"
-    elif [[ "$free_ram_gb" -ge 4 ]] || [[ "$total_ram_gb" -ge 12 ]]; then
+    if [[ "$free_ram_gb" -ge 4 ]] || [[ "$total_ram_gb" -ge 12 ]]; then
         info "Recommended embedding by RAM: nomic-embed-text"
     else
         info "Recommended embedding by RAM: all-minilm"
@@ -1631,11 +1629,10 @@ step4_embeddings() {
         local default_choice=3  # fallback to smallest
 
         if [[ "$free_ram_gb" -ge 8 ]] || [[ "$total_ram_gb" -ge 24 ]]; then
-            can_8b=true; default_choice=1
+            can_8b=true
         fi
         if [[ "$free_ram_gb" -ge 4 ]] || [[ "$total_ram_gb" -ge 12 ]]; then
-            can_nomic=true
-            [[ "$default_choice" -gt 2 ]] && default_choice=2
+            can_nomic=true; default_choice=2
         fi
         if [[ "$free_ram_gb" -ge 2 ]] || [[ "$total_ram_gb" -ge 8 ]]; then
             can_mini=true

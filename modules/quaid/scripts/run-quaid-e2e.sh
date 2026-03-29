@@ -1560,12 +1560,12 @@ if command -v ollama >/dev/null 2>&1; then
   if [[ "$RUN_JANITOR" == true ]]; then
     EMBED_PREF="${QUAID_E2E_OLLAMA_EMBED_MODEL:-${QUAID_E2E_JANITOR_EMBEDDINGS_MODEL:-nomic-embed-text:latest}}"
   else
-    EMBED_PREF="${QUAID_E2E_OLLAMA_EMBED_MODEL:-qwen3-embedding:8b}"
+    EMBED_PREF="${QUAID_E2E_OLLAMA_EMBED_MODEL:-nomic-embed-text}"
   fi
   EMBED_SELECTED="$EMBED_PREF"
   if ! ollama list 2>/dev/null | rg -q "^${EMBED_SELECTED}\\s"; then
     echo "[e2e] WARN: preferred embeddings model not installed in Ollama: ${EMBED_SELECTED}" >&2
-    for candidate in qwen3-embedding:8b nomic-embed-text:latest nomic-embed-text mxbai-embed-large:latest mxbai-embed-large all-minilm; do
+    for candidate in nomic-embed-text:latest nomic-embed-text qwen3-embedding:8b mxbai-embed-large:latest mxbai-embed-large all-minilm; do
       if ollama list 2>/dev/null | rg -q "^${candidate}\\s"; then
         EMBED_SELECTED="$candidate"
         echo "[e2e] Using installed Ollama embeddings fallback: ${EMBED_SELECTED}" >&2

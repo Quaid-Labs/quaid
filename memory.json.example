@@ -262,13 +262,13 @@
 
   "ollama": {
     "url": "http://localhost:11434",
-    "embeddingModel": "qwen3-embedding:8b",
-    "embeddingDim": 4096,
+    "embeddingModel": "nomic-embed-text",
+    "embeddingDim": 768,
     "_WARNING_BEFORE_CHANGING_MODEL": [
       "STOP! Changing embeddingModel invalidates ALL existing embeddings.",
       "You MUST re-embed everything after changing: run 'quaid re-embed'.",
       "embeddingDim must match the new model's output dimension.",
-      "Common models: qwen3-embedding:8b (4096, ~6GB RAM), nomic-embed-text (768, ~1.5GB), all-minilm (384, ~500MB)."
+      "Common models: nomic-embed-text (768, ~1.5GB RAM), qwen3-embedding:8b (4096, ~6GB), all-minilm (384, ~500MB)."
     ]
   },
 

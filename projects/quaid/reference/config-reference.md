@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `8d1573c86853`
+Source hash: `040f771ad099`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -182,8 +182,8 @@ Notes:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `ollama.url` | `str` | `"http://localhost:11434"` |  |
-| `ollama.embedding_model` | `str` | `"qwen3-embedding:8b"` |  |
-| `ollama.embedding_dim` | `int` | `4096` |  |
+| `ollama.embedding_model` | `str` | `"nomic-embed-text"` |  |
+| `ollama.embedding_dim` | `int` | `768` |  |
 
 ## `plugins`
 

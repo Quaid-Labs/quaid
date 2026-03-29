@@ -1085,7 +1085,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
     """Generates embeddings via a local Ollama instance."""
 
     def __init__(self, url: str = "http://localhost:11434",
-                 model: str = "qwen3-embedding:8b", dim: int = 4096):
+                 model: str = "nomic-embed-text", dim: int = 768):
         self._url = url
         self._model = model
         self._dim = dim

@@ -197,8 +197,8 @@ Files scanned by `scan_docs_directory()`:
 
 ## 5. Embedding Model and Ollama
 
-- **Model:** `qwen3-embedding:8b`
-- **Dimensions:** 4096 (float32)
+- **Model:** `nomic-embed-text`
+- **Dimensions:** 768 (float32)
 - **Storage:** Packed as a float32 BLOB in `doc_chunks.embedding` via `lib/embeddings.py` helpers: `pack_embedding()` / `unpack_embedding()`
 - **Batch path:** `lib/embeddings.get_embeddings()` dedupes repeated texts and
   prefers provider-side `embed_many()` when available. `OllamaEmbeddingsProvider`
@@ -444,7 +444,7 @@ quaid docs changelog                                 # Recent doc update history
 | `rag.search_limit` | Default `--limit` for `docs search` (default: 5) |
 | `rag.min_similarity` | Default minimum similarity threshold (default: 0.3) |
 | `ollama.url` | Ollama server URL |
-| `ollama.embeddingDim` | Embedding dimension (expected: 4096 for qwen3-embedding:8b) |
+| `ollama.embeddingDim` | Embedding dimension (expected: 768 for nomic-embed-text) |
 | `projects.enabled` | Whether project system is active |
 | `projects.staging_dir` | Path to event queue directory |
 | `projects.definitions.<name>` | Project definitions (seeded to DB; DB is source of truth after first run) |

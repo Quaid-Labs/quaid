@@ -865,8 +865,8 @@ class TestOllamaEmbeddingsProvider:
     def test_init_defaults(self):
         p = OllamaEmbeddingsProvider()
         assert p._url == "http://localhost:11434"
-        assert p._model == "qwen3-embedding:8b"
-        assert p._dim == 4096
+        assert p._model == "nomic-embed-text"
+        assert p._dim == 768
 
     def test_init_custom(self):
         p = OllamaEmbeddingsProvider(url="http://gpu:11434", model="nomic", dim=768)

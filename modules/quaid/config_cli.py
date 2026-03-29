@@ -259,7 +259,7 @@ def _print_summary(path: Path, data: dict[str, Any], label: str = "") -> None:
     print(f"provider:         {_get(data, 'models.llm_provider', _get(data, 'models.llmProvider', 'default'))}")
     print(f"deep reasoning:   {_get(data, 'models.deep_reasoning', _get(data, 'models.deepReasoning', 'default'))}")
     print(f"fast reasoning:    {_get(data, 'models.fast_reasoning', _get(data, 'models.fastReasoning', 'default'))}")
-    print(f"embeddings model: {_get(data, 'ollama.embeddingModel', _get(data, 'ollama.embedding_model', 'qwen3-embedding:8b'))}")
+    print(f"embeddings model: {_get(data, 'ollama.embeddingModel', _get(data, 'ollama.embedding_model', 'nomic-embed-text'))}")
     print(f"notify level:     {_get(data, 'notifications.level', 'normal')}")
     print(f"fail hard:        {_get(data, 'retrieval.fail_hard', _get(data, 'retrieval.failHard', True))}")
     print(f"identity mode:    {_get(data, 'identity.mode', 'single_user')}")
@@ -356,7 +356,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = str(_get(staged, key, "default"))
                 _set(staged, key, _prompt_str(key, cur))
             elif choice == "4":
-                cur = str(_get(staged, "ollama.embeddingModel", _get(staged, "ollama.embedding_model", "qwen3-embedding:8b")))
+                cur = str(_get(staged, "ollama.embeddingModel", _get(staged, "ollama.embedding_model", "nomic-embed-text")))
                 _set(staged, "ollama.embeddingModel", _prompt_str("ollama.embeddingModel", cur))
             elif choice == "5":
                 cur = str(_get(staged, "notifications.level", "normal"))

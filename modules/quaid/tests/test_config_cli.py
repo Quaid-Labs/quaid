@@ -90,7 +90,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
     }
     answers = iter(
         [
-            "4", "qwen3-embedding:8b",
+            "4", "nomic-embed-text",
             "6", "60",
             "13",
         ]
@@ -109,7 +109,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
 
     assert changed is True
     assert saved["path"] == path
-    assert saved["data"]["ollama"]["embeddingModel"] == "qwen3-embedding:8b"
+    assert saved["data"]["ollama"]["embeddingModel"] == "nomic-embed-text"
     assert saved["data"]["capture"]["inactivity_timeout_minutes"] == 60
 
 
