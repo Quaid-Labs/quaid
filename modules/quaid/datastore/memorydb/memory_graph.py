@@ -2624,21 +2624,6 @@ def graph_aware_recall(
     # Determine which relations to expand based on currently active graph relations
     matched_relations = _relation_matches_for_query(query)
     expand_relations = matched_relations or None
-    # Broad kinship prompts ("my family", "relatives", etc.) can fail to map to
-    # concrete relation keywords when edge keyword tables are sparse. In that case,
-    # keep graph expansion focused on canonical family relations instead of walking
-    # unrelated neighborhoods (e.g., memberships, projects, routine activities).
-    if not matched_relations and re.search(
-        r"\b(family|relative|relatives|kin|sibling|siblings|brother|sister|parent|parents|child|children|son|daughter|spouse|husband|wife|partner|nephew|niece)\b",
-        str(query or "").lower(),
-    ):
-        expand_relations = [
-            "family_of",
-            "sibling_of",
-            "parent_of",
-            "spouse_of",
-            "partner_of",
-        ]
     if _has_generic_graph_signal(query):
         graph_depth = max(graph_depth, 2)
 
