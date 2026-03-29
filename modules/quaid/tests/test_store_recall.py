@@ -2473,6 +2473,29 @@ class TestRecallFastHookInjectContract:
             )
 
         assert stores == ["vector", "graph"]
+
+    def test_infer_recall_store_defaults_routes_graph_for_broad_family_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, _ = mg._infer_recall_store_defaults(
+                "What do you know about my family?",
+            )
+
+        assert stores == ["vector", "graph"]
+
+    def test_classify_intent_prefers_relation_for_broad_family_prompt(self):
+        import datastore.memorydb.memory_graph as mg
+
+        intent, boosts = mg.classify_intent("What do you know about my family?")
+
+        assert intent == "RELATION"
+        assert boosts.get("Person", 0) > 1.0
     def test_query_fit_multiplier_boosts_neighbour_rows_for_social_queries(self):
         import datastore.memorydb.memory_graph as mg
 

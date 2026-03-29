@@ -149,6 +149,54 @@ def _owner_full_name() -> str:
     return "the user"
 
 
+_OWNER_ALIAS_EXACT = frozenset({
+    "the user",
+    "user",
+    "the owner",
+    "owner",
+    "me",
+    "myself",
+    "i",
+})
+
+_ENTITY_PLACEHOLDER_PREFIXES = (
+    "user's ",
+    "the user's ",
+    "owner's ",
+    "the owner's ",
+    "my ",
+    "our ",
+    "his ",
+    "her ",
+    "their ",
+)
+
+
+def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
+    """Normalize owner aliases in extracted edge entities to the canonical owner name."""
+    text = str(name or "").strip()
+    if not text:
+        return text
+    owner = (owner_full or "").strip()
+    if not owner or owner.lower() == "the user":
+        return text
+    if text.lower() in _OWNER_ALIAS_EXACT:
+        return owner
+    return text
+
+
+def _is_placeholder_entity_name(name: str, owner_full: Optional[str] = None) -> bool:
+    """Return True when the entity label is role-based/ambiguous, not a named entity."""
+    text = str(name or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in _OWNER_ALIAS_EXACT:
+        owner = (owner_full or "").strip()
+        return not owner or owner.lower() == "the user"
+    return any(lowered.startswith(prefix) for prefix in _ENTITY_PLACEHOLDER_PREFIXES)
+
+
 def _default_owner_id() -> str:
     """Get the default owner ID from config."""
     try:
@@ -2219,11 +2267,13 @@ JSON array only:"""
         for edge in raw_edges:
             if not isinstance(edge, dict):
                 continue
-            subject = (edge.get("subject") or "").strip()
-            obj = (edge.get("object") or "").strip()
+            subject = _canonicalize_owner_alias(edge.get("subject") or "", owner_full)
+            obj = _canonicalize_owner_alias(edge.get("object") or "", owner_full)
             relation = (edge.get("relation") or "").strip().lower().replace(" ", "_")
 
             if not subject or not obj or not relation:
+                continue
+            if _is_placeholder_entity_name(subject, owner_full) or _is_placeholder_entity_name(obj, owner_full):
                 continue
             if subject.lower() == obj.lower():
                 continue

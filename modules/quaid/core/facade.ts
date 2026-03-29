@@ -2935,11 +2935,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       if (memory.validFrom || memory.validUntil) {
         const from = memory.validFrom ? memory.validFrom.split("T")[0] : "";
         const until = memory.validUntil ? memory.validUntil.split("T")[0] : "";
-        if (from && until) return `valid ${from} to ${until}`;
-        if (from) return `valid since ${from}`;
-        if (until) return `valid until ${until}`;
+        if (from && until) return ` | valid ${from} until ${until}`;
+        if (from) return ` | valid ${from}`;
+        if (until) return ` | valid until ${until}`;
       }
-      if (memory.createdAt) return `recorded ${memory.createdAt.split("T")[0]}`;
+      if (memory.createdAt) return ` | recorded ${memory.createdAt.split("T")[0]}`;
       return "";
     };
     const sortTimestampDesc = (value?: string): number => {
@@ -2952,23 +2952,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       if (Math.abs(simDelta) > 1e-9) return simDelta;
       return sortTimestampDesc(b.createdAt) - sortTimestampDesc(a.createdAt);
     });
+    const normalizeGraphText = (text: string): string => text.replace(/\s*→\s*/g, " -> ");
     const formatMemoryLine = (m: MemoryResult, label = m.category): string => {
-      const conf = m.extractionConfidence ?? 0.5;
-      const similarityLabel = Number.isFinite(Number(m.similarity))
-        ? ` [sim:${Math.round(Number(m.similarity || 0) * 100)}%]`
-        : "";
-      const confidenceLabel = Number.isFinite(Number(m.extractionConfidence))
-        ? ` [conf:${Math.round(Number(m.extractionConfidence || 0) * 100)}%]`
-        : "";
       const temporalLabel = formatTemporalLabel(m);
-      const timestamp = temporalLabel ? ` (${temporalLabel})` : "";
-      const domainLabel = Array.isArray(m.domains) && m.domains.length
-        ? ` [domains:${m.domains.join(",")}]`
-        : "";
-      if (conf < 0.4) {
-        return `- [${label}]${similarityLabel}${confidenceLabel}${timestamp}${domainLabel} (uncertain) ${m.text}`;
-      }
-      return `- [${label}]${similarityLabel}${confidenceLabel}${timestamp}${domainLabel} ${m.text}`;
+      const projectLabel = m.project ? ` | project ${m.project}` : "";
+      return `- ${label} | ${m.text}${projectLabel}${temporalLabel}`;
     };
     const graphAnchorExpansions = sorted.filter((m) => isGraphAnchorExpansion(m));
     const graphExpansionAnchorKeys = new Set(
@@ -3004,24 +2992,24 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         });
       }
       if (grouped.size > 0) {
-        lines.push(`- [graph-expansion-block] First-order graph expansions from top node matches:`);
         for (const group of grouped.values()) {
-          const anchorSim = Number.isFinite(Number(group.anchorSimilarity))
-            ? ` [sim:${Math.round(Number(group.anchorSimilarity || 0) * 100)}%]`
-            : "";
-          lines.push(`- [graph-expansion-anchor]${anchorSim} ${group.anchorText}`);
-          for (const row of group.rows) {
-            lines.push(formatMemoryLine(row, "graph-expansion-hit"));
+          const anchor = String(group.anchorText || "").trim();
+          if (!anchor) continue;
+          lines.push(`<graph_expansion:${anchor}>`);
+          if (Number.isFinite(Number(group.totalConnections)) && Number.isFinite(Number(group.shownConnections))) {
+            lines.push(`<Showing top ${Math.round(Number(group.shownConnections || 0))} of ${Math.round(Number(group.totalConnections || 0))} graph relations>`);
           }
+          for (const row of group.rows) {
+            lines.push(`  ${normalizeGraphText(String(row.text || ""))}`);
+          }
+          lines.push(`</graph_expansion>`);
         }
       }
     }
     if (graphNodeHits.length > 0) {
-      const packed = graphNodeHits
-        .slice(0, 8)
-        .map((m) => `${m.text} (${Math.round((m.similarity || 0) * 100)}%)`)
-        .join(", ");
-      lines.push(`- [graph-node-hits] Entity node references (not standalone facts): ${packed}`);
+      graphNodeHits.slice(0, 8).forEach((m) => {
+        lines.push(`- graph_node_hit | ${m.text}`);
+      });
     }
     return `<injected_memories>
 ${lines.join("\n")}

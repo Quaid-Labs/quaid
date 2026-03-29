@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from datastore.memorydb.maintenance_ops import (
     _normalize_edge, _INVERSE_MAP, _SYNONYM_MAP, _SYMMETRIC_RELATIONS,
     _SEED_RELATIONS,
+    _canonicalize_owner_alias, _is_placeholder_entity_name,
 )
 
 
@@ -260,6 +261,26 @@ class TestCombinedTransforms:
         assert r == "partner_of"
         assert s == "Alice"
         assert o == "Zed"
+
+
+class TestOwnerAliasCanonicalization:
+    def test_exact_owner_alias_maps_to_owner_full_name(self):
+        assert _canonicalize_owner_alias("the user", "Solomon Steadman") == "Solomon Steadman"
+        assert _canonicalize_owner_alias("ME", "Solomon Steadman") == "Solomon Steadman"
+
+    def test_owner_alias_not_changed_without_owner_full_name(self):
+        assert _canonicalize_owner_alias("the user", "the user") == "the user"
+        assert _canonicalize_owner_alias("the user", "") == "the user"
+
+
+class TestPlaceholderEntityFiltering:
+    def test_flags_possessive_placeholder_entity_names(self):
+        assert _is_placeholder_entity_name("User's sister", "Solomon Steadman")
+        assert _is_placeholder_entity_name("my brother", "Solomon Steadman")
+
+    def test_allows_named_entities(self):
+        assert not _is_placeholder_entity_name("David", "Solomon Steadman")
+        assert not _is_placeholder_entity_name("Google", "Solomon Steadman")
 
 
 class TestWhitespaceAndCase:

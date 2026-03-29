@@ -761,12 +761,12 @@ describe("QuaidFacade", () => {
       },
     ]);
     expect(out).toContain("<injected_memories>");
+    expect(out).toContain("- fact | Older fact | recorded 2026-01-01");
+    expect(out).toContain("- fact | Same score newer fact | recorded 2026-01-03");
+    expect(out).toContain("- fact | New uncertain fact | recorded 2026-01-02");
+    expect(out).toContain("- fact | Validity-only fact | valid 2026-02-01 until 2026-02-20");
+    expect(out).toContain("- graph_node_hit | Alice");
     expect(out).toContain("</injected_memories>");
-    expect(out).toContain("- [fact] [sim:70%] (recorded 2026-01-01) [domains:technical] Older fact");
-    expect(out).toContain("- [fact] [sim:65%] (recorded 2026-01-03) Same score newer fact");
-    expect(out).toContain("- [fact] [sim:65%] [conf:20%] (recorded 2026-01-02) [domains:personal] (uncertain) New uncertain fact");
-    expect(out).toContain("- [fact] [sim:60%] (valid 2026-02-01 to 2026-02-20) Validity-only fact");
-    expect(out).toContain("[graph-node-hits] Entity node references");
     expect(out.indexOf("Older fact")).toBeLessThan(out.indexOf("Same score newer fact"));
     expect(out.indexOf("Same score newer fact")).toBeLessThan(out.indexOf("New uncertain fact"));
   });
@@ -784,14 +784,18 @@ describe("QuaidFacade", () => {
         graphExpansionAnchorId: "mike-node",
         graphExpansionAnchorText: "Mike",
         graphExpansionAnchorSimilarity: 0.94,
+        graphExpansionTotalConnections: 12,
+        graphExpansionShownConnections: 5,
+        graphExpansionTruncated: true,
         createdAt: "2026-03-20T00:00:00Z",
       },
     ]);
 
-    expect(out).toContain("[graph-expansion-block] First-order graph expansions from top node matches:");
-    expect(out).toContain("[graph-expansion-anchor] [sim:94%] Mike");
-    expect(out).toContain("- [graph-expansion-hit] [sim:68%] (recorded 2026-03-20) David → sibling_of → Mike");
-    expect(out).not.toContain("[graph-node-hits] Entity node references (not standalone facts): Mike");
+    expect(out).toContain("<graph_expansion:Mike>");
+    expect(out).toContain("<Showing top 5 of 12 graph relations>");
+    expect(out).toContain("  David -> sibling_of -> Mike");
+    expect(out).toContain("</graph_expansion>");
+    expect(out).not.toContain("- graph_node_hit | Mike");
   });
 
   it("formatMemoriesForInjection surfaces memory quality notes from recall metadata", () => {

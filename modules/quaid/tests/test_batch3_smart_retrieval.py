@@ -75,6 +75,12 @@ class TestClassifyIntent:
         intent, boosts = classify_intent("how is Levi related to Hauser as siblings")
         assert intent == "RELATION"
 
+    def test_family_query_prefers_relation_intent(self):
+        from datastore.memorydb.memory_graph import classify_intent
+        intent, boosts = classify_intent("What do you know about my family?")
+        assert intent == "RELATION"
+        assert "Person" in boosts
+
     def test_general_query(self):
         from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("coffee espresso beans")

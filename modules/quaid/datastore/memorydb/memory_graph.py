@@ -2286,7 +2286,7 @@ def _relation_matches_for_query(query: str) -> List[str]:
 def _has_generic_graph_signal(query: str) -> bool:
     lowered = str(query or "").lower()
     return bool(re.search(
-        r"\b(relation|relationship|related|connected|connection|hierarchy|depends|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|reports?\s+to)\b",
+        r"\b(relation|relationship|related|connected|connection|hierarchy|depends|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|family|relative|kin|kinship|reports?\s+to)\b",
         lowered,
     ))
 
@@ -3320,7 +3320,7 @@ _INTENT_PATTERNS = {
         "type_boosts": {"Preference": 1.3},
     },
     "RELATION": {
-        "patterns": [r"\brelated to\b", r"\bconnect", r"\brelationship\b", r"\bmarried\b", r"\bspouse\b", r"\bchild\b", r"\bparent\b", r"\bsibling\b", r"\bpet\b", r"\bneighbou?r\b", r"\bnext door\b"],
+        "patterns": [r"\brelated to\b", r"\bconnect", r"\brelationship\b", r"\bmarried\b", r"\bspouse\b", r"\bchild\b", r"\bparent\b", r"\bsibling\b", r"\bfamily\b", r"\brelative\b", r"\bpet\b", r"\bneighbou?r\b", r"\bnext door\b"],
         "type_boosts": {"Person": 1.2},
     },
     "WHY": {
@@ -3352,11 +3352,30 @@ def classify_intent(query: str) -> Tuple[str, Dict[str, float]]:
     best_intent = "GENERAL"
     best_score = 0
     best_boosts: Dict[str, float] = {}
+    relation_favor = bool(
+        re.search(
+            r"\b(family|relative|sibling|brother|sister|parent|child|son|daughter|nephew|niece|spouse|husband|wife)\b",
+            query_lower,
+            re.IGNORECASE,
+        )
+    )
 
     for intent_name, config in _INTENT_PATTERNS.items():
         score = sum(1 for p in config["patterns"] if re.search(p, query_lower, re.IGNORECASE))
         if score > best_score:
             best_score = score
+            best_intent = intent_name
+            best_boosts = config["type_boosts"]
+            continue
+        if (
+            score == best_score
+            and relation_favor
+            and intent_name == "RELATION"
+            and best_intent == "WHO"
+        ):
+            # Broad kinship prompts often score WHO and RELATION equally.
+            # Prefer RELATION so graph-aware recall planning can include
+            # sibling/spouse/children clusters by default.
             best_intent = intent_name
             best_boosts = config["type_boosts"]
 
