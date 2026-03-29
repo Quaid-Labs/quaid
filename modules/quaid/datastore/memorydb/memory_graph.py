@@ -4707,6 +4707,56 @@ def _recall_once(
         if score >= min_similarity
     ]
 
+    # Post-threshold FTS rescue:
+    # If hybrid search produced candidates but thresholding removed all of them,
+    # run the same keyword fallback used for empty hybrid results.
+    if not scored_results and _pre_threshold_scored_results:
+        _phase_t0 = _time.monotonic()
+        fts_rescue = graph.search_fts(clean_query, limit=search_limit, owner_id=owner_id)
+        seen_rescue_ids = set()
+        for node, fts_rank in fts_rescue:
+            if node.id in seen_rescue_ids:
+                continue
+            seen_rescue_ids.add(node.id)
+            quality = max(0.5, 1.0 - fts_rank * 0.02)
+            _attrs = node.attributes if isinstance(node.attributes, dict) else {}
+            composite = _compute_composite_score(
+                node,
+                quality,
+                config_retrieval,
+                intent=intent,
+                prefer_fresh=prefer_fresh,
+            )
+            if type_boosts and node.type in type_boosts:
+                composite = min(composite * type_boosts[node.type], 1.0)
+            if boosted_node_factors:
+                boost_factor = boosted_node_factors.get(node.id)
+                if boost_factor:
+                    composite = min(composite * boost_factor, 1.0)
+            composite = min(
+                composite * _compute_query_fit_multiplier(clean_query, node, _attrs, intent=intent),
+                1.0,
+            )
+            if composite >= min_similarity:
+                scored_results.append((node, composite))
+                if debug and debug_info is not None:
+                    debug_info[node.id] = {
+                        "raw_quality_score": round(quality, 4),
+                        "composite_score": round(composite, 4),
+                        "intent": intent,
+                        "type_boost": type_boosts.get(node.type, 1.0) if type_boosts else 1.0,
+                        "node_type": node.type,
+                        "confidence": node.confidence,
+                        "access_count": node.access_count,
+                        "confirmation_count": node.confirmation_count,
+                        "valid_from": node.valid_from,
+                        "valid_until": node.valid_until,
+                        "fts_rescue": True,
+                    }
+        if fts_rescue:
+            _fts_fallback_used = True
+        _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
+
     # Multi-pass retrieval: if top results are low quality, try broader search
     _multi_pass_gate = 0.70
     if config_retrieval:

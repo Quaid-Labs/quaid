@@ -3036,6 +3036,37 @@ class TestScoreThreshold:
                     f"Result leaked through threshold: similarity={r['similarity']} < {threshold}"
                 )
 
+    def test_threshold_empty_triggers_fts_rescue(self, tmp_path):
+        """When thresholding empties hybrid candidates, FTS rescue should return lexical hits."""
+        from datastore.memorydb.memory_graph import store, recall
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
+             patch("datastore.memorydb.memory_graph._compute_composite_score", side_effect=lambda _n, q, *_a, **_k: float(q)):
+            store("solomon's morning run route goes along the canal towpath",
+                  owner_id="quaid", skip_dedup=True)
+
+            # Force hybrid to return a weak candidate that fails threshold.
+            node = graph.search_fts("canal towpath", limit=1, owner_id="quaid")[0][0]
+            with patch.object(graph, "search_hybrid", return_value=[(node, 0.30)]), \
+                 patch.object(graph, "search_fts", return_value=[(node, 0)]):
+                results = recall(
+                    "exercise habits recent plans",
+                    owner_id="quaid",
+                    use_routing=False,
+                    min_similarity=0.60,
+                    include_graph_traversal=False,
+                    include_co_session=False,
+                    include_mmr=False,
+                    use_multi_pass=False,
+                )
+
+            assert results, "Expected FTS rescue to return at least one result after threshold-empty hybrid"
+            assert any("canal towpath" in (r.get("text") or "").lower() for r in results)
+
 
 # ---------------------------------------------------------------------------
 # recall() limit parameter edge cases
