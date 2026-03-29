@@ -1342,6 +1342,8 @@ async function callConfiguredLLM(
   );
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    // v2026.3.28+: gateway /v1/responses requires x-openclaw-scopes header for write access.
+    "x-openclaw-scopes": "operator.write",
   };
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
@@ -1389,7 +1391,8 @@ async function callConfiguredLLM(
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: `${resolved.provider}/${resolved.model}`,
+          // v2026.3.28+: gateway /v1/responses only accepts "openclaw" as model name.
+          model: "openclaw",
           input: [
             { type: "message", role: "system", content: systemPrompt },
             { type: "message", role: "user", content: userMessage },
