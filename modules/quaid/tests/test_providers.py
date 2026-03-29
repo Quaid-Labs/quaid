@@ -1292,6 +1292,195 @@ class TestGatewayLLMProvider:
         p = GatewayLLMProvider(port=18789, token="")
         assert p._token == "cfg-token"
 
+    def test_openresponses_fallback_sends_x_openclaw_model_header(self, monkeypatch, tmp_path):
+        """Fallback /v1/responses path must send x-openclaw-model for per-request model
+        routing (v2026.3.24+).
+
+        Without this header the gateway silently routes every call to its configured
+        primary model (e.g. claude-sonnet-4-5), completely ignoring the fast/deep tier
+        config in memory.json.  This test guards against that regression by verifying
+        the outbound request contains the header with the correct anthropic/<model> value.
+        """
+        import urllib.request as _ureq
+        import urllib.error
+
+        quaid_home = tmp_path / "quaid"
+        cfg_dir = quaid_home / "config"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "memory.json").write_text(
+            json.dumps({
+                "models": {
+                    "fastReasoning": "claude-haiku-4-5",
+                    "deepReasoning": "claude-haiku-4-5",
+                }
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(quaid_home))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+        p = GatewayLLMProvider(port=18789, token="test-token")
+
+        # Force the primary /plugins/quaid/llm path to 404 so the fallback fires.
+        not_found = urllib.error.HTTPError(
+            url="http://127.0.0.1:18789/plugins/quaid/llm",
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":"not found"}'),
+        )
+        mock_resp_data = json.dumps({
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            "model": "openclaw",
+            "usage": {"input_tokens": 5, "output_tokens": 2},
+        }).encode()
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = mock_resp_data
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        captured_requests = []
+
+        def fake_urlopen(req, timeout=None):
+            captured_requests.append(req)
+            if "/plugins/quaid/llm" in req.full_url:
+                raise not_found
+            return mock_resp
+
+        with patch.object(_ureq, "urlopen", side_effect=fake_urlopen):
+            p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="fast",
+            )
+
+        openresponses_reqs = [r for r in captured_requests if "/v1/responses" in r.full_url]
+        assert openresponses_reqs, "Expected fallback call to /v1/responses"
+        req = openresponses_reqs[0]
+
+        header = req.get_header("X-openclaw-model")
+        assert header is not None, (
+            "x-openclaw-model header missing from /v1/responses fallback. "
+            "Without it the gateway ignores tier config and uses its primary model."
+        )
+        assert header.startswith("anthropic/"), (
+            f"Expected header format 'anthropic/<model>', got: {header!r}"
+        )
+        assert "haiku" in header.lower(), (
+            f"fast tier with claude-haiku-4-5 config should produce a haiku header, got: {header!r}"
+        )
+
+    def test_openresponses_fallback_x_openclaw_model_deep_tier(self, monkeypatch, tmp_path):
+        """Deep tier must also send x-openclaw-model with the deepReasoning model."""
+        import urllib.request as _ureq
+        import urllib.error
+
+        quaid_home = tmp_path / "quaid"
+        cfg_dir = quaid_home / "config"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "memory.json").write_text(
+            json.dumps({
+                "models": {
+                    "fastReasoning": "claude-haiku-4-5",
+                    "deepReasoning": "claude-haiku-4-5",
+                }
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(quaid_home))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+        p = GatewayLLMProvider(port=18789, token="tok")
+
+        not_found = urllib.error.HTTPError(
+            url="http://127.0.0.1:18789/plugins/quaid/llm",
+            code=404, msg="Not Found", hdrs=None,
+            fp=io.BytesIO(b'{"error":"not found"}'),
+        )
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            "model": "openclaw",
+            "usage": {"input_tokens": 5, "output_tokens": 2},
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        captured = []
+
+        def fake_urlopen(req, timeout=None):
+            captured.append(req)
+            if "/plugins/quaid/llm" in req.full_url:
+                raise not_found
+            return mock_resp
+
+        with patch.object(_ureq, "urlopen", side_effect=fake_urlopen):
+            p.llm_call(
+                [{"role": "user", "content": "hi"}],
+                model_tier="deep",
+            )
+
+        reqs = [r for r in captured if "/v1/responses" in r.full_url]
+        assert reqs
+        header = reqs[0].get_header("X-openclaw-model")
+        assert header is not None
+        assert header.startswith("anthropic/")
+        # deep tier also uses haiku per project policy
+        assert "haiku" in header.lower()
+
+    def test_openresponses_fallback_model_with_provider_prefix_not_doubled(
+        self, monkeypatch, tmp_path
+    ):
+        """If config already stores model as 'anthropic/claude-haiku-4-5', the header
+        should NOT double the prefix to 'anthropic/anthropic/claude-haiku-4-5'."""
+        import urllib.request as _ureq
+        import urllib.error
+
+        quaid_home = tmp_path / "quaid"
+        cfg_dir = quaid_home / "config"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "memory.json").write_text(
+            json.dumps({
+                "models": {
+                    "fastReasoning": "anthropic/claude-haiku-4-5",
+                }
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(quaid_home))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+        p = GatewayLLMProvider(port=18789, token="tok")
+        not_found = urllib.error.HTTPError(
+            url="http://127.0.0.1:18789/plugins/quaid/llm",
+            code=404, msg="Not Found", hdrs=None,
+            fp=io.BytesIO(b'{"error":"not found"}'),
+        )
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            "model": "openclaw",
+            "usage": {"input_tokens": 5, "output_tokens": 2},
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        captured = []
+
+        def fake_urlopen(req, timeout=None):
+            captured.append(req)
+            if "/plugins/quaid/llm" in req.full_url:
+                raise not_found
+            return mock_resp
+
+        with patch.object(_ureq, "urlopen", side_effect=fake_urlopen):
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+
+        reqs = [r for r in captured if "/v1/responses" in r.full_url]
+        header = reqs[0].get_header("X-openclaw-model")
+        assert header == "anthropic/claude-haiku-4-5", (
+            f"Provider prefix must not be doubled, got: {header!r}"
+        )
+
 
 class TestABCEnforcement:
     def test_llm_provider_cannot_instantiate(self):
