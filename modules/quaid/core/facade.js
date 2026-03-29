@@ -2259,7 +2259,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       if (Math.abs(simDelta) > 1e-9) return simDelta;
       return sortTimestampDesc(b.createdAt) - sortTimestampDesc(a.createdAt);
     });
-    const normalizeGraphText = (text2) => text2.replace(/\s*→\s*/g, " -> ");
+    const normalizeGraphText = (text) => text.replace(/\s*→\s*/g, " -> ");
     const formatMemoryLine = (m, label = m.category) => {
       const temporalLabel = formatTemporalLabel(m);
       const projectLabel = m.project ? ` | project ${m.project}` : "";
