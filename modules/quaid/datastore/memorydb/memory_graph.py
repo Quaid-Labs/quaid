@@ -8901,9 +8901,10 @@ def store(
                                 existing.name = text
                                 existing.embedding = None
                                 existing.content_hash = None
-                                conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
-                                with conn_cm as conn:
-                                    conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
+                                if _lib_has_vec():
+                                    conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
+                                    with conn_cm as conn:
+                                        conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
                             graph.update_node(existing, conn=_conn)
                             if (update_if_dup and verified) or subsumes == "a_subsumes_b":
                                 return _with_dedup_telemetry({
