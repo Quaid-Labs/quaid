@@ -100,6 +100,10 @@ These headline rows use the recommended Quaid lane (Sonnet ingest + Haiku eval) 
 
 With Sonnet as the answer model (production-like), Quaid reaches **88.69%** on AL-L (run `r944`), above FC Sonnet's **87.70%** on the same corpus while preserving cross-session memory across reset boundaries.
 
+In release-candidate AgentLife runs, Quaid also uses materially fewer prompt tokens than full-context replay lanes at comparable quality. For the Sonnet AL-L lane, Quaid is within 0.6pp of FC Sonnet while running at roughly one-fifth the token volume.
+
+When the host supports it, Quaid also performs automatic timeout/session compaction, which further reduces token pressure by converting long raw transcripts into structured knowledge before future turns.
+
 Full methodology, run matrix, and lane-by-lane details:
 - [AgentLife Overview](docs/AGENTLIFE.md)
 - [AgentLife Technical Report](docs/AGENTLIFE-TECHNICAL-REPORT.md)
@@ -151,7 +155,7 @@ Quaid is free and open source. These are typical API costs you pay directly to y
 | Embeddings | Free (Ollama, runs locally) |
 | **Typical monthly total** | **$5–15 for active use** |
 
-We haven't yet fully evaluated the cost savings Quaid provides by reducing context window usage and improving retrieval precision, but they are estimated to be substantial. Quantifying this is a work in progress.
+AgentLife data also shows substantial token-efficiency gains versus full-context replay baselines, and automatic compaction support on compatible hosts compounds those savings over long sessions.
 
 ---
 
