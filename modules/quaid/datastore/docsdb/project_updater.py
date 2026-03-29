@@ -50,7 +50,7 @@ from lib.project_templates import (
     render_project_md_template,
     replace_managed_block,
 )
-from lib.runtime_context import get_workspace_dir, get_quaid_home
+from lib.runtime_context import get_workspace_dir, get_quaid_home, get_data_dir
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Deep Reasoning)
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
 
@@ -646,6 +646,32 @@ def _project_md_recent_log_limit(default: int = 15) -> int:
     return max(1, limit)
 
 
+def _lookup_sqlite_project(project_name: str):
+    """Look up a project in the SQLite project_definitions table.
+
+    Fallback for dynamically-created projects that are not in the static config
+    definitions but exist in the live registry.
+    """
+    import sqlite3
+    from types import SimpleNamespace
+
+    try:
+        db_path = get_data_dir() / "memory.db"
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT home_dir FROM project_definitions WHERE name=? AND state='active'",
+            (project_name,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return SimpleNamespace(home_dir=row[0])
+    except Exception:
+        return None
+
+
 def append_project_logs(
     project_logs: Dict[str, List[str]],
     trigger: str = "Compaction",
@@ -709,6 +735,8 @@ def append_project_logs(
             continue
 
         defn = cfg.projects.definitions.get(project_name)
+        if not defn:
+            defn = _lookup_sqlite_project(project_name)
         if not defn:
             metrics["projects_unknown"] += 1
             print(f"[project-log] unknown project: {project_name}")
