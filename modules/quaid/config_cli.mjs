@@ -83,24 +83,53 @@ function workspaceRoot() {
  * Resolve which config file to target.
  *
  * Priority (CLI wins over env):
- *   --shared              → QUAID_HOME/shared/config/memory.json
+ *   --shared              → QUAID_HOME/shared/config/global/memory.json
+ *   --platform-shared [p] → QUAID_HOME/shared/config/<platform>/memory.json
  *   --instance <id>       → QUAID_HOME/<id>/config/memory.json
  *   QUAID_INSTANCE env    → QUAID_HOME/<QUAID_INSTANCE>/config/memory.json
- *   (none)                → QUAID_HOME/shared/config/memory.json  (default)
+ *   (none)                → QUAID_HOME/shared/config/global/memory.json  (default)
  */
+function platformFromInstanceName(instanceName) {
+  const name = String(instanceName || "").trim().toLowerCase();
+  if (name.startsWith("claude-code-") || name === "claude-code") return "claude-code";
+  if (name.startsWith("openclaw-") || name === "openclaw") return "openclaw";
+  if (name.startsWith("standalone-") || name === "standalone") return "standalone";
+  if (name.includes("-")) return name.split("-", 1)[0] || "standalone";
+  return name || "standalone";
+}
+
 function resolveConfigTarget() {
   const args = process.argv.slice(3); // after "node config_cli.mjs <cmd>"
   const sharedFlag = args.includes("--shared");
+  const platformSharedIdx = args.findIndex(a => a === "--platform-shared");
+  let platformSharedArg = null;
+  if (platformSharedIdx !== -1) {
+    const next = args[platformSharedIdx + 1] || "";
+    platformSharedArg = next && !next.startsWith("--") ? next : "auto";
+  }
   const instanceIdx = args.findIndex(a => a === "--instance" || a === "-i");
   const instanceArg = instanceIdx !== -1 ? args[instanceIdx + 1] : null;
 
   const home = workspaceRoot();
 
+  if (platformSharedArg !== null) {
+    const platformRaw = String(platformSharedArg || "").trim();
+    const platform = (!platformRaw || platformRaw === "auto")
+      ? platformFromInstanceName(instanceArg || process.env.QUAID_INSTANCE || "")
+      : platformRaw;
+    return {
+      kind: "shared-platform",
+      platform,
+      configPath: path.join(home, "shared", "config", platform, "memory.json"),
+      label: `shared platform '${platform}'`,
+    };
+  }
+
   if (sharedFlag || (!instanceArg && !process.env.QUAID_INSTANCE)) {
     return {
       kind: "shared",
-      configPath: path.join(home, "shared", "config", "memory.json"),
-      label: "shared (machine-wide)",
+      configPath: path.join(home, "shared", "config", "global", "memory.json"),
+      label: "shared global fallback",
     };
   }
 
@@ -883,14 +912,15 @@ function setConfig(dotted, raw) {
 }
 
 function usage() {
-  console.log("Usage: quaid config [show|edit|path|set <dotted.key> <value>] [--shared | --instance <id>]");
+  console.log("Usage: quaid config [show|edit|path|set <dotted.key> <value>] [--shared | --platform-shared [platform] | --instance <id>]");
   console.log("");
   console.log("Target flags (pick one):");
-  console.log("  --shared              Edit the machine-wide shared config (default when no QUAID_INSTANCE)");
+  console.log("  --shared              Edit the global shared fallback config");
+  console.log("  --platform-shared [p] Edit the shared config for a platform (auto from instance/env if omitted)");
   console.log("  --instance <id>       Edit a specific instance's config");
   console.log("  (no flag)             Uses QUAID_INSTANCE env var if set, else shared");
   console.log("");
-  console.log("The shared config holds machine-wide settings (embeddings model, Ollama URL).");
+  console.log("Global shared config is a fallback; platform shared config overrides it.");
   console.log("Instance configs inherit shared values and can override individual keys.");
 }
 

@@ -199,7 +199,6 @@ class TestConfigLoading:
             assert calls["n"] == 1
         finally:
             config._config = old_config
-            config._config_loading = old_loading
 
     def test_load_config_thread_safe_singleton(self):
         import config
@@ -241,7 +240,67 @@ class TestConfigLoading:
             assert all(r is first for r in results)
         finally:
             config._config = old_config
-            config._config_loading = old_loading
+
+
+class TestConfigPathResolution:
+    def test_config_paths_include_platform_and_global_shared_layers_for_claude_code(self):
+        import config
+
+        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/claude-code-main")), \
+             patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
+            paths = config._config_paths()
+
+        assert paths[0] == Path("/tmp/quaid/claude-code-main/config/memory.json")
+        assert paths[1] == Path("/tmp/quaid/shared/config/claude-code/memory.json")
+        assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
+
+    def test_config_paths_include_platform_and_global_shared_layers_for_openclaw(self):
+        import config
+
+        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/openclaw-livetest")), \
+             patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
+            paths = config._config_paths()
+
+        assert paths[0] == Path("/tmp/quaid/openclaw-livetest/config/memory.json")
+        assert paths[1] == Path("/tmp/quaid/shared/config/openclaw/memory.json")
+        assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
+
+    def test_config_inheritance_merge_order_global_then_platform_then_instance(self, tmp_path):
+        import config
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "memory.json"
+        platform_cfg = tmp_path / "shared" / "config" / "claude-code" / "memory.json"
+        instance_cfg = tmp_path / "claude-code-main" / "config" / "memory.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+        instance_cfg.parent.mkdir(parents=True, exist_ok=True)
+
+        global_cfg.write_text(json.dumps({
+            "retrieval": {"defaultLimit": 2, "failHard": False},
+            "notifications": {"level": "quiet"},
+            "ollama": {"embeddingModel": "nomic-embed-text", "embeddingDim": 768},
+        }), encoding="utf-8")
+        platform_cfg.write_text(json.dumps({
+            "retrieval": {"defaultLimit": 4},
+            "notifications": {"level": "normal"},
+        }), encoding="utf-8")
+        instance_cfg.write_text(json.dumps({
+            "retrieval": {"defaultLimit": 7},
+        }), encoding="utf-8")
+
+        old_config = config._config
+        config._config = None
+        try:
+            with patch.object(config, "_config_paths", lambda: [instance_cfg, platform_cfg, global_cfg]):
+                cfg = config.load_config()
+
+            assert cfg.retrieval.default_limit == 7
+            assert cfg.retrieval.fail_hard is False
+            assert cfg.notifications.level == "normal"
+            assert cfg.ollama.embedding_model == "nomic-embed-text"
+            assert cfg.ollama.embedding_dim == 768
+        finally:
+            config._config = old_config
 
     def test_load_from_json_file(self, tmp_path):
         """Config can be loaded from a JSON file."""

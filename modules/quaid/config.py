@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 from lib.runtime_context import get_workspace_dir
-from lib.instance import quaid_home as _quaid_home, shared_config_path as _shared_config_path
+from lib.instance import quaid_home as _quaid_home
 logger = logging.getLogger(__name__)
 
 
@@ -57,21 +57,42 @@ def _workspace_root() -> Path:
     return get_workspace_dir()
 
 
+def _platform_from_instance_name(instance_name: str) -> str:
+    name = str(instance_name or "").strip().lower()
+    if name.startswith("claude-code-") or name == "claude-code":
+        return "claude-code"
+    if name.startswith("openclaw-") or name == "openclaw":
+        return "openclaw"
+    if name.startswith("standalone-") or name == "standalone":
+        return "standalone"
+    if "-" in name:
+        return name.split("-", 1)[0] or "standalone"
+    return name or "standalone"
+
+
+def _platform_shared_config_path() -> Path:
+    root = _workspace_root()
+    platform = _platform_from_instance_name(root.name)
+    return _quaid_home() / "shared" / "config" / platform / "memory.json"
+
+
+def _global_shared_config_path() -> Path:
+    return _quaid_home() / "shared" / "config" / "global" / "memory.json"
+
+
 def _config_paths() -> list:
     """Config file search paths (highest priority first).
 
     Merge order (lowest → highest at load time):
-      3. ./memory-config.json            — local cwd override (rarely used)
-      2. ~/.quaid/memory-config.json     — user-level fallback
-      1. QUAID_HOME/shared/config/memory.json  — machine-wide shared settings (embeddings, ollama)
-      0. QUAID_HOME/<instance>/config/memory.json — per-instance config (highest priority)
+      2. QUAID_HOME/shared/config/global/memory.json           — global shared fallback
+      1. QUAID_HOME/shared/config/<platform>/memory.json       — platform shared overrides
+      0. QUAID_HOME/<instance>/config/memory.json              — per-instance config (highest priority)
     """
     root = _workspace_root()
     return [
         root / "config" / "memory.json",
-        _shared_config_path(),
-        Path.home() / ".quaid" / "memory-config.json",
-        Path("./memory-config.json"),
+        _platform_shared_config_path(),
+        _global_shared_config_path(),
     ]
 
 

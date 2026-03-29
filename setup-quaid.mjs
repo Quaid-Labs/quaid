@@ -2249,9 +2249,14 @@ async function step4_embeddings() {
   stepHeader(4, TOTAL_INSTALL_STEPS, "EMBEDDINGS", STEP_QUOTES.embeddings);
 
   // Embeddings config is machine-wide — only ask once per machine.
-  // Check shared config for any already-configured embedding provider.
-  const sharedConfigPath = path.join(WORKSPACE, "shared", "config", "memory.json");
-  if (fs.existsSync(sharedConfigPath)) {
+  // Check platform-shared first, then global shared fallback.
+  const platformKey = resolvedInstallerPlatform();
+  const sharedSearchPaths = [
+    path.join(WORKSPACE, "shared", "config", platformKey, "memory.json"),
+    path.join(WORKSPACE, "shared", "config", "global", "memory.json"),
+  ];
+  for (const sharedConfigPath of sharedSearchPaths) {
+    if (!fs.existsSync(sharedConfigPath)) continue;
     try {
       const sharedCfg = JSON.parse(fs.readFileSync(sharedConfigPath, "utf8"));
       const found = detectSharedEmbeddings(sharedCfg);
@@ -2259,7 +2264,7 @@ async function step4_embeddings() {
         log.info(C.dim("Embeddings already configured in shared config — inheriting."));
         log.info(`  provider: ${C.cyan(found.provider)}  model: ${C.cyan(found.embedModel)}  dim: ${found.embedDim || "auto"}`);
         log.info(C.dim(`  source: ${sharedConfigPath}`));
-        log.info(C.dim("  To change the model, run: quaid config edit --shared"));
+        log.info(C.dim("  To change the model, run: quaid config edit --shared or --platform-shared"));
         log.message("");
         return { embedModel: found.embedModel, embedDim: found.embedDim };
       }
@@ -4250,29 +4255,34 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     },
   };
 
-  // Write ollama/embeddings config to the machine-wide shared config so all
-  // instances on this machine use the same embedding model (required for
-  // cross-instance memory inspection).  Only write if the shared config does
-  // not already have an ollama block (first install wins; subsequent installs
-  // inherit the existing setup).
-  const sharedConfigDir = path.join(WORKSPACE, "shared", "config");
-  const sharedConfigPath = path.join(sharedConfigDir, "memory.json");
+  // Write ollama/embeddings config to shared/global (fallback layer), and
+  // always create a blank per-platform shared config file.
+  const platformKey = resolvedInstallerPlatform();
+  const sharedGlobalConfigDir = path.join(WORKSPACE, "shared", "config", "global");
+  const sharedGlobalConfigPath = path.join(sharedGlobalConfigDir, "memory.json");
+  const sharedPlatformConfigDir = path.join(WORKSPACE, "shared", "config", platformKey);
+  const sharedPlatformConfigPath = path.join(sharedPlatformConfigDir, "memory.json");
   const ollamaBlock = {
     url: (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/v1\/?$/, "").replace(/\/+$/, ""),
     embeddingModel: embeddings.embedModel,
     embeddingDim: embeddings.embedDim,
   };
-  let sharedCfg = {};
-  if (fs.existsSync(sharedConfigPath)) {
-    try { sharedCfg = JSON.parse(fs.readFileSync(sharedConfigPath, "utf8")); } catch {}
+  let sharedGlobalCfg = {};
+  if (fs.existsSync(sharedGlobalConfigPath)) {
+    try { sharedGlobalCfg = JSON.parse(fs.readFileSync(sharedGlobalConfigPath, "utf8")); } catch {}
   }
-  if (!sharedCfg.ollama) {
-    sharedCfg.ollama = ollamaBlock;
-    fs.mkdirSync(sharedConfigDir, { recursive: true });
-    fs.writeFileSync(sharedConfigPath, JSON.stringify(sharedCfg, null, 2) + "\n");
-    log.info(`Wrote embeddings config to shared config: ${sharedConfigPath}`);
+  if (!sharedGlobalCfg.ollama) {
+    sharedGlobalCfg.ollama = ollamaBlock;
+    fs.mkdirSync(sharedGlobalConfigDir, { recursive: true });
+    fs.writeFileSync(sharedGlobalConfigPath, JSON.stringify(sharedGlobalCfg, null, 2) + "\n");
+    log.info(`Wrote embeddings config to shared global fallback: ${sharedGlobalConfigPath}`);
   } else {
-    log.info(C.dim(`Shared embeddings config already exists — skipping (${sharedConfigPath})`));
+    log.info(C.dim(`Shared global embeddings config already exists — skipping (${sharedGlobalConfigPath})`));
+  }
+  if (!fs.existsSync(sharedPlatformConfigPath)) {
+    fs.mkdirSync(sharedPlatformConfigDir, { recursive: true });
+    fs.writeFileSync(sharedPlatformConfigPath, "{}\n");
+    log.info(`Created blank shared platform config: ${sharedPlatformConfigPath}`);
   }
 
   // Write config to the instance root (QUAID_HOME/<instance>/config/memory.json).

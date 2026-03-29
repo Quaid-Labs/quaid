@@ -109,13 +109,13 @@ def shared_registry_path() -> Path:
 
 
 def shared_config_path() -> Path:
-    """Shared config file: QUAID_HOME/shared/config/memory.json.
+    """Shared global config file: QUAID_HOME/shared/config/global/memory.json.
 
     Contains machine-wide settings (embeddings model, Ollama URL) that all
     instances on this machine inherit.  Instance configs can override individual
     keys; shared config is the fallback layer below instance config.
     """
-    return shared_dir() / "config" / "memory.json"
+    return shared_dir() / "config" / "global" / "memory.json"
 
 
 def misc_project_name(name: Optional[str] = None) -> str:

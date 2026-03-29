@@ -205,3 +205,21 @@ def test_discover_plugin_manifests_raises_errors_in_strict_mode(monkeypatch, tmp
     monkeypatch.setattr(plugin_runtime, "discover_plugin_manifests", _boom)
     with pytest.raises(RuntimeError, match="manifest parse failure"):
         config_cli._discover_plugin_manifests(path, data)
+
+
+def test_resolve_config_target_shared_global(monkeypatch):
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setenv("QUAID_HOME", "/tmp/quaid")
+    args = type("Args", (), {"shared": True, "platform_shared": None, "instance": None})()
+    path, label = config_cli._resolve_config_target(args)
+    assert str(path) == "/tmp/quaid/shared/config/global/memory.json"
+    assert label == "shared global fallback"
+
+
+def test_resolve_config_target_platform_shared_auto(monkeypatch):
+    monkeypatch.setenv("QUAID_HOME", "/tmp/quaid")
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-main")
+    args = type("Args", (), {"shared": False, "platform_shared": "auto", "instance": None})()
+    path, label = config_cli._resolve_config_target(args)
+    assert str(path) == "/tmp/quaid/shared/config/claude-code/memory.json"
+    assert label == "shared platform 'claude-code'"

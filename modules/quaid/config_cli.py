@@ -19,24 +19,46 @@ def _workspace_root() -> Path:
     return Path.cwd()
 
 
+def _platform_from_instance_name(instance_name: str) -> str:
+    name = str(instance_name or "").strip().lower()
+    if name.startswith("claude-code-") or name == "claude-code":
+        return "claude-code"
+    if name.startswith("openclaw-") or name == "openclaw":
+        return "openclaw"
+    if name.startswith("standalone-") or name == "standalone":
+        return "standalone"
+    if "-" in name:
+        return name.split("-", 1)[0] or "standalone"
+    return name or "standalone"
+
+
 def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path, str]:
     """Resolve which config file to target based on flags and environment.
 
     Priority (first match wins):
-      --shared flag          → QUAID_HOME/shared/config/memory.json
+      --shared flag          → QUAID_HOME/shared/config/global/memory.json
       --instance <id> flag   → QUAID_HOME/<id>/config/memory.json
       QUAID_INSTANCE env     → QUAID_HOME/<QUAID_INSTANCE>/config/memory.json
-      (none)                 → QUAID_HOME/shared/config/memory.json  (default)
+      (none)                 → QUAID_HOME/shared/config/global/memory.json  (default)
 
     Returns (config_path, label).
     """
     home = _workspace_root()
 
     shared_flag = getattr(args, "shared", False)
+    platform_shared = getattr(args, "platform_shared", None)
     instance_arg = getattr(args, "instance", None)
 
+    if platform_shared is not None:
+        platform = str(platform_shared or "").strip()
+        if not platform or platform == "auto":
+            platform = _platform_from_instance_name(
+                instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
+            )
+        return home / "shared" / "config" / platform / "memory.json", f"shared platform '{platform}'"
+
     if shared_flag or (not instance_arg and not os.getenv("QUAID_INSTANCE", "").strip()):
-        return home / "shared" / "config" / "memory.json", "shared (machine-wide)"
+        return home / "shared" / "config" / "global" / "memory.json", "shared global fallback"
 
     instance_id = instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
     return home / instance_id / "config" / "memory.json", f"instance '{instance_id}'"
@@ -420,7 +442,9 @@ def _add_target_args(p: argparse.ArgumentParser) -> None:
     """Add --shared / --instance targeting flags to a subparser."""
     grp = p.add_mutually_exclusive_group()
     grp.add_argument("--shared", action="store_true",
-                     help="Target the machine-wide shared config (embeddings, ollama)")
+                     help="Target shared global fallback config")
+    grp.add_argument("--platform-shared", nargs="?", const="auto", metavar="PLATFORM",
+                     help="Target shared platform config (auto from instance/env if omitted)")
     grp.add_argument("--instance", metavar="ID",
                      help="Target a specific instance config")
 
@@ -429,7 +453,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Quaid config helper",
         epilog=(
-            "Target flags (mutually exclusive): --shared targets QUAID_HOME/shared/config/memory.json; "
+            "Target flags (mutually exclusive): --shared targets QUAID_HOME/shared/config/global/memory.json; "
+            "--platform-shared [platform] targets QUAID_HOME/shared/config/<platform>/memory.json; "
             "--instance <id> targets QUAID_HOME/<id>/config/memory.json. "
             "When neither is given, QUAID_INSTANCE env is used, else shared is the default."
         ),
@@ -462,7 +487,7 @@ def main() -> int:
         print(str(cfg_path))
         return 0
 
-    allow_missing = getattr(args, "shared", False) or (
+    allow_missing = getattr(args, "shared", False) or (getattr(args, "platform_shared", None) is not None) or (
         not getattr(args, "instance", None) and not os.getenv("QUAID_INSTANCE", "").strip()
     )
     try:
