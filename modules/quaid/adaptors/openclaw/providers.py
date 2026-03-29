@@ -103,14 +103,20 @@ class GatewayLLMProvider(LLMProvider):
     ) -> LLMResult:
         model = self._resolve_model_for_tier(model_tier)
         # v2026.3.28+: gateway /v1/responses only accepts "openclaw" as model name;
-        # it routes to the OC agent's configured model internally.
+        # v2026.3.24+: per-request model selection moved to x-openclaw-model header.
+        # Format: provider/model (e.g. anthropic/claude-haiku-4-5).
+        oc_model = model if "/" in model else f"anthropic/{model}"
         body = json.dumps({
             "model": "openclaw",
             "instructions": system_prompt,
             "input": user_message,
             "max_output_tokens": max_tokens,
         }).encode("utf-8")
-        headers = {"Content-Type": "application/json", "x-openclaw-scopes": "operator.write"}
+        headers = {
+            "Content-Type": "application/json",
+            "x-openclaw-scopes": "operator.write",
+            "x-openclaw-model": oc_model,
+        }
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         req = urllib.request.Request(

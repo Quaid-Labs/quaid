@@ -1017,7 +1017,10 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
   const headers = {
     "Content-Type": "application/json",
     // v2026.3.28+: gateway /v1/responses requires x-openclaw-scopes header for write access.
-    "x-openclaw-scopes": "operator.write"
+    "x-openclaw-scopes": "operator.write",
+    // v2026.3.24+: per-request model selection moves from the `model` body field to this header.
+    // Format: provider/model (e.g. anthropic/claude-haiku-4-5).
+    "x-openclaw-model": `${provider}/${resolved.model}`
   };
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
