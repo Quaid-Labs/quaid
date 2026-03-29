@@ -72,27 +72,23 @@ node setup-quaid.mjs --source github --ref <commit-sha>
 - **Dual learning system:** fast snippets + slower journal distillation for long-term synthesis.
 - **OpenClaw-first, system-agnostic design:** deepest integration today is OpenClaw, but the architecture is built around adapter contracts.
 
-Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology — same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing knowledge capture quality, temporal reasoning, and multi-hop recall.
+## Benchmarks
 
-| System | Accuracy | Answer Model |
-|--------|----------|-------------|
-| **Quaid** | **70.3%** | Haiku |
-| Mem0 (graphRAG) | 68.9% | GPT-4o-mini |
-| Mem0 | 66.9% | GPT-4o-mini |
-| Zep | 66.0% | GPT-4o-mini |
-| LangMem | 58.1% | GPT-4o-mini |
-| OpenAI Memory | 52.9% | GPT-4o-mini |
+Existing memory benchmarks are useful, but they do not measure the behaviors that break first in agentic production: cross-session persistence, lifecycle maintenance, project recall, and reset resilience. We built **AgentLife** for that.
 
-Higher-cost Opus answer runs reached **75.0%**. The current OpenClaw default is **Sonnet for deep reasoning + Haiku for fast reasoning**.
+These headline rows use the recommended Quaid lane (Sonnet ingest + Haiku eval) against FC Sonnet and OpenClaw native:
 
-**Token efficiency:** Quaid retrieves about 10 relevant facts per query, averaging **about 200 tokens** of injected memory context. That's it. No raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a fast-reasoning LLM reranker call (about $0.01).
+|                            | Quaid Sonnet/Haiku | FC Sonnet | OpenClaw Native |
+|----------------------------|-------------------:|----------:|----------------:|
+| AL-S (short-horizon, dense facts) | 87.69% | 92.90% | 69.40% |
+| AL-L (long-horizon + noise) | 85.82% | 87.70% | 63.06% |
 
-> Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
-> Full-context baselines: Haiku 79.6%, Opus 86.6%.
->
-> Full methodology and per-category breakdowns: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
+With Sonnet as the answer model (production-like), Quaid reaches **88.69%** on AL-L (run `r944`), above FC Sonnet's **87.70%** on the same corpus while preserving cross-session memory across reset boundaries.
 
-LoCoMo evaluates personal fact recall — one of Quaid's three memory areas. The benchmark doesn't measure project documentation tracking, auto-doc refresh, or workspace context management, which have no equivalent in the other systems tested.
+Full methodology, run matrix, and lane-by-lane details:
+- [AgentLife Overview](docs/AGENTLIFE.md)
+- [AgentLife Technical Report](docs/AGENTLIFE-TECHNICAL-REPORT.md)
+- [Benchmark index](docs/BENCHMARKS.md)
 
 ---
 
@@ -166,7 +162,7 @@ Known limitations for **v0.2.15-alpha**:
 - Windows is not supported. macOS and Linux only.
 - OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
 
-The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md). LongMemEval integration is implemented and smoke-tested; full benchmark runs are pending.
+The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus ongoing [AgentLife benchmark](docs/AGENTLIFE.md) evaluation.
 
 GitHub Actions CI runs automated checks on pushes/PRs including runtime pair sync, docs/release consistency, linting, runtime build, isolated Python unit suites, and the full gate (`run-all-tests --full`) with the bootstrap E2E auth matrix enabled.
 
@@ -177,10 +173,12 @@ We're actively testing and refining the system against benchmarks and welcome co
 ## Learn More
 
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
+- [AgentLife Overview](docs/AGENTLIFE.md) — What AgentLife measures and why it exists
+- [AgentLife Technical Report](docs/AGENTLIFE-TECHNICAL-REPORT.md) — Full matrix, run IDs, and methodology
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Interface Contract](docs/INTERFACES.md) — CLI/adapter capability model and event contract
-- [Benchmark Results](docs/BENCHMARKS.md) — Full LoCoMo evaluation with per-category breakdowns
+- [Benchmark Index](docs/BENCHMARKS.md) — Benchmark docs and report links
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
 - [Provider Modes](docs/PROVIDER-MODES.md) — Provider routing and cost-safety guidance
 - [Release Workflow](docs/RELEASE.md) — Pre-push checks and ownership guard

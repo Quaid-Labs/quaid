@@ -582,7 +582,7 @@ Evolution chain queries need a `required_week` field. Without it, queries for un
 Must end with "Answer yes or no only." Uses the paper's exact format: "Correct Answer:" (capital A), "Model Response:" (capital R), "Rubric:" (not "Desired response rubric:"). Reference implementation at `xiaowu0162/LongMemEval/src/evaluation/evaluate_qa.py`.
 
 #### Parallel Eval Output Collision
-When running evaluations in parallel, MUST use separate `--results-dir` values. Both write `evaluation_results.json` per conversation and `locomo_results.json`, silently overwriting each other.
+When running evaluations in parallel, MUST use separate `--results-dir` values. Shared output filenames can overwrite each other across concurrent runs.
 
 #### Python stdout Buffering
 When running eval scripts in background, use `PYTHONUNBUFFERED=1` and `python3 -u`. Otherwise output is fully buffered and monitoring shows nothing until the process exits.
@@ -807,27 +807,21 @@ OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthr
 
 ---
 
-## Benchmark Results (LoCoMo, Feb 2026)
+## Benchmark Results (AgentLife)
 
-| Configuration | Accuracy | Answer Model | Notes |
-|---------------|----------|--------------|-------|
-| Quaid + Haiku | 70.28% | Haiku | Fair comparison tier |
-| Mem0 (graphRAG) | 68.9% | GPT-4o-mini | Apr 2025 numbers |
-| Mem0 | 66.9% | GPT-4o-mini | Apr 2025 numbers |
-| Zep | 66.0% | GPT-4o-mini | Apr 2025 numbers |
-| LangMem | 58.1% | GPT-4o-mini | Apr 2025 numbers |
-| OpenAI | 52.9% | GPT-4o-mini | Apr 2025 numbers |
-| Quaid + Journal + Haiku | 74.48% +/- 0.05 | Haiku | Best Haiku result, nearly matches Opus at ~46% cost |
-| **Quaid + Opus** | **75.00%** | **Opus** | **Higher-cost reference run** |
-| v2 Standard (full janitor) | 69.11% +/- 0.17 | Haiku | Regression from dedup merge bug (since fixed) |
-| Full-context Haiku | 79.59% +/- 0.17 | Haiku | Upper bound (no knowledge layer) |
-| Full-context Opus | 86.62% +/- 0.09 | Opus | Upper bound (no knowledge layer) |
+Headline launch rows:
 
-**Key insight:** Journal + Haiku (74.5%) nearly matches v1 Opus (75.0%) at roughly 46% of the cost. Journal helps most on temporal questions (+7.6pp) and single-hop questions (+6.8pp). Current OpenClaw default: Sonnet for deep reasoning, Haiku for fast reasoning.
+| Lane | Quaid Sonnet/Haiku | FC Sonnet | OpenClaw Native |
+|---|---:|---:|---:|
+| AL-S | 87.69% | 92.90% | 69.40% |
+| AL-L | 85.82% | 87.70% | 63.06% |
 
-**Benchmark code:** See `benchmark/agentlife/` and [docs/BENCHMARKS.md](BENCHMARKS.md) for full methodology.
+Sonnet-eval AL-L study reaches 88.69% (`r944`) on the same corpus.
 
-**LongMemEval** (ICLR 2025): 500 QA pairs, 7 types, 19,195 unique sessions. Pending full evaluation run.
+For full matrix/methodology/run IDs, use:
+- [docs/AGENTLIFE.md](AGENTLIFE.md)
+- [docs/AGENTLIFE-TECHNICAL-REPORT.md](AGENTLIFE-TECHNICAL-REPORT.md)
+- [docs/BENCHMARKS.md](BENCHMARKS.md)
 
 ---
 
