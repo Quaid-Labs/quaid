@@ -34,7 +34,7 @@ AL-L Sonnet-eval results from the same technical source:
 
 Interpretation:
 - Quaid remains near FC Sonnet on the headline matrix while using far fewer eval tokens.
-- In AL-L Sonnet-eval (`r944`), Quaid exceeds the FC Sonnet baseline on the same corpus.
+- For Sonnet-first production messaging, the Sonnet-ingest/Sonnet-eval row is **87.10%** (`r945`).
 - Quaid materially outperforms OpenClaw native memory on both AL-S and AL-L.
 
 ## Method notes

@@ -29,7 +29,7 @@ Headline comparison rows (recommended Quaid lane vs strongest FC Sonnet baseline
 | AL-S | 87.69% (`r880`) | 92.90% (`r606`) | 69.40% (`oc-native-als-20260315d`) |
 | AL-L | 85.82% (`r895`) | 87.70% (`r857`) | 63.06% (`oc-native-all-20260315d`) |
 
-Sonnet-eval study result: **88.69%** on AL-L (`r944`), above FC Sonnet's **87.70%** baseline on the same corpus.
+Sonnet-eval study (Sonnet-ingest lane): **87.10%** on AL-L (`r945`), near FC Sonnet's **87.70%** baseline on the same corpus.
 
 ## Read next
 

@@ -98,7 +98,7 @@ These headline rows use the recommended Quaid lane (Sonnet ingest + Haiku eval) 
 | AL-S (short-horizon, dense facts) | 87.69% | 92.90% | 69.40% |
 | AL-L (long-horizon + noise) | 85.82% | 87.70% | 63.06% |
 
-With Sonnet as the answer model (production-like), Quaid reaches **88.69%** on AL-L (run `r944`), above FC Sonnet's **87.70%** on the same corpus while preserving cross-session memory across reset boundaries.
+With Sonnet as the answer model in the Sonnet-ingest lane (production-like), Quaid reaches **87.10%** on AL-L (run `r945`), near FC Sonnet's **87.70%** on the same corpus while preserving cross-session memory across reset boundaries.
 
 In release-candidate AgentLife runs, Quaid also uses materially fewer prompt tokens than full-context replay lanes at comparable quality. For the Sonnet AL-L lane, Quaid is within 0.6pp of FC Sonnet while running at roughly one-fifth the token volume.
 
