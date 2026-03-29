@@ -2628,13 +2628,10 @@ def graph_aware_recall(
     # concrete relation keywords when edge keyword tables are sparse. In that case,
     # keep graph expansion focused on canonical family relations instead of walking
     # unrelated neighborhoods (e.g., memberships, projects, routine activities).
-    kinship_query = bool(
-        not matched_relations and re.search(
-            r"\b(family|relative|relatives|kin|sibling|siblings|brother|sister|parent|parents|child|children|son|daughter|spouse|husband|wife|partner|nephew|niece)\b",
-            str(query or "").lower(),
-        )
-    )
-    if kinship_query:
+    if not matched_relations and re.search(
+        r"\b(family|relative|relatives|kin|sibling|siblings|brother|sister|parent|parents|child|children|son|daughter|spouse|husband|wife|partner|nephew|niece)\b",
+        str(query or "").lower(),
+    ):
         expand_relations = [
             "family_of",
             "sibling_of",
@@ -2773,67 +2770,6 @@ def graph_aware_recall(
 
     results["source_breakdown"]["graph_count"] = len(results["graph_results"])
     results["meta"]["phases_ms"]["graph_expand_ms"] = round((time.monotonic() - _graph_started_at) * 1000)
-
-    # Kinship rescue path:
-    # If broad family intent has little/no useful graph support (e.g., orphaned fact
-    # nodes with no extracted edges), run a narrow fallback vector probe with lowered
-    # threshold and kinship-focused lexical expansion. This is deliberately scoped to
-    # family/relationship prompts to avoid widening unrelated recall surfaces.
-    family_relations = {"family_of", "sibling_of", "parent_of", "spouse_of", "partner_of"}
-    has_family_graph_hits = any(
-        str(item.get("relation") or "").strip().lower() in family_relations
-        for item in (results.get("graph_results") or [])
-        if isinstance(item, dict)
-    )
-    if kinship_query and not has_family_graph_hits:
-        rescue_threshold = max(0.45, float(min_similarity or 0.60) - 0.15)
-        rescue_queries = [
-            query,
-            "family relatives siblings sister brother parents children spouse partner nephew niece",
-        ]
-        rescue_batches: List[List[Dict[str, Any]]] = []
-        for rescue_query in rescue_queries:
-            rescue_rows, _rescue_meta = recall(
-                rescue_query,
-                limit=max(limit * 2, 10),
-                owner_id=owner_id,
-                min_similarity=rescue_threshold,
-                domain=domain,
-                domain_boost=domain_boost,
-                project=project,
-                use_multi_pass=False,
-                use_reranker=False,
-                include_graph_traversal=False,
-                include_co_session=False,
-                include_mmr=False,
-                max_turns=1,
-                return_meta=True,
-            )
-            rescue_facts = [
-                r for r in (rescue_rows or [])
-                if str(r.get("category", "")).lower() == "fact"
-            ]
-            if rescue_facts:
-                rescue_batches.append(rescue_facts)
-        if rescue_batches:
-            merged_direct = _merge_recall_batches(
-                [results.get("direct_results") or []] + rescue_batches,
-                limit=max(limit, limit * 2),
-            )[:limit]
-            results["direct_results"] = merged_direct
-            results["source_breakdown"]["vector_count"] = len(merged_direct)
-            results["meta"]["kinship_rescue"] = {
-                "applied": True,
-                "threshold": rescue_threshold,
-                "queries": rescue_queries,
-            }
-        else:
-            results["meta"]["kinship_rescue"] = {
-                "applied": False,
-                "threshold": rescue_threshold,
-                "queries": rescue_queries,
-            }
-
     results["meta"]["phases_ms"]["total_ms"] = round((time.monotonic() - _started_at) * 1000)
 
     return results
