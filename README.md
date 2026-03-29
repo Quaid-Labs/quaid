@@ -32,13 +32,14 @@ Quaid is an agentic-system independent knowledge layer by design, with adapters 
 
 **Platform compatibility (quick view):**
 
-| Capability | OpenClaw | Claude Code |
-|---|---|---|
-| Hook-based auto extraction | Yes | Yes |
-| Compaction extraction trigger | Yes | Yes |
-| Compaction control (wait-for-extract before compact) | **Yes** | **No** |
-| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No |
-| Programmatic compaction RPC | Yes | No |
+| Capability | OpenClaw | Claude Code | Standalone |
+|---|---|---|---|
+| Memory + janitor lifecycle | Yes | Yes | Yes |
+| Project docs + RAG system | Yes | Yes | Yes |
+| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes | Yes |
+| Hook-based auto extraction | Yes | Yes | Manual/CLI |
+| Compaction control (wait-for-extract before compact) | **Yes** | **No** | N/A |
+| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No | No |
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 

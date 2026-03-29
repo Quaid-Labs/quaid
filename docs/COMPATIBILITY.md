@@ -1,6 +1,8 @@
 # Platform Compatibility
 
-This page summarizes what Quaid supports on each host integration path today.
+This page has two views:
+- product capabilities (what Quaid provides)
+- host integration capabilities (what each platform can expose)
 
 ## Current Platforms
 
@@ -8,7 +10,18 @@ This page summarizes what Quaid supports on each host integration path today.
 - Claude Code (`claude-code` adapter)
 - Standalone CLI (`standalone` adapter)
 
-## Capability Matrix
+## Product Capability Matrix
+
+| Quaid Capability | OpenClaw | Claude Code | Standalone CLI | Notes |
+|---|---|---|---|---|
+| Memory system (capture, retrieval, maintenance) | Yes | Yes | Yes | Core Quaid engine shared across adapters. |
+| Project system (registry, docs ingest, RAG search) | Yes | Yes | Yes | Same project/docs pipeline on all adapters. |
+| Multi-agent/session lineage awareness | Yes | Yes | Partial | Best with host lifecycle hooks; CLI can run manually. |
+| Evolving identity files (`SOUL.md`, `USER.md`, `ENVIRONMENT.md`) | Yes | Yes | Yes | Instance identity files evolve via snippets + janitor distillation. |
+| Cross-session persistence and reset resilience | Yes | Yes | Yes | Instance silo model preserves state across sessions/resets. |
+| Bounded memory injection (token-efficient recall context) | Yes | Yes | Yes | Core recall pipeline; host controls final prompt assembly timing. |
+
+## Host Integration Matrix
 
 | Capability | OpenClaw | Claude Code | Notes |
 |---|---|---|---|
@@ -34,3 +47,13 @@ This page summarizes what Quaid supports on each host integration path today.
 - [Architecture Guide](ARCHITECTURE.md)
 - [AI Install Guide](AI-INSTALL.md)
 - [Hook Session Lifecycle](../projects/quaid/reference/hooks-session-lifecycle.md)
+
+## For Host Integrators
+
+If you are building a host integration, the highest-value capabilities to expose are:
+1. reliable lifecycle hooks (prompt, compaction, reset/session-end)
+2. explicit compaction-control handshake
+3. stable auth/provider routing for deep/fast model tiers
+4. clear notification routing primitives
+
+Hosts that implement these interfaces get the full Quaid lifecycle behavior with minimal adapter-specific code.
