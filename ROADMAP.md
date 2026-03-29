@@ -5,28 +5,21 @@ It reflects broad areas of active focus, not delivery guarantees.
 
 ## Current Focus
 
-- **Top priority after release: multi-user + group conversation memory**
-  - Partition memory by user/group identity with explicit routing and ownership guarantees.
-  - Support context muxing: fast context switching between participants and conversations.
-  - Add intelligent mixed-recall policies for shared/group threads without cross-user leakage.
-  - Harden datastore contracts so per-user and per-group stores remain modular and swappable.
-  - Canonical design spec: `docs/MULTI-USER-MEMORY-SPEC.md`
+- **Top priority after release: Codex adaptor**
+  - Build a first-class Codex host adaptor now that hook support is available.
+  - Match OpenClaw/Claude Code baseline capabilities for install, extraction, recall injection, and diagnostics.
+  - Keep host-specific behavior inside adaptor surfaces while reusing shared runtime behavior.
 
 - **Reliability and correctness**
   - Continue hardening extraction, recall, and janitor paths.
   - Reduce failure ambiguity with better diagnostics and test isolation.
-  - Keep OpenClaw integration stable as the primary production path.
+  - Keep OpenClaw and Claude Code integrations stable as primary production paths.
   - Parallelize janitor task execution after architectural boundary enforcement is complete.
 
 - **Benchmark rigor**
-  - Keep LoCoMo runs reproducible and current.
-  - Run and publish LongMemEval results.
+  - Keep AgentLife runs reproducible and current.
+  - Publish clear release-candidate benchmark evidence with stable provenance.
   - Improve retrieval quality in weaker categories without overfitting benchmark prompts.
-
-- **Knowledge-layer architecture**
-  - Continue refining datastore routing/read paths.
-  - Expand write-path contracts (DataWriters) so new datastores can be added cleanly.
-  - Keep adapter/orchestrator/core boundaries explicit and testable.
 
 - **Docs and OSS readiness**
   - Keep public docs aligned with actual system behavior.
@@ -34,6 +27,16 @@ It reflects broad areas of active focus, not delivery guarantees.
   - Improve contributor onboarding and operational documentation.
 
 ## Near-Term Exploration
+
+- **Datastore modularity/plugin friendliness**
+  - Refactor datastore contracts so stores can be added or replaced cleanly without cross-layer coupling.
+  - Reduce hard-coded datastore assumptions in recall/write/maintenance paths.
+  - Define stable plugin-facing datastore capabilities before broadening host coverage.
+
+- **Multi-user + group conversation memory**
+  - Partition memory by user/group identity with explicit routing and ownership guarantees.
+  - Support context muxing for fast participant/conversation switching.
+  - Add mixed-recall policies for shared/group threads without cross-user leakage.
 
 - **Graph and memory introspection**
   - Better visibility into why recalls were returned (and why misses happened).
@@ -43,14 +46,10 @@ It reflects broad areas of active focus, not delivery guarantees.
   - Evaluate practical import paths from other systems and prior agent histories.
   - Prioritize low-risk, auditable migration flows.
 
-- **Host coverage beyond OpenClaw**
-  - Deepen Claude Code and OpenClaw adapter coverage.
-  - Increase adapter portability while preserving behavior guarantees.
-
 ## Longer-Horizon Work
 
-- **Lifecycle benchmark development**
-  - Design and publish a benchmark focused on long-term maintenance/evolution, not only retrieval.
+- **Host coverage beyond current adapters**
+  - Expand validated host integrations while preserving behavior guarantees.
 
 - **Multi-agent / multi-owner hardening**
   - Strengthen isolation, governance, and conflict behavior under concurrent workloads.
