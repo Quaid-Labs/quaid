@@ -4,6 +4,9 @@ Technical reference for the Quaid instance model and configuration system.
 Covers instance identity, the config merge chain, the config CLI, and
 per-instance vs. shared state layout.
 
+For a generated key-by-key defaults table sourced directly from
+`modules/quaid/config.py`, see [`config-reference.md`](./config-reference.md).
+
 ---
 
 ## 1. Instance Model

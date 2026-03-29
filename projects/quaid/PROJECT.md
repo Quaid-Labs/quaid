@@ -14,7 +14,7 @@ This file is the starter brief for working on Quaid itself. It should help an ag
 
 ## Start Here By Task
 - Install, bootstrap, or instance layout:
-  `setup-quaid.mjs`, `setup-quaid.sh`, `reference/config-instances.md`
+  `setup-quaid.mjs`, `setup-quaid.sh`, `reference/config-instances.md`, `reference/config-reference.md`
 - Extraction, rolling ingest, or daemon behavior:
   `reference/extraction-pipeline.md`, `modules/quaid/ingest/extract.py`, `modules/quaid/core/extraction_daemon.py`
 - Recall, storage, dedup, or retrieval behavior:

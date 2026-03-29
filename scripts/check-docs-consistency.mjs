@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -127,6 +128,23 @@ for (const check of checks) {
 }
 
 checkToolsDomainBlock(errors);
+
+{
+  const checkCmd = spawnSync(
+    'python3',
+    ['modules/quaid/scripts/generate-config-reference.py', '--check'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  if (checkCmd.status !== 0) {
+    const stderr = String(checkCmd.stderr || '').trim();
+    const stdout = String(checkCmd.stdout || '').trim();
+    errors.push(
+      `projects/quaid/reference/config-reference.md is out of date (run: python3 modules/quaid/scripts/generate-config-reference.py)` +
+      (stderr ? `; stderr: ${stderr}` : '') +
+      (stdout ? `; stdout: ${stdout}` : ''),
+    );
+  }
+}
 
 if (errors.length) {
   console.error('[docs-check] FAILED');
