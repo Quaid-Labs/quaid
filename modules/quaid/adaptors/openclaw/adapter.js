@@ -58,6 +58,7 @@ function _resolvePythonPluginRoot() {
   return path.join(WORKSPACE, "plugins", "quaid");
 }
 const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
+const PYTHON_BIN = String(process.env.QUAID_PYTHON_BIN || "python3").trim() || "python3";
 const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 const _instanceForDbPath = String(process.env.QUAID_INSTANCE || "").trim();
@@ -588,7 +589,7 @@ function buildPythonEnv(extra = {}) {
 }
 function getDatastoreStatsSync() {
   try {
-    const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
+    const output = execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
       timeout: 3e4,
       env: buildPythonEnv()
@@ -1143,7 +1144,7 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
     env: buildPythonEnv(env),
     timeoutMs,
     label,
-    argv: ["python3", script, command, ...args]
+    argv: [PYTHON_BIN, script, command, ...args]
   });
 }
 function spawnNotifyScript(scriptBody) {
@@ -1157,7 +1158,7 @@ sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})
     scriptPrefix: preamble,
     scriptBody,
     env: buildPythonEnv(),
-    interpreter: "python3",
+    interpreter: PYTHON_BIN,
     filePrefix: "notify",
     fileExtension: ".py"
   });
@@ -1232,7 +1233,7 @@ const facade = createQuaidFacade({
   listCompactionSessions,
   requestSessionCompaction,
   initDatastore: () => {
-    execFileSync("python3", [PYTHON_SCRIPT, "init"], {
+    execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "init"], {
       timeout: 2e4,
       env: buildPythonEnv()
     });
