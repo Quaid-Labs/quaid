@@ -3064,6 +3064,13 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
         log.info(`Created identity/${f}`);
       }
     }
+    // Create per-instance journal directory. Runtime expects instance_root/journal
+    // (adapter.journal_dir returns instance_root/journal), not workspace/journal.
+    const instanceJournalDir = path.join(WORKSPACE, resolvedInstanceId, "journal");
+    if (!fs.existsSync(instanceJournalDir)) {
+      fs.mkdirSync(instanceJournalDir, { recursive: true });
+      log.info(`Created journal directory: ${instanceJournalDir}`);
+    }
     // Create misc project dir in projects/misc--{instanceId}/.
     // Lives as a real tracked project — all registry tooling works automatically.
     for (const bucket of [`misc--${resolvedInstanceId}`]) {
