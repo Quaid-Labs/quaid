@@ -3938,7 +3938,10 @@ function setupClaudeCodeHooks() {
   // CLAUDE_PROJECT_DIR (CC-injected) for per-project isolation.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  const envPrefix = `QUAID_HOME='${WORKSPACE}'`;
+  // Include QUAID_INSTANCE so that hooks fired outside an active session context
+  // (e.g. SessionEnd, which fires after /exit when per-project env vars are no
+  // longer injected by Claude Code) can still resolve the correct silo.
+  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_INSTANCE='${syncInstallerInstanceEnv()}'`;
 
   const desiredHooks = {
     SessionStart: [
