@@ -12,6 +12,11 @@ function _resolveTimeoutMs(name: string, fallbackMs: number): number {
 
 export const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
 
+// Allow override of the Python binary for environments where "python3" in PATH
+// resolves to the wrong interpreter (e.g. macOS system Python 3.9 instead of
+// the Homebrew Python 3.14 that has sqlite_vec).
+const PYTHON_BIN = String(process.env.QUAID_PYTHON_BIN || "python3").trim() || "python3";
+
 function _formatBridgeErrorDetail(stderrText: string, stdoutText: string): string {
   const timeoutHint =
     /timed out|timeout|Gateway LLM proxy transient error|URLError|TimeoutError/i.test(stderrText)
@@ -44,7 +49,7 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
 
   return async function execPython(command: string, args: string[] = []): Promise<string> {
     return new Promise((resolve, reject) => {
-      const proc = spawn("python3", [config.scriptPath, command, ...args], {
+      const proc = spawn(PYTHON_BIN, [config.scriptPath, command, ...args], {
         cwd: config.workspace,
         env: {
           ...process.env,

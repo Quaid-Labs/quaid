@@ -83,6 +83,10 @@ function _resolvePythonPluginRoot(): string {
   return path.join(WORKSPACE, "plugins", "quaid");
 }
 const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
+// Allow override of the Python binary for environments where "python3" in PATH
+// resolves to the wrong interpreter (e.g. macOS system Python 3.9 instead of
+// the Homebrew Python 3.14 that has sqlite_vec installed).
+const PYTHON_BIN = String(process.env.QUAID_PYTHON_BIN || "python3").trim() || "python3";
 const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 // When QUAID_INSTANCE is set, the Python bridge must point MEMORY_DB_PATH at the
@@ -827,7 +831,7 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
 
 function getDatastoreStatsSync(): Record<string, any> | null {
   try {
-    const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
+    const output = execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
       timeout: 30_000,
       env: buildPythonEnv(),
@@ -1495,7 +1499,7 @@ function _spawnWithTimeout(
     env: buildPythonEnv(env) as NodeJS.ProcessEnv,
     timeoutMs,
     label,
-    argv: ["python3", script, command, ...args],
+    argv: [PYTHON_BIN, script, command, ...args],
   });
 }
 
@@ -1513,7 +1517,7 @@ function spawnNotifyScript(scriptBody: string): boolean {
     scriptPrefix: preamble,
     scriptBody,
     env: buildPythonEnv() as NodeJS.ProcessEnv,
-    interpreter: "python3",
+    interpreter: PYTHON_BIN,
     filePrefix: "notify",
     fileExtension: ".py",
   });
@@ -1620,7 +1624,7 @@ const facade = createQuaidFacade({
   listCompactionSessions,
   requestSessionCompaction,
   initDatastore: () => {
-    execFileSync("python3", [PYTHON_SCRIPT, "init"], {
+    execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "init"], {
       timeout: 20_000,
       env: buildPythonEnv(),
     });
