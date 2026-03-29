@@ -104,13 +104,57 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _chunk_transcript(transcript: str, max_tokens: int = 900) -> List[str]:
+def _split_long_turn(turn: str, max_chars: int) -> List[str]:
+    """Split a single turn that exceeds max_chars on line boundaries, then char boundaries."""
+    if len(turn) <= max_chars:
+        return [turn]
+    lines = turn.splitlines()
+    result: List[str] = []
+    buf_lines: List[str] = []
+    buf_len = 0
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if buf_lines and buf_len + line_len > max_chars:
+            result.append("\n".join(buf_lines).strip())
+            buf_lines = []
+            buf_len = 0
+        # If a single line itself exceeds max_chars, force-split on characters
+        if line_len > max_chars:
+            if buf_lines:
+                result.append("\n".join(buf_lines).strip())
+                buf_lines = []
+                buf_len = 0
+            for start in range(0, len(line), max_chars):
+                result.append(line[start:start + max_chars])
+        else:
+            buf_lines.append(line)
+            buf_len += line_len
+    if buf_lines:
+        result.append("\n".join(buf_lines).strip())
+    return [r for r in result if r]
+
+
+def _chunk_transcript(transcript: str, max_tokens: int = 400) -> List[str]:
+    """Split transcript into embedding-safe chunks.
+
+    max_tokens=400 keeps chunks at ~1600 chars, safely within nomic-embed-text's
+    2048-token context (session log content tokenizes at ~2 chars/token, not 4).
+    Individual turns longer than 1600 chars are force-split on line/char boundaries
+    before grouping so no single embedding call exceeds the model's context limit.
+    """
     txt = str(transcript or "").strip()
     if not txt:
         return []
-    turns = [t.strip() for t in txt.split("\n\n") if t.strip()]
-    if not turns:
+    raw_turns = [t.strip() for t in txt.split("\n\n") if t.strip()]
+    if not raw_turns:
         return [txt]
+
+    # max_chars safety bound: 4 * max_tokens (inverse of _estimate_tokens)
+    max_chars = max_tokens * 4
+    # Force-split any turn that individually exceeds the char limit
+    turns: List[str] = []
+    for raw_turn in raw_turns:
+        turns.extend(_split_long_turn(raw_turn, max_chars))
 
     chunks: List[str] = []
     buf: List[str] = []
