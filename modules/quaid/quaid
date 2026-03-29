@@ -60,40 +60,45 @@ elif [[ ":${PYTHONPATH}:" != *":${SCRIPT_DIR}:"* ]]; then
   export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
 fi
 
+# Honour QUAID_PYTHON_BIN if set (allows host environments to point at a
+# specific Python interpreter, e.g. /opt/homebrew/bin/python3 instead of the
+# system python3 that may lack sqlite_vec or other required extensions).
+PYTHON_BIN="${QUAID_PYTHON_BIN:-python3}"
+
 case "$CMD" in
   # Lifecycle hooks (adapter-agnostic)
   hook-inject)
-    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" inject "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/interface/hooks.py" inject "$@"
     ;;
   hook-inject-compact)
-    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" inject-compact "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/interface/hooks.py" inject-compact "$@"
     ;;
   hook-extract)
-    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" extract "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/interface/hooks.py" extract "$@"
     ;;
   hook-session-init)
-    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" session-init "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/interface/hooks.py" session-init "$@"
     ;;
   hook-subagent-start)
-    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" subagent-start "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/interface/hooks.py" subagent-start "$@"
     ;;
   hook-subagent-stop)
-    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" subagent-stop "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/interface/hooks.py" subagent-stop "$@"
     ;;
 
   # Extraction daemon
   daemon)
-    exec python3 "$SCRIPT_DIR/core/extraction_daemon.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/extraction_daemon.py" "$@"
     ;;
 
   # Janitor commands
   janitor)
-    exec python3 "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
     ;;
 
   # Session commands
   session)
-    exec python3 "$SCRIPT_DIR/ingest/session_logs_ingest.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/ingest/session_logs_ingest.py" "$@"
     ;;
 
   # Domain management
@@ -101,13 +106,13 @@ case "$CMD" in
     SUBCMD="${1:-list}"
     shift 2>/dev/null || true
     case "$SUBCMD" in
-      list)     exec python3 -c "
+      list)     exec "$PYTHON_BIN" -c "
 import sys; sys.path.insert(0, '$SCRIPT_DIR')
 from core.interface.api import list_domains
 import json
 print(json.dumps(list_domains(), indent=2))
 " "$@" ;;
-      register) exec python3 -c "
+      register) exec "$PYTHON_BIN" -c "
 import sys; sys.path.insert(0, '$SCRIPT_DIR')
 from core.interface.api import register_domain
 import json
@@ -127,38 +132,38 @@ print(json.dumps(register_domain(name, desc), indent=2))
     SUBCMD="${1:-help}"
     shift 2>/dev/null || true
     case "$SUBCMD" in
-      list)    exec python3 "$SCRIPT_DIR/datastore/docsdb/registry.py" list "$@" ;;
-      check)   exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
-      update)  exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@" ;;
-      changelog) exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
-      search)  exec python3 "$SCRIPT_DIR/datastore/docsdb/rag.py" search "$@" ;;
+      list)    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/registry.py" list "$@" ;;
+      check)   exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
+      update)  exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@" ;;
+      changelog) exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
+      search)  exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/rag.py" search "$@" ;;
       *)       echo "Usage: quaid docs {list|check|update|changelog|search} [args...]"; exit 1 ;;
     esac
     ;;
 
   # Registry/projects subsystem (docs registry)
   registry)
-    exec python3 "$SCRIPT_DIR/datastore/docsdb/registry.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/registry.py" "$@"
     ;;
 
   # Project system (project registry, shadow git, sync)
   project|projects)
-    exec python3 "$SCRIPT_DIR/core/project_registry_cli.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/project_registry_cli.py" "$@"
     ;;
 
   # Global project registry (cross-instance tracking)
   global-registry)
-    exec python3 "$SCRIPT_DIR/lib/project_registry.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/lib/project_registry.py" "$@"
     ;;
 
   # Project updater
   updater)
-    exec python3 "$SCRIPT_DIR/datastore/docsdb/project_updater.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/project_updater.py" "$@"
     ;;
 
   # Compatibility check
   compat|compatibility)
-    exec python3 -c "
+    exec "$PYTHON_BIN" -c "
 import sys, json; sys.path.insert(0, '$SCRIPT_DIR')
 from core.compatibility import (
     read_circuit_breaker, HostInfo, preflight_compatibility_check,
@@ -215,21 +220,21 @@ else:
 
 # Everything else goes to memory_graph.py
 store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|backfill-hashes|health|event)
-    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
     ;;
 
   identity-map)
-    exec python3 "$SCRIPT_DIR/datastore/memorydb/identity_map.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/memorydb/identity_map.py" "$@"
     ;;
 
   doctor)
-    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
     ;;
 
   claudecode|openclaw)
     # Adapter-registered CLI namespace dispatch
     ADAPTER_CMD="$CMD"
-    python3 - "$ADAPTER_CMD" "$@" <<'PYEOF'
+    "$PYTHON_BIN" - "$ADAPTER_CMD" "$@" <<'PYEOF'
 import sys, os
 sys.path.insert(0, os.environ.get("QUAID_MODULE_ROOT", os.path.dirname(os.path.abspath(__file__))))
 
@@ -269,7 +274,7 @@ PYEOF
     shift 2>/dev/null || true
     case "$SUBCMD" in
       list)
-        python3 - "$@" <<'PYEOF'
+        "$PYTHON_BIN" - "$@" <<'PYEOF'
 import sys, os, json
 sys.path.insert(0, os.environ.get("QUAID_MODULE_ROOT", os.path.dirname(os.path.abspath(__file__))))
 from lib.instance import list_instances, quaid_home, instance_id as _iid
@@ -314,16 +319,16 @@ PYEOF
         if [[ -f "$CONFIG_NODE" ]]; then
           exec node "$CONFIG_NODE" "$SUBCMD" "$@"
         fi
-        exec python3 "$CONFIG_PY" "$SUBCMD" "$@"
+        exec "$PYTHON_BIN" "$CONFIG_PY" "$SUBCMD" "$@"
         ;;
       set)
         if [[ -f "$CONFIG_NODE" ]]; then
           exec node "$CONFIG_NODE" set "$@"
         fi
-        exec python3 "$CONFIG_PY" set "$@"
+        exec "$PYTHON_BIN" "$CONFIG_PY" set "$@"
         ;;
       set-auth)
-        exec python3 "$CONFIG_PY" set-auth "$@"
+        exec "$PYTHON_BIN" "$CONFIG_PY" set-auth "$@"
         ;;
       *)
         echo "Usage: quaid config [show|edit|path|set <dotted.key> <value>|set-auth <token>] [--shared | --instance <id>]"
@@ -407,6 +412,6 @@ PYEOF
     ;;
 
   *)
-    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
     ;;
 esac
