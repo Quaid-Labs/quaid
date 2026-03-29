@@ -2973,7 +2973,14 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       lines.unshift(`- [memory-quality] ${qualityNote}`);
     }
     if (graphAnchorExpansions.length > 0) {
-      const grouped = new Map<string, { anchorText: string; anchorSimilarity?: number; rows: MemoryResult[] }>();
+      const grouped = new Map<string, {
+        anchorText: string;
+        anchorSimilarity?: number;
+        totalConnections?: number;
+        shownConnections?: number;
+        truncated?: boolean;
+        rows: MemoryResult[];
+      }>();
       for (const row of graphAnchorExpansions) {
         const key = String(row.graphExpansionAnchorId || row.graphExpansionAnchorText || row.text || "").trim();
         if (!key) continue;
@@ -2983,11 +2990,29 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           if ((row.graphExpansionAnchorSimilarity || 0) > (existing.anchorSimilarity || 0)) {
             existing.anchorSimilarity = row.graphExpansionAnchorSimilarity;
           }
+          if (Number.isFinite(Number(row.graphExpansionTotalConnections))) {
+            existing.totalConnections = Number(row.graphExpansionTotalConnections);
+          }
+          if (Number.isFinite(Number(row.graphExpansionShownConnections))) {
+            existing.shownConnections = Number(row.graphExpansionShownConnections);
+          }
+          if (typeof row.graphExpansionTruncated === "boolean") {
+            existing.truncated = row.graphExpansionTruncated;
+          }
           continue;
         }
         grouped.set(key, {
           anchorText: String(row.graphExpansionAnchorText || row.sourceName || row.text || "").trim(),
           anchorSimilarity: row.graphExpansionAnchorSimilarity,
+          totalConnections: Number.isFinite(Number(row.graphExpansionTotalConnections))
+            ? Number(row.graphExpansionTotalConnections)
+            : undefined,
+          shownConnections: Number.isFinite(Number(row.graphExpansionShownConnections))
+            ? Number(row.graphExpansionShownConnections)
+            : undefined,
+          truncated: typeof row.graphExpansionTruncated === "boolean"
+            ? row.graphExpansionTruncated
+            : undefined,
           rows: [row],
         });
       }

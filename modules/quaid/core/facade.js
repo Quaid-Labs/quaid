@@ -2288,11 +2288,23 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
           if ((row.graphExpansionAnchorSimilarity || 0) > (existing.anchorSimilarity || 0)) {
             existing.anchorSimilarity = row.graphExpansionAnchorSimilarity;
           }
+          if (Number.isFinite(Number(row.graphExpansionTotalConnections))) {
+            existing.totalConnections = Number(row.graphExpansionTotalConnections);
+          }
+          if (Number.isFinite(Number(row.graphExpansionShownConnections))) {
+            existing.shownConnections = Number(row.graphExpansionShownConnections);
+          }
+          if (typeof row.graphExpansionTruncated === "boolean") {
+            existing.truncated = row.graphExpansionTruncated;
+          }
           continue;
         }
         grouped.set(key, {
           anchorText: String(row.graphExpansionAnchorText || row.sourceName || row.text || "").trim(),
           anchorSimilarity: row.graphExpansionAnchorSimilarity,
+          totalConnections: Number.isFinite(Number(row.graphExpansionTotalConnections)) ? Number(row.graphExpansionTotalConnections) : void 0,
+          shownConnections: Number.isFinite(Number(row.graphExpansionShownConnections)) ? Number(row.graphExpansionShownConnections) : void 0,
+          truncated: typeof row.graphExpansionTruncated === "boolean" ? row.graphExpansionTruncated : void 0,
           rows: [row]
         });
       }
