@@ -32,16 +32,18 @@ Quaid is an agentic-system independent knowledge layer by design, with adapters 
 
 **Platform compatibility (quick view):**
 
-| Capability | OpenClaw | Claude Code | Standalone |
-|---|---|---|---|
-| Memory + janitor lifecycle | Yes | Yes | Yes |
-| Project docs + RAG system | Yes | Yes | Yes |
-| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes | Yes |
-| Hook-based auto extraction | Yes | Yes | Manual/CLI |
-| Compaction control (wait-for-extract before compact) | **Yes** | **No** | N/A |
-| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No | No |
+| Capability | OpenClaw | Claude Code |
+|---|---|---|
+| Memory + janitor lifecycle | Yes | Yes |
+| Project docs + RAG system | Yes | Yes |
+| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes |
+| Hook-based auto extraction | Yes | Yes |
+| Compaction control (wait-for-extract before compact) | **Yes** | **No** |
+| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No |
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+
+Quaid also includes a direct `quaid` CLI for operational control, but OC/CC are the primary host integrations.
 
 Runtime event capabilities are discoverable via `quaid event capabilities` so orchestration can adapt to host/runtime support instead of assuming fixed behavior.
 

@@ -4,22 +4,23 @@ This page has two views:
 - product capabilities (what Quaid provides)
 - host integration capabilities (what each platform can expose)
 
-## Current Platforms
+## Primary Host Integrations
 
 - OpenClaw (`openclaw` adapter)
 - Claude Code (`claude-code` adapter)
-- Standalone CLI (`standalone` adapter)
+
+Quaid also provides a direct operational CLI, but this page focuses on host integrations.
 
 ## Product Capability Matrix
 
-| Quaid Capability | OpenClaw | Claude Code | Standalone CLI | Notes |
-|---|---|---|---|---|
-| Memory system (capture, retrieval, maintenance) | Yes | Yes | Yes | Core Quaid engine shared across adapters. |
-| Project system (registry, docs ingest, RAG search) | Yes | Yes | Yes | Same project/docs pipeline on all adapters. |
-| Multi-agent/session lineage awareness | Yes | Yes | Partial | Best with host lifecycle hooks; CLI can run manually. |
-| Evolving identity files (`SOUL.md`, `USER.md`, `ENVIRONMENT.md`) | Yes | Yes | Yes | Instance identity files evolve via snippets + janitor distillation. |
-| Cross-session persistence and reset resilience | Yes | Yes | Yes | Instance silo model preserves state across sessions/resets. |
-| Bounded memory injection (token-efficient recall context) | Yes | Yes | Yes | Core recall pipeline; host controls final prompt assembly timing. |
+| Quaid Capability | OpenClaw | Claude Code | Notes |
+|---|---|---|---|
+| Memory system (capture, retrieval, maintenance) | Yes | Yes | Core Quaid engine shared across adapters. |
+| Project system (registry, docs ingest, RAG search) | Yes | Yes | Same project/docs pipeline on all adapters. |
+| Multi-agent/session lineage awareness | Yes | Yes | Best with host lifecycle hooks. |
+| Evolving identity files (`SOUL.md`, `USER.md`, `ENVIRONMENT.md`) | Yes | Yes | Instance identity files evolve via snippets + janitor distillation. |
+| Cross-session persistence and reset resilience | Yes | Yes | Instance silo model preserves state across sessions/resets. |
+| Bounded memory injection (token-efficient recall context) | Yes | Yes | Core recall pipeline; host controls final prompt assembly timing. |
 
 ## Host Integration Matrix
 
