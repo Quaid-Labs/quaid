@@ -1,7 +1,7 @@
 <p align="center">
   <img src="assets/quaid-logo.png" alt="Quaid" width="500">
   <br>
-  <em>"If I'm not me, then who the hell am I?"</em>
+  <em>"If I'm not me...."</em>
 </p>
 
 ### A Knowledge Layer for Agentic Systems
