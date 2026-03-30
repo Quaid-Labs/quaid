@@ -1146,10 +1146,7 @@ def get_adapter() -> QuaidAdapter:
             return _adapter
         _auto_provision_from_env_if_needed()
         kind = _normalize_adapter_id(_read_adapter_type_from_config())
-        if kind == "standalone":
-            _adapter = StandaloneAdapter()
-        else:
-            _adapter = _instantiate_adapter_from_manifest(kind)
+        _adapter = _instantiate_adapter_from_manifest(kind)
         _bootstrap_instance_env(_adapter)
         return _adapter
 
