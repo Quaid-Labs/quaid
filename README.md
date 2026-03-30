@@ -10,18 +10,18 @@
 
 Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time.
 
-Full-context is an upper bound, not the target. It grows linearly in cost, does not persist across resets, and gets weaker as long-running workflows sprawl. Quaid targets a different regime: persistent knowledge with bounded recall cost and cross-session continuity.
+Context-window-based memory is an upper bound, not the target. It grows linearly in cost, does not persist across resets, and gets weaker as long-running workflows sprawl. Quaid targets a different regime: persistent knowledge with bounded recall cost and cross-session continuity.
 
 Quaid is local-first: your memory database, identity files, project docs, and embeddings stay on your machine. You own the data, can back it up, move it, inspect it, and run it without a hosted memory service.
 
-Every session starts ready to work. Project docs, architecture decisions, tool guidance, and codebase context are tracked and kept current automatically. Through dual snippet/journal learning, the layer evolves with use: it doesn't just retain facts, it builds durable understanding of users, workflows, and projects over time.
+Every session starts ready to work. Project docs, architecture decisions, tool guidance, and codebase context are tracked and kept current automatically. Through a dual learning evolution system, the layer evolves with use: it doesn't just retain facts, it builds durable understanding of users, workflows, and projects over time.
 
 **Why teams use it:**
 - **Cross-platform and multi-agent:** OpenClaw and Claude Code are supported now, with Codex next on the roadmap. Agents can keep personal memory siloed per instance, intentionally share a memory silo, or share only the common project space.
 - **Shared projects without forced identity sharing:** project docs and registry live in a shared workspace, so different agents and platforms can work from the same project context even when their personal memories stay separate.
 - **Local-first and portable:** SQLite + local files + local embeddings mean you own and can move the data.
 - **Low operating cost:** bounded recall, local embeddings, and compaction-aware flows are built to reduce brute-force context replay. On long-running agents, the memory layer can cost less than the context spend it saves.
-- **Self-evolving agents:** `SOUL.md`, `USER.md`, and `ENVIRONMENT.md` are updated over time through snippets, journals, and janitor distillation.
+- **Self-evolving agents:** `SOUL.md`, `USER.md`, and `ENVIRONMENT.md` are updated over time from usage. The agent keeps a curated journal of its surroundings so it can better understand them in the future.
 - **Tested for long-horizon use:** AgentLife and the real-world scalability study both stress long-running memory behavior, not just short QA recall.
 
 **What it remembers:**
@@ -36,10 +36,10 @@ Every session starts ready to work. Project docs, architecture decisions, tool g
 - Keeps project docs and personality files current without manual maintenance
 - Lets multiple agents share a project space while keeping personal memory siloed by default
 
-Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integrations are [OpenClaw](https://github.com/openclaw/openclaw) and Claude Code, with a direct standalone CLI for operations. Codex adapter support is the next major host integration on the roadmap.
+Quaid is a system-agnostic knowledge layer by design, with adapters handling host-specific runtime details. [OpenClaw](https://github.com/openclaw/openclaw) and Claude Code are supported now, with Codex adapter support next on the roadmap.
 
 **Interface surfaces:**
-- **OpenClaw adapter** — lifecycle hooks + tool integration (most mature path)
+- **OpenClaw adapter** — lifecycle hooks + tool integration
 - **Claude Code adapter** — hook-driven integration with durable session-init and daemon signaling
 - **CLI** — direct operational control for extraction, recall, janitor, docs, and events
 - **Adapter architecture** — manifest-driven, pluggable host integration model so other agentic systems can add Quaid support without forking core behavior
@@ -52,7 +52,7 @@ Quaid is an agentic-system independent knowledge layer by design, with adapters 
 | Project docs + RAG system | Yes | Yes |
 | Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes |
 | Hook-based auto extraction | Yes | Yes |
-| Compaction control (wait-for-extract before compact) | **Yes** | **No** |
+| Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** |
 | Gateway-managed LLM path (no per-project API key setup) | **Yes** | No |
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
@@ -84,13 +84,6 @@ git clone https://github.com/quaid-labs/quaid.git
 cd quaid && node setup-quaid.mjs
 ```
 
-**Canary / commit testing (no public release cut):**
-```bash
-node setup-quaid.mjs --source github --ref canary
-# or pin exact commit:
-node setup-quaid.mjs --source github --ref <commit-sha>
-```
-
 After install, start here:
 - [User Guide](projects/quaid/USER-GUIDE.md) — day-1 usage, project system basics, and where Quaid stores its files
 
@@ -103,16 +96,29 @@ After install, start here:
 - **You own the data:** SQLite DBs, identity files, and project docs stay inspectable and portable.
 - **Three knowledge areas:** facts, core personality, and project knowledge are treated differently instead of flattened into one store.
 - **Lifecycle maintenance, not just storage:** nightly janitor pipeline continuously reviews, deduplicates, and decays stale knowledge.
-- **Dual learning system:** fast snippets + slower journal distillation for long-term synthesis.
+- **Dual learning evolution system:** fast updates plus slower journal distillation for long-term synthesis.
 - **Project system with shadow git:** project knowledge is tracked through a shadow git-backed docs pipeline instead of being dumped into personal memory.
 - **Tested for scale and cost:** long-horizon benchmark and live study data show the system stays practical as history grows, while bounded recall and compaction reduce token spend.
-- **OpenClaw-first, system-agnostic design:** deepest integration today is OpenClaw, but the architecture is built around pluggable adapter contracts.
+- **System-agnostic design:** the architecture is built around pluggable adapter contracts rather than a single host.
 
 ## Benchmarks
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
 
-AgentLife compares Quaid against full-context baselines because they are useful upper bounds for short-horizon tasks. Quaid is not trying to replace that regime; it is trying to stay competitive while preserving knowledge across resets and reducing long-run context cost.
+FC is included here as an upper-bound baseline, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets and reducing long-run token cost.
+
+Headline launch summary:
+
+| Metric | Quaid | FC Sonnet | OpenClaw Native |
+| --- | ---: | ---: | ---: |
+| AL-S | 87.69% | 92.90% | 69.40% |
+| Tokens | 5.75M | 29.83M | unknown |
+| AL-L | 87.10% | 87.70% | 63.06% |
+| Tokens | 6.46M | 34.60M | unknown |
+| AL-L OBD | 86.04% | 87.70% | unknown |
+| Tokens | 6.08M | 34.60M | unknown |
+
+Quaid was measured with Haiku fast, Sonnet deep, and a Sonnet agent running eval. `AL-L` and `AL-L OBD` are chosen here as the best representation of real use data; `AL-S` remains the cleaner, more idealized lane. `Sonnet/Haiku` remains the flagship configuration on cleanliness and overall benchmark tradeoffs. `Opus` was evaluated, but underperformed `Sonnet` overall and is not the recommended launch configuration. On `AL-L` and `AL-L OBD`, FC is forced to compact, and the drop in FC quality reflects that compaction plus the added noise in the larger corpus. OpenClaw Native tokens remain unknown due to telemetry restrictions. Token counts here are the minimum tokens used to answer the full set of 283 eval questions.
 
 Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
 
@@ -122,51 +128,11 @@ Use these canonical links:
 
 ---
 
-## How It Works
-
-Quaid organizes knowledge into three areas, each with different retrieval behavior, and maintains them with four systems.
-
-### Three knowledge areas
-
-**Fact knowledge** — User facts, relationships, preferences, experiences. Retrieved via hybrid search (vector + keyword + graph traversal) with LLM reranking — only the most relevant facts are injected per query.
-
-**Core personality** — Deeper understanding of the user, the agent's own identity, and the world around it. Loaded as full context on every conversation — always available, always current.
-
-**Project knowledge** — Documentation, project structure, tool APIs. Available via RAG search — full documents loaded when relevant. Projects aren't just code — this covers any sustained effort: a codebase, an essay, a YouTube channel, a home renovation.
-
-### Four systems
-
-**Knowledge Capture & Recall** — Conversations are distilled into structured facts, relationships, and preferences stored in a SQLite graph database. Retrieval uses hybrid search, LLM reranking, and intent-aware fusion to find the right knowledge at the right time.
-
-**Journal & Personality** — A dual learning system. Fast-path *snippets* capture small observations and fold them into core personality files. Slow-path *journal entries* accumulate over time and get distilled into deeper insights — the kind of perceived, inferred understanding that makes an agent feel like it actually knows you.
-
-**Projects & Docs** — Auto-discovers project structure, tracks documentation, and keeps docs current from git changes through a shadow git-backed pipeline. Comprehensive docs beat partial docs — partial or outdated docs mislead the LLM. This also keeps system-level knowledge out of the memory graph, where it would pollute fact retrieval.
-
-**Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where deep-reasoning LLMs can curate knowledge economically. Reviews, deduplicates, decays stale facts, and monitors documentation health in bulk.
-
----
-
 ## Design Philosophy: LLM-First
 
 Almost every decision in Quaid is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. The system splits work between a **deep-reasoning LLM** (fact review, contradiction resolution, journal distillation) and a **fast-reasoning LLM** (reranking, dedup verification, query expansion) to balance quality against cost and speed. The fast-reasoning model isn't just cheaper — it's fast. Memory recall needs to feel instant, not take three seconds waiting on a premium model to rerank results.
 
 Because the system leans heavily on LLM reasoning, Quaid naturally scales with AI models — as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
-
----
-
-## Cost
-
-Quaid is free and open source. These are typical API costs you pay directly to your configured LLM provider (provider/model dependent):
-
-| Component | API Cost |
-|-----------|----------|
-| Fact extraction | $0.05–0.20 per compaction (deep-reasoning LLM) |
-| Knowledge recall | $0.01 per query (fast-reasoning LLM reranker) |
-| Nightly janitor | $1–5 per run |
-| Embeddings | Free (Ollama, runs locally) |
-| **Typical monthly total** | **$5–15 for active use** |
-
-AgentLife data also shows substantial token-efficiency gains versus full-context replay baselines, and automatic compaction support on compatible hosts compounds those savings over long sessions. In long-running workflows, Quaid can reduce total context spend enough to more than pay for its operating cost.
 
 ---
 
@@ -190,11 +156,11 @@ Known limitations for **v0.2.15-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows is not supported. macOS and Linux only.
-- OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
+- Host integrations are still maturing across platforms; OpenClaw and Claude Code are supported today, with broader host coverage still in progress.
 
 The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus ongoing AgentLife benchmark evaluation.
 
-GitHub Actions CI runs automated checks on pushes/PRs including runtime pair sync, docs/release consistency, linting, runtime build, isolated Python unit suites, and the full gate (`run-all-tests --full`) with the bootstrap E2E auth matrix enabled.
+GitHub Actions CI runs automated checks on pushes/PRs including runtime pair sync, docs/release consistency, linting, runtime build, isolated Python unit suites, and the full gate (`run-all-tests --full`).
 
 We're actively testing and refining the system against benchmarks and welcome collaboration. If you're interested in contributing, testing, or just have ideas — open an issue or reach out.
 
