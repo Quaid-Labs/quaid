@@ -10,6 +10,8 @@
 
 Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time.
 
+Full-context is an upper bound, not the target. It grows linearly in cost, does not persist across resets, and gets weaker as long-running workflows sprawl. Quaid targets a different regime: persistent knowledge with bounded recall cost and cross-session continuity.
+
 Quaid is local-first: your memory database, identity files, project docs, and embeddings stay on your machine. You own the data, can back it up, move it, inspect it, and run it without a hosted memory service.
 
 Every session starts ready to work. Project docs, architecture decisions, tool guidance, and codebase context are tracked and kept current automatically. Through dual snippet/journal learning, the layer evolves with use: it doesn't just retain facts, it builds durable understanding of users, workflows, and projects over time.
@@ -109,6 +111,10 @@ After install, start here:
 ## Benchmarks
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
+
+AgentLife compares Quaid against full-context baselines because they are useful upper bounds for short-horizon tasks. Quaid is not trying to replace that regime; it is trying to stay competitive while preserving knowledge across resets and reducing long-run context cost.
+
+Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
 
 Use these canonical links:
 - [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
@@ -210,6 +216,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Benchmark Index](docs/BENCHMARKS.md) — Canonical AgentLife benchmark links
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
 - [Provider Modes](docs/PROVIDER-MODES.md) — Provider routing and cost-safety guidance
+- [Security Policy](SECURITY.md) — Private vulnerability reporting guidance
 - [Release Workflow](docs/RELEASE.md) — Pre-push checks and ownership guard
 - [Maintainer Lifecycle](docs/MAINTAINER-LIFECYCLE.md) — Safe branch/release model for post-user operation
 - [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy

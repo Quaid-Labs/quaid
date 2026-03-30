@@ -4,7 +4,12 @@
 
 Please do not open public issues for suspected vulnerabilities.
 
-Report privately to the maintainer with:
+Report privately using one of these paths:
+
+- GitHub private vulnerability reporting / security advisories for this repository, if enabled
+- Direct maintainer contact through the repository owner's GitHub profile
+
+Include:
 
 - A clear description of the issue
 - Reproduction steps or proof-of-concept
