@@ -464,6 +464,21 @@ class QuaidAdapter(abc.ABC):
     def get_install_url(self) -> str:
         return f"https://raw.githubusercontent.com/{self.get_repo_slug()}/main/install.sh"
 
+    # ---- Installer capability surface ----
+
+    def installer_supported_providers(self) -> List[str]:
+        """LLM provider ids this adapter supports in guided install."""
+        return ["anthropic", "openai", "openrouter", "together", "ollama"]
+
+    def installer_default_models(self, provider: str) -> Optional[Dict[str, str]]:
+        """Default deep/fast lanes for installer provider selection.
+
+        Returns {"deep": "<model>", "fast": "<model>"} or None when adapter
+        does not define opinionated defaults for the given provider.
+        """
+        _ = provider
+        return None
+
 
 class StandaloneAdapter(QuaidAdapter):
     """Default adapter for standalone Quaid installations.
@@ -669,6 +684,19 @@ class StandaloneAdapter(QuaidAdapter):
             f"Unknown LLM provider '{provider_id}'. "
             "Valid values: 'claude-code', 'anthropic', 'openai-compatible'."
         )
+
+    def installer_supported_providers(self) -> List[str]:
+        return ["anthropic", "openai", "openrouter", "together", "ollama"]
+
+    def installer_default_models(self, provider: str) -> Optional[Dict[str, str]]:
+        p = str(provider or "").strip().lower()
+        if p == "anthropic":
+            return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
+        if p in ("openai", "openrouter", "together"):
+            return {"deep": "gpt-4o", "fast": "gpt-4o-mini"}
+        if p == "ollama":
+            return {"deep": "llama3.1:70b", "fast": "llama3.1:8b"}
+        return None
 
 
 # ---------------------------------------------------------------------------

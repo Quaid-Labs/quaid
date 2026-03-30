@@ -31,6 +31,7 @@ from lib.providers import (
 )
 from adaptors.openclaw.adapter import OpenClawAdapter
 from adaptors.openclaw.providers import GatewayLLMProvider
+from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
 
 def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
@@ -208,6 +209,11 @@ class TestStandaloneAdapter:
         assert standalone.filter_system_messages("HEARTBEAT_OK") is False
         assert standalone.filter_system_messages("GatewayRestart: ...") is False
         assert standalone.filter_system_messages("normal message") is False
+
+    def test_installer_provider_defaults(self, standalone):
+        assert "anthropic" in standalone.installer_supported_providers()
+        defaults = standalone.installer_default_models("anthropic")
+        assert defaults == {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
 
     def test_build_transcript_uses_adapter_filters_only(self, standalone):
         transcript = standalone.build_transcript([
@@ -486,6 +492,25 @@ class TestOpenClawAdapter:
             assert "message" in cmd
             assert "send" in cmd
             assert "test message" in cmd
+
+    def test_installer_provider_surface(self):
+        adapter = OpenClawAdapter()
+        assert set(adapter.installer_supported_providers()) >= {"anthropic", "openai", "ollama"}
+        assert adapter.installer_default_models("anthropic") == {
+            "deep": "claude-sonnet-4-5",
+            "fast": "claude-haiku-4-5",
+        }
+
+
+class TestClaudeCodeAdapter:
+    def test_installer_provider_surface_is_anthropic_only(self):
+        adapter = ClaudeCodeAdapter()
+        assert adapter.installer_supported_providers() == ["anthropic"]
+        assert adapter.installer_default_models("anthropic") == {
+            "deep": "claude-sonnet-4-5",
+            "fast": "claude-haiku-4-5",
+        }
+        assert adapter.installer_default_models("openai") is None
 
 
 # ---------------------------------------------------------------------------

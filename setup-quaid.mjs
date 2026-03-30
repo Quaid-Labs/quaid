@@ -389,16 +389,74 @@ function _adapterOptionsForSelect() {
   ];
 }
 
-function _adapterModelDefaults(adapterId, provider) {
-  const manifest = _adapterManifestById(adapterId);
-  const defaults = manifest?.install?.modelDefaults;
-  if (!defaults || typeof defaults !== "object") return null;
-  const slot = defaults[String(provider || "").trim().toLowerCase()];
-  if (!slot || typeof slot !== "object") return null;
-  const deep = String(slot.deep || "").trim();
-  const fast = String(slot.fast || "").trim();
-  if (!deep || !fast) return null;
-  return { deep, fast };
+function _readAdapterInstallerCapabilities(adapterId) {
+  const normalized = String(adapterId || "").trim().toLowerCase();
+  if (!normalized) return null;
+  const py = [
+    "import json, os, sys",
+    "sys.path.insert(0, os.environ.get('QUAID_PYTHONPATH', ''))",
+    "from lib.adapter import _instantiate_adapter_from_manifest",
+    "aid = os.environ.get('QUAID_ADAPTER_TYPE', '').strip()",
+    "adapter = _instantiate_adapter_from_manifest(aid)",
+    "providers = list(adapter.installer_supported_providers() or [])",
+    "out = {'providers': [str(p).strip().lower() for p in providers if str(p).strip()], 'modelDefaults': {}}",
+    "for p in out['providers']:",
+    "    d = adapter.installer_default_models(p)",
+    "    if isinstance(d, dict):",
+    "        deep = str(d.get('deep', '')).strip()",
+    "        fast = str(d.get('fast', '')).strip()",
+    "        if deep and fast:",
+    "            out['modelDefaults'][p] = {'deep': deep, 'fast': fast}",
+    "print(json.dumps(out))",
+  ].join("\n");
+  const res = spawnSync("python3", ["-c", py], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      QUAID_HOME: WORKSPACE,
+      QUAID_WORKSPACE: WORKSPACE,
+      QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
+      QUAID_ADAPTER_TYPE: normalized,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (res.status !== 0) return null;
+  try {
+    const parsed = JSON.parse(String(res.stdout || "{}"));
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function _sharedModelOverride(adapterId) {
+  const platformKey = String(adapterId || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  const candidates = [
+    path.join(WORKSPACE, "shared", "config", platformKey, "memory.json"),
+    path.join(WORKSPACE, "shared", "config", "global", "memory.json"),
+  ];
+  for (const cfgPath of candidates) {
+    if (!fs.existsSync(cfgPath)) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const models = raw?.models || {};
+      const provider = String(
+        models.llm_provider || models.llmProvider || models.provider || ""
+      ).trim().toLowerCase();
+      const deep = String(
+        models.deep_reasoning || models.deepReasoning || ""
+      ).trim();
+      const fast = String(
+        models.fast_reasoning || models.fastReasoning || ""
+      ).trim();
+      if (!deep || !fast) continue;
+      return { provider, deep, fast, source: cfgPath };
+    } catch {
+      // Ignore malformed shared files.
+    }
+  }
+  return null;
 }
 
 function runAdapterInstallHook(adapterId, hookName) {
@@ -2152,20 +2210,6 @@ async function step3_models() {
       initialValue: adapterType,
       options: adapterOptions,
     }));
-    provider = handleCancel(await select({
-      message: "LLM provider",
-      options: [
-        { value: "anthropic",  label: "Anthropic (Claude)", hint: "Recommended" },
-        { value: "openai",     label: "OpenAI",             hint: "Experimental" },
-        { value: "openrouter", label: "OpenRouter",         hint: "Experimental — multi-provider gateway" },
-        { value: "together",   label: "Together AI",        hint: "Experimental" },
-        { value: "ollama",     label: "Ollama (local)",     hint: "Experimental — quality depends on model size" },
-      ],
-    }));
-  }
-  if (!advancedSetup && ["anthropic", "openai", "openrouter", "together", "ollama"].includes(forcedProvider)) {
-    provider = forcedProvider;
-    log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
   }
   _platformOverride = adapterType;
   syncInstallerInstanceEnv(adapterType);
@@ -2176,6 +2220,43 @@ async function step3_models() {
     await promptInstanceId(adapterType);
   }
 
+  const adapterCaps = _readAdapterInstallerCapabilities(adapterType) || {};
+  const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
+    ? adapterCaps.providers
+    : ["anthropic", "openai", "openrouter", "together", "ollama"];
+
+  const providerOptions = [
+    { value: "anthropic",  label: "Anthropic (Claude)", hint: "Recommended" },
+    { value: "openai",     label: "OpenAI",             hint: "Experimental" },
+    { value: "openrouter", label: "OpenRouter",         hint: "Experimental — multi-provider gateway" },
+    { value: "together",   label: "Together AI",        hint: "Experimental" },
+    { value: "ollama",     label: "Ollama (local)",     hint: "Experimental — quality depends on model size" },
+  ].filter((opt) => supportedProviders.includes(opt.value));
+
+  const sharedOverride = _sharedModelOverride(adapterType);
+  if (sharedOverride?.provider && supportedProviders.includes(sharedOverride.provider)) {
+    provider = sharedOverride.provider;
+    log.info(C.dim(`Provider override from shared config: ${provider} (${sharedOverride.source})`));
+  }
+  if (forcedProvider && supportedProviders.includes(forcedProvider)) {
+    provider = forcedProvider;
+    log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
+  } else if (forcedProvider && !supportedProviders.includes(forcedProvider)) {
+    log.warn(`Ignoring QUAID_INSTALL_PROVIDER=${forcedProvider} (unsupported by adapter '${adapterType}').`);
+  }
+  if (!supportedProviders.includes(provider)) {
+    provider = supportedProviders[0] || "anthropic";
+  }
+  if (advancedSetup) {
+    provider = handleCancel(await select({
+      message: "LLM provider",
+      initialValue: provider,
+      options: providerOptions.length > 0 ? providerOptions : [
+        { value: provider, label: provider, hint: "adapter-defined provider" },
+      ],
+    }));
+  }
+
   if (provider !== "anthropic") {
     log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
     log.warn(C.bold("Extraction quality may vary. You can switch providers later in config."));
@@ -2184,13 +2265,19 @@ async function step3_models() {
   }
 
   let highModel, lowModel;
-  const adapterDefaults = _adapterModelDefaults(adapterType, provider);
-  if (adapterDefaults) {
-    highModel = adapterDefaults.deep;
-    lowModel = adapterDefaults.fast;
+  const adapterDefaults = (adapterCaps.modelDefaults && typeof adapterCaps.modelDefaults === "object")
+    ? adapterCaps.modelDefaults[String(provider || "").trim().toLowerCase()]
+    : null;
+  if (sharedOverride?.deep && sharedOverride?.fast && (!sharedOverride.provider || sharedOverride.provider === provider)) {
+    highModel = sharedOverride.deep;
+    lowModel = sharedOverride.fast;
+    log.info(C.dim(`Model lanes overridden by shared config: deep=${highModel} fast=${lowModel}`));
+  } else if (adapterDefaults && adapterDefaults.deep && adapterDefaults.fast) {
+    highModel = String(adapterDefaults.deep);
+    lowModel = String(adapterDefaults.fast);
   } else if (provider === "anthropic") {
-    // Global fallback when adapter manifest does not define lane defaults.
-    highModel = "claude-haiku-4-5";
+    // Global fallback when adapter does not define lane defaults.
+    highModel = "claude-sonnet-4-5";
     lowModel = "claude-haiku-4-5";
   } else if (provider === "ollama") {
     highModel = "llama3.1:70b";

@@ -30,7 +30,6 @@ Built-in manifests are seeded by installer first, then the same directory is use
 - `runtime.python.module`: Python import path for runtime adapter class
 - `runtime.python.class`: class name to instantiate for this adapter
 - `runtime.python.path` (optional): list of extra import roots (relative to manifest dir or absolute)
-- `install.modelDefaults` (optional): adapter-owned default deep/fast model lanes per provider
 - `scripts.preinstall` (optional): runs during installer preflight
 - `scripts.postinstall` (optional): runs near install completion
 
@@ -44,13 +43,7 @@ Built-in manifests are seeded by installer first, then the same directory is use
   "install": {
     "selectLabel": "AgentFoo",
     "selectHint": "AgentFoo runtime integration",
-    "sortOrder": 40,
-    "modelDefaults": {
-      "anthropic": {
-        "deep": "claude-sonnet-4-5",
-        "fast": "claude-haiku-4-5"
-      }
-    }
+    "sortOrder": 40
   },
   "runtime": {
     "instancePrefix": "agentfoo-",
@@ -112,6 +105,8 @@ See existing implementations:
 - `get_host_info()` (compatibility checks)
 - `get_cli_namespace()` / `get_cli_commands()` for adapter-specific CLI
 - `get_instance_manager()` if your host supports user-created named silos
+- `installer_supported_providers()` to constrain provider choices in guided install
+- `installer_default_models(provider)` to provide deep/fast lane defaults per provider
 
 ### Optional instance manager
 

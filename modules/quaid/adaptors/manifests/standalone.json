@@ -5,29 +5,7 @@
   "install": {
     "selectLabel": "Standalone",
     "selectHint": "local-only runtime (default)",
-    "sortOrder": 10,
-    "modelDefaults": {
-      "anthropic": {
-        "deep": "claude-haiku-4-5",
-        "fast": "claude-haiku-4-5"
-      },
-      "openai": {
-        "deep": "gpt-4o",
-        "fast": "gpt-4o-mini"
-      },
-      "openrouter": {
-        "deep": "gpt-4o",
-        "fast": "gpt-4o-mini"
-      },
-      "together": {
-        "deep": "gpt-4o",
-        "fast": "gpt-4o-mini"
-      },
-      "ollama": {
-        "deep": "llama3.1:70b",
-        "fast": "llama3.1:8b"
-      }
-    }
+    "sortOrder": 10
   },
   "runtime": {
     "instancePrefix": "standalone",

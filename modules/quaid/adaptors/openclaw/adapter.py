@@ -346,6 +346,19 @@ class OpenClawAdapter(QuaidAdapter):
         port, token = self._get_gateway_auth()
         return GatewayLLMProvider(port=port, token=token)
 
+    def installer_supported_providers(self) -> list:
+        return ["anthropic", "openai", "openrouter", "together", "ollama"]
+
+    def installer_default_models(self, provider: str) -> Optional[dict]:
+        p = str(provider or "").strip().lower()
+        if p == "anthropic":
+            return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
+        if p in ("openai", "openrouter", "together"):
+            return {"deep": "gpt-4o", "fast": "gpt-4o-mini"}
+        if p == "ollama":
+            return {"deep": "llama3.1:70b", "fast": "llama3.1:8b"}
+        return None
+
     def _get_agent_config_dir(self) -> Path:
         """Path to the gateway's agent config directory."""
         return Path.home() / ".openclaw" / "agents" / "main" / "agent"

@@ -403,6 +403,15 @@ class ClaudeCodeAdapter(QuaidAdapter):
             fast = None
         return ClaudeCodeOAuthLLMProvider(deep_model=deep, fast_model=fast)
 
+    def installer_supported_providers(self) -> list:
+        # CC adapter is OAuth Anthropic-backed in current shipping flow.
+        return ["anthropic"]
+
+    def installer_default_models(self, provider: str) -> Optional[dict]:
+        if str(provider or "").strip().lower() != "anthropic":
+            return None
+        return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
+
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
