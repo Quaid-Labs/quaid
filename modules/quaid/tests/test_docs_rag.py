@@ -103,6 +103,17 @@ Content B.
         for chunk in chunks:
             assert isinstance(chunk, str)
 
+    def test_splits_oversized_single_line_content(self, tmp_path):
+        """Single-line source files still need to respect the chunk budget."""
+        rag = _make_rag(tmp_path)
+        long_line = '{"payload":"' + ("a" * 1600) + '"}'
+        content = f"# Header\n{long_line}"
+
+        chunks = rag.chunk_markdown(content, max_tokens=50)
+
+        assert len(chunks) >= 2
+        assert max(rag.estimate_tokens(chunk) for chunk in chunks) <= 55
+
 
 # ---------------------------------------------------------------------------
 # needs_reindex

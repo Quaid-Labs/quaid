@@ -337,6 +337,33 @@ class DocsRAG:
         """Rough token estimation (4 chars ≈ 1 token)."""
         return len(text) // 4
 
+    def _split_oversized_line(self, line: str, max_tokens: int) -> List[str]:
+        """Split a single oversized line so chunking never ships a giant blob.
+
+        Registry-managed source files can contain very long single-line JSON/CSS/JS
+        content. If we let those through unchanged, a later embed request can fail
+        hard even when normal markdown chunking is enabled.
+        """
+        raw = str(line or "")
+        if self.estimate_tokens(raw) <= max_tokens:
+            return [raw]
+
+        max_chars = max(16, int(max_tokens) * 4)
+        parts: List[str] = []
+        remaining = raw
+        while remaining:
+            if len(remaining) <= max_chars:
+                parts.append(remaining)
+                break
+            split_at = remaining.rfind(" ", 0, max_chars + 1)
+            if split_at <= 0:
+                split_at = max_chars
+            parts.append(remaining[:split_at])
+            remaining = remaining[split_at:]
+            if remaining[:1].isspace():
+                remaining = remaining[1:]
+        return [part for part in parts if part]
+
     def chunk_markdown(self, content: str, max_tokens: int = None) -> List[DocumentChunk]:
         """Smart chunking of markdown content at headers/paragraphs."""
         if max_tokens is None:
@@ -346,38 +373,44 @@ class DocsRAG:
         current_chunk_lines = []
         current_tokens = 0
 
-        for line in lines:
-            line_tokens = self.estimate_tokens(line)
+        for raw_line in lines:
+            expanded_lines = self._split_oversized_line(raw_line, max_tokens)
+            for line in expanded_lines:
+                line_tokens = self.estimate_tokens(line)
 
-            # Check for header — start a new chunk at each heading boundary
-            header_match = re.match(r'^(#{1,3})\s+(.+)', line)
-            if header_match:
-                # Save current chunk if it has content
-                if current_chunk_lines:
-                    chunks.append('\n'.join(current_chunk_lines))
-                    current_chunk_lines = []
-                    current_tokens = 0
+                # Check for header — start a new chunk at each heading boundary
+                header_match = re.match(r'^(#{1,3})\s+(.+)', line)
+                if header_match:
+                    # Save current chunk if it has content
+                    if current_chunk_lines:
+                        chunks.append('\n'.join(current_chunk_lines))
+                        current_chunk_lines = []
+                        current_tokens = 0
 
+                    current_chunk_lines.append(line)
+                    current_tokens = line_tokens
+                    continue
+
+                # Add line to current chunk
                 current_chunk_lines.append(line)
-                current_tokens = line_tokens
-                continue
-            
-            # Add line to current chunk
-            current_chunk_lines.append(line)
-            current_tokens += line_tokens
-            
-            # Check if chunk is getting too large
-            if current_tokens > max_tokens:
-                # Try to split at paragraph break
-                split_point = self._find_paragraph_break(current_chunk_lines)
-                if split_point > 0:
-                    # Save chunk up to split point
-                    chunks.append('\n'.join(current_chunk_lines[:split_point]))
-                    
-                    # Start new chunk with overlap
-                    overlap_start = max(0, split_point - _chunk_overlap_tokens() // 10)
-                    current_chunk_lines = current_chunk_lines[overlap_start:]
-                    current_tokens = sum(self.estimate_tokens(l) for l in current_chunk_lines)
+                current_tokens += line_tokens
+
+                # Check if chunk is getting too large
+                if current_tokens > max_tokens:
+                    # Try to split at paragraph break
+                    split_point = self._find_paragraph_break(current_chunk_lines)
+                    if split_point > 0:
+                        # Save chunk up to split point
+                        chunks.append('\n'.join(current_chunk_lines[:split_point]))
+
+                        # Start new chunk with overlap
+                        overlap_lines = min(
+                            max(0, split_point - 1),
+                            max(0, _chunk_overlap_tokens() // 10),
+                        )
+                        overlap_start = split_point - overlap_lines
+                        current_chunk_lines = current_chunk_lines[overlap_start:]
+                        current_tokens = sum(self.estimate_tokens(l) for l in current_chunk_lines)
         
         # Don't forget the last chunk
         if current_chunk_lines:
