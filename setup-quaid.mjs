@@ -389,6 +389,18 @@ function _adapterOptionsForSelect() {
   ];
 }
 
+function _adapterModelDefaults(adapterId, provider) {
+  const manifest = _adapterManifestById(adapterId);
+  const defaults = manifest?.install?.modelDefaults;
+  if (!defaults || typeof defaults !== "object") return null;
+  const slot = defaults[String(provider || "").trim().toLowerCase()];
+  if (!slot || typeof slot !== "object") return null;
+  const deep = String(slot.deep || "").trim();
+  const fast = String(slot.fast || "").trim();
+  if (!deep || !fast) return null;
+  return { deep, fast };
+}
+
 function runAdapterInstallHook(adapterId, hookName) {
   const manifest = _adapterManifestById(adapterId);
   if (!manifest) return true;
@@ -2172,8 +2184,12 @@ async function step3_models() {
   }
 
   let highModel, lowModel;
-  if (provider === "anthropic") {
-    // Quaid default: Haiku for both reasoning tiers to preserve API quota.
+  const adapterDefaults = _adapterModelDefaults(adapterType, provider);
+  if (adapterDefaults) {
+    highModel = adapterDefaults.deep;
+    lowModel = adapterDefaults.fast;
+  } else if (provider === "anthropic") {
+    // Global fallback when adapter manifest does not define lane defaults.
     highModel = "claude-haiku-4-5";
     lowModel = "claude-haiku-4-5";
   } else if (provider === "ollama") {

@@ -5,7 +5,29 @@
   "install": {
     "selectLabel": "OpenClaw",
     "selectHint": "gateway-integrated runtime",
-    "sortOrder": 20
+    "sortOrder": 20,
+    "modelDefaults": {
+      "anthropic": {
+        "deep": "claude-sonnet-4-5",
+        "fast": "claude-haiku-4-5"
+      },
+      "openai": {
+        "deep": "gpt-4o",
+        "fast": "gpt-4o-mini"
+      },
+      "openrouter": {
+        "deep": "gpt-4o",
+        "fast": "gpt-4o-mini"
+      },
+      "together": {
+        "deep": "gpt-4o",
+        "fast": "gpt-4o-mini"
+      },
+      "ollama": {
+        "deep": "llama3.1:70b",
+        "fast": "llama3.1:8b"
+      }
+    }
   },
   "runtime": {
     "instancePrefix": "openclaw-",

@@ -30,6 +30,7 @@ Built-in manifests are seeded by installer first, then the same directory is use
 - `runtime.python.module`: Python import path for runtime adapter class
 - `runtime.python.class`: class name to instantiate for this adapter
 - `runtime.python.path` (optional): list of extra import roots (relative to manifest dir or absolute)
+- `install.modelDefaults` (optional): adapter-owned default deep/fast model lanes per provider
 - `scripts.preinstall` (optional): runs during installer preflight
 - `scripts.postinstall` (optional): runs near install completion
 
@@ -43,7 +44,13 @@ Built-in manifests are seeded by installer first, then the same directory is use
   "install": {
     "selectLabel": "AgentFoo",
     "selectHint": "AgentFoo runtime integration",
-    "sortOrder": 40
+    "sortOrder": 40,
+    "modelDefaults": {
+      "anthropic": {
+        "deep": "claude-sonnet-4-5",
+        "fast": "claude-haiku-4-5"
+      }
+    }
   },
   "runtime": {
     "instancePrefix": "agentfoo-",
