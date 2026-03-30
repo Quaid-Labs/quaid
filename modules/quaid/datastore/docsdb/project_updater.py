@@ -646,34 +646,6 @@ def _project_md_recent_log_limit(default: int = 15) -> int:
     return max(1, limit)
 
 
-def _lookup_sqlite_project(project_name: str):
-    """Look up a project in the SQLite project_definitions table.
-
-    Used for dynamically-created projects that are not in the static config
-    definitions but exist in the live registry. Opens read-only to avoid
-    interfering with the main database writer.
-    """
-    import sqlite3
-    from types import SimpleNamespace
-
-    db_path = get_data_dir() / "memory.db"
-    if not db_path.exists():
-        return None
-    conn = None
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
-        row = conn.execute(
-            "SELECT home_dir FROM project_definitions WHERE name=? AND state='active'",
-            (project_name,),
-        ).fetchone()
-        if not row:
-            return None
-        return SimpleNamespace(home_dir=row[0])
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 def append_project_logs(
@@ -702,6 +674,7 @@ def append_project_logs(
         return metrics
 
     cfg = get_config()
+    registry = DocsRegistry()
     today = date_str or datetime.now().strftime("%Y-%m-%d")
     marker_begin = PROJECT_LOG_BEGIN
     marker_end = PROJECT_LOG_END
@@ -740,7 +713,7 @@ def append_project_logs(
 
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
-            defn = _lookup_sqlite_project(project_name)
+            defn = registry.get_project_definition(project_name)
         if not defn:
             metrics["projects_unknown"] += 1
             print(f"[project-log] unknown project: {project_name}")

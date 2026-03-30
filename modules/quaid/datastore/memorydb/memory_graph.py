@@ -3950,8 +3950,15 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
     out: List[Dict[str, Any]] = []
     # Keep docs payloads bounded so a single docs-heavy recall cannot flood
     # answer context with tens of thousands of chars.
-    per_chunk_char_cap = 900
-    total_char_budget = 9000
+    # Config keys: retrieval.docs_per_chunk_char_cap, retrieval.docs_total_char_budget
+    try:
+        from config import get_config as _gc
+        _r = getattr(_gc(), "retrieval", None)
+        per_chunk_char_cap = int(getattr(_r, "docs_per_chunk_char_cap", 900) or 900)
+        total_char_budget = int(getattr(_r, "docs_total_char_budget", 9000) or 9000)
+    except Exception:
+        per_chunk_char_cap = 900
+        total_char_budget = 9000
     consumed_chars = 0
     for chunk in docs["chunks"][:limit]:
         text = " ".join(str(chunk.get("content") or "").split()).strip()
@@ -10643,25 +10650,35 @@ if __name__ == "__main__":
                     docs_opts = store_opts.get("docs", {})
                     doc_project = docs_opts.get("project", cfg.get("project"))
                     doc_limit = docs_opts.get("limit", limit if not want_memory else 3)
-                    # Cap direct docs-only recall fanout to prevent large context
-                    # floods when tool-planned docs queries are broad.
+                    # Cap direct docs-only recall fanout (config: docs_fanout_max, default 8).
+                    docs_fanout_max = int(cfg.get("docs_fanout_max", 8))
                     if not want_memory:
-                        doc_limit = min(int(doc_limit), 8)
+                        doc_limit = min(int(doc_limit), docs_fanout_max)
                     doc_filters = docs_opts.get("docs", cfg.get("docs"))
                     if isinstance(doc_filters, str):
                         doc_filters = [d.strip() for d in doc_filters.split(",") if d.strip()]
                     doc_min_similarity = docs_opts.get("min_similarity", cfg.get("min_similarity", 0.30))
                     if not want_memory:
-                        # Tool/docs-only retrieval should stay high precision.
-                        doc_min_similarity = max(float(doc_min_similarity), 0.45)
+                        # Soft floor for docs-only precision (config: docs_only_min_similarity_floor, default 0.35).
+                        docs_floor = float(cfg.get("docs_only_min_similarity_floor", 0.35))
+                        doc_min_similarity = max(float(doc_min_similarity), docs_floor)
                     _rag = _DocsRAG()
                     doc_results = _rag.search_docs_bundle(
                         query=query,
-                        limit=max(1, min(doc_limit, 8)),
+                        limit=max(1, min(doc_limit, docs_fanout_max)),
                         min_similarity=doc_min_similarity,
                         project=doc_project if doc_project else None,
                         docs=doc_filters,
                     )
+                    # Adaptive fallback: if docs-only returns nothing, retry without the floor.
+                    if not want_memory and not _validate_docs_bundle(doc_results).get("chunks"):
+                        doc_results = _rag.search_docs_bundle(
+                            query=query,
+                            limit=max(1, min(doc_limit, docs_fanout_max)),
+                            min_similarity=float(cfg.get("min_similarity", 0.20)),
+                            project=doc_project if doc_project else None,
+                            docs=doc_filters,
+                        )
                     if use_json:
                         if json_payload is None:
                             json_payload = _build_recall_json_payload([], docs=doc_results)
