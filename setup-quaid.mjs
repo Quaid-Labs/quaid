@@ -3919,6 +3919,7 @@ except Exception as e:
   }
 
   const nextSteps = [
+    `${C.bcyan("→")} Read the quick guide: ${C.bcyan("projects/quaid/USER-GUIDE.md")}`,
     `${C.bcyan("→")} Facts are extracted automatically on context compaction and new sessions`,
     `${C.bcyan("→")} The nightly janitor reviews, deduplicates, and maintains memories`,
     `${C.bcyan("→")} Run the janitor now to discover and organize your projects:`,
