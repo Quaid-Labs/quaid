@@ -220,9 +220,17 @@ def main() -> int:
     load_p.add_argument("--session-id", required=True)
     load_p.add_argument("--owner", default=None)
 
-    last_p = sub.add_parser("last", help="Load most recent indexed session transcript")
+    last_p = sub.add_parser("last", help="Load most recent indexed session transcript (truncated to --max-tokens by default)")
     last_p.add_argument("--owner", default=None)
     last_p.add_argument("--exclude-session-id", default=None)
+    last_p.add_argument(
+        "--max-tokens", type=int, default=20000,
+        help="Max tokens to load from the end of the transcript (default: 20000; 0 = full)",
+    )
+    last_p.add_argument(
+        "--size-only", action="store_true",
+        help="Return token size estimate only, without loading transcript content",
+    )
 
     search_p = sub.add_parser("search", help="Search indexed session logs")
     search_p.add_argument("query")
@@ -266,6 +274,29 @@ def main() -> int:
                 *(["--exclude-session-id", str(args.exclude_session_id)] if args.exclude_session_id else []),
             ],
         )
+        if payload and isinstance(payload, dict):
+            transcript = payload.get("transcript_text") or ""
+            total_chars = len(transcript)
+            total_tokens_est = max(1, total_chars // 4) if transcript else 0
+            payload["total_tokens_estimated"] = total_tokens_est
+            if getattr(args, "size_only", False):
+                payload.pop("transcript_text", None)
+                payload["size_only"] = True
+            else:
+                max_tok = int(getattr(args, "max_tokens", 20000) or 0)
+                if max_tok > 0 and total_tokens_est > max_tok:
+                    keep_chars = max_tok * 4
+                    payload["transcript_text"] = transcript[-keep_chars:]
+                    payload["truncated"] = True
+                    payload["loaded_tokens_estimated"] = max_tok
+                    payload["truncation_note"] = (
+                        f"Transcript truncated to last ~{max_tok} tokens "
+                        f"(full session ~{total_tokens_est} tokens). "
+                        f"Use --max-tokens 0 to load full transcript."
+                    )
+                else:
+                    payload["truncated"] = False
+                    payload["loaded_tokens_estimated"] = total_tokens_est
         print(json.dumps(payload))
         return 0
 
