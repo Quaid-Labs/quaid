@@ -20,6 +20,7 @@ Tests use set_adapter() / reset_adapter() for isolation.
 """
 
 import abc
+import importlib
 import json
 import os
 import re
@@ -820,6 +821,131 @@ _adapter: Optional[QuaidAdapter] = None
 _adapter_lock = threading.Lock()
 
 
+def _normalize_adapter_id(value: str) -> str:
+    token = str(value or "").strip().lower().replace("_", "-")
+    if token == "claudecode":
+        return "claude-code"
+    return token
+
+
+def _registry_quaid_home() -> Path:
+    env = os.environ.get("QUAID_HOME", "").strip()
+    return Path(env).resolve() if env else Path.home() / "quaid"
+
+
+def _adapter_manifest_candidates(adapter_id: str) -> List[Path]:
+    normalized = _normalize_adapter_id(adapter_id)
+    candidates: List[Path] = [
+        _registry_quaid_home() / ".quaid" / "adaptors" / normalized / "adapter.json",
+        Path(__file__).resolve().parent.parent / "adaptors" / "manifests" / f"{normalized}.json",
+    ]
+    out: List[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        sp = str(p)
+        if sp in seen:
+            continue
+        seen.add(sp)
+        out.append(p)
+    return out
+
+
+def _load_adapter_manifest(adapter_id: str) -> dict:
+    normalized = _normalize_adapter_id(adapter_id)
+    searched: List[str] = []
+    for path in _adapter_manifest_candidates(normalized):
+        searched.append(str(path))
+        if not path.exists():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise RuntimeError(f"Manifest is not a JSON object: {path}")
+            data["__path"] = str(path)
+            return data
+        except (json.JSONDecodeError, OSError) as e:
+            raise RuntimeError(f"Failed to read adapter manifest {path}: {e}") from e
+
+    raise RuntimeError(
+        f"Unsupported adapter type '{adapter_id}'. No adapter manifest found. "
+        f"Searched: {', '.join(searched)}"
+    )
+
+
+def _instantiate_adapter_from_manifest(adapter_id: str) -> QuaidAdapter:
+    normalized = _normalize_adapter_id(adapter_id)
+    manifest = _load_adapter_manifest(normalized)
+    runtime = manifest.get("runtime", {})
+    runtime_py = runtime.get("python", {}) if isinstance(runtime, dict) else {}
+    module_name = str(runtime_py.get("module", "")).strip()
+    class_name = str(runtime_py.get("class", "")).strip()
+    if not module_name or not class_name:
+        raise RuntimeError(
+            f"Unsupported adapter type '{normalized}'. Manifest must define "
+            "runtime.python.module and runtime.python.class"
+        )
+
+    manifest_path = Path(str(manifest.get("__path", "")))
+    base_dir = manifest_path.parent if manifest_path else Path.cwd()
+    raw_paths = runtime_py.get("path", [])
+    if isinstance(raw_paths, str):
+        raw_paths = [raw_paths]
+    if isinstance(raw_paths, list):
+        for raw in raw_paths:
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            p = Path(token)
+            if not p.is_absolute():
+                p = (base_dir / p).resolve()
+            sp = str(p)
+            if sp and sp not in sys.path:
+                sys.path.insert(0, sp)
+
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as e:
+        raise RuntimeError(
+            f"Unsupported adapter type '{normalized}'. Could not import "
+            f"runtime.python.module '{module_name}': {e}"
+        ) from e
+
+    klass = getattr(module, class_name, None)
+    if klass is None:
+        raise RuntimeError(
+            f"Unsupported adapter type '{normalized}'. Module '{module_name}' "
+            f"does not export class '{class_name}'"
+        )
+
+    try:
+        adapter = klass()
+    except Exception as e:
+        raise RuntimeError(
+            f"Unsupported adapter type '{normalized}'. Failed to construct "
+            f"'{module_name}.{class_name}': {e}"
+        ) from e
+
+    required = (
+        "quaid_home",
+        "get_instance_name",
+        "notify",
+        "get_last_channel",
+        "get_api_key",
+        "get_sessions_dir",
+        "filter_system_messages",
+        "get_llm_provider",
+    )
+    missing = [name for name in required if not callable(getattr(adapter, name, None))]
+    if missing:
+        raise RuntimeError(
+            f"Unsupported adapter type '{normalized}'. Adapter class "
+            f"'{module_name}.{class_name}' missing required callables: {', '.join(missing)}"
+        )
+
+    return adapter
+
+
 def _adapter_config_paths() -> List[Path]:
     """Candidate config files for adapter selection (priority order).
 
@@ -929,8 +1055,8 @@ def _infer_adapter_type_from_instance(instance_id: str) -> str:
     """
     if instance_id.startswith("openclaw-") or instance_id == "openclaw":
         return "openclaw"
-    if instance_id.startswith("claude-code-") or instance_id == "claude_code":
-        return "claude_code"
+    if instance_id.startswith("claude-code-") or instance_id in ("claude-code", "claude_code"):
+        return "claude-code"
     return ""
 
 
@@ -1019,12 +1145,11 @@ def get_adapter() -> QuaidAdapter:
         if _adapter is not None:
             return _adapter
         _auto_provision_from_env_if_needed()
-        kind = _read_adapter_type_from_config()
+        kind = _normalize_adapter_id(_read_adapter_type_from_config())
         if kind == "standalone":
             _adapter = StandaloneAdapter()
         else:
-            from adaptors.factory import create_adapter
-            _adapter = create_adapter(kind)
+            _adapter = _instantiate_adapter_from_manifest(kind)
         _bootstrap_instance_env(_adapter)
         return _adapter
 

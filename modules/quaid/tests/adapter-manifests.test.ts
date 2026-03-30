@@ -24,6 +24,7 @@ describe("adapter manifest registry", () => {
       id: "openclaw",
       name: "OpenClaw",
       install: { selectLabel: "OpenClaw" },
+      runtime: { python: { module: "adaptors.openclaw.adapter", class: "OpenClawAdapter" } },
     });
     expect(check.ok).toBe(true);
   });
@@ -49,15 +50,20 @@ describe("adapter manifest registry", () => {
         id: "agentfoo",
         name: "AgentFoo",
         install: { selectLabel: "AgentFoo", selectHint: "external adapter" },
+        runtime: { python: { module: "agentfoo.adapter", class: "AgentFooAdapter" } },
         scripts: { preinstall: "./hooks/preinstall.sh" },
       }, null, 2),
       "utf8",
     );
+    fs.mkdirSync(path.join(builtinsDir, "hooks"), { recursive: true });
+    fs.writeFileSync(path.join(builtinsDir, "hooks", "preinstall.sh"), "#!/bin/sh\necho ok\n", "utf8");
 
     const copied = syncBuiltinAdapterManifests({ workspace, installerDir });
     expect(copied.length).toBe(1);
     const manifestPath = path.join(adapterRegistryDir(workspace), "agentfoo", "adapter.json");
     expect(fs.existsSync(manifestPath)).toBe(true);
+    const hookPath = path.join(adapterRegistryDir(workspace), "agentfoo", "hooks", "preinstall.sh");
+    expect(fs.existsSync(hookPath)).toBe(true);
   });
 
   it("loads manifests and derives select options", () => {
@@ -71,6 +77,7 @@ describe("adapter manifest registry", () => {
         id: "agentfoo",
         name: "AgentFoo",
         install: { selectLabel: "AgentFoo", selectHint: "third-party host" },
+        runtime: { python: { module: "agentfoo.adapter", class: "AgentFooAdapter" } },
       }, null, 2),
       "utf8",
     );

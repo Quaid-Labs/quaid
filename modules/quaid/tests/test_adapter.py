@@ -1,5 +1,6 @@
 """Tests for lib/adapter.py — platform adapter layer."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -36,6 +37,28 @@ def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "memory.json").write_text(f'{{"adapter": {{"type": "{adapter_type}"}}}}')
+
+
+def _write_adapter_manifest(
+    tmp_path: Path,
+    adapter_id: str,
+    module_name: str,
+    class_name: str,
+    runtime_path: str = "",
+) -> None:
+    reg = tmp_path / ".quaid" / "adaptors" / adapter_id
+    reg.mkdir(parents=True, exist_ok=True)
+    runtime = {"module": module_name, "class": class_name}
+    if runtime_path:
+        runtime["path"] = [runtime_path]
+    payload = {
+        "schema": "quaid-adapter-install/v1",
+        "id": adapter_id,
+        "name": adapter_id,
+        "install": {"selectLabel": adapter_id},
+        "runtime": {"python": runtime},
+    }
+    (reg / "adapter.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +670,58 @@ class TestAdapterSelectionEdgeCases:
         (tmp_path / "config" / "memory.json").write_text('{"adapter":"invalid"}')
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         with pytest.raises(RuntimeError, match="Unsupported adapter type"):
+            get_adapter()
+
+    def test_manifest_runtime_loader_supports_third_party_module(self, monkeypatch, tmp_path):
+        _write_adapter_config(tmp_path, "agentfoo")
+        runtime_dir = tmp_path / "adapter_runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "agentfoo_runtime.py").write_text(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "class AgentFooAdapter:",
+                    "    def quaid_home(self): return Path('/tmp/agentfoo-home')",
+                    "    def get_instance_name(self): return 'main'",
+                    "    def notify(self, message, channel_override=None, dry_run=False, force=False): return True",
+                    "    def get_last_channel(self, session_key=''): return None",
+                    "    def get_api_key(self, env_var_name): return None",
+                    "    def get_sessions_dir(self): return None",
+                    "    def filter_system_messages(self, text): return False",
+                    "    def get_llm_provider(self, model_tier=None): return object()",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        _write_adapter_manifest(
+            tmp_path=tmp_path,
+            adapter_id="agentfoo",
+            module_name="agentfoo_runtime",
+            class_name="AgentFooAdapter",
+            runtime_path="../../../adapter_runtime",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        adapter = get_adapter()
+        assert type(adapter).__name__ == "AgentFooAdapter"
+
+    def test_manifest_runtime_loader_rejects_missing_runtime_fields(self, monkeypatch, tmp_path):
+        _write_adapter_config(tmp_path, "agentfoo")
+        reg = tmp_path / ".quaid" / "adaptors" / "agentfoo"
+        reg.mkdir(parents=True, exist_ok=True)
+        (reg / "adapter.json").write_text(
+            json.dumps(
+                {
+                    "schema": "quaid-adapter-install/v1",
+                    "id": "agentfoo",
+                    "name": "agentfoo",
+                    "install": {"selectLabel": "agentfoo"},
+                    "runtime": {"python": {"module": "agentfoo_runtime"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        with pytest.raises(RuntimeError, match="runtime\\.python\\.module and runtime\\.python\\.class"):
             get_adapter()
 
 

@@ -8,7 +8,14 @@
     "sortOrder": 10
   },
   "runtime": {
-    "instancePrefix": "standalone"
+    "instancePrefix": "standalone",
+    "python": {
+      "module": "lib.adapter",
+      "class": "StandaloneAdapter"
+    }
   },
-  "scripts": {}
+  "scripts": {
+    "preinstall": "./hooks/preinstall.mjs",
+    "postinstall": "./hooks/postinstall.mjs"
+  }
 }

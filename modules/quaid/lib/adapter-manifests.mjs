@@ -31,6 +31,22 @@ export function validateAdapterManifest(raw) {
   }
   const label = String(install.selectLabel || raw.name || "").trim();
   if (!label) return { ok: false, error: "manifest.install.selectLabel (or manifest.name) is required" };
+  const runtime = raw.runtime;
+  if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+    return { ok: false, error: "manifest.runtime is required" };
+  }
+  const runtimePy = runtime.python;
+  if (!runtimePy || typeof runtimePy !== "object" || Array.isArray(runtimePy)) {
+    return { ok: false, error: "manifest.runtime.python is required" };
+  }
+  const runtimeModule = String(runtimePy.module || "").trim();
+  if (!runtimeModule) {
+    return { ok: false, error: "manifest.runtime.python.module is required" };
+  }
+  const runtimeClass = String(runtimePy.class || "").trim();
+  if (!runtimeClass) {
+    return { ok: false, error: "manifest.runtime.python.class is required" };
+  }
   return { ok: true };
 }
 
@@ -58,6 +74,12 @@ export function syncBuiltinAdapterManifests({ workspace, installerDir }) {
     const destPath = path.join(destDir, "adapter.json");
     fs.mkdirSync(destDir, { recursive: true });
     fs.copyFileSync(srcPath, destPath);
+    const srcHooksDir = path.join(path.dirname(srcPath), "hooks");
+    const destHooksDir = path.join(destDir, "hooks");
+    if (fs.existsSync(srcHooksDir) && fs.statSync(srcHooksDir).isDirectory()) {
+      fs.mkdirSync(destHooksDir, { recursive: true });
+      fs.cpSync(srcHooksDir, destHooksDir, { recursive: true, force: true });
+    }
     installed.push(destPath);
   }
   return installed;

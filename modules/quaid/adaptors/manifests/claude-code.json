@@ -8,7 +8,14 @@
     "sortOrder": 30
   },
   "runtime": {
-    "instancePrefix": "claude-code-"
+    "instancePrefix": "claude-code-",
+    "python": {
+      "module": "adaptors.claude_code.adapter",
+      "class": "ClaudeCodeAdapter"
+    }
   },
-  "scripts": {}
+  "scripts": {
+    "preinstall": "./hooks/preinstall.mjs",
+    "postinstall": "./hooks/postinstall.mjs"
+  }
 }

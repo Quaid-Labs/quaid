@@ -8,7 +8,14 @@
     "sortOrder": 20
   },
   "runtime": {
-    "instancePrefix": "openclaw-"
+    "instancePrefix": "openclaw-",
+    "python": {
+      "module": "adaptors.openclaw.adapter",
+      "class": "OpenClawAdapter"
+    }
   },
-  "scripts": {}
+  "scripts": {
+    "preinstall": "./hooks/preinstall.mjs",
+    "postinstall": "./hooks/postinstall.mjs"
+  }
 }

@@ -27,6 +27,9 @@ Built-in manifests are seeded by installer first, then the same directory is use
 - `install.selectLabel`: label shown in installer platform picker
 - `install.selectHint`: short hint shown in installer platform picker
 - `install.sortOrder` (optional): lower appears earlier
+- `runtime.python.module`: Python import path for runtime adapter class
+- `runtime.python.class`: class name to instantiate for this adapter
+- `runtime.python.path` (optional): list of extra import roots (relative to manifest dir or absolute)
 - `scripts.preinstall` (optional): runs during installer preflight
 - `scripts.postinstall` (optional): runs near install completion
 
@@ -43,7 +46,12 @@ Built-in manifests are seeded by installer first, then the same directory is use
     "sortOrder": 40
   },
   "runtime": {
-    "instancePrefix": "agentfoo-"
+    "instancePrefix": "agentfoo-",
+    "python": {
+      "module": "agentfoo_quaid_adapter.runtime",
+      "class": "AgentFooAdapter",
+      "path": ["./runtime"]
+    }
   },
   "scripts": {
     "preinstall": "./hooks/preinstall.sh",
@@ -108,20 +116,16 @@ and return it from `get_instance_manager()`.
 
 ---
 
-## 3) Runtime registration today (current state)
+## 3) Runtime registration path (current state)
 
-Installer manifest registration alone does **not** activate runtime loading yet.
-
-Current runtime adapter selection path is:
+Runtime adapter selection now follows the same manifest registry contract:
 
 1. `config/memory.json` → `adapter.type`
-2. `modules/quaid/adaptors/factory.py` → `create_adapter(kind)`
+2. Resolve `~/.quaid/adaptors/<adapter-id>/adapter.json`
+3. Load `runtime.python.module` + `runtime.python.class` from that manifest
 
-So today, for full runtime support you must also:
-
-1. Add your adapter module under `modules/quaid/adaptors/<adapter_id>/`.
-2. Register it in `modules/quaid/adaptors/factory.py`.
-3. Ensure `adapter.type` resolves to your adapter id.
+Built-in adapters use this exact path too. Third-party adapters can ship outside
+the Quaid repo and point `runtime.python.path` at their own package root.
 
 ---
 
@@ -129,8 +133,8 @@ So today, for full runtime support you must also:
 
 1. Add installer manifest to `~/.quaid/adaptors/<id>/adapter.json` (or ship via built-in manifests).
 2. Add optional pre/post install hooks if host setup is needed.
-3. Implement Python adapter class inheriting `QuaidAdapter`.
-4. Wire adapter in `adaptors/factory.py`.
+3. Implement Python adapter class compatible with `QuaidAdapter` methods.
+4. Set `runtime.python.module` + `runtime.python.class` in manifest.
 5. Validate:
    - `quaid compat status`
    - `quaid doctor`
