@@ -67,6 +67,8 @@ Runtime event capabilities are discoverable via `quaid event capabilities` so or
 
 The guided installer sets up Quaid with knowledge capture, janitor scheduling, and host integration.
 
+macOS and Linux are supported. Windows is not supported at this time.
+
 **Tell your agent about it:**
 ```text
 https://github.com/quaid-labs/quaid/blob/main/docs/AI-INSTALL.md
@@ -107,6 +109,13 @@ Quaid's benchmark program is **AgentLife**, maintained in a dedicated public rep
 
 FC is included here as an upper-bound baseline, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets and reducing long-run token cost.
 
+Terminology:
+- `AL-S`: clean core AgentLife lane
+- `AL-L`: long/noisy lane with filler sessions
+- `AL-L OBD`: `AL-L` compressed into one operational day, simulates a power user
+- `FC`: full-context baseline without a memory system
+- `Tokens`: minimum eval tokens to answer all 283 benchmark questions
+
 Headline launch summary:
 
 | Metric | Quaid | FC Sonnet | OpenClaw Native |
@@ -121,13 +130,6 @@ Headline launch summary:
 Quaid was measured with Haiku fast, Sonnet deep, and a Sonnet agent running eval. `AL-L` and `AL-L OBD` are chosen here as the best representation of real use data; `AL-S` remains the cleaner, more idealized lane. `Sonnet/Haiku` remains the flagship configuration on cleanliness and overall benchmark tradeoffs. `Opus` was evaluated, but underperformed `Sonnet` overall and is not the recommended launch configuration. On `AL-L` and `AL-L OBD`, FC is forced to compact, and the drop in FC quality reflects that compaction plus the added noise in the larger corpus. OpenClaw Native tokens remain unknown due to telemetry restrictions. Token counts here are the minimum tokens used to answer the full set of 283 eval questions.
 
 Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
-
-Terminology:
-- `AL-S`: clean core AgentLife lane
-- `AL-L`: long/noisy lane with filler sessions
-- `AL-L OBD`: `AL-L` compressed into one operational day, simulates a power user
-- `FC`: full-context baseline without a memory system
-- `Tokens`: minimum eval tokens to answer all 283 benchmark questions
 
 Use these canonical links:
 - [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
