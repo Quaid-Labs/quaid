@@ -118,7 +118,6 @@ Benchmark note: AgentLife uses synthetic high-density conversations designed to 
 
 Use these canonical links:
 - [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
-- [AgentLife Overview](https://github.com/quaid-labs/agentlife/blob/main/docs/AGENTLIFE_PUBLIC.md)
 - [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md)
 
 ---
@@ -207,13 +206,11 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [User Guide](projects/quaid/USER-GUIDE.md) — Day-1 usage, project system basics, and file locations
 - [Adapter Authoring](docs/ADAPTER-AUTHORING.md) — How to integrate Quaid with your own host platform
 - [AgentLife Repository](https://github.com/quaid-labs/agentlife) — Benchmark source, datasets, and runbooks
-- [AgentLife Overview](https://github.com/quaid-labs/agentlife/blob/main/docs/AGENTLIFE_PUBLIC.md) — Public benchmark overview
 - [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md) — Full matrix, run IDs, and methodology
 - [Platform Compatibility](docs/COMPATIBILITY.md) — OC vs CC capability matrix
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Interface Contract](docs/INTERFACES.md) — CLI/adapter capability model and event contract
-- [Benchmark Index](docs/BENCHMARKS.md) — Canonical AgentLife benchmark links
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
 - [Provider Modes](docs/PROVIDER-MODES.md) — Provider routing and cost-safety guidance
 - [Security Policy](SECURITY.md) — Private vulnerability reporting guidance

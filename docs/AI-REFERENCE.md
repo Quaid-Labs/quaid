@@ -811,7 +811,6 @@ OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthr
 
 Canonical benchmark docs:
 - https://github.com/quaid-labs/agentlife
-- https://github.com/quaid-labs/agentlife/blob/main/docs/AGENTLIFE_PUBLIC.md
 - https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md
 
 ---
