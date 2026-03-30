@@ -26,7 +26,7 @@ Quaid is a graph-based persistent knowledge layer for AI agents. It ships with d
 - **Backend:** Python modules for graph operations, extraction, retrieval, maintenance, docs, and project tracking
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
 - **Embeddings:** Ollama local server (nomic-embed-text, 768 dimensions)
-- **LLM calls:** Anthropic API (Opus for deep-reasoning, Haiku for fast-reasoning / reranking)
+- **LLM calls:** provider-routed deep-reasoning and fast-reasoning LLM tiers
 - **Config:** JSON config file at `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json`
 
 **Retrieval pipeline (current):**
@@ -578,8 +578,8 @@ Must split into `old_keywords` / `new_keywords`. A single new fact can satisfy `
 #### Week-gated Queries
 Evolution chain queries need a `required_week` field. Without it, queries for un-injected facts silently report as failures instead of being properly gated.
 
-#### LongMemEval Judge Prompts
-Must end with "Answer yes or no only." Uses the paper's exact format: "Correct Answer:" (capital A), "Model Response:" (capital R), "Rubric:" (not "Desired response rubric:"). Reference implementation at `xiaowu0162/LongMemEval/src/evaluation/evaluate_qa.py`.
+#### Legacy Yes/No Judge Prompts
+Must end with "Answer yes or no only." Uses the exact format: "Correct Answer:" (capital A), "Model Response:" (capital R), "Rubric:" (not "Desired response rubric:").
 
 #### Parallel Eval Output Collision
 When running evaluations in parallel, MUST use separate `--results-dir` values. Shared output filenames can overwrite each other across concurrent runs.
@@ -811,8 +811,8 @@ OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthr
 
 Canonical benchmark docs:
 - https://github.com/quaid-labs/agentlife
-- https://quaid.ai/benchmarks/agentlife
-- https://quaid.ai/benchmarks/agentlife/technical-report
+- https://github.com/quaid-labs/agentlife/blob/main/docs/AGENTLIFE_PUBLIC.md
+- https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md
 
 ---
 

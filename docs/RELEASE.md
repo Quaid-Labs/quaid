@@ -117,23 +117,23 @@ script.
 
 Flow:
 
-1. Solomon says "let's do a release".
+1. The maintainer decides to start a release.
 2. Run the full current test bar and fix issues as needed.
 3. The full bar includes:
    - unit and CI gates
    - the full current live suite, as defined by [LIVE-TEST-GUIDE.md](../modules/quaid/tests/LIVE-TEST-GUIDE.md)
 4. After the suite is green, compare the cleared live-test SHA against current
    `HEAD`.
-5. Report the exact post-clear delta to Solomon as:
+5. Report the exact post-clear delta to the maintainer as:
    - "ready for release, but these changes landed after the clear"
-6. Solomon decides whether the delta is acceptable for release or whether more
+6. The maintainer decides whether the delta is acceptable for release or whether more
    testing/work is required.
 
-If Solomon approves a post-clear delta, record that local approval before the
+If the maintainer approves a post-clear delta, record that local approval before the
 final release check:
 
 ```bash
-node scripts/release-approve-delta.mjs --notes "Solomon approved the post-clear release delta"
+node scripts/release-approve-delta.mjs --notes "Maintainer approved the post-clear release delta"
 ```
 
 This writes `.release-approval.local.json` (ignored by git). It does not change

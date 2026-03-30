@@ -10,7 +10,17 @@
 
 Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time.
 
+Quaid is local-first: your memory database, identity files, project docs, and embeddings stay on your machine. You own the data, can back it up, move it, inspect it, and run it without a hosted memory service.
+
 Every session starts ready to work. Project docs, architecture decisions, tool guidance, and codebase context are tracked and kept current automatically. Through dual snippet/journal learning, the layer evolves with use: it doesn't just retain facts, it builds durable understanding of users, workflows, and projects over time.
+
+**Why teams use it:**
+- **Cross-platform and multi-agent:** OpenClaw and Claude Code are supported now, with Codex next on the roadmap. Agents can keep personal memory siloed per instance, intentionally share a memory silo, or share only the common project space.
+- **Shared projects without forced identity sharing:** project docs and registry live in a shared workspace, so different agents and platforms can work from the same project context even when their personal memories stay separate.
+- **Local-first and portable:** SQLite + local files + local embeddings mean you own and can move the data.
+- **Low operating cost:** bounded recall, local embeddings, and compaction-aware flows are built to reduce brute-force context replay. On long-running agents, the memory layer can cost less than the context spend it saves.
+- **Self-evolving agents:** `SOUL.md`, `USER.md`, and `ENVIRONMENT.md` are updated over time through snippets, journals, and janitor distillation.
+- **Tested for long-horizon use:** AgentLife and the real-world scalability study both stress long-running memory behavior, not just short QA recall.
 
 **What it remembers:**
 - **Facts** — names, relationships, preferences, decisions, life events
@@ -22,13 +32,15 @@ Every session starts ready to work. Project docs, architecture decisions, tool g
 - Retrieves the right ones at the right time (hybrid search + LLM reranking)
 - Runs a nightly janitor that reviews, deduplicates, and decays stale memories
 - Keeps project docs and personality files current without manual maintenance
+- Lets multiple agents share a project space while keeping personal memory siloed by default
 
-Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integrations are [OpenClaw](https://github.com/openclaw/openclaw), Claude Code, and the standalone CLI.
+Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integrations are [OpenClaw](https://github.com/openclaw/openclaw) and Claude Code, with a direct standalone CLI for operations. Codex adapter support is the next major host integration on the roadmap.
 
 **Interface surfaces:**
 - **OpenClaw adapter** — lifecycle hooks + tool integration (most mature path)
 - **Claude Code adapter** — hook-driven integration with durable session-init and daemon signaling
 - **CLI** — direct operational control for extraction, recall, janitor, docs, and events
+- **Adapter architecture** — manifest-driven, pluggable host integration model so other agentic systems can add Quaid support without forking core behavior
 
 **Platform compatibility (quick view):**
 
@@ -77,15 +89,22 @@ node setup-quaid.mjs --source github --ref canary
 node setup-quaid.mjs --source github --ref <commit-sha>
 ```
 
+After install, start here:
+- [User Guide](projects/quaid/USER-GUIDE.md) — day-1 usage, project system basics, and where Quaid stores its files
+
 ---
 
 ## How Quaid Is Different
 
 - **Local-first by default:** memory graph, embeddings, and maintenance run on your machine.
+- **Cross-platform and multi-agent:** per-instance silos keep personal memory separate by default, while the project space can stay shared across agents and hosts.
+- **You own the data:** SQLite DBs, identity files, and project docs stay inspectable and portable.
 - **Three knowledge areas:** facts, core personality, and project knowledge are treated differently instead of flattened into one store.
 - **Lifecycle maintenance, not just storage:** nightly janitor pipeline continuously reviews, deduplicates, and decays stale knowledge.
 - **Dual learning system:** fast snippets + slower journal distillation for long-term synthesis.
-- **OpenClaw-first, system-agnostic design:** deepest integration today is OpenClaw, but the architecture is built around adapter contracts.
+- **Project system with shadow git:** project knowledge is tracked through a shadow git-backed docs pipeline instead of being dumped into personal memory.
+- **Tested for scale and cost:** long-horizon benchmark and live study data show the system stays practical as history grows, while bounded recall and compaction reduce token spend.
+- **OpenClaw-first, system-agnostic design:** deepest integration today is OpenClaw, but the architecture is built around pluggable adapter contracts.
 
 ## Benchmarks
 
@@ -93,8 +112,8 @@ Quaid's benchmark program is **AgentLife**, maintained in a dedicated public rep
 
 Use these canonical links:
 - [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
-- [AgentLife Overview](https://quaid.ai/benchmarks/agentlife)
-- [AgentLife Technical Report](https://quaid.ai/benchmarks/agentlife/technical-report)
+- [AgentLife Overview](https://github.com/quaid-labs/agentlife/blob/main/docs/AGENTLIFE_PUBLIC.md)
+- [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md)
 
 ---
 
@@ -116,7 +135,7 @@ Quaid organizes knowledge into three areas, each with different retrieval behavi
 
 **Journal & Personality** — A dual learning system. Fast-path *snippets* capture small observations and fold them into core personality files. Slow-path *journal entries* accumulate over time and get distilled into deeper insights — the kind of perceived, inferred understanding that makes an agent feel like it actually knows you.
 
-**Projects & Docs** — Auto-discovers project structure, tracks documentation, and keeps docs current from git changes. Comprehensive docs beat partial docs — partial or outdated docs mislead the LLM. This also keeps system-level knowledge out of the memory graph, where it would pollute fact retrieval.
+**Projects & Docs** — Auto-discovers project structure, tracks documentation, and keeps docs current from git changes through a shadow git-backed pipeline. Comprehensive docs beat partial docs — partial or outdated docs mislead the LLM. This also keeps system-level knowledge out of the memory graph, where it would pollute fact retrieval.
 
 **Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where deep-reasoning LLMs can curate knowledge economically. Reviews, deduplicates, decays stale facts, and monitors documentation health in bulk.
 
@@ -142,7 +161,7 @@ Quaid is free and open source. These are typical API costs you pay directly to y
 | Embeddings | Free (Ollama, runs locally) |
 | **Typical monthly total** | **$5–15 for active use** |
 
-AgentLife data also shows substantial token-efficiency gains versus full-context replay baselines, and automatic compaction support on compatible hosts compounds those savings over long sessions.
+AgentLife data also shows substantial token-efficiency gains versus full-context replay baselines, and automatic compaction support on compatible hosts compounds those savings over long sessions. In long-running workflows, Quaid can reduce total context spend enough to more than pay for its operating cost.
 
 ---
 
@@ -179,10 +198,11 @@ We're actively testing and refining the system against benchmarks and welcome co
 ## Learn More
 
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
+- [User Guide](projects/quaid/USER-GUIDE.md) — Day-1 usage, project system basics, and file locations
 - [Adapter Authoring](docs/ADAPTER-AUTHORING.md) — How to integrate Quaid with your own host platform
 - [AgentLife Repository](https://github.com/quaid-labs/agentlife) — Benchmark source, datasets, and runbooks
-- [AgentLife Overview](https://quaid.ai/benchmarks/agentlife) — Public benchmark overview
-- [AgentLife Technical Report](https://quaid.ai/benchmarks/agentlife/technical-report) — Full matrix, run IDs, and methodology
+- [AgentLife Overview](https://github.com/quaid-labs/agentlife/blob/main/docs/AGENTLIFE_PUBLIC.md) — Public benchmark overview
+- [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md) — Full matrix, run IDs, and methodology
 - [Platform Compatibility](docs/COMPATIBILITY.md) — OC vs CC capability matrix
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants

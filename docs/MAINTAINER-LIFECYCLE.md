@@ -50,7 +50,7 @@ npm run test:all
 3. Build release tarball:
 
 ```bash
-cd /path/to/quaid/dev
+cd /path/to/quaid
 ./scripts/build-release-tarball.sh
 ```
 
