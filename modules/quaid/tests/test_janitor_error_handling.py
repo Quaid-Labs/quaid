@@ -302,7 +302,8 @@ def test_check_for_updates_returns_newer_release(tmp_path, monkeypatch):
 
         def read(self):
             return (
-                b'{"tag_name":"v0.2.16-alpha",'
+                b'{"tag_name":"v0.2.16-alpha","name":"M6 recall rescue + update UX",'
+                b'"body":"- Improves recall fallback for threshold-empty hybrid results\\n- Adds updater command",'
                 b'"html_url":"https://github.com/quaid-labs/quaid/releases/tag/v0.2.16-alpha"}'
             )
 
@@ -316,6 +317,7 @@ def test_check_for_updates_returns_newer_release(tmp_path, monkeypatch):
         assert out is not None
         assert out["current"] == "0.2.15-alpha"
         assert out["latest"] == "0.2.16-alpha"
+        assert out.get("message") == "M6 recall rescue + update UX"
         assert "releases/tag/v0.2.16-alpha" in out["url"]
     finally:
         if original is None:

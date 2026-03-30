@@ -573,6 +573,9 @@ def format_janitor_summary_message(metrics: dict, applied_changes: dict) -> str:
         msg_parts.append("")
         msg_parts.append("⚠️⚠️⚠️ **UPDATE AVAILABLE** ⚠️⚠️⚠️")
         msg_parts.append(f"v{update_info['current']} → v{update_info['latest']}")
+        update_message = str(update_info.get("message") or "").strip()
+        if update_message:
+            msg_parts.append(f"Note: {update_message}")
         msg_parts.append("")
         msg_parts.append("Update with:")
         msg_parts.append(f"`curl -fsSL {get_install_url()} | bash`")

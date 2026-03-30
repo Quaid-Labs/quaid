@@ -375,6 +375,29 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     except Exception as exc:
         janitor_logger.warn("update_check_cache_read_failed", error=str(exc))
 
+    def _release_summary(data: Dict[str, Any]) -> str:
+        """Extract a short relay-friendly update message from release metadata."""
+        if not isinstance(data, dict):
+            return ""
+        title = str(data.get("name") or "").strip()
+        body = str(data.get("body") or "").strip()
+        body_line = ""
+        if body:
+            for line in body.splitlines():
+                clean = str(line).strip()
+                if not clean:
+                    continue
+                if clean.startswith("#"):
+                    continue
+                if clean.startswith("- "):
+                    clean = clean[2:].strip()
+                body_line = clean
+                break
+        summary = title or body_line
+        if len(summary) > 180:
+            summary = summary[:177].rstrip() + "..."
+        return summary
+
     # Fetch latest release from GitHub
     try:
         req = urllib.request.Request(RELEASES_URL, headers={
@@ -399,7 +422,12 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         return None
 
     # Cache the result via datastore helper
-    result = {"latest": latest_tag, "current": current, "url": html_url}
+    result = {
+        "latest": latest_tag,
+        "current": current,
+        "url": html_url,
+        "message": _release_summary(data),
+    }
     try:
         graph = get_graph()
         write_update_check_cache(graph, result)
@@ -1538,6 +1566,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 update_info = _check_for_updates()
                 if update_info:
                     print(f"  ⚠️  UPDATE AVAILABLE: v{update_info['current']} → v{update_info['latest']}")
+                    if update_info.get("message"):
+                        print(f"  ⚠️  Note: {update_info.get('message')}")
                     print(f"  ⚠️  Update: curl -fsSL {get_install_url()} | bash")
                     print(f"  ⚠️  Release: {update_info['url']}")
                     applied_changes["update_available"] = update_info

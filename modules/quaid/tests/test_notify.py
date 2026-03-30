@@ -536,11 +536,13 @@ class TestJanitorSummaryFormatting:
                 "update_available": {
                     "current": "0.2.15-alpha",
                     "latest": "0.2.16-alpha",
+                    "message": "M6 recall rescue + update UX",
                     "url": "https://github.com/quaid-labs/quaid/releases/tag/v0.2.16-alpha",
                 },
             },
         )
         assert "UPDATE AVAILABLE" in msg
         assert "v0.2.15-alpha → v0.2.16-alpha" in msg
+        assert "Note: M6 recall rescue + update UX" in msg
         assert "curl -fsSL" in msg
         assert "Release notes:" in msg
