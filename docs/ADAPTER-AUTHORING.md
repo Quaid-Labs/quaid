@@ -5,7 +5,7 @@ This page explains how to add Quaid support for a new host platform (for example
 Quaid adapter integration has two layers:
 
 1. **Installer integration** (manifest registry under `~/.quaid/adaptors/`)
-2. **Runtime integration** (Python `QuaidAdapter` implementation + factory wiring)
+2. **Runtime integration** (Python `QuaidAdapter` implementation + manifest runtime loader wiring)
 
 You need both for a complete platform integration.
 
