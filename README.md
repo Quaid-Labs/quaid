@@ -37,6 +37,19 @@ After install, start here:
 - **Tested for scale and cost:** long-horizon benchmark and live study data show the system stays practical as history grows, while bounded recall and compaction reduce token spend.
 - **System-agnostic design:** the architecture is built around pluggable adapter contracts rather than a single host.
 
+**Platform Compatibility (Quick View)**
+
+| Capability | OpenClaw | Claude Code |
+|---|---|---|
+| Memory + janitor lifecycle | Yes | Yes |
+| Project docs + RAG system | Yes | Yes |
+| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes |
+| Hook-based auto extraction | Yes | Yes |
+| Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** |
+| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No |
+
+Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+
 ## Benchmarks
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
