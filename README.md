@@ -122,6 +122,13 @@ Quaid was measured with Haiku fast, Sonnet deep, and a Sonnet agent running eval
 
 Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
 
+Terminology:
+- `AL-S`: clean core AgentLife lane
+- `AL-L`: long/noisy lane with filler sessions
+- `AL-L OBD`: `AL-L` compressed into one operational day, simulates a power user
+- `FC`: full-context baseline without a memory system
+- `Tokens`: minimum eval tokens to answer all 283 benchmark questions
+
 Use these canonical links:
 - [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
 - [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md)
