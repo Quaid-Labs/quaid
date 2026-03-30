@@ -136,8 +136,7 @@ print(json.dumps(register_domain(name, desc), indent=2))
       check)   exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
       update)  exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@" ;;
       changelog) exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
-      search)  exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/rag.py" search "$@" ;;
-      *)       echo "Usage: quaid docs {list|check|update|changelog|search} [args...]"; exit 1 ;;
+      *)       echo "Usage: quaid docs {list|check|update|changelog} [args...]"; exit 1 ;;
     esac
     ;;
 
@@ -373,7 +372,6 @@ PYEOF
     echo "  docs check           Check doc staleness"
     echo "  docs update --apply  Update stale docs"
     echo "  docs changelog       View update history"
-    echo "  docs search \"query\"  Search project documentation (RAG)"
     echo ""
     echo "Projects:"
     echo "  project list         List registered projects"

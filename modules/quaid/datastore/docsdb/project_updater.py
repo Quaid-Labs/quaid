@@ -649,27 +649,31 @@ def _project_md_recent_log_limit(default: int = 15) -> int:
 def _lookup_sqlite_project(project_name: str):
     """Look up a project in the SQLite project_definitions table.
 
-    Fallback for dynamically-created projects that are not in the static config
-    definitions but exist in the live registry.
+    Used for dynamically-created projects that are not in the static config
+    definitions but exist in the live registry. Opens read-only to avoid
+    interfering with the main database writer.
     """
     import sqlite3
     from types import SimpleNamespace
 
+    db_path = get_data_dir() / "memory.db"
+    if not db_path.exists():
+        return None
+    conn = None
     try:
-        db_path = get_data_dir() / "memory.db"
-        if not db_path.exists():
-            return None
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
         row = conn.execute(
             "SELECT home_dir FROM project_definitions WHERE name=? AND state='active'",
             (project_name,),
         ).fetchone()
-        conn.close()
         if not row:
             return None
         return SimpleNamespace(home_dir=row[0])
-    except Exception:
+    except sqlite3.OperationalError:
         return None
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def append_project_logs(
