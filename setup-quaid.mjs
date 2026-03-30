@@ -432,9 +432,10 @@ function _readAdapterInstallerCapabilities(adapterId) {
 
 function _sharedModelOverride(adapterId) {
   const platformKey = String(adapterId || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  // Model/provider defaults are platform-specific by design.
+  // Do not read model lanes from shared/config/global.
   const candidates = [
     path.join(WORKSPACE, "shared", "config", platformKey, "memory.json"),
-    path.join(WORKSPACE, "shared", "config", "global", "memory.json"),
   ];
   for (const cfgPath of candidates) {
     if (!fs.existsSync(cfgPath)) continue;
