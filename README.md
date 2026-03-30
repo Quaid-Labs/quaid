@@ -8,7 +8,7 @@
 
 > **Early alpha** — launched 2026, active daily development.
 
-Quaid is not another memory plugin — it is an **active knowledge layer** that makes your agent smarter and cuts token cost by 5x. Local-first, cross-platform, and built for long-running agents: it captures, maintains, and retrieves knowledge across sessions while keeping your data on your machine.
+Quaid is not another memory plugin — it is an **active knowledge layer** for agents that need to operate over time. Local-first, cross-platform, and built for long-running agents, it captures, maintains, and retrieves knowledge across sessions while keeping your data on your machine. Quaid is designed to solve the failure modes that show up once agents leave a single context window behind: resets, stale facts, project drift, and rising token cost. To study that regime, we built AgentLife — a benchmark for persistence, recall under resets, and cross-session coherence.
 
 **Mac / Linux:**
 ```bash
@@ -54,7 +54,7 @@ Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
 
-FC is included here as an upper-bound baseline, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets and reducing long-run token cost.
+Context-window baselines like FC are included here as short-horizon upper bounds, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets, controlling cost growth, and preserving continuity across sessions.
 
 Terminology:
 - `AL-S`: clean core AgentLife lane
