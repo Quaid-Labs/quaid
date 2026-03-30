@@ -288,5 +288,41 @@ def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypat
             version_file.write_text(original, encoding="utf-8")
 
 
+def test_check_for_updates_returns_newer_release(tmp_path, monkeypatch):
+    version_file = Path(janitor.__file__).parent / "VERSION"
+    original = version_file.read_text(encoding="utf-8") if version_file.exists() else None
+    version_file.write_text("0.2.15-alpha", encoding="utf-8")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return (
+                b'{"tag_name":"v0.2.16-alpha",'
+                b'"html_url":"https://github.com/quaid-labs/quaid/releases/tag/v0.2.16-alpha"}'
+            )
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Resp())
+    monkeypatch.setattr(janitor, "get_graph", lambda: object())
+    monkeypatch.setattr(janitor, "get_update_check_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(janitor, "write_update_check_cache", lambda *_args, **_kwargs: None)
+
+    try:
+        out = janitor._check_for_updates()
+        assert out is not None
+        assert out["current"] == "0.2.15-alpha"
+        assert out["latest"] == "0.2.16-alpha"
+        assert "releases/tag/v0.2.16-alpha" in out["url"]
+    finally:
+        if original is None:
+            version_file.unlink(missing_ok=True)
+        else:
+            version_file.write_text(original, encoding="utf-8")
+
+
 def test_cli_task_choices_include_temporal():
     assert "temporal" in janitor.JANITOR_TASK_CHOICES

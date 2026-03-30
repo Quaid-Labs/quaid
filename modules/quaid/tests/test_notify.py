@@ -15,6 +15,7 @@ import pytest
 from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
+    format_janitor_summary_message,
     notify_user,
     get_last_channel,
     ChannelInfo,
@@ -524,3 +525,22 @@ class TestNotifyFallbackVisibility:
                 assert "work" in call_args
         finally:
             reset_adapter()
+
+
+class TestJanitorSummaryFormatting:
+    def test_includes_update_alert_block(self):
+        msg = format_janitor_summary_message(
+            metrics={"duration_seconds": 12.3, "errors": 0},
+            applied_changes={
+                "reviewed": 2,
+                "update_available": {
+                    "current": "0.2.15-alpha",
+                    "latest": "0.2.16-alpha",
+                    "url": "https://github.com/quaid-labs/quaid/releases/tag/v0.2.16-alpha",
+                },
+            },
+        )
+        assert "UPDATE AVAILABLE" in msg
+        assert "v0.2.15-alpha → v0.2.16-alpha" in msg
+        assert "curl -fsSL" in msg
+        assert "Release notes:" in msg

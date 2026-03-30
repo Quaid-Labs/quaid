@@ -337,6 +337,10 @@ PYEOF
     esac
     ;;
 
+  update)
+    exec node "$SCRIPT_DIR/scripts/update-quaid.mjs" "$@"
+    ;;
+
   help|--help|-h)
     echo "quaid - Total Recall memory system"
     echo ""
@@ -395,6 +399,10 @@ PYEOF
     echo "  compat status        Show host version and circuit breaker state"
     echo "  compat check         Run compatibility preflight check"
     echo "  compat matrix        Show cached compatibility matrix"
+    echo ""
+    echo "Updates:"
+    echo "  update               Update Quaid from latest release tarball"
+    echo "  update --check       Check if a newer release is available"
     echo ""
     echo "Config:"
     echo "  instances list       List all Quaid instances under QUAID_HOME"
