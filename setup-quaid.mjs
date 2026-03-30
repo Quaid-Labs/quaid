@@ -17,6 +17,12 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
+import {
+  adapterSelectOptions,
+  loadAdapterManifests,
+  resolveAdapterHookScript,
+  syncBuiltinAdapterManifests,
+} from "./modules/quaid/lib/adapter-manifests.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -355,6 +361,67 @@ const LOGS_DIR = path.join(WORKSPACE, "logs");
 const PROJECTS_DIR = path.join(WORKSPACE, "projects");
 const TEMP_DIR = path.join(WORKSPACE, "temp");
 const SCRATCH_DIR = path.join(WORKSPACE, "scratch");
+const ADAPTER_REGISTRY_DIR = path.join(WORKSPACE, ".quaid", "adaptors");
+
+let _adapterManifests = [];
+
+function _refreshAdapterManifests() {
+  try {
+    syncBuiltinAdapterManifests({ workspace: WORKSPACE, installerDir: __dirname });
+  } catch {
+    // Non-fatal: installer can continue with built-in fallbacks.
+  }
+  _adapterManifests = loadAdapterManifests(WORKSPACE);
+}
+
+function _adapterManifestById(id) {
+  const key = String(id || "").trim().toLowerCase();
+  return _adapterManifests.find((m) => String(m?.id || "").toLowerCase() === key) || null;
+}
+
+function _adapterOptionsForSelect() {
+  const options = adapterSelectOptions(_adapterManifests);
+  if (options.length > 0) return options;
+  return [
+    { value: "standalone", label: "Standalone", hint: "local-only runtime (default)" },
+    { value: "claude-code", label: "Claude Code", hint: "hooks + OAuth for Claude Code CLI" },
+    { value: "openclaw", label: "OpenClaw", hint: "gateway-integrated runtime" },
+  ];
+}
+
+function runAdapterInstallHook(adapterId, hookName) {
+  const manifest = _adapterManifestById(adapterId);
+  if (!manifest) return true;
+  const scriptPath = resolveAdapterHookScript(manifest, hookName);
+  if (!scriptPath || !fs.existsSync(scriptPath)) return true;
+
+  const ext = path.extname(scriptPath).toLowerCase();
+  let cmd = scriptPath;
+  let args = [];
+  if (ext === ".mjs" || ext === ".js" || ext === ".cjs") {
+    cmd = "node";
+    args = [scriptPath];
+  } else if (ext === ".py") {
+    cmd = "python3";
+    args = [scriptPath];
+  }
+  const res = spawnSync(cmd, args, {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      QUAID_HOME: WORKSPACE,
+      QUAID_WORKSPACE: WORKSPACE,
+      QUAID_ADAPTER_ID: String(adapterId || ""),
+      QUAID_ADAPTER_MANIFEST_PATH: String(manifest.__path || ""),
+      QUAID_ADAPTER_REGISTRY_DIR: ADAPTER_REGISTRY_DIR,
+      QUAID_ADAPTER_HOOK: String(hookName || ""),
+    },
+  });
+  if (res.status !== 0) {
+    throw new Error(`Adapter hook failed (${hookName}) for ${adapterId}: exit ${res.status}`);
+  }
+  return true;
+}
 
 /**
  * Returns the instance-level projects directory.
@@ -1662,6 +1729,7 @@ async function step1_preflight() {
   stepHeader(1, TOTAL_INSTALL_STEPS, "PREFLIGHT", STEP_QUOTES.preflight);
   intro(C.dim("Checking your system..."));
 
+  _refreshAdapterManifests();
   log.info(C.dim(`Workspace: ${WORKSPACE}`));
 
   // Snapshot existing files BEFORE any clawdbot commands — those commands load
@@ -1685,24 +1753,19 @@ async function step1_preflight() {
   // --- Platform selection ---
   // If not explicitly set via CLI flag, ask in interactive mode.
   if (!IS_OPENCLAW && !IS_CLAUDE_CODE && !AGENT_MODE && !_testAnswers) {
+    const adapterOptions = _adapterOptionsForSelect();
     const platform = handleCancel(await select({
       message: "Which platform are you installing Quaid for?",
-      options: [
-        { value: "standalone", label: "Standalone", hint: "local-only runtime (default)" },
-        { value: "claude-code", label: "Claude Code", hint: "hooks + OAuth for Claude Code CLI" },
-        { value: "openclaw", label: "OpenClaw", hint: "gateway-integrated runtime" },
-      ],
+      options: adapterOptions,
     }));
-    if (platform === "claude-code") {
-      // Promote to IS_CLAUDE_CODE for the rest of the install
-      // We can't reassign const, so use a module-level mutable flag.
-      _platformOverride = "claude-code";
-    } else if (platform === "openclaw") {
-      _platformOverride = "openclaw";
-    }
+    // Promote to selected adapter for the rest of the install.
+    _platformOverride = platform;
     syncInstallerInstanceEnv();
     await promptInstanceId(resolvedInstallerPlatform());
   }
+
+  // External adapter hooks can perform preflight checks or env bootstrap.
+  runAdapterInstallHook(resolvedInstallerPlatform(), "preinstall");
 
   if (_isPlatform("claude-code")) {
     // --- Claude Code mode ---
@@ -2071,14 +2134,11 @@ async function step3_models() {
   let provider = "anthropic";
   let adapterType = _isPlatform("claude-code") ? "claude-code" : _isPlatform("openclaw") ? "openclaw" : "standalone";
   if (advancedSetup) {
+    const adapterOptions = _adapterOptionsForSelect();
     adapterType = handleCancel(await select({
       message: "Agent system adapter",
       initialValue: adapterType,
-      options: [
-        { value: "standalone", label: "standalone", hint: "local-only runtime" },
-        { value: "claude-code", label: "claude-code", hint: "Claude Code hooks + OAuth" },
-        { value: "openclaw", label: "openclaw", hint: "gateway-integrated runtime" },
-      ],
+      options: adapterOptions,
     }));
     provider = handleCancel(await select({
       message: "LLM provider",
@@ -2095,6 +2155,7 @@ async function step3_models() {
     provider = forcedProvider;
     log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
   }
+  _platformOverride = adapterType;
   syncInstallerInstanceEnv(adapterType);
   // Prompt for instance ID if it wasn't already set in step1 (e.g. platform
   // was pre-detected via IS_OPENCLAW / IS_CLAUDE_CODE flags rather than the
@@ -3564,6 +3625,7 @@ except ValueError:
       + `${postInstall.timeoutBuffersCleared} stale timeout buffer(s).`
     );
   }
+  runAdapterInstallHook(resolvedInstallerPlatform(), "postinstall");
   log.success("Installation complete!");
   // Write install timestamp so the session-index watcher knows to ignore
   // sessions that predate this install (prevents orphan extraction fan-out

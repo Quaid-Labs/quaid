@@ -1,0 +1,14 @@
+{
+  "schema": "quaid-adapter-install/v1",
+  "id": "openclaw",
+  "name": "OpenClaw",
+  "install": {
+    "selectLabel": "OpenClaw",
+    "selectHint": "gateway-integrated runtime",
+    "sortOrder": 20
+  },
+  "runtime": {
+    "instancePrefix": "openclaw-"
+  },
+  "scripts": {}
+}

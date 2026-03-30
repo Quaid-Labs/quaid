@@ -1,0 +1,14 @@
+{
+  "schema": "quaid-adapter-install/v1",
+  "id": "claude-code",
+  "name": "Claude Code",
+  "install": {
+    "selectLabel": "Claude Code",
+    "selectHint": "hooks + OAuth for Claude Code CLI",
+    "sortOrder": 30
+  },
+  "runtime": {
+    "instancePrefix": "claude-code-"
+  },
+  "scripts": {}
+}

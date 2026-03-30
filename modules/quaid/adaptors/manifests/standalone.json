@@ -1,0 +1,14 @@
+{
+  "schema": "quaid-adapter-install/v1",
+  "id": "standalone",
+  "name": "Standalone",
+  "install": {
+    "selectLabel": "Standalone",
+    "selectHint": "local-only runtime (default)",
+    "sortOrder": 10
+  },
+  "runtime": {
+    "instancePrefix": "standalone"
+  },
+  "scripts": {}
+}
