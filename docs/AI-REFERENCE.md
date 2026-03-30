@@ -809,19 +809,10 @@ OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthr
 
 ## Benchmark Results (AgentLife)
 
-Headline launch rows:
-
-| Lane | Quaid Sonnet/Haiku | FC Sonnet | OpenClaw Native |
-|---|---:|---:|---:|
-| AL-S | 87.69% | 92.90% | 69.40% |
-| AL-L | 85.82% | 87.70% | 63.06% |
-
-Sonnet-eval AL-L study reaches 88.69% (`r944`) on the same corpus.
-
-For full matrix/methodology/run IDs, use:
-- [docs/AGENTLIFE.md](AGENTLIFE.md)
-- [docs/AGENTLIFE-TECHNICAL-REPORT.md](AGENTLIFE-TECHNICAL-REPORT.md)
-- [docs/BENCHMARKS.md](BENCHMARKS.md)
+Canonical benchmark docs:
+- https://github.com/quaid-labs/agentlife
+- https://quaid.ai/benchmarks/agentlife
+- https://quaid.ai/benchmarks/agentlife/technical-report
 
 ---
 

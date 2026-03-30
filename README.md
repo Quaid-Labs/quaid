@@ -89,25 +89,12 @@ node setup-quaid.mjs --source github --ref <commit-sha>
 
 ## Benchmarks
 
-Existing memory benchmarks are useful, but they do not measure the behaviors that break first in agentic production: cross-session persistence, lifecycle maintenance, project recall, and reset resilience. We built **AgentLife** for that.
+Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
 
-These headline rows use the recommended Quaid lane (Sonnet ingest + Haiku eval) against FC Sonnet and OpenClaw native:
-
-|                            | Quaid Sonnet/Haiku | FC Sonnet | OpenClaw Native |
-|----------------------------|-------------------:|----------:|----------------:|
-| AL-S (short-horizon, dense facts) | 87.69% | 92.90% | 69.40% |
-| AL-L (long-horizon + noise) | 85.82% | 87.70% | 63.06% |
-
-With Sonnet as the answer model in the Sonnet-ingest lane (production-like), Quaid reaches **87.10%** on AL-L (run `r945`), near FC Sonnet's **87.70%** on the same corpus while preserving cross-session memory across reset boundaries.
-
-In release-candidate AgentLife runs, Quaid also uses materially fewer prompt tokens than full-context replay lanes at comparable quality. For the Sonnet AL-L lane, Quaid is within 0.6pp of FC Sonnet while running at roughly one-fifth the token volume.
-
-When the host supports it, Quaid also performs automatic timeout/session compaction, which further reduces token pressure by converting long raw transcripts into structured knowledge before future turns.
-
-Full methodology, run matrix, and lane-by-lane details:
-- [AgentLife Overview](docs/AGENTLIFE.md)
-- [AgentLife Technical Report](docs/AGENTLIFE-TECHNICAL-REPORT.md)
-- [Benchmark index](docs/BENCHMARKS.md)
+Use these canonical links:
+- [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
+- [AgentLife Overview](https://quaid.ai/benchmarks/agentlife)
+- [AgentLife Technical Report](https://quaid.ai/benchmarks/agentlife/technical-report)
 
 ---
 
@@ -181,7 +168,7 @@ Known limitations for **v0.2.15-alpha**:
 - Windows is not supported. macOS and Linux only.
 - OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
 
-The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus ongoing [AgentLife benchmark](docs/AGENTLIFE.md) evaluation.
+The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus ongoing AgentLife benchmark evaluation.
 
 GitHub Actions CI runs automated checks on pushes/PRs including runtime pair sync, docs/release consistency, linting, runtime build, isolated Python unit suites, and the full gate (`run-all-tests --full`) with the bootstrap E2E auth matrix enabled.
 
@@ -193,13 +180,14 @@ We're actively testing and refining the system against benchmarks and welcome co
 
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
 - [Adapter Authoring](docs/ADAPTER-AUTHORING.md) — How to integrate Quaid with your own host platform
-- [AgentLife Overview](docs/AGENTLIFE.md) — What AgentLife measures and why it exists
-- [AgentLife Technical Report](docs/AGENTLIFE-TECHNICAL-REPORT.md) — Full matrix, run IDs, and methodology
+- [AgentLife Repository](https://github.com/quaid-labs/agentlife) — Benchmark source, datasets, and runbooks
+- [AgentLife Overview](https://quaid.ai/benchmarks/agentlife) — Public benchmark overview
+- [AgentLife Technical Report](https://quaid.ai/benchmarks/agentlife/technical-report) — Full matrix, run IDs, and methodology
 - [Platform Compatibility](docs/COMPATIBILITY.md) — OC vs CC capability matrix
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Interface Contract](docs/INTERFACES.md) — CLI/adapter capability model and event contract
-- [Benchmark Index](docs/BENCHMARKS.md) — Benchmark docs and report links
+- [Benchmark Index](docs/BENCHMARKS.md) — Canonical AgentLife benchmark links
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
 - [Provider Modes](docs/PROVIDER-MODES.md) — Provider routing and cost-safety guidance
 - [Release Workflow](docs/RELEASE.md) — Pre-push checks and ownership guard
