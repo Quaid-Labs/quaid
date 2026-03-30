@@ -192,6 +192,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 ## Learn More
 
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
+- [Adapter Authoring](docs/ADAPTER-AUTHORING.md) — How to integrate Quaid with your own host platform
 - [AgentLife Overview](docs/AGENTLIFE.md) — What AgentLife measures and why it exists
 - [AgentLife Technical Report](docs/AGENTLIFE-TECHNICAL-REPORT.md) — Full matrix, run IDs, and methodology
 - [Platform Compatibility](docs/COMPATIBILITY.md) — OC vs CC capability matrix
