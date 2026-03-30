@@ -115,19 +115,7 @@ quaid global-registry list    # cross-instance project list
 ```bash
 quaid session list [--limit 5]
 quaid session load --session-id <id>
-
-# Load last session — truncated to last ~20k tokens by default.
-# Always check size first; only load if it makes sense to load.
-quaid session last --size-only                  # token count only, no content loaded
-quaid session last                              # load last session, last 20k tokens
-quaid session last --max-tokens 50000           # load last session, last 50k tokens
-quaid session last --max-tokens 0               # load full transcript (use with caution)
 ```
-
-**Token size note:** `last` returns `total_tokens_estimated` (full session size) and
-`loaded_tokens_estimated` (what was actually returned). If `truncated: true`, the
-response includes a `truncation_note` explaining how to load more. Default cap is
-20k tokens to avoid flooding context — override only when older context is needed.
 
 ---
 
@@ -175,6 +163,6 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 
 **Memory + docs in one pass:** `recall "query" '{"stores": ["vector","graph","docs"]}'`
 
-**Missing session context:** `session last --size-only` to check size → `session last` to load (truncated to 20k tokens); use `--max-tokens 0` only if older context is specifically needed
+**Missing session context:** `session list --limit 1` → `session load --session-id <id>`
 
 **Conflicting facts:** prefer newest; if unresolved, surface uncertainty and suggest janitor review
