@@ -479,6 +479,26 @@ class QuaidAdapter(abc.ABC):
         _ = provider
         return None
 
+    def get_fast_provider_default(self) -> str:
+        """Adapter-owned default fast-tier provider id."""
+        return "default"
+
+    def get_deep_provider_default(self) -> str:
+        """Adapter-owned default deep-tier provider id."""
+        return "default"
+
+    def get_fast_model_default(self, provider: str) -> Optional[str]:
+        """Adapter-owned default fast-tier model for a provider."""
+        defaults = self.installer_default_models(provider) or {}
+        model = str(defaults.get("fast", "")).strip()
+        return model or None
+
+    def get_deep_model_default(self, provider: str) -> Optional[str]:
+        """Adapter-owned default deep-tier model for a provider."""
+        defaults = self.installer_default_models(provider) or {}
+        model = str(defaults.get("deep", "")).strip()
+        return model or None
+
 
 class StandaloneAdapter(QuaidAdapter):
     """Default adapter for standalone Quaid installations.
@@ -697,6 +717,12 @@ class StandaloneAdapter(QuaidAdapter):
         if p == "ollama":
             return {"deep": "llama3.1:70b", "fast": "llama3.1:8b"}
         return None
+
+    def get_fast_provider_default(self) -> str:
+        return "anthropic"
+
+    def get_deep_provider_default(self) -> str:
+        return "anthropic"
 
 
 # ---------------------------------------------------------------------------

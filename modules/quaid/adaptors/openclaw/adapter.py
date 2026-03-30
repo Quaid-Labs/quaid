@@ -359,6 +359,12 @@ class OpenClawAdapter(QuaidAdapter):
             return {"deep": "llama3.1:70b", "fast": "llama3.1:8b"}
         return None
 
+    def get_fast_provider_default(self) -> str:
+        return "anthropic"
+
+    def get_deep_provider_default(self) -> str:
+        return "anthropic"
+
     def _get_agent_config_dir(self) -> Path:
         """Path to the gateway's agent config directory."""
         return Path.home() / ".openclaw" / "agents" / "main" / "agent"

@@ -412,6 +412,12 @@ class ClaudeCodeAdapter(QuaidAdapter):
             return None
         return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
 
+    def get_fast_provider_default(self) -> str:
+        return "anthropic"
+
+    def get_deep_provider_default(self) -> str:
+        return "anthropic"
+
 
 def _now_iso() -> str:
     from datetime import datetime, timezone

@@ -72,6 +72,15 @@ Built-in manifests are seeded by installer first, then the same directory is use
   - `QUAID_ADAPTER_REGISTRY_DIR`
   - `QUAID_ADAPTER_HOOK` (`preinstall` or `postinstall`)
 
+### Platform-shared config ownership
+
+Adapter/platform-scoped defaults live under:
+
+`$QUAID_HOME/shared/config/<platform>/memory.json`
+
+For model/provider defaults specifically, installer/runtime treat this as
+platform-owned override state. Do not use global shared config for model lanes.
+
 ---
 
 ## 2) Runtime Adapter Contract (Python)
@@ -107,6 +116,13 @@ See existing implementations:
 - `get_instance_manager()` if your host supports user-created named silos
 - `installer_supported_providers()` to constrain provider choices in guided install
 - `installer_default_models(provider)` to provide deep/fast lane defaults per provider
+- `get_fast_provider_default()` / `get_deep_provider_default()` for adapter-owned default provider lanes
+- `get_fast_model_default(provider)` / `get_deep_model_default(provider)` for adapter-owned model defaults
+
+Model precedence in install flow:
+1. Platform-shared config (`shared/config/<platform>/memory.json`)
+2. Adapter defaults (`get_*_provider_default`, `get_*_model_default`)
+3. Global hardcoded fallback (only if adapter does not provide values)
 
 ### Optional instance manager
 

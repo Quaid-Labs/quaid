@@ -214,6 +214,8 @@ class TestStandaloneAdapter:
         assert "anthropic" in standalone.installer_supported_providers()
         defaults = standalone.installer_default_models("anthropic")
         assert defaults == {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
+        assert standalone.get_deep_provider_default() == "anthropic"
+        assert standalone.get_fast_provider_default() == "anthropic"
 
     def test_build_transcript_uses_adapter_filters_only(self, standalone):
         transcript = standalone.build_transcript([
@@ -500,6 +502,8 @@ class TestOpenClawAdapter:
             "deep": "claude-sonnet-4-5",
             "fast": "claude-haiku-4-5",
         }
+        assert adapter.get_deep_provider_default() == "anthropic"
+        assert adapter.get_fast_provider_default() == "anthropic"
 
 
 class TestClaudeCodeAdapter:
@@ -510,6 +514,8 @@ class TestClaudeCodeAdapter:
             "deep": "claude-sonnet-4-5",
             "fast": "claude-haiku-4-5",
         }
+        assert adapter.get_deep_provider_default() == "anthropic"
+        assert adapter.get_fast_provider_default() == "anthropic"
         assert adapter.installer_default_models("openai") is None
 
 

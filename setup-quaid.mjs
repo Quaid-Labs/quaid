@@ -399,14 +399,33 @@ function _readAdapterInstallerCapabilities(adapterId) {
     "aid = os.environ.get('QUAID_ADAPTER_TYPE', '').strip()",
     "adapter = _instantiate_adapter_from_manifest(aid)",
     "providers = list(adapter.installer_supported_providers() or [])",
-    "out = {'providers': [str(p).strip().lower() for p in providers if str(p).strip()], 'modelDefaults': {}}",
+    "out = {'providers': [str(p).strip().lower() for p in providers if str(p).strip()], 'modelDefaults': {}, 'defaultFastProvider': '', 'defaultDeepProvider': ''}",
+    "try:",
+    "    out['defaultFastProvider'] = str(adapter.get_fast_provider_default() or '').strip().lower()",
+    "except Exception:",
+    "    out['defaultFastProvider'] = ''",
+    "try:",
+    "    out['defaultDeepProvider'] = str(adapter.get_deep_provider_default() or '').strip().lower()",
+    "except Exception:",
+    "    out['defaultDeepProvider'] = ''",
     "for p in out['providers']:",
-    "    d = adapter.installer_default_models(p)",
-    "    if isinstance(d, dict):",
-    "        deep = str(d.get('deep', '')).strip()",
-    "        fast = str(d.get('fast', '')).strip()",
-    "        if deep and fast:",
-    "            out['modelDefaults'][p] = {'deep': deep, 'fast': fast}",
+    "    deep = ''",
+    "    fast = ''",
+    "    try:",
+    "        deep = str(adapter.get_deep_model_default(p) or '').strip()",
+    "    except Exception:",
+    "        deep = ''",
+    "    try:",
+    "        fast = str(adapter.get_fast_model_default(p) or '').strip()",
+    "    except Exception:",
+    "        fast = ''",
+    "    if not (deep and fast):",
+    "        d = adapter.installer_default_models(p)",
+    "        if isinstance(d, dict):",
+    "            deep = deep or str(d.get('deep', '')).strip()",
+    "            fast = fast or str(d.get('fast', '')).strip()",
+    "    if deep and fast:",
+    "        out['modelDefaults'][p] = {'deep': deep, 'fast': fast}",
     "print(json.dumps(out))",
   ].join("\n");
   const res = spawnSync("python3", ["-c", py], {
@@ -2225,6 +2244,12 @@ async function step3_models() {
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
     : ["anthropic", "openai", "openrouter", "together", "ollama"];
+  const adapterDefaultProvider = String(
+    adapterCaps.defaultDeepProvider || adapterCaps.defaultFastProvider || ""
+  ).trim().toLowerCase();
+  if (adapterDefaultProvider && supportedProviders.includes(adapterDefaultProvider)) {
+    provider = adapterDefaultProvider;
+  }
 
   const providerOptions = [
     { value: "anthropic",  label: "Anthropic (Claude)", hint: "Recommended" },
