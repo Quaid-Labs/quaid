@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from fnmatch import fnmatch
 from pathlib import Path
@@ -514,6 +515,14 @@ class DocsRegistry:
         """Register a document in the registry. Returns the row ID."""
         if not file_path or not file_path.strip():
             raise ValueError("file_path must be a non-empty string")
+        resolved = Path(file_path.strip()).expanduser().resolve()
+        tmp_dir = Path(tempfile.gettempdir()).resolve()
+        if str(resolved).startswith(str(tmp_dir) + os.sep) or resolved == tmp_dir:
+            raise ValueError(
+                f"Cannot register a file under a temporary directory ({tmp_dir}). "
+                "Quaid only tracks durable file paths that persist across reboots. "
+                "Move the file to a permanent location first."
+            )
         with get_connection(self.db_path) as conn:
             conn.execute("""
                 INSERT INTO doc_registry

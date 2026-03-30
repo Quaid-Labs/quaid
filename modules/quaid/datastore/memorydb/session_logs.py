@@ -18,11 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from lib.config import get_db_path as _lib_get_db_path
-from lib.worker_pool import run_callables
 from lib.database import get_connection as _lib_get_connection
-from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
-from lib.similarity import cosine_similarity as _lib_cosine_similarity
-from lib.fail_policy import is_fail_hard_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -100,78 +96,6 @@ def _with_session_lock(session_id: str) -> tuple[int, str]:
             time.sleep(0.2)
 
 
-def _estimate_tokens(text: str) -> int:
-    return max(1, len(text) // 4)
-
-
-def _split_long_turn(turn: str, max_chars: int) -> List[str]:
-    """Split a single turn that exceeds max_chars on line boundaries, then char boundaries."""
-    if len(turn) <= max_chars:
-        return [turn]
-    lines = turn.splitlines()
-    result: List[str] = []
-    buf_lines: List[str] = []
-    buf_len = 0
-    for line in lines:
-        line_len = len(line) + 1  # +1 for newline
-        if buf_lines and buf_len + line_len > max_chars:
-            result.append("\n".join(buf_lines).strip())
-            buf_lines = []
-            buf_len = 0
-        # If a single line itself exceeds max_chars, force-split on characters
-        if line_len > max_chars:
-            if buf_lines:
-                result.append("\n".join(buf_lines).strip())
-                buf_lines = []
-                buf_len = 0
-            for start in range(0, len(line), max_chars):
-                result.append(line[start:start + max_chars])
-        else:
-            buf_lines.append(line)
-            buf_len += line_len
-    if buf_lines:
-        result.append("\n".join(buf_lines).strip())
-    return [r for r in result if r]
-
-
-def _chunk_transcript(transcript: str, max_tokens: int = 400) -> List[str]:
-    """Split transcript into embedding-safe chunks.
-
-    max_tokens=400 keeps chunks at ~1600 chars, safely within nomic-embed-text's
-    2048-token context (session log content tokenizes at ~2 chars/token, not 4).
-    Individual turns longer than 1600 chars are force-split on line/char boundaries
-    before grouping so no single embedding call exceeds the model's context limit.
-    """
-    txt = str(transcript or "").strip()
-    if not txt:
-        return []
-    raw_turns = [t.strip() for t in txt.split("\n\n") if t.strip()]
-    if not raw_turns:
-        return [txt]
-
-    # max_chars safety bound: 4 * max_tokens (inverse of _estimate_tokens)
-    max_chars = max_tokens * 4
-    # Force-split any turn that individually exceeds the char limit
-    turns: List[str] = []
-    for raw_turn in raw_turns:
-        turns.extend(_split_long_turn(raw_turn, max_chars))
-
-    chunks: List[str] = []
-    buf: List[str] = []
-    tok = 0
-    for turn in turns:
-        t = _estimate_tokens(turn)
-        if buf and tok + t > max_tokens:
-            chunks.append("\n\n".join(buf).strip())
-            buf = []
-            tok = 0
-        buf.append(turn)
-        tok += t
-    if buf:
-        chunks.append("\n\n".join(buf).strip())
-    return [c for c in chunks if c]
-
-
 def _infer_topic_hint(transcript: str) -> str:
     for line in str(transcript or "").splitlines():
         line = line.strip()
@@ -180,29 +104,6 @@ def _infer_topic_hint(transcript: str) -> str:
             if body:
                 return body[:140]
     return ""
-
-
-def _parallel_workers(task_name: str, default: int = 4) -> int:
-    try:
-        from config import get_config
-
-        cfg = get_config()
-        parallel = getattr(getattr(cfg, "core", None), "parallel", None)
-        if parallel is None or not getattr(parallel, "enabled", True):
-            return 1
-        workers = int(getattr(parallel, "llm_workers", default) or default)
-        task_workers = getattr(parallel, "task_workers", {}) or {}
-        override = None
-        if isinstance(task_workers, dict):
-            for key in (task_name, task_name.upper(), task_name.lower()):
-                if key in task_workers:
-                    override = task_workers.get(key)
-                    break
-        raw = override if override is not None else workers
-        return max(1, min(int(raw), 16))
-    except Exception as exc:
-        logger.warning("session_logs parallel worker config parse failed for task=%s: %s", task_name, exc)
-        return max(1, int(default))
 
 
 def ensure_schema(conn) -> None:
@@ -241,23 +142,6 @@ def ensure_schema(conn) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_updated ON session_logs(updated_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_conversation ON session_logs(conversation_id, updated_at DESC)")
 
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS session_log_chunks (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            chunk_index INTEGER NOT NULL,
-            content TEXT NOT NULL,
-            embedding BLOB,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES session_logs(session_id) ON DELETE CASCADE,
-            UNIQUE(session_id, chunk_index)
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_session_log_chunks_session ON session_log_chunks(session_id)")
-
 
 def index_session_log(
     *,
@@ -288,35 +172,6 @@ def index_session_log(
             msg_count = transcript_text.count("\n\n") + 1
 
         content_hash = hashlib.sha256(transcript_text.encode("utf-8")).hexdigest()
-        chunks = _chunk_transcript(transcript_text)
-        embedding_blobs: List[Optional[bytes]] = []
-        if chunks:
-            calls = [(lambda chunk_text: (lambda: _lib_get_embedding(chunk_text)))(chunk) for chunk in chunks]
-            emb_results = run_callables(
-                calls,
-                max_workers=min(_parallel_workers("session_log_index"), len(chunks)),
-                pool_name="session-log-index",
-                return_exceptions=True,
-            )
-            for item in emb_results:
-                if isinstance(item, Exception) or not item:
-                    if isinstance(item, Exception):
-                        if is_fail_hard_enabled():
-                            raise RuntimeError(
-                                f"Session log embedding generation failed for session {sid}"
-                            ) from item
-                        logger.warning("Session log embedding generation failed for session %s: %s", sid, item)
-                    embedding_blobs.append(None)
-                else:
-                    try:
-                        embedding_blobs.append(_lib_pack_embedding(item))
-                    except Exception as exc:
-                        if is_fail_hard_enabled():
-                            raise RuntimeError(
-                                f"Session log embedding pack failed for session {sid}"
-                            ) from exc
-                        logger.warning("Session log embedding pack failed for session %s: %s", sid, exc)
-                        embedding_blobs.append(None)
 
         with _lib_get_connection() as conn:
             ensure_schema(conn)
@@ -349,9 +204,6 @@ def index_session_log(
                 return {
                     "status": "unchanged",
                     "session_id": sid,
-                    "chunks": int(
-                        conn.execute("SELECT COUNT(*) AS n FROM session_log_chunks WHERE session_id = ?", (sid,)).fetchone()["n"]
-                    ),
                 }
 
             conn.execute(
@@ -393,23 +245,9 @@ def index_session_log(
                 ),
             )
 
-            conn.execute("DELETE FROM session_log_chunks WHERE session_id = ?", (sid,))
-            created = 0
-            for i, chunk in enumerate(chunks):
-                embedding_blob = embedding_blobs[i] if i < len(embedding_blobs) else None
-                conn.execute(
-                    """
-                    INSERT INTO session_log_chunks (id, session_id, chunk_index, content, embedding, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (f"{sid}:{i}", sid, i, chunk, embedding_blob, now, now),
-                )
-                created += 1
-
         return {
             "status": "indexed",
             "session_id": sid,
-            "chunks": created,
             "message_count": msg_count,
         }
     finally:
@@ -474,147 +312,6 @@ def load_session(session_id: str, owner_id: Optional[str] = None) -> Optional[Di
     return dict(row) if row else None
 
 
-def load_last_session(owner_id: Optional[str] = None, exclude_session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    exclude = str(exclude_session_id or "").strip()
-    with _lib_get_connection() as conn:
-        ensure_schema(conn)
-        params: List[Any] = []
-        where: List[str] = []
-        if owner_id:
-            where.append("owner_id = ?")
-            params.append(str(owner_id))
-        if exclude:
-            where.append("session_id != ?")
-            params.append(exclude)
-
-        sql = (
-            "SELECT session_id, owner_id, source_label, source_path, source_channel, conversation_id, participant_ids, participant_aliases, "
-            "message_count, topic_hint, indexed_at, updated_at, transcript_text "
-            "FROM session_logs "
-        )
-        if where:
-            sql += "WHERE " + " AND ".join(where) + " "
-        sql += "ORDER BY updated_at DESC LIMIT 1"
-        row = conn.execute(sql, tuple(params)).fetchone()
-    return dict(row) if row else None
-
-
-def _lexical_score(query: str, text: str) -> float:
-    q_tokens = [t for t in re.findall(r"[a-z0-9_]+", query.lower()) if len(t) >= 2]
-    if not q_tokens:
-        return 0.0
-    hay = text.lower()
-    hits = sum(1 for t in q_tokens if t in hay)
-    return hits / len(q_tokens)
-
-
-def search_session_logs(
-    query: str,
-    *,
-    owner_id: Optional[str] = None,
-    limit: int = 5,
-    min_similarity: float = 0.15,
-) -> List[Dict[str, Any]]:
-    q = str(query or "").strip()
-    if not q:
-        return []
-
-    lim = max(1, min(int(limit or 5), 25))
-    q_emb = _lib_get_embedding(q)
-
-    with _lib_get_connection() as conn:
-        ensure_schema(conn)
-        params: List[Any] = []
-        if owner_id:
-            rows = conn.execute(
-                """
-                SELECT c.session_id, c.chunk_index, c.content, c.embedding,
-                       s.owner_id, s.source_label, s.message_count, s.topic_hint, s.updated_at
-                FROM session_log_chunks c
-                JOIN session_logs s ON s.session_id = c.session_id
-                WHERE s.owner_id = ?
-                """,
-                (str(owner_id),),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT c.session_id, c.chunk_index, c.content, c.embedding,
-                       s.owner_id, s.source_label, s.message_count, s.topic_hint, s.updated_at
-                FROM session_log_chunks c
-                JOIN session_logs s ON s.session_id = c.session_id
-                """
-            ).fetchall()
-
-    def _score_row(row: Any) -> Optional[Dict[str, Any]]:
-        content = str(row["content"] or "")
-        sem = 0.0
-        if q_emb and row["embedding"]:
-            try:
-                emb = _lib_unpack_embedding(row["embedding"])
-                sem = _lib_cosine_similarity(q_emb, emb)
-            except Exception as exc:
-                if is_fail_hard_enabled():
-                    raise RuntimeError("Session log embedding unpack failed during search") from exc
-                logger.warning("Session log embedding unpack failed during search: %s", exc)
-                sem = 0.0
-        lex = _lexical_score(q, content)
-        score = max(sem, lex * 0.6)
-        if score < float(min_similarity):
-            return None
-        return {
-            "session_id": row["session_id"],
-            "chunk_index": int(row["chunk_index"]),
-            "text": content,
-            "score": round(float(score), 4),
-            "semantic": round(float(sem), 4),
-            "lexical": round(float(lex), 4),
-            "owner_id": row["owner_id"],
-            "source_label": row["source_label"],
-            "message_count": int(row["message_count"] or 0),
-            "topic_hint": row["topic_hint"] or "",
-            "updated_at": row["updated_at"],
-        }
-
-    results: List[Dict[str, Any]] = []
-    worker_count = min(_parallel_workers("session_log_search"), len(rows))
-    if worker_count > 1 and len(rows) >= 32:
-        calls = [(lambda r: (lambda: _score_row(r)))(row) for row in rows]
-        scored = run_callables(
-            calls,
-            max_workers=worker_count,
-            pool_name="session-log-search",
-            return_exceptions=True,
-        )
-        for item in scored:
-            if isinstance(item, Exception) or item is None:
-                continue
-            results.append(item)
-    else:
-        for row in rows:
-            scored = _score_row(row)
-            if scored is not None:
-                results.append(scored)
-
-    results.sort(key=lambda x: (x["score"], x["updated_at"]), reverse=True)
-    return results[:lim]
-
-
-def _format_search_results(results: List[Dict[str, Any]]) -> str:
-    if not results:
-        return "No session log matches found."
-    lines = [f"Found {len(results)} session log match(es):"]
-    for i, r in enumerate(results, start=1):
-        text = str(r.get("text") or "").replace("\n", " ").strip()
-        if len(text) > 280:
-            text = text[:277] + "..."
-        lines.append(
-            f"{i}. session={r.get('session_id')} chunk={r.get('chunk_index')} score={r.get('score'):.3f} "
-            f"[{r.get('source_label') or 'unknown'}] {text}"
-        )
-    return "\n".join(lines)
-
-
 def _main() -> int:
     parser = argparse.ArgumentParser(description="Session log datastore")
     sub = parser.add_subparsers(dest="command")
@@ -639,16 +336,6 @@ def _main() -> int:
     load_p = sub.add_parser("load", help="Load one indexed session transcript")
     load_p.add_argument("--session-id", required=True)
     load_p.add_argument("--owner", default=None)
-
-    last_p = sub.add_parser("last", help="Load most recent indexed session transcript")
-    last_p.add_argument("--owner", default=None)
-    last_p.add_argument("--exclude-session-id", default=None)
-
-    search_p = sub.add_parser("search", help="Search indexed session logs")
-    search_p.add_argument("query")
-    search_p.add_argument("--owner", default=None)
-    search_p.add_argument("--limit", type=int, default=5)
-    search_p.add_argument("--min-similarity", type=float, default=0.15)
 
     args = parser.parse_args()
 
@@ -676,15 +363,6 @@ def _main() -> int:
 
     if args.command == "load":
         print(json.dumps({"session": load_session(args.session_id, owner_id=args.owner)}))
-        return 0
-
-    if args.command == "last":
-        print(json.dumps({"session": load_last_session(owner_id=args.owner, exclude_session_id=args.exclude_session_id)}))
-        return 0
-
-    if args.command == "search":
-        results = search_session_logs(args.query, owner_id=args.owner, limit=args.limit, min_similarity=args.min_similarity)
-        print(json.dumps({"results": results, "summary": _format_search_results(results)}))
         return 0
 
     parser.print_help()

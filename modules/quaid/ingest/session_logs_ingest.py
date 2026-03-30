@@ -220,16 +220,6 @@ def main() -> int:
     load_p.add_argument("--session-id", required=True)
     load_p.add_argument("--owner", default=None)
 
-    last_p = sub.add_parser("last", help="Load most recent indexed session transcript")
-    last_p.add_argument("--owner", default=None)
-    last_p.add_argument("--exclude-session-id", default=None)
-
-    search_p = sub.add_parser("search", help="Search indexed session logs")
-    search_p.add_argument("query")
-    search_p.add_argument("--owner", default=None)
-    search_p.add_argument("--limit", type=int, default=5)
-    search_p.add_argument("--min-similarity", type=float, default=0.15)
-
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -256,30 +246,6 @@ def main() -> int:
 
     if args.command == "load":
         print(json.dumps(_call_session_logs_cli("load", ["--session-id", str(args.session_id), *(["--owner", str(args.owner)] if args.owner else [])])))
-        return 0
-
-    if args.command == "last":
-        payload = _call_session_logs_cli(
-            "last",
-            [
-                *(["--owner", str(args.owner)] if args.owner else []),
-                *(["--exclude-session-id", str(args.exclude_session_id)] if args.exclude_session_id else []),
-            ],
-        )
-        print(json.dumps(payload))
-        return 0
-
-    if args.command == "search":
-        payload = _call_session_logs_cli(
-            "search",
-            [
-                str(args.query),
-                "--limit", str(int(args.limit or 5)),
-                "--min-similarity", str(float(args.min_similarity or 0.15)),
-                *(["--owner", str(args.owner)] if args.owner else []),
-            ],
-        )
-        print(json.dumps(payload))
         return 0
 
     parser.print_help()
