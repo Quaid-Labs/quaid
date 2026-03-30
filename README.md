@@ -8,82 +8,16 @@
 
 > **Early alpha** — launched 2026, active daily development.
 
-Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time.
-
-Context-window-based memory is an upper bound, not the target. It grows linearly in cost, does not persist across resets, and gets weaker as long-running workflows sprawl. Quaid targets a different regime: persistent knowledge with bounded recall cost and cross-session continuity.
-
-Quaid is local-first: your memory database, identity files, project docs, and embeddings stay on your machine. You own the data, can back it up, move it, inspect it, and run it without a hosted memory service.
-
-Every session starts ready to work. Project docs, architecture decisions, tool guidance, and codebase context are tracked and kept current automatically. Through a dual learning evolution system, the layer evolves with use: it doesn't just retain facts, it builds durable understanding of users, workflows, and projects over time.
-
-**Why teams use it:**
-- **Cross-platform and multi-agent:** OpenClaw and Claude Code are supported now, with Codex next on the roadmap. Agents can keep personal memory siloed per instance, intentionally share a memory silo, or share only the common project space.
-- **Shared projects without forced identity sharing:** project docs and registry live in a shared workspace, so different agents and platforms can work from the same project context even when their personal memories stay separate.
-- **Local-first and portable:** SQLite + local files + local embeddings mean you own and can move the data.
-- **Low operating cost:** bounded recall, local embeddings, and compaction-aware flows are built to reduce brute-force context replay. On long-running agents, the memory layer can cost less than the context spend it saves.
-- **Self-evolving agents:** `SOUL.md`, `USER.md`, and `ENVIRONMENT.md` are updated over time from usage. The agent keeps a curated journal of its surroundings so it can better understand them in the future.
-- **Tested for long-horizon use:** AgentLife and the real-world scalability study both stress long-running memory behavior, not just short QA recall.
-
-**What it remembers:**
-- **Facts** — names, relationships, preferences, decisions, life events
-- **Projects** — documentation, architecture, tools, tracked from git changes
-- **Personality** — who your user is, who the agent is, how they interact — evolving over time
-
-**What it does with them:**
-- Extracts memories from conversations automatically
-- Retrieves the right ones at the right time (hybrid search + LLM reranking)
-- Runs a nightly janitor that reviews, deduplicates, and decays stale memories
-- Keeps project docs and personality files current without manual maintenance
-- Lets multiple agents share a project space while keeping personal memory siloed by default
-
-Quaid is a system-agnostic knowledge layer by design, with adapters handling host-specific runtime details. [OpenClaw](https://github.com/openclaw/openclaw) and Claude Code are supported now, with Codex adapter support next on the roadmap.
-
-**Interface surfaces:**
-- **OpenClaw adapter** — lifecycle hooks + tool integration
-- **Claude Code adapter** — hook-driven integration with durable session-init and daemon signaling
-- **CLI** — direct operational control for extraction, recall, janitor, docs, and events
-- **Adapter architecture** — manifest-driven, pluggable host integration model so other agentic systems can add Quaid support without forking core behavior
-
-**Platform compatibility (quick view):**
-
-| Capability | OpenClaw | Claude Code |
-|---|---|---|
-| Memory + janitor lifecycle | Yes | Yes |
-| Project docs + RAG system | Yes | Yes |
-| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes |
-| Hook-based auto extraction | Yes | Yes |
-| Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** |
-| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No |
-
-Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
-
-Quaid also includes a direct `quaid` CLI for operational control, but OC/CC are the primary host integrations.
-
-Runtime event capabilities are discoverable via `quaid event capabilities` so orchestration can adapt to host/runtime support instead of assuming fixed behavior.
-
----
-
-## Install
-
-The guided installer sets up Quaid with knowledge capture, janitor scheduling, and host integration.
-
-macOS and Linux are supported. Windows is not supported at this time.
-
-**Tell your agent about it:**
-```text
-https://github.com/quaid-labs/quaid/blob/main/docs/AI-INSTALL.md
-```
-If you're an agent, go there first and do not use the commands below.
+Quaid is not another memory plugin — it is an **active knowledge layer** that makes your agent smarter and cuts token cost by 5x. Local-first, cross-platform, and built for long-running agents: it captures, maintains, and retrieves knowledge across sessions while keeping your data on your machine.
 
 **Mac / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
 ```
 
-**Manual:**
-```bash
-git clone https://github.com/quaid-labs/quaid.git
-cd quaid && node setup-quaid.mjs
+Or just point your agent here:
+```text
+https://github.com/quaid-labs/quaid/blob/main/docs/AI-INSTALL.md
 ```
 
 After install, start here:
