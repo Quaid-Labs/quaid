@@ -77,7 +77,6 @@ class CodexAdapter(QuaidAdapter):
         try:
             pending = self._pending_notifications_path()
             pending.parent.mkdir(parents=True, exist_ok=True)
-            pending.write_text("", encoding="utf-8") if not pending.exists() else None
             with open(pending, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"message": message, "ts": _now_iso()}) + "\n")
             return True
@@ -132,7 +131,9 @@ class CodexAdapter(QuaidAdapter):
         if key:
             return key
         if is_fail_hard_enabled():
-            return None
+            raise RuntimeError(
+                f"[fail_hard] {env_var_name} is required but not set in the environment."
+            )
         print(
             f"[adapter][FALLBACK] {env_var_name} not found in env; "
             "attempting .env lookup because failHard is disabled.",

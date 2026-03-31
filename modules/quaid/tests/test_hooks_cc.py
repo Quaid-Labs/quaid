@@ -12,6 +12,7 @@ import io
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -97,6 +98,8 @@ def cursor_dir(tmp_path, monkeypatch):
 def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     """Return a mock adapter wired into get_adapter() and get_owner_id()."""
     adapter = MagicMock()
+    adapter.adapter_id.return_value = ""
+    adapter.get_session_path.return_value = None
     adapter.get_sessions_dir.return_value = str(sessions_dir)
     adapter.get_pending_context.return_value = ""
 
@@ -157,6 +160,7 @@ class TestHookInjectCursorSeeding:
         cwd = "/tmp/quaid-dev"
         expected_encoded = cwd.replace("/", "-")  # "-tmp-quaid-dev"
         expected_path = str(Path(str(sessions_dir)) / expected_encoded / f"{session_id}.jsonl")
+        mock_adapter.adapter_id.return_value = "claude-code"
 
         written = {}
 
@@ -268,6 +272,46 @@ class TestHookInjectCursorSeeding:
         # sessions_dir/{session_id}.jsonl is used as the predicted path.
         expected_flat = str(sessions_dir / f"{session_id}.jsonl")
         assert written.get("path") == expected_flat
+
+    def test_codex_race_uses_predicted_rollout_fallback(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """Codex sessions seed a predicted rollout path before the file exists."""
+        session_id = "019d4367-1794-7fc2-84f3-bb30ba99a24f"
+        mock_adapter.adapter_id.return_value = "codex"
+        mock_adapter.get_session_path.return_value = None
+
+        written = {}
+
+        from core import extraction_daemon
+
+        def fake_write_cursor(sid, offset, path):
+            written["sid"] = sid
+            written["offset"] = offset
+            written["path"] = path
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", fake_write_cursor)
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            _run_hook_inject(
+                {
+                    "prompt": "seed codex cursor",
+                    "session_id": session_id,
+                    "cwd": "/tmp/quaid-dev",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        expected_path = (
+            Path(str(sessions_dir))
+            / datetime.now().strftime("%Y/%m/%d")
+            / f"rollout-pending-{session_id}.jsonl"
+        )
+        assert written == {
+            "sid": session_id,
+            "offset": 0,
+            "path": str(expected_path),
+        }
 
 
 # ===========================================================================

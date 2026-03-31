@@ -1146,7 +1146,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 input_details.get("cache_creation_tokens", usage.get("cache_creation_input_tokens", 0)) or 0
             ),
             model=str(data.get("model", model) or model),
-            truncated=bool(data.get("incomplete", False)),
+            truncated=bool(data.get("status") == "incomplete"),
         )
 
     def llm_call(self, messages, model_tier="deep",

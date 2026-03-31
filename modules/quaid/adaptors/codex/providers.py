@@ -68,6 +68,7 @@ class _CodexAppServerManager:
         self._reader: Optional[threading.Thread] = None
         self._stderr_reader: Optional[threading.Thread] = None
         self._lock = threading.RLock()
+        self._pending_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._next_id = 1
         self._pending: Dict[int, "queue.Queue[dict]"] = {}
@@ -158,7 +159,9 @@ class _CodexAppServerManager:
             logger.debug("Codex app-server stderr: %s", line.rstrip())
 
     def _broadcast(self, payload: dict) -> None:
-        for listener in list(self._listeners):
+        with self._lock:
+            listeners = list(self._listeners)
+        for listener in listeners:
             try:
                 listener.put_nowait(payload)
             except Exception:
@@ -166,12 +169,14 @@ class _CodexAppServerManager:
 
     def _fail_pending(self, message: str) -> None:
         error_payload = {"error": {"message": message}}
-        for waiter in list(self._pending.values()):
+        with self._pending_lock:
+            waiters = list(self._pending.values())
+            self._pending.clear()
+        for waiter in waiters:
             try:
                 waiter.put_nowait(error_payload)
             except Exception:
                 pass
-        self._pending.clear()
         self._broadcast({"method": "__quaid/process_closed__", "params": {"message": message}})
 
     def _read_loop(self) -> None:
@@ -191,7 +196,8 @@ class _CodexAppServerManager:
                 logger.debug("Codex app-server emitted non-JSON line: %s", line)
                 continue
             if isinstance(payload, dict) and "id" in payload:
-                waiter = self._pending.pop(int(payload["id"]), None)
+                with self._pending_lock:
+                    waiter = self._pending.pop(int(payload["id"]), None)
                 if waiter is not None:
                     waiter.put(payload)
                 continue
@@ -209,7 +215,8 @@ class _CodexAppServerManager:
         request_id = self._next_id
         self._next_id += 1
         waiter: "queue.Queue[dict]" = queue.Queue(maxsize=1)
-        self._pending[request_id] = waiter
+        with self._pending_lock:
+            self._pending[request_id] = waiter
         message = {"jsonrpc": "2.0", "id": request_id, "method": method}
         if params is not None:
             message["params"] = params
@@ -218,13 +225,15 @@ class _CodexAppServerManager:
                 proc.stdin.write(json.dumps(message) + "\n")
                 proc.stdin.flush()
         except Exception as exc:
-            self._pending.pop(request_id, None)
+            with self._pending_lock:
+                self._pending.pop(request_id, None)
             raise RuntimeError(f"Failed writing request to Codex app-server: {exc}") from exc
 
         try:
             payload = waiter.get(timeout=timeout)
         except queue.Empty as exc:
-            self._pending.pop(request_id, None)
+            with self._pending_lock:
+                self._pending.pop(request_id, None)
             raise TimeoutError(f"Timed out waiting for Codex app-server response: {method}") from exc
 
         error = payload.get("error") if isinstance(payload, dict) else None
@@ -318,11 +327,15 @@ class _CodexAppServerManager:
                 params = notification.get("params") if isinstance(notification, dict) else None
                 if not isinstance(params, dict):
                     continue
+                if method == "__quaid/process_closed__":
+                    raise RuntimeError(str(params.get("message") or "Codex app-server exited"))
                 note_thread_id = str(params.get("threadId") or "").strip()
                 note_turn_id = str(params.get("turnId") or params.get("turn", {}).get("id") or "").strip()
                 if note_thread_id and note_thread_id != thread_id:
                     continue
                 if note_turn_id and note_turn_id != turn_id:
+                    continue
+                if not note_thread_id and not note_turn_id:
                     continue
 
                 if method == "item/completed":
@@ -346,8 +359,6 @@ class _CodexAppServerManager:
                         "turn_id": turn_id,
                         "thread_path": str(thread.get("path") or ""),
                     }
-                elif method == "__quaid/process_closed__":
-                    raise RuntimeError(str(params.get("message") or "Codex app-server exited"))
         finally:
             self.unregister_listener(listener)
 
@@ -406,11 +417,16 @@ class CodexLLMProvider(LLMProvider):
 
     def _build_prompt(self, messages: list) -> str:
         sections: List[str] = []
+        headings = {
+            "system": "System Instructions",
+            "user": "User Request",
+            "assistant": "Assistant",
+        }
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
             role = str(msg.get("role") or "").strip().lower()
-            if role not in ("system", "user"):
+            if role not in headings:
                 continue
             content = msg.get("content", "")
             if isinstance(content, list):
@@ -424,8 +440,7 @@ class CodexLLMProvider(LLMProvider):
             content = content.strip()
             if not content:
                 continue
-            heading = "System Instructions" if role == "system" else "User Request"
-            sections.append(f"{heading}:\n{content}")
+            sections.append(f"{headings[role]}:\n{content}")
         prompt = "\n\n".join(sections).strip()
         if not prompt:
             raise ValueError("Cannot make Codex app-server call with empty prompt")

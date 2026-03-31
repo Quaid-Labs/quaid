@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import io
+import queue
 import urllib.error
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -24,7 +25,7 @@ from lib.providers import (
     MockEmbeddingsProvider,
 )
 from adaptors.openclaw.providers import GatewayLLMProvider
-from adaptors.codex.providers import CodexLLMProvider
+from adaptors.codex.providers import CodexLLMProvider, _CodexAppServerManager
 
 
 # ---------------------------------------------------------------------------
@@ -1001,6 +1002,30 @@ class TestOpenAICompatibleLLMProvider:
 
         assert result.text == "hello\nworld"
 
+    def test_llm_call_marks_incomplete_responses_as_truncated(self):
+        p = OpenAICompatibleLLMProvider(
+            base_url="https://api.openai.com",
+            api_key="sk-openai-test",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        response_data = {
+            "output_text": "partial",
+            "usage": {"input_tokens": 2, "output_tokens": 1},
+            "model": "gpt-5.4-mini",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+
+        assert result.truncated is True
+
 
 class TestCodexLLMProvider:
     class _FakeManager:
@@ -1062,6 +1087,72 @@ class TestCodexLLMProvider:
         assert call["model"] == "gpt-5.4"
         assert call["effort"] == "high"
         assert call["service_tier"] == "flex"
+
+    def test_prompt_preserves_assistant_history(self):
+        manager = self._FakeManager()
+        provider = CodexLLMProvider(manager=manager)
+        provider.llm_call(
+            [
+                {"role": "user", "content": "Question one"},
+                {"role": "assistant", "content": "Prior answer"},
+                {"role": "user", "content": "Follow up"},
+            ],
+            model_tier="deep",
+        )
+        prompt = manager.calls[0]["prompt"]
+        assert "User Request:\nQuestion one" in prompt
+        assert "Assistant:\nPrior answer" in prompt
+        assert "User Request:\nFollow up" in prompt
+
+
+class TestCodexAppServerManager:
+    def test_run_turn_ignores_broadcast_notifications_without_ids(self):
+        manager = _CodexAppServerManager(binary="/tmp/fake-codex")
+        notifications: "queue.Queue[dict]" = queue.Queue()
+        notifications.put(
+            {
+                "method": "item/completed",
+                "params": {"item": {"type": "agentMessage", "text": "broadcast noise"}},
+            }
+        )
+        notifications.put(
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"type": "agentMessage", "text": "real answer"},
+                },
+            }
+        )
+        notifications.put(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": "thread-1", "turn": {"id": "turn-1"}},
+            }
+        )
+
+        def fake_request(method, params=None, timeout=30.0):
+            if method == "thread/start":
+                return {"thread": {"id": "thread-1", "path": "/tmp/thread-1.jsonl"}}
+            if method == "turn/start":
+                return {"turn": {"id": "turn-1"}}
+            raise AssertionError(f"unexpected request: {method}")
+
+        manager.request = fake_request
+        manager.register_listener = lambda: notifications
+        manager.unregister_listener = lambda listener: None
+
+        result = manager.run_turn(
+            prompt="hi",
+            model="gpt-5.4-mini",
+            effort="none",
+            service_tier="fast",
+            timeout=1.0,
+            cwd="/tmp",
+        )
+
+        assert result["text"] == "real answer"
 
 
 # ---------------------------------------------------------------------------

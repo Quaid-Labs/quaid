@@ -598,6 +598,13 @@ class TestCodexAdapter:
         provider = adapter.get_llm_provider()
         assert isinstance(provider, CodexLLMProvider)
 
+    def test_get_api_key_raises_when_fail_hard_enabled(self, monkeypatch):
+        adapter = CodexAdapter()
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+                adapter.get_api_key("OPENAI_API_KEY")
+
 
 # ---------------------------------------------------------------------------
 # Adapter Selection Tests

@@ -401,12 +401,19 @@ def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcrip
         adapter_id = ""
 
     if sessions_dir:
-        for candidate in Path(sessions_dir).rglob(f"{session_id}.jsonl"):
+        pattern = f"rollout-*{session_id}.jsonl" if adapter_id == "codex" else f"{session_id}.jsonl"
+        for candidate in Path(sessions_dir).rglob(pattern):
             return str(candidate)
 
     if hook_cwd and sessions_dir and adapter_id == "claude-code":
         cwd_encoded = hook_cwd.replace("/", "-")
         return str(Path(sessions_dir) / cwd_encoded / f"{session_id}.jsonl")
+
+    if sessions_dir and adapter_id == "codex":
+        from datetime import datetime
+
+        date_prefix = datetime.now().strftime("%Y/%m/%d")
+        return str(Path(sessions_dir) / date_prefix / f"rollout-pending-{session_id}.jsonl")
 
     if sessions_dir and adapter_id in ("openclaw", "standalone", ""):
         return str(Path(sessions_dir) / f"{session_id}.jsonl")
