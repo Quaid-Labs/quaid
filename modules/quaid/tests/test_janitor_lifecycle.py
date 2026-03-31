@@ -121,6 +121,20 @@ def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
     assert any("Would apply review decisions" in line for line in result.logs)
 
 
+def test_workspace_lifecycle_skips_cleanly_for_codex_adapter(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "core.lifecycle.janitor_lifecycle._resolve_adapter_maintenance_module",
+        lambda default_module="": "adaptors.codex.maintenance",
+    )
+
+    registry = build_default_registry()
+    result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path))
+
+    assert result.errors == []
+    assert result.data["workspace_phase"] == "skipped"
+    assert "Workspace audit not applicable for codex adapter" in result.logs
+
+
 def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
     calls = {"journal": []}
 
