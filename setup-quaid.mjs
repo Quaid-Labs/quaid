@@ -725,6 +725,14 @@ function _isPlatform(name) {
   return false;
 }
 
+function _installerPlatformLabel() {
+  const platform = String(resolvedInstallerPlatform() || "").trim().toLowerCase();
+  if (platform === "openclaw") return "OpenClaw";
+  if (platform === "claude-code") return "Claude Code";
+  if (platform === "codex") return "Codex";
+  return "Standalone mode";
+}
+
 // Python env setup — always set canonical Quaid root, plus workspace hint.
 const PY_ENV_SETUP =
   `os.environ['QUAID_HOME'] = ${JSON.stringify(WORKSPACE)}\n` +
@@ -2017,10 +2025,10 @@ async function step1_preflight() {
     }
     s.stop(C.green("OpenClaw") + " gateway running");
   } else {
-    // --- Standalone mode: ensure workspace directory exists ---
+    // --- Non-OpenClaw installs: ensure workspace directory exists ---
     s.start("Checking workspace directory...");
     fs.mkdirSync(WORKSPACE, { recursive: true });
-    s.stop(C.green("Standalone mode") + C.dim(` — workspace: ${WORKSPACE}`));
+    s.stop(C.green(_installerPlatformLabel()) + C.dim(` — workspace: ${WORKSPACE}`));
   }
 
   // --- Python ---
@@ -4878,6 +4886,7 @@ function notifyInstallCompletion(owner, models, embeddings, systems) {
 }
 
 function notifyInstallWarmupNotice() {
+  if (!_isPlatform("openclaw")) return;
   if (String(process.env.QUAID_INSTALL_NOTIFY_PROGRESS || "1").trim() === "0") return;
   sendInstallerNotification(
     "⏳ Quaid install needs to restart the OpenClaw gateway to apply changes.\n" +
@@ -4912,7 +4921,9 @@ async function main() {
       "Night shift assigned. Warmup can take a minute or two."
     );
     notifyInstallWarmupNotice();
-    log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
+    if (_isPlatform("openclaw")) {
+      log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
+    }
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     notifyInstallCheckpoint(6, TOTAL_INSTALL_STEPS, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
