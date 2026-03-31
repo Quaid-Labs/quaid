@@ -462,6 +462,7 @@ def _apply_quaid(quaid_cfg: Dict[str, Any], dev_root: Path) -> None:
     config.setdefault("plugins", {})
     # Keep runtime-preflight stable even when a minimal/empty template is used.
     config["retrieval"].setdefault("maxLimit", 20)
+    config["retrieval"].setdefault("retry_budget_ms", 8000)
     config["models"].setdefault(
         "fastReasoningModelClasses",
         {

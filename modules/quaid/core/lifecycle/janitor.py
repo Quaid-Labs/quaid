@@ -314,6 +314,18 @@ def _acquire_lock() -> bool:
     """Acquire janitor lock using fcntl.flock (atomic, auto-releases on crash)."""
     global _lock_fd
     import fcntl
+    # Clear stale lock left by a dead process before attempting to acquire.
+    lock_path = _lock_file_path()
+    if lock_path.exists():
+        try:
+            lines = lock_path.read_text().strip().split('\n')
+            stored_pid = int(lines[0])
+            try:
+                os.kill(stored_pid, 0)  # Signal 0: check process exists
+            except (OSError, ProcessLookupError):
+                lock_path.unlink(missing_ok=True)  # Process gone — stale lock
+        except Exception:
+            lock_path.unlink(missing_ok=True)  # Unreadable lock — remove it
     with _lock_guard:
         try:
             _lock_file_path().parent.mkdir(parents=True, exist_ok=True)
