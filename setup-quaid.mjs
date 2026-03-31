@@ -2250,7 +2250,7 @@ async function step3_models() {
 
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
-  let adapterType = _isPlatform("claude-code") ? "claude-code" : _isPlatform("openclaw") ? "openclaw" : "standalone";
+  let adapterType = resolvedInstallerPlatform() || "standalone";
   if (advancedSetup) {
     const adapterOptions = _adapterOptionsForSelect();
     adapterType = handleCancel(await select({
