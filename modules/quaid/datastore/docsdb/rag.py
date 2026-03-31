@@ -312,6 +312,13 @@ class DocsRAG:
                 params.append(_escape_like(rp) + "%")
                 suffixes.update(_path_suffix_candidates(rp, workspace))
             for suffix in sorted(suffixes):
+                # Some adapters index shared project docs with relative paths like
+                # "projects/cross-live-test/..." instead of absolute source paths.
+                # Project-scoped recall must match both shapes.
+                project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                params.append(_escape_like(suffix))
+                project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
+                params.append(f"{_escape_like(suffix)}/%")
                 project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")
                 params.append(f"%/{_escape_like(suffix)}")
                 project_like.append(f"{source_expr} LIKE ? ESCAPE '\\'")

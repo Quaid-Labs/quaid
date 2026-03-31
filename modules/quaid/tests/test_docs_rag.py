@@ -433,6 +433,38 @@ class TestDocsSearchFiltering:
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_filters_by_project_for_relative_project_paths(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("rel:0", "projects/cross-live-test/beacon-maintenance.md", 0, "north pier beacon is offline", "# Beacon", b"e"),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("other:0", "projects/other-test/beacon-maintenance.md", 0, "other beacon", "# Beacon", b"e"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": str(tmp_path / "codex-livetest" / "projects" / "cross-live-test"),
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs("north pier beacon", limit=10, project="cross-live-test")
+
+        assert len(results) == 1
+        assert results[0]["source"] == "projects/cross-live-test/beacon-maintenance.md"
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.70)
     def test_search_docs_skips_context_files_even_if_indexed(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)

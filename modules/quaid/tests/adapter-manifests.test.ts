@@ -66,6 +66,35 @@ describe("adapter manifest registry", () => {
     expect(fs.existsSync(hookPath)).toBe(true);
   });
 
+  it("syncs namespaced built-in hook directories to workspace registry", () => {
+    const workspace = makeTempDir("quaid-adapter-registry-ns-");
+    const installerDir = makeTempDir("quaid-installer-ns-");
+    const builtinsDir = path.join(installerDir, "adaptors", "manifests");
+    fs.mkdirSync(path.join(builtinsDir, "agentbar", "hooks"), { recursive: true });
+    fs.writeFileSync(
+      path.join(builtinsDir, "agentbar.json"),
+      JSON.stringify({
+        schema: ADAPTER_MANIFEST_SCHEMA,
+        id: "agentbar",
+        name: "AgentBar",
+        install: { selectLabel: "AgentBar" },
+        runtime: { python: { module: "agentbar.adapter", class: "AgentBarAdapter" } },
+        scripts: { postinstall: "./hooks/postinstall.sh" },
+      }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(builtinsDir, "agentbar", "hooks", "postinstall.sh"),
+      "#!/bin/sh\necho namespaced\n",
+      "utf8",
+    );
+
+    const copied = syncBuiltinAdapterManifests({ workspace, installerDir });
+    expect(copied.length).toBe(1);
+    const hookPath = path.join(adapterRegistryDir(workspace), "agentbar", "hooks", "postinstall.sh");
+    expect(fs.existsSync(hookPath)).toBe(true);
+  });
+
   it("loads manifests and derives select options", () => {
     const workspace = makeTempDir("quaid-adapter-load-");
     const regDir = path.join(adapterRegistryDir(workspace), "agentfoo");

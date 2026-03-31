@@ -97,7 +97,7 @@ class _CodexAppServerManager:
             return
         binary = self._binary or self._resolve_binary()
         proc = subprocess.Popen(
-            [binary, "app-server", "--listen", "stdio://"],
+            [binary, "app-server", "--disable", "codex_hooks", "--listen", "stdio://"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -207,7 +207,8 @@ class _CodexAppServerManager:
 
     def _request_locked(self, method: str, params: Optional[dict], timeout: float) -> dict:
         if not self._proc_alive():
-            self._start_locked()
+            with self._lock:
+                self._start_locked()
         proc = self._proc
         if proc is None or proc.stdin is None:
             raise RuntimeError("Codex app-server is not available")
@@ -246,9 +247,8 @@ class _CodexAppServerManager:
         return result
 
     def request(self, method: str, params: Optional[dict] = None, timeout: float = 30.0) -> dict:
-        with self._lock:
-            self.ensure_running()
-            return self._request_locked(method, params, timeout)
+        self.ensure_running()
+        return self._request_locked(method, params, timeout)
 
     def register_listener(self) -> "queue.Queue[dict]":
         listener: "queue.Queue[dict]" = queue.Queue()
@@ -269,7 +269,7 @@ class _CodexAppServerManager:
         prompt: str,
         model: str,
         effort: str,
-        service_tier: str,
+        service_tier: str = "",
         timeout: float = 600.0,
         cwd: Optional[str] = None,
     ) -> dict:
@@ -280,8 +280,9 @@ class _CodexAppServerManager:
             "model": model,
             "personality": "pragmatic",
             "sandbox": "danger-full-access",
-            "serviceTier": service_tier,
         }
+        if service_tier:
+            thread_params["serviceTier"] = service_tier
         thread_result = self.request("thread/start", thread_params, timeout=min(timeout, 60.0))
         thread = thread_result.get("thread") if isinstance(thread_result, dict) else None
         if not isinstance(thread, dict):
@@ -293,17 +294,15 @@ class _CodexAppServerManager:
         listener = self.register_listener()
         start_time = time.time()
         try:
-            turn_result = self.request(
-                "turn/start",
-                {
-                    "threadId": thread_id,
-                    "model": model,
-                    "serviceTier": service_tier,
-                    "effort": effort,
-                    "input": [{"type": "text", "text": prompt}],
-                },
-                timeout=min(timeout, 60.0),
-            )
+            turn_params = {
+                "threadId": thread_id,
+                "model": model,
+                "effort": effort,
+                "input": [{"type": "text", "text": prompt}],
+            }
+            if service_tier:
+                turn_params["serviceTier"] = service_tier
+            turn_result = self.request("turn/start", turn_params, timeout=min(timeout, 60.0))
             turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
             if not isinstance(turn, dict):
                 raise RuntimeError("Codex app-server turn/start did not return a turn object")
@@ -454,7 +453,7 @@ class CodexLLMProvider(LLMProvider):
             prompt=prompt,
             model=self._resolve_model(model_tier),
             effort=self._resolve_effort(model_tier),
-            service_tier="fast" if model_tier == "fast" else "flex",
+            service_tier="fast" if model_tier == "fast" else "",
             timeout=timeout,
             cwd=os.getcwd(),
         )

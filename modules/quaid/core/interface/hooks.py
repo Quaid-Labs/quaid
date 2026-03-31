@@ -26,6 +26,7 @@ import re
 import select
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List
@@ -375,6 +376,15 @@ def _get_pending_context() -> str:
     return ""
 
 
+def _current_adapter_id() -> str:
+    try:
+        from lib.adapter import get_adapter
+
+        return str(get_adapter().adapter_id() or "").strip().lower()
+    except Exception:
+        return ""
+
+
 def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcript_path: str = "") -> str:
     """Resolve hook transcript paths across adapter-specific session layouts."""
     session_id = str(session_id or "").strip()
@@ -547,6 +557,152 @@ def hook_extract(args):
         print(f"[quaid][{label}] error: {e}", file=sys.stderr)
 
 
+def _parse_transcript_delta(transcript_path: str, from_line: int) -> tuple[str, int]:
+    """Parse only transcript lines that were appended after the last cursor."""
+    from core.extraction_daemon import read_transcript_slice
+    from lib.adapter import get_adapter
+
+    new_lines = read_transcript_slice(transcript_path, from_line)
+    if not new_lines:
+        return "", 0
+
+    tmp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as tmp:
+            tmp.writelines(new_lines)
+            tmp_path = tmp.name
+        transcript = get_adapter().parse_session_jsonl(Path(tmp_path))
+        return transcript, len(new_lines)
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def hook_codex_stop(args):
+    """Synchronously extract the latest Codex turn on Stop."""
+    try:
+        hook_input = _read_stdin_json()
+    except (json.JSONDecodeError, ValueError):
+        hook_input = {}
+
+    session_id = str(hook_input.get("session_id") or "").strip()
+    transcript_path = _resolve_hook_transcript_path(
+        session_id=session_id,
+        hook_cwd=str(hook_input.get("cwd") or "").strip(),
+        transcript_path=str(hook_input.get("transcript_path") or "").strip(),
+    )
+
+    if not session_id or not transcript_path:
+        print("{}")
+        return
+
+    transcript_path = os.path.expanduser(transcript_path)
+    if not os.path.isfile(transcript_path):
+        _write_hook_trace("hook.codex.stop.transcript_missing", {
+            "session_id": session_id,
+            "transcript_path": transcript_path,
+        })
+        print("{}")
+        return
+
+    try:
+        from core.extraction_daemon import count_transcript_lines, read_cursor, write_cursor
+        from core.ingest_runtime import run_extract_from_transcript, run_session_logs_ingest
+        from core.runtime.notify import notify_memory_extraction
+
+        owner = _get_owner_id()
+        cursor = read_cursor(session_id)
+        cursor_offset = int(cursor.get("line_offset", 0) or 0)
+        cursor_transcript = str(cursor.get("transcript_path") or "").strip()
+        if not cursor_transcript or cursor_transcript != transcript_path:
+            write_cursor(session_id, cursor_offset, transcript_path)
+
+        total_lines = count_transcript_lines(transcript_path)
+        if total_lines <= cursor_offset:
+            _write_hook_trace("hook.codex.stop.no_new_content", {
+                "session_id": session_id,
+                "cursor_offset": cursor_offset,
+                "total_lines": total_lines,
+            })
+            print("{}")
+            return
+
+        transcript_text, new_line_count = _parse_transcript_delta(transcript_path, cursor_offset)
+        if new_line_count <= 0:
+            _write_hook_trace("hook.codex.stop.empty_slice", {
+                "session_id": session_id,
+                "cursor_offset": cursor_offset,
+                "total_lines": total_lines,
+            })
+            print("{}")
+            return
+
+        result = {}
+        if transcript_text.strip():
+            result = run_extract_from_transcript(
+                transcript=transcript_text,
+                owner_id=owner,
+                label="codex-stop",
+                dry_run=False,
+            )
+
+            try:
+                notify_memory_extraction(
+                    facts_stored=int(result.get("facts_stored", 0) or 0),
+                    facts_skipped=int(result.get("facts_skipped", 0) or 0),
+                    edges_created=int(result.get("edges_created", 0) or 0),
+                    trigger="codex_stop",
+                    details=result.get("facts"),
+                    snippet_details=result.get("snippets"),
+                )
+            except Exception as notify_exc:
+                print(f"[quaid][codex-stop] notification failed: {notify_exc}", file=sys.stderr)
+
+        try:
+            run_session_logs_ingest(
+                session_id=session_id,
+                owner_id=owner,
+                label="codex-stop",
+                transcript_path=str(transcript_path),
+                message_count=new_line_count,
+                topic_hint=str(result.get("topic_hint") or ""),
+            )
+        except Exception as ingest_exc:
+            print(f"[quaid][codex-stop] session log ingest failed: {ingest_exc}", file=sys.stderr)
+
+        write_cursor(session_id, cursor_offset + new_line_count, transcript_path)
+        _write_hook_trace("hook.codex.stop.processed", {
+            "session_id": session_id,
+            "transcript_path": transcript_path,
+            "cursor_offset": cursor_offset,
+            "processed_lines": new_line_count,
+            "facts_stored": int(result.get("facts_stored", 0) or 0),
+            "facts_skipped": int(result.get("facts_skipped", 0) or 0),
+            "edges_created": int(result.get("edges_created", 0) or 0),
+        })
+        print("{}")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+
+            if is_fail_hard_enabled():
+                raise
+        except RuntimeError:
+            raise
+        _write_hook_trace("hook.codex.stop.error", {
+            "session_id": session_id,
+            "transcript_path": transcript_path,
+            "error": str(exc),
+        })
+        print(f"[quaid][codex-stop] error: {exc}", file=sys.stderr)
+        print("{}")
+
+
 def _check_janitor_health() -> str:
     """Check if the janitor has run recently. Returns a warning string or empty."""
     try:
@@ -630,6 +786,7 @@ def hook_session_init(args):
         hook_input = {}
 
     current_session_id = hook_input.get("session_id", "")
+    adapter_id = _current_adapter_id()
 
     # Refresh the adapter's auth token from the session-scoped CC OAuth token.
     # CLAUDE_CODE_OAUTH_TOKEN is a properly API-scoped token that CC injects
@@ -654,13 +811,8 @@ def hook_session_init(args):
     # duplicate daemon processes).
     try:
         from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
-        try:
-            from lib.adapter import get_adapter as _ga
-            _adapter_id = type(_ga()).__name__.lower()
-        except Exception:
-            _adapter_id = ""
-        _gateway_managed = "openclaw" in _adapter_id
-        if not _gateway_managed:
+        _daemon_externally_managed = adapter_id in ("openclaw", "codex")
+        if not _daemon_externally_managed:
             try:
                 ensure_alive()
             except Exception as e:
@@ -802,6 +954,18 @@ def hook_session_init(args):
     except Exception:
         pass
 
+    content = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
+
+    if adapter_id == "codex":
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": content,
+            }
+        }))
+        print("[quaid][session-init] emitted Codex startup context", file=sys.stderr)
+        return
+
     # 4. Write to .claude/rules/ so Claude Code caches it and preserves
     #    through compaction. The file is regenerated on each session start
     #    to pick up any project doc changes.
@@ -817,7 +981,6 @@ def hook_session_init(args):
     rules_dir.mkdir(parents=True, exist_ok=True)
 
     rules_file = rules_dir / "quaid-projects.md"
-    content = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
 
     # Only write if content changed (avoid unnecessary file churn)
     try:
@@ -923,6 +1086,7 @@ def main():
     subparsers.add_parser("inject", help="Recall + inject memories for a user message")
     subparsers.add_parser("inject-compact", help="Re-inject memories after compaction")
     subparsers.add_parser("session-init", help="Inject project docs at session start")
+    subparsers.add_parser("codex-stop", help="Synchronously extract the latest Codex turn")
 
     extract_parser = subparsers.add_parser("extract", help="Extract knowledge from transcript")
     extract_parser.add_argument(
@@ -941,6 +1105,8 @@ def main():
         hook_inject_compact(args)
     elif args.command == "session-init":
         hook_session_init(args)
+    elif args.command == "codex-stop":
+        hook_codex_stop(args)
     elif args.command == "extract":
         hook_extract(args)
     elif args.command == "subagent-start":

@@ -30,21 +30,21 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 2. **Throwaway / one-off / scratch / quick / hello-world** → write it to the misc project:
    ```bash
    # The misc project is pre-created. Write directly to its directory:
-   ~/.openclaw/extensions/quaid/quaid project show misc--$QUAID_INSTANCE  # confirm path
+   $QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE  # confirm path
    # Then write your file there, e.g.:
    # ~/quaid/projects/misc--$QUAID_INSTANCE/hello.py
    ```
    Always tell the user you wrote to misc and offer to promote to a real project.
 3. **Durable new work** → create a project first, then write files:
    ```bash
-   ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
+   $QUAID_HOME/plugins/quaid/quaid registry create-project <name> --source-roots <path>
    # THEN write files / spawn sub-agents
    ```
 4. **User specifies a path outside the project system** → write there, then register the file so the project tracks it:
    ```bash
    # Write the file at the user's requested path (e.g. ~/my-scripts/tool.py)
    # Then link it into the owning project:
-   ~/.openclaw/extensions/quaid/quaid registry register ~/my-scripts/tool.py --project <name>
+   $QUAID_HOME/plugins/quaid/quaid registry register ~/my-scripts/tool.py --project <name>
    ```
    Always tell the user the file is tracked via the registry even though it lives outside the project directory.
 
@@ -54,7 +54,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 Correct response:
 ```bash
 # Step 1: confirm misc project path
-~/.openclaw/extensions/quaid/quaid project show misc--$QUAID_INSTANCE
+$QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE
 # Step 2: write the file inside that project
 # e.g. write to ~/quaid/projects/misc--$QUAID_INSTANCE/hello.py
 ```
@@ -67,7 +67,7 @@ Do NOT write to `/tmp/hello.py` or any other path.
 Correct response:
 ```bash
 # Step 1: create a project BEFORE doing any work or spawning sub-agents
-~/.openclaw/extensions/quaid/quaid registry create-project my-cli-tool --source-roots /path/to/script
+$QUAID_HOME/plugins/quaid/quaid registry create-project my-cli-tool --source-roots /path/to/script
 # Step 2: then proceed with the work
 ```
 
@@ -75,7 +75,7 @@ Correct response:
 
 ## Tool Access
 
-Use the `quaid` CLI via your Bash tool. `QUAID_HOME` and `QUAID_INSTANCE` are set in your environment by the adapter — do not override them. See `TOOLS.md` for the full command reference.
+Use Quaid via your Bash tool. Prefer `$QUAID_HOME/plugins/quaid/quaid`; some hosts do not place `quaid` on `PATH`. `QUAID_HOME` and `QUAID_INSTANCE` are set in your environment by the adapter — do not override them. See `TOOLS.md` for the full command reference.
 
 ---
 

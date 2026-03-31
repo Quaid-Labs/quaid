@@ -1069,7 +1069,7 @@ class TestCodexLLMProvider:
         assert "System Instructions:\nsys" in call["prompt"]
         assert "User Request:\nhi" in call["prompt"]
 
-    def test_deep_lane_uses_deep_model_high_and_flex_service_tier(self):
+    def test_deep_lane_uses_deep_model_high_without_service_tier_override(self):
         manager = self._FakeManager()
         provider = CodexLLMProvider(
             deep_model="gpt-5.4",
@@ -1086,7 +1086,7 @@ class TestCodexLLMProvider:
         call = manager.calls[0]
         assert call["model"] == "gpt-5.4"
         assert call["effort"] == "high"
-        assert call["service_tier"] == "flex"
+        assert call["service_tier"] == ""
 
     def test_prompt_preserves_assistant_history(self):
         manager = self._FakeManager()
@@ -1106,6 +1106,103 @@ class TestCodexLLMProvider:
 
 
 class TestCodexAppServerManager:
+    def test_start_locked_disables_hooks_for_sidecar(self, monkeypatch):
+        class _FakeProc:
+            def __init__(self):
+                self.stdin = MagicMock()
+                self.stdout = MagicMock()
+                self.stderr = MagicMock()
+
+            def poll(self):
+                return None
+
+        class _FakeThread:
+            def __init__(self, target=None, name=None, daemon=None):
+                self.target = target
+                self.name = name
+                self.daemon = daemon
+
+            def start(self):
+                return None
+
+        observed = {}
+
+        def fake_popen(args, **kwargs):
+            observed["args"] = list(args)
+            observed["kwargs"] = kwargs
+            return _FakeProc()
+
+        manager = _CodexAppServerManager(binary="/tmp/fake-codex")
+        monkeypatch.setattr("adaptors.codex.providers.subprocess.Popen", fake_popen)
+        monkeypatch.setattr("adaptors.codex.providers.threading.Thread", _FakeThread)
+        monkeypatch.setattr(manager, "_initialize_locked", lambda: None)
+
+        manager._start_locked()
+
+        assert observed["args"] == [
+            "/tmp/fake-codex",
+            "app-server",
+            "--disable",
+            "codex_hooks",
+            "--listen",
+            "stdio://",
+        ]
+
+    def test_run_turn_omits_service_tier_when_not_requested(self):
+        manager = _CodexAppServerManager(binary="/tmp/fake-codex")
+        notifications: "queue.Queue[dict]" = queue.Queue()
+        notifications.put(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": "thread-1", "turn": {"id": "turn-1"}},
+            }
+        )
+        observed = {}
+
+        def fake_request(method, params=None, timeout=30.0):
+            observed.setdefault(method, []).append(dict(params or {}))
+            if method == "thread/start":
+                return {"thread": {"id": "thread-1", "path": "/tmp/thread-1.jsonl"}}
+            if method == "turn/start":
+                return {"turn": {"id": "turn-1"}}
+            raise AssertionError(f"unexpected request: {method}")
+
+        manager.request = fake_request
+        manager.register_listener = lambda: notifications
+        manager.unregister_listener = lambda listener: None
+
+        manager.run_turn(
+            prompt="hi",
+            model="gpt-5.4",
+            effort="high",
+            service_tier="",
+            timeout=1.0,
+            cwd="/tmp",
+        )
+
+        assert "serviceTier" not in observed["thread/start"][0]
+        assert "serviceTier" not in observed["turn/start"][0]
+
+    def test_request_does_not_hold_state_lock_while_waiting(self):
+        manager = _CodexAppServerManager(binary="/tmp/fake-codex")
+        observed = {}
+
+        manager.ensure_running = lambda: None
+
+        def fake_request_locked(method, params=None, timeout=30.0):
+            observed["method"] = method
+            owned = getattr(manager._lock, "_is_owned", lambda: None)()
+            observed["lock_owned"] = owned
+            return {"ok": True}
+
+        manager._request_locked = fake_request_locked
+
+        result = manager.request("turn/start", {"threadId": "thread-1"}, timeout=5.0)
+
+        assert result == {"ok": True}
+        assert observed["method"] == "turn/start"
+        assert observed["lock_owned"] is False
+
     def test_run_turn_ignores_broadcast_notifications_without_ids(self):
         manager = _CodexAppServerManager(binary="/tmp/fake-codex")
         notifications: "queue.Queue[dict]" = queue.Queue()

@@ -74,9 +74,13 @@ export function syncBuiltinAdapterManifests({ workspace, installerDir }) {
     const destPath = path.join(destDir, "adapter.json");
     fs.mkdirSync(destDir, { recursive: true });
     fs.copyFileSync(srcPath, destPath);
-    const srcHooksDir = path.join(path.dirname(srcPath), "hooks");
+    const srcHooksDirCandidates = [
+      path.join(path.dirname(srcPath), "hooks"),
+      path.join(path.dirname(srcPath), id, "hooks"),
+    ];
     const destHooksDir = path.join(destDir, "hooks");
-    if (fs.existsSync(srcHooksDir) && fs.statSync(srcHooksDir).isDirectory()) {
+    const srcHooksDir = srcHooksDirCandidates.find((d) => fs.existsSync(d) && fs.statSync(d).isDirectory());
+    if (srcHooksDir) {
       fs.mkdirSync(destHooksDir, { recursive: true });
       fs.cpSync(srcHooksDir, destHooksDir, { recursive: true, force: true });
     }

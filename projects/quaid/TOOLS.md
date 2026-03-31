@@ -1,8 +1,8 @@
 # Quaid — Tool Usage Guide
 
-Quaid is an active knowledge layer. Use the `quaid` CLI via your Bash tool — no tool registration needed.
+Quaid is an active knowledge layer. Use the Quaid CLI via your Bash tool — no tool registration needed. Prefer `$QUAID_HOME/plugins/quaid/quaid`; use plain `quaid` only if it is already on `PATH`.
 
-**Environment:** `QUAID_HOME` and `QUAID_INSTANCE` are baked into hooks at install time. If calling `quaid` from a shell outside of a hook, ensure both are set.
+**Environment:** `QUAID_HOME` and `QUAID_INSTANCE` are baked into hooks at install time. If calling the CLI from a shell outside of a hook, ensure both are set.
 
 **For full project docs, architecture, and reference index:** every tracked project has its own `PROJECT.md` at `QUAID_HOME/projects/<project-name>/PROJECT.md`. Read the relevant project's `PROJECT.md` first. If you do not know the project name yet, docs recall/search will try to infer it and surface the best matching `PROJECT.md`.
 
