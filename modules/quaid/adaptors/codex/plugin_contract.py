@@ -20,7 +20,7 @@ class CodexAdapterPluginContract(PluginContractBase):
 
     def on_config(self, ctx: PluginHookContext) -> None:
         adapter_type = str(getattr(getattr(ctx.config, "adapter", None), "type", "") or "").strip().lower()
-        if adapter_type and adapter_type not in ("codex",):
+        if adapter_type and adapter_type not in ("codex", "codex-cli", "codex_cli"):
             raise ValueError(
                 f"codex adapter plugin active but adapter.type={adapter_type!r} (expected 'codex')"
             )

@@ -37,6 +37,7 @@ function parseInstallArgs(argv) {
   const opts = {
     workspace: "",
     ownerName: "",
+    adapter: "",
     source: "",
     ref: "",
     githubRepo: "",
@@ -166,6 +167,25 @@ function parseInstallArgs(argv) {
       }
       continue;
     }
+    if (arg === "--adapter") {
+      const next = argv[i + 1] || "";
+      if (!next || next.startsWith("--")) {
+        opts.errors.push("--adapter requires a value");
+      } else {
+        opts.adapter = next;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--adapter=")) {
+      const value = arg.slice("--adapter=".length);
+      if (!value) {
+        opts.errors.push("--adapter requires a non-empty value");
+      } else {
+        opts.adapter = value;
+      }
+      continue;
+    }
     if (arg === "--claude-code") {
       opts.claudeCode = true;
       continue;
@@ -185,6 +205,7 @@ function printUsageAndExit() {
 Options:
   --workspace <path>  Override workspace/home path (highest priority)
   --owner-name <name> Person name used to tag memories (recommended for --agent)
+  --adapter <id>      Force adapter/platform id (e.g. standalone, claude-code, openclaw, codex)
   --source <kind>     Plugin source: local (default), github, artifact
   --ref <git-ref>     Git ref/commit to install when --source github
   --github-repo <r>   GitHub repo for github source (default: quaid-labs/quaid)
@@ -204,6 +225,12 @@ if (INSTALL_ARGS.errors.length) {
   console.error("    Use --help for usage.");
   process.exit(2);
 }
+const FORCED_ADAPTER_TYPE = String(
+  INSTALL_ARGS.adapter
+  || process.env.QUAID_ADAPTER_TYPE
+  || process.env.QUAID_INSTALL_ADAPTER_TYPE
+  || ""
+).trim().toLowerCase();
 const INSTALL_SOURCE = String(INSTALL_ARGS.source || process.env.QUAID_INSTALL_SOURCE || "local").trim().toLowerCase();
 const INSTALL_REF = String(INSTALL_ARGS.ref || process.env.QUAID_INSTALL_REF || "main").trim();
 const INSTALL_GITHUB_REPO = String(INSTALL_ARGS.githubRepo || process.env.QUAID_INSTALL_GITHUB_REPO || "quaid-labs/quaid").trim();
@@ -386,6 +413,7 @@ function _adapterOptionsForSelect() {
     { value: "standalone", label: "Standalone", hint: "local-only runtime (default)" },
     { value: "claude-code", label: "Claude Code", hint: "hooks + OAuth for Claude Code CLI" },
     { value: "openclaw", label: "OpenClaw", hint: "gateway-integrated runtime" },
+    { value: "codex", label: "Codex", hint: "hooks + app-server sidecar runtime" },
   ];
 }
 
@@ -532,9 +560,9 @@ const OLLAMA_BASE_URL = (process.env.OLLAMA_URL || "http://localhost:11434")
 const OLLAMA_TAGS_URL = `${OLLAMA_BASE_URL}/api/tags`;
 const OLLAMA_PS_URL = `${OLLAMA_BASE_URL}/api/ps`;
 
-// Mutable platform override — set by interactive platform selection prompt.
+// Mutable platform override — set by CLI/env override or interactive platform selection prompt.
 // Allows the prompt to override IS_OPENCLAW / IS_CLAUDE_CODE after they're set.
-let _platformOverride = "";
+let _platformOverride = FORCED_ADAPTER_TYPE;
 
 // Mutable instance ID override — set by the instance ID prompt in step1().
 // Takes precedence over the adapter-derived default.
@@ -848,7 +876,7 @@ if (!clack) {
 
 if (!clack) {
   console.error(C.red("[x] Could not find @clack/prompts."));
-  if (IS_OPENCLAW) {
+  if (_isPlatform("openclaw")) {
     console.error("    Make sure OpenClaw is installed: npm install -g openclaw");
   } else {
     console.error("    Install it: npm install @clack/prompts");
@@ -1018,7 +1046,7 @@ function _gatewayServiceLooksStopped(snapshot) {
 }
 
 async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
-  if (!IS_OPENCLAW || !cli) return;
+  if (!_isPlatform("openclaw") || !cli) return;
   if (await waitForGatewayWarmup(timeoutMs)) return;
 
   // The gateway may have come up during the warmup window but just missed the
@@ -2349,11 +2377,11 @@ async function step3_models() {
   } else {
     log.info(C.dim("Notifications: normal (recommended)"));
   }
-  const pinnedNotifyRoute = IS_OPENCLAW ? resolvePinnedNotificationRoute() : null;
+  const pinnedNotifyRoute = _isPlatform("openclaw") ? resolvePinnedNotificationRoute() : null;
   const notifChannel = pinnedNotifyRoute?.channel || "last_used";
-  if (IS_OPENCLAW && pinnedNotifyRoute?.channel) {
+  if (_isPlatform("openclaw") && pinnedNotifyRoute?.channel) {
     log.info(C.dim(`Notifications will be pinned to the OpenClaw channel '${pinnedNotifyRoute.channel}' during install.`));
-  } else if (IS_OPENCLAW) {
+  } else if (_isPlatform("openclaw")) {
     log.warn("No active OpenClaw notification route detected; falling back to last_used until a channel is established.");
   }
   log.info(C.dim("You can ask your agent to change notification routing or level anytime."));
@@ -3476,7 +3504,7 @@ except Exception as e:
   spawnSync("python3", ["-c", storeScript], { cwd: PLUGIN_DIR, stdio: "pipe" });
   s.stop(C.green(`Owner node: ${owner.display}`));
 
-  if (IS_OPENCLAW) {
+  if (_isPlatform("openclaw")) {
     s.start("Registering Quaid plugin in OpenClaw...");
     const reg = _registerOpenClawQuaidPlugin(PLUGIN_DIR);
     if (!reg.ok) {
@@ -3512,7 +3540,7 @@ except Exception as e:
     }));
     if (doMigrate) {
       const useMockCheck = process.env.QUAID_TEST_MOCK_MIGRATION === "1";
-      if (IS_OPENCLAW && !useMockCheck) {
+      if (_isPlatform("openclaw") && !useMockCheck) {
         log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
         await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "workspace migration");
       }
@@ -3851,7 +3879,7 @@ c.close()
   // Gateway must be reachable before the smoke test. Give it a short window to settle
   // after any install-triggered restart before bailing — a genuinely missing gateway
   // is an OpenClaw problem, not a Quaid install problem.
-  if (IS_OPENCLAW) {
+  if (_isPlatform("openclaw")) {
     if (!(await waitForGatewayWarmup(15_000))) {
       cancel(
         "OpenClaw gateway is not running or not reachable.\n" +
@@ -4264,7 +4292,14 @@ async function tryBrewInstall(pkg, label) {
 }
 
 function writeConfig(owner, models, embeddings, systems, janitorPolicies = null) {
-  const resolvedAdapterType = models.adapterType || (_isPlatform("claude-code") ? "claude-code" : _isPlatform("openclaw") ? "openclaw" : "standalone");
+  const resolvedAdapterType = models.adapterType || resolvedInstallerPlatform() || "standalone";
+  const adapterPluginId = resolvedAdapterType === "openclaw"
+    ? "openclaw.adapter"
+    : resolvedAdapterType === "claude-code"
+      ? "claude_code.adapter"
+      : resolvedAdapterType === "codex"
+        ? "codex.adapter"
+        : "";
   const policies = janitorPolicies || {
     coreMarkdownWrites: "ask",
     projectDocsWrites: "ask",
@@ -4280,9 +4315,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       // Include module path explicitly; pathlib rglob does not reliably recurse
       // into symlinked plugin dirs across environments.
       paths: ["modules/quaid", "plugins"],
-      allowList: ["memorydb.core", "docsdb.core", "core.extract", "openclaw.adapter", "claude_code.adapter"],
+      allowList: ["memorydb.core", "docsdb.core", "core.extract", "openclaw.adapter", "claude_code.adapter", "codex.adapter"],
       slots: {
-        adapter: resolvedAdapterType === "openclaw" ? "openclaw.adapter" : resolvedAdapterType === "claude-code" ? "claude_code.adapter" : "",
+        adapter: adapterPluginId,
         ingest: ["core.extract"],
         dataStores: ["memorydb.core", "docsdb.core"],
       },
@@ -4641,7 +4676,7 @@ function _gatewayHttpCode(pathname, method = "GET", body = null) {
 }
 
 async function waitForGatewayWarmup(timeoutMs = 12000) {
-  if (!IS_OPENCLAW || !canRun("curl")) return true;
+  if (!_isPlatform("openclaw") || !canRun("curl")) return true;
   const startedAt = Date.now();
   let nextHeartbeatAt = startedAt + 30_000;
   const deadline = Date.now() + Math.max(1000, timeoutMs);
@@ -4746,7 +4781,7 @@ function resolvePinnedNotificationRoute() {
 }
 
 function sendInstallerNotification(message) {
-  if (!AGENT_MODE || !IS_OPENCLAW) return false;
+  if (!AGENT_MODE || !_isPlatform("openclaw")) return false;
   if (String(process.env.QUAID_INSTALL_NOTIFY || "1").trim() === "0") return false;
 
   const cli = _resolveInstallerMessageCli();
