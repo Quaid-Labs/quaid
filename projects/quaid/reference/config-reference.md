@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `a5757a57c451`
+Source hash: `45852e4be428`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -18,7 +18,7 @@ Notes:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `adapter.type` | `str` | `"standalone"` | standalone \| openclaw |
+| `adapter.type` | `str` | `"standalone"` | standalone \| openclaw \| claude-code \| codex |
 
 ## `capture`
 
@@ -152,6 +152,8 @@ Notes:
 | `models.embeddings_provider` | `str` | `"ollama"` | "ollama" (default) or adapter/provider-specific ID |
 | `models.fast_reasoning` | `str` | `"default"` |  |
 | `models.deep_reasoning` | `str` | `"default"` |  |
+| `models.fast_reasoning_effort` | `str` | `"none"` |  |
+| `models.deep_reasoning_effort` | `str` | `"high"` |  |
 | `models.deep_reasoning_model_classes` | `dict[str, str]` | `{}` |  |
 | `models.fast_reasoning_model_classes` | `dict[str, str]` | `{}` |  |
 | `models.fast_reasoning_context` | `int` | `200000` |  |
