@@ -32,6 +32,8 @@ from lib.providers import (
 from adaptors.openclaw.adapter import OpenClawAdapter
 from adaptors.openclaw.providers import GatewayLLMProvider
 from adaptors.claude_code.adapter import ClaudeCodeAdapter
+from adaptors.codex.adapter import CodexAdapter
+from adaptors.codex.providers import CodexLLMProvider
 
 
 def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
@@ -214,6 +216,10 @@ class TestStandaloneAdapter:
         assert "anthropic" in standalone.installer_supported_providers()
         defaults = standalone.installer_default_models("anthropic")
         assert defaults == {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
+        assert standalone.installer_default_models("openai") == {
+            "deep": "gpt-5.4",
+            "fast": "gpt-5.4-mini",
+        }
         assert standalone.get_deep_provider_default() == "anthropic"
         assert standalone.get_fast_provider_default() == "anthropic"
 
@@ -502,6 +508,10 @@ class TestOpenClawAdapter:
             "deep": "claude-sonnet-4-5",
             "fast": "claude-haiku-4-5",
         }
+        assert adapter.installer_default_models("openai") == {
+            "deep": "gpt-5.4",
+            "fast": "gpt-5.4-mini",
+        }
         assert adapter.get_deep_provider_default() == "anthropic"
         assert adapter.get_fast_provider_default() == "anthropic"
 
@@ -517,6 +527,76 @@ class TestClaudeCodeAdapter:
         assert adapter.get_deep_provider_default() == "anthropic"
         assert adapter.get_fast_provider_default() == "anthropic"
         assert adapter.installer_default_models("openai") is None
+
+
+class TestCodexAdapter:
+    def test_installer_provider_surface_is_openai_models(self):
+        adapter = CodexAdapter()
+        assert adapter.installer_supported_providers() == ["openai"]
+        assert adapter.installer_default_models("openai") == {
+            "deep": "gpt-5.4",
+            "fast": "gpt-5.4-mini",
+        }
+        assert adapter.get_deep_provider_default() == "openai"
+        assert adapter.get_fast_provider_default() == "openai"
+
+    def test_get_sessions_dir(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / ".codex" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        adapter = CodexAdapter()
+        assert adapter.get_sessions_dir() == sessions_dir
+
+    def test_get_session_path_finds_nested_rollout(self, tmp_path, monkeypatch):
+        session_id = "019d4367-1794-7fc2-84f3-bb30ba99a24f"
+        session_file = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "03"
+            / "31"
+            / f"rollout-2026-03-31T18-18-42-{session_id}.jsonl"
+        )
+        session_file.parent.mkdir(parents=True)
+        session_file.write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        adapter = CodexAdapter()
+        assert adapter.get_session_path(session_id) == session_file
+
+    def test_parse_session_jsonl_prefers_event_messages(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "First user"}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "First answer"}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "First answer"}}),
+                    json.dumps(
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "fallback answer"}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "User: First user" in transcript
+        assert "Assistant: First answer" in transcript
+        assert transcript.count("Assistant: First answer") == 1
+        assert "fallback answer" not in transcript
+
+    def test_get_llm_provider_returns_codex_provider(self):
+        adapter = CodexAdapter()
+        provider = adapter.get_llm_provider()
+        assert isinstance(provider, CodexLLMProvider)
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +617,12 @@ class TestAdapterSelection:
         monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
         adapter = get_adapter()
         assert isinstance(adapter, OpenClawAdapter)
+
+    def test_config_codex(self, monkeypatch, tmp_path):
+        _write_adapter_config(tmp_path, "codex")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        adapter = get_adapter()
+        assert isinstance(adapter, CodexAdapter)
 
     def test_missing_adapter_raises(self, monkeypatch, tmp_path):
         reset_adapter()
@@ -983,6 +1069,8 @@ class TestProviderFactoryMethods:
                 deep_reasoning_provider="default",
                 deep_reasoning="gpt-4o-mini",
                 fast_reasoning="gpt-4o-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
                 deep_reasoning_model_classes={},
                 fast_reasoning_model_classes={},
                 base_url="",
@@ -993,6 +1081,8 @@ class TestProviderFactoryMethods:
             llm = standalone.get_llm_provider()
         assert isinstance(llm, OpenAICompatibleLLMProvider)
         assert llm._base_url == "https://api.openai.com"
+        assert llm._deep_reasoning_effort == "high"
+        assert llm._fast_reasoning_effort == "none"
 
     def test_standalone_raises_without_any_provider(self, standalone, monkeypatch):
         """StandaloneAdapter raises when config requires anthropic but no key."""

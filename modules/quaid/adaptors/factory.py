@@ -13,11 +13,14 @@ def create_adapter(kind: str) -> "QuaidAdapter":
     if normalized == "openclaw":
         from adaptors.openclaw.adapter import OpenClawAdapter
         return OpenClawAdapter()
+    if normalized == "codex":
+        from adaptors.codex.adapter import CodexAdapter
+        return CodexAdapter()
     if normalized in ("claude_code", "claudecode"):
         from adaptors.claude_code.adapter import ClaudeCodeAdapter
         return ClaudeCodeAdapter()
     raise RuntimeError(
         f"Unsupported adapter type for adaptors.factory: {kind!r}. "
-        "Supported: 'openclaw', 'claude-code'. "
+        "Supported: 'openclaw', 'codex', 'claude-code'. "
         "'standalone' is handled in lib.adapter.get_adapter()."
     )

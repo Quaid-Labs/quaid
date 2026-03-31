@@ -1508,7 +1508,7 @@ PY
   fi
 fi
 
-# Patch Quaid LLM models to cheapest tier after installer (which defaults to gpt-4o/gpt-4o-mini).
+# Patch Quaid LLM models to cheapest tier after installer (which defaults to gpt-5.4/gpt-5.4-mini).
 # The gateway only allows models that match its config; mismatch causes "model not allowed" errors.
 # Must patch BOTH workspace-level and instance-level configs.
 for _cfg in "$MEMORY_CFG" "${_iroot}/config/memory.json"; do

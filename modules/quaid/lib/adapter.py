@@ -12,6 +12,7 @@ Built-in adapters currently include:
 - Additional host-specific adapters from `adaptors/` (for gateway/runtime integrations)
   - OpenClawAdapter: for OpenClaw gateway runtime
   - ClaudeCodeAdapter: for Claude Code sessions (hooks + CLI)
+  - CodexAdapter: for Codex CLI/app sessions (hooks + app-server sidecar)
 
 Adapter selection (get_adapter()):
 1. config/memory.json adapter type  (required)
@@ -579,6 +580,8 @@ class StandaloneAdapter(QuaidAdapter):
         cfg = get_config()
         deep_model = getattr(cfg.models, "deep_reasoning", "default")
         fast_model = getattr(cfg.models, "fast_reasoning", "default")
+        deep_effort = getattr(cfg.models, "deep_reasoning_effort", "high")
+        fast_effort = getattr(cfg.models, "fast_reasoning_effort", "none")
         provider_id = cfg.models.llm_provider
         if model_tier == "fast":
             fast_provider = getattr(cfg.models, "fast_reasoning_provider", "default")
@@ -655,6 +658,8 @@ class StandaloneAdapter(QuaidAdapter):
                 base_url=base_url, api_key=api_key,
                 deep_model=resolved_deep,
                 fast_model=resolved_fast,
+                deep_reasoning_effort=deep_effort,
+                fast_reasoning_effort=fast_effort,
             )
 
         if provider_id == "claude-code":
@@ -713,7 +718,7 @@ class StandaloneAdapter(QuaidAdapter):
         if p == "anthropic":
             return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
         if p in ("openai", "openrouter", "together"):
-            return {"deep": "gpt-4o", "fast": "gpt-4o-mini"}
+            return {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"}
         if p == "ollama":
             return {"deep": "llama3.1:70b", "fast": "llama3.1:8b"}
         return None
@@ -1030,6 +1035,13 @@ def _adapter_config_paths() -> List[Path]:
             paths.append(
                 Path(home) / f"claude-code-{_slug}" / "config" / "memory.json"
             )
+        _codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
+        if _codex_project_dir:
+            from lib.instance import instance_slug_from_project_dir
+            _slug = instance_slug_from_project_dir(_codex_project_dir)
+            paths.append(
+                Path(home) / f"codex-{_slug}" / "config" / "memory.json"
+            )
 
     # Legacy: flat QUAID_HOME/config/memory.json
     if home:
@@ -1109,6 +1121,8 @@ def _infer_adapter_type_from_instance(instance_id: str) -> str:
     """
     if instance_id.startswith("openclaw-") or instance_id == "openclaw":
         return "openclaw"
+    if instance_id.startswith("codex-") or instance_id == "codex":
+        return "codex"
     if instance_id.startswith("claude-code-") or instance_id in ("claude-code", "claude_code"):
         return "claude-code"
     return ""
@@ -1133,13 +1147,20 @@ def _auto_provision_from_env_if_needed() -> None:
     # and ClaudeCodeAdapter.get_instance_name).  Setting QUAID_INSTANCE here means
     # the silo is provisioned and _bootstrap_instance_env won't override it later.
     if home and not instance:
-        _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
-        if _cpd:
-            from lib.instance import instance_slug_from_project_dir
-            _slug = instance_slug_from_project_dir(_cpd)
+        from lib.instance import instance_slug_from_project_dir
+
+        for env_name, prefix in (
+            ("CLAUDE_PROJECT_DIR", "claude-code"),
+            ("CODEX_PROJECT_DIR", "codex"),
+        ):
+            project_dir = os.environ.get(env_name, "").strip()
+            if not project_dir:
+                continue
+            _slug = instance_slug_from_project_dir(project_dir)
             if _slug:
-                instance = f"claude-code-{_slug}"
+                instance = f"{prefix}-{_slug}"
                 os.environ["QUAID_INSTANCE"] = instance
+                break
 
     if not home or not instance:
         return
@@ -1163,7 +1184,7 @@ def _auto_provision_from_env_if_needed() -> None:
             def adapter_id(self):  # type: ignore[override]
                 return adapter_type
             def agent_id_prefix(self):  # type: ignore[override]
-                prefix_map = {"openclaw": "openclaw", "claude_code": "claude-code"}
+                prefix_map = {"openclaw": "openclaw", "claude_code": "claude-code", "codex": "codex"}
                 return prefix_map.get(adapter_type, adapter_type)
 
         mgr = InstanceManager(_BootstrapAdapter())  # type: ignore[arg-type]

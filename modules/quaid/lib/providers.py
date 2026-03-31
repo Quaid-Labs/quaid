@@ -1004,21 +1004,163 @@ class OpenAICompatibleLLMProvider(LLMProvider):
 
     def __init__(self, base_url: str = "http://localhost:8000",
                  api_key: str = "",
-                 deep_model: str = "", fast_model: str = ""):
+                 deep_model: str = "", fast_model: str = "",
+                 deep_reasoning_effort: str = "high",
+                 fast_reasoning_effort: str = "none"):
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._deep_model = deep_model
         self._fast_model = fast_model or deep_model
+        self._deep_reasoning_effort = self._normalize_reasoning_effort(deep_reasoning_effort, "high")
+        self._fast_reasoning_effort = self._normalize_reasoning_effort(fast_reasoning_effort, "none")
+
+    @staticmethod
+    def _normalize_reasoning_effort(value: str, default: str) -> str:
+        effort = str(value or "").strip().lower()
+        if effort in {"none", "low", "medium", "high", "xhigh"}:
+            return effort
+        return default
 
     def _resolve_model(self, model_tier: str) -> str:
         if model_tier == "fast" and self._fast_model:
             return self._fast_model
         return self._deep_model
 
+    def _resolve_reasoning_effort(self, model_tier: str) -> str:
+        if model_tier == "fast":
+            return self._fast_reasoning_effort
+        return self._deep_reasoning_effort
+
+    def _should_use_openai_responses(self, model: str) -> bool:
+        host = str(urllib.parse.urlsplit(self._base_url).hostname or "").strip().lower()
+        model_name = str(model or "").strip().lower()
+        return host == "api.openai.com" and model_name.startswith("gpt-5")
+
+    @staticmethod
+    def _clean_response_text(text: str) -> str:
+        return re.sub(r"<think>[\s\S]*?</think>\s*", "", str(text or "")).strip()
+
+    @staticmethod
+    def _extract_responses_text(data: dict) -> str:
+        if not isinstance(data, dict):
+            return ""
+        text = data.get("output_text")
+        if isinstance(text, str) and text.strip():
+            return text
+        output = data.get("output")
+        if not isinstance(output, list):
+            return ""
+        chunks = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content_items = item.get("content")
+            if isinstance(content_items, list):
+                for content_item in content_items:
+                    if not isinstance(content_item, dict):
+                        continue
+                    if content_item.get("type") not in ("output_text", "text"):
+                        continue
+                    value = content_item.get("text")
+                    if isinstance(value, str) and value:
+                        chunks.append(value)
+            else:
+                value = item.get("text")
+                if isinstance(value, str) and value:
+                    chunks.append(value)
+        return "\n".join(chunks).strip()
+
+    @staticmethod
+    def _messages_to_responses_payload(messages):
+        instructions = []
+        input_items = []
+        for message in messages:
+            role = str(message.get("role", "user") or "user").strip().lower()
+            content = message.get("content", "")
+            text = str(content if content is not None else "")
+            if role in ("system", "developer"):
+                if text.strip():
+                    instructions.append(text)
+                continue
+            if role not in ("user", "assistant"):
+                text = f"{role}: {text}" if text else role
+                role = "user"
+            input_items.append({"role": role, "content": text})
+
+        input_payload = ""
+        if len(input_items) == 1 and input_items[0]["role"] == "user":
+            input_payload = input_items[0]["content"]
+        elif input_items:
+            input_payload = input_items
+
+        return "\n\n".join(instructions).strip(), input_payload
+
+    def _llm_call_responses(self, messages, *, model: str, model_tier: str, max_tokens: int, timeout: int):
+        import time as _time
+
+        url = f"{self._base_url}/v1/responses"
+        instructions, input_payload = self._messages_to_responses_payload(messages)
+        payload = {
+            "model": model,
+            "input": input_payload,
+            "max_output_tokens": max_tokens,
+            "reasoning": {
+                "effort": self._resolve_reasoning_effort(model_tier),
+            },
+        }
+        if instructions:
+            payload["instructions"] = instructions
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers=headers,
+        )
+
+        t0 = _time.time()
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        elapsed = _time.time() - t0
+
+        if not isinstance(data, dict):
+            raise RuntimeError(f"OpenAI responses payload must be a JSON object, got {type(data).__name__}")
+
+        usage = data.get("usage", {}) if isinstance(data.get("usage"), dict) else {}
+        input_details = usage.get("input_tokens_details", {})
+        if not isinstance(input_details, dict):
+            input_details = {}
+
+        return LLMResult(
+            text=self._clean_response_text(self._extract_responses_text(data)),
+            duration=elapsed,
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            cache_read_tokens=int(
+                input_details.get("cached_tokens", usage.get("cache_read_input_tokens", 0)) or 0
+            ),
+            cache_creation_tokens=int(
+                input_details.get("cache_creation_tokens", usage.get("cache_creation_input_tokens", 0)) or 0
+            ),
+            model=str(data.get("model", model) or model),
+            truncated=bool(data.get("incomplete", False)),
+        )
+
     def llm_call(self, messages, model_tier="deep",
                  max_tokens=4000, timeout=600):
         import time as _time
         model = self._resolve_model(model_tier)
+        if self._should_use_openai_responses(model):
+            return self._llm_call_responses(
+                messages,
+                model=model,
+                model_tier=model_tier,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
         url = f"{self._base_url}/v1/chat/completions"
 
         # Convert messages to OpenAI format
@@ -1058,9 +1200,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         content = message.get("content") if isinstance(message, dict) else None
         if content is None:
             raise RuntimeError("OpenAI-compatible response missing choices[0].message.content")
-        text = str(content)
-        # Strip thinking tags (Qwen3 and similar models)
-        text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
+        text = self._clean_response_text(str(content))
         usage = data.get("usage", {})
         return LLMResult(
             text=text,

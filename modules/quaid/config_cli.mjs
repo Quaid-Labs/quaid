@@ -92,6 +92,7 @@ function workspaceRoot() {
 function platformFromInstanceName(instanceName) {
   const name = String(instanceName || "").trim().toLowerCase();
   if (name.startsWith("claude-code-") || name === "claude-code") return "claude-code";
+  if (name.startsWith("codex-") || name === "codex") return "codex";
   if (name.startsWith("openclaw-") || name === "openclaw") return "openclaw";
   if (name.startsWith("standalone-") || name === "standalone") return "standalone";
   if (name.includes("-")) return name.split("-", 1)[0] || "standalone";
@@ -339,6 +340,8 @@ function compactSummary(cfgPath, cfg) {
   const configuredEmbProvider = String(getPath(cfg, "models.embeddingsProvider", "ollama"));
   const deep = getPath(cfg, "models.deepReasoning", "default");
   const fast = getPath(cfg, "models.fastReasoning", "default");
+  const deepEffort = getPath(cfg, "models.deepReasoningEffort", "high");
+  const fastEffort = getPath(cfg, "models.fastReasoningEffort", "none");
   const deepDesc = deep === "default"
     ? `${deepProvider}:${defaultMappedModel(cfg, "deep", deepProvider)}`
     : `${deepProvider}:${deep}`;
@@ -371,7 +374,9 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Deep Provider")}: ${getPath(cfg, "models.deepReasoningProvider", "default")} ${C.dim(`(effective -> ${providerDisplayName(deepProvider)})`)}`,
     `${C.bold("Fast Provider")}: ${getPath(cfg, "models.fastReasoningProvider", "default")} ${C.dim(`(effective -> ${providerDisplayName(fastProvider)})`)}`,
     `${C.bold("Deep")}: ${deep} ${C.dim(`(${deepDesc})`)}`,
+    `${C.bold("Deep Effort")}: ${deepEffort}`,
     `${C.bold("Fast")}: ${fast} ${C.dim(`(${fastDesc})`)}`,
+    `${C.bold("Fast Effort")}: ${fastEffort}`,
     `${C.bold("Embeddings")}: ${configuredEmbProvider} ${C.dim(`(default -> ${ep} / ${epModel})`)}`,
     `${C.bold("Notifications")}: ${notifyLevel} ${C.dim(`(janitor:${janitorVerb} extraction:${extractionVerb} retrieval:${retrievalVerb})`)}`,
     `${C.bold("Janitor Apply")}: ${janitorApplyMode} ${C.dim("(master policy)")}`,
@@ -422,6 +427,16 @@ function providerOptions(cfg) {
   ];
 }
 
+function reasoningEffortOptions() {
+  return [
+    { value: "none", label: "none", hint: "lowest latency when supported" },
+    { value: "low", label: "low", hint: "light extra reasoning" },
+    { value: "medium", label: "medium", hint: "balanced reasoning depth" },
+    { value: "high", label: "high", hint: "stronger reasoning for deep work" },
+    { value: "xhigh", label: "xhigh", hint: "maximum reasoning depth when available" },
+  ];
+}
+
 function modelOptions(cfg, tier) {
   const effective = resolveEffectiveTierProvider(cfg, tier);
   const mapped = defaultMappedModel(cfg, tier, effective);
@@ -429,7 +444,9 @@ function modelOptions(cfg, tier) {
   const isAnthropic = effective.startsWith("anthropic");
   const fallback = isAnthropic
     ? (tier === "deep" ? ["claude-sonnet-4-6", "claude-opus-4-6"] : ["claude-haiku-4-5", "claude-sonnet-4-6"])
-    : (tier === "deep" ? ["gpt-5.3-codex", "gpt-5.2-codex", "gpt-4o"] : ["gpt-5.1-codex-mini", "gpt-4o-mini"]);
+    : (tier === "deep"
+        ? ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-4o"]
+        : ["gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.1-codex-mini", "gpt-4o-mini"]);
   const mapKey = tier === "deep" ? "models.deepReasoningModelClasses" : "models.fastReasoningModelClasses";
   const mappedForProvider = String(getPath(cfg, `${mapKey}.${effective}`, "") || "").trim();
   const mapValues = mappedForProvider ? [mappedForProvider] : [];
@@ -557,8 +574,10 @@ async function runEdit() {
           { value: "provider", label: "LLM provider", hint: "Routing class for deep/fast reasoning" },
           { value: "deep_provider", label: "Deep reasoning provider", hint: "optional override for deep tier" },
           { value: "deep", label: "Deep reasoning model", hint: "deep extraction/review" },
+          { value: "deep_effort", label: "Deep reasoning effort", hint: "none/low/medium/high/xhigh when supported" },
           { value: "fast_provider", label: "Fast reasoning provider", hint: "optional override for fast tier" },
           { value: "fast", label: "Fast reasoning model", hint: "cheap utility/rerank calls" },
+          { value: "fast_effort", label: "Fast reasoning effort", hint: "none/low/medium/high/xhigh when supported" },
           { value: "emb_provider", label: "Embeddings provider", hint: "vector model host" },
           { value: "emb_model", label: "Embeddings model", hint: "semantic retrieval vectors" },
           { value: "back", label: "Back" },
@@ -633,6 +652,7 @@ async function runEdit() {
         initialValue: getPath(cfg, "adapter.type", "standalone"),
         options: [
           { value: "openclaw", label: "openclaw", hint: "recommended; gateway-integrated runtime" },
+          { value: "codex", label: "codex", hint: "Codex hooks + local app-server sidecar" },
           { value: "standalone", label: "standalone", hint: "local-only mode (advanced)" },
         ],
       }));
@@ -648,6 +668,13 @@ async function runEdit() {
       const def = modelOptions(cfg, "deep");
       const next = await chooseWithCustom("models.deepReasoning", def.options, getPath(cfg, def.key, "default"));
       setPath(cfg, def.key, next);
+    } else if (menu === "deep_effort") {
+      const next = await chooseWithCustom(
+        "models.deepReasoningEffort",
+        reasoningEffortOptions(),
+        getPath(cfg, "models.deepReasoningEffort", "high"),
+      );
+      setPath(cfg, "models.deepReasoningEffort", next);
     } else if (menu === "fast_provider") {
       const def = tierProviderOptions(cfg, "fast");
       const next = await chooseWithCustom(def.key, def.options, def.current);
@@ -656,6 +683,13 @@ async function runEdit() {
       const def = modelOptions(cfg, "fast");
       const next = await chooseWithCustom("models.fastReasoning", def.options, getPath(cfg, def.key, "default"));
       setPath(cfg, def.key, next);
+    } else if (menu === "fast_effort") {
+      const next = await chooseWithCustom(
+        "models.fastReasoningEffort",
+        reasoningEffortOptions(),
+        getPath(cfg, "models.fastReasoningEffort", "none"),
+      );
+      setPath(cfg, "models.fastReasoningEffort", next);
     } else if (menu === "emb_provider") {
       const inferred = resolveEffectiveEmbeddingsProvider(cfg);
       const next = await chooseWithCustom(
@@ -877,6 +911,8 @@ function showConfig() {
   const effectiveEmbModel = effectiveEmbeddingModel(cfg, effectiveEmb);
   const deep = getPath(cfg, "models.deepReasoning", "default");
   const fast = getPath(cfg, "models.fastReasoning", "default");
+  const deepEffort = getPath(cfg, "models.deepReasoningEffort", "high");
+  const fastEffort = getPath(cfg, "models.fastReasoningEffort", "none");
 
   const target = resolveConfigTarget();
   console.log(`Quaid Configuration — ${target.label}`);
@@ -886,8 +922,10 @@ function showConfig() {
   console.log(`provider:         ${getPath(cfg, "models.llmProvider", "default")} (default -> ${providerDisplayName(effective)})`);
   console.log(`deep provider:    ${getPath(cfg, "models.deepReasoningProvider", "default")} (effective -> ${providerDisplayName(effectiveDeepProvider)})`);
   console.log(`deep reasoning:   ${deep}`);
+  console.log(`deep effort:      ${deepEffort}`);
   console.log(`fast provider:    ${getPath(cfg, "models.fastReasoningProvider", "default")} (effective -> ${providerDisplayName(effectiveFastProvider)})`);
   console.log(`fast reasoning:   ${fast}`);
+  console.log(`fast effort:      ${fastEffort}`);
   console.log(`embeddings:       ${getPath(cfg, "models.embeddingsProvider", "ollama")} (default -> ${effectiveEmb})`);
   console.log(`embeddings model: ${effectiveEmbModel}`);
   console.log(`notify level:     ${getPath(cfg, "notifications.level", "normal")} (janitor:${getPath(cfg, "notifications.janitor.verbosity", "inherit")} extraction:${getPath(cfg, "notifications.extraction.verbosity", "inherit")} retrieval:${getPath(cfg, "notifications.retrieval.verbosity", "inherit")})`);

@@ -354,7 +354,7 @@ class OpenClawAdapter(QuaidAdapter):
         if p == "anthropic":
             return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
         if p in ("openai", "openrouter", "together"):
-            return {"deep": "gpt-4o", "fast": "gpt-4o-mini"}
+            return {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"}
         if p == "ollama":
             return {"deep": "llama3.1:70b", "fast": "llama3.1:8b"}
         return None

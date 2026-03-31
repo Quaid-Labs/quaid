@@ -466,19 +466,21 @@ def _apply_quaid(quaid_cfg: Dict[str, Any], dev_root: Path) -> None:
     config["models"].setdefault(
         "fastReasoningModelClasses",
         {
-            "openai": "gpt-5.1-codex-mini",
+            "openai": "gpt-5.4-mini",
             "anthropic": "claude-haiku-4-5",
-            "openai-compatible": "gpt-4.1-mini",
+            "openai-compatible": "gpt-5.4-mini",
         },
     )
     config["models"].setdefault(
         "deepReasoningModelClasses",
         {
-            "openai": "gpt-5.3-codex",
+            "openai": "gpt-5.4",
             "anthropic": "claude-haiku-4-5",
-            "openai-compatible": "gpt-4.1",
+            "openai-compatible": "gpt-5.4",
         },
     )
+    config["models"].setdefault("fastReasoningEffort", "none")
+    config["models"].setdefault("deepReasoningEffort", "high")
 
     for section in ("models", "ollama", "users", "projects", "notifications", "retrieval"):
         updates = quaid_cfg.get(section)

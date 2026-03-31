@@ -114,15 +114,21 @@ class TestModelConfig:
         cfg = ModelConfig()
         assert cfg.fast_reasoning == "default"
         assert cfg.deep_reasoning == "default"
+        assert cfg.fast_reasoning_effort == "none"
+        assert cfg.deep_reasoning_effort == "high"
         assert cfg.batch_budget_percent == 0.50
 
     def test_custom_values(self):
         cfg = ModelConfig(
             fast_reasoning="custom-model",
+            fast_reasoning_effort="low",
+            deep_reasoning_effort="medium",
             deep_reasoning_context=500000,
             batch_budget_percent=0.30,
         )
         assert cfg.fast_reasoning == "custom-model"
+        assert cfg.fast_reasoning_effort == "low"
+        assert cfg.deep_reasoning_effort == "medium"
         assert cfg.deep_reasoning_context == 500000
         assert cfg.batch_budget_percent == 0.30
 
@@ -252,6 +258,17 @@ class TestConfigPathResolution:
 
         assert paths[0] == Path("/tmp/quaid/claude-code-main/config/memory.json")
         assert paths[1] == Path("/tmp/quaid/shared/config/claude-code/memory.json")
+        assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
+
+    def test_config_paths_include_platform_and_global_shared_layers_for_codex(self):
+        import config
+
+        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/codex-main")), \
+             patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
+            paths = config._config_paths()
+
+        assert paths[0] == Path("/tmp/quaid/codex-main/config/memory.json")
+        assert paths[1] == Path("/tmp/quaid/shared/config/codex/memory.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
 
     def test_config_paths_include_platform_and_global_shared_layers_for_openclaw(self):
@@ -1098,6 +1115,8 @@ class TestConfigPathResolution:
                 "models": {
                     "fastReasoning": "gpt-4o-mini",
                     "deepReasoning": "gpt-4o-mini",
+                    "fastReasoningEffort": "low",
+                    "deepReasoningEffort": "medium",
                 },
                 "retrieval": {
                     "failHard": False,
@@ -1107,10 +1126,31 @@ class TestConfigPathResolution:
                 cfg = load_config()
                 assert cfg.models.fast_reasoning == "gpt-4o-mini"
                 assert cfg.models.deep_reasoning == "gpt-4o-mini"
+                assert cfg.models.fast_reasoning_effort == "low"
+                assert cfg.models.deep_reasoning_effort == "medium"
                 assert cfg.models.base_url == "https://api.openai.com"
                 assert cfg.models.api_key_env == "OPENAI_API_KEY"
                 assert cfg.retrieval.use_hyde is False
                 assert cfg.retrieval.fail_hard is False
+        finally:
+            config._config = old_config
+
+    def test_invalid_reasoning_effort_falls_back_to_defaults(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "models": {
+                    "fastReasoningEffort": "turbo",
+                    "deepReasoningEffort": "max",
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.models.fast_reasoning_effort == "none"
+                assert cfg.models.deep_reasoning_effort == "high"
         finally:
             config._config = old_config
 

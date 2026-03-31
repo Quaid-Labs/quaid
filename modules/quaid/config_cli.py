@@ -23,6 +23,8 @@ def _platform_from_instance_name(instance_name: str) -> str:
     name = str(instance_name or "").strip().lower()
     if name.startswith("claude-code-") or name == "claude-code":
         return "claude-code"
+    if name.startswith("codex-") or name == "codex":
+        return "codex"
     if name.startswith("openclaw-") or name == "openclaw":
         return "openclaw"
     if name.startswith("standalone-") or name == "standalone":

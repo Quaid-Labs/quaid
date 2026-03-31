@@ -45,6 +45,14 @@ def _coerce_positive_float(raw: Any, default: float) -> float:
         return default
 
 
+def _coerce_reasoning_effort(raw: Any, default: str) -> str:
+    """Normalize reasoning effort; fallback to default for invalid values."""
+    value = str(raw or "").strip().lower()
+    if value in {"none", "low", "medium", "high", "xhigh"}:
+        return value
+    return default
+
+
 def _default_deep_reasoning_model_classes() -> Dict[str, str]:
     return {}
 
@@ -61,6 +69,8 @@ def _platform_from_instance_name(instance_name: str) -> str:
     name = str(instance_name or "").strip().lower()
     if name.startswith("claude-code-") or name == "claude-code":
         return "claude-code"
+    if name.startswith("codex-") or name == "codex":
+        return "codex"
     if name.startswith("openclaw-") or name == "openclaw":
         return "openclaw"
     if name.startswith("standalone-") or name == "standalone":
@@ -107,6 +117,8 @@ class ModelConfig:
     # Model names per tier; "default" resolves via *_reasoning_model_classes.
     fast_reasoning: str = "default"
     deep_reasoning: str = "default"
+    fast_reasoning_effort: str = "none"
+    deep_reasoning_effort: str = "high"
     deep_reasoning_model_classes: Dict[str, str] = field(default_factory=_default_deep_reasoning_model_classes)
     fast_reasoning_model_classes: Dict[str, str] = field(default_factory=_default_fast_reasoning_model_classes)
     fast_reasoning_context: int = 200000
@@ -484,7 +496,7 @@ class SystemsConfig:
 
 @dataclass
 class AdapterConfig:
-    type: str = "standalone"  # standalone | openclaw
+    type: str = "standalone"  # standalone | openclaw | claude-code | codex
 
 
 @dataclass
@@ -568,6 +580,8 @@ _KNOWN_MODELS_KEYS = {
     "embeddings_provider",
     "fast_reasoning",
     "deep_reasoning",
+    "fast_reasoning_effort",
+    "deep_reasoning_effort",
     "deep_reasoning_model_classes",
     "fast_reasoning_model_classes",
     "fast_reasoning_context",
@@ -956,6 +970,14 @@ def _load_config_inner() -> MemoryConfig:
         embeddings_provider=models_data.get('embeddings_provider', models_data.get('embeddingsProvider', 'ollama')),
         fast_reasoning=models_data.get('fast_reasoning', ModelConfig.fast_reasoning),
         deep_reasoning=models_data.get('deep_reasoning', ModelConfig.deep_reasoning),
+        fast_reasoning_effort=_coerce_reasoning_effort(
+            models_data.get('fast_reasoning_effort', models_data.get('fastReasoningEffort', ModelConfig.fast_reasoning_effort)),
+            ModelConfig.fast_reasoning_effort,
+        ),
+        deep_reasoning_effort=_coerce_reasoning_effort(
+            models_data.get('deep_reasoning_effort', models_data.get('deepReasoningEffort', ModelConfig.deep_reasoning_effort)),
+            ModelConfig.deep_reasoning_effort,
+        ),
         deep_reasoning_model_classes=deep_reasoning_model_classes,
         fast_reasoning_model_classes=fast_reasoning_model_classes,
         fast_reasoning_context=_coerce_positive_int(models_data.get('fast_reasoning_context', 200000), 200000),

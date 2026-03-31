@@ -1,0 +1,21 @@
+{
+  "schema": "quaid-adapter-install/v1",
+  "id": "codex",
+  "name": "Codex",
+  "install": {
+    "selectLabel": "Codex",
+    "selectHint": "hooks + app-server sidecar for Codex CLI/app",
+    "sortOrder": 25
+  },
+  "runtime": {
+    "instancePrefix": "codex-",
+    "python": {
+      "module": "adaptors.codex.adapter",
+      "class": "CodexAdapter"
+    }
+  },
+  "scripts": {
+    "preinstall": "./hooks/preinstall.mjs",
+    "postinstall": "./hooks/postinstall.mjs"
+  }
+}

@@ -18,11 +18,13 @@ from lib.providers import (
     EmbeddingsProvider,
     AnthropicLLMProvider,
     ClaudeCodeLLMProvider,
+    OpenAICompatibleLLMProvider,
     TestLLMProvider,
     OllamaEmbeddingsProvider,
     MockEmbeddingsProvider,
 )
 from adaptors.openclaw.providers import GatewayLLMProvider
+from adaptors.codex.providers import CodexLLMProvider
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +860,211 @@ class TestTestLLMProvider:
 
 
 # ---------------------------------------------------------------------------
+# OpenAICompatibleLLMProvider
+# ---------------------------------------------------------------------------
+
+class TestOpenAICompatibleLLMProvider:
+    def test_init_defaults(self):
+        p = OpenAICompatibleLLMProvider()
+        assert p._base_url == "http://localhost:8000"
+        assert p._api_key == ""
+        assert p._deep_reasoning_effort == "high"
+        assert p._fast_reasoning_effort == "none"
+
+    def test_llm_call_uses_responses_api_for_openai_gpt5_models(self):
+        p = OpenAICompatibleLLMProvider(
+            base_url="https://api.openai.com",
+            api_key="sk-openai-test",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+            deep_reasoning_effort="high",
+            fast_reasoning_effort="none",
+        )
+        response_data = {
+            "output_text": "Hello!",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "input_tokens_details": {"cached_tokens": 2},
+            },
+            "model": "gpt-5.4-mini",
+            "incomplete": False,
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="fast",
+                max_tokens=100,
+            )
+
+        assert result.text == "Hello!"
+        assert result.input_tokens == 10
+        assert result.output_tokens == 5
+        assert result.cache_read_tokens == 2
+        assert result.model == "gpt-5.4-mini"
+
+        req = mock_open.call_args[0][0]
+        assert req.full_url == "https://api.openai.com/v1/responses"
+        assert req.get_header("Authorization") == "Bearer sk-openai-test"
+        sent_body = json.loads(req.data.decode())
+        assert sent_body["model"] == "gpt-5.4-mini"
+        assert sent_body["instructions"] == "sys"
+        assert sent_body["input"] == "hi"
+        assert sent_body["reasoning"] == {"effort": "none"}
+        assert sent_body["max_output_tokens"] == 100
+
+    def test_llm_call_uses_deep_effort_for_deep_tier(self):
+        p = OpenAICompatibleLLMProvider(
+            base_url="https://api.openai.com",
+            api_key="sk-openai-test",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+            deep_reasoning_effort="high",
+            fast_reasoning_effort="none",
+        )
+        response_data = {
+            "output_text": "Deep reply",
+            "usage": {"input_tokens": 11, "output_tokens": 6},
+            "model": "gpt-5.4",
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            result = p.llm_call(
+                [{"role": "user", "content": "solve it"}],
+                model_tier="deep",
+                max_tokens=128,
+            )
+
+        assert result.text == "Deep reply"
+        sent_body = json.loads(mock_open.call_args[0][0].data.decode())
+        assert sent_body["model"] == "gpt-5.4"
+        assert sent_body["reasoning"] == {"effort": "high"}
+
+    def test_llm_call_uses_chat_completions_for_non_openai_endpoint(self):
+        p = OpenAICompatibleLLMProvider(
+            base_url="http://localhost:8000",
+            api_key="local-key",
+            deep_model="qwen3",
+            fast_model="qwen3-mini",
+        )
+        response_data = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 3},
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast", max_tokens=55)
+
+        assert result.text == "ok"
+        req = mock_open.call_args[0][0]
+        assert req.full_url == "http://localhost:8000/v1/chat/completions"
+        sent_body = json.loads(req.data.decode())
+        assert sent_body["model"] == "qwen3-mini"
+        assert sent_body["messages"] == [{"role": "user", "content": "hi"}]
+        assert sent_body["max_tokens"] == 55
+
+    def test_llm_call_extracts_text_from_responses_output_chunks(self):
+        p = OpenAICompatibleLLMProvider(
+            base_url="https://api.openai.com",
+            api_key="sk-openai-test",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        response_data = {
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "hello"}]},
+                {"type": "message", "content": [{"type": "output_text", "text": "world"}]},
+            ],
+            "usage": {"input_tokens": 2, "output_tokens": 2},
+            "model": "gpt-5.4-mini",
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+
+        assert result.text == "hello\nworld"
+
+
+class TestCodexLLMProvider:
+    class _FakeManager:
+        def __init__(self):
+            self.calls = []
+
+        def run_turn(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "text": "PONG",
+                "duration": 1.25,
+                "model": kwargs["model"],
+                "usage": {
+                    "inputTokens": 11,
+                    "outputTokens": 4,
+                    "cachedInputTokens": 3,
+                },
+            }
+
+    def test_fast_lane_uses_fast_model_none_and_fast_service_tier(self):
+        manager = self._FakeManager()
+        provider = CodexLLMProvider(
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+            deep_reasoning_effort="high",
+            fast_reasoning_effort="none",
+            manager=manager,
+        )
+        result = provider.llm_call(
+            [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            model_tier="fast",
+        )
+        assert result.text == "PONG"
+        assert result.model == "gpt-5.4-mini"
+        assert result.input_tokens == 11
+        assert result.cache_read_tokens == 3
+        call = manager.calls[0]
+        assert call["model"] == "gpt-5.4-mini"
+        assert call["effort"] == "none"
+        assert call["service_tier"] == "fast"
+        assert "System Instructions:\nsys" in call["prompt"]
+        assert "User Request:\nhi" in call["prompt"]
+
+    def test_deep_lane_uses_deep_model_high_and_flex_service_tier(self):
+        manager = self._FakeManager()
+        provider = CodexLLMProvider(
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+            deep_reasoning_effort="high",
+            fast_reasoning_effort="none",
+            manager=manager,
+        )
+        result = provider.llm_call(
+            [{"role": "user", "content": "analyze this"}],
+            model_tier="deep",
+        )
+        assert result.model == "gpt-5.4"
+        call = manager.calls[0]
+        assert call["model"] == "gpt-5.4"
+        assert call["effort"] == "high"
+        assert call["service_tier"] == "flex"
+
+
+# ---------------------------------------------------------------------------
 # OllamaEmbeddingsProvider
 # ---------------------------------------------------------------------------
 
@@ -1234,9 +1441,10 @@ class TestGatewayLLMProvider:
         fallback_req = mock_open.call_args_list[1][0][0]
         assert "/v1/responses" in fallback_req.full_url
         sent_body = json.loads(fallback_req.data)
-        assert sent_body["model"] == "claude-haiku-4-5"
+        assert sent_body["model"] == "openclaw"
         assert sent_body["input"] == "hello"
         assert sent_body["instructions"] == "sys"
+        assert fallback_req.get_header("X-openclaw-model") == "anthropic/claude-haiku-4-5"
 
     def test_openresponses_fallback_uses_workspace_model_from_memory_config(self, tmp_path, monkeypatch):
         import urllib.request
@@ -1272,7 +1480,8 @@ class TestGatewayLLMProvider:
         assert result.text == "ok"
         req_obj = mock_open.call_args[0][0]
         sent_body = json.loads(req_obj.data)
-        assert sent_body["model"] == "qwen2.5-coder:7b"
+        assert sent_body["model"] == "openclaw"
+        assert req_obj.get_header("X-openclaw-model") == "anthropic/qwen2.5-coder:7b"
 
     def test_gateway_provider_resolves_token_from_env_when_missing_explicit_token(self, monkeypatch):
         monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token")

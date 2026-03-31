@@ -251,30 +251,11 @@ def hook_inject(args):
             from core.extraction_daemon import write_cursor, read_cursor
             existing = read_cursor(session_id)
             if not existing.get("transcript_path"):
-                from lib.adapter import get_adapter
-                sessions_dir = get_adapter().get_sessions_dir()
-                transcript_path = ""
-                if sessions_dir:
-                    for candidate in Path(sessions_dir).rglob(f"{session_id}.jsonl"):
-                        transcript_path = str(candidate)
-                        break
-                # Fallback: rglob misses when the transcript hasn't been created yet
-                # (race: CC creates the .jsonl file after UserPromptSubmit fires).
-                # Derive the expected path from cwd using CC's encoding scheme
-                # (abs path with '/' replaced by '-') so the daemon can discover
-                # the session once the transcript exists and has content.
-                if not transcript_path:
-                    hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
-                    if hook_cwd and sessions_dir:
-                        cwd_encoded = hook_cwd.replace("/", "-")
-                        predicted = Path(sessions_dir) / cwd_encoded / f"{session_id}.jsonl"
-                        transcript_path = str(predicted)
-                # OC flat-path fallback: sessions_dir/{session_id}.jsonl (no cwd encoding).
-                # Fires on first user message (hook_inject), after transcript exists,
-                # so idle check never discovers session before real content arrives.
-                if not transcript_path and sessions_dir:
-                    predicted = Path(sessions_dir) / f"{session_id}.jsonl"
-                    transcript_path = str(predicted)
+                transcript_path = _resolve_hook_transcript_path(
+                    session_id=session_id,
+                    hook_cwd=hook_input.get("cwd", "").strip() if hook_input else "",
+                    transcript_path=hook_input.get("transcript_path", "").strip() if hook_input else "",
+                )
                 if transcript_path:
                     write_cursor(session_id, 0, transcript_path)
         except Exception:
@@ -391,6 +372,45 @@ def _get_pending_context() -> str:
             return adapter.get_pending_context() or ""
     except Exception:
         pass
+    return ""
+
+
+def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcript_path: str = "") -> str:
+    """Resolve hook transcript paths across adapter-specific session layouts."""
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        return ""
+
+    explicit = str(transcript_path or "").strip()
+    if explicit:
+        return explicit
+
+    sessions_dir = None
+    adapter_id = ""
+    try:
+        from lib.adapter import get_adapter
+
+        adapter = get_adapter()
+        adapter_id = str(adapter.adapter_id() or "").strip().lower()
+        resolved = adapter.get_session_path(session_id)
+        if resolved:
+            return str(resolved)
+        sessions_dir = adapter.get_sessions_dir()
+    except Exception:
+        sessions_dir = None
+        adapter_id = ""
+
+    if sessions_dir:
+        for candidate in Path(sessions_dir).rglob(f"{session_id}.jsonl"):
+            return str(candidate)
+
+    if hook_cwd and sessions_dir and adapter_id == "claude-code":
+        cwd_encoded = hook_cwd.replace("/", "-")
+        return str(Path(sessions_dir) / cwd_encoded / f"{session_id}.jsonl")
+
+    if sessions_dir and adapter_id in ("openclaw", "standalone", ""):
+        return str(Path(sessions_dir) / f"{session_id}.jsonl")
+
     return ""
 
 
@@ -653,17 +673,11 @@ def hook_session_init(args):
             from core.extraction_daemon import write_cursor, read_cursor
             existing = read_cursor(current_session_id)
             if not existing.get("transcript_path"):
-                # Resolve transcript path: adapter.get_sessions_dir() + search
-                transcript_path = ""
-                try:
-                    from lib.adapter import get_adapter
-                    sessions_dir = get_adapter().get_sessions_dir()
-                    if sessions_dir:
-                        for candidate in Path(sessions_dir).rglob(f"{current_session_id}.jsonl"):
-                            transcript_path = str(candidate)
-                            break
-                except Exception:
-                    pass
+                transcript_path = _resolve_hook_transcript_path(
+                    session_id=current_session_id,
+                    hook_cwd=hook_input.get("cwd", "").strip() if hook_input else "",
+                    transcript_path=hook_input.get("transcript_path", "").strip() if hook_input else "",
+                )
                 if transcript_path:
                     write_cursor(current_session_id, 0, transcript_path)
                     print(f"[quaid][session-init] seeded cursor for {current_session_id}", file=sys.stderr)

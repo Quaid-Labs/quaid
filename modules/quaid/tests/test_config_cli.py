@@ -223,3 +223,12 @@ def test_resolve_config_target_platform_shared_auto(monkeypatch):
     path, label = config_cli._resolve_config_target(args)
     assert str(path) == "/tmp/quaid/shared/config/claude-code/memory.json"
     assert label == "shared platform 'claude-code'"
+
+
+def test_resolve_config_target_platform_shared_auto_codex(monkeypatch):
+    monkeypatch.setenv("QUAID_HOME", "/tmp/quaid")
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+    args = type("Args", (), {"shared": False, "platform_shared": "auto", "instance": None})()
+    path, label = config_cli._resolve_config_target(args)
+    assert str(path) == "/tmp/quaid/shared/config/codex/memory.json"
+    assert label == "shared platform 'codex'"

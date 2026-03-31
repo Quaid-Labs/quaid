@@ -77,3 +77,12 @@ def test_create_adapter_claudecode_alias():
     }):
         result = create_adapter("claudecode")
         assert result is mock_adapter
+
+
+def test_create_adapter_codex():
+    mock_adapter = MagicMock()
+    with patch.dict("sys.modules", {
+        "adaptors.codex.adapter": MagicMock(CodexAdapter=MagicMock(return_value=mock_adapter))
+    }):
+        result = create_adapter("codex")
+        assert result is mock_adapter
