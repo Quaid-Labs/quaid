@@ -1639,12 +1639,12 @@ step4_embeddings() {
         fi
 
         if $can_8b; then
-            echo -e "    1) qwen3-embedding:8b  (4096 dim, ${YELLOW}~6GB RAM${RESET})  ${GREEN}— Best quality${RESET}"
+            echo -e "    1) qwen3-embedding:8b  (4096 dim, ${YELLOW}~6GB RAM${RESET})  — Higher RAM, secondary option"
         else
             echo -e "    ${DIM}1) qwen3-embedding:8b  (4096 dim, ~6GB RAM)  — Not enough RAM${RESET}"
         fi
         if $can_nomic; then
-            echo -e "    2) nomic-embed-text    (768 dim,  ${YELLOW}~1.5GB RAM${RESET})"
+            echo -e "    2) nomic-embed-text    (768 dim,  ${YELLOW}~1.5GB RAM${RESET})  ${GREEN}— Recommended${RESET}"
         else
             echo -e "    ${DIM}2) nomic-embed-text    (768 dim,  ~1.5GB RAM) — Not enough RAM${RESET}"
         fi

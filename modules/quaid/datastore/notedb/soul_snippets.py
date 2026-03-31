@@ -1628,14 +1628,25 @@ def apply_decisions(
     if len(all_snippets) == 1:
         single_target = next(iter(all_snippets.keys()))
 
+    zero_based_files = set()
     for decision in decisions:
         filename = decision.get("file", "")
-        snippet_idx = decision.get("snippet_index", 0) - 1
-        action = decision.get("action", "DISCARD").upper()
+        if filename not in all_snippets and single_target is not None:
+            filename = single_target
+        try:
+            raw_index = int(decision.get("snippet_index", 0))
+        except (TypeError, ValueError):
+            continue
+        if raw_index == 0 and filename in all_snippets:
+            zero_based_files.add(filename)
 
-        if action not in valid_actions:
-            logger.warning(f"Unrecognized action '{action}' for {filename}[{snippet_idx+1}], defaulting to DISCARD")
-            action = "DISCARD"
+    for decision in decisions:
+        filename = decision.get("file", "")
+        try:
+            raw_snippet_index = int(decision.get("snippet_index", 0))
+        except (TypeError, ValueError):
+            raw_snippet_index = 0
+        action = decision.get("action", "DISCARD").upper()
 
         if filename not in all_snippets:
             if single_target is not None:
@@ -1652,6 +1663,12 @@ def apply_decisions(
                     ",".join(sorted(all_snippets.keys())),
                 )
                 continue
+
+        snippet_idx = raw_snippet_index if filename in zero_based_files else raw_snippet_index - 1
+
+        if action not in valid_actions:
+            logger.warning(f"Unrecognized action '{action}' for {filename}[{snippet_idx+1}], defaulting to DISCARD")
+            action = "DISCARD"
 
         file_data = all_snippets[filename]
         snippets = file_data["snippets"]

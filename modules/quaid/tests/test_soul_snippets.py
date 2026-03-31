@@ -2408,23 +2408,26 @@ class TestApplyDecisionsFoldRewriteDiscard:
         assert "99" in stats["errors"][0] or "invalid" in stats["errors"][0].lower()
         assert stats["folded"] == 0
 
-    def test_invalid_snippet_index_dry_run_also_records_error(self, workspace_dir):
-        """Out-of-range index in dry_run=True mode also records error, not exception."""
+    def test_zero_based_snippet_index_batch_is_accepted(self, workspace_dir):
+        """A batch containing snippet_index=0 is treated as zero-based for that file."""
         from datastore.notedb.soul_snippets import apply_decisions
 
         all_snippets = {
             "SOUL.md": {
                 "parent_content": "# SOUL\n",
-                "snippets": ["One."],
+                "snippets": ["One.", "Two."],
                 "config": {},
             }
         }
         decisions = [
             {"file": "SOUL.md", "snippet_index": 0, "action": "FOLD",
-             "insert_after": "END"}  # index 0 → snippet_idx -1 → invalid
+             "insert_after": "END"},
+            {"file": "SOUL.md", "snippet_index": 1, "action": "DISCARD"},
         ]
         stats = apply_decisions(decisions, all_snippets, dry_run=True)
-        assert len(stats["errors"]) == 1
+        assert stats["errors"] == []
+        assert stats["folded"] == 1
+        assert stats["discarded"] == 1
 
     def test_processed_snippets_removed_from_file_after_fold(self, workspace_dir):
         """After a successful FOLD, the snippet is removed from .snippets.md."""

@@ -740,6 +740,71 @@ def parse_json_response(text: str) -> Optional[object]:
     Handles responses wrapped in ```json ... ``` blocks as well as bare JSON.
     Returns parsed JSON (dict or list) or None on failure.
     """
+    def _repair_invalid_string_escapes(candidate: str) -> str:
+        """Repair invalid backslash escapes inside quoted JSON strings.
+
+        Some LLMs emit otherwise-valid JSON but leave raw backslashes inside
+        string values, for example ``"C:\\work\\cap"``. The JSON parser rejects
+        those as invalid escapes. Preserve the literal backslash by doubling it
+        before retrying.
+        """
+        candidate = candidate or ""
+        if "\\" not in candidate:
+            return candidate
+
+        out: List[str] = []
+        in_string = False
+        escape = False
+        idx = 0
+        length = len(candidate)
+        valid_simple = {'"', "\\", "/", "b", "f", "n", "r", "t"}
+        hex_digits = set("0123456789abcdefABCDEF")
+
+        while idx < length:
+            ch = candidate[idx]
+
+            if not in_string:
+                out.append(ch)
+                if ch == '"':
+                    in_string = True
+                idx += 1
+                continue
+
+            if escape:
+                out.append(ch)
+                escape = False
+                idx += 1
+                continue
+
+            if ch == "\\":
+                next_ch = candidate[idx + 1] if idx + 1 < length else ""
+                if next_ch in valid_simple:
+                    out.append(ch)
+                    escape = True
+                    idx += 1
+                    continue
+                if (
+                    next_ch == "u"
+                    and idx + 5 < length
+                    and all(c in hex_digits for c in candidate[idx + 2:idx + 6])
+                ):
+                    out.append(ch)
+                    escape = True
+                    idx += 1
+                    continue
+                # Invalid escape inside a string: preserve the literal
+                # backslash so json.loads can accept the repaired payload.
+                out.append("\\\\")
+                idx += 1
+                continue
+
+            out.append(ch)
+            if ch == '"':
+                in_string = False
+            idx += 1
+
+        return "".join(out)
+
     def _extract_balanced_json(candidate: str) -> Optional[str]:
         candidate = (candidate or "").strip()
         if not candidate:
@@ -775,13 +840,25 @@ def parse_json_response(text: str) -> Optional[object]:
         return None
 
     def _loads_with_relaxed_fallback(candidate: str):
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError as e:
+        repaired = _repair_invalid_string_escapes(candidate)
+        try_candidates = [candidate]
+        if repaired != candidate:
+            try_candidates.append(repaired)
+
+        first_error = None
+        for raw_candidate in try_candidates:
             try:
-                return json.loads(candidate, strict=False)
-            except json.JSONDecodeError:
-                raise e
+                return json.loads(raw_candidate)
+            except json.JSONDecodeError as e:
+                if first_error is None:
+                    first_error = e
+                try:
+                    return json.loads(raw_candidate, strict=False)
+                except json.JSONDecodeError as relaxed_error:
+                    if first_error is None:
+                        first_error = relaxed_error
+                    continue
+        raise first_error or json.JSONDecodeError("invalid JSON", candidate or "", 0)
 
     if not text:
         return None

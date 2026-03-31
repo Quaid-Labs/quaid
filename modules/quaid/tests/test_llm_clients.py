@@ -121,6 +121,24 @@ class TestParseJsonResponse:
             "content": "value",
         }
 
+    def test_repairs_invalid_backslash_escapes_inside_fenced_json_strings(self):
+        text = (
+            '```json\n'
+            '{"decisions":[{"file":"SOUL.md","snippet_index":1,"action":"DISCARD",'
+            '"reason":"Already over token cap for C:\\work\\cap"}]}\n'
+            '```'
+        )
+        assert parse_json_response(text) == {
+            "decisions": [
+                {
+                    "file": "SOUL.md",
+                    "snippet_index": 1,
+                    "action": "DISCARD",
+                    "reason": "Already over token cap for C:\\work\\cap",
+                }
+            ]
+        }
+
     def test_validate_llm_output_warns_on_unknown_keys(self, caplog):
         caplog.set_level("WARNING")
         parsed = [{"foo": "bar"}]
