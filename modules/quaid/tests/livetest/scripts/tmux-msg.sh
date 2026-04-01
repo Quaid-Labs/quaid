@@ -17,10 +17,11 @@
 #   main:N.0     explicit pane address
 #
 # Environment:
-#   TMUX_MSG_SENDER  (required) sender identity label
-#   TMUX_MSG_SOURCE  (optional) override source pane; auto-detected from current tmux pane if not set
-#   TMUX_MSG_WAIT    (optional) max seconds to wait for user to finish; default 60; 0 = send immediately
-#   TMUX_MSG_POLL    (optional) poll interval in seconds; default 2
+#   TMUX_MSG_SENDER               (required) sender identity label
+#   TMUX_MSG_SOURCE               (optional) override source pane; auto-detected from current tmux pane if not set
+#   THIS_IS_A_CRITICAL_MESSAGE    (optional) set to "true" to bypass draft detection and send immediately
+#   TMUX_MSG_WAIT                 (optional) max seconds to wait for user to finish; default 60
+#   TMUX_MSG_POLL                 (optional) poll interval in seconds; default 2
 #
 # Exit codes:
 #   0  message delivered
@@ -45,8 +46,16 @@ SENDER="${TMUX_MSG_SENDER:-}"
 # Auto-detect sender pane from tmux; TMUX_MSG_SOURCE overrides if explicitly set
 _detected_pane="$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || echo "unknown")"
 SENDER_PANE="${TMUX_MSG_SOURCE:-$_detected_pane}"
-WAIT="${TMUX_MSG_WAIT:-60}"
 POLL="${TMUX_MSG_POLL:-2}"
+# THIS_IS_A_CRITICAL_MESSAGE=true bypasses draft detection (send immediately).
+# Use only when you need to interrupt the user mid-sentence (e.g. INTERRUPT-level
+# escalations). ISSUE messages do NOT need this — busy detection only fires when
+# the user is actively typing in the input prompt, not during agent tool calls.
+if [[ "${THIS_IS_A_CRITICAL_MESSAGE:-false}" == "true" ]]; then
+    WAIT=0
+else
+    WAIT="${TMUX_MSG_WAIT:-60}"
+fi
 shift
 
 if [ -z "$SENDER" ]; then
@@ -116,19 +125,33 @@ _user_viewing() {
 }
 
 _pane_has_draft() {
-    local cursor_y cursor_x raw_line candidate
+    local cursor_y cursor_x pane_height raw_line candidate last_line
     cursor_y="$(tmux display-message -p -t "$PANE" '#{cursor_y}' 2>/dev/null || echo "")"
     cursor_x="$(tmux display-message -p -t "$PANE" '#{cursor_x}' 2>/dev/null || echo "")"
+    pane_height="$(tmux display-message -p -t "$PANE" '#{pane_height}' 2>/dev/null || echo "")"
     [[ "$cursor_y" =~ ^[0-9]+$ ]] || return 1
     [[ "$cursor_x" =~ ^[0-9]+$ ]] || return 1
+    [[ "$pane_height" =~ ^[0-9]+$ ]] || return 1
+    # Only treat as draft when cursor is on the bottom line of the pane.
+    # Tool call rendering moves the cursor mid-screen; the user input prompt
+    # is always at the very bottom. This avoids false positives from agents
+    # running tool calls (which render output above the input line).
+    last_line=$(( pane_height - 1 ))
+    [[ "$cursor_y" -ge "$last_line" ]] || return 1
     raw_line="$(tmux capture-pane -p -t "$PANE" -S "$cursor_y" -E "$cursor_y" 2>/dev/null || true)"
     candidate="${raw_line:0:$cursor_x}"
-    # Strip common prompt prefixes
-    for mark in "❯ " "› " "> " "$ " ": " "% "; do
-        if [[ "$candidate" == *"$mark"* ]]; then
-            candidate="${candidate##*$mark}"
+    # Require the cursor line to START WITH a known prompt prefix.
+    # Tool output lines may contain "> " or "$ " mid-line; only the actual
+    # input prompt will have it at position 0.
+    local stripped=0
+    for mark in "❯ " "› " "> " "$ " "% "; do
+        if [[ "$raw_line" == "$mark"* ]]; then
+            candidate="${candidate#"$mark"}"
+            stripped=1
+            break
         fi
     done
+    [[ "$stripped" -eq 1 ]] || return 1
     # Trim whitespace
     candidate="${candidate#"${candidate%%[![:space:]]*}"}"
     candidate="${candidate%"${candidate##*[![:space:]]}"}"
