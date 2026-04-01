@@ -72,8 +72,16 @@ tmux send-keys -t livetest:OC-tester  "cd /path/to/quaid && TESTER_CLI" Enter
 tmux send-keys -t livetest:CDX-tester "cd /path/to/quaid && TESTER_CLI" Enter
 ```
 
-On first message to each tester, send the contents of `TESTER.SKILL.md` as the
-opening context. Include:
+On first message to each tester, send the contents of **both** the general skill
+file and the platform-specific supplement as the opening context:
+
+| Tester | General | Platform supplement |
+|--------|---------|-------------------|
+| OC-tester | `TESTER.SKILL.md` | `TESTER.OC.md` |
+| CC-tester | `TESTER.SKILL.md` | `TESTER.CC.md` |
+| CDX-tester | `TESTER.SKILL.md` | `TESTER.CDX.md` |
+
+Also include in the opening message:
 - Which platform it is testing (OC, CC, or CDX)
 - Its own tmux window name (e.g. `livetest:OC-tester`)
 - **Your coordinator pane address** (from `tmux.coordinator_pane` in config)
