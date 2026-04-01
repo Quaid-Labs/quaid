@@ -130,7 +130,7 @@ if [[ -n "$REMOTE_IP" && -n "$LOCAL_IP" && "$REMOTE_IP" == "$LOCAL_IP" ]]; then
     SAFE=0
 fi
 
-# Check: hostname match (covers alfie.local vs alfie, etc.)
+# Check: hostname match (covers shortname vs fqdn aliases, etc.)
 if [[ "$DRY_RUN" == "0" && "$SAFE" == "1" ]]; then
     REMOTE_HOSTNAME="$(ssh "$REMOTE_HOST" 'hostname -s 2>/dev/null || hostname' 2>/dev/null || echo "")"
     if [[ -n "$REMOTE_HOSTNAME" && "$REMOTE_HOSTNAME" == "$LOCAL_HOSTNAME" ]]; then
