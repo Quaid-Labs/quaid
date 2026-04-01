@@ -25,6 +25,33 @@ The coordinator manages the run loop: wipe, install, milestones, commit check,
 repeat until a full suite passes with zero new commits. Tester agents execute
 milestones on each platform and report back.
 
+### Why a dedicated remote host (required)
+
+**The platforms under test must run on a separate machine from the coordinator.**
+This is a hard requirement, not a suggestion.
+
+The remote host will be wiped and reinstalled on every run — sometimes multiple
+times per session. Between wipes it may be running broken, partially-installed,
+or otherwise unstable code. Do not use a machine you care about.
+
+Specific reasons this must be a separate machine:
+
+- **Wipe safety**: `livetest-preflight.sh` performs a full destructive wipe of the
+  Quaid workspace, extension directories, and session history before each run.
+  It will refuse to run if the remote and local hostnames match, but there is
+  no substitute for using a machine you can afford to nuke.
+- **Isolation**: A platform crash, runaway extraction daemon, or model timeout on
+  the test machine cannot affect the coordinator or tester agents on your machine.
+- **Clean hook state**: CC and CDX write hook config and session history to `$HOME`
+  paths. On a shared machine those collide with your live working session.
+- **Correct silo routing**: Platform instances use `$HOME`-relative paths for
+  their config. On a dedicated remote, each test silo is the only one, so
+  instance routing is unambiguous.
+
+A lightweight VM, cloud instance, or spare machine works fine. It only needs
+the three platform CLIs installed, logged in, and reachable via SSH with key-based
+auth (no passphrase prompt).
+
 ---
 
 ## Prerequisites
@@ -117,6 +144,24 @@ The coordinator creates and manages a `livetest` tmux session:
 
 Tester agents run in the `-tester` windows. Platform interaction happens in the
 adjacent windows so the coordinator can observe each session live.
+
+---
+
+## Scripts
+
+Bundled scripts in `tests/livetest/scripts/`. All remote-touching scripts run
+exclusively via SSH — they cannot accidentally affect the local machine.
+
+| Script | Purpose |
+|--------|---------|
+| `livetest-preflight.sh` | **Run before every run.** Verifies remote ≠ local, checks SSH, wipes the remote, starts platform services. Hard-aborts if the remote host matches the local machine. |
+| `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
+| `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
+| `tmux-msg.sh` | Send a message to a coordinator or tester pane. Handles quoting, copy-mode, and stale input clearing. |
+| `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. Coordinator starts one per tester at run start. |
+
+All scripts that touch the remote accept `--dry-run` to print SSH commands without
+executing them, and `--config <path>` to override the default config location.
 
 ---
 

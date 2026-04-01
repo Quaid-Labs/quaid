@@ -56,6 +56,9 @@ tmux list-windows -t livetest | grep -q 'CDX$'        || tmux new-window -t live
 ```
 
 Scripts shipped with the livetest suite (relative to repo root):
+- `tests/livetest/scripts/livetest-preflight.sh` — safety checks, wipe, platform start (run before every run)
+- `tests/livetest/scripts/livetest-wipe.sh` — wipe Quaid from remote (called by preflight)
+- `tests/livetest/scripts/livetest-platform-start.sh` — start platform services on remote (called by preflight)
 - `tests/livetest/scripts/tmux-msg.sh` — inter-agent messaging
 - `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
 
@@ -103,11 +106,13 @@ tmux send-keys -t livetest:CDX "ssh REMOTE_HOST" Enter
 
 ---
 
-## Step 2 — Verify Coordinator Pane and Record Run Start SHA
+## Step 2 — Preflight: Pane Verify, Safety Check, Wipe, Platform Start
 
-**Do this at the start of every run**, not just once at boot. The pane address
-must be confirmed fresh each run before testers are spawned.
+**Do this at the start of every run.** Two things happen here: you confirm your
+own pane address, and you run the preflight script that wipes the remote and
+starts platform services.
 
+**Confirm coordinator pane:**
 ```bash
 COORDINATOR_PANE=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}')
 TMUX_MSG_SENDER=coordinator \
@@ -116,31 +121,36 @@ TMUX_MSG_SENDER=coordinator \
 ```
 
 If the message does not arrive, stop. You are not in tmux or the detected address
-is wrong. Do not spawn testers until this passes.
+is wrong. Do not proceed until this passes.
 
+**Record run start SHA:**
 ```bash
 cd /path/to/quaid && git rev-parse HEAD
 ```
+Save as RUN_START_SHA. Compare HEAD against this at run end.
 
-Save this as RUN_START_SHA. You will compare HEAD against this at run end.
+**Run preflight (wipe + safety check + platform start):**
+```bash
+tests/livetest/scripts/livetest-preflight.sh
+```
+
+The preflight script:
+1. Verifies the remote host is not this machine (hard abort if they match)
+2. Verifies SSH connectivity
+3. Wipes Quaid from the remote (all silos, hooks, sessions, extension dir)
+4. Starts the OC gateway and waits for it to be healthy
+
+If preflight fails, do not proceed. Read the error output and fix the underlying
+cause before continuing.
+
+For a CC-only wipe (when OC is already live mid-run):
+```bash
+tests/livetest/scripts/livetest-preflight.sh --wipe-platform cc --skip-platform-start
+```
 
 ---
 
-## Step 3 — Wipe the Remote
-
-Before every run, wipe the existing Quaid install on the remote. Follow the wipe
-procedure in `tests/LIVE-TEST-GUIDE.md` (Step 0). This clears the workspace,
-hooks, DB, and any stale processes.
-
-Key wipe steps (exact commands in the guide):
-- Kill daemon and any lingering extraction processes
-- Remove the silo directories for all enabled instances
-- Clear platform hooks (CC settings.json, CDX hooks.json)
-- Verify the remote is clean before proceeding
-
----
-
-## Step 4 — M0: Agent-Driven Install
+## Step 3 — M0: Agent-Driven Install
 
 **M0 tests the installer itself.** Each platform agent reads the Quaid AI install
 guide on canary and installs Quaid itself. Do not run the installer directly.
@@ -257,7 +267,7 @@ done
 
 ---
 
-## Step 5 — Run M1–M13 (Parallel)
+## Step 4 — Run M1–M13 (Parallel)
 
 Send start signals to all three tester windows after M0 passes on all platforms.
 All three run simultaneously. The run is not complete until all three reach M13 PASS.
@@ -303,7 +313,7 @@ If you can imagine a code change that would fix it — write it.
 
 ---
 
-## Step 6 — XP (Cross-Platform Project Linking)
+## Step 5 — XP (Cross-Platform Project Linking)
 
 Run after all three platforms reach M13 PASS. Full procedure in
 `tests/LIVE-TEST-GUIDE.md` under "Cross-Platform Project Linking Test."
@@ -312,7 +322,7 @@ XP tests that all three platforms can share a project and recall each other's do
 
 ---
 
-## Step 7 — End-of-Run Check
+## Step 6 — End-of-Run Check
 
 ```bash
 cd /path/to/quaid && git log --oneline RUN_START_SHA..HEAD
