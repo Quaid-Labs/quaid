@@ -179,6 +179,11 @@ wait for their ruling. The coordinator applies the four-condition test.
 - Always use `tests/livetest/scripts/tmux-msg.sh` for inter-agent messages.
   Never use raw `tmux send-keys` for messages to other agents.
 - Always include `TMUX_MSG_SENDER` and `TMUX_MSG_SOURCE` env vars.
+- **Never set `TMUX_MSG_WAIT=0`** for STATUS or ISSUE messages to the
+  coordinator. The coordinator may be mid-sentence when your message arrives.
+  The default wait (60s) lets the draft-detection logic hold off until they
+  finish typing. Only use `THIS_IS_A_CRITICAL_MESSAGE=true` if the message
+  is a genuine emergency that requires immediate interruption.
 - Avoid bracket characters `[` and `]` in tmux messages — they can trigger
   shell quote mode in the receiving pane.
 
