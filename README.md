@@ -10,8 +10,6 @@
 
 Quaid is not another memory plugin — it is an **active knowledge layer** for agents that need to operate over time. Local-first, cross-platform, and built for long-running agents, it captures, maintains, and retrieves knowledge across sessions while keeping your data on your machine. Quaid is designed to solve the failure modes that show up once agents leave a single context window behind: resets, stale facts, project drift, and rising token cost. To study that regime, we built AgentLife — a benchmark for persistence, recall under resets, and cross-session coherence.
 
-**Skills give an agent behavior. Quaid gives it understanding.**
-
 **Mac / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
@@ -41,14 +39,14 @@ After install, start here:
 
 **Platform Compatibility (Quick View)**
 
-| Capability | OpenClaw | Claude Code |
-|---|---|---|
-| Memory + janitor lifecycle | Yes | Yes |
-| Project docs + RAG system | Yes | Yes |
-| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes |
-| Hook-based auto extraction | Yes | Yes |
-| Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** |
-| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No |
+| Capability | OpenClaw | Claude Code | Codex |
+|---|---|---|---|
+| Memory + janitor lifecycle | Yes | Yes | Yes |
+| Project docs + RAG system | Yes | Yes | Yes |
+| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes | Yes |
+| Hook-based auto extraction | Yes | Yes | Yes |
+| Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** | **No** |
+| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No | **Yes** |
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
