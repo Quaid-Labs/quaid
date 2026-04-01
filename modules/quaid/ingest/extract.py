@@ -1573,6 +1573,8 @@ def apply_extracted_payloads(
         category = fact.get("category", "fact")
         privacy = fact.get("privacy", "shared")
         keywords = fact.get("keywords")
+        if isinstance(keywords, list):
+            keywords = " ".join(str(k) for k in keywords if k)
         domains = fact.get("domains")
         if isinstance(domains, str):
             domains = [domains]
@@ -1761,6 +1763,8 @@ def apply_extracted_payloads(
                         category = fact.get("category", "fact")
                         privacy = fact.get("privacy", "shared")
                         keywords = fact.get("keywords")
+                        if isinstance(keywords, list):
+                            keywords = " ".join(str(k) for k in keywords if k)
                         domains = fact.get("domains")
                         if isinstance(domains, str):
                             domains = [domains]
