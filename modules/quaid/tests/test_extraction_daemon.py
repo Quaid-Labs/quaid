@@ -1223,6 +1223,112 @@ class TestRollingExtraction:
 
 
 # ---------------------------------------------------------------------------
+# sweep_orphaned_sessions: carry_facts flush
+# ---------------------------------------------------------------------------
+
+class TestSweepOrphanedSessionsCarryFacts:
+    """sweep_orphaned_sessions must flush sessions with staged carry_facts even
+    when the transcript cursor is already at the end of the file (Codex /new
+    creates a new session_id rather than appending a lifecycle command)."""
+
+    def _setup_cursor(self, tmp_path, instance_id, session_id, line_offset, transcript_path):
+        cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True, exist_ok=True)
+        cursor_file = cursor_dir / f"{session_id}.json"
+        cursor_file.write_text(
+            json.dumps({
+                "session_id": session_id,
+                "line_offset": line_offset,
+                "transcript_path": str(transcript_path),
+            }),
+            encoding="utf-8",
+        )
+        return cursor_file
+
+    def _setup_rolling_state(self, tmp_path, instance_id, session_id, carry_facts, transcript_path):
+        rolling_dir = tmp_path / instance_id / "data" / "rolling-extraction"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        state_file = rolling_dir / f"{session_id}.json"
+        state_file.write_text(
+            json.dumps({
+                "session_id": session_id,
+                "carry_facts": carry_facts,
+                "transcript_path": str(transcript_path),
+                "raw_facts": carry_facts,
+            }),
+            encoding="utf-8",
+        )
+        return state_file
+
+    def test_flushes_session_with_carry_facts_when_cursor_at_end(self, monkeypatch, tmp_path):
+        """Sessions whose cursor is at transcript end but have carry_facts must get a session_end signal."""
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "orphan-inst")
+
+        transcript = tmp_path / "t1.jsonl"
+        transcript.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"My neighbor won a chili cook-off."}}\n'
+            '{"type":"event_msg","payload":{"type":"agent_message","message":"Cool!"}}\n',
+            encoding="utf-8",
+        )
+        # Cursor is at end (line_offset == total lines == 2)
+        self._setup_cursor(tmp_path, "orphan-inst", "sess-carry", 2, transcript)
+        # Rolling state has staged carry_facts
+        self._setup_rolling_state(
+            tmp_path, "orphan-inst", "sess-carry",
+            [{"text": "User's neighbor won a chili cook-off.", "category": "fact", "domains": ["personal"]}],
+            transcript,
+        )
+
+        written_signals = []
+        monkeypatch.setattr(
+            extraction_daemon, "write_signal",
+            lambda signal_type, session_id, transcript_path, **kw: written_signals.append({
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+            }),
+        )
+
+        swept = extraction_daemon.sweep_orphaned_sessions(current_session_id="new-current-sess")
+
+        assert swept == 1
+        assert len(written_signals) == 1
+        sig = written_signals[0]
+        assert sig["signal_type"] == "session_end"
+        assert sig["session_id"] == "sess-carry"
+        assert sig["transcript_path"] == str(transcript)
+
+    def test_skips_session_with_cursor_at_end_and_no_carry_facts(self, monkeypatch, tmp_path):
+        """Sessions at end-of-transcript with empty carry_facts must not trigger a flush signal."""
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "orphan-inst2")
+
+        transcript = tmp_path / "t2.jsonl"
+        transcript.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"Hello"}}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, "orphan-inst2", "sess-empty", 1, transcript)
+        self._setup_rolling_state(
+            tmp_path, "orphan-inst2", "sess-empty",
+            [],  # no carry_facts
+            transcript,
+        )
+
+        written_signals = []
+        monkeypatch.setattr(
+            extraction_daemon, "write_signal",
+            lambda signal_type, session_id, transcript_path, **kw: written_signals.append(signal_type),
+        )
+
+        swept = extraction_daemon.sweep_orphaned_sessions(current_session_id="new-sess")
+
+        assert swept == 0
+        assert written_signals == []
+
+
+# ---------------------------------------------------------------------------
 # process_signal() retry-safety: signal file is preserved on exception
 # ---------------------------------------------------------------------------
 

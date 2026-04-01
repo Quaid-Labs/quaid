@@ -2440,6 +2440,23 @@ def sweep_orphaned_sessions(current_session_id: str = "") -> int:
         cursor_offset = data.get("line_offset", 0)
         total_lines = count_transcript_lines(transcript_path)
         if total_lines <= cursor_offset:
+            # Cursor is at end — check if there are staged carry_facts that need flushing.
+            # This handles adapters (e.g. Codex) where /new creates a fresh session_id
+            # rather than appending a lifecycle command to the current transcript, so
+            # the rolling stage advances the cursor to the end but never gets a
+            # session_end signal to flush the carry buffer to the DB.
+            rolling_state = read_rolling_state(session_id)
+            if rolling_state.get("carry_facts"):
+                logger.info(
+                    "orphan sweep: session %s cursor at end but has %d staged carry_facts — flushing",
+                    session_id, len(rolling_state["carry_facts"]),
+                )
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                )
+                swept += 1
             continue
 
         # Write a session_end signal for the daemon to process
