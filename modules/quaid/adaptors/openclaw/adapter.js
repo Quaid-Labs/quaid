@@ -304,6 +304,30 @@ function latestResetBackup(sessionId) {
     return null;
   }
 }
+function findLatestOCSessionFile() {
+  try {
+    const dir = getOpenClawSessionsBaseDir();
+    const names = fs.readdirSync(dir).filter(
+      (n) => n.endsWith(".jsonl") && !n.includes(".jsonl.") && n.length > 6
+    );
+    let bestFile = "";
+    let bestMtime = 0;
+    for (const name of names) {
+      const f = path.join(dir, name);
+      try {
+        const { mtimeMs } = fs.statSync(f);
+        if (mtimeMs > bestMtime) {
+          bestMtime = mtimeMs;
+          bestFile = f;
+        }
+      } catch {
+      }
+    }
+    return bestFile || null;
+  } catch {
+    return null;
+  }
+}
 function latestResetBackupFromPath(filePath) {
   if (!filePath) return null;
   try {
@@ -395,6 +419,13 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       sessionTranscriptPaths.set(sessionId, backup);
     }
   }
+  if (!resolvedPath && (signalType === "compaction" || signalType === "session_end")) {
+    const actual = findLatestOCSessionFile();
+    if (actual) {
+      resolvedPath = actual;
+      sessionTranscriptPaths.set(sessionId, resolvedPath);
+    }
+  }
   if (!resolvedPath) {
     console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
     return null;
@@ -413,6 +444,13 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       if (backup) {
         resolvedPath = backup;
       }
+    }
+  }
+  if ((signalType === "compaction" || signalType === "session_end") && resolvedPath && !fs.existsSync(resolvedPath)) {
+    const actual = findLatestOCSessionFile();
+    if (actual) {
+      resolvedPath = actual;
+      sessionTranscriptPaths.set(sessionId, resolvedPath);
     }
   }
   const agentLabel = sessionIdToAgentId.get(sessionId);

@@ -472,6 +472,31 @@ function latestResetBackup(sessionId: string): string | null {
 // When OC reuses a conversation file across resets, the backup is named after
 // the physical file (e.g. a34175cc.jsonl.reset.*), not the session ID.
 // Use the physical file path to find the correct backup.
+
+// After /reset OC begins writing the new session to the same physical file
+// (e.g. 46becb55.jsonl) under a new session UUID (87826784-...).
+// The UUID-based path never exists on disk; use mtime to find the real file.
+function findLatestOCSessionFile(): string | null {
+  try {
+    const dir = getOpenClawSessionsBaseDir();
+    const names = fs.readdirSync(dir).filter(
+      (n) => n.endsWith(".jsonl") && !n.includes(".jsonl.") && n.length > 6,
+    );
+    let bestFile = "";
+    let bestMtime = 0;
+    for (const name of names) {
+      const f = path.join(dir, name);
+      try {
+        const { mtimeMs } = fs.statSync(f);
+        if (mtimeMs > bestMtime) { bestMtime = mtimeMs; bestFile = f; }
+      } catch {}
+    }
+    return bestFile || null;
+  } catch {
+    return null;
+  }
+}
+
 function latestResetBackupFromPath(filePath: string): string | null {
   if (!filePath) return null;
   try {
@@ -579,6 +604,16 @@ function writeDaemonSignal(
       sessionTranscriptPaths.set(sessionId, backup);
     }
   }
+  // After a gateway restart sessionTranscriptPaths is empty. For compaction/session_end
+  // the UUID-based candidate paths (e.g. 87826784-....jsonl) won't exist when OC reused
+  // the physical file (46becb55.jsonl) for a post-reset session. Scan by mtime instead.
+  if (!resolvedPath && (signalType === "compaction" || signalType === "session_end")) {
+    const actual = findLatestOCSessionFile();
+    if (actual) {
+      resolvedPath = actual;
+      sessionTranscriptPaths.set(sessionId, resolvedPath);
+    }
+  }
   if (!resolvedPath) {
     console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
     return null;
@@ -607,6 +642,17 @@ function writeDaemonSignal(
       if (backup) {
         resolvedPath = backup;
       }
+    }
+  }
+  // Compaction/session_end: the resolved path may be a UUID-based name that doesn't exist
+  // on disk (e.g. 87826784-....jsonl) because OC reused the physical file (46becb55.jsonl)
+  // for the post-reset session. Scan by mtime to find the actual current file.
+  if ((signalType === "compaction" || signalType === "session_end") &&
+      resolvedPath && !fs.existsSync(resolvedPath)) {
+    const actual = findLatestOCSessionFile();
+    if (actual) {
+      resolvedPath = actual;
+      sessionTranscriptPaths.set(sessionId, resolvedPath);
     }
   }
 
