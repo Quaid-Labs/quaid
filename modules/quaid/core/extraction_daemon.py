@@ -1181,18 +1181,36 @@ def read_transcript_token_window(
     """Read a single message-aligned transcript window up to the token budget."""
     lines: List[str] = []
     approx_tokens = 0
+    budgeted_lines = 0
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
                 if i < from_line:
                     continue
-                if max_lines > 0 and lines and len(lines) >= max_lines:
-                    break
                 line_tokens = max(1, len(line) // 4)
-                if lines and approx_tokens + line_tokens > max_tokens:
+                # Oversized single rows can exceed this rolling window budget.
+                # Keep them in the returned slice so cursor advancement remains
+                # monotonic and downstream transcript/extraction chunking can
+                # still split/process the content normally; just do not let
+                # them consume this window's token/line budget.
+                if line_tokens > max_tokens:
+                    lines.append(line)
+                    if len(lines) >= MAX_TRANSCRIPT_LINES:
+                        logger.warning(
+                            "transcript %s: token window capped at %d lines (from offset %d)",
+                            transcript_path,
+                            MAX_TRANSCRIPT_LINES,
+                            from_line,
+                        )
+                        break
+                    continue
+                if max_lines > 0 and budgeted_lines >= max_lines:
+                    break
+                if budgeted_lines > 0 and approx_tokens + line_tokens > max_tokens:
                     break
                 lines.append(line)
                 approx_tokens += line_tokens
+                budgeted_lines += 1
                 if len(lines) >= MAX_TRANSCRIPT_LINES:
                     logger.warning(
                         "transcript %s: token window capped at %d lines (from offset %d)",

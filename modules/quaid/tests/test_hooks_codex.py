@@ -142,3 +142,47 @@ def test_codex_stop_writes_rolling_signal_only(monkeypatch, tmp_path, cursor_dir
     assert sig["supports_compaction_control"] is False
     assert sig["meta"]["source"] == "hook_codex_stop"
     assert err.strip() == ""
+
+
+def test_codex_stop_writes_session_end_signal_for_new_command(monkeypatch, tmp_path, cursor_dir):
+    transcript_path = tmp_path / "rollout-test-new.jsonl"
+    transcript_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "/new"}}),
+                json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "Started a fresh session."}}),
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    written_signals = []
+
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-session-end.json")
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+
+    out, err = _run_hook_codex_stop(
+        {
+            "session_id": "sess-codex-new",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    payload = json.loads(out)
+    assert payload == {}
+    assert len(written_signals) == 1
+    sig = written_signals[0]
+    assert sig["signal_type"] == "session_end"
+    assert sig["session_id"] == "sess-codex-new"
+    assert sig["transcript_path"] == str(transcript_path)
+    assert sig["adapter"] == "codex"
+    assert sig["supports_compaction_control"] is False
+    assert sig["meta"]["source"] == "hook_codex_stop"
+    assert sig["meta"]["command"] == "/new"
+    assert sig["meta"]["reason"] == "command:new"
+    assert err.strip() == ""

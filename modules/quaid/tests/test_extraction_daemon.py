@@ -1552,3 +1552,21 @@ class TestReadTranscriptSlice:
         )
 
         assert lines == ["one\n", "two\n"]
+
+    def test_read_transcript_token_window_oversized_line_does_not_consume_budget(self, tmp_path):
+        t = tmp_path / "t.jsonl"
+        oversized = "x" * 8_000 + "\n"  # ~2000 tokens; intentionally above max_tokens
+        small_a = "small-a\n"
+        small_b = "small-b\n"
+        t.write_text(oversized + small_a + small_b, encoding="utf-8")
+
+        lines = extraction_daemon.read_transcript_token_window(
+            str(t),
+            from_line=0,
+            max_tokens=1_500,
+            max_lines=2,
+        )
+
+        # Oversized metadata rows should still advance the cursor, but the
+        # budgeted window should continue to include valid smaller rows.
+        assert lines == [oversized, small_a, small_b]
