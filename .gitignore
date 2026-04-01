@@ -75,3 +75,4 @@ modules/quaid/profiles/runtime-profile.local.quaid.json
 release-evidence.json.tmp-*.json
 compatibility.json.tmp-*.json
 modules/quaid/tests/LIVE-TEST-GUIDE.local.md
+modules/quaid/tests/livetest/livetest-config.json

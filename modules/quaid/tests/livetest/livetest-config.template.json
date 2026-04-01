@@ -1,0 +1,39 @@
+{
+  "_comment": "Copy this file to livetest-config.json and fill in your values. livetest-config.json is gitignored.",
+
+  "remote": {
+    "host": "your-test-machine.local",
+    "workspace": "~/quaid"
+  },
+
+  "owner_name": "Your Name",
+
+  "tester": {
+    "cli": "codex --yolo",
+    "model": "gpt-5.1-codex-mini",
+    "effort": "medium"
+  },
+
+  "platforms": {
+    "oc": {
+      "enabled": true,
+      "instance_name": "openclaw-livetest"
+    },
+    "cc": {
+      "enabled": true,
+      "instance_name": "claude-code-livetest",
+      "project_dir": "/tmp/cc-livetest",
+      "auth_token_file": "~/path/to/anthropic-token.txt"
+    },
+    "cdx": {
+      "enabled": true,
+      "instance_name": "codex-livetest",
+      "project_dir": "/tmp/cdx-livetest"
+    }
+  },
+
+  "tmux": {
+    "livetest_session": "livetest",
+    "coordinator_pane": "main:4.0"
+  }
+}
