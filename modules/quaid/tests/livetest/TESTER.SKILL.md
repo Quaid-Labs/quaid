@@ -91,17 +91,27 @@ yourself.
     dry-run until the previous platform's M0 is confirmed PASS.
 
 1b. **Run the installer in dry-run mode** to validate the install plan before
-    handing off to the platform:
+    handing off to the platform. Use `QUAID_INSTANCE` env var to set the silo
+    name and `--adapter` to set the platform type:
 
     ```bash
-    ssh REMOTE_HOST 'cd ~/quaid/dev && node setup-quaid.mjs --dry-run \
-      --workspace ~/quaid --instance INSTANCE_NAME --owner OWNER_NAME 2>&1 | tail -40'
+    # OC tester
+    ssh alfie.local 'cd ~/quaid/dev && QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs \
+      --dry-run --workspace ~/quaid --adapter openclaw --owner-name Solomon --agent 2>&1 | tail -40'
+
+    # CC tester
+    ssh alfie.local 'cd ~/quaid/dev && QUAID_INSTANCE=claude-code-livetest node setup-quaid.mjs \
+      --dry-run --workspace ~/quaid --adapter claude-code --owner-name Solomon --agent 2>&1 | tail -40'
+
+    # CDX tester
+    ssh alfie.local 'cd ~/quaid/dev && QUAID_INSTANCE=codex-livetest node setup-quaid.mjs \
+      --dry-run --workspace ~/quaid --adapter codex --owner-name Solomon --agent 2>&1 | tail -40'
     ```
 
     Check the plan output:
-    - `adapter.type` matches your platform (openclaw / claude_code / codex)
-    - workspace is `~/quaid`
-    - instance name is correct
+    - `platform` matches your platform (openclaw / claude-code / codex)
+    - `workspace` is `/Users/clawdbot/quaid`
+    - `instanceId` matches your silo name (openclaw-livetest / claude-code-livetest / codex-livetest)
     - No fatal errors
 
     If the plan looks wrong, **stop and send an ISSUE to the coordinator** before
