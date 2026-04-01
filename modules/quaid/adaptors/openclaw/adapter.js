@@ -387,7 +387,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
   if (signalType === "reset") {
     try {
       const stat = fs.statSync(resolvedPath);
-      if (stat.size === 0) {
+      if (stat.size < 200) {
         const backup = latestResetBackup(sessionId);
         if (backup) {
           resolvedPath = backup;
