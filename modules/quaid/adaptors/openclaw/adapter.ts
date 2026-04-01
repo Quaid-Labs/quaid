@@ -565,12 +565,13 @@ function writeDaemonSignal(
 
   // For reset signals, OC may have already moved the transcript content to a
   // .reset.* snapshot before this signal fires. If the resolved path is empty
-  // (0 bytes) or missing (ENOENT) and a .reset.* backup exists, use the backup
-  // so the daemon has content to extract from.
+  // or contains only a minimal post-reset stub (< 200 bytes) and a .reset.*
+  // backup exists, use the backup so the daemon has content to extract from.
+  // OC 2026.3.31 leaves a ~124-byte stub after reset; 0-byte check was too narrow.
   if (signalType === "reset") {
     try {
       const stat = fs.statSync(resolvedPath);
-      if (stat.size === 0) {
+      if (stat.size < 200) {
         const backup = latestResetBackup(sessionId);
         if (backup) {
           resolvedPath = backup;
