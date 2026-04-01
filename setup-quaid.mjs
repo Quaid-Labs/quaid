@@ -3992,7 +3992,9 @@ print(total_docs)
     const quaidProjDir = path.join(WORKSPACE, "projects", "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
-    copyMissingDirSync(quaidProjSrc, quaidProjDir);
+    if (fs.existsSync(quaidProjSrc)) {
+      copyMissingDirSync(quaidProjSrc, quaidProjDir);
+    }
     const quaidSourceRoot = path.relative(WORKSPACE, PLUGIN_DIR).split(path.sep).join("/");
     const quaidSourceRoots = JSON.stringify(quaidSourceRoot ? [quaidSourceRoot] : []);
     // Register Quaid as a project unless it was already covered by existing project scan.
