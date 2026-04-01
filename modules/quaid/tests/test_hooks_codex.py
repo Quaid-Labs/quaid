@@ -102,9 +102,7 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert "emitted Codex startup context" in err
 
 
-def test_codex_stop_extracts_delta_and_advances_cursor(monkeypatch, tmp_path, cursor_dir):
-    from adaptors.codex.adapter import CodexAdapter
-
+def test_codex_stop_writes_rolling_signal_only(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test.jsonl"
     transcript_path.write_text(
         "\n".join(
@@ -116,40 +114,13 @@ def test_codex_stop_extracts_delta_and_advances_cursor(monkeypatch, tmp_path, cu
         encoding="utf-8",
     )
 
-    adapter = CodexAdapter(home=tmp_path)
-    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
-    monkeypatch.setattr("core.interface.hooks._get_owner_id", lambda: "test-owner")
+    written_signals = []
 
-    extracted = {}
-    session_logs = {}
-    notifications = {}
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-rolling.json")
 
-    def fake_extract(*, transcript, owner_id, label="cli", dry_run=False):
-        extracted.update({
-            "transcript": transcript,
-            "owner_id": owner_id,
-            "label": label,
-            "dry_run": dry_run,
-        })
-        return {
-            "facts_stored": 1,
-            "facts_skipped": 0,
-            "edges_created": 0,
-            "facts": [{"text": "neighbor chili win"}],
-            "snippets": {},
-            "topic_hint": "neighbor",
-        }
-
-    def fake_session_logs_ingest(**kwargs):
-        session_logs.update(kwargs)
-        return {"status": "processed"}
-
-    def fake_notify(**kwargs):
-        notifications.update(kwargs)
-
-    monkeypatch.setattr("core.ingest_runtime.run_extract_from_transcript", fake_extract)
-    monkeypatch.setattr("core.ingest_runtime.run_session_logs_ingest", fake_session_logs_ingest)
-    monkeypatch.setattr("core.runtime.notify.notify_memory_extraction", fake_notify)
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
 
     out, err = _run_hook_codex_stop(
         {
@@ -160,18 +131,14 @@ def test_codex_stop_extracts_delta_and_advances_cursor(monkeypatch, tmp_path, cu
         monkeypatch=monkeypatch,
     )
 
-    from core.extraction_daemon import read_cursor
-
     payload = json.loads(out)
     assert payload == {}
-    assert "chili cook-off" in extracted["transcript"]
-    assert extracted["owner_id"] == "test-owner"
-    assert extracted["label"] == "codex-stop"
-    assert extracted["dry_run"] is False
-    assert session_logs["session_id"] == "sess-codex-stop"
-    assert session_logs["message_count"] == 2
-    assert notifications["facts_stored"] == 1
-    cursor = read_cursor("sess-codex-stop")
-    assert cursor["line_offset"] == 2
-    assert cursor["transcript_path"] == str(transcript_path)
+    assert len(written_signals) == 1
+    sig = written_signals[0]
+    assert sig["signal_type"] == "rolling"
+    assert sig["session_id"] == "sess-codex-stop"
+    assert sig["transcript_path"] == str(transcript_path)
+    assert sig["adapter"] == "codex"
+    assert sig["supports_compaction_control"] is False
+    assert sig["meta"]["source"] == "hook_codex_stop"
     assert err.strip() == ""

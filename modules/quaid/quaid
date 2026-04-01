@@ -393,7 +393,7 @@ PYEOF
     echo "  hook-inject-compact  Re-inject after compaction"
     echo "  hook-extract         Extract knowledge from transcript"
     echo "  hook-session-init    Inject project docs at session start"
-    echo "  hook-codex-stop      Extract the latest Codex turn synchronously"
+    echo "  hook-codex-stop      Queue the latest Codex turn for daemon extraction"
     echo "  hook-subagent-start  Register subagent in registry"
     echo "  hook-subagent-stop   Mark subagent complete in registry"
     echo ""

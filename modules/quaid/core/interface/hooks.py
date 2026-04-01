@@ -26,7 +26,6 @@ import re
 import select
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List
@@ -244,6 +243,14 @@ def hook_inject(args):
     query = hook_input.get("prompt", "").strip()
     if not query:
         return
+
+    # Any prompt traffic is a daemon liveness contact point.
+    # ensure_alive is instance-scoped and lock-guarded, so repeated calls are cheap.
+    try:
+        from core.extraction_daemon import ensure_alive
+        ensure_alive()
+    except Exception as e:
+        print(f"[quaid][hook-inject] daemon ensure_alive failed: {e}", file=sys.stderr)
 
     # Ensure a cursor exists for this session so the daemon can discover it
     # for timeout extraction.  Lightweight: skips if cursor already exists.
@@ -532,57 +539,31 @@ def hook_extract(args):
         print(f"[quaid][{label}] signal written: {sig_path.name}", file=sys.stderr)
 
         # Signal write is complete (the critical part). Now ensure the daemon
-        # is alive to process it. Run in a detached subprocess so CC cannot
-        # cancel it — the hook itself returns immediately after this Popen.
-        # Skipped for OC: the gateway manages the OC daemon lifecycle.
-        if "openclaw" not in adapter_name:
-            try:
-                _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-                _env = {
-                    k: v for k, v in os.environ.items()
-                    if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
-                }
-                subprocess.Popen(
-                    [sys.executable, str(_daemon_script), "start"],
-                    start_new_session=True,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    env=_env,
-                )
-            except Exception:
-                pass  # best-effort; signal is already written
+        # is alive to process it. Run in a detached subprocess so host hook
+        # cancellation cannot interrupt daemon startup.
+        try:
+            _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
+            _env = {
+                k: v for k, v in os.environ.items()
+                if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
+            }
+            subprocess.Popen(
+                [sys.executable, str(_daemon_script), "start"],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=_env,
+            )
+        except Exception:
+            pass  # best-effort; signal is already written
 
     except Exception as e:
         print(f"[quaid][{label}] error: {e}", file=sys.stderr)
 
 
-def _parse_transcript_delta(transcript_path: str, from_line: int) -> tuple[str, int]:
-    """Parse only transcript lines that were appended after the last cursor."""
-    from core.extraction_daemon import read_transcript_slice
-    from lib.adapter import get_adapter
-
-    new_lines = read_transcript_slice(transcript_path, from_line)
-    if not new_lines:
-        return "", 0
-
-    tmp_path = ""
-    try:
-        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as tmp:
-            tmp.writelines(new_lines)
-            tmp_path = tmp.name
-        transcript = get_adapter().parse_session_jsonl(Path(tmp_path))
-        return transcript, len(new_lines)
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-
 def hook_codex_stop(args):
-    """Synchronously extract the latest Codex turn on Stop."""
+    """Queue Codex Stop extraction work for the daemon (signal-only path)."""
     try:
         hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
@@ -609,80 +590,40 @@ def hook_codex_stop(args):
         return
 
     try:
-        from core.extraction_daemon import count_transcript_lines, read_cursor, write_cursor
-        from core.ingest_runtime import run_extract_from_transcript, run_session_logs_ingest
-        from core.runtime.notify import notify_memory_extraction
+        from core.extraction_daemon import write_signal
 
-        owner = _get_owner_id()
-        cursor = read_cursor(session_id)
-        cursor_offset = int(cursor.get("line_offset", 0) or 0)
-        cursor_transcript = str(cursor.get("transcript_path") or "").strip()
-        if not cursor_transcript or cursor_transcript != transcript_path:
-            write_cursor(session_id, cursor_offset, transcript_path)
-
-        total_lines = count_transcript_lines(transcript_path)
-        if total_lines <= cursor_offset:
-            _write_hook_trace("hook.codex.stop.no_new_content", {
-                "session_id": session_id,
-                "cursor_offset": cursor_offset,
-                "total_lines": total_lines,
-            })
-            print("{}")
-            return
-
-        transcript_text, new_line_count = _parse_transcript_delta(transcript_path, cursor_offset)
-        if new_line_count <= 0:
-            _write_hook_trace("hook.codex.stop.empty_slice", {
-                "session_id": session_id,
-                "cursor_offset": cursor_offset,
-                "total_lines": total_lines,
-            })
-            print("{}")
-            return
-
-        result = {}
-        if transcript_text.strip():
-            result = run_extract_from_transcript(
-                transcript=transcript_text,
-                owner_id=owner,
-                label="codex-stop",
-                dry_run=False,
-            )
-
-            try:
-                notify_memory_extraction(
-                    facts_stored=int(result.get("facts_stored", 0) or 0),
-                    facts_skipped=int(result.get("facts_skipped", 0) or 0),
-                    edges_created=int(result.get("edges_created", 0) or 0),
-                    trigger="codex_stop",
-                    details=result.get("facts"),
-                    snippet_details=result.get("snippets"),
-                )
-            except Exception as notify_exc:
-                print(f"[quaid][codex-stop] notification failed: {notify_exc}", file=sys.stderr)
-
-        try:
-            run_session_logs_ingest(
-                session_id=session_id,
-                owner_id=owner,
-                label="codex-stop",
-                transcript_path=str(transcript_path),
-                message_count=new_line_count,
-                topic_hint=str(result.get("topic_hint") or ""),
-            )
-        except Exception as ingest_exc:
-            print(f"[quaid][codex-stop] session log ingest failed: {ingest_exc}", file=sys.stderr)
-
-        write_cursor(session_id, cursor_offset + new_line_count, transcript_path)
-        _write_hook_trace("hook.codex.stop.processed", {
+        sig_path = write_signal(
+            signal_type="rolling",
+            session_id=session_id,
+            transcript_path=transcript_path,
+            adapter="codex",
+            supports_compaction_control=False,
+            meta={"source": "hook_codex_stop"},
+        )
+        _write_hook_trace("hook.codex.stop.signal_written", {
             "session_id": session_id,
             "transcript_path": transcript_path,
-            "cursor_offset": cursor_offset,
-            "processed_lines": new_line_count,
-            "facts_stored": int(result.get("facts_stored", 0) or 0),
-            "facts_skipped": int(result.get("facts_skipped", 0) or 0),
-            "edges_created": int(result.get("edges_created", 0) or 0),
+            "signal_name": sig_path.name,
         })
+
+        # Best-effort daemon wakeup using the same detached launcher strategy as hook_extract.
+        try:
+            _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
+            _env = {
+                k: v for k, v in os.environ.items()
+                if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
+            }
+            subprocess.Popen(
+                [sys.executable, str(_daemon_script), "start"],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=_env,
+            )
+        except Exception:
+            pass  # signal write is complete; wakeup remains best-effort
+
         print("{}")
     except RuntimeError:
         raise
@@ -805,20 +746,15 @@ def hook_session_init(args):
         print(f"[quaid][session-init] auth token capture failed: {_e}", file=sys.stderr)
 
     # Sweep orphaned sessions via the extraction daemon.
-    # Only call ensure_alive() for adapters that do not manage the daemon
-    # externally (e.g. OC gateway owns its daemon lifecycle — calling
-    # ensure_alive() from the hook races the gateway at startup and produces
-    # duplicate daemon processes).
-    # CDX does not manage the daemon externally — include it here so rolling
-    # extraction runs for Codex sessions.
+    # Always call ensure_alive() on session init across all adapters.
+    # Daemons are instance-scoped and ensure_alive()/start_daemon() is
+    # lock-guarded (PID + flock), so repeated contact points are idempotent.
     try:
         from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
-        _daemon_externally_managed = adapter_id in ("openclaw",)
-        if not _daemon_externally_managed:
-            try:
-                ensure_alive()
-            except Exception as e:
-                print(f"[quaid][session-init] daemon ensure_alive failed: {e}", file=sys.stderr)
+        try:
+            ensure_alive()
+        except Exception as e:
+            print(f"[quaid][session-init] daemon ensure_alive failed: {e}", file=sys.stderr)
         swept = sweep_orphaned_sessions(current_session_id)
         if swept:
             print(f"[quaid][session-init] swept {swept} orphaned session(s)", file=sys.stderr)
@@ -1088,7 +1024,7 @@ def main():
     subparsers.add_parser("inject", help="Recall + inject memories for a user message")
     subparsers.add_parser("inject-compact", help="Re-inject memories after compaction")
     subparsers.add_parser("session-init", help="Inject project docs at session start")
-    subparsers.add_parser("codex-stop", help="Synchronously extract the latest Codex turn")
+    subparsers.add_parser("codex-stop", help="Queue Codex Stop extraction for the daemon")
 
     extract_parser = subparsers.add_parser("extract", help="Extract knowledge from transcript")
     extract_parser.add_argument(
