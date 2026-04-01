@@ -86,6 +86,27 @@ yourself.
    Follow the wipe procedure in `tests/LIVE-TEST-GUIDE.md` (Step 0 / wipe section).
    Run all wipe commands via `ssh REMOTE_HOST '...'`.
 
+1a. **Wait for your turn** — installs are sequential in a randomly-rolled order
+    that the coordinator announces at the start of the run. Do not start your
+    dry-run until the previous platform's M0 is confirmed PASS.
+
+1b. **Run the installer in dry-run mode** to validate the install plan before
+    handing off to the platform:
+
+    ```bash
+    ssh REMOTE_HOST 'cd ~/quaid/dev && node setup-quaid.mjs --dry-run \
+      --workspace ~/quaid --instance INSTANCE_NAME --owner OWNER_NAME 2>&1 | tail -40'
+    ```
+
+    Check the plan output:
+    - `adapter.type` matches your platform (openclaw / claude_code / codex)
+    - workspace is `~/quaid`
+    - instance name is correct
+    - No fatal errors
+
+    If the plan looks wrong, **stop and send an ISSUE to the coordinator** before
+    proceeding. Do not run the real install if the dry-run plan is incorrect.
+
 2. **Tell the platform to install** by sending it this message (swap in your values):
 
    > Please install Quaid by following the AI install guide on the canary branch:
