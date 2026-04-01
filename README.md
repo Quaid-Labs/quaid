@@ -54,7 +54,7 @@ Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
 _“We Can Remember It for You Wholesale.”_
 
-A long-term goal for Quaid is portable memory interchange: shareable, sanitized memory packs that can travel with a project — similar to how skills are shared today, but with domain knowledge and curated supporting context included.
+A long-term goal for Quaid is portable memory interchange: shareable memory packs that can travel with a project — similar to how skills are shared today, but with domain knowledge and curated context included. Quaid's local-first, file-based architecture makes the portability side tractable. The hard problems — sanitizing personal data out of a memory graph, consolidating and curating memories for sharing, and defining interchange formats that hold up across runtimes — remain open.
 This is vision, not a released feature.
 
 ## Benchmarks
