@@ -96,21 +96,21 @@ yourself.
 
     ```bash
     # OC tester
-    ssh alfie.local 'cd ~/quaid/dev && QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs \
-      --dry-run --workspace ~/quaid --adapter openclaw --owner-name Solomon --agent 2>&1 | tail -40'
+    ssh REMOTE_HOST 'cd ~/quaid/dev && QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs \
+      --dry-run --workspace WORKSPACE --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CC tester
-    ssh alfie.local 'cd ~/quaid/dev && QUAID_INSTANCE=claude-code-livetest node setup-quaid.mjs \
-      --dry-run --workspace ~/quaid --adapter claude-code --owner-name Solomon --agent 2>&1 | tail -40'
+    ssh REMOTE_HOST 'cd ~/quaid/dev && QUAID_INSTANCE=claude-code-livetest node setup-quaid.mjs \
+      --dry-run --workspace WORKSPACE --adapter claude-code --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CDX tester
-    ssh alfie.local 'cd ~/quaid/dev && QUAID_INSTANCE=codex-livetest node setup-quaid.mjs \
-      --dry-run --workspace ~/quaid --adapter codex --owner-name Solomon --agent 2>&1 | tail -40'
+    ssh REMOTE_HOST 'cd ~/quaid/dev && QUAID_INSTANCE=codex-livetest node setup-quaid.mjs \
+      --dry-run --workspace WORKSPACE --adapter codex --owner-name OWNER_NAME --agent 2>&1 | tail -40'
     ```
 
     Check the plan output:
     - `platform` matches your platform (openclaw / claude-code / codex)
-    - `workspace` is `/Users/clawdbot/quaid`
+    - `workspace` is `WORKSPACE`
     - `instanceId` matches your silo name (openclaw-livetest / claude-code-livetest / codex-livetest)
     - No fatal errors
 
