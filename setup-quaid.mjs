@@ -463,6 +463,19 @@ function _readAdapterInstallerCapabilities(adapterId) {
     "            fast = fast or str(d.get('fast', '')).strip()",
     "    if deep and fast:",
     "        out['modelDefaults'][p] = {'deep': deep, 'fast': fast}",
+    "resolved_default_provider = out['defaultDeepProvider'] or out['defaultFastProvider'] or 'default'",
+    "deep = ''",
+    "fast = ''",
+    "try:",
+    "    deep = str(adapter.get_deep_model_default(resolved_default_provider) or '').strip()",
+    "except Exception:",
+    "    deep = ''",
+    "try:",
+    "    fast = str(adapter.get_fast_model_default(resolved_default_provider) or '').strip()",
+    "except Exception:",
+    "    fast = ''",
+    "if deep and fast:",
+    "    out['modelDefaults'][resolved_default_provider] = {'deep': deep, 'fast': fast}",
     "print(json.dumps(out))",
   ].join("\n");
   const res = spawnSync("python3", ["-c", py], {
@@ -745,6 +758,90 @@ function _platformUsesHostManagedLlmByDefault(adapterType = "") {
   // OpenClaw and Codex own runtime/provider resolution; keep installer on
   // platform defaults unless the user explicitly opts into advanced setup.
   return platform === "openclaw" || platform === "codex";
+}
+
+function _readOpenClawGatewayRuntime() {
+  const out = { baseUrl: "http://127.0.0.1:18789", token: "" };
+  try {
+    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+    if (!fs.existsSync(cfgPath)) return out;
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    const port = Number(cfg?.gateway?.port || 18789);
+    if (Number.isFinite(port) && port > 0) {
+      out.baseUrl = `http://127.0.0.1:${port}`;
+    }
+    const mode = String(cfg?.gateway?.auth?.mode || "").trim().toLowerCase();
+    const token = String(cfg?.gateway?.auth?.token || "").trim();
+    if (mode === "token" && token) out.token = token;
+  } catch {}
+  return out;
+}
+
+function _extractGatewayResponseText(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const direct = String(payload.output_text || "").trim();
+  if (direct) return direct;
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const chunks = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (Array.isArray(item.content)) {
+      for (const contentItem of item.content) {
+        const text = String(contentItem?.text || "").trim();
+        if (text) chunks.push(text);
+      }
+    } else {
+      const text = String(item.text || "").trim();
+      if (text) chunks.push(text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+function _validateOpenClawModelPingOrThrow(provider, model, tier) {
+  const providerNorm = String(provider || "").trim().toLowerCase();
+  const modelNorm = String(model || "").trim();
+  if (!providerNorm || !modelNorm) {
+    throw new Error(`Missing ${tier} model validation inputs (provider='${providerNorm}' model='${modelNorm}').`);
+  }
+  if (!canRun("curl")) {
+    throw new Error("`curl` is required to validate OpenClaw model mappings during install.");
+  }
+  const { baseUrl, token } = _readOpenClawGatewayRuntime();
+  const modelRef = modelNorm.includes("/") ? modelNorm : `${providerNorm}/${modelNorm}`;
+  const body = JSON.stringify({
+    model: "openclaw",
+    instructions: "Reply with exactly: PONG",
+    input: "PING",
+    max_output_tokens: 24,
+  });
+  const args = [
+    "-sS",
+    "-X", "POST", `${baseUrl}/v1/responses`,
+    "-H", "Content-Type: application/json",
+    "-H", "x-openclaw-scopes: operator.write",
+    "-H", `x-openclaw-model: ${modelRef}`,
+    "--max-time", "20",
+    "-d", body,
+  ];
+  if (token) {
+    args.push("-H", `Authorization: Bearer ${token}`);
+  }
+  const res = spawnSync("curl", args, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  if (res.status !== 0) {
+    const err = String(res.stderr || res.stdout || "").trim() || "unknown gateway error";
+    throw new Error(`OpenClaw gateway rejected ${tier} model '${modelRef}': ${err}`);
+  }
+  let payload = null;
+  try {
+    payload = JSON.parse(String(res.stdout || "{}"));
+  } catch {
+    throw new Error(`OpenClaw gateway returned invalid JSON for ${tier} model '${modelRef}'.`);
+  }
+  const text = _extractGatewayResponseText(payload);
+  if (!text) {
+    throw new Error(`OpenClaw gateway returned an empty reply for ${tier} model '${modelRef}'.`);
+  }
 }
 
 function _installerPlatformLabel() {
@@ -2344,10 +2441,14 @@ async function step3_models() {
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
     : ["anthropic", "openai", "openrouter", "together", "ollama"];
+  const hostManagedLlmDefault = _platformUsesHostManagedLlmByDefault(adapterType) && !advancedSetup;
   const adapterDefaultProvider = String(
     adapterCaps.defaultDeepProvider || adapterCaps.defaultFastProvider || ""
   ).trim().toLowerCase();
-  if (adapterDefaultProvider && supportedProviders.includes(adapterDefaultProvider)) {
+  if (
+    adapterDefaultProvider
+    && (hostManagedLlmDefault || supportedProviders.includes(adapterDefaultProvider))
+  ) {
     provider = adapterDefaultProvider;
   }
 
@@ -2359,8 +2460,14 @@ async function step3_models() {
     { value: "ollama",     label: "Ollama (local)",     hint: "Experimental — quality depends on model size" },
   ].filter((opt) => supportedProviders.includes(opt.value));
 
-  const hostManagedLlmDefault = _platformUsesHostManagedLlmByDefault(adapterType) && !advancedSetup;
   let sharedOverride = null;
+  const ocGatewayProviderDetected = !(hostManagedLlmDefault && adapterType === "openclaw" && !adapterDefaultProvider);
+  if (!ocGatewayProviderDetected) {
+    log.warn("OpenClaw adapter could not detect a gateway default provider.");
+    log.warn("An explicit fast/deep model pair is required to avoid incorrect defaults.");
+  } else if (hostManagedLlmDefault && adapterType === "openclaw" && adapterDefaultProvider) {
+    log.info(C.dim(`Detected OpenClaw gateway provider (adapter): ${adapterDefaultProvider}`));
+  }
   if (hostManagedLlmDefault) {
     log.info(C.dim(`Using ${adapterType} host-managed LLM defaults. Configure alternate providers later in settings.`));
   } else {
@@ -2397,13 +2504,75 @@ async function step3_models() {
   }
 
   let highModel, lowModel;
+  let manualPairNeeded = false;
+  let manualPairReason = "";
+  let envDeepModel = "";
+  let envFastModel = "";
   const adapterDefaults = (adapterCaps.modelDefaults && typeof adapterCaps.modelDefaults === "object")
     ? adapterCaps.modelDefaults[String(provider || "").trim().toLowerCase()]
     : null;
+  if (
+    hostManagedLlmDefault
+    && !advancedSetup
+    && (
+      (adapterType === "openclaw" && !ocGatewayProviderDetected)
+      || !adapterDefaults
+      || !adapterDefaults.deep
+      || !adapterDefaults.fast
+    )
+  ) {
+    manualPairNeeded = true;
+    manualPairReason = (adapterType === "openclaw" && !ocGatewayProviderDetected)
+      ? "OpenClaw gateway default provider could not be detected."
+      : (
+          `No adapter fast/deep mapping is defined for provider '${provider}'.`
+        );
+    log.warn(manualPairReason);
+    log.warn("You need to set a deep/fast model pair for this provider during install.");
+    envDeepModel = String(process.env.QUAID_INSTALL_DEEP_MODEL || "").trim();
+    envFastModel = String(process.env.QUAID_INSTALL_FAST_MODEL || "").trim();
+    if (AGENT_MODE) {
+      if (!envDeepModel || !envFastModel) {
+        throw new Error(
+          `${manualPairReason} Agent mode requires both QUAID_INSTALL_DEEP_MODEL and QUAID_INSTALL_FAST_MODEL. ` +
+          "Example guidance: fast = smallest/fastest model with decent reasoning; deep = mid/high reasoning model (not necessarily max tier)."
+        );
+      }
+      highModel = envDeepModel;
+      lowModel = envFastModel;
+      log.info(C.dim(`Using agent-provided OC pair: deep=${highModel} fast=${lowModel}`));
+    }
+  }
   if (sharedOverride?.deep && sharedOverride?.fast && (!sharedOverride.provider || sharedOverride.provider === provider)) {
     highModel = sharedOverride.deep;
     lowModel = sharedOverride.fast;
     log.info(C.dim(`Model lanes overridden by shared config: deep=${highModel} fast=${lowModel}`));
+  } else if (manualPairNeeded && !AGENT_MODE) {
+    const pairProviderLabel = (adapterType === "openclaw" && !ocGatewayProviderDetected)
+      ? "unknown (gateway default not detected)"
+      : provider;
+    note(
+      [
+        `OpenClaw provider '${pairProviderLabel}' does not have a built-in fast/deep mapping yet.`,
+        "",
+        "Choose two models:",
+        "  - Fast lane: the fastest model with decent reasoning for reranking/classification.",
+        "  - Deep lane: a mid/high reasoning model for extraction/review (max-tier is optional).",
+        "",
+        "Use provider/model format when possible (for example: openai/gpt-5.4-mini).",
+      ].join("\n"),
+      C.bmag("MODEL PAIR REQUIRED")
+    );
+    lowModel = handleCancel(await text({
+      message: "Fast reasoning model:",
+      placeholder: "provider/model (recommended)",
+      validate: (v) => String(v || "").trim().length === 0 ? "Fast model is required" : undefined,
+    }));
+    highModel = handleCancel(await text({
+      message: "Deep reasoning model:",
+      placeholder: "provider/model (recommended)",
+      validate: (v) => String(v || "").trim().length === 0 ? "Deep model is required" : undefined,
+    }));
   } else if (adapterDefaults && adapterDefaults.deep && adapterDefaults.fast) {
     highModel = String(adapterDefaults.deep);
     lowModel = String(adapterDefaults.fast);
@@ -2433,6 +2602,19 @@ async function step3_models() {
     }));
   } else {
     log.info(`Deep reasoning: ${C.bcyan(highModel)}  |  Fast reasoning: ${C.bcyan(lowModel)}`);
+  }
+
+  if (_isPlatform("openclaw")) {
+    const ping = spinner();
+    ping.start("Validating OpenClaw deep/fast model mappings (gateway PING)...");
+    try {
+      _validateOpenClawModelPingOrThrow(provider, lowModel, "fast");
+      _validateOpenClawModelPingOrThrow(provider, highModel, "deep");
+      ping.stop(C.green("OpenClaw model validation passed"));
+    } catch (err) {
+      ping.stop(C.red("OpenClaw model validation failed"), 2);
+      throw err;
+    }
   }
 
   // API key — the bot passes its key to Quaid at runtime.

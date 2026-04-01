@@ -16,7 +16,7 @@ Include:
 - Impact assessment (what can be accessed or changed)
 - Suggested mitigation (if available)
 
-Include your Quaid version and host mode (`openclaw`, `claude-code`, `cli`) when possible.
+Include your Quaid version and host mode (`openclaw`, `claude-code`, `codex`, `cli`) when possible.
 
 ## Scope Notes
 

@@ -19,10 +19,10 @@ Full installer guidance: [`docs/AI-INSTALL.md`](AI-INSTALL.md).
 
 ## System Overview
 
-Quaid is a graph-based persistent knowledge layer for AI agents. It ships with deep host integrations for [OpenClaw](https://github.com/openclaw/openclaw) and Claude Code, plus a standalone CLI. Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
+Quaid is a graph-based persistent knowledge layer for AI agents. It ships with deep host integrations for [OpenClaw](https://github.com/openclaw/openclaw), Claude Code, and Codex, plus a standalone CLI. Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
 
 **Architecture stack:**
-- **Interfaces:** CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks), Claude Code adapter/hooks
+- **Interfaces:** CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks), Claude Code adapter/hooks, Codex adapter/hooks
 - **Backend:** Python modules for graph operations, extraction, retrieval, maintenance, docs, and project tracking
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
 - **Embeddings:** Ollama local server (nomic-embed-text, 768 dimensions)
@@ -87,6 +87,7 @@ Write request
 | `adaptors/openclaw/adapter.py` | OpenClaw-specific adapter | `OpenClawAdapter`, sessions from `~/.openclaw/sessions/`, notifications via `openclaw message send` CLI |
 | `adaptors/openclaw/maintenance.py` | OpenClaw lifecycle registrations | `register_lifecycle_routines()` (workspace audit) |
 | `adaptors/claude_code/adapter.py` | Claude Code adapter | `ClaudeCodeAdapter`, sessions from `~/.claude/projects/`, deferred notifications via pending file, OAuth token auth |
+| `adaptors/codex/adapter.py` | Codex adapter | `CodexAdapter`, sessions from `~/.codex/sessions/`, deferred notifications via pending file, host-managed app-server provider path |
 | `adaptors/claude_code/hooks.py` | Backwards-compatible shim for CC hooks | Auto-provisions a new instance silo on first invocation if needed, then delegates to `core.interface.hooks.main` |
 | `core/interface/hooks.py` | Adapter-agnostic hook entry points (SOURCE OF TRUTH for hooks) | `hook_inject`, `hook_inject_compact`, `hook_extract`, `hook_session_init`, `hook_subagent_start`, `hook_subagent_stop` |
 
@@ -277,7 +278,7 @@ Triggers `nodes_ai`, `nodes_ad`, `nodes_au` keep `nodes_fts` in sync with `nodes
 Each Quaid instance (adapter silo) lives in its own subdirectory under `QUAID_HOME`. Two environment variables control which silo is active:
 
 - `QUAID_HOME` — root directory (default `~/quaid/`)
-- `QUAID_INSTANCE` — instance identifier, e.g. `openclaw` or `claude-code` (no default; required)
+- `QUAID_INSTANCE` — instance identifier, e.g. `openclaw`, `claude-code`, or `codex` (no default; required)
 
 ```
 $QUAID_HOME/
@@ -288,7 +289,7 @@ $QUAID_HOME/
 │   ├── projects/                    # Shared project docs (TOOLS.md, AGENTS.md, etc.)
 │   │   └── <project-name>/
 │   └── project-registry.json        # Global registry (projects -> instances)
-└── <INSTANCE_ID>/                   # Per-instance silo (e.g. "openclaw", "claude-code")
+└── <INSTANCE_ID>/                   # Per-instance silo (e.g. "openclaw", "claude-code", "codex")
     ├── config/
     │   └── memory.json              # Instance config (adapter.type, models, janitor, etc.)
     ├── data/

@@ -81,7 +81,7 @@ node setup-quaid.mjs --agent \
 
 ## Instance ID (Silo Name)
 
-The installer prompts for an **instance ID** — a short name for the memory silo (e.g. `claude-code`, `openclaw`).
+The installer prompts for an **instance ID** — a short name for the memory silo (e.g. `claude-code`, `openclaw`, `codex`).
 Two installs with the same ID share memory; different IDs get independent databases.
 The ID becomes a subdirectory under `QUAID_HOME`: `<QUAID_HOME>/<instance-id>/`.
 
@@ -103,7 +103,7 @@ To change the shared embedding model after install, edit `<QUAID_HOME>/shared/co
 ## Environment Variables (optional)
 
 - `QUAID_HOME`: explicit workspace/home path override (highest priority). **Do NOT set this globally in your shell profile** (e.g., `~/.zshrc`) — the hooks/installer manage it per-invocation. Setting it globally causes all adapter instances to share the same silo, corrupting cross-adapter isolation.
-- `QUAID_INSTANCE`: pre-set instance identifier; installer skips the instance prompt and uses this value directly (e.g. `openclaw`, `claude-code`)
+- `QUAID_INSTANCE`: pre-set instance identifier; installer skips the instance prompt and uses this value directly (e.g. `openclaw`, `claude-code`, `codex`)
 - `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint (auto-detected when OpenClaw is installed)
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults
 - `QUAID_INSTALL_CLAUDE_CODE=1`: force installer into Claude Code adapter mode (equivalent to `--claude-code` flag)

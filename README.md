@@ -109,6 +109,7 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 - Python 3.10+
 - SQLite 3.35+
 - [Ollama](https://ollama.ai) (for local embeddings)
+- RAM for `nomic-embed-text` embeddings: ~1.5GB model footprint; recommend ~4GB available system RAM for stable local operation
 - For OpenClaw integration: [OpenClaw](https://github.com/openclaw/openclaw) gateway
 - Gateway-managed provider auth (OAuth/API key) when running inside an agentic host like OpenClaw
 - Optional standalone auth/config when running via CLI outside a host gateway
@@ -123,7 +124,7 @@ Known limitations for **v0.2.15-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows is not supported. macOS and Linux only.
-- Host integrations are still maturing across platforms; OpenClaw and Claude Code are supported today, with broader host coverage still in progress.
+- Host integrations are still maturing across platforms; OpenClaw, Claude Code, and Codex are supported today, with broader host coverage still in progress.
 
 The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus ongoing AgentLife benchmark evaluation.
 
@@ -140,7 +141,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Adapter Authoring](docs/ADAPTER-AUTHORING.md) — How to integrate Quaid with your own host platform
 - [AgentLife Repository](https://github.com/quaid-labs/agentlife) — Benchmark source, datasets, and runbooks
 - [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md) — Full matrix, run IDs, and methodology
-- [Platform Compatibility](docs/COMPATIBILITY.md) — OC vs CC capability matrix
+- [Platform Compatibility](docs/COMPATIBILITY.md) — OpenClaw, Claude Code, and Codex capability matrix
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Interface Contract](docs/INTERFACES.md) — CLI/adapter capability model and event contract

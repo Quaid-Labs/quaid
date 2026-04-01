@@ -12,6 +12,7 @@ This document defines Quaid's external interface model for host adapters and run
 
 - `OpenClaw adapter` (`modules/quaid/adaptors/openclaw/adapter.ts`): deep lifecycle hook integration (before_agent_start, before_prompt_build, before_compaction, session_end, before_reset, command:new/reset, message_received). Tool registration has been removed from this adapter — agents use the `quaid` CLI instead (see `projects/quaid/TOOLS.md`).
 - `Claude Code adapter` (`modules/quaid/adaptors/claude_code/adapter.py`): Python adapter for Claude Code sessions; hooks-based lifecycle, deferred notifications via pending file.
+- `Codex adapter` (`modules/quaid/adaptors/codex/adapter.py`): Python adapter for Codex sessions; hook-based lifecycle (`SessionStart`, `UserPromptSubmit`, `Stop`), deferred notifications via pending file, and host-managed `codex app-server` provider path.
 - `CLI wrapper` (`modules/quaid/quaid`): operational entrypoint to Python modules.
 
 ## Plugin Foundation (Phase 1)

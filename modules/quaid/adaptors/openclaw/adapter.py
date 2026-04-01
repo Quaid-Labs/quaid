@@ -25,6 +25,59 @@ class OpenClawAdapter(QuaidAdapter):
     """
 
     _MAIN_SESSION_KEY = "agent:main:main"
+    _INSTALLER_MODEL_DEFAULTS = {
+        "anthropic": {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"},
+        "openai": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
+        "openrouter": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
+        "together": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
+        "ollama": {"deep": "llama3.1:70b", "fast": "llama3.1:8b"},
+    }
+    _PROVIDER_ALIASES = {
+        "openai-codex": "openai",
+        "anthropic-claude-code": "anthropic",
+    }
+
+    @classmethod
+    def _normalize_installer_provider(cls, provider: str) -> str:
+        normalized = str(provider or "").strip().lower()
+        if not normalized:
+            return ""
+        return cls._PROVIDER_ALIASES.get(normalized, normalized)
+
+    def _detect_gateway_primary_provider(self) -> str:
+        cfg_path = self.get_gateway_config_path()
+        if cfg_path:
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                primary = str(
+                    cfg.get("agents", {}).get("main", {}).get("modelPrimary")
+                    or cfg.get("agents", {}).get("defaults", {}).get("modelPrimary")
+                    or cfg.get("agents", {}).get("main", {}).get("model", {}).get("primary")
+                    or cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary")
+                    or ""
+                ).strip()
+                if "/" in primary:
+                    return str(primary.split("/", 1)[0] or "").strip().lower()
+            except Exception:
+                pass
+        profiles_path = self._get_agent_config_dir() / "auth-profiles.json"
+        if profiles_path.exists():
+            try:
+                with open(profiles_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                last_good = data.get("lastGood", {}) if isinstance(data, dict) else {}
+                preferred = ("openai-codex", "openai", "anthropic")
+                for p in preferred:
+                    if last_good.get(p):
+                        return p
+                for p in last_good.keys():
+                    normalized = str(p or "").strip().lower()
+                    if normalized:
+                        return normalized
+            except Exception:
+                pass
+        return ""
 
     @staticmethod
     def _score_session_row(session: dict, fallback_mtime_ms: float) -> float:
@@ -347,23 +400,42 @@ class OpenClawAdapter(QuaidAdapter):
         return GatewayLLMProvider(port=port, token=token)
 
     def installer_supported_providers(self) -> list:
-        return ["anthropic", "openai", "openrouter", "together", "ollama"]
+        providers = set(self._INSTALLER_MODEL_DEFAULTS.keys())
+        detected = self._detect_gateway_primary_provider()
+        if detected:
+            providers.add(str(detected).strip().lower())
+        return sorted(providers)
 
     def installer_default_models(self, provider: str) -> Optional[dict]:
-        p = str(provider or "").strip().lower()
-        if p == "anthropic":
-            return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
-        if p in ("openai", "openrouter", "together"):
-            return {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"}
-        if p == "ollama":
-            return {"deep": "llama3.1:70b", "fast": "llama3.1:8b"}
-        return None
+        key = self._normalize_installer_provider(provider)
+        model_pair = self._INSTALLER_MODEL_DEFAULTS.get(key)
+        if not model_pair:
+            return None
+        return {"deep": str(model_pair["deep"]), "fast": str(model_pair["fast"])}
 
     def get_fast_provider_default(self) -> str:
-        return "anthropic"
+        detected = self._detect_gateway_primary_provider()
+        return detected or "anthropic"
 
     def get_deep_provider_default(self) -> str:
-        return "anthropic"
+        detected = self._detect_gateway_primary_provider()
+        return detected or "anthropic"
+
+    def get_fast_model_default(self, provider: str) -> Optional[str]:
+        p = str(provider or "").strip().lower()
+        if not p or p == "default":
+            p = self.get_fast_provider_default()
+        defaults = self.installer_default_models(p) or {}
+        model = str(defaults.get("fast", "")).strip()
+        return model or None
+
+    def get_deep_model_default(self, provider: str) -> Optional[str]:
+        p = str(provider or "").strip().lower()
+        if not p or p == "default":
+            p = self.get_deep_provider_default()
+        defaults = self.installer_default_models(p) or {}
+        model = str(defaults.get("deep", "")).strip()
+        return model or None
 
     def _get_agent_config_dir(self) -> Path:
         """Path to the gateway's agent config directory."""

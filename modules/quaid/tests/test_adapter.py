@@ -501,7 +501,8 @@ class TestOpenClawAdapter:
             assert "send" in cmd
             assert "test message" in cmd
 
-    def test_installer_provider_surface(self):
+    def test_installer_provider_surface(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         adapter = OpenClawAdapter()
         assert set(adapter.installer_supported_providers()) >= {"anthropic", "openai", "ollama"}
         assert adapter.installer_default_models("anthropic") == {
@@ -514,6 +515,21 @@ class TestOpenClawAdapter:
         }
         assert adapter.get_deep_provider_default() == "anthropic"
         assert adapter.get_fast_provider_default() == "anthropic"
+
+    def test_installer_provider_surface_detects_gateway_provider(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(
+            json.dumps({"agents": {"defaults": {"modelPrimary": "openai-codex/gpt-5.4"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: home)
+        adapter = OpenClawAdapter()
+        assert adapter.get_deep_provider_default() == "openai-codex"
+        assert adapter.get_fast_provider_default() == "openai-codex"
+        assert adapter.get_deep_model_default("default") == "gpt-5.4"
+        assert adapter.get_fast_model_default("default") == "gpt-5.4-mini"
 
 
 class TestClaudeCodeAdapter:
