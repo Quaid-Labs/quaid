@@ -37,6 +37,10 @@ tmux list-windows -t livetest | grep -q 'CDX-tester'  || tmux new-window -t live
 tmux list-windows -t livetest | grep -q 'CDX$'        || tmux new-window -t livetest -n CDX
 ```
 
+Scripts shipped with the livetest suite (relative to repo root):
+- `tests/livetest/scripts/tmux-msg.sh` — inter-agent messaging
+- `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
+
 Start a tester agent in each `-tester` window using the CLI from your config
 (default `codex --yolo`). The tester's working directory should be the root of
 this repo so it can read the skill file:
@@ -49,6 +53,20 @@ tmux send-keys -t livetest:CDX-tester "cd /path/to/quaid && TESTER_CLI" Enter
 
 On first message to each tester, send the contents of `TESTER.SKILL.md` as the
 opening context, along with which platform it is testing and its tmux window name.
+
+Start nudge loops for each tester window (keeps agents active during long runs):
+```bash
+LIVETEST_DIR=tests/livetest/scripts
+$LIVETEST_DIR/livetest-nudge.sh -w livetest:CC-tester  -r "Run N" &; CC_NUDGE=$!
+$LIVETEST_DIR/livetest-nudge.sh -w livetest:OC-tester  -r "Run N" &; OC_NUDGE=$!
+$LIVETEST_DIR/livetest-nudge.sh -w livetest:CDX-tester -r "Run N" &; CDX_NUDGE=$!
+echo "Nudge PIDs: CC=$CC_NUDGE OC=$OC_NUDGE CDX=$CDX_NUDGE"
+```
+
+Kill nudges at run end:
+```bash
+kill $CC_NUDGE $OC_NUDGE $CDX_NUDGE 2>/dev/null
+```
 
 Open the platform interaction panes (SSH to remote, start platforms after install):
 

@@ -18,7 +18,7 @@ At the start of every session:
 2. Request nudges from the looper so you keep moving if you go idle:
    ```bash
    TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-     ~/quaidcode/util/scripts/tmux-msg.sh 5 "start nudge on window <your-window-number>"
+     tests/livetest/scripts/tmux-msg.sh 5 "start nudge on window <your-window-number>"
    ```
 3. All subsequent coordinator messages should include your window as the source.
 
@@ -192,14 +192,14 @@ On FAIL: send an ISSUE to the coordinator with the full platform pane capture.
 ### Status updates (after each milestone)
 ```
 TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-  ~/quaidcode/util/scripts/tmux-msg.sh 4 \
+  tests/livetest/scripts/tmux-msg.sh 4 \
   "STATUS: M3 PASS — 20 nodes, 12 edges, compact extraction verified"
 ```
 
 ### Issue reports (when something fails)
 ```
 TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-  ~/quaidcode/util/scripts/tmux-msg.sh 4 \
+  tests/livetest/scripts/tmux-msg.sh 4 \
   "ISSUE [M5]: injection returned empty context. Command: ssh ... quaid recall. Error: [first 3 lines]. Tried: waited 60s, re-checked DB."
 ```
 
@@ -227,7 +227,7 @@ wait for their ruling. The coordinator applies the four-condition test.
 
 ## Sending Messages — Important Rules
 
-- Always use `~/quaidcode/util/scripts/tmux-msg.sh` for inter-agent messages.
+- Always use `tests/livetest/scripts/tmux-msg.sh` for inter-agent messages.
   Never use raw `tmux send-keys` for messages to other agents.
 - Always include `TMUX_MSG_SENDER` and `TMUX_MSG_SOURCE` env vars.
 - Avoid bracket characters `[` and `]` in tmux messages — they can trigger

@@ -31,7 +31,11 @@ milestones on each platform and report back.
 
 ### On your machine (coordinator)
 
-- `tmux` installed
+- `tmux` installed — **the coordinator must run inside a tmux pane.** The
+  inter-agent messaging system (`scripts/tmux-msg.sh`) sends messages by
+  writing to tmux panes. If the coordinator is not in a tmux session, testers
+  cannot message it back and the run will stall. Start a tmux session before
+  launching the coordinator agent.
 - SSH access to the remote host (key-based, no passphrase prompt)
 - The tester agent CLI available (`codex --yolo` by default — change in config)
 - This repo checked out on `canary`
