@@ -96,7 +96,7 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "quaid/TOOLS.md" in context
     assert "codex startup docs" in context
-    assert ensure_alive_calls == []
+    assert ensure_alive_calls == [True]
     assert sweep_calls == ["codex-s1"]
     assert not (tmp_path / ".claude" / "rules" / "quaid-projects.md").exists()
     assert "emitted Codex startup context" in err

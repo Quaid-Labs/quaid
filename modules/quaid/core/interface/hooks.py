@@ -809,9 +809,11 @@ def hook_session_init(args):
     # externally (e.g. OC gateway owns its daemon lifecycle — calling
     # ensure_alive() from the hook races the gateway at startup and produces
     # duplicate daemon processes).
+    # CDX does not manage the daemon externally — include it here so rolling
+    # extraction runs for Codex sessions.
     try:
         from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
-        _daemon_externally_managed = adapter_id in ("openclaw", "codex")
+        _daemon_externally_managed = adapter_id in ("openclaw",)
         if not _daemon_externally_managed:
             try:
                 ensure_alive()
