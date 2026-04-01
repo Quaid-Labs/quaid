@@ -49,7 +49,7 @@ MATRIX_CACHE_FILE = "compatibility-matrix.json"
 
 # GitHub raw URL for the compatibility matrix
 MATRIX_URL = (
-    "https://raw.githubusercontent.com/Quaid-Labs/quaid/main/compatibility.json"
+    "https://raw.githubusercontent.com/quaid-labs/quaid/main/compatibility.json"
 )
 
 # Adaptive check intervals based on current state
@@ -323,7 +323,7 @@ def preflight_compatibility_check(
             "ok": False,
             "status": "kill_switch",
             "message": matrix.get("kill_message", "Quaid installations are currently suspended."),
-            "fix": "Check https://github.com/Quaid-Labs/quaid for status updates.",
+            "fix": "Check https://github.com/quaid-labs/quaid for status updates.",
         }
 
     state = evaluate_compatibility(info, quaid_version, matrix)

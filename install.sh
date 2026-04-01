@@ -84,7 +84,7 @@ else
     fi
 fi
 
-MATRIX_URL="https://raw.githubusercontent.com/Quaid-Labs/quaid/main/compatibility.json"
+MATRIX_URL="https://raw.githubusercontent.com/quaid-labs/quaid/main/compatibility.json"
 
 # Fetch compatibility matrix and run preflight check
 _preflight_ok=true

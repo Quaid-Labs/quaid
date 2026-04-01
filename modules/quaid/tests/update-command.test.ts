@@ -10,14 +10,14 @@ describe("quaid update helpers", () => {
     const parsed = __test.parseArgs([
       "--check",
       "--repo",
-      "Quaid-Labs/quaid",
+      "quaid-labs/quaid",
       "--tag=v0.2.16-alpha",
       "--dry-run",
       "--workspace",
       "/tmp/quaid-home",
     ]);
     expect(parsed.check).toBe(true);
-    expect(parsed.repo).toBe("Quaid-Labs/quaid");
+    expect(parsed.repo).toBe("quaid-labs/quaid");
     expect(parsed.tag).toBe("v0.2.16-alpha");
     expect(parsed.dryRun).toBe(true);
     expect(parsed.workspace).toBe("/tmp/quaid-home");
