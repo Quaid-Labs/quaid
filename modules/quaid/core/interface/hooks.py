@@ -153,7 +153,7 @@ def _extract_lifecycle_command(text: str) -> str:
     if not value.startswith("/"):
         return ""
     command = value.split()[0].lower()
-    if command in ("/new", "/reset", "/restart"):
+    if command in ("/new", "/clear", "/reset", "/restart"):
         return command
     return ""
 
@@ -667,7 +667,7 @@ def hook_codex_stop(args):
         from core.extraction_daemon import write_signal
 
         lifecycle_command = _detect_codex_lifecycle_command(hook_input, transcript_path)
-        signal_type = "session_end" if lifecycle_command in ("/new", "/reset", "/restart") else "rolling"
+        signal_type = "session_end" if lifecycle_command in ("/new", "/clear", "/reset", "/restart") else "rolling"
         meta = {"source": "hook_codex_stop"}
         if lifecycle_command:
             meta["command"] = lifecycle_command
