@@ -968,8 +968,8 @@ def _load_config_inner() -> MemoryConfig:
         fast_reasoning_provider=models_data.get('fast_reasoning_provider', models_data.get('fastReasoningProvider', 'default')),
         deep_reasoning_provider=models_data.get('deep_reasoning_provider', models_data.get('deepReasoningProvider', 'default')),
         embeddings_provider=models_data.get('embeddings_provider', models_data.get('embeddingsProvider', 'ollama')),
-        fast_reasoning=models_data.get('fast_reasoning', ModelConfig.fast_reasoning),
-        deep_reasoning=models_data.get('deep_reasoning', ModelConfig.deep_reasoning),
+        fast_reasoning=models_data.get('fast_reasoning', models_data.get('fastReasoning', ModelConfig.fast_reasoning)),
+        deep_reasoning=models_data.get('deep_reasoning', models_data.get('deepReasoning', ModelConfig.deep_reasoning)),
         fast_reasoning_effort=_coerce_reasoning_effort(
             models_data.get('fast_reasoning_effort', models_data.get('fastReasoningEffort', ModelConfig.fast_reasoning_effort)),
             ModelConfig.fast_reasoning_effort,
