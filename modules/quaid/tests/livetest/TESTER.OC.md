@@ -152,6 +152,12 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=OC_INSTANCE \
 
 ## Milestone Notes
 
+### M0 — Install
+If the installer fails at model selection with a "gateway model rejected" or
+"PING failed" error, the OC gateway does not have that model registered. Report
+to coordinator with the exact model name that was rejected — do not retry the
+install. The coordinator must resolve the gateway model configuration first.
+
 ### M1 — Extraction via `/new`
 Apply the version quirk above. Check hook trace for the correct marker for the
 installed OC version. FTS direct check is the primary verification — use

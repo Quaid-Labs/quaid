@@ -198,10 +198,16 @@ that is an M0 FAIL — investigate the installer, fix, and retry.
 
 ### Pre-install coordinator prep
 
-**OC only** — ensure the OC gateway is running before the OC agent tries to install:
+**OC only** — ensure the OC gateway is running and has the expected models registered before the OC agent tries to install:
 ```bash
 ssh REMOTE_HOST 'pgrep -f openclaw-gateway > /dev/null 2>&1 || (nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &); for i in $(seq 1 30); do curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break || sleep 2; done'
 ```
+
+**OC only** — verify gateway models are registered (installer PINGs these before proceeding):
+```bash
+ssh REMOTE_HOST 'curl -sf http://localhost:18789/v1/models | python3 -c "import json,sys; ms=[m[\"id\"] for m in json.load(sys.stdin).get(\"data\",[])]; print(\"Models:\", ms)"'
+```
+Confirm `claude-haiku-4-5` (or equivalent fast lane model) appears in the list. If the model is missing, the installer will fail hard at model selection — add the model to the gateway config before proceeding.
 
 **CC only** — clear any stale Quaid hooks before install:
 ```bash
