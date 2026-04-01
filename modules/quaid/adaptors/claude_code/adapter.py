@@ -357,8 +357,21 @@ class ClaudeCodeAdapter(QuaidAdapter):
                     continue
 
                 # Handle wrapped message format
-                if "message" in obj and isinstance(obj["message"], dict):
-                    msg = obj["message"]
+                # CC v2.1.89+ may encode message as a Python repr string instead
+                # of an inline JSON dict — use ast.literal_eval as fallback.
+                if "message" in obj:
+                    raw_msg = obj["message"]
+                    if isinstance(raw_msg, dict):
+                        msg = raw_msg
+                    elif isinstance(raw_msg, str):
+                        try:
+                            import ast
+                            parsed = ast.literal_eval(raw_msg)
+                            msg = parsed if isinstance(parsed, dict) else obj
+                        except (ValueError, SyntaxError):
+                            msg = obj
+                    else:
+                        msg = obj
                 else:
                     msg = obj
 
