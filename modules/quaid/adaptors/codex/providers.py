@@ -8,6 +8,7 @@ import logging
 import os
 import queue
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -386,6 +387,245 @@ def close_shared_codex_manager() -> None:
 atexit.register(close_shared_codex_manager)
 
 
+_BROKER_LOCK = threading.RLock()
+_BROKER_CLIENT: Optional["_CodexPlatformBrokerClient"] = None
+
+
+def _quaid_home_dir() -> Path:
+    env = str(os.environ.get("QUAID_HOME", "") or "").strip()
+    return Path(env).resolve() if env else (Path.home() / "quaid")
+
+
+def _broker_run_dir() -> Path:
+    d = _quaid_home_dir() / "shared" / "run"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _broker_sock_path() -> Path:
+    return _broker_run_dir() / "codex-app-server-broker.sock"
+
+
+def _broker_pid_path() -> Path:
+    return _broker_run_dir() / "codex-app-server-broker.pid"
+
+
+def _read_broker_pid() -> Optional[int]:
+    p = _broker_pid_path()
+    if not p.is_file():
+        return None
+    try:
+        pid = int(p.read_text(encoding="utf-8").strip())
+        os.kill(pid, 0)
+        return pid
+    except (ValueError, OSError):
+        p.unlink(missing_ok=True)
+        return None
+
+
+class _CodexAppServerBroker:
+    """Platform-shared broker that owns a single Codex app-server process."""
+
+    def __init__(self):
+        self._manager = get_shared_codex_manager()
+        self._running = False
+        self._server_sock: Optional[socket.socket] = None
+        self._lock = threading.RLock()
+
+    def _handle_client(self, conn: socket.socket) -> None:
+        with conn:
+            buf = ""
+            while self._running:
+                try:
+                    data = conn.recv(4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                buf += data.decode("utf-8", errors="replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    op = str(msg.get("op") or "").strip()
+                    if op == "status":
+                        resp = {"ok": True, "pid": os.getpid()}
+                    elif op == "run_turn":
+                        params = msg.get("params") if isinstance(msg, dict) else None
+                        if not isinstance(params, dict):
+                            resp = {"ok": False, "error": "Invalid run_turn params"}
+                        else:
+                            try:
+                                result = self._manager.run_turn(
+                                    prompt=str(params.get("prompt") or ""),
+                                    model=str(params.get("model") or ""),
+                                    effort=str(params.get("effort") or ""),
+                                    service_tier=str(params.get("service_tier") or ""),
+                                    timeout=float(params.get("timeout") or 600.0),
+                                    cwd=(str(params.get("cwd")).strip() if params.get("cwd") else None),
+                                )
+                                resp = {"ok": True, "result": result}
+                            except Exception as exc:
+                                resp = {"ok": False, "error": str(exc)}
+                    else:
+                        resp = {"ok": False, "error": f"Unknown op: {op}"}
+                    try:
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    except OSError:
+                        return
+
+    def run(self) -> None:
+        sock_path = _broker_sock_path()
+        pid_path = _broker_pid_path()
+        sock_path.unlink(missing_ok=True)
+        server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server_sock.bind(str(sock_path))
+        server_sock.listen(32)
+        self._server_sock = server_sock
+        self._running = True
+        pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+        def _shutdown(_sig, _frame):
+            self._running = False
+            try:
+                server_sock.close()
+            except OSError:
+                pass
+
+        import signal
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, _shutdown)
+            signal.signal(signal.SIGINT, _shutdown)
+
+        try:
+            while self._running:
+                try:
+                    conn, _ = server_sock.accept()
+                except OSError:
+                    break
+                threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
+        finally:
+            self._running = False
+            pid_path.unlink(missing_ok=True)
+            sock_path.unlink(missing_ok=True)
+            close_shared_codex_manager()
+
+
+def _start_broker_process() -> int:
+    pid = os.fork()
+    if pid == 0:
+        os.setsid()
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, 0)
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        os.environ["QUAID_CODEX_BROKER_PROCESS"] = "1"
+        try:
+            _CodexAppServerBroker().run()
+        finally:
+            os._exit(0)
+    return pid
+
+
+def ensure_codex_broker_alive() -> int:
+    pid = _read_broker_pid()
+    if pid is not None:
+        return pid
+    lock_path = _broker_run_dir() / "codex-app-server-broker-start.lock"
+    import fcntl
+    fd = open(lock_path, "w", encoding="utf-8")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        pid = _read_broker_pid()
+        if pid is not None:
+            return pid
+        child_pid = _start_broker_process()
+        sock = _broker_sock_path()
+        for _ in range(30):
+            if sock.exists():
+                return child_pid
+            time.sleep(0.1)
+        raise RuntimeError("Codex app-server broker did not create socket in time")
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        fd.close()
+        lock_path.unlink(missing_ok=True)
+
+
+class _CodexPlatformBrokerClient:
+    """Client for platform-shared Codex app-server broker."""
+
+    def _send(self, msg: dict, timeout: float) -> dict:
+        ensure_codex_broker_alive()
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(max(5.0, float(timeout) + 10.0))
+            sock.connect(str(_broker_sock_path()))
+            sock.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+            buf = ""
+            while "\n" not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise RuntimeError("Codex broker connection closed unexpectedly")
+                buf += chunk.decode("utf-8", errors="replace")
+            line = buf.split("\n")[0].strip()
+            if not line:
+                raise RuntimeError("Codex broker returned empty response")
+            payload = json.loads(line)
+            if not isinstance(payload, dict):
+                raise RuntimeError("Codex broker returned invalid response payload")
+            if not bool(payload.get("ok")):
+                raise RuntimeError(str(payload.get("error") or "Codex broker request failed"))
+            return payload.get("result") if isinstance(payload.get("result"), dict) else payload
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def run_turn(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        effort: str,
+        service_tier: str = "",
+        timeout: float = 600.0,
+        cwd: Optional[str] = None,
+    ) -> dict:
+        return self._send(
+            {
+                "op": "run_turn",
+                "params": {
+                    "prompt": prompt,
+                    "model": model,
+                    "effort": effort,
+                    "service_tier": service_tier,
+                    "timeout": timeout,
+                    "cwd": cwd or os.getcwd(),
+                },
+            },
+            timeout=timeout,
+        )
+
+
+def get_platform_codex_broker_client() -> _CodexPlatformBrokerClient:
+    global _BROKER_CLIENT
+    with _BROKER_LOCK:
+        if _BROKER_CLIENT is None:
+            _BROKER_CLIENT = _CodexPlatformBrokerClient()
+        return _BROKER_CLIENT
+
+
 class CodexLLMProvider(LLMProvider):
     """Routes stateless turns through a shared Codex app-server sidecar."""
 
@@ -448,15 +688,25 @@ class CodexLLMProvider(LLMProvider):
     def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
         _ = max_tokens  # turn/start schema does not currently expose an output-token cap.
         prompt = self._build_prompt(messages)
-        manager = self._manager or get_shared_codex_manager()
-        result = manager.run_turn(
-            prompt=prompt,
-            model=self._resolve_model(model_tier),
-            effort=self._resolve_effort(model_tier),
-            service_tier="fast" if model_tier == "fast" else "",
-            timeout=timeout,
-            cwd=os.getcwd(),
-        )
+        if self._manager is not None:
+            result = self._manager.run_turn(
+                prompt=prompt,
+                model=self._resolve_model(model_tier),
+                effort=self._resolve_effort(model_tier),
+                service_tier="fast" if model_tier == "fast" else "",
+                timeout=timeout,
+                cwd=os.getcwd(),
+            )
+        else:
+            broker = get_platform_codex_broker_client()
+            result = broker.run_turn(
+                prompt=prompt,
+                model=self._resolve_model(model_tier),
+                effort=self._resolve_effort(model_tier),
+                service_tier="fast" if model_tier == "fast" else "",
+                timeout=timeout,
+                cwd=os.getcwd(),
+            )
         usage = result.get("usage") if isinstance(result, dict) else {}
         if not isinstance(usage, dict):
             usage = {}
