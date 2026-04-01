@@ -469,6 +469,26 @@ function latestResetBackup(sessionId: string): string | null {
   }
 }
 
+// When OC reuses a conversation file across resets, the backup is named after
+// the physical file (e.g. a34175cc.jsonl.reset.*), not the session ID.
+// Use the physical file path to find the correct backup.
+function latestResetBackupFromPath(filePath: string): string | null {
+  if (!filePath) return null;
+  try {
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath);
+    // Strip any existing .reset.* suffix so we search from the base name.
+    const jsonlBase = base.includes(".jsonl.reset.") ? base.slice(0, base.indexOf(".jsonl.reset.")) + ".jsonl" : base;
+    const prefix = `${jsonlBase}.reset.`;
+    const names = fs.readdirSync(dir).filter((n) => n.startsWith(prefix));
+    if (!names.length) return null;
+    names.sort();
+    return path.join(dir, names[names.length - 1]);
+  } catch {
+    return null;
+  }
+}
+
 function preserveSessionTranscript(sessionId: string, preferredPath: string | null | undefined, reason: string): string | null {
   const candidates: string[] = [];
   const preferred = String(preferredPath || "").trim();
@@ -552,6 +572,7 @@ function writeDaemonSignal(
   if (!resolvedPath && signalType === "reset") {
     // Original JSONL not found — OC may have moved it entirely (not just emptied it).
     // Try the .reset.* backup directly so the daemon still gets content to extract.
+    // Use path-based lookup first (handles reused conversation filenames), then session ID.
     const backup = latestResetBackup(sessionId);
     if (backup) {
       resolvedPath = backup;
@@ -568,18 +589,21 @@ function writeDaemonSignal(
   // or contains only a minimal post-reset stub (< 200 bytes) and a .reset.*
   // backup exists, use the backup so the daemon has content to extract from.
   // OC 2026.3.31 leaves a ~124-byte stub after reset; 0-byte check was too narrow.
+  // Prefer path-based backup lookup (handles reused conversation filenames where the
+  // backup is named after the physical file, not the session ID).
   if (signalType === "reset") {
     try {
       const stat = fs.statSync(resolvedPath);
       if (stat.size < 200) {
-        const backup = latestResetBackup(sessionId);
+        const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
         if (backup) {
           resolvedPath = backup;
         }
       }
     } catch {
       // File missing (ENOENT) — OC moved it entirely to a .reset.* backup.
-      const backup = latestResetBackup(sessionId);
+      // Use path-based lookup first (handles reused conversation filenames), then session ID.
+      const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
       if (backup) {
         resolvedPath = backup;
       }

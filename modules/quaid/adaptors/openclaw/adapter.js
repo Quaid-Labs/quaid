@@ -304,6 +304,21 @@ function latestResetBackup(sessionId) {
     return null;
   }
 }
+function latestResetBackupFromPath(filePath) {
+  if (!filePath) return null;
+  try {
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath);
+    const jsonlBase = base.includes(".jsonl.reset.") ? base.slice(0, base.indexOf(".jsonl.reset.")) + ".jsonl" : base;
+    const prefix = `${jsonlBase}.reset.`;
+    const names = fs.readdirSync(dir).filter((n) => n.startsWith(prefix));
+    if (!names.length) return null;
+    names.sort();
+    return path.join(dir, names[names.length - 1]);
+  } catch {
+    return null;
+  }
+}
 function preserveSessionTranscript(sessionId, preferredPath, reason) {
   const candidates = [];
   const preferred = String(preferredPath || "").trim();
@@ -388,13 +403,13 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     try {
       const stat = fs.statSync(resolvedPath);
       if (stat.size < 200) {
-        const backup = latestResetBackup(sessionId);
+        const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
         if (backup) {
           resolvedPath = backup;
         }
       }
     } catch {
-      const backup = latestResetBackup(sessionId);
+      const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
       if (backup) {
         resolvedPath = backup;
       }
