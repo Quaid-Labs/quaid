@@ -10,6 +10,8 @@
 
 Quaid is not another memory plugin — it is an **active knowledge layer** for agents that need to operate over time. Local-first, cross-platform, and built for long-running agents, it captures, maintains, and retrieves knowledge across sessions while keeping your data on your machine. Quaid is designed to solve the failure modes that show up once agents leave a single context window behind: resets, stale facts, project drift, and rising token cost. To study that regime, we built AgentLife — a benchmark for persistence, recall under resets, and cross-session coherence.
 
+**Skills give an agent behavior. Quaid gives it understanding.**
+
 **Mac / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
@@ -54,7 +56,11 @@ Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
 _“We Can Remember It for You Wholesale.”_
 
-A long-term goal for Quaid is portable memory interchange: shareable memory packs that can travel with a project — similar to how skills are shared today, but with domain knowledge and curated context included. Quaid's local-first, file-based architecture makes the portability side tractable. The hard problems — sanitizing personal data out of a memory graph, consolidating and curating memories for sharing, and defining interchange formats that hold up across runtimes — remain open.
+Skills give an agent behavior. Quaid gives it understanding.
+
+A long-term goal is portable agent identity: a complete, curated package of domain knowledge, project context, and learned personality that can be deployed to a fresh agent instance — the way skills are shared today, but with genuine depth. A sales agent that already knows your product and customers. A dev agent that arrives knowing the codebase. A support agent whose knowledge evolves and can be redistributed.
+
+Quaid's local-first architecture makes the portability side tractable today. The hard problems — sanitizing personal data out of a memory graph, curating and consolidating memories for sharing, and defining interchange formats that hold up across runtimes — remain open and unsolved.
 This is vision, not a released feature.
 
 ## Benchmarks
