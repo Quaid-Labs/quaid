@@ -13,8 +13,11 @@ you are running in when they send you this file.
 
 At the start of every session:
 
-1. Confirm which platform you are testing (OC, CC, or CDX) and your tmux window
-   from the coordinator's opening message.
+1. Confirm from the coordinator's opening message:
+   - Which platform you are testing (OC, CC, or CDX)
+   - Your own tmux window name (e.g. `livetest:OC-tester`)
+   - The **coordinator's pane address** (e.g. `main:4.0`) — use this as the
+     target for all STATUS and ISSUE messages you send back
 2. Request nudges from the looper so you keep moving if you go idle:
    ```bash
    TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
@@ -192,14 +195,14 @@ On FAIL: send an ISSUE to the coordinator with the full platform pane capture.
 ### Status updates (after each milestone)
 ```
 TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-  tests/livetest/scripts/tmux-msg.sh 4 \
+  tests/livetest/scripts/tmux-msg.sh <coordinator-pane> \
   "STATUS: M3 PASS — 20 nodes, 12 edges, compact extraction verified"
 ```
 
 ### Issue reports (when something fails)
 ```
 TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-  tests/livetest/scripts/tmux-msg.sh 4 \
+  tests/livetest/scripts/tmux-msg.sh <coordinator-pane> \
   "ISSUE [M5]: injection returned empty context. Command: ssh ... quaid recall. Error: [first 3 lines]. Tried: waited 60s, re-checked DB."
 ```
 

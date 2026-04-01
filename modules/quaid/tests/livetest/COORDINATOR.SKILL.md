@@ -24,6 +24,10 @@ All references to REMOTE_HOST, WORKSPACE, OWNER_NAME, INSTANCE_NAME, and
 TESTER_CLI below are read from `livetest-config.json`. Substitute actual values
 before running any command.
 
+Also record your own tmux pane address from the config (`tmux.coordinator_pane`,
+e.g. `main:4.0`). You will pass this to every tester at boot so they know where
+to send STATUS and ISSUE messages back to you.
+
 ---
 
 ## Step 1 — Set Up the livetest tmux Session
@@ -52,7 +56,13 @@ tmux send-keys -t livetest:CDX-tester "cd /path/to/quaid && TESTER_CLI" Enter
 ```
 
 On first message to each tester, send the contents of `TESTER.SKILL.md` as the
-opening context, along with which platform it is testing and its tmux window name.
+opening context. Include:
+- Which platform it is testing (OC, CC, or CDX)
+- Its own tmux window name (e.g. `livetest:OC-tester`)
+- **Your coordinator pane address** (from `tmux.coordinator_pane` in config)
+
+The tester uses your pane address as the target for all STATUS and ISSUE messages.
+Without it, testers cannot reach you.
 
 Start nudge loops for each tester window (keeps agents active during long runs):
 ```bash
