@@ -128,7 +128,7 @@ wipe_oc() {
     run_remote "kill OC extraction daemons" \
         "pkill -9 -f extraction_daemon.py 2>/dev/null; echo 'OC daemons killed (or none running)'"
     run_remote "uninstall OC plugin" \
-        "openclaw plugins uninstall quaid 2>/dev/null; echo 'OC plugin uninstalled (or not installed)'"
+        "echo y | openclaw plugins uninstall quaid 2>/dev/null; echo 'OC plugin uninstalled (or not installed)'"
     run_remote "wipe OC silo + extensions" \
         "rm -rf $WORKSPACE/$OC_INSTANCE && rm -rf ~/.openclaw/extensions/quaid && echo 'OC silo + extensions wiped'"
     run_remote "clear OC session transcripts" \
