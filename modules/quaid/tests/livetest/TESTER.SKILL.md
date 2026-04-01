@@ -147,10 +147,15 @@ TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
 
 ### Issue reports (when something fails)
 ```
-TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
+THIS_IS_A_CRITICAL_MESSAGE=true TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
   tests/livetest/scripts/tmux-msg.sh <coordinator-pane> \
   "ISSUE [M5]: injection returned empty context. Command: ssh ... quaid recall. Error: [first 3 lines]. Tried: waited 60s, re-checked DB."
 ```
+
+Always use `THIS_IS_A_CRITICAL_MESSAGE=true` for ISSUE messages. The coordinator may be
+processing tool calls when your ISSUE arrives; the default 60s wait will time out and
+drop the message. ISSUE messages are blocking (you're waiting for a response anyway),
+so immediate delivery is always correct.
 
 Every issue report must include:
 1. Which milestone failed
@@ -179,11 +184,13 @@ wait for their ruling. The coordinator applies the four-condition test.
 - Always use `tests/livetest/scripts/tmux-msg.sh` for inter-agent messages.
   Never use raw `tmux send-keys` for messages to other agents.
 - Always include `TMUX_MSG_SENDER` and `TMUX_MSG_SOURCE` env vars.
-- **Never set `TMUX_MSG_WAIT=0`** for STATUS or ISSUE messages to the
-  coordinator. The coordinator may be mid-sentence when your message arrives.
+- **Never set `TMUX_MSG_WAIT=0`** for STATUS messages to the coordinator.
   The default wait (60s) lets the draft-detection logic hold off until they
-  finish typing. Only use `THIS_IS_A_CRITICAL_MESSAGE=true` if the message
-  is a genuine emergency that requires immediate interruption.
+  finish typing.
+- **Always use `THIS_IS_A_CRITICAL_MESSAGE=true` for ISSUE messages.** The
+  coordinator is often mid-tool-call when an ISSUE arrives; the 60s wait will
+  time out and silently drop the message. ISSUE messages are blocking (you
+  wait for a reply anyway), so bypass draft detection unconditionally.
 - Avoid bracket characters `[` and `]` in tmux messages — they can trigger
   shell quote mode in the receiving pane.
 
