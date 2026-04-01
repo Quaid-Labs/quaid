@@ -24,9 +24,42 @@ All references to REMOTE_HOST, WORKSPACE, OWNER_NAME, INSTANCE_NAME, and
 TESTER_CLI below are read from `livetest-config.json`. Substitute actual values
 before running any command.
 
-Also record your own tmux pane address from the config (`tmux.coordinator_pane`,
-e.g. `main:4.0`). You will pass this to every tester at boot so they know where
-to send STATUS and ISSUE messages back to you.
+### Confirm your coordinator pane address
+
+Do this before spawning any testers. Testers need your pane address to send
+STATUS and ISSUE messages back — get it right first.
+
+**Step 1 — Resolve the address.**
+
+Check if `tmux.coordinator_pane` is set in your config. If it is, use that value.
+If it is absent or empty, detect your pane automatically:
+
+```bash
+tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'
+```
+
+This returns your current pane in the form `session:window.pane` (e.g. `main:4.0`).
+
+**Step 2 — Verify by messaging yourself.**
+
+Send a test message to the resolved address and confirm it arrives:
+
+```bash
+COORDINATOR_PANE=<resolved-address>
+TMUX_MSG_SENDER=coordinator TMUX_MSG_SOURCE=$COORDINATOR_PANE \
+  tests/livetest/scripts/tmux-msg.sh "$COORDINATOR_PANE" "coordinator pane verified: $COORDINATOR_PANE"
+```
+
+If the message appears in your pane — you have the right address. If the script
+errors or the message does not appear, you are either not in tmux or the address
+is wrong. Resolve this before continuing. If you are not inside a tmux session,
+ask the user to launch you inside one (see README prerequisite).
+
+**Step 3 — Use this address for the whole run.**
+
+Every message you send to a tester must include your confirmed pane address so
+testers can echo it back in their responses. Do not proceed to Step 1 (session
+setup) until the pane address is confirmed.
 
 ---
 
@@ -89,7 +122,29 @@ tmux send-keys -t livetest:CDX "ssh REMOTE_HOST" Enter
 
 ---
 
-## Step 2 — Record the Run Start SHA
+## Step 2 — Verify Coordinator Pane and Record Run Start SHA
+
+**Do this at the start of every run**, not just once at boot. The pane address
+must be confirmed fresh each run before testers are spawned.
+
+```bash
+# Re-confirm pane (catches moves between runs)
+COORDINATOR_PANE=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}')
+
+# Compare against config if set — warn on mismatch, use detected value
+CONFIG_PANE=$(cat tests/livetest/livetest-config.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('tmux',{}).get('coordinator_pane',''))" 2>/dev/null || echo "")
+if [ -n "$CONFIG_PANE" ] && [ "$CONFIG_PANE" != "$COORDINATOR_PANE" ]; then
+  echo "WARNING: config pane ($CONFIG_PANE) differs from detected pane ($COORDINATOR_PANE). Using detected value."
+fi
+
+# Self-test
+TMUX_MSG_SENDER=coordinator TMUX_MSG_SOURCE=$COORDINATOR_PANE \
+  tests/livetest/scripts/tmux-msg.sh "$COORDINATOR_PANE" \
+  "coordinator self-test: pane confirmed as $COORDINATOR_PANE — run starting"
+```
+
+If the self-test message does not arrive, stop. You are not in tmux or the
+detected address is wrong. Do not spawn testers until this passes.
 
 ```bash
 cd /path/to/quaid && git rev-parse HEAD
