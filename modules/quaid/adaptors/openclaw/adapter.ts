@@ -647,28 +647,33 @@ function writeDaemonSignal(
     return null;
   }
 
-  // For reset signals, OC may have already moved the transcript content to a
-  // .reset.* snapshot before this signal fires. If the resolved path is empty
-  // or contains only a minimal post-reset stub (< 200 bytes) and a .reset.*
-  // backup exists, use the backup so the daemon has content to extract from.
-  // OC 2026.3.31 leaves a ~124-byte stub after reset; 0-byte check was too narrow.
-  // Prefer path-based backup lookup (handles reused conversation filenames where the
-  // backup is named after the physical file, not the session ID).
+  // For reset signals, the session-ID-based backup (.reset.*) is the authoritative
+  // source for extraction: it contains exactly the pre-reset conversation content.
+  // Always prefer it over the resolved live-file path, because OC reuses the physical
+  // file for the new post-reset session (e.g. 46becb55.jsonl -> new session UUID).
+  // When resolvedPath points to the large live file, stat.size >= 200 and the old
+  // size check silently skipped the backup lookup, causing empty transcript extraction.
   if (signalType === "reset") {
-    try {
-      const stat = fs.statSync(resolvedPath);
-      if (stat.size < 200) {
-        const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
+    const sessionBackup = latestResetBackup(sessionId);
+    if (sessionBackup) {
+      resolvedPath = sessionBackup;
+    } else {
+      // No session-ID backup found. Fall back: if the resolved path is a stub
+      // (< 200 bytes) or missing, look for a path-based backup.
+      try {
+        const stat = fs.statSync(resolvedPath);
+        if (stat.size < 200) {
+          const backup = latestResetBackupFromPath(resolvedPath);
+          if (backup) {
+            resolvedPath = backup;
+          }
+        }
+      } catch {
+        // File missing (ENOENT) — look for path-based backup.
+        const backup = latestResetBackupFromPath(resolvedPath);
         if (backup) {
           resolvedPath = backup;
         }
-      }
-    } catch {
-      // File missing (ENOENT) — OC moved it entirely to a .reset.* backup.
-      // Use path-based lookup first (handles reused conversation filenames), then session ID.
-      const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
-      if (backup) {
-        resolvedPath = backup;
       }
     }
   }

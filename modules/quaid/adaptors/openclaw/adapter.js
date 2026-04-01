@@ -449,18 +449,23 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     return null;
   }
   if (signalType === "reset") {
-    try {
-      const stat = fs.statSync(resolvedPath);
-      if (stat.size < 200) {
-        const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
+    const sessionBackup = latestResetBackup(sessionId);
+    if (sessionBackup) {
+      resolvedPath = sessionBackup;
+    } else {
+      try {
+        const stat = fs.statSync(resolvedPath);
+        if (stat.size < 200) {
+          const backup = latestResetBackupFromPath(resolvedPath);
+          if (backup) {
+            resolvedPath = backup;
+          }
+        }
+      } catch {
+        const backup = latestResetBackupFromPath(resolvedPath);
         if (backup) {
           resolvedPath = backup;
         }
-      }
-    } catch {
-      const backup = latestResetBackupFromPath(resolvedPath) || latestResetBackup(sessionId);
-      if (backup) {
-        resolvedPath = backup;
       }
     }
   }
