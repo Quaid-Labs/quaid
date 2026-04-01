@@ -18,7 +18,7 @@
 #
 # Environment:
 #   TMUX_MSG_SENDER  (required) sender identity label
-#   TMUX_MSG_SOURCE  (optional) source pane, default main:4.0
+#   TMUX_MSG_SOURCE  (optional) override source pane; auto-detected from current tmux pane if not set
 #   TMUX_MSG_WAIT    (optional) max seconds to wait for user to finish; default 60; 0 = send immediately
 #   TMUX_MSG_POLL    (optional) poll interval in seconds; default 2
 #
@@ -42,7 +42,9 @@ set -euo pipefail
 
 TARGET="${1:?Usage: tmux-msg.sh <target> <message>}"
 SENDER="${TMUX_MSG_SENDER:-}"
-SENDER_PANE="${TMUX_MSG_SOURCE:-main:4.0}"
+# Auto-detect sender pane from tmux; TMUX_MSG_SOURCE overrides if explicitly set
+_detected_pane="$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || echo "unknown")"
+SENDER_PANE="${TMUX_MSG_SOURCE:-$_detected_pane}"
 WAIT="${TMUX_MSG_WAIT:-60}"
 POLL="${TMUX_MSG_POLL:-2}"
 shift
