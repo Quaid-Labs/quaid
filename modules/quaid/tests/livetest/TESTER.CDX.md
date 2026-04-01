@@ -140,9 +140,16 @@ Use `/clear` (not `/reset`). Verify the pre-clear session is extracted. Do not
 gate on snippet or journal output — that is discretionary and covered in M11.
 
 ### M3 — Rolling Extraction
-CDX does not have `/compact`. After seeding and building context, use `/clear`
-as the extraction trigger. Verify `rolling-extraction.jsonl` has `rolling_stage`
-and `rolling_flush` events the same as OC/CC.
+CDX has no extraction daemon, so there is no `rolling-extraction.jsonl` and no
+`rolling_stage` / `rolling_flush` events. CDX extraction is entirely turn-driven
+via `hook_codex_stop`.
+
+**CDX M3 pass criterion:** After seeding a multi-turn context (5+ turns), send
+`/clear`. Verify that the node count in the DB increased since before the session
+began. If nodes were added, M3 PASS — per-turn extraction is the CDX equivalent
+of rolling extraction.
+
+Do NOT gate on `rolling-extraction.jsonl` for CDX — that file will never exist.
 
 ### M4 — Timeout Extraction
 **SKIP.** See dedicated section above.
