@@ -133,6 +133,21 @@ class QuaidAdapter(abc.ABC):
     def core_markdown_dir(self) -> Path:
         return self.instance_root()
 
+    def get_instance_type(self) -> str:
+        """Return how this adapter determines instance identity.
+
+        Returns:
+            "folder" — instance is derived from the agent's project root
+                       directory (e.g. Claude Code, Codex). Any two agents
+                       running from the same project folder share the same
+                       Quaid silo automatically.
+            "keyed"  — instance is determined by an explicit QUAID_INSTANCE
+                       key injected by the platform (e.g. OpenClaw). Each
+                       agent gets its own key; keys can be reused intentionally
+                       to share a silo.
+        """
+        return "keyed"
+
     # ---- Notifications ----
 
     @abc.abstractmethod

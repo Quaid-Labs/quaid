@@ -837,6 +837,7 @@ def hook_session_init(args):
     # Always call ensure_alive() on session init across all adapters.
     # Daemons are instance-scoped and ensure_alive()/start_daemon() is
     # lock-guarded (PID + flock), so repeated contact points are idempotent.
+    multi_instance_warning = ""
     try:
         from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
         try:
@@ -848,6 +849,70 @@ def hook_session_init(args):
             print(f"[quaid][session-init] swept {swept} orphaned session(s)", file=sys.stderr)
     except Exception as e:
         print(f"[quaid][session-init] orphan sweep error: {e}", file=sys.stderr)
+
+    # Warn when multiple agents share the same instance silo. This setup is
+    # not supported — platform limitations (e.g. Codex /new creating a new
+    # session_id without a lifecycle hook) mean the orphan sweep may flush
+    # one agent's staged carry_facts while another is still mid-conversation,
+    # which can cause memory quality loss.
+    try:
+        import time as _time
+        import os as _os
+        from core.extraction_daemon import _cursor_dir as _get_cursor_dir
+        _cursor_dir = _get_cursor_dir()
+        if _cursor_dir.is_dir():
+            _now = _time.time()
+            _active_threshold = 120  # seconds: transcript modified within 2 min = active
+            for _cf in _cursor_dir.glob("*.json"):
+                try:
+                    _cd = json.loads(_cf.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                _other_sid = _cd.get("session_id", "")
+                if not _other_sid or _other_sid == current_session_id:
+                    continue
+                _tp = _cd.get("transcript_path", "")
+                if not _tp or not _os.path.isfile(_tp):
+                    continue
+                try:
+                    if _now - _os.path.getmtime(_tp) < _active_threshold:
+                        try:
+                            from lib.adapter import get_adapter as _get_adapter
+                            _instance_type = _get_adapter().get_instance_type()
+                        except Exception:
+                            _instance_type = "keyed"
+                        if _instance_type == "folder":
+                            _project_dir = _os.environ.get(
+                                "CLAUDE_PROJECT_DIR",
+                                _os.environ.get("CODEX_PROJECT_DIR", _os.getcwd()),
+                            )
+                            multi_instance_warning = (
+                                "⚠️  [Quaid] WARNING: Multiple agents are sharing the same "
+                                "Quaid instance. On this platform, your Quaid instance is "
+                                f"tied to your project root folder (`{_project_dir}`). Any "
+                                "agent running from that folder shares the same memory silo. "
+                                "Concurrent use by multiple agents is not supported and may "
+                                "cause memory quality loss. To give each agent its own "
+                                "isolated memory, run it from a different project directory. "
+                                "Proceed at your own risk."
+                            )
+                        else:
+                            _instance_id = _os.environ.get("QUAID_INSTANCE", "unknown")
+                            multi_instance_warning = (
+                                "⚠️  [Quaid] WARNING: Multiple agents are sharing the same "
+                                f"Quaid instance (`{_instance_id}`). Concurrent use on the "
+                                "same instance is not supported and may cause memory quality "
+                                "loss. To isolate an agent, assign it a different "
+                                "`QUAID_INSTANCE`. To intentionally share memory between "
+                                "separate instances, symlink their instance folders together. "
+                                "Proceed at your own risk."
+                            )
+                        print("[quaid][session-init] WARNING: multiple active sessions detected on same instance", file=sys.stderr)
+                        break
+                except OSError:
+                    continue
+    except Exception as _e:
+        print(f"[quaid][session-init] multi-instance check error: {_e}", file=sys.stderr)
 
     # Seed an initial cursor for the current session so the daemon's idle
     # check can discover it for timeout extraction.  Without this, new
@@ -979,6 +1044,10 @@ def hook_session_init(args):
             print(f"[quaid][session-init] {compat_warning}", file=sys.stderr)
     except Exception:
         pass
+
+    # 3c. Prepend multi-instance warning if detected
+    if multi_instance_warning:
+        sections.insert(0, f"--- SYSTEM WARNING ---\n{multi_instance_warning}")
 
     content = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
 

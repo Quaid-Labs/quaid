@@ -36,6 +36,9 @@ class CodexAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "codex"
 
+    def get_instance_type(self) -> str:
+        return "folder"
+
     def get_instance_name(self) -> str:
         project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip() or os.getcwd()
         return instance_slug_from_project_dir(project_dir)

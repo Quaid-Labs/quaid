@@ -154,6 +154,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "claude-code"
 
+    def get_instance_type(self) -> str:
+        return "folder"
+
     def agent_id_prefix(self) -> str:
         """CC adapter prefix for building instance IDs (e.g. "claude-code").
 
