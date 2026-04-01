@@ -4547,6 +4547,8 @@ def _recall_once(
             min_similarity = 0.60
     if privacy is None:
         privacy = ["private", "shared", "public"]
+    elif isinstance(privacy, str):
+        privacy = [privacy]
     graph = get_graph()
     active_domains = _active_domains_for_filter(graph)
     include_all_domains, included_domains = _normalize_domain_filter(
