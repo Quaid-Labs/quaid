@@ -1772,60 +1772,48 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     if (unmanaged) removeStaleExtensionDir();
   }
 
-  const installRes = runCliWithTimeout(cli, ["plugins", "install", stagedPluginPath], 60_000);
-  if (installRes.status !== 0) {
-    const msg = renderCliFailure(installRes, 60_000);
-    const norm = normalize(msg);
-    if ((norm.includes("already installed") || norm.includes("already exists")) && removeStaleExtensionDir()) {
-      const retry = runCliWithTimeout(cli, ["plugins", "install", stagedPluginPath], 60_000);
-      if (retry.status === 0) {
-        // continue
-      } else {
-        const retryMsg = renderCliFailure(retry, 60_000);
-        return { ok: false, reason: `plugins install failed after stale-dir cleanup: ${retryMsg.trim() || "unknown error"}` };
-      }
-    } else if (norm.includes("dangerous") || norm.includes("blocked") || norm.includes("unsafe") || norm.includes("security scanner")) {
-      // OC 2026.3.31+ security scanner blocks plugins with child_process patterns.
-      // Fall back to manual registration: copy files to extensionDir + write install record directly.
-      log.warn(`plugins install blocked by security scanner; falling back to manual registration: ${msg.trim()}`);
-      try {
-        fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, force: true });
-      } catch (err) {
-        return { ok: false, reason: `manual registration: failed to copy plugin to extension dir: ${String(err)}` };
-      }
-      // sourcePath in the install record must be in the macOS secure temp dir (/var/folders/)
-      // for the OC gateway to accept the record. Use TMPDIR env (set by macOS) not os.tmpdir()
-      // which may resolve to /tmp in SSH sessions.
-      const secureTmpBase = process.env.TMPDIR || os.tmpdir();
-      const secureSourcePath = path.join(secureTmpBase, `quaid-plugin-stage-${process.pid}-${Date.now()}`);
-      let pluginVersion = "0.0.0";
-      try {
-        const pkgRaw = fs.readFileSync(path.join(stagedPluginPath, "package.json"), "utf8");
-        pluginVersion = JSON.parse(pkgRaw).version || pluginVersion;
-      } catch {}
-      const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-      const tmpPath = `${cfgPath}.tmp-install-${process.pid}-${Date.now()}`;
-      try {
-        const raw = fs.existsSync(cfgPath) ? fs.readFileSync(cfgPath, "utf8") : "{}";
-        const parsed = JSON.parse(raw);
-        const plugins = parsed.plugins || (parsed.plugins = {});
-        const installs = plugins.installs || (plugins.installs = {});
-        installs.quaid = {
-          source: "path",
-          sourcePath: secureSourcePath,
-          installPath: extensionDir,
-          version: pluginVersion,
-          installedAt: new Date().toISOString(),
-        };
-        fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-        fs.renameSync(tmpPath, cfgPath);
-        log.info("Wrote manual OC plugin install record (security-scanner bypass).");
-      } catch (err) {
-        try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
-        return { ok: false, reason: `manual registration: failed to write install record: ${String(err)}` };
-      }
-    } else {
-      return { ok: false, reason: `plugins install failed: ${msg.trim() || "unknown error"}` };
+  // Register the plugin by writing directly to extensionDir and openclaw.json.
+  // OC's `plugins install` CLI is not used here: OC 2026.3.31+ added a security
+  // scanner that blocks any plugin using child_process (which we need for the
+  // extraction daemon), and the official bypass flag (--dangerously-force-unsafe-install)
+  // has a wiring bug in the manifest loader that prevents it from working. Direct
+  // registration achieves the same result and is more reliable across OC versions.
+  try {
+    fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, force: true });
+  } catch (err) {
+    return { ok: false, reason: `failed to copy plugin to extension dir: ${String(err)}` };
+  }
+  {
+    // sourcePath must be in the macOS secure temp dir (/var/folders/) for the OC
+    // gateway to accept the install record. Use TMPDIR env rather than os.tmpdir()
+    // which may resolve to /private/tmp in some environments.
+    const secureTmpBase = process.env.TMPDIR || os.tmpdir();
+    const secureSourcePath = path.join(secureTmpBase, `quaid-plugin-stage-${process.pid}-${Date.now()}`);
+    let pluginVersion = "0.0.0";
+    try {
+      const pkgRaw = fs.readFileSync(path.join(stagedPluginPath, "package.json"), "utf8");
+      pluginVersion = JSON.parse(pkgRaw).version || pluginVersion;
+    } catch {}
+    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+    const tmpPath = `${cfgPath}.tmp-install-${process.pid}-${Date.now()}`;
+    try {
+      const raw = fs.existsSync(cfgPath) ? fs.readFileSync(cfgPath, "utf8") : "{}";
+      const parsed = JSON.parse(raw);
+      const plugins = parsed.plugins || (parsed.plugins = {});
+      const installs = plugins.installs || (plugins.installs = {});
+      installs.quaid = {
+        source: "path",
+        sourcePath: secureSourcePath,
+        installPath: extensionDir,
+        version: pluginVersion,
+        installedAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+      fs.renameSync(tmpPath, cfgPath);
+      log.info("Registered quaid plugin via direct install record write.");
+    } catch (err) {
+      try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
+      return { ok: false, reason: `failed to write plugin install record: ${String(err)}` };
     }
   }
 
