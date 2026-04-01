@@ -400,6 +400,7 @@ const SCRATCH_DIR = path.join(WORKSPACE, "scratch");
 const ADAPTER_REGISTRY_DIR = path.join(WORKSPACE, ".quaid", "adaptors");
 
 let _adapterManifests = [];
+let _existingInstallDetected = false;
 
 function _refreshAdapterManifests() {
   try {
@@ -642,6 +643,57 @@ function listExistingInstances() {
       })
       .sort();
   } catch { return []; }
+}
+
+function detectExistingInstallState() {
+  const instances = listExistingInstances();
+  const sharedGlobalConfig = path.join(WORKSPACE, "shared", "config", "global", "memory.json");
+  const sharedPlatformConfig = path.join(
+    WORKSPACE,
+    "shared",
+    "config",
+    String(resolvedInstallerPlatform() || "").trim().toLowerCase(),
+    "memory.json"
+  );
+  const legacyConfig = path.join(CONFIG_DIR, "memory.json");
+  const legacyDb = path.join(DATA_DIR, "memory.db");
+  const pluginMarker = fs.existsSync(path.join(PLUGIN_DIR, "package.json"));
+  const hasInstall = (
+    instances.length > 0
+    || fs.existsSync(sharedGlobalConfig)
+    || fs.existsSync(sharedPlatformConfig)
+    || fs.existsSync(legacyConfig)
+    || fs.existsSync(legacyDb)
+    || pluginMarker
+  );
+  return { hasInstall, instances };
+}
+
+function resolveExistingOwnerIdentity() {
+  const candidates = [];
+  const instances = listExistingInstances();
+  for (const instanceId of instances) {
+    candidates.push(path.join(WORKSPACE, instanceId, "config", "memory.json"));
+  }
+  candidates.push(path.join(CONFIG_DIR, "memory.json"));
+  for (const cfgPath of candidates) {
+    if (!fs.existsSync(cfgPath)) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const users = raw?.users || {};
+      const defaultOwner = String(users.defaultOwner || "").trim();
+      const identity = users.identities?.[defaultOwner] || {};
+      const display = String(
+        identity.personNodeName
+        || (Array.isArray(identity.speakers) ? identity.speakers[0] : "")
+        || ""
+      ).trim();
+      if (defaultOwner) {
+        return { display: display || defaultOwner, id: defaultOwner, source: cfgPath };
+      }
+    } catch {}
+  }
+  return null;
 }
 
 /**
@@ -2036,7 +2088,15 @@ async function step1_preflight() {
     // Promote to selected adapter for the rest of the install.
     _platformOverride = platform;
     syncInstallerInstanceEnv();
-    await promptInstanceId(resolvedInstallerPlatform());
+  }
+
+  const installState = detectExistingInstallState();
+  _existingInstallDetected = !!installState.hasInstall;
+  if (_existingInstallDetected) {
+    const details = installState.instances.length > 0
+      ? ` (${installState.instances.length} existing instance${installState.instances.length === 1 ? "" : "s"})`
+      : "";
+    log.info(C.dim(`Existing Quaid install detected${details}. First-install-only setup will be skipped.`));
   }
 
   // External adapter hooks can perform preflight checks or env bootstrap.
@@ -2356,7 +2416,7 @@ async function step1_preflight() {
 
   // --- Backup (only if existing files) ---
   // Uses snapshots from before clawdbot commands (which create data/memory.db)
-  if (_existingFiles.length > 0 || _hasConfig || _hasDb) {
+  if (!_existingInstallDetected && (_existingFiles.length > 0 || _hasConfig || _hasDb)) {
     log.warn("Quaid's nightly janitor modifies your workspace markdown files");
     log.warn("(SOUL.md, USER.md, etc.) to keep them current. Back up first.");
 
@@ -2393,6 +2453,17 @@ async function step1_preflight() {
 async function step2_owner() {
   stepHeader(2, TOTAL_INSTALL_STEPS, "IDENTITY", STEP_QUOTES.identity);
 
+  if (_existingInstallDetected) {
+    const existing = resolveExistingOwnerIdentity();
+    if (existing?.id) {
+      log.info(C.dim("Reusing existing owner identity from prior install."));
+      log.info(C.dim(`Source: ${existing.source}`));
+      log.success(`Owner: ${C.bcyan(existing.display)} ${C.dim(`(${existing.id})`)}`);
+      return { display: existing.display, id: existing.id };
+    }
+    log.warn("Existing install detected but owner identity was not found in existing config; falling back to prompt.");
+  }
+
   log.info(C.bold("Every memory is stored against an owner name."));
   log.info(C.bold("This is how Quaid keeps memories namespaced — one owner per person."));
   log.info(C.dim("Tell us your real name so memory tags stay human-readable."));
@@ -2402,8 +2473,13 @@ async function step2_owner() {
     String(INSTALL_ARGS.ownerName || process.env.QUAID_OWNER_NAME || shell("git config user.name 2>/dev/null") || "").trim();
   if (seedName) {
     log.info(`Suggested: ${C.bcyan(seedName)}`);
-  } else if (AGENT_MODE) {
+  } else if (AGENT_MODE && !_existingInstallDetected) {
     throw new Error("Agent mode requires --owner-name or QUAID_OWNER_NAME so memories are tagged to the person.");
+  } else if (AGENT_MODE && _existingInstallDetected) {
+    throw new Error(
+      "Agent mode detected an existing install but could not resolve owner identity from existing config. "
+      + "Provide --owner-name (or QUAID_OWNER_NAME) to proceed."
+    );
   }
 
   const display = handleCancel(await text({
@@ -2449,12 +2525,9 @@ async function step3_models() {
   }
   _platformOverride = adapterType;
   syncInstallerInstanceEnv(adapterType);
-  // Prompt for instance ID if it wasn't already set in step1 (e.g. platform
-  // was pre-detected via IS_OPENCLAW / IS_CLAUDE_CODE flags rather than the
-  // interactive picker, so step1 skipped the prompt).
-  if (!_instanceIdOverride) {
-    await promptInstanceId(adapterType);
-  }
+  // Instance IDs are runtime-owned and provision automatically on first use.
+  // Installer keeps the deterministic default (<platform>-main) unless the
+  // operator sets QUAID_INSTANCE explicitly before running setup.
 
   const adapterCaps = _readAdapterInstallerCapabilities(adapterType) || {};
   const supportsTimeoutCompaction = _platformSupportsTimeoutCompaction(adapterType);
@@ -3815,109 +3888,10 @@ except Exception as e:
     await waitForGatewayWarmup(30_000);
   }
 
-  // Migration
-  let migrationCompleted = false;
-  const mdFiles = ["SOUL.md", "USER.md", "TOOLS.md", "ENVIRONMENT.md", "AGENTS.md"]
-    .filter(f => {
-      const fp = path.join(WORKSPACE, f);
-      if (!fs.existsSync(fp)) return false;
-      const lines = fs.readFileSync(fp, "utf8").split("\n").length;
-      return lines > 5;
-    });
-
-  if (mdFiles.length > 0 && !AGENT_MODE) {
-    log.info(`Found existing workspace files: ${C.bcyan(mdFiles.join(", "))}`);
-    const doMigrate = handleCancel(await confirm({
-      message: "Import facts from existing files into memory? (uses LLM processing)",
-      initialValue: true,
-    }));
-    if (doMigrate) {
-      const useMockCheck = process.env.QUAID_TEST_MOCK_MIGRATION === "1";
-      if (_isPlatform("openclaw") && !useMockCheck) {
-        log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
-        await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "workspace migration");
-      }
-      s.start("Extracting facts from workspace files...");
-      const useMock = process.env.QUAID_TEST_MOCK_MIGRATION === "1";
-      const migrateScript = useMock ? `
-import os, sys
-${PY_ENV_SETUP}
-os.environ['QUAID_QUIET'] = '1'
-sys.path.insert(0, '.')
-from datastore.memorydb.memory_graph import store
-files = ${JSON.stringify(mdFiles)}
-total = 0
-for fname in files:
-    fpath = os.path.join(${JSON.stringify(WORKSPACE)}, fname)
-    with open(fpath) as f:
-        lines = f.read().strip().split('\\n')
-    for line in lines:
-        line = line.strip().lstrip('- ')
-        if line and not line.startswith('#') and len(line) > 15:
-            cat = 'preference' if any(w in line.lower() for w in ['prefer', 'like', 'enjoy', 'favorite']) else 'fact'
-            try:
-                store(line, owner_id='${owner.id}', category=cat, source='migration')
-                total += 1
-            except ValueError:
-                pass
-print(total)
-` : `
-import os, sys
-${PY_ENV_SETUP}
-os.environ['QUAID_QUIET'] = '1'
-sys.path.insert(0, '.')
-from datastore.memorydb.memory_graph import store
-from core.llm.clients import call_deep_reasoning, parse_json_response
-files = ${JSON.stringify(mdFiles)}
-total = 0
-for fname in files:
-    fpath = os.path.join(${JSON.stringify(WORKSPACE)}, fname)
-    with open(fpath) as f:
-        content = f.read().strip()
-    if len(content) < 50:
-        continue
-    prompt = f"""Extract factual information from this document. Return a JSON array of objects:
-[{{"fact": "...", "category": "fact|preference|belief|experience"}}]
-Only extract clear, specific facts. Skip meta-information and formatting.
-Document ({fname}):\\n{content}"""
-    try:
-        response, _ = call_deep_reasoning(prompt, max_tokens=4000)
-    except Exception as e:
-        print(f'warn: migration llm call failed for {fname}: {e}', file=sys.stderr)
-        continue
-    if response:
-        try:
-            parsed = parse_json_response(response)
-        except Exception as e:
-            print(f'warn: migration response parse failed for {fname}: {e}', file=sys.stderr)
-            parsed = None
-        if isinstance(parsed, list):
-            for item in parsed:
-                if isinstance(item, dict) and 'fact' in item:
-                    try:
-                        store(item['fact'], owner_id='${owner.id}', category=item.get('category', 'fact'), source='migration')
-                        total += 1
-                    except ValueError:
-                        pass
-print(total)
-`;
-      const result = spawnSync("python3", ["-c", migrateScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-      const factCount = (result.stdout || "").trim();
-      if (result.status === 0) {
-        migrationCompleted = true;
-        s.stop(C.green(`Migration complete: ${factCount} facts extracted`));
-        log.info(C.bold("These facts will be reviewed and deduplicated by the nightly janitor."));
-      } else {
-        s.stop(C.yellow("Migration failed; prompting again after install"));
-        const detail = (result.stderr || result.stdout || "").trim();
-        if (detail) {
-          log.warn(detail);
-        }
-      }
-      log.message("");
-      await waitForKey();
-    }
-  }
+  // Workspace migration is intentionally not part of installer flow.
+  // Memory should accumulate naturally, or users can request migration later.
+  const migrationCompleted = true;
+  const mdFiles = [];
 
   if (!postInstallStateStabilized) {
     const postInstall = _stabilizePostInstallExtractionState();
@@ -5207,6 +5181,7 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
     schemaVersion: 1,
     mode: AGENT_MODE ? "agent" : "interactive",
     dryRun: DRY_RUN,
+    existingInstallDetected: _existingInstallDetected,
     platform,
     workspace: WORKSPACE,
     instanceId,
@@ -5268,12 +5243,21 @@ async function main() {
     const embeddings = await step4_embeddings();
     notifyInstallCheckpoint(4, TOTAL_INSTALL_STEPS, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
     const systems = { memory: true, journal: true, projects: true, workspace: true };
-    const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
-    notifyInstallCheckpoint(
-      5, TOTAL_INSTALL_STEPS, "janitor",
-      "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
-      "Night shift assigned. Warmup can take a minute or two."
-    );
+    let schedule = null;
+    if (!_existingInstallDetected) {
+      schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
+      notifyInstallCheckpoint(
+        5, TOTAL_INSTALL_STEPS, "janitor",
+        "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
+        "Night shift assigned. Warmup can take a minute or two."
+      );
+    } else {
+      notifyInstallCheckpoint(
+        5, TOTAL_INSTALL_STEPS, "janitor",
+        "Existing install detected — skipping first-install janitor scheduling step.",
+        "Reusing existing janitor policy/schedule."
+      );
+    }
     notifyInstallWarmupNotice();
     if (_isPlatform("openclaw")) {
       log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
