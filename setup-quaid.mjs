@@ -5227,6 +5227,33 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
 // Main
 // =============================================================================
 async function main() {
+  // --- Installer lock: prevent concurrent runs against the same workspace ---
+  const LOCK_FILE = path.join(DATA_DIR, ".installer.lock");
+  let _lockAcquired = false;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(LOCK_FILE, new Date().toISOString(), { flag: "wx" }); // exclusive create
+    _lockAcquired = true;
+  } catch (lockErr) {
+    if (lockErr.code === "EEXIST") {
+      const lockedAt = (() => { try { return fs.readFileSync(LOCK_FILE, "utf8").trim(); } catch { return "unknown"; } })();
+      console.error(`\n[x] Another installer is already running against this workspace (${WORKSPACE}).`);
+      console.error(`    Lock file: ${LOCK_FILE}`);
+      console.error(`    Started:   ${lockedAt}`);
+      console.error("    If the previous run crashed, delete the lock file and retry.");
+      process.exit(1);
+    }
+    // Non-EEXIST (e.g. permissions) — warn but continue without lock
+    console.warn(`[warn] Could not acquire installer lock (${lockErr.message}); proceeding without lock.`);
+  }
+  if (_lockAcquired) {
+    const _releaseLock = () => { try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ } };
+    process.on("exit", _releaseLock);
+    process.on("SIGINT",  () => { _releaseLock(); process.exit(130); });
+    process.on("SIGTERM", () => { _releaseLock(); process.exit(143); });
+  }
+  // --- End installer lock ---
+
   try {
     syncInstallerInstanceEnv();
     if (AGENT_MODE) {
