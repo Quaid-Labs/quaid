@@ -82,13 +82,23 @@ const WORKSPACE = _resolveWorkspace();
 function _resolveQuaidInstance(): string {
   const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
   if (fromEnv) return fromEnv;
-  try {
-    const fallbackPath = path.join(WORKSPACE, ".oc-instance-name");
-    if (fs.existsSync(fallbackPath)) {
-      const val = fs.readFileSync(fallbackPath, "utf8").trim();
-      if (val) return val;
-    }
-  } catch {}
+  // OC plugin config schema rejects an "env" key, so there is no OC-native way to
+  // inject QUAID_INSTANCE into the gateway plugin process.  Read from a sidecar file
+  // written by the installer.  Try two locations: one relative to WORKSPACE (works
+  // when QUAID_HOME is in the gateway env) and one at the fixed OC extension dir
+  // (absolute, always reachable regardless of WORKSPACE resolution).
+  const candidates = [
+    path.join(WORKSPACE, ".oc-instance-name"),
+    path.join(os.homedir(), ".openclaw", "extensions", "quaid", ".oc-instance-name"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        const val = fs.readFileSync(candidate, "utf8").trim();
+        if (val) return val;
+      }
+    } catch {}
+  }
   return "";
 }
 

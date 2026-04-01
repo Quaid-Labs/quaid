@@ -53,13 +53,18 @@ const WORKSPACE = _resolveWorkspace();
 function _resolveQuaidInstance() {
   const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
   if (fromEnv) return fromEnv;
-  try {
-    const fallbackPath = path.join(WORKSPACE, ".oc-instance-name");
-    if (fs.existsSync(fallbackPath)) {
-      const val = fs.readFileSync(fallbackPath, "utf8").trim();
-      if (val) return val;
+  const candidates = [
+    path.join(WORKSPACE, ".oc-instance-name"),
+    path.join(os.homedir(), ".openclaw", "extensions", "quaid", ".oc-instance-name")
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        const val = fs.readFileSync(candidate, "utf8").trim();
+        if (val) return val;
+      }
+    } catch {
     }
-  } catch {
   }
   return "";
 }
