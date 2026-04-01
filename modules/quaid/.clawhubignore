@@ -1,0 +1,25 @@
+# Dev/test artifacts not needed in package publish payloads.
+tests/
+docs/
+node_modules/
+.pytest_cache/
+.ruff_cache/
+.tmp/
+.quaid/
+logs/
+~/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Local env and release/test harness files.
+.env*
+test-runner.js
+vitest.config.ts
+pytest.ini
+pyproject.toml
+eslint.config.mjs
+
+# Bulky lockfile is not required for ClawHub package uploads.
+package-lock.json
