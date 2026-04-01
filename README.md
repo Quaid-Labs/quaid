@@ -50,6 +50,13 @@ After install, start here:
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
+## Aspirational Direction
+
+_“We Can Remember It for You Wholesale.”_
+
+A long-term goal for Quaid is portable memory interchange: shareable, sanitized memory packs that can travel with a project — similar to how skills are shared today, but with domain knowledge and curated supporting context included.
+This is vision, not a released feature.
+
 ## Benchmarks
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.

@@ -27,6 +27,7 @@ Quaid does not own:
 ## Integration Posture
 
 OpenClaw is the deepest integration today and a first-class reference adapter.
+Claude Code and Codex are active integrations; Quaid continues to keep host behavior adapter-scoped rather than hardcoded in core.
 
 Quaid core remains adapter-agnostic by design:
 
@@ -61,3 +62,17 @@ Quaid core remains adapter-agnostic by design:
 - Adapter eventing and delayed-action reliability
 - Installer and operational UX hardening
 - Reproducible benchmark and release workflows
+
+## Memory Interchange Vision (Aspirational)
+
+_“We Can Remember It for You Wholesale.”_
+
+Quaid aims to push toward an open standard for agent memory storage and transfer across platforms.
+
+Long-term direction:
+
+- Portable memory formats that are inspectable and host-agnostic
+- Sanitized, shareable memory packs distributed with projects
+- Memory distribution patterns analogous to skills distribution, but including domain context and supporting evidence
+
+This is an aspirational direction and not a committed near-term deliverable.
