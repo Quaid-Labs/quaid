@@ -44,6 +44,7 @@ function parseInstallArgs(argv) {
     artifact: "",
     agent: false,
     claudeCode: false,
+    dryRun: false,
     help: false,
     errors: [],
   };
@@ -190,6 +191,10 @@ function parseInstallArgs(argv) {
       opts.claudeCode = true;
       continue;
     }
+    if (arg === "--dry-run") {
+      opts.dryRun = true;
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       opts.help = true;
       continue;
@@ -212,6 +217,9 @@ Options:
   --artifact <path>   Local file path or URL to .tar.gz when --source artifact
   --agent             Non-interactive agent mode (accepts sane defaults)
   --claude-code       Install for Claude Code (hooks + OAuth provider)
+  --dry-run           Run all prompts and checks but skip writes — outputs the
+                      install plan and exits. Useful for validating interactive
+                      UX and comparing against agent-mode output.
   -h, --help          Show this help
 `);
   process.exit(0);
@@ -376,6 +384,7 @@ const WORKSPACE =
   detectWorkspaceFromCli() ||
   path.join(os.homedir(), "quaid");
 const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1" || !process.stdin.isTTY;
+const DRY_RUN = !!(INSTALL_ARGS.dryRun || process.env.QUAID_INSTALL_DRY_RUN === "1");
 const MODULES_PLUGIN_DIR = path.join(WORKSPACE, "modules", "quaid");
 const LEGACY_PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
 const PLUGIN_DIR = fs.existsSync(path.join(MODULES_PLUGIN_DIR, "package.json"))
@@ -1951,15 +1960,51 @@ async function step1_preflight() {
           validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
         }));
         if (newToken && newToken.trim()) {
-          fs.mkdirSync(path.dirname(authTokenPath), { recursive: true });
-          fs.writeFileSync(authTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
-          log.success("Token stored at " + authTokenPath);
+          if (!DRY_RUN) {
+            fs.mkdirSync(path.dirname(authTokenPath), { recursive: true });
+            fs.writeFileSync(authTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
+            log.success("Token stored at " + authTokenPath);
+          } else {
+            log.info(C.dim("(dry run) Would store token at " + authTokenPath));
+          }
         }
       }
     } else if (!hasToken) {
-      log.warn("No OAuth token found. Set CLAUDE_CODE_OAUTH_TOKEN or run the installer interactively.");
+      // Agent mode with no token: emit structured instructions the agent can
+      // relay to the user, directing them to write the token out-of-band.
+      // In dry-run mode, note the gap but continue so the full plan is shown.
+      if (DRY_RUN) {
+        log.warn("(dry run) No auth token — would print out-of-band instructions and exit in real run.");
+      } else {
+        note(
+          [
+            "Quaid needs a long-lived OAuth token for background API calls.",
+            "",
+            "IMPORTANT: Do NOT paste the token into this conversation.",
+            "",
+            "Ask the user to complete these steps in a NEW terminal window:",
+            "",
+            "  Step 1 — Generate the token:",
+            "    claude setup-token",
+            "    (copy the token that is printed)",
+            "",
+            "  Step 2 — Write it to disk (replace YOUR_TOKEN_HERE with the copied token):",
+            `    mkdir -p "${path.dirname(authTokenPath)}"`,
+            `    printf '%s' 'YOUR_TOKEN_HERE' > "${authTokenPath}"`,
+            `    chmod 600 "${authTokenPath}"`,
+            "",
+            "  Step 3 — Tell the agent the token has been written, then re-run the installer.",
+            "",
+            `Token path: ${authTokenPath}`,
+          ].join("\n"),
+          "Auth Token Required — Action Needed"
+        );
+        bail("Install incomplete: auth token not found. Write the token to the path above and re-run.");
+      }
     }
-    fs.mkdirSync(WORKSPACE, { recursive: true });
+    if (!DRY_RUN) {
+      fs.mkdirSync(WORKSPACE, { recursive: true });
+    }
   } else if (_isPlatform("openclaw")) {
     // --- OpenClaw installed ---
     s.start("Scanning for OpenClaw...");
@@ -4923,6 +4968,73 @@ function notifyInstallWarmupNotice() {
 }
 
 // =============================================================================
+// Install Plan
+// =============================================================================
+
+/**
+ * Build a structured install plan from the resolved step outputs.
+ * Written to disk after a real install and printed during --dry-run.
+ * Comparing a dry-run plan (interactive mode) against a real agent-mode
+ * install plan is the recommended way to verify parity between modes:
+ *   node setup-quaid.mjs --dry-run > /tmp/plan-interactive.json
+ *   cat WORKSPACE/INSTANCE/last-install-plan.json
+ * Any key divergence (e.g. an option enabled by agent mode that interactive
+ * would not have offered) indicates a parity bug to investigate.
+ */
+function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule) {
+  const platform = resolvedInstallerPlatform();
+  const instanceId = resolvedInstallerInstanceId(platform);
+  const authTokenPath = path.join(WORKSPACE, "config", "adapters", "claude-code", ".auth-token");
+  const authTokenPresent = (() => {
+    try { return !!fs.readFileSync(authTokenPath, "utf8").trim(); } catch { return false; }
+  })();
+
+  return {
+    schemaVersion: 1,
+    mode: AGENT_MODE ? "agent" : "interactive",
+    dryRun: DRY_RUN,
+    platform,
+    workspace: WORKSPACE,
+    instanceId,
+    owner: owner?.display || owner?.name || null,
+    models: {
+      fast: models?.lowModel || null,
+      deep: models?.highModel || null,
+      provider: models?.provider || null,
+    },
+    embeddings: {
+      model: embeddings?.embedModel || null,
+      provider: embeddings?.embedProvider || null,
+      dim: embeddings?.embedDim || null,
+    },
+    options: {
+      timeoutCompaction: models?.autoCompactionOnTimeout ?? false,
+      janitorEnabled: !!(schedule?.janitorEnabled ?? true),
+      journalEnabled: !!(systems?.journal ?? true),
+      projectsEnabled: !!(systems?.projects ?? true),
+    },
+    authToken: {
+      required: platform === "claude-code",
+      present: authTokenPresent,
+    },
+    platformCapabilities: {
+      supportsTimeoutCompaction: _platformSupportsTimeoutCompaction(platform),
+      usesHostManagedLlm: _platformUsesHostManagedLlmByDefault(platform),
+    },
+    // Parity flags: raised when agent mode produces a plan that interactive
+    // would not have offered. Consumers should treat any true flag as a bug.
+    parityWarnings: (() => {
+      const warnings = [];
+      if ((models?.autoCompactionOnTimeout) && !_platformSupportsTimeoutCompaction(platform)) {
+        warnings.push("timeoutCompaction enabled on platform that does not support it");
+      }
+      return warnings;
+    })(),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+// =============================================================================
 // Main
 // =============================================================================
 async function main() {
@@ -4952,10 +5064,43 @@ async function main() {
     if (_isPlatform("openclaw")) {
       log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
     }
+
+    // --- Dry-run exit point ---
+    // Steps 1-6 (prompts + detection) have run. No writes have occurred.
+    // Emit the install plan and exit instead of proceeding to step7.
+    if (DRY_RUN) {
+      const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
+      if (plan.parityWarnings.length > 0) {
+        log.warn("Parity warnings detected:");
+        plan.parityWarnings.forEach(w => log.warn("  ! " + w));
+      }
+      note(JSON.stringify(plan, null, 2), "Install Plan (dry run — no changes made)");
+      outro(C.green("Dry run complete.") + C.dim(" Re-run without --dry-run to install."));
+      process.exit(0);
+    }
+
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     notifyInstallCheckpoint(6, TOTAL_INSTALL_STEPS, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
     notifyInstallCheckpoint(7, TOTAL_INSTALL_STEPS, "validation", "Smoke checks passed.", "No richters spotted.");
+
+    // Write the install plan so it can be compared against a dry-run plan.
+    // If they diverge (e.g. agent mode enabled an option interactive wouldn't
+    // have offered), that is a parity bug to investigate.
+    try {
+      const instanceId = resolvedInstallerInstanceId(resolvedInstallerPlatform());
+      const planPath = path.join(WORKSPACE, instanceId, "last-install-plan.json");
+      const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
+      fs.mkdirSync(path.dirname(planPath), { recursive: true });
+      fs.writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { encoding: "utf8", mode: 0o644 });
+      if (plan.parityWarnings.length > 0) {
+        log.warn("Install plan parity warnings (check last-install-plan.json):");
+        plan.parityWarnings.forEach(w => log.warn("  ! " + w));
+      }
+    } catch (e) {
+      log.warn("Could not write last-install-plan.json: " + e.message);
+    }
+
     notifyInstallCompletion(owner, models, embeddings, systems);
 
     // In test mode, write results for the test runner to verify
