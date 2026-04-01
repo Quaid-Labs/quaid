@@ -74,6 +74,24 @@ function _resolveWorkspace(): string {
   return _normalizeWorkspacePath(process.cwd());
 }
 const WORKSPACE = _resolveWorkspace();
+
+// Resolve QUAID_INSTANCE from env first, then fall back to a sidecar file written
+// by the installer at QUAID_HOME/.oc-instance-name.  The OC gateway plugin process
+// cannot receive env vars via plugin config (schema rejects the "env" key), so the
+// installer writes the instance name to a file that the adapter reads at startup.
+function _resolveQuaidInstance(): string {
+  const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const fallbackPath = path.join(WORKSPACE, ".oc-instance-name");
+    if (fs.existsSync(fallbackPath)) {
+      const val = fs.readFileSync(fallbackPath, "utf8").trim();
+      if (val) return val;
+    }
+  } catch {}
+  return "";
+}
+
 function _resolvePythonPluginRoot(): string {
   const modulesRoot = path.join(WORKSPACE, "modules", "quaid");
   if (fs.existsSync(modulesRoot)) {
@@ -94,7 +112,7 @@ const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 // (lib/config.py:get_db_path) before falling back to config — so setting the wrong
 // path here causes auto-inject recall to query an empty root-silo database instead
 // of the active instance silo.
-const _instanceForDbPath = String(process.env.QUAID_INSTANCE || "").trim();
+const _instanceForDbPath = _resolveQuaidInstance();
 const DB_PATH = _instanceForDbPath
   ? path.join(WORKSPACE, _instanceForDbPath, "data", "memory.db")
   : path.join(WORKSPACE, "data", "memory.db");
@@ -117,7 +135,7 @@ const BACKLOG_NOTIFY_STALE_MS = 90_000;
 // Use the instance-specific path when QUAID_INSTANCE is set, mirroring the Python
 // daemon's _signal_dir() = _instance_root() / "data" / "extraction-signals".
 // QUAID_INSTANCE is the current (primary) agent's full instance ID, e.g. "openclaw-main".
-const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
+const _QUAID_INSTANCE = _resolveQuaidInstance();
 // Prefix: the adapter name portion of QUAID_INSTANCE (e.g. "openclaw", "claude-code").
 // Strip the known adapter prefix from the front rather than stripping "-main" from the back,
 // so non-main instance labels (e.g. "openclaw-livetest") compute the right prefix too.

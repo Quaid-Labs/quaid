@@ -50,6 +50,19 @@ function _resolveWorkspace() {
   return _normalizeWorkspacePath(process.cwd());
 }
 const WORKSPACE = _resolveWorkspace();
+function _resolveQuaidInstance() {
+  const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const fallbackPath = path.join(WORKSPACE, ".oc-instance-name");
+    if (fs.existsSync(fallbackPath)) {
+      const val = fs.readFileSync(fallbackPath, "utf8").trim();
+      if (val) return val;
+    }
+  } catch {
+  }
+  return "";
+}
 function _resolvePythonPluginRoot() {
   const modulesRoot = path.join(WORKSPACE, "modules", "quaid");
   if (fs.existsSync(modulesRoot)) {
@@ -61,7 +74,7 @@ const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
 const PYTHON_BIN = String(process.env.QUAID_PYTHON_BIN || "python3").trim() || "python3";
 const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
-const _instanceForDbPath = String(process.env.QUAID_INSTANCE || "").trim();
+const _instanceForDbPath = _resolveQuaidInstance();
 const DB_PATH = _instanceForDbPath ? path.join(WORKSPACE, _instanceForDbPath, "data", "memory.db") : path.join(WORKSPACE, "data", "memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
@@ -77,7 +90,7 @@ const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
-const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
+const _QUAID_INSTANCE = _resolveQuaidInstance();
 const _KNOWN_ADAPTER_PREFIXES = ["claude-code", "openclaw", "standalone"];
 const _QUAID_PREFIX = (() => {
   for (const pfx of _KNOWN_ADAPTER_PREFIXES) {
