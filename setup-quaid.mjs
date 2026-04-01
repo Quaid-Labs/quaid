@@ -725,6 +725,19 @@ function _isPlatform(name) {
   return false;
 }
 
+function _platformSupportsTimeoutCompaction(adapterType = "") {
+  const platform = String(adapterType || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  // Timeout-triggered compaction is only supported on OpenClaw today.
+  return platform === "openclaw";
+}
+
+function _platformUsesHostManagedLlmByDefault(adapterType = "") {
+  const platform = String(adapterType || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  // OpenClaw and Codex own runtime/provider resolution; keep installer on
+  // platform defaults unless the user explicitly opts into advanced setup.
+  return platform === "openclaw" || platform === "codex";
+}
+
 function _installerPlatformLabel() {
   const platform = String(resolvedInstallerPlatform() || "").trim().toLowerCase();
   if (platform === "openclaw") return "OpenClaw";
@@ -2246,11 +2259,6 @@ async function step3_models() {
     initialValue: true,
   }));
 
-  const autoCompactionOnTimeout = handleCancel(await confirm({
-    message: "Do you want to trade off a little less quality for a LOT of savings by auto-compacting after timeout memory extraction?",
-    initialValue: true,
-  }));
-
   const advancedSetup = handleCancel(await confirm({
     message: "Advanced setup? (recommended keeps sane defaults)",
     initialValue: false,
@@ -2277,6 +2285,17 @@ async function step3_models() {
   }
 
   const adapterCaps = _readAdapterInstallerCapabilities(adapterType) || {};
+  const supportsTimeoutCompaction = _platformSupportsTimeoutCompaction(adapterType);
+  const autoCompactionOnTimeout = supportsTimeoutCompaction
+    ? handleCancel(await confirm({
+        message: "Do you want to trade off a little less quality for a LOT of savings by auto-compacting after timeout memory extraction?",
+        initialValue: true,
+      }))
+    : false;
+  if (!supportsTimeoutCompaction) {
+    log.info(C.dim("Timeout auto-compaction is not supported on this platform; leaving it disabled."));
+  }
+
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
     : ["anthropic", "openai", "openrouter", "together", "ollama"];
@@ -2295,31 +2314,37 @@ async function step3_models() {
     { value: "ollama",     label: "Ollama (local)",     hint: "Experimental — quality depends on model size" },
   ].filter((opt) => supportedProviders.includes(opt.value));
 
-  const sharedOverride = _sharedModelOverride(adapterType);
-  if (sharedOverride?.provider && supportedProviders.includes(sharedOverride.provider)) {
-    provider = sharedOverride.provider;
-    log.info(C.dim(`Provider override from shared config: ${provider} (${sharedOverride.source})`));
-  }
-  if (forcedProvider && supportedProviders.includes(forcedProvider)) {
-    provider = forcedProvider;
-    log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
-  } else if (forcedProvider && !supportedProviders.includes(forcedProvider)) {
-    log.warn(`Ignoring QUAID_INSTALL_PROVIDER=${forcedProvider} (unsupported by adapter '${adapterType}').`);
-  }
-  if (!supportedProviders.includes(provider)) {
-    provider = supportedProviders[0] || "anthropic";
-  }
-  if (advancedSetup) {
-    provider = handleCancel(await select({
-      message: "LLM provider",
-      initialValue: provider,
-      options: providerOptions.length > 0 ? providerOptions : [
-        { value: provider, label: provider, hint: "adapter-defined provider" },
-      ],
-    }));
+  const hostManagedLlmDefault = _platformUsesHostManagedLlmByDefault(adapterType) && !advancedSetup;
+  let sharedOverride = null;
+  if (hostManagedLlmDefault) {
+    log.info(C.dim(`Using ${adapterType} host-managed LLM defaults. Configure alternate providers later in settings.`));
+  } else {
+    sharedOverride = _sharedModelOverride(adapterType);
+    if (sharedOverride?.provider && supportedProviders.includes(sharedOverride.provider)) {
+      provider = sharedOverride.provider;
+      log.info(C.dim(`Provider override from shared config: ${provider} (${sharedOverride.source})`));
+    }
+    if (forcedProvider && supportedProviders.includes(forcedProvider)) {
+      provider = forcedProvider;
+      log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
+    } else if (forcedProvider && !supportedProviders.includes(forcedProvider)) {
+      log.warn(`Ignoring QUAID_INSTALL_PROVIDER=${forcedProvider} (unsupported by adapter '${adapterType}').`);
+    }
+    if (!supportedProviders.includes(provider)) {
+      provider = supportedProviders[0] || "anthropic";
+    }
+    if (advancedSetup) {
+      provider = handleCancel(await select({
+        message: "LLM provider",
+        initialValue: provider,
+        options: providerOptions.length > 0 ? providerOptions : [
+          { value: provider, label: provider, hint: "adapter-defined provider" },
+        ],
+      }));
+    }
   }
 
-  if (provider !== "anthropic") {
+  if (!hostManagedLlmDefault && provider !== "anthropic") {
     log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
     log.warn(C.bold("Extraction quality may vary. You can switch providers later in config."));
     log.message("");
@@ -2368,6 +2393,9 @@ async function step3_models() {
   // API key — the bot passes its key to Quaid at runtime.
   // No need to check env here.
   const keyEnv = keyEnvFor(provider);
+  const llmProviderSetting = hostManagedLlmDefault
+    ? "default"
+    : (provider === "anthropic" ? "anthropic" : "openai-compatible");
 
   // Notifications
   let notifLevel = "normal";
@@ -2428,7 +2456,7 @@ async function step3_models() {
     provider,
     highModel,
     lowModel,
-    apiFormat: provider === "anthropic" ? "anthropic" : "openai-compatible",
+    apiFormat: llmProviderSetting,
     apiKeyEnv: keyEnv,
     baseUrl: baseUrlFor(provider),
     notifLevel,

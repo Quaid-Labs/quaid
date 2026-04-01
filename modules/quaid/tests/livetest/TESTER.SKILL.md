@@ -170,7 +170,29 @@ M0 is unique — you delegate the install to the platform rather than running it
    cannot complete the install after reasonable attempts, send an ISSUE to the
    coordinator — do not run the install yourself.
 
-4. **Verify install quality:**
+4. **Handle installer credential prompts** — if the installer exits with an
+   "Action Needed" note about a missing credential (e.g. an auth token), this is
+   expected and not a failure. The correct response is:
+
+   a. **Read the instructions in the note** — the installer prints the exact steps
+      needed (what command to run, where to write the file).
+
+   b. **Relay them to the user verbatim.** Do not paraphrase or abbreviate. The
+      user needs the exact path and commands. Tell them clearly:
+      - What to run in a new terminal window
+      - Where to write the result
+      - That they should NOT paste the credential into this conversation
+
+   c. **Wait** for the user to confirm the credential has been written.
+
+   d. **Re-run the installer** using the same parameters as before. The installer
+      will find the file and continue past the credential step.
+
+   This pattern applies to any platform that requires a credential (OAuth token,
+   API key, etc.) during agent-driven install. The installer always prints the
+   credential path — use that path, not a hardcoded one.
+
+5. **Verify install quality:**
 
    A. Check that install messages appeared in the platform pane:
    ```bash
