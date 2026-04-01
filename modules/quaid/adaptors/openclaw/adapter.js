@@ -2123,7 +2123,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (normalized === "/new" || normalized.startsWith("/new ")) {
           commandAction = "new";
           lifecycleSignal = "ResetSignal";
-        } else if (normalized === "/reset" || normalized.startsWith("/reset ") || normalized === "/clear" || normalized.startsWith("/clear ")) {
+        } else if (normalized === "/reset" || normalized.startsWith("/reset ")) {
           commandAction = "reset";
           lifecycleSignal = "ResetSignal";
         } else if (normalized === "/compact" || normalized.startsWith("/compact ")) {
