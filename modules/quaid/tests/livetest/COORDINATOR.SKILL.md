@@ -330,7 +330,7 @@ cd /path/to/quaid && git log --oneline RUN_START_SHA..HEAD
 
 ### Case A — Zero new commits
 
-Full suite passed with no code changes. Loop is complete.
+Full suite passed with no code changes.
 
 1. Push canary:
    ```bash
@@ -343,8 +343,8 @@ Full suite passed with no code changes. Loop is complete.
    rsync -a --exclude='__pycache__' --exclude='*.pyc' \
      modules/quaid/ REMOTE_HOST:~/.openclaw/extensions/quaid/
    ```
-3. Notify (optional): send a completion message via your preferred channel.
-4. Stop. Do not start another run.
+3. Print the end-of-run report (see **End-of-Run Report** below).
+4. Stop. Do not start another run unless `loop: true` in `livetest-config.json`.
 
 ### Case B — One or more new commits
 
@@ -355,12 +355,48 @@ Full suite passed with no code changes. Loop is complete.
 2. Push canary (use `./scripts/push-canary.sh github`, not raw `git push`).
 3. Deploy to remote (rsync as above).
 4. Log all new commits to `unreviewed-commits.md` under a new run section.
-5. Return to Step 2 and start the next run with the new HEAD as RUN_START_SHA.
+5. Print the end-of-run report (see **End-of-Run Report** below).
+6. **Default behavior (`loop: false`):** Stop. Tell the user the run required
+   commits and recommend a follow-up run to verify the fixes are clean.
+7. **Loop mode only (`loop: true` in config):** Return to Step 2 and start the
+   next run with the new HEAD as RUN_START_SHA.
 
 ---
 
-## Loop Termination Contract
+## End-of-Run Report
 
+Print a structured summary at the end of every run:
+
+```
+=== LIVETEST RUN REPORT ===
+Run N — YYYY-MM-DD
+
+RESULT: CLEAN | REQUIRES FOLLOW-UP | FAILURES REMAIN
+
+Platform results:
+  OC:  PASS | FAIL | PASS-WITH-NOTE
+  CC:  PASS | FAIL | PASS-WITH-NOTE
+  CDX: PASS | FAIL | PASS-WITH-NOTE
+  XP:  PASS | FAIL | SKIPPED
+
+Issues fixed this run: N
+  - <sha> <short description>
+
+Commits made this run: N
+  (none) | list of sha + subject
+
+Next step:
+  Suite clean — no action needed.
+  | Follow-up run recommended to verify N fix commit(s).
+  | Failures remain — see issues above before re-running.
+===========================
+```
+
+---
+
+## Loop Termination Contract (loop mode only)
+
+When running with `loop: true` in `livetest-config.json`:
 - Only exit when a full suite (OC + CC + CDX + XP) passes with zero new commits.
 - A run that passes but required commits → mandatory re-run, no exceptions.
 - Do not exit early because the suite looks stable. Run it clean.

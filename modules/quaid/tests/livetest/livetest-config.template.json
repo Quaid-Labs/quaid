@@ -35,5 +35,7 @@
   "tmux": {
     "livetest_session": "livetest",
     "coordinator_pane": "main:4.0"
-  }
+  },
+
+  "loop": false
 }
