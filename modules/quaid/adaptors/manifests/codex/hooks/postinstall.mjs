@@ -126,7 +126,6 @@ const managedCommands = [
 const desiredHooks = {
   SessionStart: [
     {
-      matcher: "startup|resume",
       hooks: [
         {
           type: "command",
