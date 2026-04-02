@@ -46,6 +46,37 @@ Pre-survey scope is intentionally narrow:
 
 If you already know enough to present defaults, stop exploring and show the survey.
 
+## Thin Prompt Contract (Mandatory)
+
+When the human uses the thin prompt shape, treat it as this exact procedure:
+
+1. Read `docs/AI-INSTALL.md`.
+2. Read `setup-quaid.mjs` and find `AGENT_SURVEY_CONTRACT`.
+3. Run only the minimum environment checks needed to fill survey defaults.
+4. Reply immediately with the survey in the conversation.
+5. Wait for approval.
+6. Only then run install.
+
+For the thin prompt path, do not:
+
+- list files
+- run `pwd`
+- browse adapter implementation files
+- inspect `memory.json`
+- read unrelated repo docs
+- run `find`
+- run Python snippets for exploratory inspection
+- continue planning after you already have enough information for the survey
+
+Allowed pre-survey probes are limited to what is needed to fill the survey accurately, for example:
+
+- `command -v ollama`
+- `curl http://localhost:11434/api/tags`
+- `vm_stat`
+- `sysctl -n hw.memsize`
+
+If the prompt already gives you the workspace, instance, and owner, do not spend time rediscovering them.
+
 ## Platform Selection Rule (Mandatory)
 
 If the human did not explicitly specify a platform, install Quaid for the
@@ -231,6 +262,13 @@ The required execution order is strict:
 - if the prompt is thin and only says "follow AI-INSTALL.md", you still must produce the survey first
 - before the survey, do not inspect adapter files, memory config files, or unrelated repo files
 - before the survey, do not run exploratory shell commands beyond the minimal checks needed to fill survey defaults
+
+Survey output shape is also strict:
+
+- render the survey fields in the same order as `AGENT_SURVEY_CONTRACT.fields`
+- show the selected value for each field
+- keep it short and concrete
+- end with: `Do you want to change any of these before I run install?`
 
 The list of required survey fields lives in `setup-quaid.mjs` under `AGENT_SURVEY_CONTRACT`.
 Agents must derive the survey from that contract instead of reproducing a second field list here.

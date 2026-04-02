@@ -281,11 +281,19 @@ const TOTAL_INSTALL_STEPS = 7;
 //     (for example RAM / Ollama availability)
 //   - do not inspect adapter source, memory config files, or unrelated repo docs
 //   - do not run exploratory commands like find/pwd/broad grep before the survey
+// Thin prompt contract:
+//   - if the human only says "follow AI-INSTALL.md" with workspace/instance/owner,
+//     do not rediscover those values
+//   - do not plan aloud or keep browsing once you can fill the survey
+//   - the next assistant output must be the survey rendered in the order of
+//     AGENT_SURVEY_CONTRACT.fields, then a request for approval
 const AGENT_SURVEY_CONTRACT = {
   sourceOfTruth: "setup-quaid.mjs",
   rule: "Only the fields listed here belong in the pre-install survey.",
   preSurveyRule:
     "Before the survey, read only AI-INSTALL.md and setup-quaid.mjs plus minimal environment checks needed to fill defaults. Do not browse adapter files, memory config files, unrelated repo docs, or run exploratory shell commands.",
+  outputRule:
+    "Render the survey fields in contract order, show the selected value for each, and end with: Do you want to change any of these before I run install?",
   fields: [
     {
       id: "owner_name",
