@@ -37,9 +37,12 @@ Highlights:
 
 - Manifest-first contract
 - Typed, versioned artifacts
+- Signature-based signer identity (verifier-side trust)
 - Required vs optional capability negotiation
+- Principal binding + artifact-scoped migration rules
 - Deterministic import reports
 - Explicit host-specific artifacts (no hidden coupling)
+- Default-deny external dependency/execution posture
 
 ## Cross-Platform Parity Requirement
 
@@ -69,4 +72,3 @@ We especially want security and privacy experts to challenge this model early.
 5. What sanitization attestations are practical and verifiable?
 
 If this direction resonates, feedback on the draft schema and threat model is the most valuable next step.
-

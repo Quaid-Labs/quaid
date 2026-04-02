@@ -3,6 +3,8 @@
 Status: Draft  
 Scope: Platform-agnostic interchange envelope for portable agent identity/memory packages.
 
+Community discussion thread: https://github.com/Quaid-Labs/quaid/discussions/3
+
 ## Intent
 
 `EGO` is proposed as an open, host-neutral package format for moving agent identity state between runtimes.
@@ -82,9 +84,32 @@ Core principle:
   ],
   "integrity": {
     "root_hash": "..."
+  },
+  "signatures": [
+    {
+      "id": "sig_...",
+      "key_id": "key_...",
+      "alg": "ed25519",
+      "scope": "manifest",
+      "sig": "base64..."
+    }
+  ],
+  "signer_identities": [
+    {
+      "key_id": "key_...",
+      "name": "optional human label",
+      "issuer": "optional",
+      "fingerprint": "optional"
+    }
+  ],
+  "trust_hints": {
+    "intended_trust_tier": "optional-non-authoritative"
   }
 }
 ```
+
+`trust_hints` are non-authoritative metadata only. Importers MUST NOT treat
+package-provided trust claims as sufficient for trusted execution.
 
 ## Artifact Model
 
@@ -142,6 +167,59 @@ Importers should also emit parity notes:
 - host-specific artifacts skipped
 - expected behavior drift vs source package
 
+## Principal Binding + Artifact-Scoped Migration
+
+To support portability across different local users/environments, EGO should
+define identity bindings and transform rules explicitly in manifest metadata.
+
+Baseline model:
+
+- `principals`: package-scoped logical identities (for example `principal.owner`)
+- `bindings_required`: principal IDs importer must resolve before apply
+- `migrations`: declarative transform rules with artifact selectors
+
+This enables export/import workflows like:
+
+- Export: local owner values are normalized to package principals
+- Import: package principals are bound to host/local identities before write
+
+Artifact-scoped migration is required so transforms can target only relevant
+types (for example memory artifacts) and skip unrelated types (for example
+project bundles).
+
+Example (illustrative only):
+
+```json
+{
+  "principals": [
+    { "id": "principal.owner", "role": "owner" }
+  ],
+  "bindings_required": ["principal.owner"],
+  "migrations": [
+    {
+      "id": "owner-remap-v1",
+      "type": "org.ego.migrate.owner_remap/v1",
+      "required": true,
+      "targets": {
+        "artifact_types": ["memory.graph", "memory.db"],
+        "artifact_ids": [],
+        "field_paths": ["owner_id", "edges[].owner_id"]
+      },
+      "params": {
+        "from_principal": "principal.owner",
+        "to_binding": "host.current_user"
+      }
+    }
+  ]
+}
+```
+
+Migration robustness rules:
+
+- Unknown required migration types MUST fail import.
+- Unknown optional migration types MAY be skipped with warning.
+- Import reports MUST include migration actions and field-level counts.
+
 ## Stability Contract (Anti-Fragmentation)
 
 To reduce ecosystem breakage from incompatible package variants:
@@ -153,6 +231,32 @@ To reduce ecosystem breakage from incompatible package variants:
 - Every artifact MUST include `type`, `version`, `path`, and `sha256`.
 - Importers MUST provide deterministic import reports.
 - Proposed new artifact types should be namespaced to avoid collisions.
+- Packages MUST NOT rely on undeclared implicit migrations.
+- Required principal bindings MUST resolve before any apply-mode import.
+
+## Signature + Trust Model
+
+EGO trust is verifier-side, not package-side.
+
+Baseline requirements:
+
+- Signatures must bind to canonical manifest bytes (or canonical package digest).
+- `key_id` must map to a verifier-local trust store entry.
+- Package-provided signer labels are informational only.
+- Invalid signature, unknown key, or revoked key MUST downgrade package to
+  untrusted state.
+
+Recommended verifier behavior:
+
+- Maintain a local trusted keyring (pinned public keys / certs).
+- Support explicit trust onboarding for unknown keys.
+- Support key revocation and key rotation.
+- Record signature verification result in import report.
+
+Trust decision source:
+
+- verifier-local policy + cryptographic verification result
+- not package-authored trust declarations
 
 ## Security + Privacy Hooks
 
@@ -173,6 +277,28 @@ Privacy stance:
 
 - Export flows should emit sanitization/redaction metadata.
 - Importers should surface sensitivity labels and redaction provenance to operators.
+
+## External Dependency + Execution Policy
+
+EGO packages should be self-contained by default.
+
+Threat model note: external fetch/execute behavior can convert a reviewed package
+into an unreviewed runtime payload chain.
+
+Baseline policy (recommended for core):
+
+- No implicit network fetch during import.
+- No implicit package install during import.
+- No implicit external code execution during import.
+- Any external dependency references must be explicit manifest entries and
+  treated as unresolved until operator-approved.
+
+If an implementation chooses to support external references:
+
+- They must be non-default and explicit opt-in.
+- They must require digest-pinned targets and trust-policy checks.
+- Import reports must enumerate every external reference action.
+- Safe mode must still refuse external execution/fetch by default.
 
 ## Draft Position
 

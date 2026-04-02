@@ -81,6 +81,7 @@ Current status:
 - We are actively asking for community feedback, with a priority on security expert review.
 
 Draft spec: [docs/specs/EGO-CORE-0001-draft.md](docs/specs/EGO-CORE-0001-draft.md)
+Live discussion: [github.com/Quaid-Labs/quaid/discussions/3](https://github.com/Quaid-Labs/quaid/discussions/3)
 Discussion draft: [docs/specs/EGO-GH-DISCUSSION-draft.md](docs/specs/EGO-GH-DISCUSSION-draft.md)
 
 This is an aspirational direction and not a committed near-term deliverable.

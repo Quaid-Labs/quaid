@@ -50,7 +50,7 @@ After install, start here:
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
-## Aspirational Direction
+## A New Open Standard For Portability
 
 _“We Can Remember It for You Wholesale.”_
 
@@ -61,6 +61,7 @@ A long-term goal is portable agent identity: a complete package of domain knowle
 We are currently forming an open draft standard for this and asking for community feedback before implementation, especially from security experts.
 
 Draft standard direction: [EGO Core 0001 (Draft)](docs/specs/EGO-CORE-0001-draft.md)
+Community discussion: [github.com/Quaid-Labs/quaid/discussions/3](https://github.com/Quaid-Labs/quaid/discussions/3)
 
 This is vision, not a released feature.
 
