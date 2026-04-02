@@ -16,6 +16,17 @@ derive them from those sources.
 
 The pre-install survey is mandatory for all AI/agent installs, including `--agent` mode.
 
+Execution order is mandatory:
+
+1. Read this guide and `setup-quaid.mjs`.
+2. Reply in the conversation with the pre-install survey and selected values.
+3. Wait for human approval or edits.
+4. Only then run install.
+
+Do not keep browsing, planning, or exploring code after you already have enough
+information to present the survey. The survey is the next required
+conversation output.
+
 ## Platform Selection Rule (Mandatory)
 
 If the human did not explicitly specify a platform, install Quaid for the
@@ -192,6 +203,13 @@ Then inspect `setup-quaid.mjs` for step prompts/defaults and execute the non-int
 Before running install, the AI agent must run a short pre-install survey with the human.
 
 Show all planned answers (including defaults) and ask: "Do you want to change any of these before I run install?"
+
+The required execution order is strict:
+
+- after reading this guide and `setup-quaid.mjs`, the next assistant reply must be the survey
+- do not continue exploring source files instead of surfacing the survey
+- do not run any install command before the survey is shown and the human approves
+- if the prompt is thin and only says "follow AI-INSTALL.md", you still must produce the survey first
 
 The list of required survey fields lives in `setup-quaid.mjs` under `AGENT_SURVEY_CONTRACT`.
 Agents must derive the survey from that contract instead of reproducing a second field list here.

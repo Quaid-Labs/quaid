@@ -267,6 +267,14 @@ const TOTAL_INSTALL_STEPS = 7;
 // AI agents: this is the canonical pre-install survey contract.
 // Only include fields listed here when presenting a survey to a human.
 // Everything not listed here is out of scope for the survey.
+// Execution order is mandatory:
+//   1. Read AI-INSTALL.md and this file
+//   2. Present the survey in the conversation
+//   3. Wait for human approval or edits
+//   4. Only then run install
+// Do not keep exploring source files once you already have enough information
+// to present the survey. For a thin "follow AI-INSTALL.md" prompt, the survey
+// is the next required assistant output.
 const AGENT_SURVEY_CONTRACT = {
   sourceOfTruth: "setup-quaid.mjs",
   rule: "Only the fields listed here belong in the pre-install survey.",
