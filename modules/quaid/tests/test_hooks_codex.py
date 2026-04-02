@@ -40,6 +40,20 @@ def _run_hook_codex_stop(hook_input: dict, *, monkeypatch):
     return captured_out.getvalue(), captured_err.getvalue()
 
 
+def _run_hook_inject(hook_input: dict, *, monkeypatch):
+    from core.interface import hooks
+
+    captured_out = io.StringIO()
+    captured_err = io.StringIO()
+
+    with patch("core.interface.hooks._read_stdin_json", return_value=hook_input), \
+         patch("core.interface.hooks.sys.stdout", captured_out), \
+         patch("core.interface.hooks.sys.stderr", captured_err):
+        hooks.hook_inject(MagicMock())
+
+    return captured_out.getvalue(), captured_err.getvalue()
+
+
 def test_read_stdin_json_reads_pipe_payload(monkeypatch):
     from core.interface import hooks
 
@@ -216,4 +230,54 @@ def test_codex_stop_writes_session_end_signal_for_new_command(monkeypatch, tmp_p
     assert sig["meta"]["source"] == "hook_codex_stop"
     assert sig["meta"]["command"] == "/new"
     assert sig["meta"]["reason"] == "command:new"
+    assert err.strip() == ""
+
+
+def test_codex_inject_writes_session_end_signal_for_clear_command(monkeypatch, tmp_path, cursor_dir):
+    transcript_path = tmp_path / "rollout-test-clear.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Earlier turn"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    written_signals = []
+
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-session-end.json")
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    adapter = MagicMock()
+    adapter.resolve_prompt_submit_signal.return_value = {
+        "signal_type": "session_end",
+        "meta": {
+            "source": "hook_inject",
+            "command": "/clear",
+            "reason": "command:clear",
+        },
+    }
+    adapter.adapter_id.return_value = "codex"
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+    out, err = _run_hook_inject(
+        {
+            "session_id": "sess-codex-clear",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "/clear",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    assert out.strip() == ""
+    assert len(written_signals) == 1
+    sig = written_signals[0]
+    assert sig["signal_type"] == "session_end"
+    assert sig["session_id"] == "sess-codex-clear"
+    assert sig["transcript_path"] == str(transcript_path)
+    assert sig["adapter"] == "codex"
+    assert sig["supports_compaction_control"] is False
+    assert sig["meta"]["source"] == "hook_inject"
+    assert sig["meta"]["command"] == "/clear"
+    assert sig["meta"]["reason"] == "command:clear"
     assert err.strip() == ""

@@ -389,6 +389,14 @@ class QuaidAdapter(abc.ABC):
         _ = hook_input, transcript_path
         return None
 
+    def resolve_prompt_submit_signal(
+        self,
+        hook_input: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Return adapter-owned prompt-submit signal policy, or None for no signal."""
+        _ = hook_input
+        return None
+
     # ---- Gateway config (optional) ----
 
     def get_gateway_config_path(self) -> Optional[Path]:

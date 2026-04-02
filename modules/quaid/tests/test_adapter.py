@@ -712,6 +712,14 @@ class TestCodexAdapter:
         assert signal["meta"]["command"] == "/new"
         assert signal["meta"]["reason"] == "command:new"
 
+    def test_resolve_prompt_submit_signal_returns_session_end_for_lifecycle_command(self):
+        adapter = CodexAdapter()
+        signal = adapter.resolve_prompt_submit_signal({"prompt": "/clear"})
+        assert signal is not None
+        assert signal["signal_type"] == "session_end"
+        assert signal["meta"]["command"] == "/clear"
+        assert signal["meta"]["reason"] == "command:clear"
+
     def test_get_llm_provider_returns_codex_provider(self):
         adapter = CodexAdapter()
         provider = adapter.get_llm_provider()

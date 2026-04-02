@@ -257,24 +257,26 @@ class CodexAdapter(QuaidAdapter):
             return command
         return ""
 
+    def _scan_lifecycle_candidates(self, container: dict) -> str:
+        if not isinstance(container, dict):
+            return ""
+        for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
+            cmd = self._extract_lifecycle_command(container.get(key, ""))
+            if cmd:
+                return cmd
+        payload = container.get("payload")
+        if isinstance(payload, dict):
+            for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
+                cmd = self._extract_lifecycle_command(payload.get(key, ""))
+                if cmd:
+                    return cmd
+        return ""
+
     def _detect_lifecycle_command(self, hook_input: dict, transcript_path: str) -> str:
         if not isinstance(hook_input, dict):
             hook_input = {}
 
-        def _scan_candidates(container: dict) -> str:
-            for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
-                cmd = self._extract_lifecycle_command(container.get(key, ""))
-                if cmd:
-                    return cmd
-            payload = container.get("payload")
-            if isinstance(payload, dict):
-                for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
-                    cmd = self._extract_lifecycle_command(payload.get(key, ""))
-                    if cmd:
-                        return cmd
-            return ""
-
-        direct = _scan_candidates(hook_input)
+        direct = self._scan_lifecycle_candidates(hook_input)
         if direct:
             return direct
 
@@ -315,6 +317,19 @@ class CodexAdapter(QuaidAdapter):
         except OSError:
             return ""
         return ""
+
+    def resolve_prompt_submit_signal(self, hook_input):
+        command = self._scan_lifecycle_candidates(hook_input)
+        if not command:
+            return None
+        return {
+            "signal_type": "session_end",
+            "meta": {
+                "source": "hook_inject",
+                "command": command,
+                "reason": f"command:{command.lstrip('/')}",
+            },
+        }
 
     def parse_session_jsonl(self, path: Path) -> str:
         messages = []

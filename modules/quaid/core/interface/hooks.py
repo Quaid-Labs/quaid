@@ -248,6 +248,73 @@ def hook_inject(args):
     if not query:
         return
 
+    try:
+        from core.extraction_daemon import write_signal
+        from lib.adapter import get_adapter
+
+        adapter = get_adapter()
+        signal_spec = adapter.resolve_prompt_submit_signal(hook_input)
+        if signal_spec:
+            transcript_path = _resolve_hook_transcript_path(
+                session_id=session_id,
+                hook_cwd=hook_input.get("cwd", "").strip() if hook_input else "",
+                transcript_path=hook_input.get("transcript_path", "").strip() if hook_input else "",
+            )
+            signal_type = str(signal_spec.get("signal_type") or "session_end")
+            meta = dict(signal_spec.get("meta") or {})
+            lifecycle_command = str(meta.get("command") or "").strip()
+            _write_hook_trace("hook.inject.command_detected", {
+                "query": query[:160],
+                "session_id": session_id,
+                "command": lifecycle_command,
+                "signal_type": signal_type,
+            })
+            if session_id and transcript_path and os.path.isfile(transcript_path):
+                sig_path = write_signal(
+                    signal_type=signal_type,
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    adapter=adapter.adapter_id(),
+                    supports_compaction_control=False,
+                    meta=meta,
+                )
+                _write_hook_trace("hook.inject.signal_written", {
+                    "query": query[:160],
+                    "session_id": session_id,
+                    "signal_name": sig_path.name,
+                    "signal_type": signal_type,
+                })
+
+                try:
+                    _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
+                    _env = {
+                        k: v for k, v in os.environ.items()
+                        if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
+                    }
+                    subprocess.Popen(
+                        [sys.executable, str(_daemon_script), "start"],
+                        start_new_session=True,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=_env,
+                    )
+                except Exception:
+                    pass
+            else:
+                _write_hook_trace("hook.inject.signal_skipped", {
+                    "query": query[:160],
+                    "session_id": session_id,
+                    "command": lifecycle_command,
+                    "signal_type": signal_type,
+                    "transcript_path": transcript_path,
+                })
+            return
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+
     # Any prompt traffic is a daemon liveness contact point.
     # ensure_alive is instance-scoped and lock-guarded, so repeated calls are cheap.
     try:
