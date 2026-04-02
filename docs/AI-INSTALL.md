@@ -2,6 +2,20 @@
 
 This guide is for AI agents running Quaid installation on behalf of a human.
 
+## First Command (Mandatory)
+
+For thin-prompt installs, do this before anything else:
+
+```bash
+node setup-quaid.mjs --agent --dry-run --survey \
+  --workspace "<workspace>" \
+  --adapter <target-platform> \
+  --owner-name "<owner-name>"
+```
+
+Use the survey output from that command as your first conversational reply.
+Do not browse files, plan aloud, or inspect adapter code before running it.
+
 ## Human Instructions for Agent (Copy/Paste)
 
 Use this exact minimal prompt shape when asking an AI agent to install Quaid:

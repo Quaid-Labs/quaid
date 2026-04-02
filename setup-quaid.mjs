@@ -306,6 +306,8 @@ const TOTAL_INSTALL_STEPS = 7;
 const AGENT_SURVEY_CONTRACT = {
   sourceOfTruth: "setup-quaid.mjs",
   rule: "Only the fields listed here belong in the pre-install survey.",
+  firstCommand:
+    "node setup-quaid.mjs --agent --dry-run --survey --workspace <workspace> --adapter <target-platform> --owner-name <owner-name>",
   preSurveyRule:
     "Before the survey, read only AI-INSTALL.md and setup-quaid.mjs plus minimal environment checks needed to fill defaults. Do not browse adapter files, memory config files, unrelated repo docs, or run exploratory shell commands.",
   outputRule:
