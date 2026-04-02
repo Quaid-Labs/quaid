@@ -21,6 +21,7 @@ Do not browse files, plan aloud, or inspect adapter code before running it.
 Use this exact minimal prompt shape when asking an AI agent to install Quaid:
 
 1. Read `docs/AI-INSTALL.md` first and follow it exactly.
+2. Include and obey the mandatory first command from that guide before doing anything else.
 2. Install Quaid for me using this workspace, instance name, and owner name.
 3. Tell me when install is complete and `quaid doctor` is healthy.
 

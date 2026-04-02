@@ -169,7 +169,7 @@ yourself.
 
 2. **Tell the platform to install** by sending it this message (swap in your values):
 
-   > Please install Quaid by following the AI install guide on the canary branch:
+   > Please install Quaid by following the AI install guide on the canary branch exactly, including its mandatory first command:
    > https://github.com/Quaid-Labs/quaid/blob/canary/docs/AI-INSTALL.md
    >
    > Use these parameters:

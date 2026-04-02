@@ -208,7 +208,7 @@ guide on canary and installs Quaid itself. Do not run the installer directly.
 
 Tell the platform pane:
 
-> Please install Quaid by following the AI install guide on the canary branch:
+> Please install Quaid by following the AI install guide on the canary branch exactly, including its mandatory first command:
 > https://github.com/Quaid-Labs/quaid/blob/canary/docs/AI-INSTALL.md
 >
 > Use these parameters:
