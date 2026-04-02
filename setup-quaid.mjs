@@ -275,9 +275,17 @@ const TOTAL_INSTALL_STEPS = 7;
 // Do not keep exploring source files once you already have enough information
 // to present the survey. For a thin "follow AI-INSTALL.md" prompt, the survey
 // is the next required assistant output.
+// Before the survey, scope is intentionally narrow:
+//   - allowed reads: AI-INSTALL.md and this file
+//   - allowed shell checks: only minimal checks needed to fill defaults
+//     (for example RAM / Ollama availability)
+//   - do not inspect adapter source, memory config files, or unrelated repo docs
+//   - do not run exploratory commands like find/pwd/broad grep before the survey
 const AGENT_SURVEY_CONTRACT = {
   sourceOfTruth: "setup-quaid.mjs",
   rule: "Only the fields listed here belong in the pre-install survey.",
+  preSurveyRule:
+    "Before the survey, read only AI-INSTALL.md and setup-quaid.mjs plus minimal environment checks needed to fill defaults. Do not browse adapter files, memory config files, unrelated repo docs, or run exploratory shell commands.",
   fields: [
     {
       id: "owner_name",

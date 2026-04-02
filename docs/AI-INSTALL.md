@@ -27,6 +27,25 @@ Do not keep browsing, planning, or exploring code after you already have enough
 information to present the survey. The survey is the next required
 conversation output.
 
+Pre-survey scope is intentionally narrow:
+
+- Allowed reads before the survey:
+  - `docs/AI-INSTALL.md`
+  - `setup-quaid.mjs`
+- Allowed shell checks before the survey:
+  - only minimal checks needed to fill the survey correctly, such as RAM/Ollama detection
+- Do not browse:
+  - adapter source files
+  - repo docs unrelated to install
+  - `memory.json`
+  - project files
+- Do not run exploratory commands like:
+  - `find`
+  - `pwd`
+  - broad repo search
+
+If you already know enough to present defaults, stop exploring and show the survey.
+
 ## Platform Selection Rule (Mandatory)
 
 If the human did not explicitly specify a platform, install Quaid for the
@@ -210,6 +229,8 @@ The required execution order is strict:
 - do not continue exploring source files instead of surfacing the survey
 - do not run any install command before the survey is shown and the human approves
 - if the prompt is thin and only says "follow AI-INSTALL.md", you still must produce the survey first
+- before the survey, do not inspect adapter files, memory config files, or unrelated repo files
+- before the survey, do not run exploratory shell commands beyond the minimal checks needed to fill survey defaults
 
 The list of required survey fields lives in `setup-quaid.mjs` under `AGENT_SURVEY_CONTRACT`.
 Agents must derive the survey from that contract instead of reproducing a second field list here.
