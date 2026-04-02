@@ -4256,8 +4256,9 @@ except Exception as e:
     s.stop(C.yellow("Smoke test partial — store OK, recall needs embeddings"));
   }
 
-  // Claude Code: start extraction daemon so it's ready for first session
-  if (_isPlatform("claude-code")) {
+  // Start the extraction daemon for platforms that rely on background
+  // session/lifecycle processing so the first real session is ready immediately.
+  if (_isPlatform("claude-code") || _isPlatform("codex")) {
     s.start("Starting extraction daemon...");
     const daemonScript = `
 import os, sys
