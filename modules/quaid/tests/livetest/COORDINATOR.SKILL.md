@@ -216,8 +216,24 @@ Tell the platform pane:
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
-> Read the guide, run the installer, and tell me when Quaid is installed and
-> `quaid doctor` returns healthy.
+> Install from `--source github --ref canary` or from the already-cloned
+> canary checkout in that workspace. Do not install a release build or any
+> branch other than canary.
+>
+> Before running install:
+> - read `docs/AI-INSTALL.md`
+> - show me the mandatory pre-install survey with the selected values
+> - wait for approval before running install
+>
+> While running install, send brief status updates as you move through the
+> steps. At minimum I should see:
+> - reading guide / surveying options
+> - starting installer
+> - installer checkpoints or important step transitions
+> - running `quaid doctor`
+> - final result
+>
+> Tell me when Quaid is installed and `quaid doctor` returns healthy.
 
 **Delivery per platform:**
 
@@ -259,18 +275,54 @@ print("Cleared existing Quaid CC hooks")
 PY'
 ```
 
+**CDX only** — verify the environment is clean before the first install turn.
+There must be no pre-existing Quaid Codex hooks before M0. If the first install
+prompt shows `SessionStart hook: Quaid loading project context`, the wipe failed
+and M0 is invalid.
+```bash
+ssh REMOTE_HOST 'python3 - <<PY
+import json
+from pathlib import Path
+p = Path.home() / ".codex" / "hooks.json"
+if not p.exists():
+    print("No Codex hooks file")
+    raise SystemExit(0)
+try:
+    data = json.loads(p.read_text())
+except Exception as e:
+    print(f"Unreadable hooks.json: {e}")
+    raise SystemExit(1)
+bad = []
+for section in (data.get("hooks") or {}).values():
+    for entry in section or []:
+        for hook in (entry.get("hooks") or []):
+            cmd = str(hook.get("command") or "")
+            if "quaid" in cmd.lower():
+                bad.append(cmd)
+if bad:
+    print("STALE_QUAID_HOOKS")
+    for cmd in bad:
+        print(cmd)
+    raise SystemExit(2)
+print("No Quaid Codex hooks")
+PY'
+```
+
 ### M0 pass criteria
 
 After the platform reports completion:
 
-1. **Install messages visible** — capture the platform pane and confirm installer
-   status messages appeared:
+1. **Survey and install messages visible** — capture the platform pane and confirm:
+   - the mandatory pre-install survey appeared
+   - the platform clearly stated it would install from canary
+   - installer status messages appeared during execution
    ```bash
    tmux capture-pane -t livetest:OC -p | grep -i "quaid\|install\|hook\|schema\|ready\|error" | tail -20
    tmux capture-pane -t livetest:CC -p | grep -i "quaid\|install\|hook\|schema\|ready\|error" | tail -20
    tmux capture-pane -t livetest:CDX -p | grep -i "quaid\|install\|hook\|schema\|ready\|error" | tail -20
    ```
-   Silent install with no messages = M0 FAIL. Report this as an installer bug.
+   Silent install with no messages, missing survey, ambiguous source provenance,
+   or any pre-installed Quaid hook activity before install = M0 FAIL.
 
 2. **Health check passes:**
    ```bash
@@ -343,6 +395,12 @@ If the latter — stop. Wrong responses to failures:
 - Log every fix commit to `unreviewed-commits.md` immediately (do not batch).
 - Do not fix recall quality issues (wrong facts, low scores, bad ranking). Those
   are benchmark scope — escalate separately.
+- Before escalating a quality issue, require one stronger-model retry in a
+  fresh visible session. If it passes only on the stronger model, record
+  `PASS-WITH-NOTE`. If it still fails, then hand it to benchmark.
+- If you authorize a targeted reseed/cleanup before rerunning a quality issue,
+  require a contamination audit first. The tester must prove the scoped
+  assistant/debug contaminant rows are actually gone before the rerun starts.
 
 **Infrastructure vs quality:**
 - Infrastructure (your scope): crashes, timeouts, missing signals, wrong DB path,

@@ -45,17 +45,17 @@ CDX disables `/clear` while a task is still running.
 
 ---
 
-## Extraction Model: Turn-Driven + Rolling Daemon
+## Extraction Model: Signal-Only Hook + Daemon
 
-CDX uses two extraction paths:
+CDX extraction is daemon-driven.
 
-- **Per-turn (synchronous):** `hook_codex_stop` fires after every turn and
-  ingest the turn's transcript slice immediately. Facts are available in the DB
-  right after the turn completes — no 30–60s wait needed.
-- **Rolling extraction (daemon):** The extraction daemon runs in the background
-  and fires rolling extraction once unextracted content crosses
-  `capture.chunk_tokens`. This produces `rolling_stage` and `rolling_flush`
-  events in `logs/daemon/rolling-extraction.jsonl`, same as OC/CC.
+- **Stop hook (signal only):** `hook_codex_stop` runs after every turn, but it
+  should only write an extraction signal and wake the daemon. It does not own
+  extraction or direct memory writes.
+- **Daemon extraction:** The extraction daemon consumes those signals and owns
+  rolling extraction, lifecycle flush, and publish. `rolling_stage` and
+  `rolling_flush` events are written to `logs/daemon/rolling-extraction.jsonl`,
+  same as OC/CC.
 
 CDX has no `SessionTimeoutManager` integration and no
 `capture.inactivityTimeoutMinutes` effect (M4 SKIP — see below).
@@ -98,28 +98,29 @@ ssh REMOTE_HOST 'cat WORKSPACE/shared/run/codex-app-server-broker.pid 2>/dev/nul
 
 **CDX does not have timeout extraction.** M4 is not applicable to CDX.
 
-CDX extraction fires on every turn via `hook_codex_stop`. There is no idle
-session monitor and setting `capture.inactivityTimeoutMinutes` has no effect
+CDX Stop hooks signal the daemon on every turn, but there is no idle-session
+timeout extraction mechanism. `capture.inactivityTimeoutMinutes` has no effect
 on CDX.
 
 **CDX M4 action:** Skip M4 entirely. Send STATUS to coordinator:
 `"STATUS: M4 SKIP — CDX has no timeout mechanism, extraction is turn-driven."`
 
-If you want to verify per-turn extraction completeness as a substitute, confirm
-after M1/M2 that facts from each individual turn appear in the DB promptly.
+If you want to verify turn completeness as a substitute, confirm after the
+relevant lifecycle boundary that the fact from that turn appears in the DB.
+Do not assume storage before the daemon's boundary-triggered publish.
 That is sufficient coverage for the CDX extraction path.
 
 ---
 
 ## SessionStart Hook — First Session Cold Start
 
-On a fresh CDX silo, the first `codex --yolo` session may block for several
-minutes while `quaid hook-session-init` runs 5 sequential LLM calls to
-initialise context. This is expected on first launch only.
+This must **not** appear on the first M0 install turn. Before Quaid is
+installed there should be no Quaid Codex hooks at all.
 
-If the coordinator ran a post-install warm-up step (pre-running
-`hook-session-init` with `QUAID_INSTALL_AGENT=1`), this delay should not occur.
-If it does block: wait up to 15 minutes before reporting as an ISSUE.
+If the first install prompt shows `SessionStart hook: Quaid loading project
+context`, the environment is contaminated by a prior install or an incomplete
+wipe. Report an ISSUE immediately. Do not wait for the hook to finish and do
+not treat it as expected cold start behavior for M0.
 
 ---
 
@@ -139,8 +140,10 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE \
 ## Milestone Notes
 
 ### M2 — Extraction via `/clear`
-Use `/clear` (not `/reset`). Verify the pre-clear session is extracted. Do not
-gate on snippet or journal output — that is discretionary and covered in M11.
+Use `/clear` (not `/reset`). Wait for the memorable turn to fully finish, then
+send `/clear`; `/clear` is the extraction trigger for this milestone. Verify the
+fact is stored after the clear boundary. Do not gate on snippet or journal
+output — that is discretionary and covered in M11.
 
 ### M3 — Rolling Extraction
 CDX does not have `/compact`. After seeding and building context, use `/clear`

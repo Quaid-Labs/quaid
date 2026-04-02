@@ -69,6 +69,53 @@ conflict, the guide wins.
 5. Send a STATUS message to the coordinator.
 6. If it fails: send an ISSUE message and wait for the coordinator's response.
 
+### Quality-Retry Rule Before Escalation
+
+If a failure looks like a **quality issue** rather than a platform/infrastructure
+issue, do one stronger-model retry before escalating it for a code fix.
+
+This applies to cases like:
+- recall returns weak or irrelevant memories
+- the agent sees the right tool output but answers poorly from it
+- ranking/relevance looks wrong
+- answer quality is weak but the platform, hooks, and storage paths appear healthy
+
+Required retry procedure:
+1. Increase the visible platform agent to the next stronger model in the same family.
+   Current default example: CDX `gpt-5.1-codex-mini` -> `gpt-5.1-codex`.
+2. Start a fresh session boundary (`/new` or platform equivalent).
+3. Re-run the failing prompt once in that fresh stronger-model session.
+4. Report the result clearly:
+   - if it passes only on the stronger model: `PASS-WITH-NOTE`
+   - if it still fails: `ISSUE`, and explicitly note that the stronger-model retry also failed
+
+Do not do repeated model escalation loops. One stronger-model fresh-session retry
+is the limit before escalation.
+
+### Contamination Audit Before Quality Reruns
+
+If the coordinator authorizes a targeted reseed or DB cleanup before rerunning a
+quality failure, do not assume deleting one or two obvious rows is sufficient.
+
+Before the rerun, you must prove the silo is clean enough for the test:
+1. Preserve the current contaminant row IDs and text in your notes first.
+2. Delete only the rows explicitly authorized by the coordinator.
+3. Query the DB for remaining assistant/debug contamination using the relevant
+   query text and nearby operational phrases.
+4. Do not rerun until that audit returns zero remaining contaminant matches for
+   the scoped cleanup target.
+5. Report the audit result to the coordinator before or alongside the rerun.
+
+For recall-quality contamination cases, check for rows matching things like:
+- the failing recall query text itself
+- `quaid recall`
+- `returned no entries`
+- `returned only`
+- assistant/debug summaries of the failed attempt
+
+If the audit still finds contamination, stop and send an ISSUE instead of
+starting the rerun.
+
 ### Waiting after extraction triggers
 
 After any reset, compact, or lifecycle extraction trigger, wait 30–60 seconds
@@ -130,8 +177,24 @@ yourself.
    > - Instance name: INSTANCE_NAME
    > - Owner name: OWNER_NAME
    >
-   > Read the guide, run the installer, and tell me when Quaid is installed and
-   > `quaid doctor` returns healthy.
+   > Install from `--source github --ref canary` or from the already-cloned
+   > canary checkout in that workspace. Do not install a release build or any
+   > branch other than canary.
+   >
+   > Before running install:
+   > - read `docs/AI-INSTALL.md`
+   > - show me the mandatory pre-install survey with the selected values
+   > - wait for approval before running install
+   >
+   > While running install, send brief status updates as you move through the
+   > steps. At minimum I should see:
+   > - reading guide / surveying options
+   > - starting installer
+   > - installer checkpoints or important step transitions
+   > - running `quaid doctor`
+   > - final result
+   >
+   > Tell me when Quaid is installed and `quaid doctor` returns healthy.
 
    Deliver via your platform's normal message channel (see your platform supplement).
 
@@ -164,7 +227,7 @@ yourself.
 
 5. **Verify install quality** per your platform supplement and the guide.
 
-**M0 PASS:** Platform self-installed AND install messages visible AND `quaid doctor` healthy.
+**M0 PASS:** Platform self-installed from canary AND pre-install survey visible AND install messages visible AND `quaid doctor` healthy.
 **M0 FAIL:** Platform could not install, silent install, or `quaid doctor` errors.
 On FAIL: send an ISSUE to the coordinator with the full platform pane capture.
 
