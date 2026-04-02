@@ -1894,6 +1894,22 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning("[%s] session %s: notification failed: %s", label, session_id, e)
 
+        if (
+            signal_type == "timeout"
+            and bool(signal_data.get("supports_compaction_control"))
+            and bool((signal_data.get("meta") or {}).get("compact_on_timeout"))
+        ):
+            try:
+                from core.runtime.events import emit_event
+                emit_event(
+                    name="memory.force_compaction",
+                    payload={"reason": f"inactivity timeout for session {session_id}"},
+                    source="daemon.timeout",
+                )
+                logger.info("[%s] session %s: queued post-timeout compaction request", label, session_id)
+            except Exception as e:
+                logger.warning("[%s] session %s: failed queuing post-timeout compaction: %s", label, session_id, e)
+
         try:
             from core.ingest_runtime import run_session_logs_ingest
             sl_result = run_session_logs_ingest(
@@ -2141,6 +2157,41 @@ def _get_idle_timeout_minutes(default: int = 30) -> int:
         return default
 
 
+def _get_compact_on_timeout(default: bool = True) -> bool:
+    """Read timeout compaction toggle from live config with legacy alias support."""
+    try:
+        import json as _json
+        from config import _config_paths
+        raw: bool = default
+        for _cp in reversed(list(_config_paths())):
+            if _cp.exists():
+                try:
+                    _data = _json.loads(_cp.read_text(encoding="utf-8"))
+                    _capture = _data.get("capture", {})
+                    if "compact_on_timeout" in _capture:
+                        raw = bool(_capture.get("compact_on_timeout"))
+                    elif "compactOnTimeout" in _capture:
+                        raw = bool(_capture.get("compactOnTimeout"))
+                    elif "auto_compaction_on_timeout" in _capture:
+                        raw = bool(_capture.get("auto_compaction_on_timeout"))
+                    elif "autoCompactionOnTimeout" in _capture:
+                        raw = bool(_capture.get("autoCompactionOnTimeout"))
+                except Exception:
+                    pass
+        return bool(raw)
+    except Exception:
+        return default
+
+
+def _adapter_supports_compaction_control() -> bool:
+    try:
+        from lib.adapter import get_adapter
+        adapter_name = type(get_adapter()).__name__.replace("Adapter", "").lower()
+        return adapter_name in ("openclaw",)
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Idle session detection (timeout extraction)
 # ---------------------------------------------------------------------------
@@ -2178,6 +2229,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
 
+    cursor_rows: list[dict[str, Any]] = []
     for cursor_file in cursor_dir.glob("*.json"):
         try:
             data = json.loads(cursor_file.read_text(encoding="utf-8"))
@@ -2193,8 +2245,25 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if session_id in registered_subagents:
             continue
 
+        try:
+            mtime = os.path.getmtime(transcript_path)
+        except OSError:
+            continue
+
+        cursor_rows.append({
+            "session_id": session_id,
+            "transcript_path": transcript_path,
+            "cursor_offset": int(data.get("line_offset", 0) or 0),
+            "mtime": mtime,
+        })
+
+    for row in cursor_rows:
+        session_id = str(row["session_id"])
+        transcript_path = str(row["transcript_path"])
+        cursor_offset = int(row["cursor_offset"])
+        mtime = float(row["mtime"])
+
         # Check if transcript has grown past cursor
-        cursor_offset = data.get("line_offset", 0)
         total_lines = count_transcript_lines(transcript_path)
         cursor_at_end = total_lines <= cursor_offset
 
@@ -2216,40 +2285,50 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             except Exception:
                 pass
 
+        if cursor_at_end and has_staged_payload and session_id not in pending_session_ids:
+            newer_session_exists = any(
+                float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
+                for other in cursor_rows
+            )
+            if newer_session_exists:
+                logger.info(
+                    "session %s cursor at end with staged payload and newer session activity detected, generating session_end flush",
+                    session_id,
+                )
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                )
+                continue
+
         if cursor_at_end and not has_staged_payload:
             # All content already extracted via rolling, but session may be idle without /exit.
-            # Fire timeout signal to trigger autocompaction for genuinely idle sessions.
+            # Fire timeout signal for genuinely idle sessions.
             # Only fires once per session — _cursor_end_timeout_fired prevents repeated signals
             # for sessions where rolling already extracted all content and cursor never advances.
             if session_id not in _cursor_end_timeout_fired:
-                try:
-                    idle_mtime = os.path.getmtime(transcript_path)
-                except OSError:
-                    continue
                 if (
-                    idle_mtime >= installed_at_ts
-                    and (now - idle_mtime) >= timeout_seconds
+                    mtime >= installed_at_ts
+                    and (now - mtime) >= timeout_seconds
                     and session_id not in pending_session_ids
                 ):
                     logger.info(
-                        "session %s idle for %.0fs with cursor at end, generating timeout signal for autocompaction",
+                        "session %s idle for %.0fs with cursor at end, generating timeout signal",
                         session_id,
-                        now - idle_mtime,
+                        now - mtime,
                     )
                     write_signal(
                         signal_type="timeout",
                         session_id=session_id,
                         transcript_path=transcript_path,
+                        supports_compaction_control=_adapter_supports_compaction_control(),
+                        meta={"compact_on_timeout": _get_compact_on_timeout()},
                     )
                     _cursor_end_timeout_fired.add(session_id)
             continue
 
         # Check transcript modification time for idle detection
-        try:
-            mtime = os.path.getmtime(transcript_path)
-        except OSError:
-            continue
-
         if mtime < installed_at_ts:
             continue
 
@@ -2270,7 +2349,25 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             signal_type="timeout",
             session_id=session_id,
             transcript_path=transcript_path,
+            supports_compaction_control=_adapter_supports_compaction_control(),
+            meta={"compact_on_timeout": _get_compact_on_timeout()},
         )
+
+
+def _effective_idle_timeout_minutes(
+    configured_timeout_minutes: int,
+    *,
+    fallback_minutes: int = 120,
+    max_timeout_minutes: int = 120,
+) -> int:
+    """Return a finite timeout for idle extraction/system health."""
+    try:
+        raw = int(configured_timeout_minutes)
+    except Exception:
+        raw = 0
+    if raw <= 0:
+        return int(fallback_minutes)
+    return min(raw, int(max_timeout_minutes))
 
 
 def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
@@ -2572,19 +2669,16 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             # five-minute sweep interval before becoming eligible.
             now = time.time()
             configured_timeout_minutes = _get_idle_timeout_minutes()
-            if configured_timeout_minutes > 0:
-                timeout_seconds = configured_timeout_minutes * 60
-                effective_idle_check_interval = max(
-                    poll_interval,
-                    min(idle_check_interval, max(5.0, timeout_seconds / 2.0)),
-                )
-            else:
-                effective_idle_check_interval = idle_check_interval
+            effective_timeout_minutes = _effective_idle_timeout_minutes(configured_timeout_minutes)
+            timeout_seconds = effective_timeout_minutes * 60
+            effective_idle_check_interval = max(
+                poll_interval,
+                min(idle_check_interval, max(5.0, timeout_seconds / 2.0)),
+            )
 
             if now - last_idle_check > effective_idle_check_interval:
                 try:
-                    if configured_timeout_minutes > 0:
-                        check_idle_sessions(configured_timeout_minutes)
+                    check_idle_sessions(effective_timeout_minutes)
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now

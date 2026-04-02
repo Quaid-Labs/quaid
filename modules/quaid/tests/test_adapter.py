@@ -614,6 +614,14 @@ class TestCodexAdapter:
         provider = adapter.get_llm_provider()
         assert isinstance(provider, CodexLLMProvider)
 
+    def test_get_cli_tools_snippet_includes_project_metadata_update_guidance(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        adapter = CodexAdapter()
+        snippet = adapter.get_cli_tools_snippet()
+        assert "quaid project update <name> --description" in snippet
+        assert "Do not treat edits to `PROJECT.md`" in snippet
+
     def test_get_api_key_raises_when_fail_hard_enabled(self, monkeypatch):
         adapter = CodexAdapter()
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)

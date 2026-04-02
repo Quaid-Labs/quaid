@@ -28,9 +28,11 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from fnmatch import fnmatch
 from pathlib import Path
@@ -56,6 +58,27 @@ from lib.project_templates import (
 from lib.runtime_context import get_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _run_locked_write_with_retry(op, *, op_name: str, max_attempts: int = 3, base_sleep_seconds: float = 2.0):
+    """Retry transient SQLite lock failures for small metadata writes."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return op()
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower() or attempt >= max_attempts:
+                raise
+            sleep_s = base_sleep_seconds * attempt
+            logger.warning(
+                "%s hit sqlite lock (attempt %d/%d); retrying in %.1fs",
+                op_name,
+                attempt,
+                max_attempts,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
 
 def _workspace() -> Path:
     return get_workspace_dir()
@@ -451,32 +474,35 @@ class DocsRegistry:
 
     def save_project_definition(self, name: str, defn):
         """Upsert a project definition to DB."""
-        with get_connection(self.db_path) as conn:
-            conn.execute("""
-                INSERT INTO project_definitions
-                    (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(name) DO UPDATE SET
-                    label = excluded.label,
-                    home_dir = excluded.home_dir,
-                    source_roots = excluded.source_roots,
-                    auto_index = excluded.auto_index,
-                    patterns = excluded.patterns,
-                    exclude = excluded.exclude,
-                    description = excluded.description,
-                    state = excluded.state,
-                    updated_at = datetime('now')
-            """, (
-                name,
-                defn.label,
-                defn.home_dir,
-                json.dumps(defn.source_roots) if defn.source_roots else "[]",
-                1 if defn.auto_index else 0,
-                json.dumps(defn.patterns) if defn.patterns else '["*.md"]',
-                json.dumps(defn.exclude) if defn.exclude else "[]",
-                defn.description or "",
-                getattr(defn, 'state', 'active'),
-            ))
+        def _write():
+            with get_connection(self.db_path) as conn:
+                conn.execute("""
+                    INSERT INTO project_definitions
+                        (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    ON CONFLICT(name) DO UPDATE SET
+                        label = excluded.label,
+                        home_dir = excluded.home_dir,
+                        source_roots = excluded.source_roots,
+                        auto_index = excluded.auto_index,
+                        patterns = excluded.patterns,
+                        exclude = excluded.exclude,
+                        description = excluded.description,
+                        state = excluded.state,
+                        updated_at = datetime('now')
+                """, (
+                    name,
+                    defn.label,
+                    defn.home_dir,
+                    json.dumps(defn.source_roots) if defn.source_roots else "[]",
+                    1 if defn.auto_index else 0,
+                    json.dumps(defn.patterns) if defn.patterns else '["*.md"]',
+                    json.dumps(defn.exclude) if defn.exclude else "[]",
+                    defn.description or "",
+                    getattr(defn, 'state', 'active'),
+                ))
+
+        _run_locked_write_with_retry(_write, op_name=f"save_project_definition({name})")
 
     def delete_project_definition(self, name: str):
         """Soft-delete a project definition (set state to 'deleted')."""

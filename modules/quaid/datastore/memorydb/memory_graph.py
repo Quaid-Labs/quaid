@@ -2504,6 +2504,7 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
     graph = get_graph()
     cfg = _get_memory_config()
     identity = cfg.users.identities.get(owner_id)
+    generic_owner_ids = {"default", "shared", "owner", "user", "quaid"}
 
     # Primary: explicit configured person node name.
     if identity and identity.person_node_name:
@@ -2516,6 +2517,28 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
             node = graph.find_node_by_name(candidate, type="Person")
             if node:
                 return node
+
+    # Fallback: when owner_id is a placeholder, infer the real owner from the
+    # current instance ownership edge (e.g. Solomon --owns--> codex-livetest).
+    if owner_id in generic_owner_ids and hasattr(graph, "_get_conn"):
+        instance_name = os.environ.get("QUAID_INSTANCE", "").strip()
+        if instance_name:
+            with graph._get_conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT n.*
+                    FROM edges e
+                    JOIN nodes t ON t.id = e.target_id
+                    JOIN nodes n ON n.id = e.source_id
+                    WHERE e.relation = 'owns'
+                      AND n.type = 'Person'
+                      AND LOWER(t.name) = LOWER(?)
+                    LIMIT 1
+                    """,
+                    (instance_name,),
+                ).fetchone()
+            if row:
+                return graph._row_to_node(row)
 
     # Fallback: owner id itself may map to person name in graph.
     for candidate in (owner_id, owner_id.replace("_", " ").title()):
@@ -2778,9 +2801,13 @@ def graph_aware_recall(
 
                 results["graph_results"].append({
                     "id": node.id,
+                    "text": graph_path,
+                    "category": "graph",
+                    "similarity": round(max(0.55, 0.92 - (0.08 * max(depth - 1, 0))), 3),
                     "name": node.name,
                     "type": node.type,
                     "relation": relation,
+                    "via_relation": relation,
                     "direction": direction,
                     "depth": depth,
                     "source_name": source_name,
@@ -4099,8 +4126,9 @@ def _graph_store_recall(
         project=project,
         candidate_pool=candidate_pool,
     )
+    combined = list(payload.get("direct_results", [])) + list(payload.get("graph_results", []))
     return (
-        _validate_recall_result_rows(payload.get("direct_results", [])),
+        _validate_recall_result_rows(combined),
         dict(payload.get("meta") or {}),
         None,
     )

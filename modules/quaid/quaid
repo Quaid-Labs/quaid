@@ -99,11 +99,6 @@ case "$CMD" in
     exec "$PYTHON_BIN" "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
     ;;
 
-  # Session commands
-  session)
-    exec "$PYTHON_BIN" "$SCRIPT_DIR/ingest/session_logs_ingest.py" "$@"
-    ;;
-
   # Domain management
   domain)
     SUBCMD="${1:-list}"
@@ -233,6 +228,12 @@ store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fa
     exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
     ;;
 
+  session)
+    echo "error: 'quaid session' is not a public CLI surface" >&2
+    echo "session log indexing/loading is internal runtime plumbing" >&2
+    exit 1
+    ;;
+
   claudecode|openclaw)
     # Adapter-registered CLI namespace dispatch
     ADAPTER_CMD="$CMD"
@@ -357,10 +358,6 @@ PYEOF
     echo "  get-edges <id>       Get edges for a node"
     echo "  event [subcmd]       Event bus (emit/list/process/capabilities)"
     echo ""
-    echo ""
-    echo "Sessions:"
-    echo "  session list         List recent sessions"
-    echo "  session load <id>    Load a session transcript"
     echo ""
     echo "Domains:"
     echo "  domain list          List knowledge domains"

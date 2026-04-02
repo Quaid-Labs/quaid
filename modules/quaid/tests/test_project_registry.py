@@ -58,7 +58,8 @@ class TestRegistryIO:
 class TestCreateProject:
     def test_creates_project(self, mock_adapter):
         adapter, tmp_path = mock_adapter
-        entry = create_project("my-app", description="Test app")
+        with patch("core.project_registry._sync_docs_registry_project") as sync_docs:
+            entry = create_project("my-app", description="Test app")
 
         assert entry["description"] == "Test app"
         assert entry["source_root"] is None
@@ -77,6 +78,7 @@ class TestCreateProject:
 
         # In registry
         assert get_project("my-app") is not None
+        sync_docs.assert_called_once()
 
     def test_rejects_invalid_name(self, mock_adapter):
         with pytest.raises(ValueError, match="Invalid project name"):
@@ -99,7 +101,8 @@ class TestCreateProject:
         src.mkdir()
         (src / "main.py").write_text("print('hi')")
 
-        entry = create_project("my-app", source_root=str(src))
+        with patch("core.project_registry._sync_docs_registry_project"):
+            entry = create_project("my-app", source_root=str(src))
         assert entry["source_root"] == str(src)
 
         # Shadow git should be initialized
@@ -109,9 +112,12 @@ class TestCreateProject:
 
 class TestUpdateProject:
     def test_updates_fields(self, mock_adapter):
-        create_project("my-app", description="v1")
-        updated = update_project("my-app", description="v2")
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("my-app", description="v1")
+        with patch("core.project_registry._sync_docs_registry_project") as sync_docs:
+            updated = update_project("my-app", description="v2")
         assert updated["description"] == "v2"
+        sync_docs.assert_called_once()
 
     def test_rejects_unknown_project(self, mock_adapter):
         with pytest.raises(KeyError):

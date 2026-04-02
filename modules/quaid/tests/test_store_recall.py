@@ -2489,6 +2489,42 @@ class TestRecallFastHookInjectContract:
 
         assert stores == ["vector", "graph"]
 
+    def test_graph_store_recall_returns_graph_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        payload = {
+            "direct_results": [
+                {"id": "fact-1", "text": "Diana is Solomon's sister", "category": "fact", "similarity": 0.8},
+            ],
+            "graph_results": [
+                {
+                    "id": "alice",
+                    "text": "Solomon --sibling_of--> Diana --parent_of--> Alice",
+                    "category": "graph",
+                    "similarity": 0.76,
+                    "via_relation": "parent_of",
+                    "graph_path": "Solomon --sibling_of--> Diana --parent_of--> Alice",
+                },
+            ],
+            "meta": {"source": "test"},
+        }
+
+        with patch("datastore.memorydb.memory_graph.graph_aware_recall", return_value=payload):
+            rows, meta, bundle = mg._graph_store_recall(
+                "Who is my niece?",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.6,
+                domain=None,
+                domain_boost=None,
+                project=None,
+                depth=2,
+            )
+
+        assert [row["id"] for row in rows] == ["fact-1", "alice"]
+        assert meta == {"source": "test"}
+        assert bundle is None
+
     def test_classify_intent_prefers_relation_for_broad_family_prompt(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3163,7 +3199,8 @@ class TestRecallLimitEdgeCases:
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph.get_logs_dir", return_value=logs_dir), \
-             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             created = [
                 mg.store("User has a sister named Diana", owner_id="quaid"),
                 mg.store("User's sister Diana has a daughter named Alice", owner_id="quaid"),

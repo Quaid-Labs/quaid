@@ -353,6 +353,25 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_loads_capture_compact_on_timeout_from_new_or_legacy_keys(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({"capture": {"compactOnTimeout": False}}))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.capture.compact_on_timeout is False
+
+            config._config = None
+            config_file.write_text(json.dumps({"capture": {"autoCompactionOnTimeout": True}}))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.capture.compact_on_timeout is True
+        finally:
+            config._config = old_config
+
     def test_warns_on_unknown_keys(self, tmp_path, capsys):
         import config
         old_config = config._config

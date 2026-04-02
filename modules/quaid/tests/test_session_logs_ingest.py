@@ -1,4 +1,5 @@
 import json
+import sys
 from types import SimpleNamespace
 
 from ingest import session_logs_ingest
@@ -101,3 +102,31 @@ def test_normalize_participant_aliases_rejects_non_object_json():
         assert "JSON object" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_main_accepts_json_flag_for_list_and_load(monkeypatch, tmp_path, capsys):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    captured = []
+
+    def _fake_call(command, args):
+        captured.append((command, list(args)))
+        if command == "list":
+            return {"sessions": [{"session_id": "sess-json"}]}
+        return {"session": {"session_id": "sess-json"}}
+
+    monkeypatch.setattr("ingest.session_logs_ingest._call_session_logs_cli", _fake_call)
+
+    monkeypatch.setattr(sys, "argv", ["session_logs_ingest.py", "list", "--limit", "1", "--json"])
+    assert session_logs_ingest.main() == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["sessions"][0]["session_id"] == "sess-json"
+
+    monkeypatch.setattr(sys, "argv", ["session_logs_ingest.py", "load", "--session-id", "sess-json", "--json"])
+    assert session_logs_ingest.main() == 0
+    loaded = json.loads(capsys.readouterr().out)
+    assert loaded["session"]["session_id"] == "sess-json"
+
+    assert captured == [
+        ("list", ["--limit", "1"]),
+        ("load", ["--session-id", "sess-json"]),
+    ]

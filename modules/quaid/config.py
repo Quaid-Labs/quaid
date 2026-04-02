@@ -147,8 +147,8 @@ class CaptureConfig:
     enabled: bool = True
     strictness: str = "high"  # high | medium | low
     skip_patterns: List[str] = field(default_factory=list)
-    inactivity_timeout_minutes: int = 60  # Extract after N minutes of inactivity (0 = disabled)
-    auto_compaction_on_timeout: bool = True  # Trigger gateway compaction after timeout extraction
+    inactivity_timeout_minutes: int = 60  # Extract after N minutes of inactivity (daemon clamps to 120m max for system health; 0 disables user-requested timeout compaction only)
+    compact_on_timeout: bool = True  # After timeout extraction, request compaction on adapters that support it
     chunk_tokens: int = 8_000  # Max tokens per extraction chunk (messages never split)
     chunk_max_lines: int = 0  # Optional line cap for rolling extraction windows
     chunk_size: int = 8_000  # Deprecated legacy field; mirror token cap for old configs
@@ -598,6 +598,7 @@ _KNOWN_CAPTURE_KEYS = {
     "strictness",
     "skip_patterns",
     "inactivity_timeout_minutes",
+    "compact_on_timeout",
     "auto_compaction_on_timeout",
     "chunk_tokens",
     "chunk_max_lines",
@@ -995,7 +996,13 @@ def _load_config_inner() -> MemoryConfig:
         strictness=capture_data.get('strictness', 'high'),
         skip_patterns=capture_data.get('skip_patterns', capture_data.get('skipPatterns', [])),
         inactivity_timeout_minutes=capture_data.get('inactivity_timeout_minutes', capture_data.get('inactivityTimeoutMinutes', 60)),
-        auto_compaction_on_timeout=bool(capture_data.get('auto_compaction_on_timeout', capture_data.get('autoCompactionOnTimeout', True))),
+        compact_on_timeout=bool(capture_data.get(
+            'compact_on_timeout',
+            capture_data.get(
+                'compactOnTimeout',
+                capture_data.get('auto_compaction_on_timeout', capture_data.get('autoCompactionOnTimeout', True)),
+            ),
+        )),
         chunk_tokens=capture_data.get(
             'chunk_tokens',
             capture_data.get('chunkTokens', capture_data.get('chunk_size', capture_data.get('chunkSize', 8_000))),

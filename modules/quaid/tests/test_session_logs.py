@@ -1,4 +1,6 @@
 import hashlib
+import json
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -79,3 +81,24 @@ def test_session_log_index_serializes_same_session(monkeypatch, tmp_path):
         ).fetchone()
         assert row is not None
         assert str(row["content_hash"]) == content_hash
+
+
+def test_session_log_cli_accepts_json_flag(monkeypatch, tmp_path, capsys):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+    session_logs.index_session_log(
+        session_id="sess-json",
+        transcript="User: alpha\n\nAssistant: noted.",
+        owner_id="quaid",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["session_logs.py", "list", "--limit", "1", "--json"])
+    assert session_logs._main() == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["sessions"][0]["session_id"] == "sess-json"
+
+    monkeypatch.setattr(sys, "argv", ["session_logs.py", "load", "--session-id", "sess-json", "--json"])
+    assert session_logs._main() == 0
+    loaded = json.loads(capsys.readouterr().out)
+    assert loaded["session"]["session_id"] == "sess-json"

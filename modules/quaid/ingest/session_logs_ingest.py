@@ -215,10 +215,12 @@ def main() -> int:
     list_p = sub.add_parser("list", help="List indexed sessions")
     list_p.add_argument("--owner", default=None)
     list_p.add_argument("--limit", type=int, default=5)
+    list_p.add_argument("--json", action="store_true", help="Emit JSON output (default)")
 
     load_p = sub.add_parser("load", help="Load indexed session transcript")
     load_p.add_argument("--session-id", required=True)
     load_p.add_argument("--owner", default=None)
+    load_p.add_argument("--json", action="store_true", help="Emit JSON output (default)")
 
     args = parser.parse_args()
 

@@ -19,6 +19,47 @@ from lib.project_templates import render_project_md_template
 logger = logging.getLogger(__name__)
 
 
+def _sync_docs_registry_project(
+    name: str,
+    *,
+    description: str,
+    source_root: Optional[str],
+    canonical: Path,
+) -> None:
+    """Mirror project metadata into the docs-registry source of truth."""
+    from config import ProjectDefinition
+    from datastore.docsdb.registry import DocsRegistry
+
+    registry = DocsRegistry()
+    existing = registry.get_project_definition(name)
+    label = existing.label if existing else name.replace("-", " ").title()
+    patterns = list(existing.patterns) if existing and existing.patterns else ["*.md"]
+    exclude = list(existing.exclude) if existing and existing.exclude else ["*.db", "*.log", "*.pyc", "__pycache__/"]
+    auto_index = existing.auto_index if existing is not None else True
+    home_dir = f"projects/{name}/"
+    source_roots = [source_root] if source_root else []
+    defn = ProjectDefinition(
+        label=label,
+        home_dir=home_dir,
+        source_roots=source_roots,
+        auto_index=auto_index,
+        patterns=patterns,
+        exclude=exclude,
+        description=description or (existing.description if existing else f"{label} project."),
+        state="active",
+    )
+    registry.save_project_definition(name, defn)
+    project_md = canonical / "PROJECT.md"
+    if project_md.is_file():
+        registry.register(
+            file_path=str(project_md),
+            project=name,
+            asset_type="doc",
+            title=f"Project: {label}",
+            registered_by="project_registry_sync",
+        )
+
+
 def _registry_path() -> Path:
     """Path to the project registry file."""
     try:
@@ -179,6 +220,15 @@ def create_project(
 
     registry["projects"][name] = entry
     _save_registry(registry)
+    try:
+        _sync_docs_registry_project(
+            name,
+            description=description,
+            source_root=source_root,
+            canonical=canonical,
+        )
+    except Exception as e:
+        logger.warning("Failed to sync docs registry for %s: %s", name, e)
 
     logger.info("Created project: %s", name)
     return entry
@@ -207,6 +257,16 @@ def update_project(name: str, **updates: Any) -> Dict[str, Any]:
             registry["projects"][name][key] = value
 
     _save_registry(registry)
+    try:
+        entry = registry["projects"][name]
+        _sync_docs_registry_project(
+            name,
+            description=str(entry.get("description") or ""),
+            source_root=entry.get("source_root"),
+            canonical=Path(entry.get("canonical_path", "")),
+        )
+    except Exception as e:
+        logger.warning("Failed to sync docs registry update for %s: %s", name, e)
     return registry["projects"][name]
 
 

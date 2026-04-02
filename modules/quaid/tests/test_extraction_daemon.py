@@ -155,6 +155,72 @@ def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypat
     assert captured == []
 
 
+def test_effective_idle_timeout_uses_configured_timeout_within_bounds():
+    assert extraction_daemon._effective_idle_timeout_minutes(60) == 60
+    assert extraction_daemon._effective_idle_timeout_minutes(90) == 90
+
+
+def test_effective_idle_timeout_clamps_disabled_or_excessive_values():
+    assert extraction_daemon._effective_idle_timeout_minutes(0) == 120
+    assert extraction_daemon._effective_idle_timeout_minutes(-1) == 120
+    assert extraction_daemon._effective_idle_timeout_minutes(999) == 120
+
+
+def test_check_idle_sessions_timeout_signal_carries_compaction_metadata(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
+
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
+    cursor_dir.mkdir(parents=True, exist_ok=True)
+    (cursor_dir / "sess-compact.json").write_text(
+        (
+            '{"session_id":"sess-compact","line_offset":1,'
+            f'"transcript_path":"{transcript_path}"'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    now = 1_700_000_000.0
+    old_mtime = now - (31 * 60)
+    os.utime(transcript_path, (old_mtime, old_mtime))
+
+    captured = []
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "_adapter_supports_compaction_control", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_get_compact_on_timeout", lambda: False)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+            {
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+                "kwargs": kwargs,
+            }
+        ),
+    )
+
+    extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+    assert captured == [
+        {
+            "signal_type": "timeout",
+            "session_id": "sess-compact",
+            "transcript_path": str(transcript_path),
+            "kwargs": {
+                "supports_compaction_control": True,
+                "meta": {"compact_on_timeout": False},
+            },
+        }
+    ]
+
+
 # ---------------------------------------------------------------------------
 # _signal_dir() / _cursor_dir() isolation (M3 bug regression)
 # ---------------------------------------------------------------------------
@@ -547,6 +613,21 @@ class TestCheckIdleSessions:
         )
         return cursor_file
 
+    def _setup_rolling_state(self, tmp_path, instance_id, session_id, carry_facts, transcript_path):
+        rolling_dir = tmp_path / instance_id / "data" / "rolling-extraction"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        state_file = rolling_dir / f"{session_id}.json"
+        state_file.write_text(
+            json.dumps({
+                "session_id": session_id,
+                "carry_facts": carry_facts,
+                "transcript_path": str(transcript_path),
+                "raw_facts": carry_facts,
+            }),
+            encoding="utf-8",
+        )
+        return state_file
+
     def test_skips_session_when_transcript_file_missing(self, monkeypatch, tmp_path):
         """check_idle_sessions must skip cursors pointing to non-existent transcripts."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -579,6 +660,21 @@ class TestRollingExtraction:
             encoding="utf-8",
         )
         return cursor_file
+
+    def _setup_rolling_state(self, tmp_path, instance_id, session_id, carry_facts, transcript_path):
+        rolling_dir = tmp_path / instance_id / "data" / "rolling-extraction"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        state_file = rolling_dir / f"{session_id}.json"
+        state_file.write_text(
+            json.dumps({
+                "session_id": session_id,
+                "carry_facts": carry_facts,
+                "transcript_path": str(transcript_path),
+                "raw_facts": carry_facts,
+            }),
+            encoding="utf-8",
+        )
+        return state_file
 
     def test_check_chunk_ready_sessions_writes_rolling_signal(self, monkeypatch, tmp_path):
         transcript_path = tmp_path / "session.jsonl"
@@ -1150,7 +1246,11 @@ class TestRollingExtraction:
 
         extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
-        assert captured == []
+        assert len(captured) == 1
+        assert captured[0][1]["signal_type"] == "timeout"
+        assert captured[0][1]["session_id"] == "extracted-sess"
+        assert captured[0][1]["meta"] == {"compact_on_timeout": True}
+        assert captured[0][1]["supports_compaction_control"] is False
 
     def test_skips_session_not_yet_idle(self, monkeypatch, tmp_path):
         """Session modified 10 minutes ago with 30-minute timeout must not trigger signal."""
@@ -1172,6 +1272,102 @@ class TestRollingExtraction:
         monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
         monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert captured == []
+
+    def test_flushes_cursor_end_staged_payload_when_newer_session_exists(self, monkeypatch, tmp_path):
+        """A cursor-end session with staged payload should flush immediately once a newer session exists."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        old_transcript = tmp_path / "old.jsonl"
+        old_transcript.write_text(
+            '{"role":"user","content":"old"}\n{"role":"assistant","content":"done"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, "old-sess", 2, old_transcript)
+        self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "old-sess",
+            [{"text": "staged fact", "category": "fact"}],
+            old_transcript,
+        )
+
+        new_transcript = tmp_path / "new.jsonl"
+        new_transcript.write_text('{"role":"user","content":"new"}\n', encoding="utf-8")
+        self._setup_cursor(tmp_path, instance_id, "new-sess", 0, new_transcript)
+
+        now = 1_700_000_000.0
+        old_mtime = now - 30
+        new_mtime = now - 5
+        os.utime(old_transcript, (old_mtime, old_mtime))
+        os.utime(new_transcript, (new_mtime, new_mtime))
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": "old-sess",
+                "transcript_path": str(old_transcript),
+            }
+        ]
+
+    def test_does_not_flush_cursor_end_staged_payload_without_newer_session(self, monkeypatch, tmp_path):
+        """A cursor-end staged payload alone must not flush without explicit rollover evidence."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        transcript = tmp_path / "grace.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"old"}\n{"role":"assistant","content":"done"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, "grace-sess", 2, transcript)
+        self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "grace-sess",
+            [{"text": "staged fact", "category": "fact"}],
+            transcript,
+        )
+
+        now = 1_700_000_000.0
+        mtime = now - 45
+        os.utime(transcript, (mtime, mtime))
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
 
         extraction_daemon.check_idle_sessions(timeout_minutes=30)
 

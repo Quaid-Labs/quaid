@@ -13,7 +13,7 @@ from typing import Optional
 from adaptors.codex.providers import CodexLLMProvider
 from lib.adapter import QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
-from lib.instance import instance_slug_from_project_dir
+from lib.instance import instance_id, instance_slug_from_project_dir
 
 
 def _now_iso() -> str:
@@ -192,6 +192,32 @@ class CodexAdapter(QuaidAdapter):
                 }
                 break
         return files
+
+    def get_cli_tools_snippet(self) -> str:
+        instance_name = os.environ.get("QUAID_INSTANCE", "").strip()
+        if not instance_name:
+            try:
+                instance_name = instance_id()
+            except Exception:
+                instance_name = ""
+        home = self.quaid_home()
+        misc_path = home / "projects" / f"misc--{instance_name}" if instance_name else None
+        if not instance_name or misc_path is None:
+            return ""
+        return (
+            "### Codex Project Placement Rules\n\n"
+            f"- Active instance: `{instance_name}`\n"
+            "- Before writing any file, running a multi-step task, or delegating work, first create a tracked project:\n"
+            "  - `quaid registry create-project <name> --source-roots <path>`\n"
+            "- If the user asks to change a project's metadata, update the registry directly:\n"
+            "  - `quaid project update <name> --description \"...\"`\n"
+            "- Do not treat edits to `PROJECT.md` as the authoritative way to change project description metadata.\n"
+            "- Do not write files outside tracked projects.\n"
+            "- For throwaway or temporary work, use the misc project for this instance:\n"
+            f"  - `misc--{instance_name}` at `{misc_path}/`\n"
+            f"  - If it is missing, register it first with `quaid registry create-project misc--{instance_name} --source-roots {misc_path}/`\n"
+            "- Always tell the user which project received the file.\n"
+        )
 
     def get_sessions_dir(self) -> Optional[Path]:
         sessions_dir = Path.home() / ".codex" / "sessions"

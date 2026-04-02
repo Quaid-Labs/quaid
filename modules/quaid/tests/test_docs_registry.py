@@ -2,8 +2,10 @@
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1232,3 +1234,35 @@ class TestProjectDefinitionsTable:
         loaded = r.get_project_definition("test-project")
         assert loaded.label == "Updated Label"
         assert loaded.description == "Updated description"
+
+    def test_save_project_definition_retries_transient_locked_db(self, setup_env):
+        """Transient sqlite lock during project-definition save should retry and succeed."""
+        from config import ProjectDefinition
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        real_get_connection = registry_mod.get_connection
+        calls = {"count": 0}
+
+        @contextmanager
+        def flaky_get_connection(db_path=None):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            with real_get_connection(db_path) as conn:
+                yield conn
+
+        defn = ProjectDefinition(
+            label="Retry Project",
+            home_dir="projects/retry-proj/",
+            description="Retried description",
+        )
+
+        with patch("datastore.docsdb.registry.get_connection", flaky_get_connection):
+            with patch("datastore.docsdb.registry.time.sleep", lambda _s: None):
+                r.save_project_definition("retry-proj", defn)
+
+        loaded = r.get_project_definition("retry-proj")
+        assert calls["count"] == 2
+        assert loaded is not None
+        assert loaded.description == "Retried description"
