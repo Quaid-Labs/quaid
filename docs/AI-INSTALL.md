@@ -77,6 +77,36 @@ Allowed pre-survey probes are limited to what is needed to fill the survey accur
 
 If the prompt already gives you the workspace, instance, and owner, do not spend time rediscovering them.
 
+## First Response Template (Mandatory)
+
+For the thin prompt path, the first assistant response must be the survey itself.
+Do not add planning text before it.
+
+Use this exact shape:
+
+```text
+Pre-install survey
+
+- Owner name: <value>
+- Workspace path: <value>
+- Adapter type: <value>
+- LLM provider + deep/fast models: <value>
+- Embeddings provider/model: <value>
+- Notification level + per-feature verbosity: <value>
+- Notification routing channel: <value>   # OpenClaw only; omit otherwise
+- Janitor apply mode/policies: <value>
+- Janitor schedule choice: <value>
+
+Do you want to change any of these before I run install?
+```
+
+Rules:
+
+- keep the field order aligned with `AGENT_SURVEY_CONTRACT.fields`
+- omit `Notification routing channel` entirely for non-OpenClaw installs
+- do not preface the survey with planning/explanation
+- do not continue browsing once you can fill this template
+
 ## Platform Selection Rule (Mandatory)
 
 If the human did not explicitly specify a platform, install Quaid for the
