@@ -76,10 +76,11 @@ Core principle:
       "id": "artifact_...",
       "type": "memory.graph",
       "version": "1",
-      "required": false,
       "path": "artifacts/...",
       "size_bytes": 123,
-      "sha256": "..."
+      "sha256": "...",
+      "depends_on": [],
+      "suggests": []
     }
   ],
   "integrity": {
@@ -117,8 +118,8 @@ Each artifact is type-addressable and versioned:
 
 - `type` describes semantics (for example `memory.graph`, `identity.profile`, `project.bundle`)
 - `version` is the artifact schema version for that type
-- `required=true` means importer must support it or fail import
-- `required=false` means importer may skip it and continue
+- `depends_on` declares hard artifact/capability dependencies for valid import
+- `suggests` declares soft relationships the importer may use for better fidelity
 
 This allows exotic/new artifact types without breaking older importers.
 
@@ -131,6 +132,25 @@ Suggested class split:
 
 Host-specific artifacts must declare target host/runtime compatibility in
 artifact metadata or compatibility profile sections.
+
+## Modular Export + Import
+
+EGO packages are modular by design.
+
+This means two different operations are first-class:
+
+- selective export: exporter may emit only a chosen subset of artifacts
+- selective import: importer/operator may apply only a chosen subset of artifacts
+
+Examples:
+
+- project-only package
+- memory-only package
+- identity/personality-only package
+- partial import from a larger full-identity package
+
+Validity is determined by dependency resolution, not by a package-wide notion
+that every artifact class must always be present.
 
 ## Capability + Profile Model
 
@@ -153,6 +173,15 @@ Importers should expose at least these modes:
 - `safe`: no destructive overwrite, preserve existing state
 - `merge`: deterministic merge with conflict reporting
 - `replace`: explicit destructive restore (operator-confirmed)
+
+Importers should also support artifact selection:
+
+- by `artifact_id`
+- by `type`
+- by profile/capability group
+
+If an operator selects a subset that leaves unresolved hard dependencies, the
+importer should fail that selected import set with a clear dependency report.
 
 All imports should emit a machine-readable report of:
 
@@ -228,11 +257,12 @@ To reduce ecosystem breakage from incompatible package variants:
 - Unknown top-level manifest fields are allowed.
 - Unknown required capabilities MUST fail import.
 - Unknown optional capabilities MUST be skipped with warning.
-- Every artifact MUST include `type`, `version`, `path`, and `sha256`.
+- Every artifact MUST include `id`, `type`, `version`, `path`, and `sha256`.
 - Importers MUST provide deterministic import reports.
 - Proposed new artifact types should be namespaced to avoid collisions.
 - Packages MUST NOT rely on undeclared implicit migrations.
 - Required principal bindings MUST resolve before any apply-mode import.
+- Hard artifact dependencies MUST be explicit via `depends_on`.
 
 ## Signature + Trust Model
 

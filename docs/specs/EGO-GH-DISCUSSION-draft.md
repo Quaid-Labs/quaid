@@ -37,6 +37,8 @@ Highlights:
 
 - Manifest-first contract
 - Typed, versioned artifacts
+- Modular export and modular import
+- Dependency-driven validation instead of all-or-nothing package assumptions
 - Signature-based signer identity (verifier-side trust)
 - Required vs optional capability negotiation
 - Principal binding + artifact-scoped migration rules
