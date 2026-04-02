@@ -2744,7 +2744,9 @@ async function step3_models() {
     log.info(C.dim("Notifications: normal (recommended)"));
   }
   const pinnedNotifyRoute = _isPlatform("openclaw") ? resolvePinnedNotificationRoute() : null;
-  const notifChannel = pinnedNotifyRoute?.channel || "last_used";
+  const notifChannel = _isPlatform("openclaw")
+    ? (pinnedNotifyRoute?.channel || "last_used")
+    : "";
   if (_isPlatform("openclaw") && pinnedNotifyRoute?.channel) {
     log.info(C.dim(`Notifications will be pinned to the OpenClaw channel '${pinnedNotifyRoute.channel}' during install.`));
   } else if (_isPlatform("openclaw")) {
@@ -4686,9 +4688,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     },
     notifications: {
       level: models.notifLevel,
-      janitor: { verbosity: models.notifConfig?.janitor ?? "summary", channel: models.notifChannel || "last_used" },
-      extraction: { verbosity: models.notifConfig?.extraction ?? "summary", channel: models.notifChannel || "last_used" },
-      retrieval: { verbosity: models.notifConfig?.retrieval ?? "off", channel: models.notifChannel || "last_used" },
+      janitor: { verbosity: models.notifConfig?.janitor ?? "summary", channel: models.notifChannel || "default" },
+      extraction: { verbosity: models.notifConfig?.extraction ?? "summary", channel: models.notifChannel || "default" },
+      retrieval: { verbosity: models.notifConfig?.retrieval ?? "off", channel: models.notifChannel || "default" },
       projectCreate: { enabled: true },
       fullText: false,
       showProcessingStart: false,
@@ -5140,7 +5142,7 @@ function notifyInstallCompletion(owner, models, embeddings, systems) {
     `Workspace: ${WORKSPACE}`,
     `Models: deep=${models.highModel}, fast=${models.lowModel}`,
     `Embeddings: ${embeddings.embedModel}`,
-    `Notification channel: ${models.notifChannel || "last_used"}`,
+    `Notification channel: ${models.notifChannel || "default"}`,
     "No memory mutants detected.",
   ].join("\n");
   sendInstallerNotification(summary);
