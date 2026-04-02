@@ -1694,7 +1694,7 @@ def apply_extracted_payloads(
                 return True
         else:
             fact_entry["status"] = "would_store"
-            result["facts_stored"] += 1
+            result["facts_planned"] += 1
 
         result["facts"].append(fact_entry)
         _write_publish_trace(
@@ -1927,10 +1927,16 @@ def apply_extracted_payloads(
                 session_id=session_id,
             )
 
-    logger.info(
-        f"[extract] {label}: {result['facts_stored']} stored, "
-        f"{result['facts_skipped']} skipped, {result['edges_created']} edges"
-    )
+    if dry_run:
+        logger.info(
+            f"[extract] {label}: {result.get('facts_planned', 0)} planned, "
+            f"{result['facts_skipped']} skipped, {result['edges_created']} edges"
+        )
+    else:
+        logger.info(
+            f"[extract] {label}: {result['facts_stored']} stored, "
+            f"{result['facts_skipped']} skipped, {result['edges_created']} edges"
+        )
     _write_publish_trace(
         "publish_complete",
         session_id=session_id,
@@ -1990,6 +1996,7 @@ def extract_from_transcript(
             logger.warning("[extract] blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
             return {
                 "facts_stored": 0, "facts_skipped": 0, "edges_created": 0,
+                "facts_planned": 0,
                 "facts": [], "snippets": {}, "journal": {}, "project_logs": {},
                 "project_log_metrics": {}, "dry_run": dry_run,
                 "raw_facts": [], "raw_snippets": {}, "raw_journal": {}, "raw_project_logs": {},
@@ -2013,6 +2020,7 @@ def extract_from_transcript(
         "facts_stored": 0,
         "facts_skipped": 0,
         "edges_created": 0,
+        "facts_planned": 0,
         "facts": [],
         "snippets": {},
         "journal": {},
@@ -2260,9 +2268,11 @@ def _format_human_summary(result: Dict[str, Any]) -> str:
     """Format extraction result as a human-readable summary."""
     lines = []
     prefix = "[DRY RUN] " if result.get("dry_run") else ""
+    fact_label = "Facts planned" if result.get("dry_run") else "Facts stored"
+    fact_value = result.get("facts_planned", 0) if result.get("dry_run") else result["facts_stored"]
 
     lines.append(f"{prefix}Extraction complete:")
-    lines.append(f"  Facts stored:  {result['facts_stored']}")
+    lines.append(f"  {fact_label}:  {fact_value}")
     lines.append(f"  Facts skipped: {result['facts_skipped']}")
     lines.append(f"  Edges created: {result['edges_created']}")
 

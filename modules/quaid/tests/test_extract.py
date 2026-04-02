@@ -374,7 +374,8 @@ class TestExtractFromTranscript:
         )
 
         assert result["dry_run"] is True
-        assert result["facts_stored"] == 2
+        assert result["facts_stored"] == 0
+        assert result["facts_planned"] == 2
         mock_store.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
@@ -1722,12 +1723,13 @@ class TestFormatHumanSummary:
         from ingest.extract import _format_human_summary
 
         result = {
-            "facts_stored": 1, "facts_skipped": 0, "edges_created": 0,
+            "facts_stored": 0, "facts_planned": 1, "facts_skipped": 0, "edges_created": 0,
             "facts": [], "snippets": {}, "journal": {}, "dry_run": True,
         }
 
         summary = _format_human_summary(result)
         assert "[DRY RUN]" in summary
+        assert "Facts planned:  1" in summary
 
 
 # ---------------------------------------------------------------------------
