@@ -56,9 +56,12 @@ _“We Can Remember It for You Wholesale.”_
 
 Skills give an agent behavior. Quaid gives it understanding.
 
-A long-term goal is portable agent identity: a complete, curated package of domain knowledge, project context, and learned personality that can be deployed to a fresh agent instance — the way skills are shared today, but with genuine depth. A sales agent that already knows your product and customers. A dev agent that arrives knowing the codebase. A support agent whose knowledge evolves and can be redistributed.
+A long-term goal is portable agent identity: a complete package of domain knowledge, project context, and learned behavior that can be exported from one runtime and imported into another with high parity.
 
-Quaid's local-first architecture makes the portability side tractable today. The hard problems — sanitizing personal data out of a memory graph, curating and consolidating memories for sharing, and defining interchange formats that hold up across runtimes — remain open and unsolved.
+We are currently forming an open draft standard for this and asking for community feedback before implementation, especially from security experts.
+
+Draft standard direction: [EGO Core 0001 (Draft)](docs/specs/EGO-CORE-0001-draft.md)
+
 This is vision, not a released feature.
 
 ## Benchmarks

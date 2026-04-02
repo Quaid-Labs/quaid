@@ -71,8 +71,16 @@ Quaid aims to push toward an open standard for agent memory storage and transfer
 
 Long-term direction:
 
-- Portable memory formats that are inspectable and host-agnostic
-- Sanitized, shareable memory packs distributed with projects
-- Memory distribution patterns analogous to skills distribution, but including domain context and supporting evidence
+- Portable, host-agnostic agent identity packages with strong cross-runtime parity goals
+- Sanitized, shareable memory/context packs distributed with projects
+- A typed interchange model that can evolve as new agent knowledge modalities emerge
+
+Current status:
+
+- We are forming this as an open draft standard before implementation.
+- We are actively asking for community feedback, with a priority on security expert review.
+
+Draft spec: [docs/specs/EGO-CORE-0001-draft.md](docs/specs/EGO-CORE-0001-draft.md)
+Discussion draft: [docs/specs/EGO-GH-DISCUSSION-draft.md](docs/specs/EGO-GH-DISCUSSION-draft.md)
 
 This is an aspirational direction and not a committed near-term deliverable.
