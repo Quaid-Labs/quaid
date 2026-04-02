@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `0fffd4986dd3`
+Source hash: `d984fe5a124a`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -27,8 +27,8 @@ Notes:
 | `capture.enabled` | `bool` | `true` |  |
 | `capture.strictness` | `str` | `"high"` | high \| medium \| low |
 | `capture.skip_patterns` | `list[str]` | `[]` |  |
-| `capture.inactivity_timeout_minutes` | `int` | `60` | Extract after N minutes of inactivity (0 = disabled) |
-| `capture.auto_compaction_on_timeout` | `bool` | `true` | Trigger gateway compaction after timeout extraction |
+| `capture.inactivity_timeout_minutes` | `int` | `60` | Extract after N minutes of inactivity (daemon clamps to 120m max for system health; 0 disables user-requested timeout compaction only) |
+| `capture.compact_on_timeout` | `bool` | `true` | After timeout extraction, request compaction on adapters that support it |
 | `capture.chunk_tokens` | `int` | `8000` | Max tokens per extraction chunk (messages never split) |
 | `capture.chunk_max_lines` | `int` | `0` | Optional line cap for rolling extraction windows |
 | `capture.chunk_size` | `int` | `8000` | Deprecated legacy field; mirror token cap for old configs |
