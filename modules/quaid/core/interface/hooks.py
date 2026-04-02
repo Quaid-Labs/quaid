@@ -43,19 +43,23 @@ def _read_stdin_json() -> dict:
         ready, _, _ = select.select([sys.stdin], [], [], 10.0)
         if not ready:
             return {}
-        flags = fcntl.fcntl(sys.stdin.fileno(), fcntl.F_GETFL)
-        fcntl.fcntl(sys.stdin.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
-        buf = ""
+        fd = sys.stdin.fileno()
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        chunks = []
         while True:
             try:
-                chunk = sys.stdin.read(65536)
+                chunk = os.read(fd, 65536)
                 if not chunk:
                     break
-                buf += chunk
+                chunks.append(chunk)
+            except BlockingIOError:
+                break
             except (IOError, OSError):
                 break
         # Restore blocking mode
-        fcntl.fcntl(sys.stdin.fileno(), fcntl.F_SETFL, flags)
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+        buf = b"".join(chunks).decode("utf-8", errors="replace")
         return json.loads(buf.strip()) if buf.strip() else {}
     except Exception:
         return {}

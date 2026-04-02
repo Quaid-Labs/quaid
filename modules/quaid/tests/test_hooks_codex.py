@@ -40,6 +40,29 @@ def _run_hook_codex_stop(hook_input: dict, *, monkeypatch):
     return captured_out.getvalue(), captured_err.getvalue()
 
 
+def test_read_stdin_json_reads_pipe_payload(monkeypatch):
+    from core.interface import hooks
+
+    payload = {
+        "session_id": "sess-pipe",
+        "transcript_path": "/tmp/rollout.jsonl",
+        "cwd": "/tmp",
+        "prompt": "/new",
+    }
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, json.dumps(payload).encode("utf-8"))
+    finally:
+        os.close(write_fd)
+
+    stdin_handle = os.fdopen(read_fd, "r", encoding="utf-8", closefd=True)
+    try:
+        monkeypatch.setattr(hooks.sys, "stdin", stdin_handle)
+        assert hooks._read_stdin_json() == payload
+    finally:
+        stdin_handle.close()
+
+
 @pytest.fixture()
 def cursor_dir(tmp_path, monkeypatch):
     from core import extraction_daemon
