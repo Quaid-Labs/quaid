@@ -1872,3 +1872,49 @@ class TestReadTranscriptSlice:
         # Oversized metadata rows should still advance the cursor, but the
         # budgeted window should continue to include valid smaller rows.
         assert lines == [oversized, small_a, small_b]
+
+    def test_read_transcript_token_window_waits_for_adapter_parseable_conversation(self, tmp_path):
+        t = tmp_path / "codex-rollout.jsonl"
+        machine_a = json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "<environment_context>\n  <cwd>/tmp/live</cwd>\n</environment_context>"}],
+                },
+            }
+        ) + "\n"
+        machine_b = json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "[Quaid Project Context]\n\nruntime details"}],
+                },
+            }
+        ) + "\n"
+        user_line = json.dumps(
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "My neighbor won a chili cook-off."}}
+        ) + "\n"
+        assistant_line = json.dumps(
+            {"type": "event_msg", "payload": {"type": "agent_message", "message": "That is memorable."}}
+        ) + "\n"
+        t.write_text(machine_a + machine_b + user_line + assistant_line, encoding="utf-8")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                from adaptors.codex.adapter import CodexAdapter
+
+                return CodexAdapter().parse_session_jsonl(path)
+
+        lines = extraction_daemon.read_transcript_token_window(
+            str(t),
+            from_line=0,
+            max_tokens=max(1, len(machine_a) // 4),
+            max_lines=1,
+            adapter=_FakeAdapter(),
+        )
+
+        assert lines == [machine_a, machine_b, user_line]

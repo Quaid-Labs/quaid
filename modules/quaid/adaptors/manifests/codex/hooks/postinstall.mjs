@@ -153,7 +153,6 @@ const desiredHooks = {
         {
           type: "command",
           command: `${envPrefix} ${quaidCommand} hook-codex-stop`,
-          statusMessage: "Quaid extracting memory",
           timeout: 120,
         },
       ],

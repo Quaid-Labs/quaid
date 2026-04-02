@@ -102,7 +102,7 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert "emitted Codex startup context" in err
 
 
-def test_codex_stop_writes_rolling_signal_only(monkeypatch, tmp_path, cursor_dir):
+def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test.jsonl"
     transcript_path.write_text(
         "\n".join(
@@ -118,9 +118,13 @@ def test_codex_stop_writes_rolling_signal_only(monkeypatch, tmp_path, cursor_dir
 
     def fake_write_signal(**kwargs):
         written_signals.append(kwargs)
-        return Path(tmp_path / "signals" / "sig-rolling.json")
+        return Path(tmp_path / "signals" / "sig-unused.json")
 
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    adapter = MagicMock()
+    adapter.resolve_stop_hook_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
 
     out, err = _run_hook_codex_stop(
         {
@@ -133,14 +137,7 @@ def test_codex_stop_writes_rolling_signal_only(monkeypatch, tmp_path, cursor_dir
 
     payload = json.loads(out)
     assert payload == {}
-    assert len(written_signals) == 1
-    sig = written_signals[0]
-    assert sig["signal_type"] == "rolling"
-    assert sig["session_id"] == "sess-codex-stop"
-    assert sig["transcript_path"] == str(transcript_path)
-    assert sig["adapter"] == "codex"
-    assert sig["supports_compaction_control"] is False
-    assert sig["meta"]["source"] == "hook_codex_stop"
+    assert written_signals == []
     assert err.strip() == ""
 
 
@@ -163,6 +160,17 @@ def test_codex_stop_writes_session_end_signal_for_new_command(monkeypatch, tmp_p
         return Path(tmp_path / "signals" / "sig-session-end.json")
 
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    adapter = MagicMock()
+    adapter.resolve_stop_hook_signal.return_value = {
+        "signal_type": "session_end",
+        "meta": {
+            "source": "hook_codex_stop",
+            "command": "/new",
+            "reason": "command:new",
+        },
+    }
+    adapter.adapter_id.return_value = "codex"
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
 
     out, err = _run_hook_codex_stop(
         {

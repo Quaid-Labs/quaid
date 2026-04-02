@@ -1177,11 +1177,37 @@ def read_transcript_token_window(
     from_line: int,
     max_tokens: int,
     max_lines: int = 0,
+    adapter=None,
 ) -> List[str]:
     """Read a single message-aligned transcript window up to the token budget."""
+    def _window_has_extractable_conversation(current_lines: List[str]) -> bool:
+        if not current_lines:
+            return False
+        if adapter is None:
+            return True
+        tmp_dir = _tmp_dir()
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".jsonl", delete=False, encoding="utf-8", dir=str(tmp_dir)
+            ) as tmp:
+                tmp.writelines(current_lines)
+                tmp_path = tmp.name
+            parsed = adapter.parse_session_jsonl(Path(tmp_path))
+            return bool(str(parsed or "").strip())
+        except Exception:
+            return True
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
     lines: List[str] = []
     approx_tokens = 0
     budgeted_lines = 0
+    saw_extractable_conversation = False
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -1195,6 +1221,8 @@ def read_transcript_token_window(
                 # them consume this window's token/line budget.
                 if line_tokens > max_tokens:
                     lines.append(line)
+                    if not saw_extractable_conversation:
+                        saw_extractable_conversation = _window_has_extractable_conversation(lines)
                     if len(lines) >= MAX_TRANSCRIPT_LINES:
                         logger.warning(
                             "transcript %s: token window capped at %d lines (from offset %d)",
@@ -1204,13 +1232,15 @@ def read_transcript_token_window(
                         )
                         break
                     continue
-                if max_lines > 0 and budgeted_lines >= max_lines:
+                if saw_extractable_conversation and max_lines > 0 and budgeted_lines >= max_lines:
                     break
-                if budgeted_lines > 0 and approx_tokens + line_tokens > max_tokens:
+                if saw_extractable_conversation and budgeted_lines > 0 and approx_tokens + line_tokens > max_tokens:
                     break
                 lines.append(line)
                 approx_tokens += line_tokens
                 budgeted_lines += 1
+                if not saw_extractable_conversation:
+                    saw_extractable_conversation = _window_has_extractable_conversation(lines)
                 if len(lines) >= MAX_TRANSCRIPT_LINES:
                     logger.warning(
                         "transcript %s: token window capped at %d lines (from offset %d)",
@@ -1506,8 +1536,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     chunk_budget = _get_capture_chunk_tokens()
     chunk_line_budget = _get_capture_chunk_max_lines()
+    adapter = None
+    if rolling_mode:
+        try:
+            from lib.adapter import get_adapter
+            adapter = get_adapter()
+        except Exception:
+            adapter = None
     new_lines = (
-        read_transcript_token_window(transcript_path, cursor_offset, chunk_budget, chunk_line_budget)
+        read_transcript_token_window(
+            transcript_path,
+            cursor_offset,
+            chunk_budget,
+            chunk_line_budget,
+            adapter=adapter,
+        )
         if rolling_mode
         else read_transcript_slice(transcript_path, cursor_offset)
     )
@@ -1562,7 +1605,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     publish_started_at: Optional[float] = None
     flush_payload: Dict[str, Any] = {}
     try:
-        from lib.adapter import get_adapter
         from ingest.extract import extract_from_transcript, apply_extracted_payloads
 
         transcript_text = ""
@@ -1574,7 +1616,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             ) as tmp:
                 tmp.writelines(new_lines)
                 tmp_path = tmp.name
-            adapter = get_adapter()
+            if adapter is None:
+                from lib.adapter import get_adapter
+                adapter = get_adapter()
             transcript_text = adapter.parse_session_jsonl(Path(tmp_path))
 
         if not rolling_mode and not transcript_text.strip():

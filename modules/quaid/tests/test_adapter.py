@@ -609,6 +609,109 @@ class TestCodexAdapter:
         assert transcript.count("Assistant: First answer") == 1
         assert "fallback answer" not in transcript
 
+    def test_parse_session_jsonl_ignores_machine_context_fallback_rows(self, tmp_path):
+        path = tmp_path / "rollout-machine-context.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": "<environment_context>\n  <cwd>/private/tmp/cdx-livetest</cwd>\n</environment_context>",
+                                    }
+                                ],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "developer",
+                                "content": [{"type": "input_text", "text": "[Quaid Project Context]\n\nruntime details"}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert transcript == ""
+
+    def test_parse_session_jsonl_strips_notification_prefix_from_agent_message(self, tmp_path):
+        path = tmp_path / "rollout-notify-prefix.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "<quaid_notification>\n"
+                                    "• **[Quaid — Memory Extraction]**\n\n"
+                                    "**Summary:** 2 stored, 0 skipped, 0 edges\n"
+                                    "</quaid_notification>\n"
+                                    "---\n"
+                                    "Nice! February is great for aurora season."
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "Memory Extraction" not in transcript
+        assert "Summary:" not in transcript
+        assert "Nice! February is great for aurora season." in transcript
+
+    def test_resolve_stop_hook_signal_returns_none_for_regular_turn(self, tmp_path):
+        path = tmp_path / "rollout-regular-turn.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Tell me about Baxter."}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "Baxter loves tennis balls."}}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        assert adapter.resolve_stop_hook_signal({}, str(path)) is None
+
+    def test_resolve_stop_hook_signal_returns_session_end_for_lifecycle_command(self, tmp_path):
+        path = tmp_path / "rollout-lifecycle.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "/new"}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "Started a fresh session."}}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        signal = adapter.resolve_stop_hook_signal({}, str(path))
+        assert signal is not None
+        assert signal["signal_type"] == "session_end"
+        assert signal["meta"]["command"] == "/new"
+        assert signal["meta"]["reason"] == "command:new"
+
     def test_get_llm_provider_returns_codex_provider(self):
         adapter = CodexAdapter()
         provider = adapter.get_llm_provider()

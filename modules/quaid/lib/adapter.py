@@ -30,7 +30,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from lib.platform_guard import assert_supported_platform  # noqa: F401
 from lib.fail_policy import is_fail_hard_enabled
@@ -53,6 +53,11 @@ class ChannelInfo:
 
 class QuaidAdapter(abc.ABC):
     """Abstract interface for platform-specific behavior."""
+
+    _QUAID_TRANSCRIPT_METADATA_PREFIXES = (
+        "[Quaid Project Context]",
+        "[Quaid Memory Context]",
+    )
 
     # ---- Paths ----
 
@@ -263,6 +268,29 @@ class QuaidAdapter(abc.ABC):
         """Adapter-specific transcript noise filtering."""
         return self.filter_system_messages(text)
 
+    @staticmethod
+    def strip_quaid_notification_block(text: str) -> str:
+        value = str(text or "").strip()
+        if value.startswith("<quaid_notification>"):
+            end_tag = "</quaid_notification>"
+        elif value.startswith("<notification>"):
+            end_tag = "</notification>"
+        else:
+            return value
+        end_idx = value.find(end_tag)
+        if end_idx < 0:
+            return value
+        remainder = value[end_idx + len(end_tag):].lstrip()
+        if remainder.startswith("---"):
+            remainder = remainder[3:].lstrip()
+        return remainder.strip()
+
+    def sanitize_transcript_text(self, text: str) -> str:
+        value = self.strip_quaid_notification_block(text)
+        if any(value.startswith(prefix) for prefix in self._QUAID_TRANSCRIPT_METADATA_PREFIXES):
+            return ""
+        return value.strip()
+
     def build_transcript(self, messages: List[Dict]) -> str:
         """Format role/content messages into a normalized transcript."""
         parts: List[str] = []
@@ -311,6 +339,7 @@ class QuaidAdapter(abc.ABC):
                 text,
                 flags=re.DOTALL,
             ).strip()
+            text = self.sanitize_transcript_text(text)
             if not text or self.should_filter_transcript_message(text):
                 continue
 
@@ -350,6 +379,15 @@ class QuaidAdapter(abc.ABC):
                 messages.append({"role": role, "content": content.strip()})
 
         return self.build_transcript(messages)
+
+    def resolve_stop_hook_signal(
+        self,
+        hook_input: Dict[str, Any],
+        transcript_path: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Return adapter-owned stop-hook signal policy, or None for no signal."""
+        _ = hook_input, transcript_path
+        return None
 
     # ---- Gateway config (optional) ----
 

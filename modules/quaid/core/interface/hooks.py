@@ -18,7 +18,6 @@ Usage:
 """
 
 import argparse
-from collections import deque
 import fcntl
 import glob as glob_mod
 import json
@@ -146,79 +145,6 @@ def _write_hook_trace(event: str, payload: dict | None = None) -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
-
-
-def _extract_lifecycle_command(text: str) -> str:
-    value = str(text or "").strip()
-    if not value.startswith("/"):
-        return ""
-    command = value.split()[0].lower()
-    if command in ("/new", "/clear", "/reset", "/restart"):
-        return command
-    return ""
-
-
-def _detect_codex_lifecycle_command(hook_input: dict, transcript_path: str) -> str:
-    """Best-effort detection for slash lifecycle commands on Codex Stop hooks."""
-    if not isinstance(hook_input, dict):
-        hook_input = {}
-
-    def _scan_candidates(container: dict) -> str:
-        for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
-            cmd = _extract_lifecycle_command(container.get(key, ""))
-            if cmd:
-                return cmd
-        payload = container.get("payload")
-        if isinstance(payload, dict):
-            for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
-                cmd = _extract_lifecycle_command(payload.get(key, ""))
-                if cmd:
-                    return cmd
-        return ""
-
-    direct = _scan_candidates(hook_input)
-    if direct:
-        return direct
-
-    # Fallback: inspect the tail of the transcript for the latest user slash
-    # command. Avoid full-file reads by sampling only the final rows.
-    try:
-        tail = deque(maxlen=128)
-        with open(transcript_path, "r", encoding="utf-8", errors="replace") as handle:
-            for raw in handle:
-                line = raw.strip()
-                if line:
-                    tail.append(line)
-        for raw in reversed(tail):
-            try:
-                obj = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            record_type = str(obj.get("type") or "").strip()
-            payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
-            if record_type == "event_msg" and str(payload.get("type") or "").strip() == "user_message":
-                return _extract_lifecycle_command(str(payload.get("message") or ""))
-            if record_type == "response_item" and str(payload.get("type") or "").strip() == "message":
-                role = str(payload.get("role") or "").strip().lower()
-                if role != "user":
-                    continue
-                content = payload.get("content", [])
-                if isinstance(content, list):
-                    for item in content:
-                        if not isinstance(item, dict):
-                            continue
-                        cmd = _extract_lifecycle_command(
-                            str(item.get("text") or item.get("input_text") or item.get("output_text") or "")
-                        )
-                        if cmd:
-                            return cmd
-                elif isinstance(content, str):
-                    cmd = _extract_lifecycle_command(content)
-                    if cmd:
-                        return cmd
-    except OSError:
-        return ""
-    return ""
 
 
 def _summarize_recall_results(memories: List[Dict], limit: int = 5) -> List[Dict]:
@@ -665,25 +591,33 @@ def hook_codex_stop(args):
 
     try:
         from core.extraction_daemon import write_signal
+        from lib.adapter import get_adapter
 
-        lifecycle_command = _detect_codex_lifecycle_command(hook_input, transcript_path)
-        signal_type = "session_end" if lifecycle_command in ("/new", "/clear", "/reset", "/restart") else "rolling"
-        meta = {"source": "hook_codex_stop"}
-        if lifecycle_command:
-            meta["command"] = lifecycle_command
-            meta["reason"] = f"command:{lifecycle_command.lstrip('/')}"
-            _write_hook_trace("hook.codex.stop.command_detected", {
+        adapter = get_adapter()
+        signal_spec = adapter.resolve_stop_hook_signal(hook_input, transcript_path)
+        if not signal_spec:
+            _write_hook_trace("hook.codex.stop.no_lifecycle_signal", {
                 "session_id": session_id,
                 "transcript_path": transcript_path,
-                "command": lifecycle_command,
-                "signal_type": signal_type,
             })
+            print("{}")
+            return
+
+        signal_type = str(signal_spec.get("signal_type") or "session_end")
+        meta = dict(signal_spec.get("meta") or {})
+        lifecycle_command = str(meta.get("command") or "").strip()
+        _write_hook_trace("hook.codex.stop.command_detected", {
+            "session_id": session_id,
+            "transcript_path": transcript_path,
+            "command": lifecycle_command,
+            "signal_type": signal_type,
+        })
 
         sig_path = write_signal(
             signal_type=signal_type,
             session_id=session_id,
             transcript_path=transcript_path,
-            adapter="codex",
+            adapter=adapter.adapter_id(),
             supports_compaction_control=False,
             meta=meta,
         )

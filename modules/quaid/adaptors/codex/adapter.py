@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import json
 import os
 import shutil
@@ -121,8 +122,8 @@ class CodexAdapter(QuaidAdapter):
             return ""
         body = "\n".join(f"• {message}" for message in messages)
         return (
-            "Print <notification> verbatim before your response, then print ---\n\n"
-            f"<notification>\n{body}\n</notification>"
+            "Print <quaid_notification> verbatim before your response, then print ---\n\n"
+            f"<quaid_notification>\n{body}\n</quaid_notification>"
         )
 
     def get_last_channel(self, session_key: str = "") -> None:
@@ -238,9 +239,82 @@ class CodexAdapter(QuaidAdapter):
         return matches[0] if matches else None
 
     def filter_system_messages(self, text: str) -> bool:
-        if text.startswith("[notify]") or text.startswith("[quaid]"):
+        if (
+            text.startswith("[notify]")
+            or text.startswith("[quaid]")
+            or text.startswith("<environment_context>")
+        ):
             return True
         return False
+
+    @staticmethod
+    def _extract_lifecycle_command(text: str) -> str:
+        value = str(text or "").strip()
+        if not value.startswith("/"):
+            return ""
+        command = value.split()[0].lower()
+        if command in ("/new", "/clear", "/reset", "/restart"):
+            return command
+        return ""
+
+    def _detect_lifecycle_command(self, hook_input: dict, transcript_path: str) -> str:
+        if not isinstance(hook_input, dict):
+            hook_input = {}
+
+        def _scan_candidates(container: dict) -> str:
+            for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
+                cmd = self._extract_lifecycle_command(container.get(key, ""))
+                if cmd:
+                    return cmd
+            payload = container.get("payload")
+            if isinstance(payload, dict):
+                for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
+                    cmd = self._extract_lifecycle_command(payload.get(key, ""))
+                    if cmd:
+                        return cmd
+            return ""
+
+        direct = _scan_candidates(hook_input)
+        if direct:
+            return direct
+
+        try:
+            tail = deque(maxlen=128)
+            with open(transcript_path, "r", encoding="utf-8", errors="replace") as handle:
+                for raw in handle:
+                    line = raw.strip()
+                    if line:
+                        tail.append(line)
+            for raw in reversed(tail):
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                record_type = str(obj.get("type") or "").strip()
+                payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+                if record_type == "event_msg" and str(payload.get("type") or "").strip() == "user_message":
+                    return self._extract_lifecycle_command(str(payload.get("message") or ""))
+                if record_type == "response_item" and str(payload.get("type") or "").strip() == "message":
+                    role = str(payload.get("role") or "").strip().lower()
+                    if role != "user":
+                        continue
+                    content = payload.get("content", [])
+                    if isinstance(content, list):
+                        for item in content:
+                            if not isinstance(item, dict):
+                                continue
+                            cmd = self._extract_lifecycle_command(
+                                str(item.get("text") or item.get("input_text") or item.get("output_text") or "")
+                            )
+                            if cmd:
+                                return cmd
+                    elif isinstance(content, str):
+                        cmd = self._extract_lifecycle_command(content)
+                        if cmd:
+                            return cmd
+        except OSError:
+            return ""
+        return ""
 
     def parse_session_jsonl(self, path: Path) -> str:
         messages = []
@@ -298,6 +372,19 @@ class CodexAdapter(QuaidAdapter):
             deduped.append(message)
             last_pair = pair
         return self.build_transcript(deduped)
+
+    def resolve_stop_hook_signal(self, hook_input, transcript_path):
+        command = self._detect_lifecycle_command(hook_input, transcript_path)
+        if not command:
+            return None
+        return {
+            "signal_type": "session_end",
+            "meta": {
+                "source": "hook_codex_stop",
+                "command": command,
+                "reason": f"command:{command.lstrip('/')}",
+            },
+        }
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         _ = model_tier
