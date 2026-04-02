@@ -110,15 +110,6 @@ quaid global-registry list    # cross-instance project list
 
 ---
 
-## Sessions
-
-```bash
-quaid session list [--limit 5]
-quaid session load --session-id <id>
-```
-
----
-
 ## Maintenance
 
 ```bash
@@ -163,6 +154,6 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 
 **Memory + docs in one pass:** `recall "query" '{"stores": ["vector","graph","docs"]}'`
 
-**Missing session context:** `session list --limit 1` → `session load --session-id <id>`
+**Missing session context:** inspect internal `session_logs` storage directly rather than using a public CLI.
 
 **Conflicting facts:** prefer newest; if unresolved, surface uncertainty and suggest janitor review

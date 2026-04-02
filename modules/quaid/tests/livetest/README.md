@@ -10,20 +10,32 @@ model where an AI agent drives each role.
 
 ```
 Your machine (coordinator)
+├── canonical tmux session: livetest
 ├── Coordinator agent — reads COORDINATOR.SKILL.md, manages the run loop
-├── livetest:OC-tester  — tester agent driving OC milestones
-├── livetest:CC-tester  — tester agent driving CC milestones
-└── livetest:CDX-tester — tester agent driving CDX milestones
+├── livetest:CC   — split window
+│   ├── left pane  = local tester agent
+│   └── right pane = local SSH shell into remote Claude Code lane
+├── livetest:OC   — split window
+│   ├── left pane  = local tester agent
+│   └── right pane = local SSH shell into remote OpenClaw lane
+└── livetest:CDX  — split window
+    ├── left pane  = local tester agent
+    └── right pane = local SSH shell into remote Codex lane
 
 Remote host (platforms under test)
-├── OpenClaw (openclaw tui / openclaw agent)
-├── Claude Code (claude --dangerously-skip-permissions)
-└── Codex CLI (codex --yolo)
+├── OpenClaw under test
+├── Claude Code under test
+└── Codex CLI under test
 ```
 
 The coordinator manages the run loop: wipe, install, milestones, commit check,
 repeat until a full suite passes with zero new commits. Tester agents execute
 milestones on each platform and report back.
+
+**Critical rule:** the tester agents do **not** run on the remote host. They run
+locally, inside the local `livetest` tmux session. The visible platform panes are
+also local tmux panes; they reach the remote host via `ssh`. Do not run a tester
+agent inside a remote tmux session on the host under test.
 
 ### Why a dedicated remote host (required)
 
@@ -107,6 +119,9 @@ The remote host needs:
    | `tester.model` | Model for tester agents (default `gpt-5.1-codex-mini`) |
    | `tester.effort` | Reasoning effort for tester agents (default `medium`) |
    | `platforms.cc.auth_token_file` | Path to a file containing your Anthropic API token (plain text, no newline). Required for the CC daemon's LLM calls. |
+   | `tmux.layout` | Must be `split-panes` for the canonical live-test topology |
+   | `tmux.tester_side` | Must be `left` for the local tester pane |
+   | `tmux.platform_side` | Must be `right` for the visible SSH-backed platform pane |
    | `tmux.coordinator_pane` | The tmux pane where the coordinator runs (default `main:4.0`) |
 
    `livetest-config.json` is gitignored — it will never be committed.
@@ -131,19 +146,35 @@ through their normal login flows (already completed in the prerequisites step).
 
 ## tmux Session Layout
 
-The coordinator creates and manages a `livetest` tmux session:
+The coordinator creates and manages a canonical local tmux session named
+`livetest`.
 
-| Window | Name | Role |
-|--------|------|------|
-| `livetest:CC-tester` | CC-tester | Tester agent driving CC milestones |
-| `livetest:CC` | CC | Visible CC interaction pane (SSH to remote, runs `claude`) |
-| `livetest:OC-tester` | OC-tester | Tester agent driving OC milestones |
-| `livetest:OC` | OC | Visible OC interaction pane (SSH to remote, runs `openclaw tui`) |
-| `livetest:CDX-tester` | CDX-tester | Tester agent driving CDX milestones |
-| `livetest:CDX` | CDX | Visible CDX interaction pane (SSH to remote, runs `codex --yolo`) |
+This is not optional. Even a single-lane run must use the `livetest` session so
+operator screens and attach commands remain stable across runs.
 
-Tester agents run in the `-tester` windows. Platform interaction happens in the
-adjacent windows so the coordinator can observe each session live.
+Canonical attach command:
+```bash
+tmux new-session -A -s livetest
+```
+
+The coordinator creates and manages the local `livetest` tmux session:
+
+| Window | Left Pane | Right Pane |
+|--------|-----------|------------|
+| `livetest:CC` | Local tester agent | Local SSH shell into remote `claude` lane |
+| `livetest:OC` | Local tester agent | Local SSH shell into remote `openclaw` lane |
+| `livetest:CDX` | Local tester agent | Local SSH shell into remote `codex` lane |
+
+This split-pane layout is the canonical live-test topology. The left pane is
+always the local tester agent. The right pane is always the visible SSH-backed
+platform lane under test. Do not invert them.
+
+Do not invent alternate session names such as `codex-live` for ad hoc single-lane
+runs. Keep the session name canonical and use the same split-pane structure for
+single-lane and full-suite runs.
+
+Do not make a remote tmux session canonical. Remote tmux can be used for ad hoc
+inspection if needed, but live-test runner/control panes must remain local.
 
 ---
 
@@ -158,7 +189,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
 | `tmux-msg.sh` | Send a message to a coordinator or tester pane. Handles quoting, copy-mode, and stale input clearing. |
-| `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. Coordinator starts one per tester at run start. |
+| `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. The active coordinator starts and owns one per tester at run start. Do not route these through window `5` / `claude-looper`. |
 
 All scripts that touch the remote accept `--dry-run` to print SSH commands without
 executing them, and `--config <path>` to override the default config location.

@@ -34,6 +34,9 @@
 
   "tmux": {
     "livetest_session": "livetest",
+    "layout": "split-panes",
+    "tester_side": "left",
+    "platform_side": "right",
     "coordinator_pane": "main:4.0"
   },
 

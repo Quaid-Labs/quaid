@@ -24,14 +24,15 @@ At the start of every session:
 
 1. Confirm from the coordinator's opening message:
    - Which platform you are testing (OC, CC, or CDX)
-   - Your own tmux window name (e.g. `livetest:OC-tester`)
+   - Your own tmux pane address (e.g. `livetest:OC.0`)
    - The **coordinator's pane address** (e.g. `main:4.0`) — use this as the
      target for all STATUS and ISSUE messages you send back
-2. Request nudges from the looper so you keep moving if you go idle:
-   ```bash
-   TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-     tests/livetest/scripts/tmux-msg.sh 5 "start nudge on window <your-window-number>"
-   ```
+   - The canonical `livetest` tmux session is local, not remote
+   - The visible platform lane is the right-hand pane in your platform window and SSHes into the remote
+     host, not a tester process running on the remote host
+   - You are the left-hand local tester pane and must not type directly into the right pane except through the normal lane-driving procedure for your milestone
+2. Expect the active coordinator to own your `livetest:*` nudge loop directly if one is needed.
+   Do not request live-test nudges from window `5` / `claude-looper`.
 3. All subsequent coordinator messages should include your window as the source.
 
 ---
@@ -45,6 +46,8 @@ At the start of every session:
 - If you cannot resolve an issue, message the coordinator — do not guess at fixes.
 - All commands on the remote host run via `ssh REMOTE_HOST '...'`.
 - **Never run install or setup commands locally** — always via SSH to the remote.
+- **Never move the tester agent itself onto the remote host.** The tester must
+  remain local so host-under-test failures do not take down the runner.
 
 ---
 

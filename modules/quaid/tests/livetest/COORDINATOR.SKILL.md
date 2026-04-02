@@ -46,13 +46,37 @@ STATUS and ISSUE messages. Do not proceed to session setup until the self-test p
 
 ## Step 1 — Set Up the livetest tmux Session
 
+`livetest` is the canonical **local** tmux session name for all live-test work.
+This is a hard rule.
+
+- Use one window per platform: `CC`, `OC`, `CDX`.
+- Each platform window must be split into two panes.
+- Left pane: local tester agent.
+- Right pane: local SSH shell into the remote platform under test.
+- Do **not** run tester agents on the remote host.
+- Do **not** make a remote tmux session canonical for the run.
+
+If the host under test crashes, wedges, or installs broken code, the local tester
+must survive. Running the tester on the remote host violates that safety boundary.
+
+Do not run a one-off lane in a differently named session. Operator attach paths
+and monitoring screens depend on the local `tmux new-session -A -s livetest`
+workflow continuing to work.
+
 ```bash
-tmux has-session -t livetest 2>/dev/null || tmux new-session -d -s livetest -n CC-tester
-tmux list-windows -t livetest | grep -q 'CC$'         || tmux new-window -t livetest -n CC
-tmux list-windows -t livetest | grep -q 'OC-tester'   || tmux new-window -t livetest -n OC-tester
-tmux list-windows -t livetest | grep -q 'OC$'         || tmux new-window -t livetest -n OC
-tmux list-windows -t livetest | grep -q 'CDX-tester'  || tmux new-window -t livetest -n CDX-tester
-tmux list-windows -t livetest | grep -q 'CDX$'        || tmux new-window -t livetest -n CDX
+tmux has-session -t livetest 2>/dev/null || tmux new-session -d -s livetest -n CC
+tmux list-windows -t livetest | grep -q 'CC$'  || tmux new-window -t livetest -n CC
+tmux list-windows -t livetest | grep -q 'OC$'  || tmux new-window -t livetest -n OC
+tmux list-windows -t livetest | grep -q 'CDX$' || tmux new-window -t livetest -n CDX
+
+for win in CC OC CDX; do
+  if [ "$(tmux list-panes -t livetest:$win | wc -l | tr -d ' ')" -lt 2 ]; then
+    tmux split-window -h -t livetest:$win
+  fi
+  tmux select-layout -t livetest:$win even-horizontal
+  tmux select-pane -t livetest:$win.0 -T "${win,,}-tester"
+  tmux select-pane -t livetest:$win.1 -T "${win,,}-platform"
+done
 ```
 
 Scripts shipped with the livetest suite (relative to repo root):
@@ -62,28 +86,28 @@ Scripts shipped with the livetest suite (relative to repo root):
 - `tests/livetest/scripts/tmux-msg.sh` — inter-agent messaging
 - `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
 
-Start a tester agent in each `-tester` window using the CLI from your config
-(default `codex --yolo`). The tester's working directory should be the root of
-this repo so it can read the skill file:
+Start a tester agent in each left pane using the CLI from your config
+(default `codex --yolo`). Start it from the tester agent workspace so the
+agent-local `AGENTS.md` is loaded, and keep repo paths explicit in the prompt:
 
 ```bash
-tmux send-keys -t livetest:CC-tester  "cd /path/to/quaid && TESTER_CLI" Enter
-tmux send-keys -t livetest:OC-tester  "cd /path/to/quaid && TESTER_CLI" Enter
-tmux send-keys -t livetest:CDX-tester "cd /path/to/quaid && TESTER_CLI" Enter
+tmux send-keys -t livetest:CC.0  "cd /path/to/quaidcode/util/agents/codex-livetester && TESTER_CLI" Enter
+tmux send-keys -t livetest:OC.0  "cd /path/to/quaidcode/util/agents/codex-livetester && TESTER_CLI" Enter
+tmux send-keys -t livetest:CDX.0 "cd /path/to/quaidcode/util/agents/codex-livetester && TESTER_CLI" Enter
 ```
 
 On first message to each tester, send the contents of **both** the general skill
 file and the platform-specific supplement as the opening context:
 
-| Tester | General | Platform supplement |
-|--------|---------|-------------------|
-| OC-tester | `TESTER.SKILL.md` | `TESTER.OC.md` |
-| CC-tester | `TESTER.SKILL.md` | `TESTER.CC.md` |
-| CDX-tester | `TESTER.SKILL.md` | `TESTER.CDX.md` |
+| Tester Pane | General | Platform supplement |
+|-------------|---------|-------------------|
+| `livetest:OC.0` | `TESTER.SKILL.md` | `TESTER.OC.md` |
+| `livetest:CC.0` | `TESTER.SKILL.md` | `TESTER.CC.md` |
+| `livetest:CDX.0` | `TESTER.SKILL.md` | `TESTER.CDX.md` |
 
 Also include in the opening message:
 - Which platform it is testing (OC, CC, or CDX)
-- Its own tmux window name (e.g. `livetest:OC-tester`)
+- Its own tmux pane address (e.g. `livetest:OC.0`)
 - **Your coordinator pane address** (from `tmux.coordinator_pane` in config)
 
 The tester uses your pane address as the target for all STATUS and ISSUE messages.
@@ -92,11 +116,16 @@ Without it, testers cannot reach you.
 Start nudge loops for each tester window (keeps agents active during long runs):
 ```bash
 LIVETEST_DIR=tests/livetest/scripts
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:CC-tester  -r "Run N" &; CC_NUDGE=$!
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:OC-tester  -r "Run N" &; OC_NUDGE=$!
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:CDX-tester -r "Run N" &; CDX_NUDGE=$!
+$LIVETEST_DIR/livetest-nudge.sh -w livetest:CC.0  -r "Run N" &; CC_NUDGE=$!
+$LIVETEST_DIR/livetest-nudge.sh -w livetest:OC.0  -r "Run N" &; OC_NUDGE=$!
+$LIVETEST_DIR/livetest-nudge.sh -w livetest:CDX.0 -r "Run N" &; CDX_NUDGE=$!
 echo "Nudge PIDs: CC=$CC_NUDGE OC=$OC_NUDGE CDX=$CDX_NUDGE"
 ```
+
+Coordinator policy:
+- The active coordinator owns these live-test nudge loops directly.
+- Do not route tester nudge requests through window `5` / `claude-looper`.
+- Window `5` is reserved for `main`-session monitoring, not `livetest:*` sessions.
 
 Kill nudges at run end:
 ```bash
@@ -107,10 +136,16 @@ Open the platform interaction panes (SSH to remote, start platforms after instal
 
 ```bash
 # These are populated after M0 install — do not start platforms before install
-tmux send-keys -t livetest:OC  "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CC  "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CDX "ssh REMOTE_HOST" Enter
+tmux send-keys -t livetest:OC.1  "ssh REMOTE_HOST" Enter
+tmux send-keys -t livetest:CC.1  "ssh REMOTE_HOST" Enter
+tmux send-keys -t livetest:CDX.1 "ssh REMOTE_HOST" Enter
 ```
+
+If you find an active live-test lane running under a non-canonical **local**
+tmux session name, rename that local session back to `livetest` before continuing.
+
+If you find the tester itself running on the remote host, stop and correct it.
+That setup is invalid and unsafe.
 
 ---
 
