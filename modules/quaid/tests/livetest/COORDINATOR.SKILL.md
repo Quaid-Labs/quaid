@@ -208,17 +208,17 @@ guide on canary and installs Quaid itself. Do not run the installer directly.
 
 Tell the platform pane:
 
-> Please install Quaid by following the AI install guide on the canary branch exactly, including its mandatory first command:
-> https://github.com/Quaid-Labs/quaid/blob/canary/docs/AI-INSTALL.md
+> Please install Quaid by following the local AI install guide exactly, including its mandatory first command:
+> `~/quaid/dev/docs/AI-INSTALL.md`
 >
 > Use these parameters:
 > - Workspace: WORKSPACE
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
-> Use canary as the source (`--source github --ref canary` or the already-cloned
-> canary checkout in that workspace). Do not install a release build or any
-> non-canary branch.
+> Use the already-cloned local canary checkout in `~/quaid/dev` as the source.
+> Do not browse the web for install docs or source code during M0.
+> Do not install a release build or any non-canary branch.
 >
 > Tell me when Quaid is installed and `quaid doctor` returns healthy.
 
