@@ -45,6 +45,7 @@ function parseInstallArgs(argv) {
     agent: false,
     claudeCode: false,
     dryRun: false,
+    survey: false,
     help: false,
     errors: [],
   };
@@ -195,6 +196,10 @@ function parseInstallArgs(argv) {
       opts.dryRun = true;
       continue;
     }
+    if (arg === "--survey") {
+      opts.survey = true;
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       opts.help = true;
       continue;
@@ -220,6 +225,8 @@ Options:
   --dry-run           Run all prompts and checks but skip writes — outputs the
                       install plan and exits. Useful for validating interactive
                       UX and comparing against agent-mode output.
+  --survey            With --dry-run, print the canonical pre-install survey
+                      derived from resolved installer values.
   -h, --help          Show this help
 `);
   process.exit(0);
@@ -243,6 +250,7 @@ const INSTALL_SOURCE = String(INSTALL_ARGS.source || process.env.QUAID_INSTALL_S
 const INSTALL_REF = String(INSTALL_ARGS.ref || process.env.QUAID_INSTALL_REF || "main").trim();
 const INSTALL_GITHUB_REPO = String(INSTALL_ARGS.githubRepo || process.env.QUAID_INSTALL_GITHUB_REPO || "quaid-labs/quaid").trim();
 const INSTALL_ARTIFACT = String(INSTALL_ARGS.artifact || process.env.QUAID_INSTALL_ARTIFACT || "").trim();
+const SURVEY_ONLY = !!INSTALL_ARGS.survey;
 if (!["local", "github", "artifact"].includes(INSTALL_SOURCE)) {
   console.error(`[x] Invalid --source: ${INSTALL_SOURCE}`);
   console.error("    Expected one of: local, github, artifact");
@@ -254,6 +262,10 @@ if (INSTALL_SOURCE === "github" && !INSTALL_REF) {
 }
 if (INSTALL_SOURCE === "artifact" && !INSTALL_ARTIFACT) {
   console.error("[x] --source artifact requires --artifact (or QUAID_INSTALL_ARTIFACT).");
+  process.exit(2);
+}
+if (SURVEY_ONLY && !INSTALL_ARGS.dryRun) {
+  console.error("[x] --survey requires --dry-run.");
   process.exit(2);
 }
 
@@ -284,6 +296,8 @@ const TOTAL_INSTALL_STEPS = 7;
 // Thin prompt contract:
 //   - if the human only says "follow AI-INSTALL.md" with workspace/instance/owner,
 //     do not rediscover those values
+//   - run `node setup-quaid.mjs --agent --dry-run --survey ...` first and use
+//     that output as the conversational survey
 //   - do not plan aloud or keep browsing once you can fill the survey
 //   - the next assistant output must be the survey rendered in the order of
 //     AGENT_SURVEY_CONTRACT.fields, then a request for approval
@@ -298,6 +312,8 @@ const AGENT_SURVEY_CONTRACT = {
     "Render the survey fields in contract order, show the selected value for each, and end with: Do you want to change any of these before I run install?",
   firstResponseRule:
     "For thin-prompt installs, the first assistant response must be the survey itself with no planning preamble, using the AI-INSTALL.md first-response template.",
+  preferredMechanism:
+    "For thin-prompt installs, prefer `node setup-quaid.mjs --agent --dry-run --survey ...` and use its output as the survey instead of hand-synthesizing one.",
   fields: [
     {
       id: "owner_name",
@@ -1115,12 +1131,22 @@ function _nextAnswer(type, message) {
 const _clack = clack;
 const { intro: _intro, outro: _outro, note: _note, cancel: _cancel, isCancel: _isCancel, log: _log, spinner: _spinner } = _clack;
 
-const intro = _intro;
-const outro = _outro;
-const note = _note;
+const _noop = () => {};
+const intro = SURVEY_ONLY ? _noop : _intro;
+const outro = SURVEY_ONLY ? _noop : _outro;
+const note = SURVEY_ONLY ? _noop : _note;
 const cancel = _cancel;
 const isCancel = _isCancel;
-const log = _log;
+const log = SURVEY_ONLY
+  ? {
+      info: _noop,
+      warn: _noop,
+      error: _noop,
+      success: _noop,
+      message: _noop,
+      step: _noop,
+    }
+  : _log;
 
 const select = _testAnswers
   ? async (opts) => { const a = _nextAnswer("select", opts.message); log.info(C.dim(`[test] select "${opts.message}" → ${a}`)); return a; }
@@ -1164,6 +1190,8 @@ const text = _testAnswers
     : _clack.text;
 const spinner = _testAnswers
   ? () => ({ start: (m) => log.info(C.dim(`[test] spinner: ${m}`)), stop: (m) => log.info(C.dim(`[test] done: ${m}`)) })
+  : SURVEY_ONLY
+    ? () => ({ start: _noop, stop: _noop, message: _noop })
   : _clack.spinner;
 
 // --- Helpers ---
@@ -2051,6 +2079,7 @@ function getLoadedOllamaModels() {
 }
 
 function showBanner() {
+  if (SURVEY_ONLY) return;
   // Persistent header — shown at the top of every step
   const lines = renderQuaidBanner(C, {
     subtitle: "by Douglas Quaid",
@@ -2064,6 +2093,7 @@ function showBanner() {
 }
 
 function stepHeader(num, total, title, quote) {
+  if (SURVEY_ONLY) return;
   clearScreen();
   showBanner();
   const w = 60;
@@ -5226,6 +5256,13 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
       deep: models?.highModel || null,
       provider: models?.provider || null,
     },
+    notifications: {
+      level: models?.notifLevel || null,
+      janitor: models?.notifConfig?.janitor || null,
+      extraction: models?.notifConfig?.extraction || null,
+      retrieval: models?.notifConfig?.retrieval || null,
+      channel: models?.notifChannel || null,
+    },
     embeddings: {
       model: embeddings?.embedModel || null,
       provider: embeddings?.embedProvider || null,
@@ -5245,6 +5282,12 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
       supportsTimeoutCompaction: _platformSupportsTimeoutCompaction(platform),
       usesHostManagedLlm: _platformUsesHostManagedLlmByDefault(platform),
     },
+    janitor: {
+      askFirst: models?.janitorAskFirst ?? null,
+      scheduleHour: schedule?.hour ?? null,
+      scheduled: schedule?.scheduled ?? null,
+      approvalPolicies: schedule?.approvalPolicies || null,
+    },
     // Parity flags: raised when agent mode produces a plan that interactive
     // would not have offered. Consumers should treat any true flag as a bug.
     parityWarnings: (() => {
@@ -5256,6 +5299,48 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
     })(),
     generatedAt: new Date().toISOString(),
   };
+}
+
+function formatPreInstallSurvey(plan) {
+  const lines = ["Pre-install survey", ""];
+  const modelBits = [];
+  if (plan?.models?.provider) modelBits.push(`provider ${plan.models.provider}`);
+  if (plan?.models?.deep) modelBits.push(`deep ${plan.models.deep}`);
+  if (plan?.models?.fast) modelBits.push(`fast ${plan.models.fast}`);
+
+  const embedBits = [];
+  if (plan?.embeddings?.provider) embedBits.push(plan.embeddings.provider);
+  if (plan?.embeddings?.model) embedBits.push(plan.embeddings.model);
+  if (plan?.embeddings?.dim) embedBits.push(`${plan.embeddings.dim} dim`);
+
+  const notifParts = [];
+  if (plan?.notifications?.level) notifParts.push(`level ${plan.notifications.level}`);
+  if (plan?.notifications?.janitor) notifParts.push(`janitor ${plan.notifications.janitor}`);
+  if (plan?.notifications?.extraction) notifParts.push(`extraction ${plan.notifications.extraction}`);
+  if (plan?.notifications?.retrieval) notifParts.push(`retrieval ${plan.notifications.retrieval}`);
+
+  const janitorPolicies = plan?.janitor?.approvalPolicies
+    ? Object.entries(plan.janitor.approvalPolicies).map(([k, v]) => `${k}=${v}`).join(", ")
+    : (plan?.janitor?.askFirst === false ? "auto defaults" : "ask defaults");
+
+  const scheduleValue = plan?.janitor?.scheduled
+    ? `scheduled around ${plan.janitor.scheduleHour}:00`
+    : "not scheduled";
+
+  lines.push(`- Owner name: ${plan?.owner || "unknown"}`);
+  lines.push(`- Workspace path: ${plan?.workspace || "unknown"}`);
+  lines.push(`- Adapter type: ${plan?.platform || "unknown"}`);
+  lines.push(`- LLM provider + deep/fast models: ${modelBits.join(", ") || "unknown"}`);
+  lines.push(`- Embeddings provider/model: ${embedBits.join(", ") || "unknown"}`);
+  lines.push(`- Notification level + per-feature verbosity: ${notifParts.join(", ") || "unknown"}`);
+  if (plan?.platform === "openclaw" && plan?.notifications?.channel) {
+    lines.push(`- Notification routing channel: ${plan.notifications.channel}`);
+  }
+  lines.push(`- Janitor apply mode/policies: ${janitorPolicies}`);
+  lines.push(`- Janitor schedule choice: ${scheduleValue}`);
+  lines.push("");
+  lines.push("Do you want to change any of these before I run install?");
+  return lines.join("\n");
 }
 
 // =============================================================================
@@ -5333,6 +5418,10 @@ async function main() {
       if (plan.parityWarnings.length > 0) {
         log.warn("Parity warnings detected:");
         plan.parityWarnings.forEach(w => log.warn("  ! " + w));
+      }
+      if (SURVEY_ONLY) {
+        console.log(formatPreInstallSurvey(plan));
+        process.exit(0);
       }
       note(JSON.stringify(plan, null, 2), "Install Plan (dry run — no changes made)");
       outro(C.green("Dry run complete.") + C.dim(" Re-run without --dry-run to install."));

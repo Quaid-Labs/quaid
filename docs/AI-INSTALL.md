@@ -52,10 +52,18 @@ When the human uses the thin prompt shape, treat it as this exact procedure:
 
 1. Read `docs/AI-INSTALL.md`.
 2. Read `setup-quaid.mjs` and find `AGENT_SURVEY_CONTRACT`.
-3. Run only the minimum environment checks needed to fill survey defaults.
-4. Reply immediately with the survey in the conversation.
+3. Run the installer in survey mode first:
+
+```bash
+node setup-quaid.mjs --agent --dry-run --survey \
+  --workspace "<workspace>" \
+  --adapter <target-platform> \
+  --owner-name "<owner-name>"
+```
+
+4. Use that survey output as your next conversational reply.
 5. Wait for approval.
-6. Only then run install.
+6. Only then run install without `--dry-run --survey`.
 
 For the thin prompt path, do not:
 
@@ -76,11 +84,13 @@ Allowed pre-survey probes are limited to what is needed to fill the survey accur
 - `sysctl -n hw.memsize`
 
 If the prompt already gives you the workspace, instance, and owner, do not spend time rediscovering them.
+If the target platform is already known from the current agent/session, pass it explicitly with `--adapter`.
 
 ## First Response Template (Mandatory)
 
 For the thin prompt path, the first assistant response must be the survey itself.
 Do not add planning text before it.
+Prefer the output from `node setup-quaid.mjs --agent --dry-run --survey ...` over hand-written survey synthesis.
 
 Use this exact shape:
 
