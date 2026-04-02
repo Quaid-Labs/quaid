@@ -58,6 +58,12 @@ class TestClassifyIntent:
         assert intent == "WHEN"
         assert "Event" in boosts
 
+    def test_recent_plans_query_is_temporal(self):
+        from datastore.memorydb.memory_graph import classify_intent
+        intent, boosts = classify_intent("exercise habits recent plans")
+        assert intent == "WHEN"
+        assert "Event" in boosts
+
     def test_where_query(self):
         from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("where does Quaid live?")
