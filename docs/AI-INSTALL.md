@@ -16,6 +16,24 @@ derive them from those sources.
 
 The pre-install survey is mandatory for all AI/agent installs, including `--agent` mode.
 
+## Platform Selection Rule (Mandatory)
+
+If the human did not explicitly specify a platform, install Quaid for the
+platform currently running the agent/session that is following this guide.
+
+Examples:
+- if the agent is running inside Codex, install for Codex
+- if the agent is running inside Claude Code, install for Claude Code
+- if the agent is running inside OpenClaw, install for OpenClaw
+
+Do not switch to some other platform on the machine just because it is also
+installed or auto-detectable.
+
+On hosts with multiple platforms installed, auto-detection can choose the wrong
+target. In non-interactive or automated runs, explicitly force the intended
+platform when needed (for example `--adapter codex` for Codex installs, or the
+platform-specific force flag such as `--claude-code`).
+
 ## Source of Truth for Prompt Flow
 
 Before running install, read the installer file directly:
