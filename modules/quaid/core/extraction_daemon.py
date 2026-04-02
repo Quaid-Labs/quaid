@@ -2833,6 +2833,7 @@ def start_daemon() -> int:
             if not any(k.startswith(p) for p in _skip_prefixes)
             and k not in _skip_keys
         }
+        env["QUAID_HOME"] = str(_quaid_home())
         env["QUAID_DAEMON"] = "1"
 
         with open(log_file, "a") as _lf:

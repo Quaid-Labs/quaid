@@ -67,6 +67,35 @@ def test_start_daemon_returns_negative_one_when_pid_file_never_appears(monkeypat
     assert read_pid_calls >= 2
 
 
+def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    captured = {}
+
+    def fake_read_pid():
+        return None
+
+    class _FakePopen:
+        pid = 99999
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon, "_log_path", lambda: tmp_path / "daemon.log")
+    monkeypatch.setattr(extraction_daemon.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "read_pid", fake_read_pid)
+
+    result = extraction_daemon.start_daemon()
+
+    assert result == -1
+    assert captured["env"]["QUAID_HOME"] == str(tmp_path / "home")
+    assert captured["env"]["QUAID_INSTANCE"] == "codex-livetest"
+    assert captured["env"]["QUAID_DAEMON"] == "1"
+
+
 def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
