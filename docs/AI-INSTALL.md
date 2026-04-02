@@ -54,6 +54,16 @@ Do not maintain a separate survey template in agent memory.
 Do not infer survey sections from internal installer functions.
 If `setup-quaid.mjs` changes, the survey must change with it.
 
+When presenting the survey or final install summary, keep it scoped to the
+target platform only.
+
+- Do not mention other installed platforms just because they exist on the host.
+- Do not mention OpenClaw-specific routing, channels, `last_used`, gateway
+  semantics, or other adapter-only details during Codex or Claude Code installs.
+- If shared machine-wide config is being reused, describe only the effective
+  value that the current target install will inherit. Do not drag prior platform
+  context into the explanation.
+
 ## Recommended Entry Point
 
 Use the Node installer directly instead of `curl | bash` when an agent is driving install:
@@ -213,6 +223,14 @@ The installer or agent should pin Quaid notifications to an explicit OpenClaw ch
 - the adapter is responsible for resolving that channel to the proper recent session target at send time
 
 If the active OpenClaw user route cannot be determined, the agent must say so clearly before install instead of pretending notifications are guaranteed.
+
+For non-OpenClaw installs:
+
+- do not include notification routing channel in the survey
+- do not mention OpenClaw channels, `last_used`, pending-route behavior, or
+  other OpenClaw routing internals
+- it is enough to report the notification verbosity/profile relevant to the
+  target platform
 
 If the user is using an unsupported provider/model lane for their gateway (for example Gemini, Kimi/K2.5, or other custom routes), Quaid does not provide suggested fast/deep defaults. In that case the agent must:
 

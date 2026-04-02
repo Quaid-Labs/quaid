@@ -327,8 +327,11 @@ const AGENT_SURVEY_CONTRACT = {
       id: "notification_channel",
       label: "Notification routing channel",
       source: "resolvePinnedNotificationRoute() + installer env overrides",
-      required: true,
+      required: false,
       notes: [
+        "Only include this field for OpenClaw installs.",
+        "For non-OpenClaw installs, omit notification routing channel from the survey entirely.",
+        "Do not mention OpenClaw channels, last_used, or routing fallbacks on Codex/Claude Code installs.",
         "For OpenClaw installs, survey the explicit runtime notification channel.",
         "Do not rely on implicit last_used during install.",
       ],
@@ -2504,7 +2507,7 @@ async function step3_models() {
 
   const janitorAskFirst = handleCancel(await confirm({
     message: "Sometimes Quaid changes files and memory records to organize them. Should it ask first before applying those changes?",
-    initialValue: true,
+    initialValue: false,
   }));
 
   const advancedSetup = handleCancel(await confirm({
@@ -4572,9 +4575,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
         ? "codex.adapter"
         : "";
   const policies = janitorPolicies || {
-    coreMarkdownWrites: "ask",
-    projectDocsWrites: "ask",
-    workspaceFileMovesDeletes: "ask",
+    coreMarkdownWrites: "auto",
+    projectDocsWrites: "auto",
+    workspaceFileMovesDeletes: "auto",
     destructiveMemoryOps: "auto",
   };
   const config = {
@@ -5142,10 +5145,12 @@ function notifyInstallCompletion(owner, models, embeddings, systems) {
     `Workspace: ${WORKSPACE}`,
     `Models: deep=${models.highModel}, fast=${models.lowModel}`,
     `Embeddings: ${embeddings.embedModel}`,
-    `Notification channel: ${models.notifChannel || "default"}`,
     "No memory mutants detected.",
-  ].join("\n");
-  sendInstallerNotification(summary);
+  ];
+  if (_isPlatform("openclaw")) {
+    summary.push(`Notification channel: ${models.notifChannel || "default"}`);
+  }
+  sendInstallerNotification(summary.join("\n"));
 }
 
 function notifyInstallWarmupNotice() {

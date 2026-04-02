@@ -353,9 +353,9 @@ function compactSummary(cfgPath, cfg) {
   const extractionVerb = String(getPath(cfg, "notifications.extraction.verbosity", "inherit"));
   const retrievalVerb = String(getPath(cfg, "notifications.retrieval.verbosity", "inherit"));
   const janitorApplyMode = String(getPath(cfg, "janitor.applyMode", "auto"));
-  const corePolicy = String(getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask"));
-  const projectPolicy = String(getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask"));
-  const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"));
+  const corePolicy = String(getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "auto"));
+  const projectPolicy = String(getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "auto"));
+  const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "auto"));
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
   const routerFailOpen = !!getPath(cfg, "retrieval.router_fail_open", getPath(cfg, "retrieval.routerFailOpen", true));
   const failHard = retrievalFailHard(cfg);
@@ -840,21 +840,21 @@ async function runEdit() {
     } else if (menu === "janitor_policy_core") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.coreMarkdownWrites",
-        initialValue: getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask"),
+        initialValue: getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "auto"),
         options: janitorScopePolicyOptions(),
       }));
       setPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", next);
     } else if (menu === "janitor_policy_project") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.projectDocsWrites",
-        initialValue: getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask"),
+        initialValue: getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "auto"),
         options: janitorScopePolicyOptions(),
       }));
       setPath(cfg, "janitor.approvalPolicies.projectDocsWrites", next);
     } else if (menu === "janitor_policy_workspace") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.workspaceFileMovesDeletes",
-        initialValue: getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"),
+        initialValue: getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "auto"),
         options: janitorScopePolicyOptions(),
       }));
       setPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", next);
