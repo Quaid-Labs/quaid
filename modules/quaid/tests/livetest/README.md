@@ -264,7 +264,8 @@ current milestone on first message.
 **Platform install silent / no output** — M0 explicitly checks that the
 platform showed the pre-install survey, confirmed canary install provenance,
 and emitted install status messages in the platform pane. Missing survey,
-ambiguous source, or silent install is a failure signal, not a pass.
+ambiguous source, or silent install is a failure signal, not a pass. Do not
+paper over a silent installer by asking the platform agent to narrate progress.
 
 **CDX recall uses file browsing instead of Quaid** — Launch CDX with
 `QUAID_INSTANCE=<instance_name> codex --yolo` so the agent's shell environment

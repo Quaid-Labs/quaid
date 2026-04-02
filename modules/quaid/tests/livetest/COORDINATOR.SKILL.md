@@ -216,22 +216,9 @@ Tell the platform pane:
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
-> Install from `--source github --ref canary` or from the already-cloned
-> canary checkout in that workspace. Do not install a release build or any
-> branch other than canary.
->
-> Before running install:
-> - read `docs/AI-INSTALL.md`
-> - show me the mandatory pre-install survey with the selected values
-> - wait for approval before running install
->
-> While running install, send brief status updates as you move through the
-> steps. At minimum I should see:
-> - reading guide / surveying options
-> - starting installer
-> - installer checkpoints or important step transitions
-> - running `quaid doctor`
-> - final result
+> Use canary as the source (`--source github --ref canary` or the already-cloned
+> canary checkout in that workspace). Do not install a release build or any
+> non-canary branch.
 >
 > Tell me when Quaid is installed and `quaid doctor` returns healthy.
 

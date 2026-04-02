@@ -4,13 +4,15 @@ This guide is for AI agents running Quaid installation on behalf of a human.
 
 ## Human Instructions for Agent (Copy/Paste)
 
-Use this exact flow when asking an AI agent to install Quaid:
+Use this exact minimal prompt shape when asking an AI agent to install Quaid:
 
 1. Read `docs/AI-INSTALL.md` first and follow it exactly.
-2. Before running any install command, show me a pre-install survey with all chosen options (including defaults).
-3. Ask me to approve or change the survey answers.
-4. Only after my approval, run install.
-5. After install, report a full summary of the final selected options.
+2. Install Quaid for me using this workspace, instance name, and owner name.
+3. Tell me when install is complete and `quaid doctor` is healthy.
+
+Do not duplicate the survey contract, defaults, or approval flow in the human's
+prompt. Those are defined here and in `setup-quaid.mjs`, and the agent must
+derive them from those sources.
 
 The pre-install survey is mandatory for all AI/agent installs, including `--agent` mode.
 
