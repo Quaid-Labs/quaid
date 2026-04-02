@@ -113,6 +113,21 @@ _pane_in_copy_mode() {
     [[ "$m" == "1" ]]
 }
 
+_pane_command() {
+    tmux display-message -p -t "$PANE" '#{pane_current_command}' 2>/dev/null || echo ""
+}
+
+_pane_allows_ctrl_c_clear() {
+    case "$(_pane_command)" in
+        bash|zsh|sh|fish)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 _user_viewing() {
     local w p
     w="$(tmux display-message -p -t "$PANE" '#{window_active}' 2>/dev/null || echo "0")"
@@ -120,8 +135,27 @@ _user_viewing() {
     [[ "$w" == "1" && "$p" == "1" ]]
 }
 
+_looks_like_placeholder_prompt() {
+    local text
+    text="$(_normalize_message_text "$1")"
+    [[ -n "$text" ]] || return 1
+
+    case "$text" in
+        "Describe a task"*|\
+        "Ask anything"*|\
+        "What would you like"*|\
+        "How can I help"*|\
+        "Type a message"*|\
+        "Enter a prompt"*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
 _current_draft_text() {
-    local cursor_y cursor_x pane_height start_line raw_block candidate prompt_index i line mark stripped
+    local cursor_y cursor_x pane_height start_line raw_block candidate prompt_index i line mark stripped continuation_count
     cursor_y="$(tmux display-message -p -t "$PANE" '#{cursor_y}' 2>/dev/null || echo "")"
     cursor_x="$(tmux display-message -p -t "$PANE" '#{cursor_x}' 2>/dev/null || echo "")"
     pane_height="$(tmux display-message -p -t "$PANE" '#{pane_height}' 2>/dev/null || echo "")"
@@ -134,6 +168,7 @@ _current_draft_text() {
     [[ -n "$raw_block" ]] || return 1
 
     prompt_index=-1
+    continuation_count=0
     candidate=""
     i=0
     while IFS= read -r line; do
@@ -150,6 +185,7 @@ _current_draft_text() {
                 candidate+="$stripped"
             elif [[ -n "$candidate" ]]; then
                 candidate+="$line"
+                continuation_count=$(( continuation_count + 1 ))
             fi
         fi
         i=$(( i + 1 ))
@@ -161,10 +197,15 @@ _current_draft_text() {
     candidate="${candidate%"${candidate##*[![:space:]]}"}"
     [[ -n "$candidate" ]] || return 1
 
-    # Codex idle suggestions render as prompt text with the cursor still at the
-    # prompt start. Treat those as placeholders, not editable drafts.
+    # Some UIs render placeholder helper text on the prompt line with the
+    # cursor still at the prompt start. Ignore only obvious placeholders.
+    # Wrapped drafts and injected inter-agent messages can also leave the
+    # cursor near the prompt start, so do not discard those purely by cursor
+    # position.
     if [[ "$cursor_x" -le 2 ]]; then
-        return 1
+        if [[ "$continuation_count" -eq 0 ]] && _looks_like_placeholder_prompt "$candidate"; then
+            return 1
+        fi
     fi
 
     printf '%s\n' "$candidate"
@@ -317,6 +358,37 @@ _clear_current_draft() {
         [[ -z "$after" ]] && return 0
         [[ "$after" != "$before" ]] && break
     done
+
+    tmux send-keys -t "$PANE" Escape
+    sleep 0.1
+    tmux send-keys -t "$PANE" C-u
+    for attempt in {1..10}; do
+        sleep 0.1
+        after="$(_current_draft_text 2>/dev/null || true)"
+        [[ -z "$after" ]] && return 0
+        [[ "$after" != "$before" ]] && break
+    done
+
+    # Ctrl-C is only safe in shell-like panes. In agent panes it interrupts the
+    # live conversation, which is worse than failing to preserve a draft.
+    if _pane_allows_ctrl_c_clear; then
+        tmux send-keys -t "$PANE" C-c
+        for attempt in {1..10}; do
+            sleep 0.1
+            after="$(_current_draft_text 2>/dev/null || true)"
+            [[ -z "$after" ]] && return 0
+            [[ "$after" != "$before" ]] && break
+        done
+
+        tmux send-keys -t "$PANE" Escape
+        sleep 0.1
+        tmux send-keys -t "$PANE" C-c
+        for attempt in {1..10}; do
+            sleep 0.1
+            after="$(_current_draft_text 2>/dev/null || true)"
+            [[ -z "$after" ]] && return 0
+        done
+    fi
 
     max_len=${#before}
     if [[ ${#after} -gt "$max_len" ]]; then
