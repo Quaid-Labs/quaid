@@ -189,6 +189,26 @@ cd /path/to/quaid && git rev-parse HEAD
 ```
 Save as RUN_START_SHA. Compare HEAD against this at run end.
 
+**Verify remote/platform source is up to date before launching tests:**
+
+Do this **every run loop iteration**, immediately after the cleanup / wipe phase
+and before you launch M0 or any tester work. Do not assume the remote checkout
+is current just because local `canary` is current.
+
+Minimum check:
+```bash
+LOCAL_SHA=$(cd /path/to/quaid && git rev-parse --short HEAD)
+ssh REMOTE_HOST 'cd WORKSPACE/dev && git rev-parse --short HEAD'
+```
+
+If the remote SHA differs, update it before launching that loop iteration:
+```bash
+ssh REMOTE_HOST 'cd WORKSPACE/dev && git pull --ff-only origin canary'
+```
+
+After any remote code update, restart the relevant runtime/daemon before
+testing so the host under test is actually running the updated code.
+
 **Run preflight (wipe + safety check + platform start):**
 ```bash
 tests/livetest/scripts/livetest-preflight.sh
