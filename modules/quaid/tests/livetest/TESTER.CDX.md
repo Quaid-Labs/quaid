@@ -136,6 +136,14 @@ context`, the environment is contaminated by a prior install or an incomplete
 wipe. Report an ISSUE immediately. Do not wait for the hook to finish and do
 not treat it as expected cold start behavior for M0.
 
+The most common cause is a stale `~/.codex/hooks.json` on alfie that survived
+the Step 0 wipe. The coordinator clears it with:
+```bash
+ssh alfie.local 'echo "{}" > ~/.codex/hooks.json && echo "CDX hooks cleared"'
+```
+After clearing, restart the CDX platform agent session (`/new` or restart
+codex) so it picks up the empty hooks file before retrying the install prompt.
+
 ---
 
 ## Database and CLI
