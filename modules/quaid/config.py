@@ -545,6 +545,7 @@ class MemoryConfig:
 _config: Optional[MemoryConfig] = None
 _config_loading: bool = False  # Re-entrancy guard (load_config → get_db_path → get_config)
 _config_lock = threading.RLock()
+_config_instance_id: Optional[str] = None  # QUAID_INSTANCE active when _config was cached
 _warned_unknown_config_keys: set[str] = set()
 _config_callbacks_lock = threading.RLock()
 _config_callbacks: Dict[str, List[Callable[[Any, "MemoryConfig"], None]]] = {}
@@ -871,11 +872,15 @@ def _coerce_list_field(value: Any, *, field_name: str, default: Optional[List[An
 
 def load_config() -> MemoryConfig:
     """Load configuration from file or use defaults."""
-    global _config, _config_loading
+    global _config, _config_loading, _config_instance_id
 
     with _config_lock:
-        if _config is not None:
+        current_instance = os.environ.get("QUAID_INSTANCE", "").strip()
+        if _config is not None and current_instance == _config_instance_id:
             return _config
+        # QUAID_INSTANCE changed — reload for the new instance
+        if _config is not None and current_instance != _config_instance_id:
+            _config = None
 
         # Re-entrancy guard: load_config() → get_db_path() → _get_cfg() → load_config()
         # The project definitions loader calls get_db_path which recurses back here.
@@ -892,7 +897,7 @@ def load_config() -> MemoryConfig:
 
 def _load_config_inner() -> MemoryConfig:
     """Inner config loader (called with re-entrancy guard held)."""
-    global _config
+    global _config, _config_instance_id
 
     raw_config: Dict[str, Any] = {}
     loaded_paths: List[Path] = []
@@ -1622,6 +1627,7 @@ def _load_config_inner() -> MemoryConfig:
             raise ValueError("Plugin contract tool_runtime failures: " + "; ".join(plugin_errors))
 
     _config = candidate
+    _config_instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
     return _config
 
 

@@ -715,15 +715,22 @@ def append_project_logs(
         if not defn:
             defn = registry.get_project_definition(project_name)
         if not defn:
-            metrics["projects_unknown"] += 1
-            print(f"[project-log] unknown project: {project_name}")
-            continue
-
-        project_md = _resolve_project_home(defn.home_dir) / "PROJECT.md"
-        if not project_md.exists():
-            metrics["projects_missing_file"] += 1
-            print(f"[project-log] missing PROJECT.md: {project_md}")
-            continue
+            # Filesystem fallback: project may have been deleted from the
+            # registry during the session but its directory still exists.
+            candidate = get_quaid_home() / "projects" / project_name
+            if (candidate / "PROJECT.md").exists():
+                project_md = candidate / "PROJECT.md"
+                print(f"[project-log] registry miss, using filesystem fallback: {project_md}")
+            else:
+                metrics["projects_unknown"] += 1
+                print(f"[project-log] unknown project: {project_name}")
+                continue
+        else:
+            project_md = _resolve_project_home(defn.home_dir) / "PROJECT.md"
+            if not project_md.exists():
+                metrics["projects_missing_file"] += 1
+                print(f"[project-log] missing PROJECT.md: {project_md}")
+                continue
 
         if not dry_run:
             _append_project_history_log(project_md, raw_entries or [])
