@@ -63,6 +63,7 @@ class ClaudeCodeInstanceManager(InstanceManager):
 
         if not dry_run:
             self._write_settings(project_dir, instance_id)
+            self._write_hooks(instance_id)
             self._store_auth_token(token)
             self._write_model_config(
                 silo_root,
@@ -157,6 +158,71 @@ class ClaudeCodeInstanceManager(InstanceManager):
             config_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
         return instance_id, was_new
+
+    def _write_hooks(self, instance_id: str) -> None:
+        """Write the 6 Quaid hook commands into ~/.claude/settings.json.
+
+        Mirrors what the JS installer's setupClaudeCodeHooks() does. Called
+        by make_instance() so newly created project instances get hooks wired
+        without requiring a full re-run of the installer.
+
+        Skips any hook command already present to avoid duplicates. If the
+        main install already wrote identical hooks, this is a no-op.
+        """
+        import shutil as _shutil
+
+        # Prefer the quaid binary co-located with this package; fall back to PATH.
+        _pkg_root = Path(__file__).resolve().parent.parent.parent
+        _candidate = _pkg_root / "quaid"
+        quaid_bin = str(_candidate) if _candidate.is_file() else (_shutil.which("quaid") or "quaid")
+
+        workspace = str(self.adapter.quaid_home())
+        env_prefix = f"QUAID_HOME='{workspace}' QUAID_INSTANCE='{instance_id}'"
+
+        desired: dict = {
+            "SessionStart":     f"{env_prefix} {quaid_bin} hook-session-init",
+            "UserPromptSubmit": f"{env_prefix} {quaid_bin} hook-inject",
+            "PreCompact":       f"{env_prefix} {quaid_bin} hook-extract --precompact",
+            "SessionEnd":       f"{env_prefix} {quaid_bin} hook-extract",
+            "SubagentStart":    f"{env_prefix} {quaid_bin} hook-subagent-start",
+            "SubagentStop":     f"{env_prefix} {quaid_bin} hook-subagent-stop",
+        }
+
+        settings_path = Path.home() / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+        settings: dict = {}
+        if settings_path.is_file():
+            try:
+                settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                settings = {}
+
+        if "hooks" not in settings:
+            settings["hooks"] = {}
+
+        changed = False
+        for event, command in desired.items():
+            entries = settings["hooks"].setdefault(event, [])
+            existing_cmds = {
+                h.get("command", "")
+                for entry in entries
+                for h in entry.get("hooks", [])
+            }
+            if command not in existing_cmds:
+                entries.append({"matcher": "", "hooks": [{"type": "command", "command": command}]})
+                changed = True
+
+        env = settings.setdefault("env", {})
+        if env.get("QUAID_HOME") != workspace:
+            env["QUAID_HOME"] = workspace
+            changed = True
+
+        if changed:
+            settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+            print(f"  CC hooks written for {instance_id}")
+        else:
+            print(f"  CC hooks already present for {instance_id}")
 
     def _write_settings(self, project_dir: Path, instance_id: str) -> None:
         """Write QUAID_INSTANCE into <project_dir>/.claude/settings.json."""

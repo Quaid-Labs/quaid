@@ -652,6 +652,13 @@ if (AGENT_MODE) {
 
 function resolvedInstallerPlatform() {
   if (_platformOverride) return _platformOverride;
+  // Infer platform from QUAID_INSTANCE prefix — set by the tester/env before
+  // agent-driven install runs, and more reliable than binary detection when
+  // multiple platforms coexist on the same host (e.g. alfie has openclaw,
+  // codex, and claude on PATH simultaneously, making IS_OPENCLAW always true).
+  const instanceId = (process.env.QUAID_INSTANCE || "").trim();
+  if (instanceId.startsWith("codex-")) return "codex";
+  if (instanceId.startsWith("claude-code-")) return "claude-code";
   if (IS_CLAUDE_CODE) return "claude-code";
   if (IS_OPENCLAW) return "openclaw";
   return "standalone";
