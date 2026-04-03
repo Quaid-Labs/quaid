@@ -468,4 +468,4 @@ class CodexAdapter(QuaidAdapter):
             # for the ending session, so the daemon must sweep carry_facts via
             # idle timeout rather than relying on an explicit session_end signal.
             return True
-        return None
+        return super().get_adapter_config(key)

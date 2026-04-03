@@ -399,14 +399,21 @@ class QuaidAdapter(abc.ABC):
 
     # ---- Adapter feature config ----
 
+    _ADAPTER_DEFAULTS: Dict[str, Any] = {
+        # Sweep carry_facts for sessions whose cursor reached end without a
+        # session_end signal (e.g. Codex /new).  False for all adapters that
+        # emit proper session_end signals; overridden to True in CodexAdapter.
+        "orphan_sweep": False,
+    }
+
     def get_adapter_config(self, key: str) -> Any:
         """Return an adapter-specific feature flag or config value.
 
         Adapters override this to expose capabilities the daemon or core can
-        read without hardcoding adapter names.  Unknown keys return None.
+        read without hardcoding adapter names.  Known keys have explicit
+        defaults in _ADAPTER_DEFAULTS; unknown keys return None.
         """
-        _ = key
-        return None
+        return self._ADAPTER_DEFAULTS.get(key)
 
     # ---- Providers ----
 
