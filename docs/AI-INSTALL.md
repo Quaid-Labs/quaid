@@ -7,6 +7,7 @@ This guide is for AI agents running Quaid installation on behalf of a human.
 For thin-prompt installs, do this before anything else:
 
 ```bash
+cd "<repo-root-containing-this-guide>" && \
 node setup-quaid.mjs --agent --dry-run --survey \
   --workspace "<workspace>" \
   --adapter <target-platform> \
@@ -15,6 +16,11 @@ node setup-quaid.mjs --agent --dry-run --survey \
 
 Use the survey output from that command as your first conversational reply.
 Do not browse files, plan aloud, or inspect adapter code before running it.
+
+If the guide you were given is a local file inside an already-cloned Quaid
+checkout, that checkout is the install source. Run the command from that repo.
+Do not inspect installer flags just to confirm local-source behavior.
+`--source local` is already the default.
 
 ## Human Instructions for Agent (Copy/Paste)
 
@@ -70,6 +76,7 @@ When the human uses the thin prompt shape, treat it as this exact procedure:
 3. Run the installer in survey mode first:
 
 ```bash
+cd "<repo-root-containing-this-guide>" && \
 node setup-quaid.mjs --agent --dry-run --survey \
   --workspace "<workspace>" \
   --adapter <target-platform> \
@@ -100,6 +107,8 @@ Allowed pre-survey probes are limited to what is needed to fill the survey accur
 
 If the prompt already gives you the workspace, instance, and owner, do not spend time rediscovering them.
 If the target platform is already known from the current agent/session, pass it explicitly with `--adapter`.
+If the guide path is local, use that checkout directly and do not inspect CLI
+arguments to prove that local source is allowed.
 
 ## First Response Template (Mandatory)
 
