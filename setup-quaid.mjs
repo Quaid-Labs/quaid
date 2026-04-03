@@ -296,6 +296,9 @@ const TOTAL_INSTALL_STEPS = 7;
 // Thin prompt contract:
 //   - if the human only says "follow AI-INSTALL.md" with workspace/instance/owner,
 //     do not rediscover those values
+//   - if workspace, adapter/platform, and owner are already given,
+//     execute the survey command immediately after the initial read; do not
+//     keep planning, run pwd/ls, or re-read the guide
 //   - run `node setup-quaid.mjs --agent --dry-run --survey ...` first and use
 //     that output as the conversational survey
 //   - do not plan aloud or keep browsing once you can fill the survey
@@ -309,7 +312,7 @@ const AGENT_SURVEY_CONTRACT = {
   firstCommand:
     "node setup-quaid.mjs --agent --dry-run --survey --workspace <workspace> --adapter <target-platform> --owner-name <owner-name>",
   preSurveyRule:
-    "Before the survey, read only AI-INSTALL.md and setup-quaid.mjs plus minimal environment checks needed to fill defaults. Do not browse adapter files, memory config files, unrelated repo docs, or run exploratory shell commands.",
+    "Before the survey, read only AI-INSTALL.md and setup-quaid.mjs plus minimal environment checks needed to fill defaults. If workspace, adapter/platform, and owner are already provided, execute the survey command immediately after that initial read. Do not browse adapter files, memory config files, unrelated repo docs, or run exploratory shell commands like pwd/ls/find.",
   outputRule:
     "Render the survey fields in contract order, show the selected value for each, and end with: Do you want to change any of these before I run install?",
   firstResponseRule:

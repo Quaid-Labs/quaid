@@ -16,6 +16,9 @@ node setup-quaid.mjs --agent --dry-run --survey \
 
 Use the survey output from that command as your first conversational reply.
 Do not browse files, plan aloud, or inspect adapter code before running it.
+When the prompt already includes workspace, adapter/platform, and owner name,
+your next action is to execute this command immediately. Do not keep reading the
+guide, run `pwd`, run `ls`, or keep planning first.
 
 If the guide you were given is a local file inside an already-cloned Quaid
 checkout, that checkout is the install source. Run the command from that repo.
@@ -57,6 +60,9 @@ Execution order is mandatory:
 2. Reply in the conversation with the pre-install survey and selected values.
 3. Wait for human approval or edits.
 4. Only then run install.
+
+If workspace, adapter/platform, and owner are already supplied in the prompt,
+do not loop on Step 1. Read enough to run the mandatory first command, then run it.
 
 Do not keep browsing, planning, or exploring code after you already have enough
 information to present the survey. The survey is the next required
@@ -101,10 +107,19 @@ node setup-quaid.mjs --agent --dry-run --survey \
 5. Wait for approval.
 6. Only then run install without `--dry-run --survey`.
 
+If the prompt already gives you all three install parameters:
+- workspace
+- adapter/platform
+- owner name
+
+then do not do any more planning or file browsing after the initial read.
+Your next action is to execute the survey command immediately.
+
 For the thin prompt path, do not:
 
 - list files
 - run `pwd`
+- re-read `AI-INSTALL.md` repeatedly
 - browse adapter implementation files
 - inspect `memory.json`
 - read unrelated repo docs
