@@ -15,9 +15,11 @@ tmux send-keys -t livetest:CDX "mkdir -p /tmp/cdx-livetest && cd /tmp/cdx-livete
 ```
 
 **MANDATORY — verify model before any test messages:**
-CDX must use `gpt-5.1-codex-mini` at Medium effort. Both fast and deep lanes
-are set to this model (deep lane is overwritten with the fast lane value — same
-rule as OC/CC). Verify from config before sending any milestone prompts:
+CDX must use `gpt-5.4-mini` at Medium effort (with `reasoning_effort=none` for
+fast lane — this model accepts `effort=none`, unlike `gpt-5.1-codex-mini`).
+Both fast and deep lanes are set to this model (deep lane is overwritten with
+the fast lane value — same rule as OC/CC). Verify from config before sending
+any milestone prompts:
 ```bash
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"WORKSPACE/CDX_INSTANCE/config/memory.json\")); \
   print(\"fast:\", d[\"models\"][\"fastReasoning\"]); print(\"deep:\", d[\"models\"][\"deepReasoning\"])"'
