@@ -2256,6 +2256,14 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     timeout_seconds = timeout_minutes * 60
     installed_at_ts = _read_installed_at()
 
+    # Read once: whether this adapter needs orphan carry_facts sweep (e.g. Codex
+    # /new which discards the old session without firing a Stop hook).
+    try:
+        from lib.adapter import get_adapter
+        _orphan_sweep = bool(get_adapter().get_adapter_config("orphan_sweep"))
+    except Exception:
+        _orphan_sweep = False
+
     # B002: Cache registered subagent IDs once instead of scanning per cursor file
     registered_subagents: set = set()
     try:
@@ -2323,8 +2331,9 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         has_staged_payload = False
         if cursor_at_end:
             try:
-                has_staged_payload = staged_state_has_payload(
-                    read_rolling_state(session_id)
+                rolling = read_rolling_state(session_id)
+                has_staged_payload = staged_state_has_payload(rolling) or (
+                    _orphan_sweep and bool(rolling.get("carry_facts"))
                 )
             except Exception:
                 pass
@@ -2641,15 +2650,10 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
     signal.signal(signal.SIGINT, handle_sigterm)
 
     last_idle_check = 0.0
-    last_orphan_sweep = 0.0
     last_stale_doc_check = 0.0
     last_embed_retry_check = 0.0
     _STALE_DOC_CHECK_INTERVAL = 60.0  # check for stale docs every 60s
     _EMBED_RETRY_INTERVAL = 300.0  # retry missing embeddings every 5 minutes
-    # Orphan sweep interval: flush carry_facts for sessions that ended without a
-    # session_end signal (e.g. Codex /new which creates a new session_id without
-    # firing the Stop hook for the previous session).
-    _ORPHAN_SWEEP_INTERVAL = 30.0
 
     # Initialize version watcher and janitor scheduler
     from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
@@ -2731,17 +2735,6 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
-
-            # Periodic orphan sweep — flush carry_facts for sessions whose cursors
-            # are at end but never received a session_end signal (e.g. Codex /new).
-            if now - last_orphan_sweep > _ORPHAN_SWEEP_INTERVAL:
-                try:
-                    swept = sweep_orphaned_sessions()
-                    if swept:
-                        logger.info("daemon orphan sweep: flushed %d orphaned session(s)", swept)
-                except Exception as e:
-                    logger.error("orphan sweep failed: %s", e)
-                last_orphan_sweep = now
 
             # Janitor scheduler tick — checks if maintenance is due
             try:

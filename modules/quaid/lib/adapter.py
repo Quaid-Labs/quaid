@@ -397,6 +397,17 @@ class QuaidAdapter(abc.ABC):
         """Path to the gateway config file (if applicable)."""
         return None
 
+    # ---- Adapter feature config ----
+
+    def get_adapter_config(self, key: str) -> Any:
+        """Return an adapter-specific feature flag or config value.
+
+        Adapters override this to expose capabilities the daemon or core can
+        read without hardcoding adapter names.  Unknown keys return None.
+        """
+        _ = key
+        return None
+
     # ---- Providers ----
 
     @abc.abstractmethod
