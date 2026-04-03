@@ -406,14 +406,23 @@ class QuaidAdapter(abc.ABC):
         "orphan_sweep": False,
     }
 
+    # Subclasses declare adapter-specific overrides here as a plain dict.
+    # Do NOT override get_adapter_config — declare ADAPTER_CONFIG instead.
+    ADAPTER_CONFIG: Dict[str, Any] = {}
+
     def get_adapter_config(self, key: str) -> Any:
         """Return an adapter-specific feature flag or config value.
 
-        Adapters override this to expose capabilities the daemon or core can
-        read without hardcoding adapter names.  Known keys have explicit
-        defaults in _ADAPTER_DEFAULTS; unknown keys return None.
+        Resolves by merging _ADAPTER_DEFAULTS with the concrete subclass's
+        ADAPTER_CONFIG dict.  Subclasses declare ADAPTER_CONFIG as a plain
+        class-level dict — no method override, no super() call required.
+        Known keys have explicit defaults in _ADAPTER_DEFAULTS; unknown keys
+        return None.
         """
-        return self._ADAPTER_DEFAULTS.get(key)
+        subclass_config = getattr(type(self), "ADAPTER_CONFIG", {})
+        if not isinstance(subclass_config, dict):
+            subclass_config = {}
+        return {**self._ADAPTER_DEFAULTS, **subclass_config}.get(key)
 
     # ---- Providers ----
 
