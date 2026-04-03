@@ -372,6 +372,13 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
   if (resetBackup) {
     candidates.push(resetBackup);
   }
+  const latestPhysical = findLatestOCSessionFile();
+  if (latestPhysical) {
+    const physBackup = latestResetBackupFromPath(latestPhysical);
+    if (physBackup) {
+      candidates.push(physBackup);
+    }
+  }
   const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
   const sourcePath = deduped.find((candidate) => fs.existsSync(candidate));
   if (!sourcePath) {
@@ -465,6 +472,15 @@ function writeDaemonSignal(sessionId, signalType, meta) {
         const backup = latestResetBackupFromPath(resolvedPath);
         if (backup) {
           resolvedPath = backup;
+        } else {
+          const latestPhysical = findLatestOCSessionFile();
+          if (latestPhysical) {
+            const physBackup = latestResetBackupFromPath(latestPhysical);
+            if (physBackup) {
+              resolvedPath = physBackup;
+              sessionTranscriptPaths.set(sessionId, physBackup);
+            }
+          }
         }
       }
     }

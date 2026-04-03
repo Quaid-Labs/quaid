@@ -88,6 +88,7 @@ fi
 SAFE_TARGET="$(echo "$WINDOW" | tr -c 'A-Za-z0-9_.-' '_')"
 PID_FILE="/tmp/autonomous_mode_${SAFE_TARGET}.pid"
 LOG_FILE="/tmp/autonomous_mode_${SAFE_TARGET}.log"
+TRACE_LOG="/tmp/autonomous_mode_${SAFE_TARGET}.trace.log"
 
 if ! ( set -o noclobber; echo "$$" > "$PID_FILE" ) 2>/dev/null; then
     OTHER_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -104,20 +105,25 @@ fi
 
 # --- Logging ---
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
-log() { echo "[$(ts)] $*" | tee -a "$LOG_FILE"; }
+log() { echo "[$(ts)] $*" >> "$LOG_FILE"; }
+trace() { echo "[$(ts)] $*" >> "$TRACE_LOG"; }
 
 # --- Cleanup ---
 cleanup() {
+    local exit_code=$?
     trap - EXIT INT TERM HUP
+    trace "cleanup start exit_code=$exit_code pid=$$"
     rm -f "$PID_FILE"
     local pid
     for pid in $(jobs -p 2>/dev/null); do
+        trace "cleanup killing child pid=$pid"
         kill "$pid" 2>/dev/null || true
     done
     if [[ -n "${ON_EXIT_CMD:-}" ]]; then
         log "running on-exit command"
         eval "$ON_EXIT_CMD" >> "$LOG_FILE" 2>&1 || true
     fi
+    trace "cleanup complete exit_code=$exit_code"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -128,16 +134,20 @@ log "  Window:   $WINDOW"
 log "  Interval: ${INTERVAL}s"
 log "  Message:  $MESSAGE"
 log "  Stop with: kill $PID"
+trace "startup pid=$PID ppid=$PPID window=$WINDOW pane=$PANE interval=$INTERVAL pid_file=$PID_FILE log_file=$LOG_FILE"
 
 echo "autonomous_mode.sh started (PID=$PID, window=$WINDOW, interval=${INTERVAL}s)"
 echo "Stop with: kill $PID"
 
 while true; do
+    trace "loop begin pid=$PID window=$WINDOW"
     # tmux-msg.sh owns the full decision matrix (copy mode, draft, user watching)
     RC=0
+    trace "send start target=$WINDOW"
     TMUX_MSG_SENDER="autonomous-mode" \
     TMUX_MSG_SOURCE="script" \
     "$TMUX_MSG" "$WINDOW" "$MESSAGE" >> "$LOG_FILE" 2>&1 || RC=$?
+    trace "send end rc=$RC target=$WINDOW"
     if [[ "$RC" == "0" ]]; then
         log "nudge sent to $WINDOW"
     elif [[ "$RC" == "2" ]]; then
@@ -145,6 +155,12 @@ while true; do
     else
         log "send failed (rc=$RC) on $WINDOW"
     fi
+    trace "sleep start interval=$INTERVAL"
     sleep "$INTERVAL" &
-    wait $! 2>/dev/null || break
+    wait $! 2>/dev/null || {
+        wait_rc=$?
+        trace "sleep wait interrupted rc=$wait_rc"
+        break
+    }
+    trace "sleep complete interval=$INTERVAL"
 done

@@ -553,6 +553,16 @@ function preserveSessionTranscript(sessionId: string, preferredPath: string | nu
   if (resetBackup) {
     candidates.push(resetBackup);
   }
+  // When OC assigns a new UUID to a session whose physical file uses a different name
+  // (e.g. b68db697.jsonl), the UUID-based backup lookup above finds nothing. Fall back
+  // to the most recently modified session file and look for its .reset.* backup.
+  const latestPhysical = findLatestOCSessionFile();
+  if (latestPhysical) {
+    const physBackup = latestResetBackupFromPath(latestPhysical);
+    if (physBackup) {
+      candidates.push(physBackup);
+    }
+  }
   const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
   const sourcePath = deduped.find((candidate) => fs.existsSync(candidate));
   if (!sourcePath) {
@@ -673,6 +683,19 @@ function writeDaemonSignal(
         const backup = latestResetBackupFromPath(resolvedPath);
         if (backup) {
           resolvedPath = backup;
+        } else {
+          // UUID-based path not on disk and no matching backup found. OC may have
+          // assigned a new UUID to a session whose physical file uses a different name
+          // (e.g. b68db697.jsonl). Scan for the most recently modified session file
+          // and look for its .reset.* backup as a last resort.
+          const latestPhysical = findLatestOCSessionFile();
+          if (latestPhysical) {
+            const physBackup = latestResetBackupFromPath(latestPhysical);
+            if (physBackup) {
+              resolvedPath = physBackup;
+              sessionTranscriptPaths.set(sessionId, physBackup);
+            }
+          }
         }
       }
     }

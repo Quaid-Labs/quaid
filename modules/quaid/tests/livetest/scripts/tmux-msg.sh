@@ -74,7 +74,7 @@ fi
 # Resolve target to tmux pane
 case "$TARGET" in
     self)
-        PANE="${TMUX_PANE:-main:4.0}"
+        PANE="${TMUX_PANE:-main:2.0}"
         ;;
     codex-dev)
         PANE="main:1.0"
