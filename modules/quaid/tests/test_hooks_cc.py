@@ -102,6 +102,7 @@ def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     adapter.get_session_path.return_value = None
     adapter.get_sessions_dir.return_value = str(sessions_dir)
     adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
 
     monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
@@ -412,6 +413,8 @@ class TestHookInjectRecallResilience:
 
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "<quaid_project_docs>\n" in context
+        assert "</quaid_project_docs>" in context
         assert "[Quaid Project Docs: recipe-app]" in context
         assert "Authentication uses JWTs and refresh tokens." in context
         assert "api.md" in context

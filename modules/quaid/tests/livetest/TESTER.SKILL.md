@@ -123,6 +123,31 @@ before checking the DB. The extraction pipeline needs time to process.
 
 Exception: CDX extraction is synchronous — see `TESTER.CDX.md`.
 
+### Sanitized Transcript Hygiene Audit
+
+Once your platform has produced at least one real extracted session, run a
+sanitized-transcript spot check during the suite and report any likely system
+leakage as adapter-filter candidates.
+
+What to inspect:
+1. The adapter-parsed / sanitized transcript for one or more recent sessions.
+2. Any remaining lines that look like system or hook chatter rather than real
+   user / assistant conversation.
+
+Good candidates to flag:
+- hook status text
+- hook context dumps
+- notification wrappers or summaries
+- platform UI status lines
+- Quaid-injected context that survived sanitization
+
+Do not patch or fix it yourself. Send a concise STATUS or ISSUE to the
+coordinator listing:
+- the session you inspected
+- the suspicious line(s)
+- why they look like system text
+- whether they appear adapter-specific or generic
+
 ---
 
 ## M0: Agent-Driven Install

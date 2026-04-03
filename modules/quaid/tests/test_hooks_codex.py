@@ -131,6 +131,8 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert context.startswith("<quaid_project_context>\n")
+    assert context.rstrip().endswith("</quaid_project_context>")
     assert "quaid/TOOLS.md" in context
     assert "codex startup docs" in context
     assert ensure_alive_calls == [True]

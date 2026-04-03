@@ -24,6 +24,23 @@ All references to REMOTE_HOST, WORKSPACE, OWNER_NAME, INSTANCE_NAME, and
 TESTER_CLI below are read from `livetest-config.json`. Substitute actual values
 before running any command.
 
+## Transcript Hygiene Audit
+
+During each platform run, require at least one sanitized-transcript audit after
+the platform has produced real extracted sessions.
+
+Goal:
+- catch system or hook chatter that still survives adapter sanitization
+- turn those lines into concrete adapter-filter candidates
+
+Tester should inspect the parsed / sanitized transcript output and report:
+- suspicious line(s)
+- session inspected
+- why the line appears to be system text
+- whether it looks platform-specific or generic Quaid wrapper leakage
+
+Use this as a routine live-test check, not only after a known failure.
+
 ### Confirm your coordinator pane address
 
 Do this before spawning any testers. The script auto-detects the sending pane,

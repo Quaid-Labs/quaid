@@ -87,7 +87,8 @@ def _format_memories(memories: List[Dict]) -> str:
         sim = mem.get("similarity", 0)
         category = mem.get("category", "fact")
         lines.append(f"  {i}. [{category}] {text} (relevance: {sim:.2f})")
-    return "\n".join(lines)
+    body = "\n".join(lines)
+    return f"<quaid_memory_context>\n{body}\n</quaid_memory_context>"
 
 
 def _format_project_docs(docs_bundle: Dict) -> str:
@@ -107,7 +108,10 @@ def _format_project_docs(docs_bundle: Dict) -> str:
         sim = float(chunk.get("similarity") or 0.0)
         label = f" (from {source})" if source else ""
         lines.append(f"  {i}. {text}{label} (relevance: {sim:.2f})")
-    return "\n".join(lines) if len(lines) > 1 else ""
+    if len(lines) <= 1:
+        return ""
+    body = "\n".join(lines)
+    return f"<quaid_project_docs>\n{body}\n</quaid_project_docs>"
 
 
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
@@ -1054,7 +1058,8 @@ def hook_session_init(args):
     if multi_instance_warning:
         sections.insert(0, f"--- SYSTEM WARNING ---\n{multi_instance_warning}")
 
-    content = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
+    body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
+    content = f"<quaid_project_context>\n{body}</quaid_project_context>\n"
 
     if adapter_id == "codex":
         print(json.dumps({

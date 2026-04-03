@@ -57,8 +57,10 @@ CDX extraction is daemon-driven.
   `rolling_flush` events are written to `logs/daemon/rolling-extraction.jsonl`,
   same as OC/CC.
 
-CDX has no `SessionTimeoutManager` integration and no
-`capture.inactivityTimeoutMinutes` effect (M4 SKIP — see below).
+CDX does not use `SessionTimeoutManager`, but the daemon still honors
+`capture.inactivityTimeoutMinutes` through its idle-session timeout path.
+That means CDX gets **timeout extraction** but **not timeout compaction**
+(see M4 below).
 
 ---
 
@@ -94,21 +96,33 @@ ssh REMOTE_HOST 'cat WORKSPACE/shared/run/codex-app-server-broker.pid 2>/dev/nul
 
 ---
 
-## M4 — Timeout Extraction: SKIP
+## M4 — Timeout Extraction
 
-**CDX does not have timeout extraction.** M4 is not applicable to CDX.
+**CDX does have timeout extraction, but not timeout compaction.**
 
-CDX Stop hooks signal the daemon on every turn, but there is no idle-session
-timeout extraction mechanism. `capture.inactivityTimeoutMinutes` has no effect
-on CDX.
+CDX idle extraction comes from the daemon's timeout check, not from a Codex
+session-timeout manager. So M4 still applies to CDX, but the expected signal is
+**extraction only**.
 
-**CDX M4 action:** Skip M4 entirely. Send STATUS to coordinator:
-`"STATUS: M4 SKIP — CDX has no timeout mechanism, extraction is turn-driven."`
+**CDX M4 procedure:**
+1. Set `capture.inactivityTimeoutMinutes` to `1` and restart the CDX daemon:
+   ```bash
+   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+   ```
+2. Start a fresh visible CDX session, state one memorable fact, then let the
+   pane idle for >1 minute without `/new` or `/clear`.
+3. Verify extraction fired:
+   - daemon log shows timeout handling (`daemon-timeout` or equivalent timeout extraction path)
+   - the fact is stored in DB / FTS
+4. Restore the timeout and restart the daemon again:
+   ```bash
+   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+   ```
 
-If you want to verify turn completeness as a substitute, confirm after the
-relevant lifecycle boundary that the fact from that turn appears in the DB.
-Do not assume storage before the daemon's boundary-triggered publish.
-That is sufficient coverage for the CDX extraction path.
+**M4 PASS criteria (CDX):** Timeout fact extracted and stored with no explicit
+lifecycle command. Note in STATUS: `"M4 PASS — timeout extraction verified (no compaction, expected for CDX)."`
 
 ---
 
@@ -151,7 +165,7 @@ as the extraction trigger. Verify `rolling-extraction.jsonl` has `rolling_stage`
 and `rolling_flush` events the same as OC/CC.
 
 ### M4 — Timeout Extraction
-**SKIP.** See dedicated section above.
+See dedicated section above. CDX gets timeout extraction but no timeout compaction.
 
 ### M8 Phase 1 — Project Auto-Creation
 CDX agents generally follow file-placement policy. If Phase 1 fails (agent

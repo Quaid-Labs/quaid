@@ -1920,7 +1920,7 @@ class TestReadTranscriptSlice:
                 "payload": {
                     "type": "message",
                     "role": "developer",
-                    "content": [{"type": "input_text", "text": "[Quaid Project Context]\n\nruntime details"}],
+                    "content": [{"type": "input_text", "text": "<quaid_project_context>\n[Quaid Project Context]\n\nruntime details\n</quaid_project_context>"}],
                 },
             }
         ) + "\n"

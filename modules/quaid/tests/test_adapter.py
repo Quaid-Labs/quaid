@@ -635,10 +635,37 @@ class TestCodexAdapter:
                             "payload": {
                                 "type": "message",
                                 "role": "developer",
-                                "content": [{"type": "input_text", "text": "[Quaid Project Context]\n\nruntime details"}],
+                                "content": [{"type": "input_text", "text": "<quaid_project_context>\n[Quaid Project Context]\n\nruntime details\n</quaid_project_context>"}],
                             },
                         }
                     ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert transcript == ""
+
+    def test_parse_session_jsonl_strips_quaid_memory_context_block(self, tmp_path):
+        path = tmp_path / "rollout-memory-context.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "<quaid_memory_context>\n"
+                                    "[Quaid Memory Context]\n"
+                                    "  1. [fact] Maya lives in South Austin (relevance: 0.91)\n"
+                                    "</quaid_memory_context>"
+                                ),
+                            },
+                        }
+                    )
                 ]
             ),
             encoding="utf-8",
@@ -676,6 +703,39 @@ class TestCodexAdapter:
         transcript = adapter.parse_session_jsonl(path)
         assert "Memory Extraction" not in transcript
         assert "Summary:" not in transcript
+        assert "Nice! February is great for aurora season." in transcript
+
+    def test_parse_session_jsonl_strips_codex_hook_status_block_from_agent_message(self, tmp_path):
+        path = tmp_path / "rollout-hook-status.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "• Running UserPromptSubmit hook: Quaid recalling memory\n\n"
+                                    "UserPromptSubmit hook (completed)\n"
+                                    "  hook context: <quaid_memory_context>\n"
+                                    "[Quaid Memory Context]\n"
+                                    "  1. [fact] Maya lives in South Austin (relevance: 0.91)\n"
+                                    "</quaid_memory_context>\n\n"
+                                    "Nice! February is great for aurora season."
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "Running UserPromptSubmit hook" not in transcript
+        assert "hook context:" not in transcript
+        assert "Maya lives in South Austin" not in transcript
         assert "Nice! February is great for aurora season." in transcript
 
     def test_resolve_stop_hook_signal_returns_none_for_regular_turn(self, tmp_path):

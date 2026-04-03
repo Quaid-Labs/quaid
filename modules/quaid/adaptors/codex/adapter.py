@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,20 @@ def _now_iso() -> str:
 
 class CodexAdapter(QuaidAdapter):
     """Adapter for Codex CLI/app sessions."""
+
+    _HOOK_STATUS_LINE_RE = re.compile(
+        r"^\s*(?:•\s*)?(?:Running\s+)?(?:SessionStart|UserPromptSubmit|Stop)\s+hook(?::|\s+\(completed\)).*$",
+        flags=re.IGNORECASE,
+    )
+    _HOOK_CONTEXT_LINE_RE = re.compile(
+        r"^\s*hook\s+(?:context|output):.*$",
+        flags=re.IGNORECASE,
+    )
+    _PROMPT_MARKER_RE = re.compile(r"^\s*[›>]\s*")
+    _QUAID_WRAPPER_LINE_RE = re.compile(
+        r"^\s*(?:</?quaid_[a-z_]+>|(?:\[Quaid (?:Memory Context|Project Context|Project Docs)|# Quaid Project Context)).*$",
+        flags=re.IGNORECASE,
+    )
 
     def __init__(self, home: Optional[Path] = None):
         self._home = home
@@ -246,6 +261,35 @@ class CodexAdapter(QuaidAdapter):
         ):
             return True
         return False
+
+    def sanitize_transcript_text(self, text: str) -> str:
+        value = super().sanitize_transcript_text(text)
+        if not value:
+            return ""
+        lines = value.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if not (self._HOOK_STATUS_LINE_RE.match(line) or self._HOOK_CONTEXT_LINE_RE.match(line)):
+                break
+            i += 1
+            while i < len(lines):
+                next_line = lines[i]
+                stripped = next_line.strip()
+                if not stripped:
+                    i += 1
+                    continue
+                if self._HOOK_STATUS_LINE_RE.match(next_line) or self._HOOK_CONTEXT_LINE_RE.match(next_line):
+                    i += 1
+                    continue
+                if self._QUAID_WRAPPER_LINE_RE.match(next_line):
+                    i += 1
+                    continue
+                if next_line.startswith("  ") and not self._PROMPT_MARKER_RE.match(next_line):
+                    i += 1
+                    continue
+                break
+        return "\n".join(lines[i:]).strip()
 
     @staticmethod
     def _extract_lifecycle_command(text: str) -> str:

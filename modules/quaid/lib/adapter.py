@@ -54,9 +54,16 @@ class ChannelInfo:
 class QuaidAdapter(abc.ABC):
     """Abstract interface for platform-specific behavior."""
 
+    _QUAID_TRANSCRIPT_METADATA_BLOCK_TAGS = (
+        "quaid_project_context",
+        "quaid_memory_context",
+        "quaid_project_docs",
+    )
     _QUAID_TRANSCRIPT_METADATA_PREFIXES = (
         "[Quaid Project Context]",
         "[Quaid Memory Context]",
+        "[Quaid Project Docs",
+        "# Quaid Project Context",
     )
 
     # ---- Paths ----
@@ -285,8 +292,27 @@ class QuaidAdapter(abc.ABC):
             remainder = remainder[3:].lstrip()
         return remainder.strip()
 
+    @classmethod
+    def strip_quaid_metadata_blocks(cls, text: str) -> str:
+        value = str(text or "").strip()
+        if not value:
+            return ""
+        for tag in cls._QUAID_TRANSCRIPT_METADATA_BLOCK_TAGS:
+            start_tag = f"<{tag}>"
+            end_tag = f"</{tag}>"
+            if value.startswith(start_tag):
+                end_idx = value.find(end_tag)
+                if end_idx < 0:
+                    return ""
+                remainder = value[end_idx + len(end_tag):].lstrip()
+                if remainder.startswith("---"):
+                    remainder = remainder[3:].lstrip()
+                value = remainder.strip()
+        return value
+
     def sanitize_transcript_text(self, text: str) -> str:
         value = self.strip_quaid_notification_block(text)
+        value = self.strip_quaid_metadata_blocks(value)
         if any(value.startswith(prefix) for prefix in self._QUAID_TRANSCRIPT_METADATA_PREFIXES):
             return ""
         return value.strip()
