@@ -36,8 +36,22 @@ class CodexAdapter(QuaidAdapter):
     )
     _PROMPT_MARKER_RE = re.compile(r"^\s*[›>]\s*")
     _QUAID_WRAPPER_LINE_RE = re.compile(
-        r"^\s*(?:</?quaid_[a-z_]+>|(?:\[Quaid (?:Memory Context|Project Context|Project Docs)|# Quaid Project Context)).*$",
+        r"^\s*(?:</?quaid_[a-z_]+>|(?:\[Quaid (?:Memory Context|Project Context|Project Docs|Warning|runtime)|# Quaid Project Context)).*$",
         flags=re.IGNORECASE,
+    )
+    # CDX-specific noise lines that survive the leading-block strip and appear
+    # mid-transcript: CLAUDE.md section dividers, numbered recall items with
+    # relevance scores, and doc-attribution parentheticals.
+    _CDX_INLINE_NOISE_RE = re.compile(
+        r"""
+        ^\s*---\ [^\s].*\.md\ ---\s*$          # --- FILENAME.md --- section dividers
+        | ^\s+\d+\.\ \[(?:fact|event|docs       # numbered recall/doc items with
+               |person|pet|preference|entity    #   relevance score suffix
+               |concept)\].*\(relevance:\ [\d.]+\).*$
+        | ^\s*\(from\ [^\)]+\.md\)\s*$          # (from filename.md) attribution tags
+        | ^\s*\(relevance:\ [\d.]+\)\s*$        # standalone relevance annotations
+        """,
+        flags=re.VERBOSE | re.IGNORECASE,
     )
 
     def __init__(self, home: Optional[Path] = None):
@@ -267,29 +281,28 @@ class CodexAdapter(QuaidAdapter):
         if not value:
             return ""
         lines = value.splitlines()
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if not (self._HOOK_STATUS_LINE_RE.match(line) or self._HOOK_CONTEXT_LINE_RE.match(line)):
-                break
-            i += 1
-            while i < len(lines):
-                next_line = lines[i]
-                stripped = next_line.strip()
+        # Strip any hook/Quaid-injection blocks wherever they appear in the text.
+        # A block starts with a hook-status or Quaid-wrapper line and extends
+        # through following indented or blank lines.
+        cleaned: list[str] = []
+        in_quaid_block = False
+        for line in lines:
+            is_hook = self._HOOK_STATUS_LINE_RE.match(line) or self._HOOK_CONTEXT_LINE_RE.match(line)
+            is_wrapper = self._QUAID_WRAPPER_LINE_RE.match(line)
+            if is_hook or is_wrapper:
+                in_quaid_block = True
+                continue
+            if in_quaid_block:
+                stripped = line.strip()
                 if not stripped:
-                    i += 1
                     continue
-                if self._HOOK_STATUS_LINE_RE.match(next_line) or self._HOOK_CONTEXT_LINE_RE.match(next_line):
-                    i += 1
+                if line.startswith("  ") and not self._PROMPT_MARKER_RE.match(line):
                     continue
-                if self._QUAID_WRAPPER_LINE_RE.match(next_line):
-                    i += 1
-                    continue
-                if next_line.startswith("  ") and not self._PROMPT_MARKER_RE.match(next_line):
-                    i += 1
-                    continue
-                break
-        return "\n".join(lines[i:]).strip()
+                in_quaid_block = False
+            if self._CDX_INLINE_NOISE_RE.match(line):
+                continue
+            cleaned.append(line)
+        return "\n".join(cleaned).strip()
 
     @staticmethod
     def _extract_lifecycle_command(text: str) -> str:
