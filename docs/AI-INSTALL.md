@@ -30,6 +30,12 @@ Concrete rule for local guides:
 
 Do not collapse that to `cd ~/quaid`.
 
+Workspace rule:
+- use the workspace path exactly as provided by the human / test prompt
+- do not rewrite, canonicalize, or substitute it with sandbox-style defaults
+- if the prompt gives an absolute workspace path, pass that exact absolute path
+- do not silently change it to a sandbox/home-default path or any other substitute
+
 ## Human Instructions for Agent (Copy/Paste)
 
 Use this exact minimal prompt shape when asking an AI agent to install Quaid:
@@ -118,6 +124,8 @@ If the target platform is already known from the current agent/session, pass it 
 If the guide path is local, use that checkout directly and do not inspect CLI
 arguments to prove that local source is allowed.
 For the live-test prompt path, `~/quaid/dev/docs/AI-INSTALL.md` means the command
+must run from `~/quaid/dev`, and the workspace argument must stay exactly as provided
+in the prompt.
 must run from `~/quaid/dev`.
 
 ## First Response Template (Mandatory)
