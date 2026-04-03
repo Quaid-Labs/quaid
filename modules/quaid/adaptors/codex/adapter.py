@@ -41,7 +41,8 @@ class CodexAdapter(QuaidAdapter):
     )
     # CDX-specific noise lines that survive the leading-block strip and appear
     # mid-transcript: CLAUDE.md section dividers, numbered recall items with
-    # relevance scores, and doc-attribution parentheticals.
+    # relevance scores, doc-attribution parentheticals, and unindented
+    # [Quaid runtime] metadata fields (instance:, active domains:, etc.).
     _CDX_INLINE_NOISE_RE = re.compile(
         r"""
         ^\s*---\ [^\s].*\.md\ ---\s*$          # --- FILENAME.md --- section dividers
@@ -50,6 +51,10 @@ class CodexAdapter(QuaidAdapter):
                |concept)\].*\(relevance:\ [\d.]+\).*$
         | ^\s*\(from\ [^\)]+\.md\)\s*$          # (from filename.md) attribution tags
         | ^\s*\(relevance:\ [\d.]+\)\s*$        # standalone relevance annotations
+        | ^\s*instance:\ \S.*$                  # [Quaid runtime] block: instance field
+        | ^\s*active\ domains:\ \w.*$           # [Quaid runtime] block: domains list
+        | ^\s*active\ graph\ relation\ types:   # [Quaid runtime] block: graph types
+        | ^\s*runtime\ note:\ .*$              # [Quaid runtime] block: runtime note
         """,
         flags=re.VERBOSE | re.IGNORECASE,
     )
