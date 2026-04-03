@@ -88,7 +88,7 @@ def _format_memories(memories: List[Dict]) -> str:
         category = mem.get("category", "fact")
         lines.append(f"  {i}. [{category}] {text} (relevance: {sim:.2f})")
     body = "\n".join(lines)
-    return f"<quaid_memory_context>\n{body}\n</quaid_memory_context>"
+    return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
 
 
 def _format_project_docs(docs_bundle: Dict) -> str:
@@ -111,7 +111,7 @@ def _format_project_docs(docs_bundle: Dict) -> str:
     if len(lines) <= 1:
         return ""
     body = "\n".join(lines)
-    return f"<quaid_project_docs>\n{body}\n</quaid_project_docs>"
+    return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
 
 
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
@@ -756,22 +756,22 @@ def _check_janitor_health() -> str:
                 if checkpoints:
                     checkpoint = checkpoints[-1]
                 else:
-                    return "[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply"
+                    return "<quaid_system_message>\n[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply\n</quaid_system_message>"
             else:
-                return "[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply"
+                return "<quaid_system_message>\n[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply\n</quaid_system_message>"
 
         import json as _json
         data = _json.loads(checkpoint.read_text(encoding="utf-8"))
         last_ts = data.get("last_completed_at", "")
         if not last_ts:
-            return "[Quaid Warning] Janitor has never completed successfully."
+            return "<quaid_system_message>\n[Quaid Warning] Janitor has never completed successfully.\n</quaid_system_message>"
 
         from datetime import datetime, timezone
         last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
         age_hours = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
         if age_hours > 24:
             age_display = f"{age_hours / 24:.0f} days" if age_hours > 48 else f"{age_hours:.0f} hours"
-            return f"[Quaid Warning] Janitor last ran {age_display} ago. Stale janitor causes memory/doc drift. Run: quaid janitor --task all --apply"
+            return f"<quaid_system_message>\n[Quaid Warning] Janitor last ran {age_display} ago. Stale janitor causes memory/doc drift. Run: quaid janitor --task all --apply\n</quaid_system_message>"
     except Exception:
         pass
     return ""
@@ -1059,7 +1059,7 @@ def hook_session_init(args):
         sections.insert(0, f"--- SYSTEM WARNING ---\n{multi_instance_warning}")
 
     body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
-    content = f"<quaid_project_context>\n{body}</quaid_project_context>\n"
+    content = f"<quaid_system_message>\n{body}</quaid_system_message>\n"
 
     if adapter_id == "codex":
         print(json.dumps({

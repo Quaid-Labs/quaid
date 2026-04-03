@@ -118,8 +118,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
         body = "\n".join(f"• {n}" for n in notes)
         return (
-            "Print <quaid_notification> verbatim before your response, then print ---\n\n"
-            f"<quaid_notification>\n{body}\n</quaid_notification>"
+            "The following are pending notifications for the user — please relay them in your response:\n\n"
+            f"<quaid_system_message>\n{body}\n</quaid_system_message>"
         )
 
     def get_last_channel(self, session_key: str = "") -> None:

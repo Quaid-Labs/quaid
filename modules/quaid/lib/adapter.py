@@ -54,16 +54,12 @@ class ChannelInfo:
 class QuaidAdapter(abc.ABC):
     """Abstract interface for platform-specific behavior."""
 
-    _QUAID_TRANSCRIPT_METADATA_BLOCK_TAGS = (
-        "quaid_project_context",
-        "quaid_memory_context",
-        "quaid_project_docs",
-    )
-    _QUAID_TRANSCRIPT_METADATA_PREFIXES = (
-        "[Quaid Project Context]",
-        "[Quaid Memory Context]",
-        "[Quaid Project Docs",
-        "# Quaid Project Context",
+    # Strips all <quaid_system_message>...</quaid_system_message> blocks within
+    # a single message. re.DOTALL so multi-line blocks are caught. Applied
+    # per-message so it never spans message boundaries.
+    _QUAID_SYSTEM_MESSAGE_RE = re.compile(
+        r"<quaid_system_message>.*?</quaid_system_message>",
+        flags=re.DOTALL,
     )
 
     # ---- Paths ----
@@ -275,47 +271,19 @@ class QuaidAdapter(abc.ABC):
         """Adapter-specific transcript noise filtering."""
         return self.filter_system_messages(text)
 
-    @staticmethod
-    def strip_quaid_notification_block(text: str) -> str:
-        value = str(text or "").strip()
-        if value.startswith("<quaid_notification>"):
-            end_tag = "</quaid_notification>"
-        elif value.startswith("<notification>"):
-            end_tag = "</notification>"
-        else:
-            return value
-        end_idx = value.find(end_tag)
-        if end_idx < 0:
-            return value
-        remainder = value[end_idx + len(end_tag):].lstrip()
-        if remainder.startswith("---"):
-            remainder = remainder[3:].lstrip()
-        return remainder.strip()
-
     @classmethod
-    def strip_quaid_metadata_blocks(cls, text: str) -> str:
+    def strip_quaid_system_messages(cls, text: str) -> str:
+        """Strip all <quaid_system_message>...</quaid_system_message> blocks within text.
+
+        Applied per-message so it never spans message boundaries.
+        """
         value = str(text or "").strip()
         if not value:
             return ""
-        for tag in cls._QUAID_TRANSCRIPT_METADATA_BLOCK_TAGS:
-            start_tag = f"<{tag}>"
-            end_tag = f"</{tag}>"
-            if value.startswith(start_tag):
-                end_idx = value.find(end_tag)
-                if end_idx < 0:
-                    return ""
-                remainder = value[end_idx + len(end_tag):].lstrip()
-                if remainder.startswith("---"):
-                    remainder = remainder[3:].lstrip()
-                value = remainder.strip()
-        return value
+        return cls._QUAID_SYSTEM_MESSAGE_RE.sub("", value).strip()
 
     def sanitize_transcript_text(self, text: str) -> str:
-        value = self.strip_quaid_notification_block(text)
-        value = self.strip_quaid_metadata_blocks(value)
-        if any(value.startswith(prefix) for prefix in self._QUAID_TRANSCRIPT_METADATA_PREFIXES):
-            return ""
-        return value.strip()
+        return self.strip_quaid_system_messages(text)
 
     def build_transcript(self, messages: List[Dict]) -> str:
         """Format role/content messages into a normalized transcript."""
