@@ -45,7 +45,7 @@ Use this exact minimal prompt shape when asking an AI agent to install Quaid:
 
 1. Read `docs/AI-INSTALL.md` first and follow it exactly.
 2. Include and obey the mandatory first command from that guide before doing anything else.
-2. Install Quaid for me using this workspace, instance name, and owner name.
+2. Install Quaid for me using this workspace, platform/adapter, instance name, and owner name.
 3. Tell me when install is complete and `quaid doctor` is healthy.
 
 Do not duplicate the survey contract, defaults, or approval flow in the human's
@@ -61,7 +61,7 @@ Execution order is mandatory:
 3. Wait for human approval or edits.
 4. Only then run install.
 
-If workspace, adapter/platform, and owner are already supplied in the prompt,
+If workspace, adapter/platform, instance name, and owner are already supplied in the prompt,
 do not loop on Step 1. Read enough to run the mandatory first command, then run it.
 
 Do not keep browsing, planning, or exploring code after you already have enough
@@ -134,7 +134,7 @@ Allowed pre-survey probes are limited to what is needed to fill the survey accur
 - `vm_stat`
 - `sysctl -n hw.memsize`
 
-If the prompt already gives you the workspace, instance, and owner, do not spend time rediscovering them.
+If the prompt already gives you the workspace, adapter/platform, instance, and owner, do not spend time rediscovering them.
 If the target platform is already known from the current agent/session, pass it explicitly with `--adapter`.
 If the guide path is local, use that checkout directly and do not inspect CLI
 arguments to prove that local source is allowed.

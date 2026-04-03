@@ -250,6 +250,7 @@ Tell the platform pane:
 >
 > Use these parameters:
 > - Workspace: WORKSPACE
+> - Adapter/platform: PLATFORM
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
