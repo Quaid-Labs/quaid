@@ -2641,10 +2641,15 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
     signal.signal(signal.SIGINT, handle_sigterm)
 
     last_idle_check = 0.0
+    last_orphan_sweep = 0.0
     last_stale_doc_check = 0.0
     last_embed_retry_check = 0.0
     _STALE_DOC_CHECK_INTERVAL = 60.0  # check for stale docs every 60s
     _EMBED_RETRY_INTERVAL = 300.0  # retry missing embeddings every 5 minutes
+    # Orphan sweep interval: flush carry_facts for sessions that ended without a
+    # session_end signal (e.g. Codex /new which creates a new session_id without
+    # firing the Stop hook for the previous session).
+    _ORPHAN_SWEEP_INTERVAL = 30.0
 
     # Initialize version watcher and janitor scheduler
     from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
@@ -2726,6 +2731,17 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
+
+            # Periodic orphan sweep — flush carry_facts for sessions whose cursors
+            # are at end but never received a session_end signal (e.g. Codex /new).
+            if now - last_orphan_sweep > _ORPHAN_SWEEP_INTERVAL:
+                try:
+                    swept = sweep_orphaned_sessions()
+                    if swept:
+                        logger.info("daemon orphan sweep: flushed %d orphaned session(s)", swept)
+                except Exception as e:
+                    logger.error("orphan sweep failed: %s", e)
+                last_orphan_sweep = now
 
             # Janitor scheduler tick — checks if maintenance is due
             try:
