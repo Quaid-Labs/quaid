@@ -22,6 +22,14 @@ checkout, that checkout is the install source. Run the command from that repo.
 Do not inspect installer flags just to confirm local-source behavior.
 `--source local` is already the default.
 
+Concrete rule for local guides:
+- if the guide path is `~/quaid/dev/docs/AI-INSTALL.md`
+- then the repo root is `~/quaid/dev`
+- so the mandatory first command must start with:
+  - `cd ~/quaid/dev && node setup-quaid.mjs ...`
+
+Do not collapse that to `cd ~/quaid`.
+
 ## Human Instructions for Agent (Copy/Paste)
 
 Use this exact minimal prompt shape when asking an AI agent to install Quaid:
@@ -109,6 +117,8 @@ If the prompt already gives you the workspace, instance, and owner, do not spend
 If the target platform is already known from the current agent/session, pass it explicitly with `--adapter`.
 If the guide path is local, use that checkout directly and do not inspect CLI
 arguments to prove that local source is allowed.
+For the live-test prompt path, `~/quaid/dev/docs/AI-INSTALL.md` means the command
+must run from `~/quaid/dev`.
 
 ## First Response Template (Mandatory)
 
