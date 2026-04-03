@@ -3,7 +3,7 @@
 
   "remote": {
     "host": "your-test-machine.local",
-    "workspace": "~/quaid"
+    "workspace": "/absolute/path/to/quaid"
   },
 
   "owner_name": "Your Name",

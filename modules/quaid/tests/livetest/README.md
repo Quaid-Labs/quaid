@@ -113,7 +113,7 @@ The remote host needs:
    | Key | What to set |
    |-----|-------------|
    | `remote.host` | SSH hostname of your test machine (e.g. `testbox.local`) |
-   | `remote.workspace` | Quaid workspace root on the remote (default `~/quaid`) |
+   | `remote.workspace` | Quaid workspace root on the remote. Use an absolute path, not `~` shorthand. |
    | `owner_name` | Your name — written into the Quaid identity files at install time |
    | `tester.cli` | Command used to start tester agents (default `codex --yolo`) |
    | `tester.model` | Model for tester agents (default `gpt-5.1-codex-mini`) |
