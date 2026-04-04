@@ -200,6 +200,8 @@ def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypat
     assert "deferred maintenance notices waiting" in context
     assert "background extraction daemon failed to start" in context
     assert "recovered 2 orphaned prior session(s)" in context
+    assert "daemon offline" not in context
+    assert "Error type: RuntimeError" in context
 
 
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):

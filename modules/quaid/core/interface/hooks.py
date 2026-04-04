@@ -125,6 +125,12 @@ def _format_direct_agent_notices(messages: List[str]) -> str:
     )
 
 
+def _safe_agent_error(exc: Exception) -> str:
+    """Summarize hook/runtime exceptions without dumping raw internals into context."""
+    err_type = type(exc).__name__ or "Error"
+    return f"Error type: {err_type}. Check Quaid logs for details."
+
+
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     if doc_file != "TOOLS.md":
         return content
@@ -387,7 +393,7 @@ def hook_inject(args):
         direct_notices.append(
             "Quaid's background extraction daemon failed to start. "
             "New memories may not be processed until Quaid recovers. "
-            f"Error: {e}"
+            f"{_safe_agent_error(e)}"
         )
 
     # Ensure a cursor exists for this session so the daemon can discover it
@@ -943,7 +949,7 @@ def hook_session_init(args):
             startup_notices.append(
                 "Quaid's background extraction daemon failed to start. "
                 "New memories may not be processed until Quaid recovers. "
-                f"Error: {e}"
+                f"{_safe_agent_error(e)}"
             )
         swept = sweep_orphaned_sessions(current_session_id)
         if swept:
@@ -958,7 +964,7 @@ def hook_session_init(args):
         startup_notices.append(
             "Quaid hit an orphan-session recovery error during startup. "
             "Recent memories from a previous session may still be pending. "
-            f"Error: {e}"
+            f"{_safe_agent_error(e)}"
         )
 
     # Warn when multiple agents share the same instance silo. This setup is

@@ -752,8 +752,8 @@ def main():
         parser.error("--deferred-status and --deferred-drain are mutually exclusive")
 
     if args.deferred_status:
-        status = get_deferred_notice_status()
-        items = list_deferred_notices(limit=args.limit)
+        status = get_deferred_notice_status(limit=args.limit, include_items=True)
+        items = status.get("items", [])
         payload = {
             "pending_count": status.get("pending_count", 0),
             "kinds": status.get("kinds", {}),

@@ -81,13 +81,16 @@ def get_llm_provider(model_tier: Optional[str] = None) -> "LLMProvider":
         return get_adapter().get_llm_provider(model_tier=model_tier)
     except Exception as exc:
         tier = str(model_tier or "default").strip() or "default"
-        _notify_agent(
-            f"Quaid could not access its {tier} language model provider: {exc}",
-            severity="error",
-            source="provider",
-            dedupe_key=f"llm-provider:{tier}:{type(exc).__name__}:{str(exc).strip()}",
-            ttl_seconds=900,
-        )
+        try:
+            _notify_agent(
+                f"Quaid could not access its {tier} language model provider: {exc}",
+                severity="error",
+                source="provider",
+                dedupe_key=f"llm-provider:{tier}:{type(exc).__name__}:{str(exc).strip()}",
+                ttl_seconds=900,
+            )
+        except Exception as notify_exc:
+            logger.warning("Failed surfacing provider access error to agent: %s", notify_exc)
         raise
 
 

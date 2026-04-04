@@ -133,6 +133,16 @@ def _priority_rank(priority: str) -> int:
     return 1
 
 
+def _sort_deferred_notices(notices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    notices.sort(
+        key=lambda item: (
+            -_priority_rank(str(item.get("priority") or "normal")),
+            str(item.get("created_at") or ""),
+        )
+    )
+    return notices
+
+
 def _trim_deferred_notices(notices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if len(notices) <= _MAX_DEFERRED_NOTICES:
         return notices
@@ -279,8 +289,7 @@ def list_deferred_notices(
             continue
         notices.append(dict(item))
 
-    notices.sort(key=lambda item: str(item.get("created_at") or ""))
-    return notices[: max(1, min(int(limit), 500))]
+    return _sort_deferred_notices(notices)[: max(1, min(int(limit), 500))]
 
 
 def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
@@ -297,12 +306,7 @@ def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
             item for item in requests
             if isinstance(item, dict) and str(item.get("status") or "pending").strip().lower() == "pending"
         ]
-        pending.sort(
-            key=lambda item: (
-                -_priority_rank(str(item.get("priority") or "normal")),
-                str(item.get("created_at") or ""),
-            )
-        )
+        _sort_deferred_notices(pending)
         target_ids = {
             str(item.get("id") or "")
             for item in pending[: max(1, min(int(limit), 500))]
@@ -329,17 +333,15 @@ def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
         updated.sort(key=lambda item: str(item.get("created_at") or ""))
         _write_json(path, {"version": 1, "requests": _trim_deferred_notices(updated)})
 
-    drained.sort(
-        key=lambda item: (
-            -_priority_rank(str(item.get("priority") or "normal")),
-            str(item.get("created_at") or ""),
-        )
-    )
-    return drained
+    return _sort_deferred_notices(drained)
 
 
-def get_deferred_notice_status() -> dict[str, Any]:
-    notices = list_deferred_notices(status="pending", limit=500)
+def get_deferred_notice_status(
+    *,
+    limit: int = 500,
+    include_items: bool = False,
+) -> dict[str, Any]:
+    notices = list_deferred_notices(status="pending", limit=limit)
     kinds: dict[str, int] = {}
     priorities: dict[str, int] = {}
     for item in notices:
@@ -348,12 +350,14 @@ def get_deferred_notice_status() -> dict[str, Any]:
         kinds[kind] = kinds.get(kind, 0) + 1
         priorities[priority] = priorities.get(priority, 0) + 1
 
-    return {
+    payload = {
         "pending_count": len(notices),
         "kinds": kinds,
         "priorities": priorities,
-        "items": notices,
     }
+    if include_items:
+        payload["items"] = notices
+    return payload
 
 
 def format_deferred_notice_hint() -> str:

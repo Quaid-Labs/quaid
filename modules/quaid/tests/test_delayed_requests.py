@@ -183,10 +183,12 @@ def test_deferred_status_and_hint_reflect_pending_requests(clean_adapter):
     queue_deferred_notice("janitor summary", kind="janitor_summary", priority="low")
     queue_deferred_notice("provider outage recap", kind="provider", priority="high")
 
-    status = get_deferred_notice_status()
+    status = get_deferred_notice_status(include_items=True)
     assert status["pending_count"] == 2
     assert status["kinds"]["janitor_summary"] == 1
     assert status["kinds"]["provider"] == 1
+    assert status["items"][0]["kind"] == "provider"
+    assert status["items"][1]["kind"] == "janitor_summary"
 
     hint = format_deferred_notice_hint()
     assert "deferred maintenance notices" in hint
