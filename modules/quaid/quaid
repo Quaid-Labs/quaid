@@ -215,6 +215,10 @@ else:
 " "$@"
     ;;
 
+  notify)
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/runtime/notify.py" "$@"
+    ;;
+
 # Everything else goes to memory_graph.py
 store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|backfill-hashes|health|event)
     exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
@@ -366,6 +370,7 @@ PYEOF
     echo "Maintenance:"
     echo "  janitor [args]       Run janitor pipeline"
     echo "  daemon [cmd]         Extraction daemon (start|stop|status|run)"
+    echo "  notify [args]        Active + deferred operator notifications"
     echo ""
     echo "Docs:"
     echo "  docs list            List registered docs"

@@ -11,6 +11,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 from lib.adapter import get_adapter
+from lib.agent_notice import (
+    drain_deferred_notices as _drain_deferred_notices,
+    format_deferred_notice_hint as _format_deferred_notice_hint,
+    get_deferred_notice_status as _get_deferred_notice_status,
+    list_deferred_notices as _list_deferred_notices,
+    notify_agent as _notify_agent,
+    queue_deferred_notice as _queue_deferred_notice,
+)
 from lib.fail_policy import is_fail_hard_enabled
 
 if TYPE_CHECKING:
@@ -69,7 +77,18 @@ def get_bootstrap_markdown_globs() -> List[str]:
 
 
 def get_llm_provider(model_tier: Optional[str] = None) -> "LLMProvider":
-    return get_adapter().get_llm_provider(model_tier=model_tier)
+    try:
+        return get_adapter().get_llm_provider(model_tier=model_tier)
+    except Exception as exc:
+        tier = str(model_tier or "default").strip() or "default"
+        _notify_agent(
+            f"Quaid could not access its {tier} language model provider: {exc}",
+            severity="error",
+            source="provider",
+            dedupe_key=f"llm-provider:{tier}:{type(exc).__name__}:{str(exc).strip()}",
+            ttl_seconds=900,
+        )
+        raise
 
 
 def parse_session_jsonl(path: Path) -> str:
@@ -93,5 +112,71 @@ def send_notification(
     *,
     channel_override: Optional[str] = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> bool:
-    return get_adapter().notify(message, channel_override=channel_override, dry_run=dry_run)
+    return get_adapter().notify(
+        message,
+        channel_override=channel_override,
+        dry_run=dry_run,
+        force=force,
+    )
+
+
+def notify_agent(
+    message: str,
+    *,
+    severity: str = "warning",
+    source: str = "",
+    dedupe_key: Optional[str] = None,
+    ttl_seconds: int = 3600,
+    channel_override: Optional[str] = None,
+    dry_run: bool = False,
+    force: bool = False,
+) -> bool:
+    return _notify_agent(
+        message,
+        severity=severity,
+        source=source,
+        dedupe_key=dedupe_key,
+        ttl_seconds=ttl_seconds,
+        channel_override=channel_override,
+        dry_run=dry_run,
+        force=force,
+    )
+
+
+def queue_deferred_notice(
+    message: str,
+    *,
+    kind: str = "janitor",
+    priority: str = "normal",
+    source: str = "quaid",
+    dedupe_key: Optional[str] = None,
+) -> bool:
+    return _queue_deferred_notice(
+        message,
+        kind=kind,
+        priority=priority,
+        source=source,
+        dedupe_key=dedupe_key,
+    )
+
+
+def list_deferred_notices(
+    *,
+    status: str = "pending",
+    limit: int = 50,
+) -> List[Dict]:
+    return _list_deferred_notices(status=status, limit=limit)
+
+
+def drain_deferred_notices(*, limit: int = 50) -> List[Dict]:
+    return _drain_deferred_notices(limit=limit)
+
+
+def get_deferred_notice_status() -> Dict:
+    return _get_deferred_notice_status()
+
+
+def format_deferred_notice_hint() -> str:
+    return _format_deferred_notice_hint()

@@ -984,7 +984,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function queueDelayedRequest(request: DelayedRequestInput): boolean {
     const requestsPath = String(
-      request?.requestsPath || path.join(deps.workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json"),
+      request?.requestsPath || path.join(deps.workspace, ".runtime", "notes", "delayed-llm-requests.json"),
     );
     const message = String(request?.message || "").trim();
     const kind = String(request?.kind || "janitor");

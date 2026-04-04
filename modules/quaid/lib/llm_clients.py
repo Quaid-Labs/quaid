@@ -29,7 +29,7 @@ import urllib.error
 from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_pool import acquire_llm_slot
 from lib.providers import LLMResult
-from lib.runtime_context import get_llm_provider
+from lib.runtime_context import get_llm_provider, notify_agent
 from prompt_sets import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,17 @@ class ProviderUnavailableError(Exception):
     provider outages — ensure_alive auto-restarts it on the next hook call (which
     can only happen when the provider is back, since the user can't chat without it).
     """
+
+
+def _short_error_text(exc: Exception | None, *, max_len: int = 240) -> str:
+    if exc is None:
+        text = "unknown error"
+    else:
+        text = str(exc or "").strip() or type(exc).__name__
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
+
 
 # Timeouts (seconds)
 # Allow runtime overrides for bounded e2e/CI lanes without changing defaults.
@@ -664,6 +675,19 @@ def call_llm(system_prompt: str, user_message: str,
         _is_provider_outage = last_error.code in _RETRYABLE_HTTP_CODES
 
     if _is_provider_outage:
+        notify_agent(
+            (
+                f"Quaid could not reach its {resolved_tier} provider "
+                f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
+            ),
+            severity="error",
+            source="provider",
+            dedupe_key=(
+                f"llm-outage:{provider_name}:{resolved_tier}:{model}:"
+                f"{getattr(last_error, 'code', type(last_error).__name__) if last_error is not None else 'unknown'}"
+            ),
+            ttl_seconds=900,
+        )
         if is_fail_hard_enabled():
             err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
             raise RuntimeError(

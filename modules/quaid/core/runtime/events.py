@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from core.ingest_runtime import run_docs_ingest, run_session_logs_ingest
 from core.runtime.paths import get_runtime_root
+from lib.runtime_context import queue_deferred_notice
 from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
@@ -83,21 +84,21 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": "notification.delayed",
-        "description": "Queue delayed notification/request for later user-facing handling.",
+        "description": "Queue deferred operator notice for later explicit retrieval.",
         "fireable": True,
         "processable": True,
         "listenable": True,
         "delivery_mode": "passive",
-        "delivery_notes": "Do not force immediate processing; handled asynchronously via delayed request flow.",
+        "delivery_notes": "Buffered until the active agent explicitly drains deferred notices.",
     },
     {
         "name": "memory.force_compaction",
-        "description": "Request compaction via delayed request queue.",
+        "description": "Request compaction via deferred notice queue.",
         "fireable": True,
         "processable": True,
         "listenable": True,
         "delivery_mode": "passive",
-        "delivery_notes": "Compaction requests are queued for later user/heartbeat handling.",
+        "delivery_notes": "Compaction requests are buffered for later explicit operator handling.",
     },
     {
         "name": "docs.ingest_transcript",
@@ -322,42 +323,16 @@ def _next_event_id(name: str, ts: str) -> str:
     return "evt-" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")[:24]
 
 
-def _make_request_id(kind: str, message: str) -> str:
-    return f"{kind}-" + base64.b64encode(message.encode("utf-8")).decode("ascii")[:16]
-
-
 def _queue_delayed_llm_request(message: str, kind: str = "janitor", priority: str = "normal", source: str = "quaid_events") -> bool:
     message = str(message or "").strip()
     if not message:
         return False
-    paths = _event_paths()
-    rid = _make_request_id(kind, message)
-    queued = False
-
-    def _mutate(payload: Any) -> Any:
-        nonlocal queued
-        base = payload if isinstance(payload, dict) else {"version": 1, "requests": []}
-        requests = base.get("requests")
-        if not isinstance(requests, list):
-            requests = []
-        for item in requests:
-            if isinstance(item, dict) and item.get("id") == rid and item.get("status") == "pending":
-                queued = False
-                return {"version": 1, "requests": requests}
-        requests.append({
-            "id": rid,
-            "created_at": _now(),
-            "source": source,
-            "kind": kind,
-            "priority": priority,
-            "status": "pending",
-            "message": message,
-        })
-        queued = True
-        return {"version": 1, "requests": requests}
-
-    _read_modify_write_json(paths["delayed_llm_requests"], {"version": 1, "requests": []}, _mutate)
-    return queued
+    return queue_deferred_notice(
+        message,
+        kind=kind,
+        priority=priority,
+        source=source,
+    )
 
 
 def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:

@@ -117,7 +117,13 @@ quaid janitor --task all --dry-run
 quaid janitor --task all --apply              # add --approve when applyMode=ask
 quaid doctor
 quaid updater doc-health <project> [--dry-run]
+quaid notify --deferred-status                # inspect buffered janitor/update notices
+quaid notify --deferred-drain                 # fetch buffered notices when a human user is active
 ```
+
+- Deferred notices are non-urgent system messages from janitor, update checks, and similar background work.
+- Do not drain deferred notices unless you are confident a human user is active and can see the response.
+- Active outage/failure notices use the normal live notification path and should be relayed when surfaced.
 
 ---
 

@@ -613,24 +613,24 @@ def _queue_delayed_notification(
     kind: str = "janitor",
     priority: str = "normal",
 ) -> None:
-    """Queue notification via event bus delayed channel."""
+    """Queue a deferred operator notice for later explicit retrieval."""
     if not message:
         return
     try:
-        from core.runtime.events import queue_delayed_notification as _queue_event_delayed_notification
-        result = _queue_event_delayed_notification(
+        from lib.runtime_context import queue_deferred_notice
+
+        queued = queue_deferred_notice(
             message,
             kind=kind,
             priority=priority,
             source="janitor",
         )
-        item_id = str(((result.get("event") or {}).get("id")) or "")
         _append_decision_log(
             "delayed_notification_queued",
             {
-                "id": item_id,
                 "kind": kind,
                 "priority": priority,
+                "queued": bool(queued),
             },
         )
     except Exception as e:

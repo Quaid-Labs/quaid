@@ -105,6 +105,7 @@ def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     adapter.resolve_prompt_submit_signal.return_value = None
 
     monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+    monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("core.interface.hooks._get_owner_id", lambda: "test-owner")
     return adapter
@@ -361,6 +362,35 @@ class TestHookInjectRecallResilience:
 
         assert out.strip() == "", f"Expected no stdout, got: {out!r}"
 
+    def test_deferred_notice_hint_is_injected_without_draining(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr(
+            "core.interface.hooks._get_deferred_notice_hint",
+            lambda: (
+                "<quaid_system_message>\n"
+                "Quaid has 1 deferred maintenance notice waiting.\n"
+                "</quaid_system_message>"
+            ),
+        )
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "hello",
+                    "session_id": "sess-deferred",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "deferred maintenance notice" in context
+
     def test_memory_context_still_injected_without_tool_hint_round_trip(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
@@ -413,8 +443,8 @@ class TestHookInjectRecallResilience:
 
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
-        assert "<quaid_project_docs>\n" in context
-        assert "</quaid_project_docs>" in context
+        assert "<quaid_system_message>\n" in context
+        assert "</quaid_system_message>" in context
         assert "[Quaid Project Docs: recipe-app]" in context
         assert "Authentication uses JWTs and refresh tokens." in context
         assert "api.md" in context

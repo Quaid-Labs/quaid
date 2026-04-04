@@ -106,11 +106,13 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     adapter.identity_dir.return_value = identity_dir
     adapter.get_base_context_files.return_value = {}
     adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = ""
     adapter.data_dir.return_value = tmp_path / "data"
 
     monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
     monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
     monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
     monkeypatch.setattr(hooks, "_current_adapter_id", lambda: "codex")
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -131,14 +133,73 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert context.startswith("<quaid_project_context>\n")
-    assert context.rstrip().endswith("</quaid_project_context>")
+    assert context.startswith("<quaid_system_message>\n")
+    assert context.rstrip().endswith("</quaid_system_message>")
     assert "quaid/TOOLS.md" in context
     assert "codex startup docs" in context
     assert ensure_alive_calls == [True]
     assert sweep_calls == ["codex-s1"]
     assert not (tmp_path / ".claude" / "rules" / "quaid-projects.md").exists()
     assert "emitted Codex startup context" in err
+
+
+def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypatch, tmp_path):
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+
+    project = projects_dir / "quaid"
+    project.mkdir()
+    (project / "TOOLS.md").write_text("# Tools\ncodex startup docs", encoding="utf-8")
+
+    from core.interface import hooks
+    adapter = MagicMock()
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = (
+        "The following are pending notifications for the user — please relay them in your response:\n\n"
+        "<quaid_system_message>\n• [Quaid error] [provider] Earlier queued notice\n</quaid_system_message>"
+    )
+    adapter.data_dir.return_value = tmp_path / "data"
+
+    monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
+    monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
+    monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
+    monkeypatch.setattr(
+        hooks,
+        "_get_deferred_notice_hint",
+        lambda: (
+            "<quaid_system_message>\n"
+            "Quaid has 2 deferred maintenance notices waiting.\n"
+            "</quaid_system_message>"
+        ),
+    )
+    monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
+    monkeypatch.setattr(hooks, "_current_adapter_id", lambda: "codex")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("core.compatibility.notify_on_use_if_degraded", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: (_ for _ in ()).throw(RuntimeError("daemon offline")))
+    monkeypatch.setattr("core.extraction_daemon.sweep_orphaned_sessions", lambda _sid: 2)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+
+    with patch("core.project_registry.list_projects", return_value={}):
+        out, _err = _run_hook_session_init(
+            {"session_id": "codex-s1", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "Earlier queued notice" in context
+    assert "deferred maintenance notices waiting" in context
+    assert "background extraction daemon failed to start" in context
+    assert "recovered 2 orphaned prior session(s)" in context
 
 
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):

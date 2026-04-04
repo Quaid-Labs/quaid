@@ -114,6 +114,17 @@ def _format_project_docs(docs_bundle: Dict) -> str:
     return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
 
 
+def _format_direct_agent_notices(messages: List[str]) -> str:
+    notices = [str(message or "").strip() for message in messages if str(message or "").strip()]
+    if not notices:
+        return ""
+    body = "\n".join(f"• {message}" for message in notices)
+    return (
+        "The following are live system notices from Quaid — please relay them in your response:\n\n"
+        f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+    )
+
+
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     if doc_file != "TOOLS.md":
         return content
@@ -251,6 +262,7 @@ def hook_inject(args):
     query = hook_input.get("prompt", "").strip()
     if not query:
         return
+    direct_notices: List[str] = []
 
     try:
         from core.extraction_daemon import write_signal
@@ -372,6 +384,11 @@ def hook_inject(args):
         ensure_alive()
     except Exception as e:
         print(f"[quaid][hook-inject] daemon ensure_alive failed: {e}", file=sys.stderr)
+        direct_notices.append(
+            "Quaid's background extraction daemon failed to start. "
+            "New memories may not be processed until Quaid recovers. "
+            f"Error: {e}"
+        )
 
     # Ensure a cursor exists for this session so the daemon can discover it
     # for timeout extraction.  Lightweight: skips if cursor already exists.
@@ -390,9 +407,10 @@ def hook_inject(args):
         except Exception:
             pass
 
-    # Ask the adapter for any pending context (e.g. deferred notifications).
-    # Adapters without pending context return empty string.
+    # Ask the adapter for any active pending context and check whether there
+    # are deferred notices waiting for an explicit agent-driven drain.
     pending_context = _get_pending_context()
+    deferred_notice_hint = _get_deferred_notice_hint()
 
     try:
         from concurrent.futures import ThreadPoolExecutor
@@ -441,8 +459,15 @@ def hook_inject(args):
 
         context_parts = []
 
+        direct_notice_context = _format_direct_agent_notices(direct_notices)
+        if direct_notice_context:
+            context_parts.append(direct_notice_context)
+
         if pending_context:
             context_parts.append(pending_context)
+
+        if deferred_notice_hint:
+            context_parts.append(deferred_notice_hint)
 
         if memories:
             context_parts.append(_format_memories(memories))
@@ -477,22 +502,27 @@ def hook_inject(args):
     except RuntimeError:
         raise
     except Exception as e:
-        # Still try to surface pending context even if recall fails
+        fallback_context_parts = []
         if pending_context:
+            fallback_context_parts.append(pending_context)
+        if deferred_notice_hint:
+            fallback_context_parts.append(deferred_notice_hint)
+        if fallback_context_parts:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": pending_context,
+                    "additionalContext": "\n\n".join(fallback_context_parts),
                 }
             }))
         print(f"[quaid][hook-inject] error: {e}", file=sys.stderr)
 
 
 def _get_pending_context() -> str:
-    """Ask the adapter for any pending context to inject.
+    """Ask the adapter for any active pending context to inject.
 
     Returns formatted context string ready for additionalContext, or empty string.
-    Each adapter decides its own mechanism (deferred file, queue, etc.).
+    Each adapter decides its own mechanism for live notifications that should
+    be surfaced greedily on the next hook contact.
     """
     try:
         from lib.adapter import get_adapter
@@ -502,6 +532,16 @@ def _get_pending_context() -> str:
     except Exception:
         pass
     return ""
+
+
+def _get_deferred_notice_hint() -> str:
+    """Return a non-draining advisory when deferred notices are waiting."""
+    try:
+        from lib.runtime_context import format_deferred_notice_hint
+
+        return format_deferred_notice_hint() or ""
+    except Exception:
+        return ""
 
 
 def _current_adapter_id() -> str:
@@ -893,17 +933,33 @@ def hook_session_init(args):
     # Daemons are instance-scoped and ensure_alive()/start_daemon() is
     # lock-guarded (PID + flock), so repeated contact points are idempotent.
     multi_instance_warning = ""
+    startup_notices: List[str] = []
     try:
         from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
         try:
             ensure_alive()
         except Exception as e:
             print(f"[quaid][session-init] daemon ensure_alive failed: {e}", file=sys.stderr)
+            startup_notices.append(
+                "Quaid's background extraction daemon failed to start. "
+                "New memories may not be processed until Quaid recovers. "
+                f"Error: {e}"
+            )
         swept = sweep_orphaned_sessions(current_session_id)
         if swept:
             print(f"[quaid][session-init] swept {swept} orphaned session(s)", file=sys.stderr)
+            startup_notices.append(
+                f"Quaid recovered {swept} orphaned prior session(s) at startup. "
+                "This means a previous session ended without a clean lifecycle boundary, "
+                "so recent memories may have been flushed late."
+            )
     except Exception as e:
         print(f"[quaid][session-init] orphan sweep error: {e}", file=sys.stderr)
+        startup_notices.append(
+            "Quaid hit an orphan-session recovery error during startup. "
+            "Recent memories from a previous session may still be pending. "
+            f"Error: {e}"
+        )
 
     # Warn when multiple agents share the same instance silo. This setup is
     # not supported — platform limitations (e.g. Codex /new creating a new
@@ -1080,14 +1136,14 @@ def hook_session_init(args):
     if sections:
         sections.insert(0, _build_runtime_context_block())
 
-    if not sections:
-        print("[quaid][session-init] no project docs found", file=sys.stderr)
-        return
+    warning_sections: List[str] = []
+    for notice in startup_notices:
+        warning_sections.append(f"--- SYSTEM WARNING ---\n{notice}")
 
     # 3. Check janitor health and prepend warning if stale
     janitor_warning = _check_janitor_health()
     if janitor_warning:
-        sections.insert(0, janitor_warning)
+        warning_sections.append(janitor_warning)
 
     # 3b. Check compatibility and prepend warning if degraded/safe
     try:
@@ -1095,17 +1151,33 @@ def hook_session_init(args):
         from lib.adapter import get_adapter
         compat_warning = notify_on_use_if_degraded(get_adapter().data_dir())
         if compat_warning:
-            sections.insert(0, f"--- SYSTEM WARNING ---\n{compat_warning}")
+            warning_sections.append(f"--- SYSTEM WARNING ---\n{compat_warning}")
             print(f"[quaid][session-init] {compat_warning}", file=sys.stderr)
     except Exception:
         pass
 
     # 3c. Prepend multi-instance warning if detected
     if multi_instance_warning:
-        sections.insert(0, f"--- SYSTEM WARNING ---\n{multi_instance_warning}")
+        warning_sections.append(f"--- SYSTEM WARNING ---\n{multi_instance_warning}")
+
+    if not sections and not warning_sections:
+        print("[quaid][session-init] no project docs found", file=sys.stderr)
+        return
+
+    for warning in reversed(warning_sections):
+        sections.insert(0, warning)
 
     body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
-    content = f"<quaid_system_message>\n{body}</quaid_system_message>\n"
+    content_parts: List[str] = []
+    if adapter_id == "codex":
+        deferred_notice_hint = _get_deferred_notice_hint()
+        if deferred_notice_hint:
+            content_parts.append(deferred_notice_hint)
+        startup_pending_context = _get_pending_context()
+        if startup_pending_context:
+            content_parts.append(startup_pending_context)
+    content_parts.append(f"<quaid_system_message>\n{body}</quaid_system_message>\n")
+    content = "\n\n".join(content_parts)
 
     if adapter_id == "codex":
         print(json.dumps({

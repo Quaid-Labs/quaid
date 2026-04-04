@@ -503,6 +503,22 @@ class TestCallLlmProvider:
             with pytest.raises(ProviderUnavailableError):
                 llm_clients.call_llm("system", "user", max_retries=0)
 
+    def test_notifies_agent_on_persistent_provider_outage(self, test_adapter):
+        import core.llm.clients as llm_clients
+        from lib.llm_clients import ProviderUnavailableError
+
+        def always_fail(*_args, **_kwargs):
+            raise ConnectionError("persistent failure")
+
+        test_adapter._llm.llm_call = always_fail
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+             patch("lib.llm_clients.notify_agent") as mock_notify:
+            with pytest.raises(ProviderUnavailableError):
+                llm_clients.call_llm("system", "user", max_retries=0)
+
+        mock_notify.assert_called_once()
+        assert "could not reach its" in mock_notify.call_args.args[0]
+
     def test_no_response_raises_when_failhard_enabled(self, test_adapter):
         """Provider null responses must fail hard when failHard is enabled."""
         import core.llm.clients as llm_clients

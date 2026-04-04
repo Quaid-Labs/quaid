@@ -43,9 +43,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import get_config
-from lib.delayed_requests import queue_delayed_request
 from lib.llm_clients import call_deep_reasoning, call_fast_reasoning
-from lib.runtime_context import get_workspace_dir
+from lib.runtime_context import get_workspace_dir, queue_deferred_notice
 logger = logging.getLogger(__name__)
 
 def _workspace() -> Path:
@@ -125,7 +124,7 @@ def _run_git_command(args: List[str], deadline: float) -> subprocess.CompletedPr
 
 def _queue_delayed_notification(message: str, kind: str, priority: str, source: str) -> None:
     try:
-        queue_delayed_request(
+        queue_deferred_notice(
             str(message),
             kind=str(kind),
             priority=str(priority),

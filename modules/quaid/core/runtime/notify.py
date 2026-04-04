@@ -2,20 +2,11 @@
 from __future__ import annotations
 
 """
-User Notification Module
+User notification module.
 
-Channel-agnostic messaging to the user via the platform adapter.
-
-Usage:
-  python3 notify.py "Your message here"
-  python3 notify.py --check  # Just show last channel info
-
-Programmatic:
-  from core.runtime.notify import notify_user, get_last_channel
-
-  info = get_last_channel()
-  if info:
-      notify_user("Doc updated: janitor-reference.md")
+Supports:
+- live operator notifications via the active adapter transport
+- deferred notice status/drain for janitor/update style background work
 """
 
 import argparse
@@ -36,8 +27,14 @@ if str(_MODULE_ROOT) not in sys.path:
 from lib.adapter import ChannelInfo
 from lib.fail_policy import is_fail_hard_enabled
 from lib.runtime_context import (
+    drain_deferred_notices as _ctx_drain_deferred_notices,
+    format_deferred_notice_hint as _ctx_format_deferred_notice_hint,
+    get_deferred_notice_status as _ctx_get_deferred_notice_status,
     get_install_url,
     get_last_channel as _ctx_get_last_channel,
+    list_deferred_notices as _ctx_list_deferred_notices,
+    notify_agent as _ctx_notify_agent,
+    queue_deferred_notice as _ctx_queue_deferred_notice,
     send_notification as _ctx_send_notification,
 )
 
@@ -218,6 +215,67 @@ def notify_user(
         True if message sent successfully, False otherwise
     """
     return _ctx_send_notification(message, channel_override=channel_override, dry_run=dry_run)
+
+
+def notify_agent(
+    message: str,
+    *,
+    severity: str = "warning",
+    source: str = "",
+    dedupe_key: Optional[str] = None,
+    ttl_seconds: int = 3600,
+    channel_override: Optional[str] = None,
+    dry_run: bool = False,
+    force: bool = False,
+) -> bool:
+    """Send an operator-facing notice to the currently active agent."""
+    return _ctx_notify_agent(
+        message,
+        severity=severity,
+        source=source,
+        dedupe_key=dedupe_key,
+        ttl_seconds=ttl_seconds,
+        channel_override=channel_override,
+        dry_run=dry_run,
+        force=force,
+    )
+
+
+def queue_deferred_notice(
+    message: str,
+    *,
+    kind: str = "janitor",
+    priority: str = "normal",
+    source: str = "quaid",
+    dedupe_key: Optional[str] = None,
+) -> bool:
+    return _ctx_queue_deferred_notice(
+        message,
+        kind=kind,
+        priority=priority,
+        source=source,
+        dedupe_key=dedupe_key,
+    )
+
+
+def list_deferred_notices(
+    *,
+    status: str = "pending",
+    limit: int = 50,
+) -> list:
+    return _ctx_list_deferred_notices(status=status, limit=limit)
+
+
+def drain_deferred_notices(*, limit: int = 50) -> list:
+    return _ctx_drain_deferred_notices(limit=limit)
+
+
+def get_deferred_notice_status() -> dict:
+    return _ctx_get_deferred_notice_status()
+
+
+def get_deferred_notice_hint() -> str:
+    return _ctx_format_deferred_notice_hint()
 
 
 def notify_memory_recall(
@@ -629,7 +687,7 @@ def format_daily_memories_message(memories: list) -> Optional[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Send notifications to user's last active channel"
+        description="Quaid notification CLI"
     )
     parser.add_argument(
         "message",
@@ -666,8 +724,83 @@ def main():
         default="",
         help="Optional account id for direct send"
     )
+    parser.add_argument(
+        "--deferred-status",
+        action="store_true",
+        help="Show pending deferred notice summary"
+    )
+    parser.add_argument(
+        "--deferred-drain",
+        action="store_true",
+        help="Drain pending deferred notices for explicit relay"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Limit deferred status/drain results"
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit JSON for deferred status/drain"
+    )
 
     args = parser.parse_args()
+
+    if args.deferred_status and args.deferred_drain:
+        parser.error("--deferred-status and --deferred-drain are mutually exclusive")
+
+    if args.deferred_status:
+        status = get_deferred_notice_status()
+        items = list_deferred_notices(limit=args.limit)
+        payload = {
+            "pending_count": status.get("pending_count", 0),
+            "kinds": status.get("kinds", {}),
+            "priorities": status.get("priorities", {}),
+            "items": items,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return
+        print(f"Pending deferred notices: {payload['pending_count']}")
+        if payload["kinds"]:
+            print(f"Kinds: {json.dumps(payload['kinds'], sort_keys=True)}")
+        if not items:
+            return
+        print("")
+        for item in items:
+            created_at = str(item.get("created_at") or "").strip()
+            priority = str(item.get("priority") or "normal").strip() or "normal"
+            kind = str(item.get("kind") or "unknown").strip() or "unknown"
+            message = str(item.get("message") or "").strip()
+            print(f"[{priority}] {kind} {created_at}")
+            print(message)
+            print("")
+        return
+
+    if args.deferred_drain:
+        drained = drain_deferred_notices(limit=args.limit)
+        payload = {
+            "drained": len(drained),
+            "items": drained,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return
+        print(f"Drained deferred notices: {len(drained)}")
+        if not drained:
+            return
+        print("")
+        for item in drained:
+            created_at = str(item.get("created_at") or "").strip()
+            priority = str(item.get("priority") or "normal").strip() or "normal"
+            kind = str(item.get("kind") or "unknown").strip() or "unknown"
+            message = str(item.get("message") or "").strip()
+            print(f"[{priority}] {kind} {created_at}")
+            print(message)
+            print("")
+        return
 
     if args.check:
         info = get_last_channel(args.session)

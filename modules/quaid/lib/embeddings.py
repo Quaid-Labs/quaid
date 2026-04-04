@@ -16,6 +16,7 @@ import threading
 from typing import List, Optional, Sequence, Any
 
 from lib.fail_policy import is_fail_hard_enabled
+from lib.runtime_context import notify_agent
 from lib.worker_pool import run_callables
 from lib.providers import (
     EmbeddingsProvider,
@@ -54,6 +55,13 @@ def get_embeddings_provider() -> EmbeddingsProvider:
                 _provider = adapter_embed
                 return _provider
         except Exception as exc:
+            notify_agent(
+                f"Quaid could not access the adapter embeddings provider: {exc}",
+                severity="error" if is_fail_hard_enabled() else "warning",
+                source="embeddings",
+                dedupe_key=f"embeddings-adapter:{type(exc).__name__}",
+                ttl_seconds=1800,
+            )
             if is_fail_hard_enabled():
                 raise RuntimeError(
                     "Failed to resolve adapter embeddings provider while failHard is enabled."
@@ -72,6 +80,13 @@ def get_embeddings_provider() -> EmbeddingsProvider:
                 dim=get_embedding_dim(),
             )
         except Exception as exc:
+            notify_agent(
+                f"Quaid could not initialize the configured embeddings backend: {exc}",
+                severity="error" if is_fail_hard_enabled() else "warning",
+                source="embeddings",
+                dedupe_key=f"embeddings-config:{type(exc).__name__}",
+                ttl_seconds=1800,
+            )
             if is_fail_hard_enabled():
                 raise RuntimeError(
                     "Failed to build configured Ollama embeddings provider while failHard is enabled."

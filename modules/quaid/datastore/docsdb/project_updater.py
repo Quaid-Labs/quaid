@@ -32,7 +32,6 @@ from datastore.docsdb.registry import (
     _populate_project_md_sections,
 )
 from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
-from lib.delayed_requests import queue_delayed_request
 from lib.project_templates import (
     EXTERNAL_FILES_BEGIN,
     EXTERNAL_FILES_END,
@@ -50,7 +49,13 @@ from lib.project_templates import (
     render_project_md_template,
     replace_managed_block,
 )
-from lib.runtime_context import get_workspace_dir, get_quaid_home, get_data_dir
+from lib.runtime_context import (
+    get_data_dir,
+    get_llm_provider,
+    get_quaid_home,
+    get_workspace_dir,
+    queue_deferred_notice,
+)
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Deep Reasoning)
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
 
@@ -500,8 +505,7 @@ Rules:
 Respond with JSON only, no markdown fences."""
 
     try:
-        from lib.adapter import get_adapter
-        provider = get_adapter().get_llm_provider()
+        provider = get_llm_provider()
         llm_result = provider.llm_call(
             system=prompt,
             user="Evaluate documentation health and return decisions as JSON.",
@@ -798,7 +802,7 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
                 f"Trigger: project-{trigger}"
             )
             try:
-                queue_delayed_request(
+                queue_deferred_notice(
                     message,
                     kind="project_doc_update",
                     priority="normal",

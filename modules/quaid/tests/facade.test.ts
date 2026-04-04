@@ -1518,7 +1518,7 @@ describe("QuaidFacade", () => {
     expect(queued).toBe(true);
     expect(duplicate).toBe(false);
 
-    const delayedPath = path.join(workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json");
+    const delayedPath = path.join(workspace, ".runtime", "notes", "delayed-llm-requests.json");
     const payload = JSON.parse(await readFile(delayedPath, "utf8"));
     expect(Array.isArray(payload.requests)).toBe(true);
     expect(payload.requests).toHaveLength(1);

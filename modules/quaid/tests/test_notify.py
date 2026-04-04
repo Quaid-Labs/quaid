@@ -15,6 +15,7 @@ import pytest
 from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
+    notify_agent,
     format_janitor_summary_message,
     notify_user,
     get_last_channel,
@@ -379,6 +380,21 @@ class TestNotifyUser:
             assert notify_user("test message") is False
         finally:
             reset_adapter()
+
+
+class TestNotifyAgent:
+    def test_dedupes_repeated_notices(self, tmp_path):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.notify.return_value = True
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            assert notify_agent("provider down", dedupe_key="provider-down", ttl_seconds=3600) is True
+            assert notify_agent("provider down", dedupe_key="provider-down", ttl_seconds=3600) is True
+
+        assert adapter.notify.call_count == 1
+        sent_message = adapter.notify.call_args.args[0]
+        assert sent_message.startswith("[Quaid warning]")
 
 
 class TestNotifyFallbackVisibility:

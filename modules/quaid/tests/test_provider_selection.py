@@ -140,18 +140,23 @@ class TestEmbeddingsProviderSelection:
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
         with patch("lib.embeddings.is_fail_hard_enabled", return_value=False), \
-             patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")):
+             patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")), \
+             patch("lib.embeddings.notify_agent") as mock_notify:
             provider = get_embeddings_provider()
         assert isinstance(provider, OllamaEmbeddingsProvider)
+        mock_notify.assert_called_once()
+        assert "embeddings provider" in mock_notify.call_args.args[0]
 
     def test_adapter_embed_error_raises_when_failhard_enabled(self, monkeypatch):
         """When failHard=true, adapter embedding resolution errors raise."""
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
         with patch("lib.embeddings.is_fail_hard_enabled", return_value=True), \
-             patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")):
+             patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")), \
+             patch("lib.embeddings.notify_agent") as mock_notify:
             with pytest.raises(RuntimeError, match="failHard is enabled"):
                 get_embeddings_provider()
+        mock_notify.assert_called_once()
 
     def test_get_embeddings_prefers_embed_many_and_fans_out_duplicates(self, tmp_path):
         class _BatchProvider(MockEmbeddingsProvider):
