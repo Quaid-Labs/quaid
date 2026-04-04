@@ -224,16 +224,26 @@ target platform only.
 
 ## Recommended Entry Point
 
-Use the Node installer directly instead of `curl | bash` when an agent is driving install:
+Use the Node installer directly instead of `curl | bash` when an agent is driving install.
+The installer handles its own source download — do not `git clone` manually first:
 
 ```bash
-git clone https://github.com/quaid-labs/quaid.git
-cd quaid
-node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace" --owner-name "<Person Name>"
+node setup-quaid.mjs --agent \
+  --workspace "/absolute/path/to/workspace" \
+  --owner-name "<Person Name>" \
+  --source github
 ```
+
+`--source github` fetches the latest release. The installer manages the temporary clone
+internally and cleans it up on exit — no leftover temp directories.
 
 `--workspace` is the safest way to avoid wrong workspace detection in non-interactive sessions.
 `--owner-name` ensures memory ownership is tagged to the human (not a system account).
+
+> **Do not run `git clone` manually before the installer.** If you clone first and then run
+> `node setup-quaid.mjs` from that clone, a second nested clone attempt may collide with
+> `/tmp/quaid-install` or similar fixed paths from a prior run. Let the installer manage
+> its own source.
 
 ## Canary / Private Test Installs (No Public Release Required)
 
