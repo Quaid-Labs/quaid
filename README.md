@@ -65,6 +65,12 @@ Community discussion: [github.com/Quaid-Labs/quaid/discussions/3](https://github
 
 This is vision, not a released feature.
 
+## Extensible Data Layer
+
+Quaid is being designed to be extensible not only at the platform-adaptor layer, but eventually at the datastore and ingest layers as well. The long-term direction is for Quaid to act as an open coordination layer for AI knowledge systems: accepting multiple datastore types and input pipelines, enforcing clear boundaries between them in core, and making those boundaries exportable and importable through modular `.ego` artifacts.
+
+This depends on stronger plugin and datastore contracts than exist today, and is part of the post-launch direction rather than a completed surface.
+
 ## Benchmarks
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
