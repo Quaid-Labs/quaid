@@ -257,6 +257,52 @@ def hook_inject(args):
         from lib.adapter import get_adapter
 
         adapter = get_adapter()
+        # CDX: detect session transitions (/new, /clear) via session_id change.
+        # CDX CLI intercepts lifecycle commands before the hook fires, so the
+        # command text never reaches the hook payload or the transcript.  The
+        # adapter tracks the last known session_id and signals when it changes.
+        transition_spec = None
+        if hasattr(adapter, "check_session_transition"):
+            transition_spec = adapter.check_session_transition(hook_input)
+        if transition_spec:
+            ended_sid = str(transition_spec.get("ended_session_id") or "").strip()
+            ended_tx = str(transition_spec.get("ended_transcript_path") or "").strip()
+            t_signal_type = str(transition_spec.get("signal_type") or "session_end")
+            t_meta = dict(transition_spec.get("meta") or {})
+            _write_hook_trace("hook.inject.session_transition_detected", {
+                "ended_session_id": ended_sid,
+                "new_session_id": session_id,
+            })
+            if ended_sid and ended_tx and os.path.isfile(ended_tx):
+                t_sig_path = write_signal(
+                    signal_type=t_signal_type,
+                    session_id=ended_sid,
+                    transcript_path=ended_tx,
+                    adapter=adapter.adapter_id(),
+                    supports_compaction_control=False,
+                    meta=t_meta,
+                )
+                _write_hook_trace("hook.inject.session_transition_signal_written", {
+                    "ended_session_id": ended_sid,
+                    "signal_name": t_sig_path.name,
+                })
+                try:
+                    _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
+                    _env = {
+                        k: v for k, v in os.environ.items()
+                        if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
+                    }
+                    subprocess.Popen(
+                        [sys.executable, str(_daemon_script), "start"],
+                        start_new_session=True,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=_env,
+                    )
+                except Exception:
+                    pass
+
         signal_spec = adapter.resolve_prompt_submit_signal(hook_input)
         if signal_spec:
             transcript_path = _resolve_hook_transcript_path(

@@ -583,6 +583,10 @@ class OpenClawAdapter(QuaidAdapter):
 
         return [f"{prefix}-{label}" for label in labels]
 
+    def get_instance_manager(self):
+        from lib.instance_manager import InstanceManager
+        return InstanceManager(adapter=self)
+
     # ---- Internal helpers ----
 
     def _find_sessions_json(self) -> Optional[Path]:

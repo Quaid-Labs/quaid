@@ -230,6 +230,61 @@ class CodexAdapter(QuaidAdapter):
             "- Always tell the user which project received the file.\n"
         )
 
+    def _last_session_path(self) -> Path:
+        return self.data_dir() / "codex-last-session.json"
+
+    def _read_last_session_id(self) -> str:
+        try:
+            data = json.loads(self._last_session_path().read_text(encoding="utf-8"))
+            return str(data.get("session_id") or "").strip()
+        except (OSError, json.JSONDecodeError):
+            return ""
+
+    def _write_last_session_id(self, session_id: str) -> None:
+        try:
+            path = self._last_session_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
+        except OSError:
+            pass
+
+    def check_session_transition(self, hook_input: dict) -> Optional[dict]:
+        """Detect when a CDX /new or /clear started a new session.
+
+        CDX CLI intercepts lifecycle commands before UserPromptSubmit fires, so
+        the command text never reaches the hook payload or transcript.  Instead,
+        we track the last seen session_id in a silo file.  When the session_id
+        changes on a new UserPromptSubmit, the previous session ended (via /new
+        or /clear) and we return a session_end signal spec for it so the caller
+        can write an extraction signal for the now-closed session.
+
+        Returns a signal-spec dict for the ENDED session, or None.
+        """
+        if not isinstance(hook_input, dict):
+            return None
+        current_id = str(hook_input.get("session_id") or "").strip()
+        if not current_id:
+            return None
+        last_id = self._read_last_session_id()
+        # Always update to the current session_id.
+        self._write_last_session_id(current_id)
+        if not last_id or last_id == current_id:
+            return None
+        # Session changed — the old session ended via /new or /clear.
+        transcript_path = self.get_session_path(last_id)
+        if transcript_path is None:
+            return None
+        return {
+            "ended_session_id": last_id,
+            "ended_transcript_path": str(transcript_path),
+            "signal_type": "session_end",
+            "meta": {
+                "source": "session_transition",
+                "command": "/new",
+                "reason": "command:new",
+            },
+        }
+
     def get_sessions_dir(self) -> Optional[Path]:
         sessions_dir = Path.home() / ".codex" / "sessions"
         return sessions_dir if sessions_dir.is_dir() else None
