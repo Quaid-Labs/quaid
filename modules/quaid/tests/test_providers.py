@@ -1671,6 +1671,38 @@ class TestGatewayLLMProvider:
         assert sent_body["model"] == "openclaw"
         assert req_obj.get_header("X-openclaw-model") == "anthropic/qwen2.5-coder:7b"
 
+    def test_openresponses_fallback_uses_explicit_override_models(self):
+        import urllib.request
+
+        p = GatewayLLMProvider(
+            port=18789,
+            token="test-token",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+            default_provider="openai",
+        )
+        fallback_resp = MagicMock()
+        fallback_resp.read.return_value = json.dumps({
+            "output_text": "ok",
+            "model": "gpt-5.4-mini",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }).encode()
+        fallback_resp.__enter__ = MagicMock(return_value=fallback_resp)
+        fallback_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(urllib.request, "urlopen", return_value=fallback_resp) as mock_open:
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "PING"}],
+                model_tier="fast",
+                timeout=1,
+            )
+
+        assert result.text == "ok"
+        req_obj = mock_open.call_args[0][0]
+        assert "/v1/responses" in req_obj.full_url
+        assert "/plugins/quaid/llm" not in req_obj.full_url
+        assert req_obj.get_header("X-openclaw-model") == "openai/gpt-5.4-mini"
+
     def test_gateway_provider_resolves_token_from_env_when_missing_explicit_token(self, monkeypatch):
         monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token")
         p = GatewayLLMProvider(port=18789, token="")

@@ -223,6 +223,15 @@ class TestStandaloneAdapter:
         assert standalone.get_deep_provider_default() == "anthropic"
         assert standalone.get_fast_provider_default() == "anthropic"
 
+    def test_installer_review_model_pair_flags_unknown_provider(self, standalone):
+        review = standalone.installer_review_model_pair(
+            "kimik",
+            "kimik-2.5-pro",
+            "kimik-2.5-fast",
+        )
+        assert review["needsClarification"] is True
+        assert "kimik" in review["reason"]
+
     def test_build_transcript_uses_adapter_filters_only(self, standalone):
         transcript = standalone.build_transcript([
             {"role": "user", "content": "GatewayRestart: reconnecting"},
@@ -530,6 +539,71 @@ class TestOpenClawAdapter:
         assert adapter.get_fast_provider_default() == "openai-codex"
         assert adapter.get_deep_model_default("default") == "gpt-5.4"
         assert adapter.get_fast_model_default("default") == "gpt-5.4-mini"
+
+    def test_installer_review_model_pair_flags_unknown_gateway_provider(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(
+            json.dumps({"agents": {"defaults": {"modelPrimary": "kimik/kimik-2.5"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: home)
+        adapter = OpenClawAdapter()
+
+        review = adapter.installer_review_model_pair("", "kimik-2.5-pro", "kimik-2.5-fast")
+        assert review["needsClarification"] is True
+        assert "kimik" in review["reason"]
+
+    def test_installer_review_model_pair_accepts_supported_prefixed_models(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(
+            json.dumps({"agents": {"defaults": {"modelPrimary": "openai-codex/gpt-5.4"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: home)
+        adapter = OpenClawAdapter()
+
+        review = adapter.installer_review_model_pair(
+            "openai-codex",
+            "openai/gpt-5.4",
+            "openai/gpt-5.4-mini",
+        )
+        assert review["needsClarification"] is False
+        assert review["deep"]["provider"] == "openai"
+        assert review["fast"]["provider"] == "openai"
+
+    def test_installer_validate_model_pair_live_uses_gateway_provider(self, monkeypatch):
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_get_gateway_auth", lambda: (18789, "tok"))
+
+        captured = {}
+
+        class _StubProvider:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
+                assert messages == [{"role": "user", "content": "PING"}]
+                assert max_tokens == 8
+                assert timeout == 20
+                return SimpleNamespace(text="PONG", model=model_tier)
+
+        with patch("adaptors.openclaw.adapter.GatewayLLMProvider", _StubProvider):
+            result = adapter.installer_validate_model_pair_live(
+                "openai-codex",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+            )
+
+        assert result["supported"] is True
+        assert result["ok"] is True
+        assert len(result["results"]) == 2
+        assert captured["default_provider"] == "openai"
+        assert captured["deep_model"] == "gpt-5.4"
+        assert captured["fast_model"] == "gpt-5.4-mini"
 
 
 class TestClaudeCodeAdapter:

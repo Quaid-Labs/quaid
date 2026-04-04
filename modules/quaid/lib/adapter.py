@@ -584,6 +584,71 @@ class QuaidAdapter(abc.ABC):
         model = str(defaults.get("deep", "")).strip()
         return model or None
 
+    def installer_review_model_pair(
+        self,
+        provider: str,
+        deep_model: str,
+        fast_model: str,
+    ) -> Dict[str, Any]:
+        """Review whether installer-selected models need operator clarification.
+
+        Adapters own provider recognition for install-time model defaults.
+        The default implementation only flags providers outside the adapter's
+        supported provider list; adapters can override for richer host-specific
+        detection (for example, gateway-inspected providers).
+        """
+        normalized_provider = str(provider or "").strip().lower()
+        supported = {
+            str(item).strip().lower()
+            for item in (self.installer_supported_providers() or [])
+            if str(item).strip()
+        }
+        needs_clarification = bool(
+            normalized_provider
+            and normalized_provider != "default"
+            and normalized_provider not in supported
+        )
+        reason = ""
+        if needs_clarification:
+            reason = (
+                f"No adapter fast/deep mapping is defined for provider "
+                f"'{normalized_provider}'."
+            )
+        return {
+            "provider": normalized_provider,
+            "needsClarification": needs_clarification,
+            "reason": reason,
+            "deep": {
+                "model": str(deep_model or "").strip(),
+                "recognized": not needs_clarification,
+                "provider": normalized_provider,
+            },
+            "fast": {
+                "model": str(fast_model or "").strip(),
+                "recognized": not needs_clarification,
+                "provider": normalized_provider,
+            },
+        }
+
+    def installer_supports_live_model_validation(self) -> bool:
+        """Whether this adapter can validate install-time model pairs live."""
+        return False
+
+    def installer_validate_model_pair_live(
+        self,
+        provider: str,
+        deep_model: str,
+        fast_model: str,
+    ) -> Dict[str, Any]:
+        """Validate deep/fast models against the live provider when supported."""
+        _ = (provider, deep_model, fast_model)
+        return {
+            "supported": False,
+            "ok": True,
+            "message": "",
+            "results": [],
+        }
+
 
 class StandaloneAdapter(QuaidAdapter):
     """Default adapter for standalone Quaid installations.

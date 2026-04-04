@@ -437,6 +437,150 @@ class OpenClawAdapter(QuaidAdapter):
         model = str(defaults.get("deep", "")).strip()
         return model or None
 
+    def _installer_model_provider(self, provider: str, model: str) -> str:
+        normalized_provider = self._normalize_installer_provider(provider)
+        token = str(model or "").strip()
+        if not token:
+            return ""
+        lower = token.lower()
+        if "/" in token:
+            return self._normalize_installer_provider(token.split("/", 1)[0])
+
+        if normalized_provider:
+            defaults = self.installer_default_models(normalized_provider) or {}
+            if lower in {
+                str(defaults.get("deep", "")).strip().lower(),
+                str(defaults.get("fast", "")).strip().lower(),
+            }:
+                return normalized_provider
+
+        for key, defaults in self._INSTALLER_MODEL_DEFAULTS.items():
+            if lower in {
+                str(defaults.get("deep", "")).strip().lower(),
+                str(defaults.get("fast", "")).strip().lower(),
+            }:
+                return key
+
+        if lower.startswith("claude-"):
+            return "anthropic"
+        if re.match(r"^(gpt-|o1(?:$|[-_])|o3(?:$|[-_])|o4(?:$|[-_]))", lower):
+            return "openai"
+        return ""
+
+    def installer_review_model_pair(
+        self,
+        provider: str,
+        deep_model: str,
+        fast_model: str,
+    ) -> dict:
+        normalized_provider = self._normalize_installer_provider(
+            provider or self._detect_gateway_primary_provider()
+        )
+        supported = set(self._INSTALLER_MODEL_DEFAULTS.keys())
+        deep_provider = self._installer_model_provider(normalized_provider, deep_model)
+        fast_provider = self._installer_model_provider(normalized_provider, fast_model)
+
+        reason = ""
+        if not normalized_provider:
+            reason = "OpenClaw gateway default provider could not be detected."
+        elif normalized_provider not in supported:
+            reason = (
+                f"No adapter fast/deep mapping is defined for provider "
+                f"'{normalized_provider}'."
+            )
+        elif "/" in str(fast_model or "") and fast_provider not in supported:
+            reason = (
+                f"Fast model '{str(fast_model).strip()}' uses an unrecognized "
+                "provider prefix."
+            )
+        elif "/" in str(deep_model or "") and deep_provider not in supported:
+            reason = (
+                f"Deep model '{str(deep_model).strip()}' uses an unrecognized "
+                "provider prefix."
+            )
+
+        return {
+            "provider": normalized_provider,
+            "needsClarification": bool(reason),
+            "reason": reason,
+            "deep": {
+                "model": str(deep_model or "").strip(),
+                "recognized": bool(
+                    deep_provider
+                    or (
+                        normalized_provider in supported
+                        and str(deep_model or "").strip()
+                        and "/" not in str(deep_model or "")
+                    )
+                ),
+                "provider": deep_provider,
+            },
+            "fast": {
+                "model": str(fast_model or "").strip(),
+                "recognized": bool(
+                    fast_provider
+                    or (
+                        normalized_provider in supported
+                        and str(fast_model or "").strip()
+                        and "/" not in str(fast_model or "")
+                    )
+                ),
+                "provider": fast_provider,
+            },
+        }
+
+    def installer_supports_live_model_validation(self) -> bool:
+        return True
+
+    def installer_validate_model_pair_live(
+        self,
+        provider: str,
+        deep_model: str,
+        fast_model: str,
+    ) -> dict:
+        normalized_provider = self._normalize_installer_provider(
+            provider or self._detect_gateway_primary_provider() or "anthropic"
+        )
+        port, token = self._get_gateway_auth()
+        llm = GatewayLLMProvider(
+            port=port,
+            token=token,
+            deep_model=str(deep_model or "").strip(),
+            fast_model=str(fast_model or "").strip(),
+            default_provider=normalized_provider or "anthropic",
+        )
+
+        results = []
+        for tier, model_name in (("fast", fast_model), ("deep", deep_model)):
+            model = str(model_name or "").strip()
+            if not model:
+                raise RuntimeError(f"Installer {tier} model is empty")
+            response = llm.llm_call(
+                [{"role": "user", "content": "PING"}],
+                model_tier=tier,
+                max_tokens=8,
+                timeout=20,
+            )
+            text = str(getattr(response, "text", "") or "").strip()
+            if not text:
+                raise RuntimeError(
+                    f"OpenClaw {tier} model '{model}' returned an empty response to installer PING"
+                )
+            results.append(
+                {
+                    "tier": tier,
+                    "model": model,
+                    "text": text[:120],
+                }
+            )
+
+        return {
+            "supported": True,
+            "ok": True,
+            "message": "OpenClaw model validation passed",
+            "results": results,
+        }
+
     def _get_agent_config_dir(self) -> Path:
         """Path to the gateway's agent config directory."""
         return Path.home() / ".openclaw" / "agents" / "main" / "agent"

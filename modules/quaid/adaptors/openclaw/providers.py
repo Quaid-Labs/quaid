@@ -21,9 +21,20 @@ class GatewayLLMProvider(LLMProvider):
     and gets responses back.
     """
 
-    def __init__(self, port: int = 18789, token: str = ""):
+    def __init__(
+        self,
+        port: int = 18789,
+        token: str = "",
+        *,
+        deep_model: str = "",
+        fast_model: str = "",
+        default_provider: str = "anthropic",
+    ):
         self._port = port
         self._token = (token or "").strip() or self._resolve_gateway_token()
+        self._deep_model = str(deep_model or "").strip()
+        self._fast_model = str(fast_model or "").strip()
+        self._default_provider = str(default_provider or "anthropic").strip().lower() or "anthropic"
         self._fallback_models = {
             "fast": "claude-haiku-4-5",
             "deep": "claude-sonnet-4-6",
@@ -49,6 +60,9 @@ class GatewayLLMProvider(LLMProvider):
 
     def _resolve_model_for_tier(self, model_tier: str) -> str:
         tier = "fast" if model_tier == "fast" else "deep"
+        override = self._fast_model if tier == "fast" else self._deep_model
+        if override:
+            return override
         workspace_root = (
             os.environ.get("QUAID_HOME")
             or os.environ.get("CLAWDBOT_WORKSPACE")
@@ -105,7 +119,8 @@ class GatewayLLMProvider(LLMProvider):
         # v2026.3.28+: gateway /v1/responses only accepts "openclaw" as model name;
         # v2026.3.24+: per-request model selection moved to x-openclaw-model header.
         # Format: provider/model (e.g. anthropic/claude-haiku-4-5).
-        oc_model = model if "/" in model else f"anthropic/{model}"
+        provider_prefix = self._default_provider or "anthropic"
+        oc_model = model if "/" in model else f"{provider_prefix}/{model}"
         body = json.dumps({
             "model": "openclaw",
             "instructions": system_prompt,
@@ -153,6 +168,16 @@ class GatewayLLMProvider(LLMProvider):
                 system_prompt = m["content"]
             elif m["role"] == "user":
                 user_message = m["content"]
+
+        if self._deep_model or self._fast_model:
+            return self._llm_call_openresponses(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                model_tier=model_tier,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                start_time=time.time(),
+            )
 
         body = json.dumps({
             "system_prompt": system_prompt,

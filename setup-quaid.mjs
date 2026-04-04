@@ -477,6 +477,7 @@ function _adapterOptionsForSelect() {
 function _readAdapterInstallerCapabilities(adapterId) {
   const normalized = String(adapterId || "").trim().toLowerCase();
   if (!normalized) return null;
+  const instanceId = process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(normalized);
   const py = [
     "import json, os, sys",
     "sys.path.insert(0, os.environ.get('QUAID_PYTHONPATH', ''))",
@@ -484,7 +485,7 @@ function _readAdapterInstallerCapabilities(adapterId) {
     "aid = os.environ.get('QUAID_ADAPTER_TYPE', '').strip()",
     "adapter = _instantiate_adapter_from_manifest(aid)",
     "providers = list(adapter.installer_supported_providers() or [])",
-    "out = {'providers': [str(p).strip().lower() for p in providers if str(p).strip()], 'modelDefaults': {}, 'defaultFastProvider': '', 'defaultDeepProvider': ''}",
+    "out = {'providers': [str(p).strip().lower() for p in providers if str(p).strip()], 'modelDefaults': {}, 'defaultFastProvider': '', 'defaultDeepProvider': '', 'supportsLiveModelValidation': False}",
     "try:",
     "    out['defaultFastProvider'] = str(adapter.get_fast_provider_default() or '').strip().lower()",
     "except Exception:",
@@ -493,6 +494,10 @@ function _readAdapterInstallerCapabilities(adapterId) {
     "    out['defaultDeepProvider'] = str(adapter.get_deep_provider_default() or '').strip().lower()",
     "except Exception:",
     "    out['defaultDeepProvider'] = ''",
+    "try:",
+    "    out['supportsLiveModelValidation'] = bool(adapter.installer_supports_live_model_validation())",
+    "except Exception:",
+    "    out['supportsLiveModelValidation'] = False",
     "for p in out['providers']:",
     "    deep = ''",
     "    fast = ''",
@@ -534,6 +539,7 @@ function _readAdapterInstallerCapabilities(adapterId) {
       QUAID_WORKSPACE: WORKSPACE,
       QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
       QUAID_ADAPTER_TYPE: normalized,
+      QUAID_INSTANCE: instanceId,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -545,6 +551,65 @@ function _readAdapterInstallerCapabilities(adapterId) {
   } catch {
     return null;
   }
+}
+
+function _runAdapterInstallerJson(adapterId, pyLines) {
+  const normalized = String(adapterId || "").trim().toLowerCase();
+  if (!normalized) return null;
+  const instanceId = process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(normalized);
+  const res = spawnSync("python3", ["-c", pyLines.join("\n")], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      QUAID_HOME: WORKSPACE,
+      QUAID_WORKSPACE: WORKSPACE,
+      QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
+      QUAID_ADAPTER_TYPE: normalized,
+      QUAID_INSTANCE: instanceId,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (res.error) {
+    throw res.error;
+  }
+  if (res.status !== 0) {
+    const stderr = String(res.stderr || "").trim();
+    const stdout = String(res.stdout || "").trim();
+    throw new Error(stderr || stdout || `adapter installer helper exited ${String(res.status)}`);
+  }
+  try {
+    return JSON.parse(String(res.stdout || "{}"));
+  } catch (err) {
+    throw new Error(`adapter installer helper returned invalid JSON: ${err.message}`);
+  }
+}
+
+function _reviewAdapterInstallerModelPair(adapterId, provider, deepModel, fastModel) {
+  return _runAdapterInstallerJson(adapterId, [
+    "import json, os, sys",
+    "sys.path.insert(0, os.environ.get('QUAID_PYTHONPATH', ''))",
+    "from lib.adapter import _instantiate_adapter_from_manifest",
+    "aid = os.environ.get('QUAID_ADAPTER_TYPE', '').strip()",
+    "adapter = _instantiate_adapter_from_manifest(aid)",
+    `review = adapter.installer_review_model_pair(${JSON.stringify(String(provider || ""))}, ${JSON.stringify(String(deepModel || ""))}, ${JSON.stringify(String(fastModel || ""))})`,
+    "if not isinstance(review, dict):",
+    "    raise RuntimeError('installer_review_model_pair must return a dict')",
+    "print(json.dumps(review))",
+  ]);
+}
+
+function _validateAdapterInstallerModelPairLive(adapterId, provider, deepModel, fastModel) {
+  return _runAdapterInstallerJson(adapterId, [
+    "import json, os, sys",
+    "sys.path.insert(0, os.environ.get('QUAID_PYTHONPATH', ''))",
+    "from lib.adapter import _instantiate_adapter_from_manifest",
+    "aid = os.environ.get('QUAID_ADAPTER_TYPE', '').strip()",
+    "adapter = _instantiate_adapter_from_manifest(aid)",
+    `result = adapter.installer_validate_model_pair_live(${JSON.stringify(String(provider || ""))}, ${JSON.stringify(String(deepModel || ""))}, ${JSON.stringify(String(fastModel || ""))})`,
+    "if not isinstance(result, dict):",
+    "    raise RuntimeError('installer_validate_model_pair_live must return a dict')",
+    "print(json.dumps(result))",
+  ]);
 }
 
 function _sharedModelOverride(adapterId) {
@@ -864,90 +929,6 @@ function _platformUsesHostManagedLlmByDefault(adapterType = "") {
   // OpenClaw and Codex own runtime/provider resolution; keep installer on
   // platform defaults unless the user explicitly opts into advanced setup.
   return platform === "openclaw" || platform === "codex";
-}
-
-function _readOpenClawGatewayRuntime() {
-  const out = { baseUrl: "http://127.0.0.1:18789", token: "" };
-  try {
-    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-    if (!fs.existsSync(cfgPath)) return out;
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    const port = Number(cfg?.gateway?.port || 18789);
-    if (Number.isFinite(port) && port > 0) {
-      out.baseUrl = `http://127.0.0.1:${port}`;
-    }
-    const mode = String(cfg?.gateway?.auth?.mode || "").trim().toLowerCase();
-    const token = String(cfg?.gateway?.auth?.token || "").trim();
-    if (mode === "token" && token) out.token = token;
-  } catch {}
-  return out;
-}
-
-function _extractGatewayResponseText(payload) {
-  if (!payload || typeof payload !== "object") return "";
-  const direct = String(payload.output_text || "").trim();
-  if (direct) return direct;
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  const chunks = [];
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue;
-    if (Array.isArray(item.content)) {
-      for (const contentItem of item.content) {
-        const text = String(contentItem?.text || "").trim();
-        if (text) chunks.push(text);
-      }
-    } else {
-      const text = String(item.text || "").trim();
-      if (text) chunks.push(text);
-    }
-  }
-  return chunks.join("\n").trim();
-}
-
-function _validateOpenClawModelPingOrThrow(provider, model, tier) {
-  const providerNorm = String(provider || "").trim().toLowerCase();
-  const modelNorm = String(model || "").trim();
-  if (!providerNorm || !modelNorm) {
-    throw new Error(`Missing ${tier} model validation inputs (provider='${providerNorm}' model='${modelNorm}').`);
-  }
-  if (!canRun("curl")) {
-    throw new Error("`curl` is required to validate OpenClaw model mappings during install.");
-  }
-  const { baseUrl, token } = _readOpenClawGatewayRuntime();
-  const modelRef = modelNorm.includes("/") ? modelNorm : `${providerNorm}/${modelNorm}`;
-  const body = JSON.stringify({
-    model: "openclaw",
-    instructions: "Reply with exactly: PONG",
-    input: "PING",
-    max_output_tokens: 24,
-  });
-  const args = [
-    "-sS",
-    "-X", "POST", `${baseUrl}/v1/responses`,
-    "-H", "Content-Type: application/json",
-    "-H", "x-openclaw-scopes: operator.write",
-    "-H", `x-openclaw-model: ${modelRef}`,
-    "--max-time", "20",
-    "-d", body,
-  ];
-  if (token) {
-    args.push("-H", `Authorization: Bearer ${token}`);
-  }
-  const res = spawnSync("curl", args, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-  if (res.status !== 0) {
-    const err = String(res.stderr || res.stdout || "").trim() || "unknown gateway error";
-    throw new Error(`OpenClaw gateway rejected ${tier} model '${modelRef}': ${err}`);
-  }
-  let payload = null;
-  try {
-    payload = JSON.parse(String(res.stdout || "{}"));
-  } catch {
-    throw new Error(`OpenClaw gateway returned invalid JSON for ${tier} model '${modelRef}'.`);
-  }
-  const text = _extractGatewayResponseText(payload);
-  if (!text) {
-    throw new Error(`OpenClaw gateway returned an empty reply for ${tier} model '${modelRef}'.`);
-  }
 }
 
 function _installerPlatformLabel() {
@@ -2632,12 +2613,13 @@ async function step3_models() {
   ].filter((opt) => supportedProviders.includes(opt.value));
 
   let sharedOverride = null;
-  const ocGatewayProviderDetected = !(hostManagedLlmDefault && adapterType === "openclaw" && !adapterDefaultProvider);
-  if (!ocGatewayProviderDetected) {
-    log.warn("OpenClaw adapter could not detect a gateway default provider.");
-    log.warn("An explicit fast/deep model pair is required to avoid incorrect defaults.");
-  } else if (hostManagedLlmDefault && adapterType === "openclaw" && adapterDefaultProvider) {
-    log.info(C.dim(`Detected OpenClaw gateway provider (adapter): ${adapterDefaultProvider}`));
+  if (hostManagedLlmDefault && adapterDefaultProvider) {
+    const detectionHint = supportedProviders.includes(adapterDefaultProvider)
+      ? ""
+      : " (custom/unknown provider)";
+    log.info(C.dim(`Detected ${adapterType} host provider (adapter): ${adapterDefaultProvider}${detectionHint}`));
+  } else if (hostManagedLlmDefault) {
+    log.warn(`${adapterType} adapter could not detect a host default provider.`);
   }
   if (hostManagedLlmDefault) {
     log.info(C.dim(`Using ${adapterType} host-managed LLM defaults. Configure alternate providers later in settings.`));
@@ -2675,75 +2657,19 @@ async function step3_models() {
   }
 
   let highModel, lowModel;
-  let manualPairNeeded = false;
-  let manualPairReason = "";
+  let modelsExplicitlyProvided = false;
   let envDeepModel = "";
   let envFastModel = "";
   const adapterDefaults = (adapterCaps.modelDefaults && typeof adapterCaps.modelDefaults === "object")
     ? adapterCaps.modelDefaults[String(provider || "").trim().toLowerCase()]
     : null;
-  if (
-    hostManagedLlmDefault
-    && !advancedSetup
-    && (
-      (adapterType === "openclaw" && !ocGatewayProviderDetected)
-      || !adapterDefaults
-      || !adapterDefaults.deep
-      || !adapterDefaults.fast
-    )
-  ) {
-    manualPairNeeded = true;
-    manualPairReason = (adapterType === "openclaw" && !ocGatewayProviderDetected)
-      ? "OpenClaw gateway default provider could not be detected."
-      : (
-          `No adapter fast/deep mapping is defined for provider '${provider}'.`
-        );
-    log.warn(manualPairReason);
-    log.warn("You need to set a deep/fast model pair for this provider during install.");
-    envDeepModel = String(process.env.QUAID_INSTALL_DEEP_MODEL || "").trim();
-    envFastModel = String(process.env.QUAID_INSTALL_FAST_MODEL || "").trim();
-    if (AGENT_MODE) {
-      if (!envDeepModel || !envFastModel) {
-        throw new Error(
-          `${manualPairReason} Agent mode requires both QUAID_INSTALL_DEEP_MODEL and QUAID_INSTALL_FAST_MODEL. ` +
-          "Example guidance: fast = smallest/fastest model with decent reasoning; deep = mid/high reasoning model (not necessarily max tier)."
-        );
-      }
-      highModel = envDeepModel;
-      lowModel = envFastModel;
-      log.info(C.dim(`Using agent-provided OC pair: deep=${highModel} fast=${lowModel}`));
-    }
-  }
+  envDeepModel = String(process.env.QUAID_INSTALL_DEEP_MODEL || "").trim();
+  envFastModel = String(process.env.QUAID_INSTALL_FAST_MODEL || "").trim();
   if (sharedOverride?.deep && sharedOverride?.fast && (!sharedOverride.provider || sharedOverride.provider === provider)) {
     highModel = sharedOverride.deep;
     lowModel = sharedOverride.fast;
+    modelsExplicitlyProvided = true;
     log.info(C.dim(`Model lanes overridden by shared config: deep=${highModel} fast=${lowModel}`));
-  } else if (manualPairNeeded && !AGENT_MODE) {
-    const pairProviderLabel = (adapterType === "openclaw" && !ocGatewayProviderDetected)
-      ? "unknown (gateway default not detected)"
-      : provider;
-    note(
-      [
-        `OpenClaw provider '${pairProviderLabel}' does not have a built-in fast/deep mapping yet.`,
-        "",
-        "Choose two models:",
-        "  - Fast lane: the fastest model with decent reasoning for reranking/classification.",
-        "  - Deep lane: a mid/high reasoning model for extraction/review (max-tier is optional).",
-        "",
-        "Use provider/model format when possible (for example: openai/gpt-5.4-mini).",
-      ].join("\n"),
-      C.bmag("MODEL PAIR REQUIRED")
-    );
-    lowModel = handleCancel(await text({
-      message: "Fast reasoning model:",
-      placeholder: "provider/model (recommended)",
-      validate: (v) => String(v || "").trim().length === 0 ? "Fast model is required" : undefined,
-    }));
-    highModel = handleCancel(await text({
-      message: "Deep reasoning model:",
-      placeholder: "provider/model (recommended)",
-      validate: (v) => String(v || "").trim().length === 0 ? "Deep model is required" : undefined,
-    }));
   } else if (adapterDefaults && adapterDefaults.deep && adapterDefaults.fast) {
     highModel = String(adapterDefaults.deep);
     lowModel = String(adapterDefaults.fast);
@@ -2771,21 +2697,97 @@ async function step3_models() {
       placeholder: defaultLow,
       initialValue: defaultLow,
     }));
-  } else {
+    modelsExplicitlyProvided = true;
+  }
+
+  let modelReview = null;
+  try {
+    modelReview = _reviewAdapterInstallerModelPair(adapterType, provider, highModel, lowModel) || null;
+  } catch (err) {
+    log.warn(`Could not review installer model pair via adapter '${adapterType}': ${err.message}`);
+  }
+
+  if (modelReview?.needsClarification && !modelsExplicitlyProvided) {
+    const clarificationReason = String(modelReview.reason || "").trim()
+      || `No adapter fast/deep mapping is defined for provider '${provider}'.`;
+    log.warn(clarificationReason);
+    if (AGENT_MODE) {
+      if (envDeepModel && envFastModel) {
+        highModel = envDeepModel;
+        lowModel = envFastModel;
+        modelsExplicitlyProvided = true;
+        log.info(C.dim(`Using agent-provided model pair: deep=${highModel} fast=${lowModel}`));
+      } else {
+        sendInstallerAgentNotice(
+          [
+            `Unknown or unmapped provider detected during install for adapter '${adapterType}'.`,
+            `Current fast model: ${String(lowModel || "(unset)")}`,
+            `Current deep model: ${String(highModel || "(unset)")}`,
+            "",
+            "Quaid needs the user to confirm or correct these model IDs before it can operate reliably.",
+            "Fast model = quick routing, reranking, and classification work.",
+            "Deep model = heavier reasoning, extraction, and complex tasks.",
+          ].join("\n"),
+          {
+            severity: "warning",
+            source: "installer",
+            dedupeKey: "installer-unknown-provider",
+            ttlSeconds: 900,
+          }
+        );
+        throw new Error(
+          `${clarificationReason} Agent mode needs explicit fast/deep model IDs from the user before install can continue.`
+        );
+      }
+    } else {
+      note(
+        [
+          clarificationReason,
+          "",
+          "Quaid needs two model IDs for this provider:",
+          "  - Fast model: quick routing, reranking, and classification work.",
+          "  - Deep model: extraction, full reasoning, and more complex tasks.",
+          "",
+          "Use provider/model format when possible (for example: openai/gpt-5.4-mini).",
+        ].join("\n"),
+        C.bmag("MODEL PAIR REQUIRED")
+      );
+      lowModel = handleCancel(await text({
+        message: "Fast reasoning model:",
+        placeholder: String(lowModel || "provider/model"),
+        initialValue: String(lowModel || ""),
+        validate: (v) => String(v || "").trim().length === 0 ? "Fast model is required" : undefined,
+      }));
+      highModel = handleCancel(await text({
+        message: "Deep reasoning model:",
+        placeholder: String(highModel || "provider/model"),
+        initialValue: String(highModel || ""),
+        validate: (v) => String(v || "").trim().length === 0 ? "Deep model is required" : undefined,
+      }));
+      modelsExplicitlyProvided = true;
+    }
+  }
+
+  if (!AGENT_MODE || modelsExplicitlyProvided || !modelReview?.needsClarification) {
     log.info(`Deep reasoning: ${C.bcyan(highModel)}  |  Fast reasoning: ${C.bcyan(lowModel)}`);
   }
 
-  if (_isPlatform("openclaw")) {
+  if (adapterCaps.supportsLiveModelValidation) {
     const ping = spinner();
-    ping.start("Validating OpenClaw deep/fast model mappings (gateway PING)...");
+    ping.start(`Validating ${adapterType} deep/fast models (provider PING)...`);
     try {
-      _validateOpenClawModelPingOrThrow(provider, lowModel, "fast");
-      _validateOpenClawModelPingOrThrow(provider, highModel, "deep");
-      ping.stop(C.green("OpenClaw model validation passed"));
+      const validation = _validateAdapterInstallerModelPairLive(adapterType, provider, highModel, lowModel) || {};
+      if (validation.supported === false) {
+        ping.stop(C.dim(`${adapterType} adapter does not support live model validation`));
+      } else {
+        ping.stop(C.green(String(validation.message || `${adapterType} model validation passed`)));
+      }
     } catch (err) {
-      ping.stop(C.red("OpenClaw model validation failed"), 2);
+      ping.stop(C.red(`${adapterType} model validation failed`), 2);
       throw err;
     }
+  } else {
+    log.info(C.dim(`${adapterType} adapter does not expose live model validation during install.`));
   }
 
   // API key — the bot passes its key to Quaid at runtime.
@@ -5118,6 +5120,53 @@ function _resolveInstallerNotifyOverride() {
 
 function resolvePinnedNotificationRoute() {
   return _resolveInstallerNotifyOverride() || _resolveLastChannelFromSessions();
+}
+
+function sendInstallerAgentNotice(message, options = {}) {
+  if (!AGENT_MODE) return false;
+  if (String(process.env.QUAID_INSTALL_NOTIFY || "1").trim() === "0") return false;
+
+  const severity = String(options.severity || "warning").trim().toLowerCase() || "warning";
+  const source = String(options.source || "installer").trim() || "installer";
+  const dedupeKey = String(options.dedupeKey || "").trim();
+  const ttlSeconds = Number(options.ttlSeconds || 900);
+  const pythonRoot = path.join(__dirname, "modules", "quaid");
+  const py = `
+import os, sys
+sys.path.insert(0, ${JSON.stringify(pythonRoot)})
+from core.runtime.notify import notify_agent
+ok = notify_agent(
+    ${JSON.stringify(String(message || ""))},
+    severity=${JSON.stringify(severity)},
+    source=${JSON.stringify(source)},
+    dedupe_key=${JSON.stringify(dedupeKey || null)},
+    ttl_seconds=${Number.isFinite(ttlSeconds) ? Math.max(0, Math.trunc(ttlSeconds)) : 900},
+)
+print("ok" if ok else "unavailable")
+`;
+  const env = { ...process.env };
+  const sep = process.platform === "win32" ? ";" : ":";
+  env.QUAID_HOME = WORKSPACE;
+  env.CLAWDBOT_WORKSPACE = WORKSPACE;
+  env.PYTHONPATH = env.PYTHONPATH ? `${pythonRoot}${sep}${env.PYTHONPATH}` : pythonRoot;
+  env.QUAID_INSTANCE = env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedInstallerPlatform());
+
+  const res = spawnSync("python3", ["-c", py], {
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+    env,
+    timeout: 5_000,
+  });
+  if (res.error) {
+    log.warn(`Installer agent notice unavailable: ${String(res.error.message || res.error)}`);
+    return false;
+  }
+  if (res.status !== 0) {
+    const detail = String(res.stderr || res.stdout || "").trim();
+    log.warn(`Installer agent notice unavailable: ${detail || "python exited non-zero"}`);
+    return false;
+  }
+  return String(res.stdout || "").trim() === "ok";
 }
 
 function sendInstallerNotification(message) {
