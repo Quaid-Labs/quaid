@@ -169,7 +169,7 @@ class GatewayLLMProvider(LLMProvider):
             elif m["role"] == "user":
                 user_message = m["content"]
 
-        if self._deep_model or self._fast_model:
+        if self._deep_model and self._fast_model:
             return self._llm_call_openresponses(
                 system_prompt=system_prompt,
                 user_message=user_message,

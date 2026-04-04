@@ -5139,7 +5139,7 @@ ok = notify_agent(
     ${JSON.stringify(String(message || ""))},
     severity=${JSON.stringify(severity)},
     source=${JSON.stringify(source)},
-    dedupe_key=${JSON.stringify(dedupeKey || null)},
+    dedupe_key=${dedupeKey ? JSON.stringify(dedupeKey) : "None"},
     ttl_seconds=${Number.isFinite(ttlSeconds) ? Math.max(0, Math.trunc(ttlSeconds)) : 900},
 )
 print("ok" if ok else "unavailable")
