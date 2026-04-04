@@ -396,8 +396,24 @@ class OpenClawAdapter(QuaidAdapter):
             return []
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
+        from config import get_config
         port, token = self._get_gateway_auth()
-        return GatewayLLMProvider(port=port, token=token)
+        try:
+            cfg = get_config()
+            deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
+            fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
+            provider = str(getattr(cfg.models, "llm_provider", "") or "").strip() or "anthropic"
+        except Exception:
+            deep_model = ""
+            fast_model = ""
+            provider = "anthropic"
+        return GatewayLLMProvider(
+            port=port,
+            token=token,
+            deep_model=deep_model,
+            fast_model=fast_model,
+            default_provider=provider,
+        )
 
     def installer_supported_providers(self) -> list:
         providers = set(self._INSTALLER_MODEL_DEFAULTS.keys())

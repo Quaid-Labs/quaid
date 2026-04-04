@@ -14,6 +14,7 @@ function _formatBridgeErrorDetail(stderrText, stdoutText) {
   const compactStderr = stderrText.length > 900 ? `${stderrText.slice(0, 420)} ... [truncated] ... ${stderrText.slice(-420)}` : stderrText;
   return [timeoutHint, compactStderr ? `stderr: ${compactStderr}` : "", stdoutText ? `stdout: ${stdoutText}` : ""].filter(Boolean).join(" | ").slice(0, 2e3);
 }
+const _PYTHON_BIN = String(process.env.QUAID_PYTHON_BIN || 'python3').trim() || 'python3';
 export function createPythonBridgeExecutor(config) {
   const explicitRoot = String(config.pluginRoot || "").trim();
   const modernRoot = path.join(config.workspace, "modules", "quaid");
@@ -24,7 +25,7 @@ export function createPythonBridgeExecutor(config) {
   const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;
   return async function execPython(command, args = []) {
     return new Promise((resolve, reject) => {
-      const proc = spawn("python3", [config.scriptPath, command, ...args], {
+      const proc = spawn(_PYTHON_BIN, [config.scriptPath, command, ...args], {
         cwd: config.workspace,
         env: {
           ...process.env,
