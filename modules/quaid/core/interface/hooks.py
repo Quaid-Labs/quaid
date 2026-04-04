@@ -1171,6 +1171,12 @@ def hook_subagent_start(args):
         return
 
     try:
+        from core.extraction_daemon import ensure_alive
+        ensure_alive()
+    except Exception:
+        pass
+
+    try:
         from core.subagent_registry import register
         register(
             parent_session_id=parent_session_id,
@@ -1204,6 +1210,12 @@ def hook_subagent_stop(args):
 
     if not parent_session_id or not child_id:
         return
+
+    try:
+        from core.extraction_daemon import ensure_alive
+        ensure_alive()
+    except Exception:
+        pass
 
     # Expand ~ in transcript path
     if transcript_path:
