@@ -531,13 +531,15 @@ class QuaidAdapter(abc.ABC):
         return ""
 
     def get_instance_manager(self) -> Optional["InstanceManager"]:
-        """Return the InstanceManager for this adapter, or None.
+        """Return the InstanceManager for this adapter.
 
-        Adapters that support user-driven instance creation (e.g. CC)
-        return a subclass. Adapters that manage instances automatically
-        (e.g. OC at install time) return None.
+        All concrete adapters must implement this. Adapters that manage instances
+        automatically (e.g. OC at install time) return the base InstanceManager.
+        Adapters that support user-driven instance creation (e.g. CC) return a
+        platform-specific subclass. Adapters that do not use InstanceManager at all
+        must still implement this method and return None explicitly.
         """
-        return None
+        raise NotImplementedError(f"{type(self).__name__} must implement get_instance_manager()")
 
     # ---- Identity ----
 

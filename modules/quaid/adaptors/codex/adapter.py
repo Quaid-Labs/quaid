@@ -72,6 +72,11 @@ class CodexAdapter(QuaidAdapter):
             return [current] + [item for item in found if item != current]
         return [current] + found
 
+    def get_instance_manager(self):
+        # CDX manages instances automatically via CODEX_PROJECT_DIR path-hash.
+        # No user-driven instance creation needed.
+        return None
+
     def _pending_notifications_path(self) -> Path:
         return self.data_dir() / "codex-pending-notifications.jsonl"
 
