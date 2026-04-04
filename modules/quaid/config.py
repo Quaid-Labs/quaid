@@ -928,7 +928,10 @@ def _load_config_inner() -> MemoryConfig:
     
     raw_plugin_config = _extract_raw_plugin_config(raw_config)
     raw_user_identities = _extract_raw_user_identities(raw_config)
-    # Convert camelCase to snake_case
+    # Generic camelCase → snake_case translation. All keys in config_data are
+    # snake_case after this call. No per-key camelCase fallbacks are needed below.
+    # Do not add new .get("camelCase", .get("snake_case", ...)) chains — add a
+    # snake_case key and this call handles the alias automatically.
     config_data = _load_nested(raw_config)
     if raw_plugin_config:
         plugins_section = config_data.setdefault("plugins", {})
@@ -974,8 +977,8 @@ def _load_config_inner() -> MemoryConfig:
         fast_reasoning_provider=models_data.get('fast_reasoning_provider', models_data.get('fastReasoningProvider', 'default')),
         deep_reasoning_provider=models_data.get('deep_reasoning_provider', models_data.get('deepReasoningProvider', 'default')),
         embeddings_provider=models_data.get('embeddings_provider', models_data.get('embeddingsProvider', 'ollama')),
-        fast_reasoning=models_data.get('fast_reasoning', models_data.get('fastReasoning', ModelConfig.fast_reasoning)),
-        deep_reasoning=models_data.get('deep_reasoning', models_data.get('deepReasoning', ModelConfig.deep_reasoning)),
+        fast_reasoning=models_data.get('fast_reasoning', ModelConfig.fast_reasoning),
+        deep_reasoning=models_data.get('deep_reasoning', ModelConfig.deep_reasoning),
         fast_reasoning_effort=_coerce_reasoning_effort(
             models_data.get('fast_reasoning_effort', models_data.get('fastReasoningEffort', ModelConfig.fast_reasoning_effort)),
             ModelConfig.fast_reasoning_effort,
