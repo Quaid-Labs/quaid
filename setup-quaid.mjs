@@ -2773,18 +2773,40 @@ async function step3_models() {
   }
 
   if (adapterCaps.supportsLiveModelValidation) {
-    const ping = spinner();
-    ping.start(`Validating ${adapterType} deep/fast models (provider PING)...`);
-    try {
-      const validation = _validateAdapterInstallerModelPairLive(adapterType, provider, highModel, lowModel) || {};
-      if (validation.supported === false) {
-        ping.stop(C.dim(`${adapterType} adapter does not support live model validation`));
-      } else {
-        ping.stop(C.green(String(validation.message || `${adapterType} model validation passed`)));
+    let pingPassed = false;
+    while (!pingPassed) {
+      const ping = spinner();
+      ping.start(`Validating ${adapterType} deep/fast models (provider PING)...`);
+      try {
+        const validation = _validateAdapterInstallerModelPairLive(adapterType, provider, highModel, lowModel) || {};
+        if (validation.supported === false) {
+          ping.stop(C.dim(`${adapterType} adapter does not support live model validation`));
+        } else {
+          ping.stop(C.green(String(validation.message || `${adapterType} model validation passed`)));
+        }
+        pingPassed = true;
+      } catch (err) {
+        ping.stop(C.red(`${adapterType} model validation failed`), 2);
+        if (AGENT_MODE) throw err;
+        const shouldRetry = handleCancel(await confirm({
+          message: "Retry with different model IDs?",
+          initialValue: true,
+        }));
+        if (!shouldRetry) throw err;
+        lowModel = handleCancel(await text({
+          message: "Fast reasoning model:",
+          placeholder: String(lowModel || "provider/model"),
+          initialValue: String(lowModel || ""),
+          validate: (v) => String(v || "").trim().length === 0 ? "Fast model is required" : undefined,
+        }));
+        highModel = handleCancel(await text({
+          message: "Deep reasoning model:",
+          placeholder: String(highModel || "provider/model"),
+          initialValue: String(highModel || ""),
+          validate: (v) => String(v || "").trim().length === 0 ? "Deep model is required" : undefined,
+        }));
+        log.info(`Deep reasoning: ${C.bcyan(highModel)}  |  Fast reasoning: ${C.bcyan(lowModel)}`);
       }
-    } catch (err) {
-      ping.stop(C.red(`${adapterType} model validation failed`), 2);
-      throw err;
     }
   } else {
     log.info(C.dim(`${adapterType} adapter does not expose live model validation during install.`));
