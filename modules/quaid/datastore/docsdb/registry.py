@@ -1703,13 +1703,6 @@ def main():
     find_p = subparsers.add_parser("find-project", help="Find which project owns a file")
     find_p.add_argument("file_path", help="File path to look up")
 
-    # create-project
-    create_p = subparsers.add_parser("create-project", help="Scaffold a new project")
-    create_p.add_argument("name", help="Project name (kebab-case)")
-    create_p.add_argument("--label", help="Display label")
-    create_p.add_argument("--source-roots", nargs="*", help="Source root directories")
-    create_p.add_argument("--description", default="", help="Project description")
-
     # discover
     disc_p = subparsers.add_parser("discover", help="Auto-discover files in project")
     disc_p.add_argument("--project", required=True, help="Project name")
@@ -1731,11 +1724,6 @@ def main():
     arch_p.add_argument("name", help="Project name to archive")
     arch_p.add_argument("--yes", action="store_true", help="Skip confirmation")
 
-    # delete-project
-    del_p = subparsers.add_parser("delete-project", help="Delete a project entirely")
-    del_p.add_argument("name", help="Project name to delete")
-    del_p.add_argument("--yes", action="store_true", help="Skip confirmation")
-
     # move-file
     mv_p = subparsers.add_parser("move-file", help="Move a file to a different project")
     mv_p.add_argument("file_path", help="File path to move")
@@ -1745,11 +1733,6 @@ def main():
     ver_p = subparsers.add_parser("verify", help="Check project health (missing files, orphans)")
     ver_p.add_argument("--project", required=True, help="Project name to verify")
     ver_p.add_argument("--json", action="store_true", help="JSON output")
-
-    # list-projects
-    lp_p = subparsers.add_parser("list-projects", help="List all defined projects")
-    lp_p.add_argument("--json", action="store_true", help="JSON output")
-    lp_p.add_argument("--names-only", action="store_true", help="Output project names only, one per line")
 
     # stats
     stats_p = subparsers.add_parser("stats", help="Show registry statistics")
@@ -1843,14 +1826,6 @@ def main():
             print(f"No project found for: {args.file_path}")
             sys.exit(1)
 
-    elif args.command == "create-project":
-        registry.create_project(
-            name=args.name,
-            label=args.label,
-            source_roots=args.source_roots,
-            description=args.description,
-        )
-
     elif args.command == "discover":
         found = registry.auto_discover(args.project)
         print(f"\nDiscovered {len(found)} new file(s)")
@@ -1881,17 +1856,6 @@ def main():
         result = registry.archive_project(args.name)
         sys.exit(0 if result["archived"] > 0 else 1)
 
-    elif args.command == "delete-project":
-        if not args.yes and sys.stdin.isatty():
-            docs = registry.list_docs(project=args.name)
-            print(f"Will DELETE project '{args.name}' ({len(docs)} docs) and remove directory.")
-            confirm = input("Continue? [y/N] ").strip().lower()
-            if confirm != "y":
-                print("Aborted.")
-                sys.exit(1)
-        result = registry.delete_project(args.name)
-        sys.exit(0 if result["deleted"] > 0 else 1)
-
     elif args.command == "move-file":
         result = registry.move_file(args.file_path, args.to_project)
         sys.exit(0 if result["moved"] else 1)
@@ -1901,22 +1865,6 @@ def main():
         if args.json:
             print(json.dumps(result, indent=2))
         sys.exit(0 if not result["missing"] else 1)
-
-    elif args.command == "list-projects":
-        if args.names_only:
-            defs = registry.get_all_project_definitions()
-            for name in sorted(defs.keys()):
-                print(name)
-        elif args.json:
-            projects = registry.list_projects()
-            print(json.dumps(projects, indent=2))
-        else:
-            projects = registry.list_projects()
-            if not projects:
-                print("No projects defined.")
-            else:
-                for p in projects:
-                    print(f"  {p['name']:20s} {p['label']:25s} {p['doc_count']:3d} docs  {p['home_dir']}")
 
     elif args.command == "stats":
         projects = registry.list_projects()
