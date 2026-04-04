@@ -2525,6 +2525,78 @@ def _index_one_stale_doc() -> bool:
     return False
 
 
+def _auto_register_untracked_docs() -> int:
+    """Scan tracked project dirs for .md files not yet in the docs registry.
+
+    Called every ~5 minutes from the daemon loop. Registers any .md file found
+    under a project's home_dir or source_roots that is not already tracked.
+
+    Returns the count of newly registered docs.
+    """
+    try:
+        from config import get_config
+        from datastore.docsdb.registry import DocsRegistry
+    except ImportError:
+        return 0
+
+    try:
+        cfg = get_config()
+        registry = DocsRegistry()
+    except Exception:
+        return 0
+
+    registered_paths: set = set()
+    try:
+        for doc in registry.list_docs():
+            fp = doc.get("file_path") or doc.get("path", "")
+            if fp:
+                registered_paths.add(str(Path(fp).resolve()))
+    except Exception:
+        return 0
+
+    count = 0
+    for proj_name, defn in (cfg.projects.definitions or {}).items():
+        try:
+            from lib.adapter import get_adapter, quaid_projects_dir
+            home_dir = str(defn.home_dir or "").strip()
+            if not home_dir:
+                continue
+            # home_dir is relative to QUAID_HOME/projects/ by convention
+            if not Path(home_dir).is_absolute():
+                adapter = get_adapter()
+                base = quaid_projects_dir(adapter.quaid_home())
+                # strip leading "projects/" if present
+                rel = home_dir.removeprefix("projects/")
+                candidate_dir = base / rel
+            else:
+                candidate_dir = Path(home_dir)
+
+            if not candidate_dir.is_dir():
+                continue
+
+            for md_path in candidate_dir.rglob("*.md"):
+                abs_path = str(md_path.resolve())
+                if abs_path in registered_paths:
+                    continue
+                try:
+                    registry.register(
+                        file_path=abs_path,
+                        project=proj_name,
+                        asset_type="doc",
+                        title=md_path.stem.replace("-", " ").replace("_", " ").title(),
+                        registered_by="daemon_auto_scan",
+                    )
+                    registered_paths.add(abs_path)
+                    count += 1
+                    logger.info("[daemon] auto-registered doc: %s (project=%s)", abs_path, proj_name)
+                except Exception as e:
+                    logger.debug("[daemon] auto-register skipped %s: %s", abs_path, e)
+        except Exception as e:
+            logger.debug("[daemon] auto-register scan error for project %s: %s", proj_name, e)
+
+    return count
+
+
 def _retry_missing_embeddings() -> int:
     """Retry embeddings for nodes stored without one (e.g. when Ollama was down).
 
@@ -2652,8 +2724,10 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
     last_idle_check = 0.0
     last_stale_doc_check = 0.0
     last_embed_retry_check = 0.0
+    last_auto_register_check = 0.0
     _STALE_DOC_CHECK_INTERVAL = 60.0  # check for stale docs every 60s
     _EMBED_RETRY_INTERVAL = 300.0  # retry missing embeddings every 5 minutes
+    _AUTO_REGISTER_INTERVAL = 300.0  # scan for untracked project docs every 5 minutes
 
     # Initialize version watcher and janitor scheduler
     from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
@@ -2757,6 +2831,15 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.debug("embed retry failed: %s", e)
                 last_embed_retry_check = now
+
+            # Periodic doc auto-registration — find .md files in project dirs
+            # that are not yet registered in the docs registry
+            if now - last_auto_register_check > _AUTO_REGISTER_INTERVAL:
+                try:
+                    _auto_register_untracked_docs()
+                except Exception as e:
+                    logger.debug("auto-register docs failed: %s", e)
+                last_auto_register_check = now
 
             time.sleep(poll_interval)
 
