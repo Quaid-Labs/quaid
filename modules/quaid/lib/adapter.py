@@ -1315,12 +1315,33 @@ def _bootstrap_instance_env(adapter: QuaidAdapter) -> None:
     writes it to os.environ so all downstream code (lib.instance, subprocesses,
     CLI calls) sees a consistent value without each adapter managing it.
 
-    Skips if QUAID_INSTANCE is already set — OC's TS side may have pre-set it,
-    and explicit env overrides always win.
+    Resolution order:
+      1. QUAID_INSTANCE already set in env (explicit override) — skip.
+      2. For CC adapter: read QUAID_INSTANCE from
+         ${CLAUDE_PROJECT_DIR}/.claude/settings.json. CC writes this during
+         make_instance() so the quaid CLI resolves the same instance that CC
+         would use when running from the same project dir.
+      3. Fall back to adapter.get_instance_name() (path-hash derivation).
     """
     import os
     if os.environ.get("QUAID_INSTANCE", "").strip():
         return
+    # CC per-project settings.json: read before falling back to path-hash so that
+    # `quaid stats` / `quaid recall` from SSH behave the same as inside a CC session.
+    try:
+        _project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+        if _project_dir:
+            import json
+            from pathlib import Path as _Path
+            _settings = _Path(_project_dir) / ".claude" / "settings.json"
+            if _settings.is_file():
+                _d = json.loads(_settings.read_text(encoding="utf-8"))
+                _qi = str((_d.get("env") or {}).get("QUAID_INSTANCE") or "").strip()
+                if _qi:
+                    os.environ["QUAID_INSTANCE"] = _qi
+                    return
+    except Exception:
+        pass
     try:
         name = adapter.get_instance_name()
         prefix = adapter.agent_id_prefix()
