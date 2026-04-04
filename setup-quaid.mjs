@@ -240,12 +240,7 @@ if (INSTALL_ARGS.errors.length) {
   console.error("    Use --help for usage.");
   process.exit(2);
 }
-const FORCED_ADAPTER_TYPE = String(
-  INSTALL_ARGS.adapter
-  || process.env.QUAID_ADAPTER_TYPE
-  || process.env.QUAID_INSTALL_ADAPTER_TYPE
-  || ""
-).trim().toLowerCase();
+const FORCED_ADAPTER_TYPE = String(INSTALL_ARGS.adapter || "").trim().toLowerCase();
 const INSTALL_SOURCE = String(INSTALL_ARGS.source || process.env.QUAID_INSTALL_SOURCE || "local").trim().toLowerCase();
 const INSTALL_REF = String(INSTALL_ARGS.ref || process.env.QUAID_INSTALL_REF || "main").trim();
 const INSTALL_GITHUB_REPO = String(INSTALL_ARGS.githubRepo || process.env.QUAID_INSTALL_GITHUB_REPO || "quaid-labs/quaid").trim();
