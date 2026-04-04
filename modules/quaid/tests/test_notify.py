@@ -397,6 +397,36 @@ class TestNotifyAgent:
         assert sent_message.startswith("[Quaid warning]")
 
 
+class TestDeferredNotifyCli:
+    def test_deferred_status_cli_uses_wrapper_with_options(self, monkeypatch, capsys):
+        import core.runtime.notify as notify_mod
+
+        monkeypatch.setattr(
+            notify_mod,
+            "_ctx_get_deferred_notice_status",
+            lambda limit=500, include_items=False: {
+                "pending_count": 1,
+                "kinds": {"janitor_summary": 1},
+                "priorities": {"normal": 1},
+                "items": [
+                    {
+                        "kind": "janitor_summary",
+                        "priority": "normal",
+                        "created_at": "2026-04-04T11:11:11+00:00",
+                        "message": "Nightly janitor completed.",
+                    }
+                ] if include_items else [],
+            },
+        )
+        monkeypatch.setattr(notify_mod.sys, "argv", ["notify.py", "--deferred-status", "--json", "--limit", "3"])
+
+        notify_mod.main()
+
+        out = json.loads(capsys.readouterr().out)
+        assert out["pending_count"] == 1
+        assert out["items"][0]["kind"] == "janitor_summary"
+
+
 class TestNotifyFallbackVisibility:
     def test_notify_full_text_config_error_logs_warning_when_fail_hard_disabled(self, caplog):
         caplog.set_level("WARNING")

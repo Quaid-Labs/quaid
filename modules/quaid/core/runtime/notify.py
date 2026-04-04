@@ -270,8 +270,12 @@ def drain_deferred_notices(*, limit: int = 50) -> list:
     return _ctx_drain_deferred_notices(limit=limit)
 
 
-def get_deferred_notice_status() -> dict:
-    return _ctx_get_deferred_notice_status()
+def get_deferred_notice_status(
+    *,
+    limit: int = 500,
+    include_items: bool = False,
+) -> dict:
+    return _ctx_get_deferred_notice_status(limit=limit, include_items=include_items)
 
 
 def get_deferred_notice_hint() -> str:

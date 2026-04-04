@@ -177,8 +177,12 @@ def drain_deferred_notices(*, limit: int = 50) -> List[Dict]:
     return _drain_deferred_notices(limit=limit)
 
 
-def get_deferred_notice_status() -> Dict:
-    return _get_deferred_notice_status()
+def get_deferred_notice_status(
+    *,
+    limit: int = 500,
+    include_items: bool = False,
+) -> Dict:
+    return _get_deferred_notice_status(limit=limit, include_items=include_items)
 
 
 def format_deferred_notice_hint() -> str:

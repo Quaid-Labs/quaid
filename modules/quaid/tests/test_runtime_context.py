@@ -69,3 +69,17 @@ def test_fail_policy_logs_when_config_load_fails(caplog):
             assert is_fail_hard_enabled() is True
 
     assert any("defaulting to enabled" in rec.message for rec in caplog.records)
+
+
+def test_get_deferred_notice_status_passes_through_options():
+    from lib import runtime_context
+
+    with patch.object(
+        runtime_context,
+        "_get_deferred_notice_status",
+        return_value={"pending_count": 1, "items": [{"kind": "janitor"}]},
+    ) as mock_status:
+        payload = runtime_context.get_deferred_notice_status(limit=7, include_items=True)
+
+    mock_status.assert_called_once_with(limit=7, include_items=True)
+    assert payload["pending_count"] == 1
