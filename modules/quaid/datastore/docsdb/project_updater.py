@@ -715,6 +715,19 @@ def append_project_logs(
         if not defn:
             defn = registry.get_project_definition(project_name)
         if not defn:
+            # Force-flush: reload the config and registry before falling back to
+            # the filesystem. The config singleton may be stale (e.g. written by
+            # the installer after this process started). A fresh load gives the
+            # project one more chance to be found via the normal path.
+            try:
+                from config import load_config as _reload_cfg
+                fresh_cfg = _reload_cfg()
+                defn = fresh_cfg.projects.definitions.get(project_name)
+                if not defn:
+                    defn = DocsRegistry().get_project_definition(project_name)
+            except Exception:
+                pass
+        if not defn:
             # Filesystem fallback: project may have been deleted from the
             # registry during the session but its directory still exists.
             candidate = get_quaid_home() / "projects" / project_name
