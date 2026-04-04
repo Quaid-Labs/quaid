@@ -389,6 +389,39 @@ def delete_project(name: str) -> None:
     logger.info("Deleted project: %s", name)
 
 
+def rename_project(old_name: str, new_name: str) -> Dict[str, Any]:
+    """Rename a project: update all registry entries, move directory, refresh config.
+
+    Delegates to DocsRegistry which owns the full rename operation (DB rows,
+    directory move, project_definitions update, global registry sync).
+
+    Returns:
+        {"renamed": count, "dir_moved": bool}
+
+    Raises:
+        ValueError: If old_name does not exist or new_name is already taken.
+    """
+    from datastore.docsdb.registry import DocsRegistry
+    registry = DocsRegistry()
+    return registry.rename_project(old_name, new_name)
+
+
+def archive_project(name: str) -> Dict[str, Any]:
+    """Archive a project: set all entries to archived state, move dir to archive/.
+
+    Delegates to DocsRegistry which owns the archive operation.
+
+    Returns:
+        {"archived": count, "dir_moved": bool}
+
+    Raises:
+        ValueError: If project does not exist.
+    """
+    from datastore.docsdb.registry import DocsRegistry
+    registry = DocsRegistry()
+    return registry.archive_project(name)
+
+
 def projects_with_source_root() -> List[Dict[str, Any]]:
     """Return projects that have a source_root configured.
 

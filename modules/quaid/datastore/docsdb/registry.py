@@ -12,8 +12,6 @@ Usage:
   python3 docs_registry.py unregister <file_path>
   python3 docs_registry.py find-project <file_path>
   python3 docs_registry.py create-project <name> [--label ...] [--source-roots ...]
-  python3 docs_registry.py rename-project <old> <new>
-  python3 docs_registry.py archive-project <name> [--yes]
   python3 docs_registry.py delete-project <name> [--yes]
   python3 docs_registry.py move-file <path> --to-project <name>
   python3 docs_registry.py verify --project <name> [--json]
@@ -1714,16 +1712,6 @@ def main():
     # sync (migration)
     sync_p = subparsers.add_parser("sync", help="Migrate existing docs into registry")
 
-    # rename-project
-    ren_p = subparsers.add_parser("rename-project", help="Rename a project (registry + dir + config)")
-    ren_p.add_argument("old_name", help="Current project name")
-    ren_p.add_argument("new_name", help="New project name")
-
-    # archive-project
-    arch_p = subparsers.add_parser("archive-project", help="Archive a project")
-    arch_p.add_argument("name", help="Project name to archive")
-    arch_p.add_argument("--yes", action="store_true", help="Skip confirmation")
-
     # move-file
     mv_p = subparsers.add_parser("move-file", help="Move a file to a different project")
     mv_p.add_argument("file_path", help="File path to move")
@@ -1840,21 +1828,6 @@ def main():
         print(f"\nMigration complete:")
         print(f"  Registered from config: {result['registered']}")
         print(f"  Synced from chunks: {result['from_chunks']}")
-
-    elif args.command == "rename-project":
-        result = registry.rename_project(args.old_name, args.new_name)
-        sys.exit(0 if result["renamed"] > 0 else 1)
-
-    elif args.command == "archive-project":
-        if not args.yes and sys.stdin.isatty():
-            docs = registry.list_docs(project=args.name)
-            print(f"Will archive project '{args.name}' ({len(docs)} docs).")
-            confirm = input("Continue? [y/N] ").strip().lower()
-            if confirm != "y":
-                print("Aborted.")
-                sys.exit(1)
-        result = registry.archive_project(args.name)
-        sys.exit(0 if result["archived"] > 0 else 1)
 
     elif args.command == "move-file":
         result = registry.move_file(args.file_path, args.to_project)

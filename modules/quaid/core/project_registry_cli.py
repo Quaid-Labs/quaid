@@ -7,6 +7,8 @@ Usage:
     python3 project_registry_cli.py show <name>
     python3 project_registry_cli.py update <name> [--description "..."] [--source-root /path]
     python3 project_registry_cli.py delete <name>
+    python3 project_registry_cli.py rename <old_name> <new_name>
+    python3 project_registry_cli.py archive <name> [--yes]
     python3 project_registry_cli.py snapshot [<name>]
     python3 project_registry_cli.py sync
 """
@@ -119,6 +121,39 @@ def cmd_delete(args):
         sys.exit(1)
 
 
+def cmd_rename(args):
+    from core.project_registry import rename_project
+    try:
+        result = rename_project(args.old_name, args.new_name)
+        print(f"Renamed project '{args.old_name}' → '{args.new_name}'")
+        if args.json:
+            print(json.dumps(result, indent=2))
+    except (ValueError, KeyError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_archive(args):
+    from core.project_registry import get_project, archive_project
+    if not args.yes:
+        project = get_project(args.name)
+        if not project:
+            print(f"Project not found: {args.name}", file=sys.stderr)
+            sys.exit(1)
+        ans = input(f"Archive project '{args.name}'? [y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            print("Aborted.")
+            return
+    try:
+        result = archive_project(args.name)
+        print(f"Archived project: {args.name}")
+        if args.json:
+            print(json.dumps(result, indent=2))
+    except (ValueError, KeyError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_snapshot(args):
     if args.name:
         from core.project_registry import get_project
@@ -198,6 +233,16 @@ def main():
     delete_p = subparsers.add_parser("delete", help="Delete a project")
     delete_p.add_argument("name", help="Project name")
 
+    # rename
+    rename_p = subparsers.add_parser("rename", help="Rename a project")
+    rename_p.add_argument("old_name", help="Current project name")
+    rename_p.add_argument("new_name", help="New project name")
+
+    # archive
+    archive_p = subparsers.add_parser("archive", help="Archive a project")
+    archive_p.add_argument("name", help="Project name")
+    archive_p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+
     # snapshot
     snap_p = subparsers.add_parser("snapshot", help="Take shadow git snapshot(s)")
     snap_p.add_argument("name", nargs="?", help="Project name (all if omitted)")
@@ -213,6 +258,8 @@ def main():
         "link": cmd_link,
         "unlink": cmd_unlink,
         "delete": cmd_delete,
+        "rename": cmd_rename,
+        "archive": cmd_archive,
         "snapshot": cmd_snapshot,
     }
 
