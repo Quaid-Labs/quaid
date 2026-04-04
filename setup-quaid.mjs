@@ -5356,9 +5356,12 @@ function formatPreInstallSurvey(plan) {
 // =============================================================================
 async function main() {
   // --- Installer lock: prevent concurrent runs against the same workspace ---
+  // Dry-run writes nothing, so it does not need exclusive access.
   const LOCK_FILE = path.join(DATA_DIR, ".installer.lock");
   let _lockAcquired = false;
-  try {
+  if (DRY_RUN) {
+    // Skip lock in dry-run mode — no writes, no need to block concurrent installs.
+  } else try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(LOCK_FILE, new Date().toISOString(), { flag: "wx" }); // exclusive create
     _lockAcquired = true;
