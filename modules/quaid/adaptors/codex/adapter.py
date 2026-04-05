@@ -504,12 +504,12 @@ class CodexAdapter(QuaidAdapter):
 
             cfg = get_config()
             deep_model = getattr(cfg.models, "deep_reasoning", "gpt-5.4") or "gpt-5.4"
-            fast_model = getattr(cfg.models, "fast_reasoning", "gpt-5.4-mini") or "gpt-5.4-mini"
+            fast_model = getattr(cfg.models, "fast_reasoning", "gpt-5.4") or "gpt-5.4"
             deep_effort = getattr(cfg.models, "deep_reasoning_effort", "high") or "high"
             fast_effort = getattr(cfg.models, "fast_reasoning_effort", "none") or "none"
         except Exception:
             deep_model = "gpt-5.4"
-            fast_model = "gpt-5.4-mini"
+            fast_model = "gpt-5.4"
             deep_effort = "high"
             fast_effort = "none"
         return CodexLLMProvider(
@@ -525,7 +525,9 @@ class CodexAdapter(QuaidAdapter):
     def installer_default_models(self, provider: str) -> Optional[dict]:
         if str(provider or "").strip().lower() != "openai":
             return None
-        return {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"}
+        # gpt-5.4-mini returns HTTP 400 on the Codex OAuth path (/v1/responses).
+        # Only gpt-5.4 is confirmed valid on this path for installer validation.
+        return {"deep": "gpt-5.4", "fast": "gpt-5.4"}
 
     def get_fast_provider_default(self) -> str:
         return "openai"
