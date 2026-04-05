@@ -79,6 +79,7 @@ Core principle:
       "path": "artifacts/...",
       "size_bytes": 123,
       "sha256": "...",
+      "upgrade_mode": "replaceable",
       "depends_on": [],
       "suggests": []
     }
@@ -118,6 +119,7 @@ Each artifact is type-addressable and versioned:
 
 - `type` describes semantics (for example `memory.graph`, `identity.profile`, `project.bundle`)
 - `version` is the artifact schema version for that type
+- `upgrade_mode` declares intended upstream update behavior for that artifact class
 - `depends_on` declares hard artifact/capability dependencies for valid import
 - `suggests` declares soft relationships the importer may use for better fidelity
 
@@ -132,6 +134,12 @@ Suggested class split:
 
 Host-specific artifacts must declare target host/runtime compatibility in
 artifact metadata or compatibility profile sections.
+
+Suggested `upgrade_mode` values:
+
+- `replaceable`: upstream artifact can replace prior imported base state directly
+- `mergeable`: upstream artifact requires a merge driver during upgrades
+- `local_owned`: artifact is portable/importable, but should be treated as locally owned after import and not auto-upgraded
 
 ## Modular Export + Import
 
@@ -196,6 +204,73 @@ Importers should also emit parity notes:
 - host-specific artifacts skipped
 - expected behavior drift vs source package
 
+## Upgrade Semantics (Artifact-Scoped)
+
+Upgrade is artifact-class dependent, not a universal package guarantee.
+
+Useful distinction:
+
+- `portable`: artifact can be exported/imported
+- `replaceable`: artifact can accept a newer upstream base version
+- `mergeable`: artifact can attempt an assisted merge of upstream changes into a locally evolved working copy
+
+This is especially important for mutable artifacts such as:
+
+- structured memory stores
+- project knowledge bundles
+- identity/personality text files
+- host instruction files
+
+Recommended runtime model for mutable imported artifacts:
+
+1. Preserve the original imported base artifact snapshot.
+2. Allow runtime/local evolution to modify a working copy.
+3. On upstream upgrade, diff `old_base -> new_base`.
+4. Apply that delta onto the current working copy using the artifact's merge driver.
+5. Emit conflicts or low-confidence merges for review.
+
+Upgrade behavior should therefore operate on:
+
+- `old_base`
+- `new_base`
+- `current_working`
+
+not just `new_base` vs `current_working`.
+
+### Merge Driver Guidance
+
+For `mergeable` artifacts, the merge driver should prioritize carrying forward
+the upstream diffed content with minimal data loss while preserving meaningful
+local evolution.
+
+Priority order:
+
+1. preserve the semantic content introduced by the upstream diff
+2. avoid deleting meaningful local content unless a direct conflict forces a choice
+3. minimize silent loss or summarization collapse during merge
+4. emit explicit conflict reports when confidence is low
+
+For freeform text artifacts (for example `SOUL.md`, project guides, and host
+instruction files), this may be implemented with an LLM-assisted merge, but the
+result should still be treated as best-effort rather than guaranteed lossless.
+
+For structured artifacts (for example graph/object stores), replace/reindex or
+field-level merge strategies are preferred over freeform synthesis.
+
+### Base Snapshot Requirement
+
+If an implementation wants to support upgrades for mutable artifacts, it should
+retain enough prior imported base state to compute upstream deltas later.
+
+This does not require a separate physical database/file tree for every store.
+Implementations may use:
+
+- separate physical base and overlay stores
+- a single store with per-record provenance/layer metadata
+- a materialized merged working store backed by preserved base snapshots
+
+The contract is logical, not storage-format-specific.
+
 ## Principal Binding + Artifact-Scoped Migration
 
 To support portability across different local users/environments, EGO should
@@ -258,6 +333,7 @@ To reduce ecosystem breakage from incompatible package variants:
 - Unknown required capabilities MUST fail import.
 - Unknown optional capabilities MUST be skipped with warning.
 - Every artifact MUST include `id`, `type`, `version`, `path`, and `sha256`.
+- Artifacts that expect upgrade behavior SHOULD declare `upgrade_mode`.
 - Importers MUST provide deterministic import reports.
 - Proposed new artifact types should be namespaced to avoid collisions.
 - Packages MUST NOT rely on undeclared implicit migrations.

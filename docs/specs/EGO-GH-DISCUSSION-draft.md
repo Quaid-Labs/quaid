@@ -39,6 +39,7 @@ Highlights:
 - Typed, versioned artifacts
 - Modular export and modular import
 - Dependency-driven validation instead of all-or-nothing package assumptions
+- Artifact-scoped upgrade modes (`replaceable`, `mergeable`, `local_owned`)
 - Signature-based signer identity (verifier-side trust)
 - Required vs optional capability negotiation
 - Principal binding + artifact-scoped migration rules
@@ -72,5 +73,6 @@ We especially want security and privacy experts to challenge this model early.
 3. What import safety defaults should be mandatory vs implementation-defined?
 4. What parity guarantees are realistic across very different hosts?
 5. What sanitization attestations are practical and verifiable?
+6. What artifact classes are realistically upgradeable once local evolution begins?
 
 If this direction resonates, feedback on the draft schema and threat model is the most valuable next step.
