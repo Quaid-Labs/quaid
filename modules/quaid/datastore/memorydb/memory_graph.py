@@ -9711,7 +9711,7 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
             'Respond with JSON only: {"is_same": true/false, "subsumes": "a_subsumes_b" | "b_subsumes_a" | null, "reasoning": "brief reason"}'
         )
 
-        response, _duration = call_fast_reasoning(prompt, max_tokens=100, timeout=120.0)
+        response, _duration = call_fast_reasoning(prompt, max_tokens=1500, timeout=120.0)
         if not response:
             return None
         parsed = parse_json_response(response)
@@ -9746,7 +9746,7 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
         '[{"pair": 1, "is_same": true/false, "subsumes": "a_subsumes_b" | "b_subsumes_a" | null, "reasoning": "brief reason"}]'
     )
 
-    max_tokens = min(1200, max(200, 120 * len(candidates)))
+    max_tokens = min(2000, max(1500, 120 * len(candidates)))
     response, _duration = call_fast_reasoning(prompt, max_tokens=max_tokens, timeout=120.0)
     if not response:
         return None
