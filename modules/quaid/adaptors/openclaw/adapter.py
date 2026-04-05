@@ -28,9 +28,11 @@ class OpenClawAdapter(QuaidAdapter):
     _INSTALLER_MODEL_DEFAULTS = {
         "anthropic": {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"},
         "openai": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
-        # openai-codex uses the ChatGPT Codex OAuth path.
-        # gpt-5.4-mini returns 400 on this path; use gpt-5.2 deep / gpt-5.1-codex-mini fast.
-        "openai-codex": {"deep": "gpt-5.2", "fast": "gpt-5.1-codex-mini"},
+        # openai-codex uses the ChatGPT Codex OAuth path (/v1/responses).
+        # Only gpt-5.4 and gpt-5.1-codex-mini are confirmed valid on this path.
+        # gpt-5.2, gpt-5.4-mini return HTTP 400. gpt-5.4 needs no effort param;
+        # gpt-5.1-codex-mini requires fastReasoningEffort set in config.
+        "openai-codex": {"deep": "gpt-5.4", "fast": "gpt-5.1-codex-mini"},
         "openrouter": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "together": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "ollama": {"deep": "llama3.1:70b", "fast": "llama3.1:8b"},
