@@ -269,6 +269,32 @@ Every issue report must include:
 2. The exact command that failed
 3. The error output (first few lines)
 4. What you already tried
+5. **Any workarounds you applied** — even if they seemed minor or obvious
+
+### Your role is forensics, not problem-solving
+
+You are the coordinator's eyes and ears on the platform. Your job is:
+- Execute milestones exactly as the guide specifies
+- Observe what happens and report it accurately
+- Do first-wave forensics: capture the exact error, the system state, and what you observed
+- Report any deviations — including workarounds you applied — fully and explicitly
+
+Your job is **not**:
+- Inventing solutions or alternative approaches
+- Applying workarounds without reporting them
+- Deciding what counts as a fix
+- Ruling on whether a behavioral gap is acceptable
+
+The coordinator has access to the full codebase, all platform context, and prior run history. They are in a better position to determine the right fix, whether a workaround is safe, and what the behavioral gap means. Do not deprive them of that by solving the problem yourself and reporting only the outcome.
+
+**If you applied any workaround** — a different command, a renamed resource, a retry with different parameters, anything that deviated from the documented procedure — you must include it explicitly in your STATUS or ISSUE report. Do not bury it. Format it clearly:
+
+```
+Workaround applied: used 'oc-cli-tool' instead of 'cli-tool' because create returned 'already exists'.
+Coordinator should evaluate whether this is acceptable or a root issue.
+```
+
+This applies to both ISSUE reports (blockers) and STATUS reports (PASS and PASS-WITH-NOTE). If you deviated from procedure at any point during a milestone, the STATUS must say so.
 
 ### Waiting for coordinator response
 
