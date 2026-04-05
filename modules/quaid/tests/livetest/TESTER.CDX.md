@@ -59,6 +59,36 @@ CDX extraction is daemon-driven.
   `rolling_flush` events are written to `logs/daemon/rolling-extraction.jsonl`,
   same as OC/CC.
 
+---
+
+## QUIRK: Stop Hook Returns None — Orphan Sweep Is the Extraction Path
+
+**Do NOT fix `resolve_stop_hook_signal()` to always return a signal. This is intentional.**
+
+The CDX Stop hook (`hook_codex_stop`) only writes a `session_end` signal when
+it detects a lifecycle command (`/clear`, `/new`, `/reset`, `/restart`) in the
+transcript. On a plain task completion (no lifecycle command), it returns `None`
+and writes nothing. This is correct behavior.
+
+**Why detection fails for `/new` and `/clear`:** CDX CLI intercepts lifecycle
+commands before the Stop hook fires and strips them from the transcript. The
+hook's transcript scan finds nothing and returns `None`.
+
+**The intended extraction path is orphan sweep:** when the *next* session's
+`hook-session-init` runs, it sweeps cursor files for any previous sessions that
+have unextracted content (i.e., have a cursor but no `session_end` signal yet),
+and writes a deferred `session_end` signal for each. This is how `/new` and
+`/clear` produce extraction without the Stop hook detecting them.
+
+**Consequence for M3:** CDX M3 rolling extraction works via orphan sweep after
+`/new`, not via the Stop hook. The M3 test must use `/new` (not just observe the
+Stop hook trace) and wait for the next session's init to trigger orphan sweep.
+
+**History:** This "fix" has been attempted and reverted multiple times. Every
+attempt to make the Stop hook unconditionally write `session_end` forces
+extraction on every task completion turn, which is wrong. Document the quirk;
+do not patch the adapter.
+
 CDX does not use `SessionTimeoutManager`, but the daemon still honors
 `capture.inactivityTimeoutMinutes` through its idle-session timeout path.
 That means CDX gets **timeout extraction** but **not timeout compaction**

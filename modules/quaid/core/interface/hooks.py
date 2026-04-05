@@ -541,7 +541,25 @@ def _get_pending_context() -> str:
 
 
 def _get_deferred_notice_hint() -> str:
-    """Return a non-draining advisory when deferred notices are waiting."""
+    """Return a non-draining advisory when deferred notices are waiting.
+
+    DESIGN NOTE — do NOT replace this with an auto-drain call:
+
+    Quaid has two notification channels with different drain semantics:
+    - Normal notices: surface immediately to the agent on the next turn.
+    - Deferred notices: only drain when the *agent* explicitly calls
+      `quaid notify --deferred-drain` (or equivalent CLI command).
+
+    Deferred notices exist for cases where the notification is destined for
+    the human operator, not the agent. Auto-draining them in hook_inject
+    would surface operator-targeted messages during background agent loops,
+    where no human is watching and the message is silently lost. The agent
+    must check `--deferred-drain` when it has confirmed a human turn is
+    active and the operator can see the reply.
+
+    This function returns a hint so the agent *knows* notices are waiting
+    and can decide when to drain. It intentionally does not drain them.
+    """
     try:
         from lib.runtime_context import format_deferred_notice_hint
 

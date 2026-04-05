@@ -24,6 +24,21 @@ if TYPE_CHECKING:
     from lib.adapter import QuaidAdapter
 
 
+def _deep_merge_defaults(defaults: dict, existing: dict) -> dict:
+    """Return existing with any missing keys filled in from defaults.
+
+    Merges recursively for nested dicts. Never clobbers an existing value —
+    only fills in gaps.
+    """
+    result = dict(defaults)
+    for key, value in existing.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge_defaults(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 class InstanceManager:
     """Base class for adapter-specific instance lifecycle management.
 
@@ -86,13 +101,19 @@ class InstanceManager:
         for subdir in ("config", "data", "identity", "journal", "logs"):
             (silo_root / subdir).mkdir(parents=True, exist_ok=True)
 
-        # Config
+        # Config — fold defaults into existing config (fill missing keys without
+        # clobbering values that were written by the installer or a prior run).
         config_path = silo_root / "config" / "memory.json"
-        if not config_path.exists():
-            config_path.write_text(
-                json.dumps(self._default_config(), indent=2) + "\n",
-                encoding="utf-8",
-            )
+        existing: dict = {}
+        if config_path.exists():
+            try:
+                existing = json.loads(config_path.read_text(encoding="utf-8"))
+                if not isinstance(existing, dict):
+                    existing = {}
+            except Exception:
+                existing = {}
+        merged = _deep_merge_defaults(self._default_config(), existing)
+        config_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
 
         # Database
         db_path = silo_root / "data" / "memory.db"
@@ -156,9 +177,35 @@ class InstanceManager:
             logger.warning("misc project registration skipped at silo init: %s", _e)
 
     def _default_config(self) -> dict:
+        """Return a complete default config skeleton.
+
+        All retrieval keys are included so the TypeScript adapter's preflight
+        checks pass even if the silo was created before a full config was written.
+        Values here are the canonical defaults — they will be folded in only where
+        the actual config has a gap (see _deep_merge_defaults).
+        """
+        try:
+            import dataclasses
+            from config import RetrievalConfig
+            retrieval_defaults = {
+                f.name: f.default
+                for f in dataclasses.fields(RetrievalConfig)
+                if f.default is not dataclasses.MISSING
+            }
+        except Exception:
+            retrieval_defaults = {
+                "fail_hard": False,
+                "auto_inject": True,
+                "default_limit": 5,
+                "max_limit": 8,
+                "min_similarity": 0.80,
+                "max_tokens": 2000,
+            }
+        retrieval_defaults["fail_hard"] = False
+        retrieval_defaults["auto_inject"] = True
         return {
             "adapter": {"type": self.adapter.adapter_id()},
-            "retrieval": {"failHard": False, "autoInject": True},
+            "retrieval": retrieval_defaults,
         }
 
     # ---- Settings / integration snippet ----

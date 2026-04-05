@@ -82,15 +82,15 @@ def get_llm_provider(model_tier: Optional[str] = None) -> "LLMProvider":
     except Exception as exc:
         tier = str(model_tier or "default").strip() or "default"
         try:
-            _notify_agent(
+            _queue_deferred_notice(
                 f"Quaid could not access its {tier} language model provider: {exc}",
-                severity="error",
+                kind="provider",
+                priority="high",
                 source="provider",
                 dedupe_key=f"llm-provider:{tier}:{type(exc).__name__}:{str(exc).strip()}",
-                ttl_seconds=900,
             )
-        except Exception as notify_exc:
-            logger.warning("Failed surfacing provider access error to agent: %s", notify_exc)
+        except Exception as notice_exc:
+            logger.warning("Failed queuing provider access error as deferred notice: %s", notice_exc)
         raise
 
 
