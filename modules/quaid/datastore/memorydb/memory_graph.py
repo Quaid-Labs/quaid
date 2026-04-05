@@ -9711,7 +9711,11 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
             'Respond with JSON only: {"is_same": true/false, "subsumes": "a_subsumes_b" | "b_subsumes_a" | null, "reasoning": "brief reason"}'
         )
 
-        response, _duration = call_fast_reasoning(prompt, max_tokens=1500, timeout=120.0)
+        try:
+            response, _duration = call_fast_reasoning(prompt, max_tokens=1500, timeout=120.0)
+        except Exception as _llm_exc:
+            logger.warning("_llm_dedup_check_many LLM error (single pair), skipping dedup: %s", _llm_exc)
+            return None
         if not response:
             return None
         parsed = parse_json_response(response)
@@ -9747,7 +9751,11 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
     )
 
     max_tokens = min(2000, max(1500, 120 * len(candidates)))
-    response, _duration = call_fast_reasoning(prompt, max_tokens=max_tokens, timeout=120.0)
+    try:
+        response, _duration = call_fast_reasoning(prompt, max_tokens=max_tokens, timeout=120.0)
+    except Exception as _llm_exc:
+        logger.warning("_llm_dedup_check_many LLM error (multi pair), skipping dedup: %s", _llm_exc)
+        return None
     if not response:
         return None
 
