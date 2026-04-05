@@ -29,14 +29,16 @@ class GatewayLLMProvider(LLMProvider):
         deep_model: str = "",
         fast_model: str = "",
         default_provider: str = "anthropic",
-        reasoning_effort: str = "",
+        fast_reasoning_effort: str = "",
+        deep_reasoning_effort: str = "",
     ):
         self._port = port
         self._token = (token or "").strip() or self._resolve_gateway_token()
         self._deep_model = str(deep_model or "").strip()
         self._fast_model = str(fast_model or "").strip()
         self._default_provider = str(default_provider or "anthropic").strip().lower() or "anthropic"
-        self._reasoning_effort = str(reasoning_effort or "").strip().lower()
+        self._fast_reasoning_effort = str(fast_reasoning_effort or "").strip().lower()
+        self._deep_reasoning_effort = str(deep_reasoning_effort or "").strip().lower()
 
     @staticmethod
     def _resolve_gateway_token() -> str:
@@ -107,14 +109,15 @@ class GatewayLLMProvider(LLMProvider):
         # Format: provider/model (e.g. anthropic/claude-haiku-4-5).
         provider_prefix = self._default_provider or "anthropic"
         oc_model = model if "/" in model else f"{provider_prefix}/{model}"
+        effort = self._fast_reasoning_effort if model_tier == "fast" else self._deep_reasoning_effort
         body_dict: dict = {
             "model": "openclaw",
             "instructions": system_prompt,
             "input": user_message,
             "max_output_tokens": max_tokens,
         }
-        if self._reasoning_effort:
-            body_dict["reasoning"] = {"effort": self._reasoning_effort}
+        if effort and effort != "none":
+            body_dict["reasoning"] = {"effort": effort}
         body = json.dumps(body_dict).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
