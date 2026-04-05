@@ -774,6 +774,8 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        if real_adapter is not None:
+            fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
         class _FakeAdapter:
             def quaid_home(self):
                 return tmp_path / "rolling-inst"
@@ -1034,6 +1036,8 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        if real_adapter is not None:
+            fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
         class _FakeAdapter:
             def quaid_home(self):
                 return tmp_path / "rolling-inst"

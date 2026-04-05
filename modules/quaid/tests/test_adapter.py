@@ -538,7 +538,7 @@ class TestOpenClawAdapter:
         assert adapter.get_deep_provider_default() == "openai-codex"
         assert adapter.get_fast_provider_default() == "openai-codex"
         assert adapter.get_deep_model_default("default") == "gpt-5.4"
-        assert adapter.get_fast_model_default("default") == "gpt-5.4-mini"
+        assert adapter.get_fast_model_default("default") == "gpt-5.1-codex-mini"
 
     def test_installer_review_model_pair_flags_unknown_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
@@ -601,7 +601,7 @@ class TestOpenClawAdapter:
         assert result["supported"] is True
         assert result["ok"] is True
         assert len(result["results"]) == 2
-        assert captured["default_provider"] == "openai"
+        assert captured["default_provider"] == "openai-codex"
         assert captured["deep_model"] == "gpt-5.4"
         assert captured["fast_model"] == "gpt-5.4-mini"
 

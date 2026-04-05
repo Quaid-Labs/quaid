@@ -1291,8 +1291,39 @@ class MemoryGraph:
         results = []
 
         if _lib_has_vec():
-            results = self._search_vec(query_embedding, limit * 4, types, privacy,
-                                       owner_id, min_similarity, current_session_id, compaction_time)
+            try:
+                results = self._search_vec(
+                    query_embedding,
+                    limit * 4,
+                    types,
+                    privacy,
+                    owner_id,
+                    min_similarity,
+                    current_session_id,
+                    compaction_time,
+                )
+            except sqlite3.OperationalError as exc:
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Vector search failed during semantic retrieval while "
+                        "retrieval.fail_hard=true. Resolve vec/index health "
+                        "instead of degrading search paths."
+                    ) from exc
+                # vec index/query drift can happen in mixed test/workspace environments;
+                # degrade to brute-force cosine only when fail-hard is disabled.
+                logger.warning(
+                    "search_semantic vec query failed; falling back to brute force: %s",
+                    exc,
+                )
+                results = self._search_brute_force(
+                    query_embedding,
+                    types,
+                    privacy,
+                    owner_id,
+                    min_similarity,
+                    current_session_id,
+                    compaction_time,
+                )
         else:
             results = self._search_brute_force(query_embedding, types, privacy,
                                                 owner_id, min_similarity, current_session_id, compaction_time)
@@ -3414,7 +3445,11 @@ _INTENT_PATTERNS = {
         "type_boosts": {"Person": 1.3, "Fact": 1.0},
     },
     "WHEN": {
-        "patterns": [r"\bwhen\b", r"\bdate\b", r"\btime\b", r"\byear\b", r"\bmonth\b", r"\bday\b", r"\bschedule\b", r"\bbirthday\b", r"\banniversary\b"],
+        "patterns": [
+            r"\bwhen\b", r"\bdate\b", r"\btime\b", r"\byear\b", r"\bmonth\b", r"\bday\b",
+            r"\bschedule\b", r"\bbirthday\b", r"\banniversary\b",
+            r"\brecent\b", r"\brecently\b", r"\blatest\b",
+        ],
         "type_boosts": {"Event": 1.3, "Fact": 1.0},
     },
     "WHERE": {
@@ -9383,7 +9418,7 @@ def create_edge(
         conn.execute("""
             INSERT OR REPLACE INTO edges
             (id, source_id, target_id, relation, attributes, weight,
-             valid_from, valid_until, created_at, source_fact_id)
+            valid_from, valid_until, created_at, source_fact_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             edge.id, edge.source_id, edge.target_id, edge.relation,
@@ -9394,6 +9429,75 @@ def create_edge(
             edge.source_fact_id,
         ))
         _mark_phase("insert_edge", p0)
+        inferred_edges_created = 0
+
+        # Keep lightweight family inference inside the same transaction:
+        # - parent_of(A, C) + spouse_of(A, B) => parent_of(B, C)
+        # - spouse_of(A, B) + parent_of(A, C*) => parent_of(B, C*)
+        def _insert_parent_if_missing(parent_id: str, child_id: str) -> int:
+            if parent_id == child_id:
+                return 0
+            if _edge_exists(conn, parent_id, child_id, "parent_of"):
+                return 0
+            inferred = Edge.create(
+                source_id=parent_id,
+                target_id=child_id,
+                relation="parent_of",
+                source_fact_id=source_fact_id,
+            )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO edges
+                (id, source_id, target_id, relation, attributes, weight,
+                 valid_from, valid_until, created_at, source_fact_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    inferred.id, inferred.source_id, inferred.target_id, inferred.relation,
+                    json.dumps(inferred.attributes),
+                    inferred.weight,
+                    inferred.valid_from, inferred.valid_until,
+                    inferred.created_at or datetime.now().isoformat(),
+                    inferred.source_fact_id,
+                ),
+            )
+            return 1
+
+        if relation == "parent_of":
+            spouse_rows = conn.execute(
+                """
+                SELECT source_id, target_id
+                FROM edges
+                WHERE relation = 'spouse_of' AND (source_id = ? OR target_id = ?)
+                """,
+                (subject.id, subject.id),
+            ).fetchall()
+            for row in spouse_rows:
+                spouse_id = row["target_id"] if row["source_id"] == subject.id else row["source_id"]
+                inferred_edges_created += _insert_parent_if_missing(spouse_id, obj.id)
+
+        elif relation == "spouse_of":
+            child_rows = conn.execute(
+                """
+                SELECT target_id
+                FROM edges
+                WHERE relation = 'parent_of' AND source_id = ?
+                """,
+                (subject.id,),
+            ).fetchall()
+            for row in child_rows:
+                inferred_edges_created += _insert_parent_if_missing(obj.id, row["target_id"])
+
+            child_rows = conn.execute(
+                """
+                SELECT target_id
+                FROM edges
+                WHERE relation = 'parent_of' AND source_id = ?
+                """,
+                (obj.id,),
+            ).fetchall()
+            for row in child_rows:
+                inferred_edges_created += _insert_parent_if_missing(subject.id, row["target_id"])
 
         result = {
             "edge_id": edge.id,
@@ -9402,6 +9506,7 @@ def create_edge(
             "object_id": obj.id,
             "subject_created": subject_created,
             "object_created": object_created,
+            "inferred_edges_created": inferred_edges_created,
         }
         if telemetry_enabled:
             total_ms = round((time.perf_counter() - edge_t0) * 1000.0, 2)

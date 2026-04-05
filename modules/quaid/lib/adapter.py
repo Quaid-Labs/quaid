@@ -718,6 +718,9 @@ class StandaloneAdapter(QuaidAdapter):
         d = self.quaid_home() / "sessions"
         return d if d.is_dir() else None
 
+    def get_instance_manager(self):
+        return None
+
     def filter_system_messages(self, text: str) -> bool:
         return False
 

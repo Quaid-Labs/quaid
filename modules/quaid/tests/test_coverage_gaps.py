@@ -728,6 +728,8 @@ class TestDocsRegistryGc:
         }))
 
         from datastore.docsdb.registry import DocsRegistry
+        import datastore.docsdb.registry as docs_registry
+        monkeypatch.setattr(docs_registry.tempfile, "gettempdir", lambda: "/__quaid_tmp_guard_for_tests__")
         from config import reload_config
         reload_config()
         return DocsRegistry(db_path=iroot / "gc_test.db")

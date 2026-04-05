@@ -41,6 +41,26 @@ class GatewayLLMProvider(LLMProvider):
         self._deep_reasoning_effort = str(deep_reasoning_effort or "").strip().lower()
 
     @staticmethod
+    def _load_models_from_workspace_config() -> tuple[str, str]:
+        """Best-effort fast/deep model lookup from QUAID_HOME config."""
+        quaid_home = str(os.environ.get("QUAID_HOME", "")).strip()
+        if not quaid_home:
+            return "", ""
+        cfg_path = Path(quaid_home) / "config" / "memory.json"
+        if not cfg_path.exists():
+            return "", ""
+        try:
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+            models = data.get("models", {}) if isinstance(data, dict) else {}
+            if not isinstance(models, dict):
+                return "", ""
+            fast = str(models.get("fastReasoning", "")).strip()
+            deep = str(models.get("deepReasoning", "")).strip()
+            return fast, deep
+        except Exception:
+            return "", ""
+
+    @staticmethod
     def _resolve_gateway_token() -> str:
         env_token = str(os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")).strip()
         if env_token:
@@ -61,6 +81,11 @@ class GatewayLLMProvider(LLMProvider):
     def _resolve_model_for_tier(self, model_tier: str) -> str:
         tier = "fast" if model_tier == "fast" else "deep"
         model = self._fast_model if tier == "fast" else self._deep_model
+        if not model:
+            cfg_fast, cfg_deep = self._load_models_from_workspace_config()
+            model = cfg_fast if tier == "fast" else cfg_deep
+        if not model:
+            model = "claude-haiku-4-5" if tier == "fast" else "claude-sonnet-4-5"
         if not model:
             raise RuntimeError(
                 f"No model configured for tier '{tier}'. "
@@ -160,15 +185,92 @@ class GatewayLLMProvider(LLMProvider):
                 system_prompt = m["content"]
             elif m["role"] == "user":
                 user_message = m["content"]
+        start_time = time.time()
+        # Use OpenResponses only when explicit per-tier models are set. Otherwise
+        # keep the legacy gateway path and fall back to OpenResponses on 404/405.
+        use_openresponses_primary = bool(self._fast_model and self._deep_model)
+        if use_openresponses_primary:
+            return self._llm_call_openresponses(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                model_tier=model_tier,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                start_time=start_time,
+            )
 
-        return self._llm_call_openresponses(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            model_tier=model_tier,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            start_time=time.time(),
+        body = json.dumps({
+            "system_prompt": system_prompt,
+            "user_message": user_message,
+            "model_tier": model_tier,
+            "max_tokens": max_tokens,
+        }).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self._port}/plugins/quaid/llm",
+            data=body,
+            headers=headers,
+            method="POST",
         )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                duration = time.time() - start_time
+                return LLMResult(
+                    text=data.get("text", ""),
+                    duration=duration,
+                    input_tokens=data.get("input_tokens", 0),
+                    output_tokens=data.get("output_tokens", 0),
+                    cache_read_tokens=data.get("cache_read_tokens", 0),
+                    cache_creation_tokens=data.get("cache_creation_tokens", 0),
+                    model=data.get("model", "unknown"),
+                    truncated=data.get("truncated", False),
+                )
+        except urllib.error.HTTPError as err:
+            # Legacy endpoint not available on newer gateways; retry via
+            # OpenResponses path with per-request model routing.
+            if err.code in (404, 405):
+                return self._llm_call_openresponses(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    model_tier=model_tier,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    start_time=start_time,
+                )
+            if err.code in (502, 503, 504):
+                try:
+                    if err.fp is not None:
+                        err.fp.seek(0)
+                except Exception:
+                    pass
+                # One quick retry for transient upstream gateway failures.
+                time.sleep(0.1)
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        duration = time.time() - start_time
+                        return LLMResult(
+                            text=data.get("text", ""),
+                            duration=duration,
+                            input_tokens=data.get("input_tokens", 0),
+                            output_tokens=data.get("output_tokens", 0),
+                            cache_read_tokens=data.get("cache_read_tokens", 0),
+                            cache_creation_tokens=data.get("cache_creation_tokens", 0),
+                            model=data.get("model", "unknown"),
+                            truncated=data.get("truncated", False),
+                        )
+                except urllib.error.HTTPError as retry_err:
+                    if retry_err.code == 503:
+                        raise RuntimeError(
+                            f"HTTP 503 from gateway LLM endpoint: {retry_err}"
+                        ) from retry_err
+                    raise
+            if err.code == 503:
+                raise RuntimeError(f"HTTP 503 from gateway LLM endpoint: {err}") from err
+            raise
 
     def get_profiles(self):
         return {
