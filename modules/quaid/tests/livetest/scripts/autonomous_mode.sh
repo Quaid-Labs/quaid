@@ -4,10 +4,10 @@
 # Usage:
 #   autonomous_mode.sh [options]
 #   autonomous_mode.sh -w 1 -t 300
-#   autonomous_mode.sh -w codex-bench -t 600 -m "Keep going on the bug bash"
+#   autonomous_mode.sh -w main:3.0 -t 600 -m "Keep going on the bug bash"
 #
 # Options:
-#   -w <window>    Tmux window target (number or alias, passed to tmux-msg.sh). Required.
+#   -w <window>    Tmux target (prefer main:N.0 pane or window number), passed to tmux-msg.sh. Required.
 #   -t <seconds>   Interval between messages (default: 300 = 5 minutes, minimum: 30)
 #   -m <message>   Custom message. PID is always prepended. See default below.
 #   -n <command>   Shell command to run on exit (e.g. send a notification).
@@ -67,18 +67,6 @@ fi
 
 PID=$$
 
-# --- Resolve target to tmux pane (mirrors tmux-msg.sh) ---
-case "$WINDOW" in
-    codex-dev)    PANE="main:1.0" ;;
-    codex-pr)     PANE="main:2.0" ;;
-    codex-bench)  PANE="main:3.0" ;;
-    claude|claude-dev) PANE="main:4.0" ;;
-    monitor|claude-looper) PANE="main:5.0" ;;
-    [0-9]|[0-9][0-9]) PANE="main:${WINDOW}.0" ;;
-    main:*)       PANE="$WINDOW" ;;
-    *)            PANE="" ;;
-esac
-
 if [[ -z "$CUSTOM_MESSAGE" ]]; then
     MESSAGE="[autonomous-mode PID=$PID] If you're in the middle of something ignore this. Otherwise if you have more work to do, keep going. If you finished your overall task, then kill this process: kill $PID"
 else
@@ -135,7 +123,7 @@ log "  Window:   $WINDOW"
 log "  Interval: ${INTERVAL}s"
 log "  Message:  $MESSAGE"
 log "  Stop with: kill $PID"
-trace "startup pid=$PID ppid=$PPID window=$WINDOW pane=$PANE interval=$INTERVAL pid_file=$PID_FILE log_file=$LOG_FILE"
+trace "startup pid=$PID ppid=$PPID window=$WINDOW interval=$INTERVAL pid_file=$PID_FILE log_file=$LOG_FILE"
 
 echo "autonomous_mode.sh started (PID=$PID, window=$WINDOW, interval=${INTERVAL}s)"
 echo "Stop with: kill $PID"

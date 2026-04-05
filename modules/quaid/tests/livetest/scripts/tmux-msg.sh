@@ -4,20 +4,15 @@
 # Usage:
 #   tmux-msg.sh <target> <message>
 #   tmux-msg.sh 3 "check benchmark status"
-#   tmux-msg.sh codex-bench "run r19 with split provider"
+#   tmux-msg.sh main:3.0 "run benchmark loop"
 #   tmux-msg.sh self "reminder: check back in 20m"
 #
 # Targets:
 #   0-99         tmux window index (main:<n>.0)
 #   self         send to this script's own tmux pane ($TMUX_PANE)
-#   codex-dev    window 1
-#   codex-pr     window 2
-#   codex-bench  window 3
-#   claude       window 4
-#   claude-dev   window 4
-#   monitor      window 5
-#   claude-looper window 5
 #   main:N.0     explicit pane address
+#   livetest:NAME explicit pane address
+#   <alias>      alias from scripts/.tmux-targets.json (gitignored)
 #
 # Environment:
 #   TMUX_MSG_SENDER               (required) sender identity label
@@ -46,6 +41,8 @@ set -euo pipefail
 
 TARGET="${1:?Usage: tmux-msg.sh <target> <message>}"
 SENDER="${TMUX_MSG_SENDER:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGETS_FILE="${TMUX_MSG_TARGETS_FILE:-$SCRIPT_DIR/.tmux-targets.json}"
 # Auto-detect sender pane from tmux; TMUX_MSG_SOURCE overrides if explicitly set
 _detected_pane="$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || echo "unknown")"
 SENDER_PANE="${TMUX_MSG_SOURCE:-$_detected_pane}"
@@ -79,21 +76,6 @@ case "$TARGET" in
     self)
         PANE="${TMUX_PANE:-main:2.0}"
         ;;
-    codex-dev)
-        PANE="main:1.0"
-        ;;
-    codex-pr)
-        PANE="main:2.0"
-        ;;
-    codex-bench)
-        PANE="main:3.0"
-        ;;
-    claude|claude-dev)
-        PANE="main:4.0"
-        ;;
-    monitor|claude-looper)
-        PANE="main:5.0"
-        ;;
     [0-9]|[0-9][0-9])
         PANE="main:${TARGET}.0"
         ;;
@@ -104,9 +86,33 @@ case "$TARGET" in
         PANE="$TARGET"
         ;;
     *)
-        echo "Error: unknown target '$TARGET'" >&2
-        echo "Valid: 0-99, self, codex-dev, codex-pr, codex-bench, claude, claude-dev, monitor, claude-looper, main:N.0, livetest:NAME" >&2
-        exit 1
+        PANE="$(python3 - "$TARGETS_FILE" "$TARGET" <<'PY'
+import json
+import pathlib
+import sys
+
+cfg = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+if not cfg.is_file():
+    print("")
+    raise SystemExit(0)
+try:
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+if not isinstance(data, dict):
+    print("")
+    raise SystemExit(0)
+value = data.get(key, "")
+print(value if isinstance(value, str) else "")
+PY
+)"
+        if [[ -z "$PANE" ]]; then
+            echo "Error: unknown target '$TARGET'" >&2
+            echo "Valid: 0-99, self, main:N.0, livetest:NAME, or alias in $TARGETS_FILE" >&2
+            exit 1
+        fi
         ;;
 esac
 

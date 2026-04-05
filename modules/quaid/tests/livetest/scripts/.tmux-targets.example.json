@@ -1,0 +1,11 @@
+{
+  "codex-dev": "main:1.0",
+  "codex-pr": "main:2.0",
+  "codex-bench": "main:3.0",
+  "claude-dev": "main:4.0",
+  "claude": "main:4.0",
+  "monitor": "main:5.0",
+  "claude-looper": "main:5.0",
+  "claude-bugs": "main:6.0",
+  "codex-livetester": "main:7.0"
+}
