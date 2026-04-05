@@ -781,6 +781,34 @@ def _camel_to_snake(camel_str: str) -> str:
     return ''.join(result)
 
 
+def _snake_to_camel(snake_str: str) -> str:
+    """Convert snake_case to camelCase."""
+    parts = snake_str.split('_')
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:])
+
+
+def _cfg_get(d: Dict[str, Any], snake_key: str, default: Any = None) -> Any:
+    """Get a config key by snake_case name with camelCase fallback.
+
+    Callers must use snake_case keys. _load_nested() normalizes all config keys to
+    snake_case at load time, so the camelCase path should never be needed. If it IS
+    triggered, the warning indicates that normalization missed the key — either a
+    code path bypassed _load_nested or the config was written with camelCase keys
+    through a path that doesn't go through the standard loader.
+    """
+    if snake_key in d:
+        return d[snake_key]
+    camel_key = _snake_to_camel(snake_key)
+    if camel_key != snake_key and camel_key in d:
+        logger.warning(
+            "[config] Key '%s' found only as camelCase '%s'; config should use snake_case. "
+            "Check that _load_nested() is applied before this access.",
+            snake_key, camel_key,
+        )
+        return d[camel_key]
+    return default
+
+
 def _load_nested(data: Dict[str, Any], keys_map: Dict[str, str] = None) -> Dict[str, Any]:
     """Convert camelCase keys to snake_case recursively."""
     result = {}
@@ -949,14 +977,8 @@ def _load_config_inner() -> MemoryConfig:
     # Build config objects
     models_data = config_data.get('models', {})
     # New shape: separate deep/fast model class tables.
-    raw_high_classes = models_data.get(
-        'deep_reasoning_model_classes',
-        models_data.get('deepReasoningModelClasses', _default_deep_reasoning_model_classes()),
-    )
-    raw_low_classes = models_data.get(
-        'fast_reasoning_model_classes',
-        models_data.get('fastReasoningModelClasses', _default_fast_reasoning_model_classes()),
-    )
+    raw_high_classes = _cfg_get(models_data, 'deep_reasoning_model_classes', _default_deep_reasoning_model_classes())
+    raw_low_classes = _cfg_get(models_data, 'fast_reasoning_model_classes', _default_fast_reasoning_model_classes())
     deep_reasoning_model_classes = _default_deep_reasoning_model_classes()
     fast_reasoning_model_classes = _default_fast_reasoning_model_classes()
     if isinstance(raw_high_classes, dict):
@@ -973,53 +995,49 @@ def _load_config_inner() -> MemoryConfig:
                 fast_reasoning_model_classes[key] = val
 
     models = ModelConfig(
-        llm_provider=models_data.get('llm_provider', models_data.get('llmProvider', models_data.get('provider', 'default'))),
-        fast_reasoning_provider=models_data.get('fast_reasoning_provider', models_data.get('fastReasoningProvider', 'default')),
-        deep_reasoning_provider=models_data.get('deep_reasoning_provider', models_data.get('deepReasoningProvider', 'default')),
-        embeddings_provider=models_data.get('embeddings_provider', models_data.get('embeddingsProvider', 'ollama')),
-        fast_reasoning=models_data.get('fast_reasoning', models_data.get('fastReasoning', ModelConfig.fast_reasoning)),
-        deep_reasoning=models_data.get('deep_reasoning', models_data.get('deepReasoning', ModelConfig.deep_reasoning)),
+        llm_provider=_cfg_get(models_data, 'llm_provider', models_data.get('provider', 'default')),
+        fast_reasoning_provider=_cfg_get(models_data, 'fast_reasoning_provider', 'default'),
+        deep_reasoning_provider=_cfg_get(models_data, 'deep_reasoning_provider', 'default'),
+        embeddings_provider=_cfg_get(models_data, 'embeddings_provider', 'ollama'),
+        fast_reasoning=_cfg_get(models_data, 'fast_reasoning', ModelConfig.fast_reasoning),
+        deep_reasoning=_cfg_get(models_data, 'deep_reasoning', ModelConfig.deep_reasoning),
         fast_reasoning_effort=_coerce_reasoning_effort(
-            models_data.get('fast_reasoning_effort', models_data.get('fastReasoningEffort', ModelConfig.fast_reasoning_effort)),
+            _cfg_get(models_data, 'fast_reasoning_effort', ModelConfig.fast_reasoning_effort),
             ModelConfig.fast_reasoning_effort,
         ),
         deep_reasoning_effort=_coerce_reasoning_effort(
-            models_data.get('deep_reasoning_effort', models_data.get('deepReasoningEffort', ModelConfig.deep_reasoning_effort)),
+            _cfg_get(models_data, 'deep_reasoning_effort', ModelConfig.deep_reasoning_effort),
             ModelConfig.deep_reasoning_effort,
         ),
         deep_reasoning_model_classes=deep_reasoning_model_classes,
         fast_reasoning_model_classes=fast_reasoning_model_classes,
-        fast_reasoning_context=_coerce_positive_int(models_data.get('fast_reasoning_context', models_data.get('fastReasoningContext', 200000)), 200000),
-        deep_reasoning_context=_coerce_positive_int(models_data.get('deep_reasoning_context', models_data.get('deepReasoningContext', 200000)), 200000),
-        fast_reasoning_max_output=_coerce_positive_int(models_data.get('fast_reasoning_max_output', models_data.get('fastReasoningMaxOutput', 8192)), 8192),
-        deep_reasoning_max_output=_coerce_positive_int(models_data.get('deep_reasoning_max_output', models_data.get('deepReasoningMaxOutput', 16384)), 16384),
+        fast_reasoning_context=_coerce_positive_int(_cfg_get(models_data, 'fast_reasoning_context', 200000), 200000),
+        deep_reasoning_context=_coerce_positive_int(_cfg_get(models_data, 'deep_reasoning_context', 200000), 200000),
+        fast_reasoning_max_output=_coerce_positive_int(_cfg_get(models_data, 'fast_reasoning_max_output', 8192), 8192),
+        deep_reasoning_max_output=_coerce_positive_int(_cfg_get(models_data, 'deep_reasoning_max_output', 16384), 16384),
         batch_budget_percent=_coerce_positive_float(models_data.get('batch_budget_percent', 0.50), 0.50),
-        api_key_env=str(models_data.get('api_key_env', models_data.get('apiKeyEnv', 'OPENAI_API_KEY')) or 'OPENAI_API_KEY'),
-        base_url=str(models_data.get('base_url', models_data.get('baseUrl', '')) or ''),
+        api_key_env=str(_cfg_get(models_data, 'api_key_env', 'OPENAI_API_KEY') or 'OPENAI_API_KEY'),
+        base_url=str(_cfg_get(models_data, 'base_url', '') or ''),
     )
 
     capture_data = config_data.get('capture', {})
     capture = CaptureConfig(
         enabled=capture_data.get('enabled', True),
         strictness=capture_data.get('strictness', 'high'),
-        skip_patterns=capture_data.get('skip_patterns', capture_data.get('skipPatterns', [])),
-        inactivity_timeout_minutes=capture_data.get('inactivity_timeout_minutes', capture_data.get('inactivityTimeoutMinutes', 60)),
-        compact_on_timeout=bool(capture_data.get(
+        skip_patterns=_cfg_get(capture_data, 'skip_patterns', []),
+        inactivity_timeout_minutes=_cfg_get(capture_data, 'inactivity_timeout_minutes', 60),
+        compact_on_timeout=bool(_cfg_get(
+            capture_data,
             'compact_on_timeout',
-            capture_data.get(
-                'compactOnTimeout',
-                capture_data.get('auto_compaction_on_timeout', capture_data.get('autoCompactionOnTimeout', True)),
-            ),
+            _cfg_get(capture_data, 'auto_compaction_on_timeout', True),
         )),
-        chunk_tokens=capture_data.get(
+        chunk_tokens=_cfg_get(
+            capture_data,
             'chunk_tokens',
-            capture_data.get('chunkTokens', capture_data.get('chunk_size', capture_data.get('chunkSize', 8_000))),
+            _cfg_get(capture_data, 'chunk_size', 8_000),
         ),
-        chunk_max_lines=capture_data.get(
-            'chunk_max_lines',
-            capture_data.get('chunkMaxLines', 0),
-        ),
-        chunk_size=capture_data.get('chunk_size', capture_data.get('chunkSize', 8_000)),
+        chunk_max_lines=_cfg_get(capture_data, 'chunk_max_lines', 0),
+        chunk_size=_cfg_get(capture_data, 'chunk_size', 8_000),
     )
     
     decay_section = config_data.get('decay', {})
@@ -1041,8 +1059,7 @@ def _load_config_inner() -> MemoryConfig:
         high_similarity_threshold=config_data.get('janitor', {}).get('dedup', {}).get('high_similarity_threshold', 0.95),
         auto_reject_threshold=config_data.get('janitor', {}).get('dedup', {}).get('auto_reject_threshold', 0.98),
         gray_zone_low=config_data.get('janitor', {}).get('dedup', {}).get('gray_zone_low', 0.88),
-        llm_verify_enabled=config_data.get('janitor', {}).get('dedup', {}).get('llmVerifyEnabled',
-                            config_data.get('janitor', {}).get('dedup', {}).get('llm_verify_enabled', True))
+        llm_verify_enabled=_cfg_get(config_data.get('janitor', {}).get('dedup', {}), 'llm_verify_enabled', True)
     )
     
     contradiction = ContradictionConfig(
