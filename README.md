@@ -86,22 +86,19 @@ Terminology:
 
 Headline launch summary:
 
-| Metric | Quaid | FC Sonnet | OpenClaw Native |
-| --- | ---: | ---: | ---: |
-| AL-S | 87.69% | 92.90% | 69.40% |
-| Tokens | 5.75M | 29.83M | unknown |
-| AL-L | 87.10% | 87.70% | 63.06% |
-| Tokens | 6.46M | 34.60M | unknown |
-| AL-L OBD | 86.04% | 87.70% | unknown |
-| Tokens | 6.08M | 34.60M | unknown |
+|        | Quaid Sonnet | FC Sonnet | OpenClaw Native |
+|--------|--------------|-----------|-----------------|
+| AL-S   | 92.23%       | 92.90%    | 69.40%          |
+| AL-L   | 87.81%       | 87.70%    | 63.06%          |
+| AL-L OBD | 89.58%     | 87.70%    | 63.06%          |
 
-Quaid was measured with Haiku fast, Sonnet deep, and a Sonnet agent running eval. `AL-L` and `AL-L OBD` are chosen here as the best representation of real use data; `AL-S` remains the cleaner, more idealized lane. `Sonnet/Haiku` remains the flagship configuration on cleanliness and overall benchmark tradeoffs. `Opus` was evaluated, but underperformed `Sonnet` overall and is not the recommended launch configuration. On `AL-L` and `AL-L OBD`, FC is forced to compact, and the drop in FC quality reflects that compaction plus the added noise in the larger corpus. OpenClaw Native tokens remain unknown due to telemetry restrictions. Token counts here are the minimum tokens used to answer the full set of 283 eval questions.
+Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AL-S` remains the clean reference lane. `AL-L` and `AL-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the FC Sonnet baseline. In the long-form FC rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row.
 
 Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
 
 Use these canonical links:
 - [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
-- [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md)
+- [AgentLife Technical Report (2026-04-05)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260405.md)
 
 ---
 
