@@ -404,7 +404,9 @@ class OpenClawAdapter(QuaidAdapter):
         cfg = get_config()
         deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
         fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
-        provider = str(getattr(cfg.models, "llm_provider", "") or "").strip() or "anthropic"
+        provider = str(getattr(cfg.models, "llm_provider", "") or "").strip()
+        if not provider or provider == "default":
+            provider = self._detect_gateway_primary_provider() or "anthropic"
         fast_effort = str(getattr(cfg.models, "fast_reasoning_effort", "") or "").strip()
         deep_effort = str(getattr(cfg.models, "deep_reasoning_effort", "") or "").strip()
         if not deep_model or not fast_model:
