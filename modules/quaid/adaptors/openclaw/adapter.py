@@ -405,6 +405,7 @@ class OpenClawAdapter(QuaidAdapter):
         deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
         fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
         provider = str(getattr(cfg.models, "llm_provider", "") or "").strip() or "anthropic"
+        reasoning_effort = str(getattr(cfg.models, "reasoning_effort", "") or "").strip()
         if not deep_model or not fast_model:
             raise RuntimeError(
                 "LLM provider requires deepReasoning and fastReasoning to be set in config/memory.json. "
@@ -416,6 +417,7 @@ class OpenClawAdapter(QuaidAdapter):
             deep_model=deep_model,
             fast_model=fast_model,
             default_provider=provider,
+            reasoning_effort=reasoning_effort,
         )
 
     def installer_supported_providers(self) -> list:
