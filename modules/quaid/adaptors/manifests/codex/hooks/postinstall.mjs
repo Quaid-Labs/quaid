@@ -64,6 +64,27 @@ function pruneManagedHooks(groups, managedCommands) {
   return kept;
 }
 
+function upsertTomlTopLevel(text, key, quotedValue) {
+  // Insert or update a top-level (non-table) key=value line.
+  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  const lines = normalized ? normalized.split("\n") : [];
+  const re = new RegExp(`^\\s*${key}\\s*=`);
+  const valueLine = `${key} = ${quotedValue}`;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (re.test(lines[i]) && !lines[i].trim().startsWith("[")) {
+      lines[i] = valueLine;
+      return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+    }
+  }
+
+  // Not found; insert before first table header (or at end).
+  let insertBefore = lines.findIndex((l) => /^\s*\[/.test(l));
+  if (insertBefore === -1) insertBefore = lines.length;
+  lines.splice(insertBefore, 0, valueLine);
+  return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+}
+
 function upsertTomlBool(text, tableName, key, value) {
   const normalized = String(text || "").replace(/\r\n/g, "\n");
   const lines = normalized ? normalized.split("\n") : [];
@@ -174,8 +195,11 @@ for (const [eventName, groups] of Object.entries(desiredHooks)) {
 
 writeJson(hooksPath, hooksConfig);
 
-const currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-const updatedToml = upsertTomlBool(currentToml, "features", "codex_hooks", true);
+let currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+// Point codex at the hooks file so it is loaded on startup.
+let updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));
+// Enable the codex_hooks feature flag.
+updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);
 if (updatedToml !== currentToml) {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const tmpPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;
