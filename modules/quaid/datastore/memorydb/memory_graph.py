@@ -9429,75 +9429,6 @@ def create_edge(
             edge.source_fact_id,
         ))
         _mark_phase("insert_edge", p0)
-        inferred_edges_created = 0
-
-        # Keep lightweight family inference inside the same transaction:
-        # - parent_of(A, C) + spouse_of(A, B) => parent_of(B, C)
-        # - spouse_of(A, B) + parent_of(A, C*) => parent_of(B, C*)
-        def _insert_parent_if_missing(parent_id: str, child_id: str) -> int:
-            if parent_id == child_id:
-                return 0
-            if _edge_exists(conn, parent_id, child_id, "parent_of"):
-                return 0
-            inferred = Edge.create(
-                source_id=parent_id,
-                target_id=child_id,
-                relation="parent_of",
-                source_fact_id=source_fact_id,
-            )
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO edges
-                (id, source_id, target_id, relation, attributes, weight,
-                 valid_from, valid_until, created_at, source_fact_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    inferred.id, inferred.source_id, inferred.target_id, inferred.relation,
-                    json.dumps(inferred.attributes),
-                    inferred.weight,
-                    inferred.valid_from, inferred.valid_until,
-                    inferred.created_at or datetime.now().isoformat(),
-                    inferred.source_fact_id,
-                ),
-            )
-            return 1
-
-        if relation == "parent_of":
-            spouse_rows = conn.execute(
-                """
-                SELECT source_id, target_id
-                FROM edges
-                WHERE relation = 'spouse_of' AND (source_id = ? OR target_id = ?)
-                """,
-                (subject.id, subject.id),
-            ).fetchall()
-            for row in spouse_rows:
-                spouse_id = row["target_id"] if row["source_id"] == subject.id else row["source_id"]
-                inferred_edges_created += _insert_parent_if_missing(spouse_id, obj.id)
-
-        elif relation == "spouse_of":
-            child_rows = conn.execute(
-                """
-                SELECT target_id
-                FROM edges
-                WHERE relation = 'parent_of' AND source_id = ?
-                """,
-                (subject.id,),
-            ).fetchall()
-            for row in child_rows:
-                inferred_edges_created += _insert_parent_if_missing(obj.id, row["target_id"])
-
-            child_rows = conn.execute(
-                """
-                SELECT target_id
-                FROM edges
-                WHERE relation = 'parent_of' AND source_id = ?
-                """,
-                (obj.id,),
-            ).fetchall()
-            for row in child_rows:
-                inferred_edges_created += _insert_parent_if_missing(subject.id, row["target_id"])
 
         result = {
             "edge_id": edge.id,
@@ -9506,7 +9437,6 @@ def create_edge(
             "object_id": obj.id,
             "subject_created": subject_created,
             "object_created": object_created,
-            "inferred_edges_created": inferred_edges_created,
         }
         if telemetry_enabled:
             total_ms = round((time.perf_counter() - edge_t0) * 1000.0, 2)
