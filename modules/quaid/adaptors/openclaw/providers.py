@@ -35,10 +35,6 @@ class GatewayLLMProvider(LLMProvider):
         self._deep_model = str(deep_model or "").strip()
         self._fast_model = str(fast_model or "").strip()
         self._default_provider = str(default_provider or "anthropic").strip().lower() or "anthropic"
-        self._fallback_models = {
-            "fast": "claude-haiku-4-5",
-            "deep": "claude-sonnet-4-6",
-        }
 
     @staticmethod
     def _resolve_gateway_token() -> str:
@@ -60,25 +56,13 @@ class GatewayLLMProvider(LLMProvider):
 
     def _resolve_model_for_tier(self, model_tier: str) -> str:
         tier = "fast" if model_tier == "fast" else "deep"
-        override = self._fast_model if tier == "fast" else self._deep_model
-        if override:
-            return override
-        workspace_root = (
-            os.environ.get("QUAID_HOME")
-            or os.environ.get("CLAWDBOT_WORKSPACE")
-            or ""
-        ).strip()
-        if workspace_root:
-            cfg_path = Path(workspace_root) / "config" / "memory.json"
-            try:
-                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-                models = cfg.get("models", {}) if isinstance(cfg, dict) else {}
-                candidate = models.get("fastReasoning" if tier == "fast" else "deepReasoning")
-                if isinstance(candidate, str) and candidate.strip():
-                    return candidate.strip()
-            except Exception:
-                pass
-        return self._fallback_models[tier]
+        model = self._fast_model if tier == "fast" else self._deep_model
+        if not model:
+            raise RuntimeError(
+                f"No model configured for tier '{tier}'. "
+                "Set fastReasoning/deepReasoning in config/memory.json."
+            )
+        return model
 
     @staticmethod
     def _extract_openresponses_text(data: dict) -> str:
@@ -169,107 +153,14 @@ class GatewayLLMProvider(LLMProvider):
             elif m["role"] == "user":
                 user_message = m["content"]
 
-        if self._deep_model and self._fast_model:
-            return self._llm_call_openresponses(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                model_tier=model_tier,
-                max_tokens=max_tokens,
-                timeout=timeout,
-                start_time=time.time(),
-            )
-
-        body = json.dumps({
-            "system_prompt": system_prompt,
-            "user_message": user_message,
-            "model_tier": model_tier,
-            "max_tokens": max_tokens,
-        }).encode("utf-8")
-
-        headers = {"Content-Type": "application/json", "x-openclaw-scopes": "operator.write"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
-
-        url = f"http://127.0.0.1:{self._port}/plugins/quaid/llm"
-        req = urllib.request.Request(url, data=body, headers=headers,
-                                     method="POST")
-
-        retries = 1
-        start_time = time.time()
-        last_error = None
-        for attempt in range(retries + 1):
-            try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    if not isinstance(data, dict):
-                        raise RuntimeError(
-                            f"Gateway LLM proxy returned non-object JSON payload: {type(data).__name__}"
-                        )
-                    duration = time.time() - start_time
-                    return LLMResult(
-                        text=data.get("text"),
-                        duration=duration,
-                        input_tokens=data.get("input_tokens", 0),
-                        output_tokens=data.get("output_tokens", 0),
-                        cache_read_tokens=data.get("cache_read_tokens", 0),
-                        cache_creation_tokens=data.get("cache_creation_tokens", 0),
-                        model=data.get("model", ""),
-                        truncated=data.get("truncated", False),
-                    )
-            except urllib.error.HTTPError as e:
-                try:
-                    err_body = json.loads(e.read().decode("utf-8"))
-                    if isinstance(err_body, dict):
-                        err_msg = err_body.get("error", str(e))
-                    else:
-                        err_msg = str(e)
-                except Exception:
-                    err_msg = str(e)
-                logger.warning("Gateway LLM proxy HTTP error (%s): %s", e.code, err_msg)
-                # Fallback: some gateway builds do not mount /plugins/quaid/llm.
-                # In that case, call OpenResponses directly through the gateway.
-                if e.code in {404, 405}:
-                    try:
-                        return self._llm_call_openresponses(
-                            system_prompt=system_prompt,
-                            user_message=user_message,
-                            model_tier=model_tier,
-                            max_tokens=max_tokens,
-                            timeout=timeout,
-                            start_time=start_time,
-                        )
-                    except Exception as fallback_err:
-                        logger.warning("Gateway OpenResponses fallback failed: %s", fallback_err)
-                        raise fallback_err
-                if e.code == 503:
-                    raise RuntimeError(
-                        f"No credential configured for selected model provider (HTTP {e.code}): {err_msg}"
-                    ) from e
-                retryable = e.code in {429, 500, 502, 504}
-                last_error = e
-                if retryable and attempt < retries:
-                    time.sleep(0.25 * (2 ** attempt))
-                    continue
-                raise
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                logger.warning("Gateway LLM proxy transient error: %s", e)
-                last_error = e
-                if attempt < retries:
-                    # Only retry if there is budget remaining. A timeout means
-                    # we already spent `timeout` seconds — retrying with the
-                    # same timeout would double the wall-clock block time.
-                    elapsed = time.time() - start_time
-                    remaining = (timeout or 0) - elapsed
-                    if remaining > 0.5:
-                        time.sleep(min(0.25 * (2 ** attempt), remaining * 0.5))
-                        continue
-                raise
-            except Exception as e:
-                logger.error("Gateway LLM proxy error: %s", e)
-                raise
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("Gateway LLM proxy call failed without error detail")
+        return self._llm_call_openresponses(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            model_tier=model_tier,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            start_time=time.time(),
+        )
 
     def get_profiles(self):
         return {

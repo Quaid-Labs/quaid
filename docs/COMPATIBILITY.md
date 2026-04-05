@@ -60,3 +60,33 @@ If you are building a host integration, the highest-value capabilities to expose
 4. clear notification routing primitives
 
 Hosts that implement these interfaces get the full Quaid lifecycle behavior with minimal adapter-specific code.
+
+## Known Platform Quirks
+
+This section records behaviors discovered during live testing that materially change what Quaid can deliver on a given platform. These are not bugs in Quaid's core — they are host/model behaviors that constrain or shape what the platform integration can provide. This list is intended to grow over time and may eventually become a list of issues to raise with platform providers.
+
+### Relationship edge extraction — OpenClaw (openai-codex/gpt-5.4) and Codex
+
+**Symptom:** Quaid's extraction pipeline produces zero relationship edges at store time on both the OpenClaw adapter (when using `openai-codex/gpt-5.4` via OAuth) and the Codex adapter. The memory facts are stored correctly; only the graph edges (relationships between entities) are missing immediately after extraction.
+
+**Root cause:** Quaid's extraction LLM call includes a prompt section that asks the model to emit relationship hints in a structured format. The OpenAI Codex-family models (`openai-codex/gpt-5.4`, `gpt-5.4-mini`) do not reliably produce output in that format. This appears to be a model behavior difference compared to Claude models, which do follow the format consistently.
+
+**Impact:** Recall queries that depend on graph traversal (multi-hop relationships, entity connections) produce no results until the janitor backfill task runs. Single-hop vector recall is unaffected.
+
+**Current workaround:** The janitor `--task all --apply` run performs edge backfill from existing facts and restores graph connectivity. Scheduling regular janitor runs mitigates the gap. This is a known limitation of OpenAI Codex OAuth model integration.
+
+**Future path:** Investigate whether a different extraction prompt format or a post-extraction edge-generation pass can improve edge coverage without depending on in-format model output.
+
+---
+
+### Session identity — Codex `/new` command does not expose a session ID
+
+**Symptom:** On Codex, starting a new conversation context (equivalent to `/new` on other platforms) does not provide a stable session ID that Quaid can use to link extraction output to the initiating session. The Quaid daemon can detect the session boundary and trigger extraction, but cannot associate the extracted facts with a named session in the session log.
+
+**Root cause:** Codex does not expose a session ID as part of its hook payloads or command lifecycle. The stop hook fires correctly, but the session context passed to Quaid does not include a stable identifier for the new session.
+
+**Impact:** `quaid session list` and `quaid session load` may show incomplete or unlinked session entries for Codex-originated sessions. Cross-session lineage tracking (which session produced which facts) is weakened on Codex compared to OpenClaw and Claude Code.
+
+**Current workaround:** None. Extraction and recall still work correctly; only the session provenance metadata is affected.
+
+**Future path:** If Codex exposes a session ID in a future hook update, the adapter can be updated to forward it. Otherwise, a content-based session fingerprinting approach could substitute.

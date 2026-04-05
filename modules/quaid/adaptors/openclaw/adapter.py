@@ -398,15 +398,15 @@ class OpenClawAdapter(QuaidAdapter):
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from config import get_config
         port, token = self._get_gateway_auth()
-        try:
-            cfg = get_config()
-            deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
-            fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
-            provider = str(getattr(cfg.models, "llm_provider", "") or "").strip() or "anthropic"
-        except Exception:
-            deep_model = ""
-            fast_model = ""
-            provider = "anthropic"
+        cfg = get_config()
+        deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
+        fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
+        provider = str(getattr(cfg.models, "llm_provider", "") or "").strip() or "anthropic"
+        if not deep_model or not fast_model:
+            raise RuntimeError(
+                "LLM provider requires deepReasoning and fastReasoning to be set in config/memory.json. "
+                f"Got deep={deep_model!r} fast={fast_model!r}."
+            )
         return GatewayLLMProvider(
             port=port,
             token=token,
