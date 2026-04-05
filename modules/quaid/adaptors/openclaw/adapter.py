@@ -560,16 +560,19 @@ class OpenClawAdapter(QuaidAdapter):
         deep_model: str,
         fast_model: str,
     ) -> dict:
-        normalized_provider = self._normalize_installer_provider(
+        # Use raw provider (not alias-normalized) as the gateway routing prefix.
+        # Normalizing openai-codex -> openai would cause the gateway to route
+        # via the standard OpenAI key path instead of the Codex OAuth path.
+        raw_provider = str(
             provider or self._detect_gateway_primary_provider() or "anthropic"
-        )
+        ).strip().lower() or "anthropic"
         port, token = self._get_gateway_auth()
         llm = GatewayLLMProvider(
             port=port,
             token=token,
             deep_model=str(deep_model or "").strip(),
             fast_model=str(fast_model or "").strip(),
-            default_provider=normalized_provider or "anthropic",
+            default_provider=raw_provider,
         )
 
         results = []
