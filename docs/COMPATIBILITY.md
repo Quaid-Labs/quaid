@@ -65,6 +65,20 @@ Hosts that implement these interfaces get the full Quaid lifecycle behavior with
 
 This section records behaviors discovered during live testing that materially change what Quaid can deliver on a given platform. These are not bugs in Quaid's core — they are host/model behaviors that constrain or shape what the platform integration can provide. This list is intended to grow over time and may eventually become a list of issues to raise with platform providers.
 
+### Model availability — openai-codex OAuth path
+
+**Symptom:** Only `gpt-5.4` is confirmed valid for the Responses API (`/v1/responses`) via the ChatGPT Codex OAuth authentication path. `gpt-5.4-mini`, `gpt-5.2`, and other model variants all return HTTP 400 Bad Request.
+
+**Root cause:** The ChatGPT Codex OAuth path exposes a narrower model selection than the standard OpenAI API key path. At the time of testing, only `gpt-5.4` (full) accepts requests. `gpt-5.1-codex-mini` is available but requires an explicit `reasoning.effort` value (`low`/`medium`/`high`) — it rejects requests where `reasoning.effort` is absent or `none`.
+
+**Impact:** OC and CDX live-test silo configs must use `gpt-5.4` for deep-tier extraction and any LLM call that does not send explicit `reasoning.effort`. `gpt-5.1-codex-mini` can be used for fast-tier calls if `fastReasoningEffort` is set to `medium` in config.
+
+**Current workaround:** Set `deep_reasoning: "gpt-5.4"` (no reasoning.effort) and `fast_reasoning: "gpt-5.1-codex-mini"` with `fastReasoningEffort: "medium"` for both OC and CDX live-test silos.
+
+**Future path:** Raise with OpenAI/Codex team whether additional models (gpt-5.2, etc.) will be exposed on the OAuth path, and whether `gpt-5.4` will continue to be available without reasoning parameters.
+
+---
+
 ### Relationship edge extraction — OpenClaw (openai-codex/gpt-5.4) and Codex
 
 **Symptom:** Quaid's extraction pipeline produces zero relationship edges at store time on both the OpenClaw adapter (when using `openai-codex/gpt-5.4` via OAuth) and the Codex adapter. The memory facts are stored correctly; only the graph edges (relationships between entities) are missing immediately after extraction.
@@ -90,3 +104,31 @@ This section records behaviors discovered during live testing that materially ch
 **Current workaround:** None. Extraction and recall still work correctly; only the session provenance metadata is affected.
 
 **Future path:** If Codex exposes a session ID in a future hook update, the adapter can be updated to forward it. Otherwise, a content-based session fingerprinting approach could substitute.
+
+---
+
+### HyDE recall LLM timeout — Codex adapter
+
+**Symptom:** On the Codex adapter, `quaid recall` queries that trigger HyDE (Hypothetical Document Embedding) generation intermittently time out with `[llm_clients] LLM error: Timed out waiting for Codex turn notifications`. The timeout occurs in the LLM call path for generating the hypothetical document used to improve query embedding quality. The failure degrades recall to unranked vector results, which may be irrelevant.
+
+**Root cause:** Quaid's HyDE step issues an LLM call to generate a hypothetical answer to the recall query before embedding. On the Codex adapter, LLM calls go through the Codex CLI subprocess notification path. For complex multi-term queries at medium reasoning effort, this path exceeds the LLM client timeout. Simpler queries ("my family") complete within the timeout; compound queries ("exercise habits recent plans") do not.
+
+**Impact:** Recall quality degrades silently when the HyDE LLM call times out — the system falls back to raw vector similarity without the HyDE-boosted query, producing weaker results. The issue is intermittent (query-complexity-dependent) and not visible to the user unless they inspect logs.
+
+**Current workaround:** Set `retrieval.useHyde = false` in the CDX silo's `config/memory.json`. This disables HyDE entirely for CDX, eliminating the LLM dependency from the recall path. Recall quality is lower without HyDE but stable.
+
+**Future path:** Investigate the Codex CLI LLM call timeout in `core/llm/`. Either raise the timeout for the HyDE step, make HyDE calls async with fallback, or expose a per-adapter HyDE toggle in the adapter config contract.
+
+---
+
+### Injected context visibility — Codex shows Quaid hook context in the host view
+
+**Symptom:** On Codex, Quaid's injected recall/startup context is visible in the host view screen instead of being fully hidden as an internal system-side prompt augmentation.
+
+**Root cause:** Codex surfaces hook-provided `additionalContext` in its own UI flow. Quaid delivers bounded recall and startup context through the supported hook payload, but Codex currently treats that material as visible host context rather than invisible prompt plumbing.
+
+**Impact:** Users can see Quaid-injected memory/project context in Codex's view, which makes the integration feel less silent than OpenClaw. This is cosmetic, but it affects UX and may expose more of Quaid's internal recall framing than desired.
+
+**Current workaround:** None on the Quaid side without weakening or removing injection. As of April 4, 2026, no Codex CLI setting was found in local `codex --help`, `codex debug --help`, `codex features`, or `~/.codex/config.toml` that suppresses visibility of hook-injected `additionalContext`.
+
+**Future path:** If Codex adds a hidden/system hook channel or a visibility control for hook-injected context, the adapter should switch to that path immediately.
