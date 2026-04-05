@@ -131,6 +131,8 @@ class Node:
     confidence: float = 0.5
     source: Optional[str] = None
     source_id: Optional[str] = None
+    origin_package_id: Optional[str] = None
+    origin_version_id: Optional[str] = None
     privacy: str = "shared"  # private, shared, public
     valid_from: Optional[str] = None
     valid_until: Optional[str] = None
@@ -181,6 +183,8 @@ class Edge:
     valid_until: Optional[str] = None
     created_at: Optional[str] = None
     source_fact_id: Optional[str] = None  # The fact node that created this edge
+    origin_package_id: Optional[str] = None
+    origin_version_id: Optional[str] = None
 
     @classmethod
     def create(cls, source_id: str, target_id: str, relation: str, **kwargs) -> "Edge":
@@ -247,6 +251,15 @@ class MemoryGraph:
                 except sqlite3.OperationalError:
                     pass  # Column already exists
 
+            for col, typedef in [
+                ("origin_package_id", "TEXT"),
+                ("origin_version_id", "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {typedef}")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
             # Forward-compatible multi-user attribution columns.
             for col, typedef in [
                 ("speaker_entity_id", "TEXT"),
@@ -271,6 +284,24 @@ class MemoryGraph:
                 conn.execute("ALTER TABLE nodes ADD COLUMN storage_strength REAL DEFAULT 0.0")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+
+            for col, typedef in [
+                ("origin_package_id", "TEXT"),
+                ("origin_version_id", "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE edges ADD COLUMN {col} {typedef}")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
+            for stmt in [
+                "CREATE INDEX IF NOT EXISTS idx_nodes_origin_package_id ON nodes(origin_package_id)",
+                "CREATE INDEX IF NOT EXISTS idx_edges_origin_package_id ON edges(origin_package_id)",
+            ]:
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass
 
             # Rebuild FTS to include keywords column if schema predates it
             try:
@@ -840,12 +871,13 @@ class MemoryGraph:
             active_conn.execute("""
                 INSERT OR REPLACE INTO nodes
                 (id, type, name, attributes, embedding, verified, pinned, confidence,
-                 source, source_id, privacy, valid_from, valid_until,
+                 source, source_id, origin_package_id, origin_version_id,
+                 privacy, valid_from, valid_until,
                  created_at, updated_at, accessed_at, access_count, storage_strength, owner_id, session_id,
                  fact_type, knowledge_type, extraction_confidence, status, speaker, speaker_entity_id,
                  conversation_id, visibility_scope, sensitivity, provenance_confidence,
                  content_hash, superseded_by, confirmation_count, last_confirmed_at, keywords)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 node.id, node.type, node.name,
                 json.dumps(node.attributes),
@@ -854,6 +886,7 @@ class MemoryGraph:
                 1 if node.pinned else 0,
                 node.confidence,
                 node.source, node.source_id,
+                node.origin_package_id, node.origin_version_id,
                 node.privacy,
                 node.valid_from, node.valid_until,
                 node.created_at or datetime.now().isoformat(),
@@ -926,7 +959,7 @@ class MemoryGraph:
                 UPDATE nodes SET
                     type = ?, name = ?, attributes = ?, embedding = ?,
                     verified = ?, pinned = ?, confidence = ?,
-                    source = ?, source_id = ?, privacy = ?,
+                    source = ?, source_id = ?, origin_package_id = ?, origin_version_id = ?, privacy = ?,
                     valid_from = ?, valid_until = ?,
                     updated_at = ?, accessed_at = ?, access_count = ?,
                     storage_strength = ?,
@@ -947,6 +980,7 @@ class MemoryGraph:
                 1 if node.pinned else 0,
                 node.confidence,
                 node.source, node.source_id,
+                node.origin_package_id, node.origin_version_id,
                 node.privacy,
                 node.valid_from, node.valid_until,
                 datetime.now().isoformat(),
@@ -1117,6 +1151,8 @@ class MemoryGraph:
             confidence=row['confidence'],
             source=row['source'],
             source_id=row['source_id'],
+            origin_package_id=row['origin_package_id'] if 'origin_package_id' in row.keys() else None,
+            origin_version_id=row['origin_version_id'] if 'origin_version_id' in row.keys() else None,
             privacy=row['privacy'],
             valid_from=row['valid_from'],
             valid_until=row['valid_until'],
@@ -1154,15 +1190,18 @@ class MemoryGraph:
             conn.execute("""
                 INSERT OR REPLACE INTO edges
                 (id, source_id, target_id, relation, attributes, weight,
-                 valid_from, valid_until, created_at, source_fact_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 valid_from, valid_until, created_at, source_fact_id,
+                 origin_package_id, origin_version_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 edge.id, edge.source_id, edge.target_id, edge.relation,
                 json.dumps(edge.attributes),
                 edge.weight,
                 edge.valid_from, edge.valid_until,
                 edge.created_at or datetime.now().isoformat(),
-                edge.source_fact_id
+                edge.source_fact_id,
+                edge.origin_package_id,
+                edge.origin_version_id,
             ))
         return edge.id
 
@@ -1212,7 +1251,9 @@ class MemoryGraph:
             valid_from=row['valid_from'],
             valid_until=row['valid_until'],
             created_at=row['created_at'],
-            source_fact_id=row['source_fact_id'] if 'source_fact_id' in row.keys() else None
+            source_fact_id=row['source_fact_id'] if 'source_fact_id' in row.keys() else None,
+            origin_package_id=row['origin_package_id'] if 'origin_package_id' in row.keys() else None,
+            origin_version_id=row['origin_version_id'] if 'origin_version_id' in row.keys() else None,
         )
 
     # ==========================================================================
@@ -9635,7 +9676,7 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
             'Respond with JSON only: {"is_same": true/false, "subsumes": "a_subsumes_b" | "b_subsumes_a" | null, "reasoning": "brief reason"}'
         )
 
-        response, _duration = call_fast_reasoning(prompt, max_tokens=100, timeout=30.0)
+        response, _duration = call_fast_reasoning(prompt, max_tokens=100, timeout=120.0)
         if not response:
             return None
         parsed = parse_json_response(response)
@@ -9671,7 +9712,7 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
     )
 
     max_tokens = min(1200, max(200, 120 * len(candidates)))
-    response, _duration = call_fast_reasoning(prompt, max_tokens=max_tokens, timeout=30.0)
+    response, _duration = call_fast_reasoning(prompt, max_tokens=max_tokens, timeout=120.0)
     if not response:
         return None
 

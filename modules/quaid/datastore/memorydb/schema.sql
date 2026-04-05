@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS nodes (
     confidence REAL DEFAULT 0.5,            -- 0-1 confidence score
     source TEXT,                            -- Where this came from (file, message, etc.)
     source_id TEXT,                         -- Message ID or file path
+
+    -- Import provenance (null = locally created / user-evolved state)
+    origin_package_id TEXT,                 -- Imported package or lineage identifier
+    origin_version_id TEXT,                 -- Imported package version identifier
     
     -- Multi-user support
     owner_id TEXT,                          -- Who owns this memory (null = shared)
@@ -75,6 +79,10 @@ CREATE TABLE IF NOT EXISTS edges (
     weight REAL DEFAULT 1.0,                -- Relationship strength
     source_fact_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,  -- Fact that created this edge
 
+    -- Import provenance (null = locally created / user-evolved state)
+    origin_package_id TEXT,                 -- Imported package or lineage identifier
+    origin_version_id TEXT,                 -- Imported package version identifier
+
     -- Temporal
     valid_from TEXT,
     valid_until TEXT,
@@ -114,6 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_privacy ON nodes(privacy);
 CREATE INDEX IF NOT EXISTS idx_nodes_verified ON nodes(verified);
 CREATE INDEX IF NOT EXISTS idx_nodes_pinned ON nodes(pinned);
 CREATE INDEX IF NOT EXISTS idx_nodes_source ON nodes(source);
+CREATE INDEX IF NOT EXISTS idx_nodes_origin_package_id ON nodes(origin_package_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner ON nodes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner_status ON nodes(owner_id, status);
 CREATE INDEX IF NOT EXISTS idx_nodes_actor ON nodes(actor_id);
@@ -134,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
 CREATE INDEX IF NOT EXISTS idx_edges_source_fact ON edges(source_fact_id);
+CREATE INDEX IF NOT EXISTS idx_edges_origin_package_id ON edges(origin_package_id);
 
 -- Domain registry + node-to-domain mapping
 CREATE TABLE IF NOT EXISTS domain_registry (
