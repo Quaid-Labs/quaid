@@ -611,11 +611,16 @@ def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcrip
         cwd_encoded = hook_cwd.replace("/", "-")
         return str(Path(sessions_dir) / cwd_encoded / f"{session_id}.jsonl")
 
-    if sessions_dir and adapter_id == "codex":
+    if adapter_id == "codex":
         from datetime import datetime
 
+        # Construct path even when sessions_dir doesn't exist yet so cursor files
+        # can be seeded for --yolo sessions. Without this, get_sessions_dir()
+        # returning None caused an empty string to propagate back, the cursor was
+        # never written, and orphan-sweep could never detect the session.
+        resolved_sessions_dir = sessions_dir or (Path.home() / ".codex" / "sessions")
         date_prefix = datetime.now().strftime("%Y/%m/%d")
-        return str(Path(sessions_dir) / date_prefix / f"rollout-pending-{session_id}.jsonl")
+        return str(Path(resolved_sessions_dir) / date_prefix / f"rollout-pending-{session_id}.jsonl")
 
     if sessions_dir and adapter_id in ("openclaw", "standalone", ""):
         return str(Path(sessions_dir) / f"{session_id}.jsonl")
