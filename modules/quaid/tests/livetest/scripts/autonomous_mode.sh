@@ -144,9 +144,17 @@ while true; do
     # tmux-msg.sh owns the full decision matrix (copy mode, draft, user watching)
     RC=0
     trace "send start target=$WINDOW"
-    TMUX_MSG_SENDER="autonomous-mode" \
-    TMUX_MSG_SOURCE="script" \
-    "$TMUX_MSG" "$WINDOW" "$MESSAGE" >> "$LOG_FILE" 2>&1 || RC=$?
+    python3 - "$TMUX_MSG" "$WINDOW" "$MESSAGE" >> "$LOG_FILE" 2>&1 <<'PY' || RC=$?
+import os
+import subprocess
+import sys
+
+script, window, message = sys.argv[1:4]
+env = dict(os.environ)
+env["TMUX_MSG_SENDER"] = "autonomous-mode"
+env["TMUX_MSG_SOURCE"] = "script"
+subprocess.run([script, window, message], env=env, check=True, timeout=20)
+PY
     trace "send end rc=$RC target=$WINDOW"
     if [[ "$RC" == "0" ]]; then
         log "nudge sent to $WINDOW"

@@ -167,6 +167,15 @@ _user_busy() {
     return 1
 }
 
+_submit_message() {
+    tmux send-keys -l -t "$PANE" -- "$MESSAGE"
+    sleep 0.3
+    # Use both Enter and C-m for compatibility across pane types
+    tmux send-keys -t "$PANE" Enter
+    sleep 0.05
+    tmux send-keys -t "$PANE" C-m
+}
+
 # --- Wait for user to finish ---
 
 if [[ "$WAIT" -gt 0 ]] && _user_busy; then
@@ -198,11 +207,22 @@ if ! _user_viewing; then
     fi
 fi
 
-tmux send-keys -t "$PANE" "$MESSAGE"
-sleep 0.3
-# Use both Enter and C-m for compatibility across pane types
-tmux send-keys -t "$PANE" Enter
-sleep 0.05
-tmux send-keys -t "$PANE" C-m
+_submit_message
+
+# Some panes intermittently keep the text in the prompt buffer even after the
+# initial submit sequence. Retry a few times; if the draft is still present,
+# fail the send instead of pretending it worked.
+for _attempt in 1 2 3; do
+    sleep 0.2
+    _pane_has_draft || break
+    tmux send-keys -t "$PANE" Enter
+    sleep 0.05
+    tmux send-keys -t "$PANE" C-m
+done
+
+if _pane_has_draft; then
+    echo "Error: message still present as draft in pane '$PANE' after submit retries" >&2
+    exit 1
+fi
 
 echo "Sent to $PANE: $MESSAGE"

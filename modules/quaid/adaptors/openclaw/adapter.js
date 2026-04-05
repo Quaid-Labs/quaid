@@ -1537,7 +1537,7 @@ notify_user(${JSON.stringify(message)})
             ``,
             `[PROJECT CREATION \u2014 MANDATORY BEFORE ANY WORK BEGINS]`,
             `Before you write a single file, spawn a coding agent, run a build, or execute any multi-step task:`,
-            `  STEP 1: Run quaid registry create-project <name> --source-roots <path>`,
+            `  STEP 1: Run quaid project create <name> --source-root <path>`,
             `  STEP 2: Then do the work inside that project.`,
             `DO NOT spawn a coding agent or subagent without completing Step 1 first.`,
             `DO NOT write any file without completing Step 1 first.`,
@@ -1557,6 +1557,29 @@ notify_user(${JSON.stringify(message)})
             `Always tell the user which project received the file.`
           ].join("\n");
           writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
+        }
+      }
+      if (_QUAID_INSTANCE) {
+        try {
+          const _noticeFile = path.join(WORKSPACE, _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json");
+          const _noticeData = JSON.parse(fs.readFileSync(_noticeFile, "utf-8"));
+          const _pending = (Array.isArray(_noticeData?.requests) ? _noticeData.requests : []).filter((r) => r?.status === "pending");
+          if (_pending.length > 0) {
+            const _kinds = {};
+            for (const r of _pending) {
+              const k = String(r?.kind || "general");
+              _kinds[k] = (_kinds[k] || 0) + 1;
+            }
+            const _kindSummary = Object.entries(_kinds).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, c]) => `${k}=${c}`).join(", ") || "unknown";
+            const _word = _pending.length === 1 ? "notice" : "notices";
+            const _hint = `<quaid_system_message>
+Quaid has ${_pending.length} deferred maintenance ${_word} waiting (${_kindSummary}). These are buffered system notices. Do not retrieve or relay them unless you are confident a human user is active and can see the reply. If appropriate, inspect with \`quaid notify --deferred-status\` or fetch with \`quaid notify --deferred-drain\`, then summarize the results.
+</quaid_system_message>`;
+            appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${_hint}` : _hint;
+          }
+        } catch {
         }
       }
       const withDocs = (base) => ({
