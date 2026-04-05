@@ -28,6 +28,9 @@ class OpenClawAdapter(QuaidAdapter):
     _INSTALLER_MODEL_DEFAULTS = {
         "anthropic": {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"},
         "openai": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
+        # openai-codex uses the ChatGPT Codex OAuth path which only exposes gpt-5.4.
+        # gpt-5.4-mini is not available on this auth path and returns 400.
+        "openai-codex": {"deep": "gpt-5.4", "fast": "gpt-5.4"},
         "openrouter": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "together": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "ollama": {"deep": "llama3.1:70b", "fast": "llama3.1:8b"},
@@ -423,8 +426,11 @@ class OpenClawAdapter(QuaidAdapter):
         return sorted(providers)
 
     def installer_default_models(self, provider: str) -> Optional[dict]:
-        key = self._normalize_installer_provider(provider)
-        model_pair = self._INSTALLER_MODEL_DEFAULTS.get(key)
+        raw = str(provider or "").strip().lower()
+        # Check exact match first so provider-specific overrides (e.g. openai-codex)
+        # take precedence over alias resolution.
+        model_pair = self._INSTALLER_MODEL_DEFAULTS.get(raw) or \
+            self._INSTALLER_MODEL_DEFAULTS.get(self._normalize_installer_provider(raw))
         if not model_pair:
             return None
         return {"deep": str(model_pair["deep"]), "fast": str(model_pair["fast"])}
