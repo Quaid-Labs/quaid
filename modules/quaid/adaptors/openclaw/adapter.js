@@ -1044,6 +1044,8 @@ const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 let _beforePromptBuildInFlight = false;
+let _lastDaemonAliveCheckMs = 0;
+const _DAEMON_ALIVE_CHECK_INTERVAL_MS = 6e4;
 function _getGatewayCredential(providers) {
   for (const provider of providers) {
     const normalized = String(provider || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -1507,6 +1509,11 @@ notify_user(${JSON.stringify(message)})
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
+      const nowMs = Date.now();
+      if (nowMs - _lastDaemonAliveCheckMs > _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
+        _lastDaemonAliveCheckMs = nowMs;
+        ensureDaemonAlive();
+      }
       let appendSystemContext;
       let prependSystemContext;
       if (isSystemEnabled2("projects")) {

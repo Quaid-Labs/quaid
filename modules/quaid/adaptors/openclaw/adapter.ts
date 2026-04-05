@@ -1392,6 +1392,12 @@ const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 // call and we skip to prevent a recursive recall→LLM→recall→... loop.
 let _beforePromptBuildInFlight = false;
 
+// Rate-limit for daemon liveness pings from before_prompt_build.
+// ensureDaemonAlive() is cheap (just checks PID), but the subprocess call adds
+// latency on every turn.  Ping at most once per minute.
+let _lastDaemonAliveCheckMs = 0;
+const _DAEMON_ALIVE_CHECK_INTERVAL_MS = 60_000;
+
 function _getGatewayCredential(providers: string[]): string | undefined {
   for (const provider of providers) {
     const normalized = String(provider || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -1979,6 +1985,16 @@ notify_user(${JSON.stringify(message)})
 
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
+
+      // Keep the extraction daemon alive across long OC sessions.
+      // ensureDaemonAlive() is only called once at boot — if the daemon crashes or
+      // is killed mid-session, rolling extraction silently stops.  Rate-limited to
+      // once per minute so the subprocess cost is negligible.
+      const nowMs = Date.now();
+      if (nowMs - _lastDaemonAliveCheckMs > _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
+        _lastDaemonAliveCheckMs = nowMs;
+        ensureDaemonAlive();
+      }
 
       // Inject project docs once per session on the first message.
       // - appendSystemContext: full TOOLS.md + AGENTS.md docs (appended after OC base prompt)
