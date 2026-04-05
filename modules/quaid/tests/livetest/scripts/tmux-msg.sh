@@ -14,6 +14,9 @@
 #   codex-pr     window 2
 #   codex-bench  window 3
 #   claude       window 4
+#   claude-dev   window 4
+#   monitor      window 5
+#   claude-looper window 5
 #   main:N.0     explicit pane address
 #
 # Environment:
@@ -85,8 +88,11 @@ case "$TARGET" in
     codex-bench)
         PANE="main:3.0"
         ;;
-    claude|monitor)
+    claude|claude-dev)
         PANE="main:4.0"
+        ;;
+    monitor|claude-looper)
+        PANE="main:5.0"
         ;;
     [0-9]|[0-9][0-9])
         PANE="main:${TARGET}.0"
@@ -99,7 +105,7 @@ case "$TARGET" in
         ;;
     *)
         echo "Error: unknown target '$TARGET'" >&2
-        echo "Valid: 0-99, self, codex-dev, codex-pr, codex-bench, claude, monitor, main:N.0, livetest:NAME" >&2
+        echo "Valid: 0-99, self, codex-dev, codex-pr, codex-bench, claude, claude-dev, monitor, claude-looper, main:N.0, livetest:NAME" >&2
         exit 1
         ;;
 esac

@@ -72,7 +72,8 @@ case "$WINDOW" in
     codex-dev)    PANE="main:1.0" ;;
     codex-pr)     PANE="main:2.0" ;;
     codex-bench)  PANE="main:3.0" ;;
-    claude|monitor) PANE="main:4.0" ;;
+    claude|claude-dev) PANE="main:4.0" ;;
+    monitor|claude-looper) PANE="main:5.0" ;;
     [0-9]|[0-9][0-9]) PANE="main:${WINDOW}.0" ;;
     main:*)       PANE="$WINDOW" ;;
     *)            PANE="" ;;
@@ -144,17 +145,9 @@ while true; do
     # tmux-msg.sh owns the full decision matrix (copy mode, draft, user watching)
     RC=0
     trace "send start target=$WINDOW"
-    python3 - "$TMUX_MSG" "$WINDOW" "$MESSAGE" >> "$LOG_FILE" 2>&1 <<'PY' || RC=$?
-import os
-import subprocess
-import sys
-
-script, window, message = sys.argv[1:4]
-env = dict(os.environ)
-env["TMUX_MSG_SENDER"] = "autonomous-mode"
-env["TMUX_MSG_SOURCE"] = "script"
-subprocess.run([script, window, message], env=env, check=True, timeout=20)
-PY
+    TMUX_MSG_SENDER="autonomous-mode" \
+    TMUX_MSG_SOURCE="script" \
+    "$TMUX_MSG" "$WINDOW" "$MESSAGE" >> "$LOG_FILE" 2>&1 || RC=$?
     trace "send end rc=$RC target=$WINDOW"
     if [[ "$RC" == "0" ]]; then
         log "nudge sent to $WINDOW"
