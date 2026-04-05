@@ -142,6 +142,7 @@ echo "Stop with: kill $PID"
 
 while true; do
     RC=0
+    THIS_IS_A_CRITICAL_MESSAGE=true \
     TMUX_MSG_SENDER="livetest-nudge" \
     TMUX_MSG_SOURCE="script" \
     "$TMUX_MSG" "$WINDOW" "$MESSAGE" >> "$LOG_FILE" 2>&1 || RC=$?

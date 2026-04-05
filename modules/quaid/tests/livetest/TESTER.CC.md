@@ -76,10 +76,10 @@ supports forced compaction).
    something memorable, then **let it idle for >1 minute** with no further input.
 
 3. Verify extraction fired (daemon log shows `[daemon-compaction]` with
-   `source: timeout_extract` — not `daemon-timeout`):
+   `source: daemon.timeout`):
    ```bash
    ssh REMOTE_HOST 'tail -20 WORKSPACE/CC_INSTANCE/logs/daemon/extraction-daemon.log \
-     2>/dev/null | grep -i "timeout\|compaction\|timeout_extract"'
+     2>/dev/null | grep -i "timeout\|compaction\|daemon\.timeout"'
    ```
 
 4. Restore and restart:
@@ -93,7 +93,7 @@ supports forced compaction).
    ```
 
 **M4 PASS criteria (CC):** Timeout fact extracted and stored. Daemon log shows
-`timeout_extract` signal processed. Note in STATUS: "M4 PASS — timeout
+`daemon.timeout` signal processed. Note in STATUS: "M4 PASS — timeout
 extraction verified (no compaction, expected for CC)."
 
 ---
