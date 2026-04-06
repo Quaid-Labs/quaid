@@ -6,6 +6,14 @@
     "workspace": "/absolute/path/to/quaid"
   },
 
+  "_vm_comment": "Optional: use a Tart VM instead of a physical remote host. Run 'livetest-vm.sh start' to boot a VM and auto-patch remote.host with the VM IP. Set vm.enabled=true to document intent; the script manages the host field directly.",
+  "vm": {
+    "enabled": false,
+    "base_image": "quaid-livetest-base",
+    "run_image": "quaid-livetest-run",
+    "ssh_user": "admin"
+  },
+
   "owner_name": "Your Name",
 
   "tester": {
