@@ -40,7 +40,12 @@ class OpenClawAdapter(QuaidAdapter):
         # Static default: gpt-5.4-mini for fast, gpt-5.4 for deep.
         # gpt-5.3-codex-spark is removed — bad performance and usage exhausted.
         # The probe tries gpt-5.4-mini first; falls back to gpt-5.4 if unavailable.
-        "openai-codex": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
+        "openai-codex": {
+            "deep": "gpt-5.4",
+            "fast": "gpt-5.4-mini",
+            "deepEffort": "medium",
+            "fastEffort": "medium",
+        },
         "openrouter": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "together": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "ollama": {"deep": "llama3.1:70b", "fast": "llama3.1:8b"},
@@ -488,8 +493,22 @@ class OpenClawAdapter(QuaidAdapter):
         if raw == "openai-codex":
             probed = self._probe_openai_codex_fast_model()
             if probed:
-                return {"deep": str(model_pair["deep"]), "fast": probed}
-        return {"deep": str(model_pair["deep"]), "fast": str(model_pair["fast"])}
+                out = {"deep": str(model_pair["deep"]), "fast": probed}
+                deep_effort = str(model_pair.get("deepEffort", "")).strip()
+                fast_effort = str(model_pair.get("fastEffort", "")).strip()
+                if deep_effort:
+                    out["deepEffort"] = deep_effort
+                if fast_effort:
+                    out["fastEffort"] = fast_effort
+                return out
+        out = {"deep": str(model_pair["deep"]), "fast": str(model_pair["fast"])}
+        deep_effort = str(model_pair.get("deepEffort", "")).strip()
+        fast_effort = str(model_pair.get("fastEffort", "")).strip()
+        if deep_effort:
+            out["deepEffort"] = deep_effort
+        if fast_effort:
+            out["fastEffort"] = fast_effort
+        return out
 
     def _probe_openai_codex_fast_model(self) -> Optional[str]:
         """Probe openai-codex fast-lane candidates via gateway; return best available."""

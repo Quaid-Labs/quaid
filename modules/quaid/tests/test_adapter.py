@@ -522,6 +522,12 @@ class TestOpenClawAdapter:
             "deep": "gpt-5.4",
             "fast": "gpt-5.4-mini",
         }
+        codex_defaults = adapter.installer_default_models("openai-codex")
+        assert codex_defaults is not None
+        assert codex_defaults.get("deep") == "gpt-5.4"
+        assert codex_defaults.get("fast")
+        assert codex_defaults.get("deepEffort") == "medium"
+        assert codex_defaults.get("fastEffort") == "medium"
         assert adapter.get_deep_provider_default() == "anthropic"
         assert adapter.get_fast_provider_default() == "anthropic"
 

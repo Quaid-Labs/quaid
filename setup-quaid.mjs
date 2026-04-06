@@ -514,8 +514,23 @@ function _readAdapterInstallerCapabilities(adapterId) {
     "        if isinstance(d, dict):",
     "            deep = deep or str(d.get('deep', '')).strip()",
     "            fast = fast or str(d.get('fast', '')).strip()",
+    "    deep_effort = ''",
+    "    fast_effort = ''",
+    "    try:",
+    "        d_eff = adapter.installer_default_models(p)",
+    "        if isinstance(d_eff, dict):",
+    "            deep_effort = str(d_eff.get('deepEffort', '')).strip()",
+    "            fast_effort = str(d_eff.get('fastEffort', '')).strip()",
+    "    except Exception:",
+    "        deep_effort = ''",
+    "        fast_effort = ''",
     "    if deep and fast:",
-    "        out['modelDefaults'][p] = {'deep': deep, 'fast': fast}",
+    "        row = {'deep': deep, 'fast': fast}",
+    "        if deep_effort:",
+    "            row['deepEffort'] = deep_effort",
+    "        if fast_effort:",
+    "            row['fastEffort'] = fast_effort",
+    "        out['modelDefaults'][p] = row",
     "resolved_default_provider = out['defaultDeepProvider'] or out['defaultFastProvider'] or 'default'",
     "deep = ''",
     "fast = ''",
@@ -2657,6 +2672,8 @@ async function step3_models() {
   }
 
   let highModel, lowModel;
+  let deepReasoningEffort = "high";
+  let fastReasoningEffort = "none";
   let modelsExplicitlyProvided = false;
   let envDeepModel = "";
   let envFastModel = "";
@@ -2673,6 +2690,10 @@ async function step3_models() {
   } else if (adapterDefaults && adapterDefaults.deep && adapterDefaults.fast) {
     highModel = String(adapterDefaults.deep);
     lowModel = String(adapterDefaults.fast);
+    const adapterDeepEffort = String(adapterDefaults.deepEffort || "").trim().toLowerCase();
+    const adapterFastEffort = String(adapterDefaults.fastEffort || "").trim().toLowerCase();
+    if (adapterDeepEffort) deepReasoningEffort = adapterDeepEffort;
+    if (adapterFastEffort) fastReasoningEffort = adapterFastEffort;
   } else if (provider === "anthropic") {
     // Global fallback when adapter does not define lane defaults.
     highModel = "claude-sonnet-4-5";
@@ -2683,6 +2704,11 @@ async function step3_models() {
   } else {
     highModel = "gpt-4o";
     lowModel = lowModelFor(highModel);
+  }
+  if (provider === "openai-codex") {
+    // Codex gateway lanes degrade extraction quality when effort is omitted.
+    deepReasoningEffort = "medium";
+    fastReasoningEffort = "medium";
   }
 
   if (advancedSetup) {
@@ -2883,6 +2909,8 @@ async function step3_models() {
     apiFormat: llmProviderSetting,
     apiKeyEnv: keyEnv,
     baseUrl: baseUrlFor(provider),
+    deepReasoningEffort,
+    fastReasoningEffort,
     notifLevel,
     notifConfig,
     notifChannel,
@@ -4698,6 +4726,8 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       baseUrl: models.baseUrl,
       fastReasoning: models.lowModel,
       deepReasoning: models.highModel,
+      fastReasoningEffort: models.fastReasoningEffort,
+      deepReasoningEffort: models.deepReasoningEffort,
       fastReasoningContext: 200000,
       deepReasoningContext: 200000,
       fastReasoningMaxOutput: 8192,

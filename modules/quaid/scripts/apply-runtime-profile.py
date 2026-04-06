@@ -489,6 +489,8 @@ def _apply_quaid(quaid_cfg: Dict[str, Any], dev_root: Path) -> None:
     if isinstance(provider_model_classes, list):
         deep_map = dict(models.get("deepReasoningModelClasses") or {})
         fast_map = dict(models.get("fastReasoningModelClasses") or {})
+        deep_effort_map = dict(models.get("deepReasoningEffortClasses") or {})
+        fast_effort_map = dict(models.get("fastReasoningEffortClasses") or {})
         for entry in provider_model_classes:
             if not isinstance(entry, dict):
                 continue
@@ -497,14 +499,43 @@ def _apply_quaid(quaid_cfg: Dict[str, Any], dev_root: Path) -> None:
                 continue
             deep = str(entry.get("deepReasoning", "")).strip()
             fast = str(entry.get("fastReasoning", "")).strip()
+            deep_effort = str(entry.get("deepReasoningEffort", "")).strip().lower()
+            fast_effort = str(entry.get("fastReasoningEffort", "")).strip().lower()
             if deep:
                 deep_map[provider] = deep
             if fast:
                 fast_map[provider] = fast
+            if deep_effort:
+                deep_effort_map[provider] = deep_effort
+            if fast_effort:
+                fast_effort_map[provider] = fast_effort
         if deep_map:
             models["deepReasoningModelClasses"] = deep_map
         if fast_map:
             models["fastReasoningModelClasses"] = fast_map
+        if deep_effort_map:
+            models["deepReasoningEffortClasses"] = deep_effort_map
+        if fast_effort_map:
+            models["fastReasoningEffortClasses"] = fast_effort_map
+
+    # Keep openai-codex effort defaults explicit for fresh profile-based installs.
+    llm_provider = str(models.get("llmProvider", "")).strip().lower()
+    provider_hint = str(models.get("llmProviderHint", "")).strip().lower()
+    deep_classes = models.get("deepReasoningModelClasses")
+    if not isinstance(deep_classes, dict):
+        deep_classes = {}
+    fast_classes = models.get("fastReasoningModelClasses")
+    if not isinstance(fast_classes, dict):
+        fast_classes = {}
+    is_openai_codex = (
+        llm_provider == "openai-codex"
+        or provider_hint == "openai-codex"
+        or ("openai-codex" in deep_classes)
+        or ("openai-codex" in fast_classes)
+    )
+    if is_openai_codex:
+        models.setdefault("deepReasoningEffort", "medium")
+        models.setdefault("fastReasoningEffort", "medium")
 
     _write_json(config_path, config)
 
