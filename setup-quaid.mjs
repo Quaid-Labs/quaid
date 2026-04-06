@@ -1652,10 +1652,14 @@ function _sanitizeOpenClawQuaidPluginEntry() {
     const parsed = JSON.parse(raw);
     const entries = parsed?.plugins?.entries;
     const quaid = entries?.quaid;
-    if (!quaid || typeof quaid !== "object" || !Object.prototype.hasOwnProperty.call(quaid, "workspace")) {
+    if (!quaid || typeof quaid !== "object") {
       return false;
     }
-    delete quaid.workspace;
+    const hasWorkspace = Object.prototype.hasOwnProperty.call(quaid, "workspace");
+    const hasHooks = Object.prototype.hasOwnProperty.call(quaid, "hooks");
+    if (!hasWorkspace && !hasHooks) return false;
+    if (hasWorkspace) delete quaid.workspace;
+    if (hasHooks) delete quaid.hooks;
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
     fs.renameSync(tmpPath, cfgPath);
     return true;
@@ -1949,8 +1953,6 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
       const entries = plugins.entries || (plugins.entries = {});
       const quaid = entries.quaid || (entries.quaid = {});
       quaid.enabled = true;
-      const quaidHooks = quaid.hooks || (quaid.hooks = {});
-      quaidHooks.allowPromptInjection = true;
       const slots = plugins.slots || (plugins.slots = {});
       slots.memory = "quaid";
       fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
@@ -2328,7 +2330,7 @@ async function step1_preflight() {
       log.info("Healed stale plugins.slots.memory=quaid to memory-core (quaid not installed)");
     }
     if (_sanitizeOpenClawQuaidPluginEntry()) {
-      log.info("Removed invalid plugins.entries.quaid.workspace from ~/.openclaw/openclaw.json");
+      log.info("Removed invalid plugins.entries.quaid keys (workspace/hooks) from ~/.openclaw/openclaw.json");
     }
     if (_removeOpenClawPluginsAllowQuaid()) {
       log.info("Removed stale plugins.allow entry for quaid before plugin registration");
@@ -4483,28 +4485,26 @@ function readGatewayVersion(gwDir) {
 }
 
 function enableRequiredOpenClawHooks() {
-  // Enable hooks via direct config write to avoid Config overwrite race with the running gateway.
-  // The gateway continuously writes to openclaw.json, causing the CLI's sha256 safety check to fail.
+  // OpenClaw v2026.4.5+ rejects unknown keys under plugins.entries.<id>.
+  // Historical installers wrote plugins.entries.quaid.hooks, which causes
+  // startup schema errors. Keep this helper as a no-op sanitization pass.
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-  // Quaid plugin tools (recall, store) are exposed to OC via the registered tool hooks
-  // and via TOOLS.md/AGENTS.md injected as appendSystemContext at session start by the adapter.
-  // No OC config allowlist entries are needed — the appendSystemContext injection is the gate.
-  log.info("Ensuring required OpenClaw hooks are enabled");
+  log.info("Ensuring OpenClaw plugin entry is schema-safe");
   try {
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw);
-
-    // allowPromptInjection must be true for before_prompt_build to mutate prompts.
-    // Without this, OC silently drops appendSystemContext / prependContext results.
     const pluginEntry = parsed?.plugins?.entries?.quaid;
-    if (pluginEntry) {
-      if (!pluginEntry.hooks) pluginEntry.hooks = {};
-      pluginEntry.hooks.allowPromptInjection = true;
+    let changed = false;
+    if (pluginEntry && typeof pluginEntry === "object" && Object.prototype.hasOwnProperty.call(pluginEntry, "hooks")) {
+      delete pluginEntry.hooks;
+      changed = true;
     }
 
-    const tmpPath = `${cfgPath}.tmp-hooks-${process.pid}-${Date.now()}`;
-    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-    fs.renameSync(tmpPath, cfgPath);
+    if (changed) {
+      const tmpPath = `${cfgPath}.tmp-hooks-${process.pid}-${Date.now()}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+      fs.renameSync(tmpPath, cfgPath);
+    }
   } catch (err) {
     throw new Error(`Could not enable required hooks via direct config write: ${String(err)}`);
   }
