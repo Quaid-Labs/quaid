@@ -37,7 +37,10 @@ class OpenClawAdapter(QuaidAdapter):
         # or the gateway will reject them with 400 before they reach the Codex API.
         # installer_validate_model_pair_live() calls installer_ensure_gateway_model_allowlist()
         # before pinging, so the allowlist is updated automatically during install.
-        "openai-codex": {"deep": "gpt-5.4", "fast": "gpt-5.3-codex-spark"},
+        # Static default: gpt-5.4-mini for fast, gpt-5.4 for deep.
+        # gpt-5.3-codex-spark is removed — bad performance and usage exhausted.
+        # The probe tries gpt-5.4-mini first; falls back to gpt-5.4 if unavailable.
+        "openai-codex": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "openrouter": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "together": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "ollama": {"deep": "llama3.1:70b", "fast": "llama3.1:8b"},
@@ -467,9 +470,8 @@ class OpenClawAdapter(QuaidAdapter):
 
     # Fast-lane candidates for openai-codex provider, probed in priority order.
     _OPENAI_CODEX_FAST_CANDIDATES = [
-        "gpt-5.3-codex-spark",  # ~2.1s via gateway — Pro only
-        "gpt-5.4-mini",          # ~3.0s via gateway — broadly available
-        "gpt-5.4",               # ~10s  via gateway — always available
+        "gpt-5.4-mini",  # ~3.0s via gateway — broadly available
+        "gpt-5.4",       # ~10s  via gateway — always available
     ]
 
     def installer_default_models(self, provider: str) -> Optional[dict]:
@@ -693,11 +695,11 @@ class OpenClawAdapter(QuaidAdapter):
         ).strip().lower() or "anthropic"
         # Ensure both models are in the OC gateway allowlist before pinging.
         # The gateway rejects models not in agents.defaults.models with HTTP 400
-        # before they reach the upstream provider.
-        if raw_provider == "openai-codex":
-            self.installer_ensure_gateway_model_allowlist(
-                [f"openai-codex/{deep_model}", f"openai-codex/{fast_model}"]
-            )
+        # before they reach the upstream provider.  This applies to all gateway-
+        # routed providers, not just openai-codex.
+        self.installer_ensure_gateway_model_allowlist(
+            [f"{raw_provider}/{deep_model}", f"{raw_provider}/{fast_model}"]
+        )
         port, token = self._get_gateway_auth()
         llm = GatewayLLMProvider(
             port=port,
