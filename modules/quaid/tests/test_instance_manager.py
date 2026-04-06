@@ -117,8 +117,10 @@ class TestClaudeCodeInstanceManager:
         project_dir = tmp_path / "myproject"
         project_dir.mkdir()
 
+        # Patch _write_hooks to avoid touching ~/.claude/settings.json during tests.
         with patch("lib.instance.instance_exists", return_value=False), \
-             patch("lib.instance.validate_instance_id"):
+             patch("lib.instance.validate_instance_id"), \
+             patch.object(mgr, "_write_hooks"):
             mgr.make_instance(str(project_dir), "myapp")
 
         settings_path = project_dir / ".claude" / "settings.json"
@@ -142,7 +144,8 @@ class TestClaudeCodeInstanceManager:
         (claude_dir / "settings.json").write_text(json.dumps(existing))
 
         with patch("lib.instance.instance_exists", return_value=False), \
-             patch("lib.instance.validate_instance_id"):
+             patch("lib.instance.validate_instance_id"), \
+             patch.object(mgr, "_write_hooks"):
             mgr.make_instance(str(project_dir), "newapp")
 
         data = json.loads((claude_dir / "settings.json").read_text())
@@ -161,8 +164,10 @@ class TestClaudeCodeInstanceManager:
         project_dir = tmp_path / "myproject"
         project_dir.mkdir()
 
+        # dry_run=True skips _write_hooks but patch anyway for safety.
         with patch("lib.instance.instance_exists", return_value=False), \
-             patch("lib.instance.validate_instance_id"):
+             patch("lib.instance.validate_instance_id"), \
+             patch.object(mgr, "_write_hooks"):
             mgr.make_instance(str(project_dir), "myapp", dry_run=True)
 
         assert not (project_dir / ".claude" / "settings.json").exists()
