@@ -1307,11 +1307,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 try:
                     other = json.loads(f.read_text(encoding="utf-8"))
                     if other.get("session_id") == session_id:
-                        # Do not discard a compaction/reset signal just because a
-                        # rolling signal is already queued — compaction/reset must
-                        # survive to flush staged facts (B009).
+                        # Do not discard a compaction/reset/session_end signal just
+                        # because a rolling signal is already queued — these signals
+                        # must survive to flush staged facts once rolling completes
+                        # (B009; session_end added for FIFO ordering).
                         other_type = other.get("type", "")
-                        if signal_type in ("compaction", "reset") and other_type == "rolling":
+                        if signal_type in ("compaction", "reset", "session_end") and other_type == "rolling":
                             continue
                         mark_signal_processed(signal_data)
                         break
@@ -1330,6 +1331,32 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             return
     except Exception:
         pass
+
+    # FIFO ordering: if this is a session_end signal but a rolling signal for
+    # the same session is still pending (not yet processing), defer this
+    # session_end so rolling can stage its facts first.  Without this, a
+    # session_end picked up before the rolling job runs would find empty
+    # rolling_state and lose staged carry_facts.
+    if signal_type == "session_end":
+        try:
+            _ses_sig_path = signal_data.get("_signal_path", "")
+            for _rf in list(_signal_dir().iterdir()):
+                if not _rf.name.endswith(".json") or str(_rf) == _ses_sig_path:
+                    continue
+                try:
+                    _rs = json.loads(_rf.read_text(encoding="utf-8"))
+                    if _rs.get("session_id") == session_id and _rs.get("type") == "rolling":
+                        logger.info(
+                            "[%s] session %s: session_end deferred — pending rolling signal "
+                            "found; will retry after rolling extraction completes (FIFO)",
+                            label, session_id,
+                        )
+                        _release_session_processing_lock(session_id, lock_fd)
+                        return  # preserve signal on disk; retry next poll cycle
+                except (json.JSONDecodeError, OSError):
+                    pass
+        except Exception as _fifo_err:
+            logger.debug("[%s] FIFO rolling-pending check failed: %s", label, _fifo_err)
 
     # Consume duplicate signals for this session now that we hold the lock.
     # Signals with the same or lower priority are redundant — this extraction
