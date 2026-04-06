@@ -173,9 +173,21 @@ wipe_cdx() {
     run_remote "wipe CDX silo" \
         "rm -rf $WORKSPACE/$CDX_INSTANCE && echo 'CDX silo wiped'"
     run_remote "clear Codex Quaid hooks" \
-        "python3 - <<'PY'\nimport json\nfrom pathlib import Path\nhooks_path = Path.home() / '.codex' / 'hooks.json'\nif hooks_path.exists():\n    try:\n        data = json.loads(hooks_path.read_text())\n    except Exception:\n        data = {}\n    hooks = data.get('hooks') if isinstance(data, dict) else {}\n    if not isinstance(hooks, dict):\n        hooks = {}\n    cleaned = {}\n    for event, entries in hooks.items():\n        kept_entries = []\n        for entry in entries or []:\n            if not isinstance(entry, dict):\n                continue\n            subhooks = []\n            for hook in entry.get('hooks') or []:\n                cmd = str((hook or {}).get('command') or '')\n                if 'quaid' in cmd.lower():\n                    continue\n                subhooks.append(hook)\n            if subhooks:\n                new_entry = dict(entry)\n                new_entry['hooks'] = subhooks\n                kept_entries.append(new_entry)\n        if kept_entries:\n            cleaned[event] = kept_entries\n    if cleaned:\n        hooks_path.write_text(json.dumps({'hooks': cleaned}, indent=2) + '\\n')\n    else:\n        hooks_path.unlink(missing_ok=True)\nprint('Codex Quaid hooks cleared')\nPY"
+        "python3 -c \"from pathlib import Path; p=Path.home()/'.codex'/'hooks.json'; p.unlink(missing_ok=True); print('Codex Quaid hooks cleared')\""
     run_remote "clear Codex hook feature flag" \
-        "python3 - <<'PY'\nfrom pathlib import Path\nconfig_path = Path.home() / '.codex' / 'config.toml'\nif not config_path.exists():\n    print('No Codex config.toml')\n    raise SystemExit(0)\nlines = config_path.read_text().splitlines()\nout = []\nin_features = False\nfeatures_lines = []\n\ndef flush_features():\n    global features_lines\n    if not features_lines:\n        return\n    kept = [line for line in features_lines if line.strip() != 'codex_hooks = true']\n    nonempty = [line for line in kept if line.strip()]\n    if nonempty:\n        out.append('[features]')\n        out.extend(kept)\n    features_lines = []\n\nfor line in lines:\n    stripped = line.strip()\n    if stripped.startswith('[') and stripped.endswith(']'):\n        if in_features:\n            flush_features()\n            in_features = False\n        if stripped == '[features]':\n            in_features = True\n            features_lines = []\n            continue\n        out.append(line)\n        continue\n    if in_features:\n        features_lines.append(line)\n    else:\n        out.append(line)\nif in_features:\n    flush_features()\nconfig_path.write_text('\\n'.join(out).rstrip() + '\\n')\nprint('Codex feature flag cleared')\nPY"
+        "python3 -c \"
+from pathlib import Path
+import re
+p = Path.home() / '.codex' / 'config.toml'
+if not p.exists():
+    print('No Codex config.toml')
+else:
+    txt = p.read_text()
+    txt = re.sub(r'codex_hooks\s*=\s*true\s*\n?', '', txt)
+    txt = re.sub(r'\[features\]\s*\n(?=\[|\Z)', '', txt)
+    p.write_text(txt)
+    print('Codex feature flag cleared')
+\""
 }
 
 wipe_shared() {

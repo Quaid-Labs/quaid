@@ -53,7 +53,7 @@ BASE_IMAGE="quaid-livetest-base"
 RUN_NAME="quaid-livetest-run"
 SSH_USER="admin"
 CONFIG_PATH="$CONFIG_DEFAULT"
-BOOT_TIMEOUT=120   # seconds to wait for VM SSH to become ready
+BOOT_TIMEOUT=180   # seconds to wait for VM SSH to become ready
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes)
 
 # ── Argument parsing ────────────────────────────────────────────────────────
@@ -237,8 +237,9 @@ cmd_start() {
     echo "[4/4] Waiting for SSH..."
     wait_for_ssh "$VM_IP" "$SSH_USER" || die "SSH not ready within ${BOOT_TIMEOUT}s on $SSH_USER@$VM_IP. Check SSH is enabled in the base image."
 
-    # Patch config and save state
-    patch_config_host "$CONFIG_PATH" "$VM_IP"
+    # Patch config with user@IP so ssh commands work without extra config
+    local ssh_host="${SSH_USER}@${VM_IP}"
+    patch_config_host "$CONFIG_PATH" "$ssh_host"
     save_state "$RUN_NAME" "$VM_IP" "$ORIG_HOST"
 
     echo ""
@@ -247,7 +248,7 @@ cmd_start() {
     echo " Name  : $RUN_NAME"
     echo " IP    : $VM_IP"
     echo " SSH   : ssh ${SSH_USER}@${VM_IP}"
-    echo " Config: remote.host patched to $VM_IP"
+    echo " Config: remote.host patched to ${SSH_USER}@${VM_IP}"
     echo "========================================"
     echo ""
     echo "$VM_IP"

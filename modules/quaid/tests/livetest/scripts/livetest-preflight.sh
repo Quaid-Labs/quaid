@@ -113,7 +113,9 @@ LOCAL_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk 
 # Resolve the remote host to an IP
 REMOTE_IP=""
 if [[ "$DRY_RUN" == "0" ]]; then
-    REMOTE_IP="$(python3 -c "import socket; print(socket.gethostbyname('$REMOTE_HOST'))" 2>/dev/null || true)"
+    # Strip user@ prefix if present (e.g. admin@192.168.64.5 -> 192.168.64.5)
+    REMOTE_HOST_ADDR="${REMOTE_HOST##*@}"
+    REMOTE_IP="$(python3 -c "import socket; print(socket.gethostbyname('$REMOTE_HOST_ADDR'))" 2>/dev/null || true)"
 fi
 
 SAFE=1
