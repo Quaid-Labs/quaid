@@ -212,36 +212,6 @@ fi
 REMOTE_UPGRADE
 fi
 
-# --- Check 4: Code sync to remote ---
-echo ""
-echo "[4/6] Verifying remote has latest Quaid code..."
-
-LOCAL_DEV="$HOME/quaidcode/dev"
-LOCAL_HEAD="$(cd "$LOCAL_DEV" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
-
-if [[ "$DRY_RUN" == "1" ]]; then
-    echo "  [dry-run] would verify remote code matches local dev HEAD ($LOCAL_HEAD)"
-else
-    # Check for a function that was added recently (indicator of up-to-date code)
-    PROBE_FN="_probe_openai_codex_fast_model"
-    REMOTE_COUNT="$(ssh "$REMOTE_HOST" "grep -c '$PROBE_FN' ~/quaid/plugins/quaid/adaptors/openclaw/adapter.py 2>/dev/null || echo 0" 2>/dev/null || echo "0")"
-    if [[ "$REMOTE_COUNT" -gt "0" ]]; then
-        echo "  $PASS  remote has up-to-date Quaid code (local HEAD: $LOCAL_HEAD)"
-    else
-        echo "  [sync] remote code is stale — building and syncing from local dev ($LOCAL_HEAD)..."
-        (cd "$LOCAL_DEV/modules/quaid" && npm run build:runtime --silent)
-        rsync -a --checksum \
-            --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
-            --exclude='.git/' --exclude='logs/' --exclude='.env*' \
-            "$LOCAL_DEV/" "$REMOTE_HOST:~/quaid/dev/" 2>&1 | tail -3
-        rsync -a --checksum \
-            --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
-            --exclude='.git/' --exclude='logs/' \
-            "$LOCAL_DEV/modules/quaid/" "$REMOTE_HOST:~/quaid/plugins/quaid/" 2>&1 | tail -3
-        echo "  $PASS  remote code synced (local HEAD: $LOCAL_HEAD)"
-    fi
-fi
-
 # --- Abort early if safety checks failed ---
 if [[ "$ERRORS" -gt 0 ]]; then
     echo ""
@@ -249,9 +219,9 @@ if [[ "$ERRORS" -gt 0 ]]; then
     exit 1
 fi
 
-# --- Step 5: Wipe ---
+# --- Step 4: Wipe ---
 echo ""
-echo "[5/6] Wiping Quaid on remote ($WIPE_PLATFORM)..."
+echo "[4/6] Wiping Quaid on remote ($WIPE_PLATFORM)..."
 
 if [[ "$SKIP_WIPE" == "1" ]]; then
     echo "  (skipped — --skip-wipe)"
@@ -262,9 +232,33 @@ else
     LIVETEST_WIPE_YES=1 "$SCRIPT_DIR/livetest-wipe.sh" "${WIPE_ARGS[@]}"
 fi
 
+# --- Step 5: Code sync to remote (after wipe so dev tree is not deleted) ---
+echo ""
+echo "[5/6] Syncing latest Quaid code to remote..."
+
+LOCAL_DEV="$HOME/quaidcode/dev"
+LOCAL_HEAD="$(cd "$LOCAL_DEV" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "  [dry-run] would sync local dev ($LOCAL_HEAD) to remote"
+else
+    echo "  Building runtime artifacts (local HEAD: $LOCAL_HEAD)..."
+    (cd "$LOCAL_DEV/modules/quaid" && npm run build:runtime --silent)
+    rsync -a --checksum \
+        --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
+        --exclude='.git/' --exclude='logs/' --exclude='.env*' --exclude='.tmp/' \
+        "$LOCAL_DEV/" "$REMOTE_HOST:~/quaid/dev/" 2>&1 | tail -3
+    rsync -a --checksum \
+        --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
+        --exclude='.git/' --exclude='logs/' --exclude='.tmp/' \
+        "$LOCAL_DEV/modules/quaid/" "$REMOTE_HOST:~/quaid/plugins/quaid/" 2>&1 | tail -3
+    echo "  $PASS  remote code synced (local HEAD: $LOCAL_HEAD)"
+fi
+
 # --- Step 6: Platform services ---
 echo ""
 echo "[6/6] Starting platform services on remote..."
+
 
 if [[ "$SKIP_PLATFORM_START" == "1" ]]; then
     echo "  (skipped — --skip-platform-start)"
