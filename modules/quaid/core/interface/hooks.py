@@ -957,14 +957,13 @@ def hook_session_init(args):
     except Exception as _e:
         print(f"[quaid][session-init] auth token capture failed: {_e}", file=sys.stderr)
 
-    # Sweep orphaned sessions via the extraction daemon.
-    # Always call ensure_alive() on session init across all adapters.
-    # Daemons are instance-scoped and ensure_alive()/start_daemon() is
-    # lock-guarded (PID + flock), so repeated contact points are idempotent.
+    # Start the extraction daemon if not already running. Daemons are
+    # instance-scoped and ensure_alive()/start_daemon() is lock-guarded
+    # (PID + flock), so repeated contact points are idempotent.
     multi_instance_warning = ""
     startup_notices: List[str] = []
     try:
-        from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
+        from core.extraction_daemon import ensure_alive
         try:
             ensure_alive()
         except Exception as e:
@@ -974,27 +973,39 @@ def hook_session_init(args):
                 "New memories may not be processed until Quaid recovers. "
                 f"{_safe_agent_error(e)}"
             )
-        swept = sweep_orphaned_sessions(current_session_id)
-        if swept:
-            print(f"[quaid][session-init] swept {swept} orphaned session(s)", file=sys.stderr)
-            startup_notices.append(
-                f"Quaid recovered {swept} orphaned prior session(s) at startup. "
-                "This means a previous session ended without a clean lifecycle boundary, "
-                "so recent memories may have been flushed late."
-            )
     except Exception as e:
-        print(f"[quaid][session-init] orphan sweep error: {e}", file=sys.stderr)
-        startup_notices.append(
-            "Quaid hit an orphan-session recovery error during startup. "
-            "Recent memories from a previous session may still be pending. "
-            f"{_safe_agent_error(e)}"
-        )
+        print(f"[quaid][session-init] daemon startup error: {e}", file=sys.stderr)
 
-    # Warn when multiple agents share the same instance silo. This setup is
-    # not supported — platform limitations (e.g. Codex /new creating a new
-    # session_id without a lifecycle hook) mean the orphan sweep may flush
-    # one agent's staged carry_facts while another is still mid-conversation,
-    # which can cause memory quality loss.
+    # For adapters that track session transitions (e.g. Codex, where /new
+    # creates a new thread in the same process without firing SessionStart),
+    # signal extraction for the session that just ended.
+    try:
+        from core.extraction_daemon import write_signal
+        from lib.adapter import get_adapter
+        _adapter = get_adapter()
+        if hasattr(_adapter, "check_session_transition"):
+            _hook_input_for_transition = {"session_id": current_session_id}
+            _transition = _adapter.check_session_transition(_hook_input_for_transition)
+            if _transition:
+                _ended_sid = str(_transition.get("ended_session_id") or "").strip()
+                _ended_tx = str(_transition.get("ended_transcript_path") or "").strip()
+                _t_type = str(_transition.get("signal_type") or "session_end")
+                _t_meta = dict(_transition.get("meta") or {})
+                if _ended_sid and _ended_tx and os.path.isfile(_ended_tx):
+                    write_signal(
+                        signal_type=_t_type,
+                        session_id=_ended_sid,
+                        transcript_path=_ended_tx,
+                        adapter=_adapter.adapter_id(),
+                        supports_compaction_control=False,
+                        meta=_t_meta,
+                    )
+                    print(f"[quaid][session-init] queued extraction for prior session {_ended_sid}", file=sys.stderr)
+    except Exception as _e:
+        print(f"[quaid][session-init] prior-session signal error: {_e}", file=sys.stderr)
+
+    # Warn when multiple agents share the same instance silo. Concurrent use
+    # on the same silo is not supported and may cause memory quality loss.
     try:
         import time as _time
         import os as _os

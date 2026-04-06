@@ -399,13 +399,6 @@ class QuaidAdapter(abc.ABC):
 
     # ---- Adapter feature config ----
 
-    _ADAPTER_DEFAULTS: Dict[str, Any] = {
-        # Sweep carry_facts for sessions whose cursor reached end without a
-        # session_end signal (e.g. Codex /new).  False for all adapters that
-        # emit proper session_end signals; overridden to True in CodexAdapter.
-        "orphan_sweep": False,
-    }
-
     # Subclasses declare adapter-specific overrides here as a plain dict.
     # Do NOT override get_adapter_config — declare ADAPTER_CONFIG instead.
     ADAPTER_CONFIG: Dict[str, Any] = {}
@@ -413,16 +406,13 @@ class QuaidAdapter(abc.ABC):
     def get_adapter_config(self, key: str) -> Any:
         """Return an adapter-specific feature flag or config value.
 
-        Resolves by merging _ADAPTER_DEFAULTS with the concrete subclass's
-        ADAPTER_CONFIG dict.  Subclasses declare ADAPTER_CONFIG as a plain
-        class-level dict — no method override, no super() call required.
-        Known keys have explicit defaults in _ADAPTER_DEFAULTS; unknown keys
-        return None.
+        Subclasses declare ADAPTER_CONFIG as a plain class-level dict —
+        no method override, no super() call required. Unknown keys return None.
         """
         subclass_config = getattr(type(self), "ADAPTER_CONFIG", {})
         if not isinstance(subclass_config, dict):
             subclass_config = {}
-        return {**self._ADAPTER_DEFAULTS, **subclass_config}.get(key)
+        return subclass_config.get(key)
 
     # ---- Providers ----
 

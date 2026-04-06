@@ -98,7 +98,6 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     (project / "TOOLS.md").write_text("# Tools\ncodex startup docs", encoding="utf-8")
 
     ensure_alive_calls = []
-    sweep_calls = []
 
     from core.interface import hooks
     adapter = MagicMock()
@@ -121,7 +120,6 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("core.compatibility.notify_on_use_if_degraded", lambda *_args, **_kwargs: "")
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: ensure_alive_calls.append(True))
-    monkeypatch.setattr("core.extraction_daemon.sweep_orphaned_sessions", lambda sid: sweep_calls.append(sid) or 0)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
 
@@ -139,7 +137,6 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert "quaid/TOOLS.md" in context
     assert "codex startup docs" in context
     assert ensure_alive_calls == [True]
-    assert sweep_calls == ["codex-s1"]
     assert not (tmp_path / ".claude" / "rules" / "quaid-projects.md").exists()
     assert "emitted Codex startup context" in err
 
@@ -185,7 +182,6 @@ def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypat
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("core.compatibility.notify_on_use_if_degraded", lambda *_args, **_kwargs: "")
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: (_ for _ in ()).throw(RuntimeError("daemon offline")))
-    monkeypatch.setattr("core.extraction_daemon.sweep_orphaned_sessions", lambda _sid: 2)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
 
@@ -200,7 +196,6 @@ def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypat
     assert "Earlier queued notice" in context
     assert "deferred maintenance notices waiting" in context
     assert "background extraction daemon failed to start" in context
-    assert "recovered 2 orphaned prior session(s)" in context
     assert "daemon offline" not in context
     assert "Error type: RuntimeError" in context
 

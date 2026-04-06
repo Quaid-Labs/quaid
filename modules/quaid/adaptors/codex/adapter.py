@@ -601,7 +601,3 @@ class CodexAdapter(QuaidAdapter):
     def get_deep_provider_default(self) -> str:
         return "openai"
 
-    # Codex /new creates a fresh session_id without firing a Stop hook for the
-    # ending session, so the daemon must sweep carry_facts via idle timeout
-    # rather than relying on an explicit session_end signal.
-    ADAPTER_CONFIG = {"orphan_sweep": True}

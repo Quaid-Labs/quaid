@@ -532,9 +532,6 @@ class TestHookSessionInitRegistryAugmentation:
 
         # Stub out daemon interactions
         monkeypatch.setattr(
-            "core.extraction_daemon.sweep_orphaned_sessions", lambda *a, **kw: 0
-        )
-        monkeypatch.setattr(
             "core.extraction_daemon.ensure_alive", lambda: None
         )
         monkeypatch.setattr(

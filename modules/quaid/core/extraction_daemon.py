@@ -2283,14 +2283,6 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     timeout_seconds = timeout_minutes * 60
     installed_at_ts = _read_installed_at()
 
-    # Read once: whether this adapter needs orphan carry_facts sweep (e.g. Codex
-    # /new which discards the old session without firing a Stop hook).
-    try:
-        from lib.adapter import get_adapter
-        _orphan_sweep = bool(get_adapter().get_adapter_config("orphan_sweep"))
-    except Exception:
-        _orphan_sweep = False
-
     # B002: Cache registered subagent IDs once instead of scanning per cursor file
     registered_subagents: set = set()
     try:
@@ -2359,9 +2351,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if cursor_at_end:
             try:
                 rolling = read_rolling_state(session_id)
-                has_staged_payload = staged_state_has_payload(rolling) or (
-                    _orphan_sweep and bool(rolling.get("carry_facts"))
-                )
+                has_staged_payload = staged_state_has_payload(rolling)
             except Exception:
                 pass
 
@@ -2642,87 +2632,6 @@ def _retry_missing_embeddings() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Orphaned session sweep (runs on session-init)
-# ---------------------------------------------------------------------------
-
-def sweep_orphaned_sessions(current_session_id: str = "") -> int:
-    """Extract tails from previous sessions with un-extracted content.
-
-    Called during session-init. Returns number of sessions swept.
-    """
-    cursor_dir = _cursor_dir()
-    if not cursor_dir.is_dir():
-        return 0
-
-    # B002: Cache registered subagent IDs once
-    registered_subagents: set = set()
-    try:
-        from core.subagent_registry import _registry_dir
-        for p in _registry_dir().glob("*.json"):
-            try:
-                rdata = json.loads(p.read_text(encoding="utf-8"))
-                registered_subagents.update(rdata.get("children", {}).keys())
-            except (json.JSONDecodeError, OSError):
-                continue
-    except Exception:
-        pass
-
-    swept = 0
-    for cursor_file in cursor_dir.glob("*.json"):
-        try:
-            data = json.loads(cursor_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-
-        session_id = data.get("session_id", "")
-        if not session_id or session_id == current_session_id:
-            continue
-
-        # Skip registered subagents — their transcripts are merged into parent extraction
-        if session_id in registered_subagents:
-            continue
-
-        transcript_path = data.get("transcript_path", "")
-        if not transcript_path or not os.path.isfile(transcript_path):
-            continue
-
-        cursor_offset = data.get("line_offset", 0)
-        total_lines = count_transcript_lines(transcript_path)
-        if total_lines <= cursor_offset:
-            # Cursor is at end — check if there are staged carry_facts that need flushing.
-            # This handles adapters (e.g. Codex) where /new creates a fresh session_id
-            # rather than appending a lifecycle command to the current transcript, so
-            # the rolling stage advances the cursor to the end but never gets a
-            # session_end signal to flush the carry buffer to the DB.
-            rolling_state = read_rolling_state(session_id)
-            if rolling_state.get("carry_facts"):
-                logger.info(
-                    "orphan sweep: session %s cursor at end but has %d staged carry_facts — flushing",
-                    session_id, len(rolling_state["carry_facts"]),
-                )
-                write_signal(
-                    signal_type="session_end",
-                    session_id=session_id,
-                    transcript_path=transcript_path,
-                )
-                swept += 1
-            continue
-
-        # Write a session_end signal for the daemon to process
-        logger.info(
-            "orphan sweep: session %s has %d unextracted lines",
-            session_id, total_lines - cursor_offset,
-        )
-        write_signal(
-            signal_type="session_end",
-            session_id=session_id,
-            transcript_path=transcript_path,
-        )
-        swept += 1
-
-    return swept
-
-
 # ---------------------------------------------------------------------------
 # Daemon main loop
 # ---------------------------------------------------------------------------

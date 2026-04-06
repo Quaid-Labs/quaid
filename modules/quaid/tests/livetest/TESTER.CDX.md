@@ -61,7 +61,7 @@ CDX extraction is daemon-driven.
 
 ---
 
-## QUIRK: Stop Hook Returns None — Orphan Sweep Is the Extraction Path
+## QUIRK: Stop Hook Returns None — check_session_transition Is the Extraction Path
 
 **Do NOT fix `resolve_stop_hook_signal()` to always return a signal. This is intentional.**
 
@@ -74,20 +74,20 @@ and writes nothing. This is correct behavior.
 commands before the Stop hook fires and strips them from the transcript. The
 hook's transcript scan finds nothing and returns `None`.
 
-**The intended extraction path is orphan sweep:** when the *next* session's
-`hook-session-init` runs, it sweeps cursor files for any previous sessions that
-have unextracted content (i.e., have a cursor but no `session_end` signal yet),
-and writes a deferred `session_end` signal for each. This is how `/new` and
-`/clear` produce extraction without the Stop hook detecting them.
+**The intended extraction path is `check_session_transition`:** in Codex
+0.118.0+, `/new` creates a new in-process thread (new `session_id`) without
+restarting the process. `SessionStart` does not fire. Instead, `hook-inject`
+(UserPromptSubmit) calls `adapter.check_session_transition()` on every message.
+When the session_id changes (i.e., the first message arrives in the new thread),
+the adapter writes a `session_end` signal for the session that just ended.
 
-**Consequence for M3:** CDX M3 rolling extraction works via orphan sweep after
-`/new`, not via the Stop hook. The M3 test must use `/new` (not just observe the
-Stop hook trace) and wait for the next session's init to trigger orphan sweep.
+**Consequence for M1/M3:** after sending `/new`, you must send one follow-up
+message in the new session (e.g. `Hello`) to trigger `hook-inject` and fire
+`check_session_transition`. Do not just wait — no message means no hook fires
+and extraction never starts.
 
-**History:** This "fix" has been attempted and reverted multiple times. Every
-attempt to make the Stop hook unconditionally write `session_end` forces
-extraction on every task completion turn, which is wrong. Document the quirk;
-do not patch the adapter.
+**Hook trace marker:** `hook.inject.session_transition_signal_written` (not
+`hook.codex.session_init.orphan_swept` — orphan sweep is removed).
 
 CDX does not use `SessionTimeoutManager`, but the daemon still honors
 `capture.inactivityTimeoutMinutes` through its idle-session timeout path.

@@ -156,9 +156,10 @@ and is picked up when the daemon next starts.
 1. **Ensure daemon alive** — calls `ensure_alive()` so the extraction daemon
    is running before any other hook fires.
 
-2. **Orphan sweep** — calls `sweep_orphaned_sessions(current_session_id)` to
-   queue extraction signals for any previous sessions whose transcripts have
-   un-extracted content past their cursor. Returns count of swept sessions.
+2. **Prior session signal** — for adapters that track session transitions
+   (e.g. Codex), calls `adapter.check_session_transition()` to detect whether
+   a `/new` or process restart ended a previous session, and queues a
+   `session_end` extraction signal for that specific session.
 
 3. **Seed session cursor** — writes an initial cursor at line offset 0 for
    the current session so `check_idle_sessions()` can discover it. Resolves
@@ -315,7 +316,7 @@ auto-registered.
 │  SessionStart                                                           │
 │    └─ hook-session-init                                                 │
 │         ├─ ensure daemon alive                                          │
-│         ├─ sweep orphaned sessions (queue extraction for stale tails)   │
+│         ├─ signal prior session end if adapter detects transition        │
 │         ├─ seed cursor for current session_id                           │
 │         └─ write/update .claude/rules/quaid-projects.md                │
 │              (identity files + TOOLS.md + AGENTS.md for all projects)  │

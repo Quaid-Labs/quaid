@@ -157,7 +157,7 @@ Quaid integrates with Claude Code via hooks registered in `~/.claude/settings.js
 
 | Hook Event | `quaid` Command | Purpose |
 |-----------|----------------|---------|
-| `SessionStart` | `quaid hook-session-init` | Write project docs to `.claude/rules/`, sweep orphaned sessions, seed extraction cursor |
+| `SessionStart` | `quaid hook-session-init` | Write project docs to `.claude/rules/`, signal extraction for prior session if applicable, seed extraction cursor |
 | `UserPromptSubmit` | `quaid hook-inject` | Recall memories and inject as `additionalContext` for each user message |
 | `PreCompact` | `quaid hook-extract --precompact` | Signal extraction daemon before context compaction |
 | `SessionEnd` | `quaid hook-extract` | Signal extraction daemon at session end |
@@ -177,7 +177,7 @@ There is no `PostCompact` hook wired. `hook-inject-compact` exists as a callable
 `quaid hook-session-init` runs at `SessionStart` (wired to the `SessionStart` hook in `~/.claude/settings.json`). It:
 
 1. Calls `ensure_alive()` to start the extraction daemon if needed.
-2. Sweeps orphaned sessions from previous runs (queues extraction for any transcript with un-extracted content past the cursor).
+2. For adapters that track session transitions (e.g. Codex), signals extraction for the session that just ended via `/new` or process restart.
 3. Seeds an extraction cursor for the current session so the daemon can discover it for timeout-based extraction.
 4. Scans `$QUAID_HOME/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_HOME/<INSTANCE_ID>/identity/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
 
