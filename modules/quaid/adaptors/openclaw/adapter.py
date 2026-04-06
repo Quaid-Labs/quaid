@@ -515,7 +515,7 @@ class OpenClawAdapter(QuaidAdapter):
                     [{"role": "user", "content": "PING"}],
                     model_tier="fast",
                     max_tokens=8,
-                    timeout=15,
+                    timeout=35,
                 )
                 if str(getattr(response, "text", "") or "").strip():
                     return candidate
@@ -718,7 +718,7 @@ class OpenClawAdapter(QuaidAdapter):
                 [{"role": "user", "content": "PING"}],
                 model_tier=tier,
                 max_tokens=8,
-                timeout=20,
+                timeout=35,
             )
             text = str(getattr(response, "text", "") or "").strip()
             if not text:
