@@ -190,9 +190,49 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
 | `tmux-msg.sh` | Send a message to a coordinator or tester pane. Handles quoting, copy-mode, and stale input clearing. |
 | `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. The active coordinator starts and owns one per tester at run start. Do not route these through window `5` / `claude-looper`. |
+| `autonomous_mode.sh` | General-purpose nudge loop for any pane (`main:N.0` preferred). Writes structured telemetry to `/tmp/autonomous_mode_<target>.status.json`. |
 
 All scripts that touch the remote accept `--dry-run` to print SSH commands without
 executing them, and `--config <path>` to override the default config location.
+
+---
+
+## Autonomous Mode (Nudge)
+
+Use explicit pane targets first (for example, `main:3.0`, `main:4.0`).
+Alias names are optional and loaded from local config:
+`tests/livetest/scripts/.tmux-targets.json` (gitignored).
+Use `tests/livetest/scripts/.tmux-targets.example.json` as the template.
+
+Launch (default): script auto-detaches with `nohup` and survives transient
+launch shells:
+
+```bash
+LIVETEST_DIR=~/quaidcode/dev/modules/quaid/tests/livetest/scripts
+"$LIVETEST_DIR/autonomous_mode.sh" -w main:3.0 -t 300
+"$LIVETEST_DIR/autonomous_mode.sh" -w main:4.0 -t 300
+```
+
+Foreground/debug mode:
+
+```bash
+"$LIVETEST_DIR/autonomous_mode.sh" -w main:3.0 -t 300 -f
+```
+
+Stop loops:
+
+```bash
+kill "$(cat /tmp/autonomous_mode_main_3.0_.pid)" "$(cat /tmp/autonomous_mode_main_4.0_.pid)"
+```
+
+Telemetry/debug files:
+- PID: `/tmp/autonomous_mode_<target>.pid`
+- Log: `/tmp/autonomous_mode_<target>.log`
+- Trace: `/tmp/autonomous_mode_<target>.trace.log`
+- Status JSON: `/tmp/autonomous_mode_<target>.status.json`
+
+The status JSON is the first place to check for drops (`state`, `stop_reason`,
+`exit_code`, `last_send_rc`, `last_outcome`).
 
 ---
 
