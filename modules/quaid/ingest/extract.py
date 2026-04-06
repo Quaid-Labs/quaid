@@ -235,6 +235,36 @@ def _get_owner_id(override: Optional[str] = None) -> str:
         return "default"
 
 
+def _normalize_fact_provenance(fact: Dict[str, Any], *, label: str, fact_index: int) -> Tuple[str, str]:
+    """Normalize speaker/source into canonical labels and enforce provenance presence."""
+    raw_speaker = str(fact.get("speaker", "") or "").strip().lower()
+    raw_source = str(fact.get("source", "") or "").strip().lower()
+    if not raw_speaker and not raw_source:
+        msg = (
+            f"[extract] missing provenance (speaker/source) for fact index={fact_index} "
+            f"in {label} extraction"
+        )
+        if is_fail_hard_enabled():
+            raise RuntimeError(msg)
+        logger.warning(msg + " - defaulting to user")
+        raw_speaker = "user"
+        raw_source = "user"
+    if raw_speaker not in {"agent", "assistant", "user"}:
+        raw_speaker = "agent" if raw_source in {"agent", "assistant"} else "user"
+    if not raw_source:
+        raw_source = raw_speaker
+    speaker_label = "agent" if raw_speaker in {"agent", "assistant"} else "user"
+    if raw_source in {"agent", "assistant"}:
+        source_type = "assistant"
+    elif raw_source == "both":
+        source_type = "both"
+    elif raw_source == "tool":
+        source_type = "tool"
+    else:
+        source_type = "user"
+    return speaker_label, source_type
+
+
 def _emit_project_events(
     project_logs: Dict[str, List[str]],
     facts: List[Dict[str, Any]],
@@ -1613,13 +1643,10 @@ def apply_extracted_payloads(
         project = fact.get("project")
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = f"{label}-extraction"
-        raw_speaker = str(fact.get("speaker", "user")).strip().lower()
-        speaker_label = "agent" if raw_speaker == "agent" else "user"
-        raw_source = str(fact.get("source", raw_speaker)).strip().lower()
-        source_type = (
-            "assistant" if raw_source == "agent"
-            else "both" if raw_source == "both"
-            else "user"
+        speaker_label, source_type = _normalize_fact_provenance(
+            fact,
+            label=label,
+            fact_index=fact_index,
         )
 
         fact_entry = {"text": text, "status": "pending", "edges": []}
@@ -1774,13 +1801,10 @@ def apply_extracted_payloads(
                         domains = [d for d in domains if d]
                         project = fact.get("project")
                         knowledge_type = "preference" if category == "preference" else "fact"
-                        raw_speaker = str(fact.get("speaker", "user")).strip().lower()
-                        speaker_label = "agent" if raw_speaker == "agent" else "user"
-                        raw_source = str(fact.get("source", raw_speaker)).strip().lower()
-                        source_type = (
-                            "assistant" if raw_source == "agent"
-                            else "both" if raw_source == "both"
-                            else "user"
+                        speaker_label, source_type = _normalize_fact_provenance(
+                            fact,
+                            label=label,
+                            fact_index=global_fact_index,
                         )
                         delta_entry = {"text": text, "status": "pending", "edges": []}
                         delta_result = _memory.store(

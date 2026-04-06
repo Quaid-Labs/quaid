@@ -2244,7 +2244,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           validUntil: item.valid_until || item.validUntil || undefined,
           privacy: item.privacy || undefined,
           ownerId: item.owner_id || item.ownerId || undefined,
-          via: expandGraph ? undefined : "vector",
+          via: item.via || (expandGraph ? undefined : "vector"),
           speaker: item.speaker || undefined,
         });
       }
@@ -2344,7 +2344,13 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const payload = parseMemoryBridgePayload(output, expandGraph);
       const results = !expandGraph
         ? payload.results.map((r) => ({ ...r, via: "vector" as const }))
-        : payload.results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
+        : payload.results.map((r) => {
+          if (r.via) return r;
+          if (r.category === "graph" || r.relation || r.graphPath) {
+            return { ...r, via: "graph" as const };
+          }
+          return { ...r, via: "vector" as const };
+        });
       return { results, meta: payload.meta };
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;
@@ -2797,6 +2803,57 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return via === "vector" || via === "vector_basic" || via === "vector_technical";
   }
 
+  function normalizeClaimText(text: string): string {
+    return String(text || "")
+      .toLowerCase()
+      .replace(/\[[^\]]+\]/g, " ")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function sourcePriority(result: MemoryResult): number {
+    const source = String(result.sourceType || "").toLowerCase();
+    const speaker = String(result.speaker || "").toLowerCase();
+    if (source === "both") return 3;
+    if (source === "user" || speaker === "user") return 2;
+    if (source === "assistant" || source === "agent" || speaker === "agent" || speaker === "assistant") return 1;
+    return 0;
+  }
+
+  function applySourceAwareClaimConflictPolicy(memories: MemoryResult[]): MemoryResult[] {
+    const rankTimestamp = (value?: string): number => {
+      if (!value) return Number.NEGATIVE_INFINITY;
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    };
+    const byClaim = new Map<string, MemoryResult[]>();
+    for (const memory of memories) {
+      const key = `${String(memory.category || "").toLowerCase()}::${normalizeClaimText(memory.text)}`;
+      if (!key.endsWith("::")) {
+        const bucket = byClaim.get(key) || [];
+        bucket.push(memory);
+        byClaim.set(key, bucket);
+      }
+    }
+    const winners = new Set<MemoryResult>();
+    for (const group of byClaim.values()) {
+      if (group.length === 1) {
+        winners.add(group[0]);
+        continue;
+      }
+      const sortedGroup = [...group].sort((a, b) => {
+        const sourceDelta = sourcePriority(b) - sourcePriority(a);
+        if (sourceDelta !== 0) return sourceDelta;
+        const simDelta = Number(b.similarity || 0) - Number(a.similarity || 0);
+        if (Math.abs(simDelta) > 1e-9) return simDelta;
+        return rankTimestamp(b.createdAt) - rankTimestamp(a.createdAt);
+      });
+      winners.add(sortedGroup[0]);
+    }
+    return memories.filter((memory) => winners.has(memory));
+  }
+
   function computeEntityCoverage(query: string, results: MemoryResult[]): number {
     const resultBlob = results
       .map((r) => `${String(r.text || "").toLowerCase()} ${String(r.sourceName || "").toLowerCase()}`)
@@ -2947,7 +3004,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const parsed = Date.parse(value);
       return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
     };
-    const sorted = [...memories].sort((a, b) => {
+    const conflictResolved = applySourceAwareClaimConflictPolicy(memories);
+    const sorted = [...conflictResolved].sort((a, b) => {
       const simDelta = Number(b.similarity || 0) - Number(a.similarity || 0);
       if (Math.abs(simDelta) > 1e-9) return simDelta;
       return sortTimestampDesc(b.createdAt) - sortTimestampDesc(a.createdAt);
@@ -2967,7 +3025,29 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       && !isGraphAnchorExpansion(m)
       && !graphExpansionAnchorKeys.has(String(m.id || m.text || "").trim()),
     );
-    const regularMemories = sorted.filter((m) => !isLowInformationEntityNode(m) && !isGraphAnchorExpansion(m));
+    const regularCandidates = sorted.filter((m) => !isLowInformationEntityNode(m) && !isGraphAnchorExpansion(m));
+    const preferredByClaim = new Map<string, MemoryResult>();
+    for (const candidate of regularCandidates) {
+      const claimKey = `${String(candidate.category || "").toLowerCase()}::${normalizeClaimText(candidate.text)}`;
+      if (claimKey.endsWith("::")) continue;
+      const existing = preferredByClaim.get(claimKey);
+      if (!existing) {
+        preferredByClaim.set(claimKey, candidate);
+        continue;
+      }
+      const sourceDelta = sourcePriority(candidate) - sourcePriority(existing);
+      if (sourceDelta > 0) {
+        preferredByClaim.set(claimKey, candidate);
+        continue;
+      }
+      if (sourceDelta === 0 && Number(candidate.similarity || 0) > Number(existing.similarity || 0)) {
+        preferredByClaim.set(claimKey, candidate);
+      }
+    }
+    const regularMemories = regularCandidates.filter((candidate) => {
+      const claimKey = `${String(candidate.category || "").toLowerCase()}::${normalizeClaimText(candidate.text)}`;
+      return preferredByClaim.get(claimKey) === candidate;
+    });
     const lines = regularMemories.map((m) => formatMemoryLine(m));
     if (qualityNote) {
       lines.unshift(`- [memory-quality] ${qualityNote}`);

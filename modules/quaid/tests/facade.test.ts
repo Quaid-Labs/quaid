@@ -621,6 +621,30 @@ describe("QuaidFacade", () => {
     expect(recallArgs).not.toContain("--domain");
   });
 
+  it("recallWithDiagnostics with expandGraph preserves both vector and graph results", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return JSON.stringify([
+          { text: "Alice is a PM", category: "fact", similarity: 0.84, source_type: "user" },
+          { text: "Alice --niece_of--> Bob", category: "graph", similarity: 0.77, via: "graph" },
+        ]);
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    const { results } = await facade.recallWithDiagnostics({
+      query: "who is alice related to",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector", "graph"],
+      expandGraph: true,
+    });
+    expect(results.map((r) => r.text)).toContain("Alice is a PM");
+    expect(results.map((r) => r.text)).toContain("Alice --niece_of--> Bob");
+    expect(results.find((r) => r.text === "Alice is a PM")?.via).toBe("vector");
+    expect(results.find((r) => r.text === "Alice --niece_of--> Bob")?.via).toBe("graph");
+  });
+
   it("recallWithToolRetry returns primary results when retry heuristics do not trigger", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command !== "recall") return "{}";
@@ -815,6 +839,35 @@ describe("QuaidFacade", () => {
     ]);
 
     expect(out).toContain("- [memory-quality] Retrieved memory for this topic looks conflicted.");
+  });
+
+  it("formatMemoriesForInjection prefers user attribution for duplicate claim text", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const out = facade.formatMemoriesForInjection([
+      {
+        text: "Alice is my niece",
+        category: "fact",
+        similarity: 0.99,
+        sourceType: "assistant",
+        speaker: "agent",
+      },
+      {
+        text: "Alice is my niece",
+        category: "fact",
+        similarity: 0.91,
+        sourceType: "user",
+        speaker: "user",
+      },
+      {
+        text: "Alice works at Stripe",
+        category: "fact",
+        similarity: 0.88,
+        sourceType: "assistant",
+      },
+    ]);
+    const duplicateHits = (out.match(/Alice is my niece/g) || []).length;
+    expect(duplicateHits).toBe(1);
+    expect(out).toContain("Alice works at Stripe");
   });
 
   // -----------------------------------------------------------------------

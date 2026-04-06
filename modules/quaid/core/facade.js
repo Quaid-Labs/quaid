@@ -1610,7 +1610,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
           validUntil: item.valid_until || item.validUntil || void 0,
           privacy: item.privacy || void 0,
           ownerId: item.owner_id || item.ownerId || void 0,
-          via: expandGraph ? void 0 : "vector",
+          via: item.via || (expandGraph ? void 0 : "vector"),
           speaker: item.speaker || void 0
         });
       }
@@ -1690,7 +1690,13 @@ Consider running: docs staleness updater (update-stale --apply)`;
       const args = [query, JSON.stringify(cfg), "--json"];
       const output = await datastoreBridge.recall(args);
       const payload = parseMemoryBridgePayload(output, expandGraph);
-      const results = !expandGraph ? payload.results.map((r) => ({ ...r, via: "vector" })) : payload.results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
+      const results = !expandGraph ? payload.results.map((r) => ({ ...r, via: "vector" })) : payload.results.map((r) => {
+        if (r.via) return r;
+        if (r.category === "graph" || r.relation || r.graphPath) {
+          return { ...r, via: "graph" };
+        }
+        return { ...r, via: "vector" };
+      });
       return { results, meta: payload.meta };
     } catch (err) {
       if (deps.isFailHardEnabled()) throw err;
@@ -2127,6 +2133,49 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const via = String(result.via || "").toLowerCase();
     return via === "vector" || via === "vector_basic" || via === "vector_technical";
   }
+  function normalizeClaimText(text) {
+    return String(text || "").toLowerCase().replace(/\[[^\]]+\]/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function sourcePriority(result) {
+    const source = String(result.sourceType || "").toLowerCase();
+    const speaker = String(result.speaker || "").toLowerCase();
+    if (source === "both") return 3;
+    if (source === "user" || speaker === "user") return 2;
+    if (source === "assistant" || source === "agent" || speaker === "agent" || speaker === "assistant") return 1;
+    return 0;
+  }
+  function applySourceAwareClaimConflictPolicy(memories) {
+    const rankTimestamp = (value) => {
+      if (!value) return Number.NEGATIVE_INFINITY;
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    };
+    const byClaim = /* @__PURE__ */ new Map();
+    for (const memory of memories) {
+      const key = `${String(memory.category || "").toLowerCase()}::${normalizeClaimText(memory.text)}`;
+      if (!key.endsWith("::")) {
+        const bucket = byClaim.get(key) || [];
+        bucket.push(memory);
+        byClaim.set(key, bucket);
+      }
+    }
+    const winners = /* @__PURE__ */ new Set();
+    for (const group of byClaim.values()) {
+      if (group.length === 1) {
+        winners.add(group[0]);
+        continue;
+      }
+      const sortedGroup = [...group].sort((a, b) => {
+        const sourceDelta = sourcePriority(b) - sourcePriority(a);
+        if (sourceDelta !== 0) return sourceDelta;
+        const simDelta = Number(b.similarity || 0) - Number(a.similarity || 0);
+        if (Math.abs(simDelta) > 1e-9) return simDelta;
+        return rankTimestamp(b.createdAt) - rankTimestamp(a.createdAt);
+      });
+      winners.add(sortedGroup[0]);
+    }
+    return memories.filter((memory) => winners.has(memory));
+  }
   function computeEntityCoverage(query, results) {
     const resultBlob = results.map((r) => `${String(r.text || "").toLowerCase()} ${String(r.sourceName || "").toLowerCase()}`).join(" ");
     const tokens = tokenizeQuery(query);
@@ -2254,7 +2303,8 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       const parsed = Date.parse(value);
       return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
     };
-    const sorted = [...memories].sort((a, b) => {
+    const conflictResolved = applySourceAwareClaimConflictPolicy(memories);
+    const sorted = [...conflictResolved].sort((a, b) => {
       const simDelta = Number(b.similarity || 0) - Number(a.similarity || 0);
       if (Math.abs(simDelta) > 1e-9) return simDelta;
       return sortTimestampDesc(b.createdAt) - sortTimestampDesc(a.createdAt);
@@ -2272,7 +2322,29 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const graphNodeHits = sorted.filter(
       (m) => isLowInformationEntityNode(m) && !isGraphAnchorExpansion(m) && !graphExpansionAnchorKeys.has(String(m.id || m.text || "").trim())
     );
-    const regularMemories = sorted.filter((m) => !isLowInformationEntityNode(m) && !isGraphAnchorExpansion(m));
+    const regularCandidates = sorted.filter((m) => !isLowInformationEntityNode(m) && !isGraphAnchorExpansion(m));
+    const preferredByClaim = /* @__PURE__ */ new Map();
+    for (const candidate of regularCandidates) {
+      const claimKey = `${String(candidate.category || "").toLowerCase()}::${normalizeClaimText(candidate.text)}`;
+      if (claimKey.endsWith("::")) continue;
+      const existing = preferredByClaim.get(claimKey);
+      if (!existing) {
+        preferredByClaim.set(claimKey, candidate);
+        continue;
+      }
+      const sourceDelta = sourcePriority(candidate) - sourcePriority(existing);
+      if (sourceDelta > 0) {
+        preferredByClaim.set(claimKey, candidate);
+        continue;
+      }
+      if (sourceDelta === 0 && Number(candidate.similarity || 0) > Number(existing.similarity || 0)) {
+        preferredByClaim.set(claimKey, candidate);
+      }
+    }
+    const regularMemories = regularCandidates.filter((candidate) => {
+      const claimKey = `${String(candidate.category || "").toLowerCase()}::${normalizeClaimText(candidate.text)}`;
+      return preferredByClaim.get(claimKey) === candidate;
+    });
     const lines = regularMemories.map((m) => formatMemoryLine(m));
     if (qualityNote) {
       lines.unshift(`- [memory-quality] ${qualityNote}`);

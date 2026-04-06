@@ -1816,6 +1816,56 @@ class TestGetOwnerId:
                 _get_owner_id(None)
 
 
+class TestNormalizeFactProvenance:
+    def test_raises_when_missing_speaker_and_source_under_fail_hard(self):
+        from ingest.extract import _normalize_fact_provenance
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="missing provenance"):
+                _normalize_fact_provenance({}, label="unit", fact_index=1)
+
+    def test_defaults_to_user_when_missing_speaker_and_source_non_fail_hard(self):
+        from ingest.extract import _normalize_fact_provenance
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+            speaker, source_type = _normalize_fact_provenance({}, label="unit", fact_index=2)
+        assert speaker == "user"
+        assert source_type == "user"
+
+    def test_normalizes_agent_and_tool_source_variants(self):
+        from ingest.extract import _normalize_fact_provenance
+
+        speaker, source_type = _normalize_fact_provenance(
+            {"speaker": "agent"},
+            label="unit",
+            fact_index=3,
+        )
+        assert speaker == "agent"
+        assert source_type == "assistant"
+
+        speaker, source_type = _normalize_fact_provenance(
+            {"source": "agent"},
+            label="unit",
+            fact_index=4,
+        )
+        assert speaker == "agent"
+        assert source_type == "assistant"
+
+        speaker, source_type = _normalize_fact_provenance(
+            {"source": "both"},
+            label="unit",
+            fact_index=5,
+        )
+        assert speaker == "user"
+        assert source_type == "both"
+
+        speaker, source_type = _normalize_fact_provenance(
+            {"source": "tool"},
+            label="unit",
+            fact_index=6,
+        )
+        assert speaker == "user"
+        assert source_type == "tool"
+
+
 class TestChunkCarryContext:
     def test_prefers_recent_tail_and_caps_size(self):
         from ingest.extract import _build_chunk_carry_context
