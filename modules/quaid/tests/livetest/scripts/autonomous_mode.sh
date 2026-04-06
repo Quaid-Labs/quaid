@@ -68,11 +68,22 @@ if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]] || [[ "$INTERVAL" -lt 30 ]]; then
     exit 1
 fi
 
+# Check for an existing instance before detaching so we can report failure
+# to the caller before disappearing into the background.
+_SAFE_TARGET_PRE="$(echo "$WINDOW" | tr -c 'A-Za-z0-9_.-' '_')"
+_PID_FILE_PRE="/tmp/autonomous_mode_${_SAFE_TARGET_PRE}.pid"
+if [[ -f "$_PID_FILE_PRE" ]]; then
+    _EXISTING_PID="$(cat "$_PID_FILE_PRE" 2>/dev/null || true)"
+    if [[ -n "$_EXISTING_PID" ]] && kill -0 "$_EXISTING_PID" 2>/dev/null; then
+        echo "autonomous_mode already running for target '$WINDOW' (pid=$_EXISTING_PID)" >&2
+        exit 1
+    fi
+fi
+
 # Auto-detach by default so loops survive transient launch shells.
 # Use -f to force foreground mode (debug/manual sessions).
 if [[ "${AUTONOMOUS_MODE_CHILD:-0}" != "1" ]] && [[ "$FOREGROUND" -ne 1 ]]; then
-    SAFE_TARGET_PRE="$(echo "$WINDOW" | tr -c 'A-Za-z0-9_.-' '_')"
-    LAUNCH_LOG="/tmp/autonomous_mode_${SAFE_TARGET_PRE}.launcher.log"
+    LAUNCH_LOG="/tmp/autonomous_mode_${_SAFE_TARGET_PRE}.launcher.log"
     cmd=( "$0" -w "$WINDOW" -t "$INTERVAL" -f )
     if [[ -n "$CUSTOM_MESSAGE" ]]; then
         cmd+=( -m "$CUSTOM_MESSAGE" )
@@ -144,25 +155,13 @@ EOF
     mv "$tmp_file" "$STATUS_FILE"
 }
 
-is_running_autonomous_target() {
-    local candidate_pid="$1"
-    [[ "$candidate_pid" =~ ^[0-9]+$ ]] || return 1
-    kill -0 "$candidate_pid" 2>/dev/null || return 1
-    local cmdline
-    cmdline="$(ps -p "$candidate_pid" -o command= 2>/dev/null || true)"
-    [[ -n "$cmdline" ]] || return 1
-    [[ "$cmdline" == *"autonomous_mode.sh"* ]] || return 1
-    [[ "$cmdline" == *"-w $WINDOW"* ]] || return 1
-    return 0
-}
-
 if ! ( set -o noclobber; echo "$$" > "$PID_FILE" ) 2>/dev/null; then
     OTHER_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [[ -n "$OTHER_PID" ]] && is_running_autonomous_target "$OTHER_PID"; then
+    if [[ -n "$OTHER_PID" ]] && kill -0 "$OTHER_PID" 2>/dev/null; then
         echo "autonomous_mode already running for target '$WINDOW' (pid=$OTHER_PID)" >&2
         exit 1
     fi
-    # Stale pidfile (dead PID or PID reused by unrelated process): reclaim it.
+    # Stale pidfile — reclaim it.
     rm -f "$PID_FILE"
     if ! ( set -o noclobber; echo "$$" > "$PID_FILE" ) 2>/dev/null; then
         echo "Error: failed to claim pidfile $PID_FILE" >&2
