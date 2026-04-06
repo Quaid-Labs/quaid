@@ -451,6 +451,19 @@ class TestUpdateTimestamps:
         entry = r.get("docs/test.md")
         assert entry["last_indexed_at"] == "2026-02-07T12:00:00"
 
+    def test_reregister_clears_last_indexed_at(self, setup_env):
+        r = _get_registry()
+        r.register("docs/test.md", title="First")
+        r.update_timestamps("docs/test.md", indexed_at="2026-02-07T12:00:00")
+        assert r.get("docs/test.md")["last_indexed_at"] == "2026-02-07T12:00:00"
+
+        # Re-registering should force a fresh index pass instead of preserving
+        # a stale timestamp that can hide missing vec rows.
+        r.register("docs/test.md", title="Second")
+        entry = r.get("docs/test.md")
+        assert entry["title"] == "Second"
+        assert entry["last_indexed_at"] is None
+
 
 class TestRenameProject:
     def test_renames_registry_entries(self, setup_env):

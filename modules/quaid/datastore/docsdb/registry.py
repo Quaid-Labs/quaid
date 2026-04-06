@@ -574,6 +574,9 @@ class DocsRegistry:
                     sensitivity = COALESCE(excluded.sensitivity, doc_registry.sensitivity),
                     participant_entity_ids = COALESCE(excluded.participant_entity_ids, doc_registry.participant_entity_ids),
                     provenance_confidence = COALESCE(excluded.provenance_confidence, doc_registry.provenance_confidence),
+                    -- Re-registering a doc must force reindex so vec/doc chunks stay in sync.
+                    -- Otherwise stale last_indexed_at can cause docs update --apply to skip it.
+                    last_indexed_at = NULL,
                     state = 'active',
                     registered_by = excluded.registered_by
             """, (
