@@ -2273,10 +2273,29 @@ async function step1_preflight() {
     }
 
     // --- Gateway running ---
-    const statusOut = shell("clawdbot status 2>/dev/null </dev/null") ||
-                      shell("openclaw status 2>/dev/null </dev/null") ||
-                      shell("clawdbot gateway probe 2>/dev/null </dev/null") ||
-                      shell("openclaw gateway probe 2>/dev/null </dev/null");
+    // IMPORTANT: do not use shell("openclaw status ...") here. When the plugin
+    // is loaded, status/probe can leave background listeners attached and keep
+    // Node's event loop alive. Always run with a bounded timeout.
+    let statusOut = "";
+    const statusChecks = [
+      ["status"],
+      ["gateway", "probe"],
+    ];
+    const statusBins = ["clawdbot", "openclaw"].filter((bin) => canRun(bin));
+    for (const bin of statusBins) {
+      for (const args of statusChecks) {
+        const res = runCliWithTimeout(bin, args, 8_000);
+        const text = [_safeTrim(res.stdout), _safeTrim(res.stderr)].filter(Boolean).join("\n");
+        if (res.status === 0) {
+          statusOut = text || `${bin} ${args.join(" ")} ok`;
+          break;
+        }
+      }
+      if (statusOut) break;
+    }
+    if (!statusOut && _gatewayHttpCode("/health", "GET", null) === 200) {
+      statusOut = "gateway /health=200";
+    }
     if (!statusOut) {
       s.stop(C.red("Gateway offline"), 2);
       note(
