@@ -170,7 +170,12 @@ def notify_agent(
     dry_run: bool = False,
     force: bool = False,
 ) -> bool:
-    """Send an operator-facing notice to the active agent."""
+    """Send an operator-facing notice to the active agent.
+
+    Returns True when the notice is either:
+    - delivered immediately via adapter.notify(), or
+    - queued as a deferred fallback after immediate delivery fails.
+    """
     text = str(message or "").strip()
     if not text:
         return False
