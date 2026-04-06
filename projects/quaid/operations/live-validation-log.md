@@ -198,7 +198,7 @@ The `<oc-host>` OC instance used the operator's Claude.ai OAuth path during this
 | Bug | Severity | Notes |
 |-----|----------|-------|
 | M6: `before_prompt_build` auto-inject uses OC gateway exec-error strings as recall query | Medium | When an OC gateway subprocess dies (e.g. reranker killed by SIGTERM), OC sends `Exec failed (cmd, signal SIGTERM) :: ...` as `event.prompt`. This string passed all existing prompt filters and became the recall query, producing garbled `[quaid][recall] source=auto_inject query="Exec failed..."` log entries and a meaningless DB lookup. Fix: added `Exec failed` to the skip-pattern regex in `beforePromptBuildHandler`. |
-| M6: OC retrieval sub-agent scores fact as perfect match (5) but main OC agent says "no concrete details" | Medium | OC-side bug — `quaid recall "niece"` CLI returns Anne correctly; the issue is OC's retrieval pipeline not surfacing sub-agent results to the main agent response. Not a Quaid bug. |
+| M6: OC retrieval sub-agent scores fact as perfect match (5) but main OC agent says "no concrete details" | Medium | OC-side bug — `quaid recall "niece"` CLI returns the correct niece fact; the issue is OC's retrieval pipeline not surfacing sub-agent results to the main agent response. Not a Quaid bug. |
 
 ### Fixes Shipped (commits on canary)
 
@@ -208,7 +208,7 @@ The `<oc-host>` OC instance used the operator's Claude.ai OAuth path during this
 
 ### Diagnostics
 
-- `quaid recall "niece"` on the live-test host returns correct facts (`User has a niece`, `Users niece Anne is 7 years old and loves drawing`) even while gateway logs show reranker timeouts.
+- `quaid recall "niece"` on the live-test host returns correct facts even while gateway logs show reranker timeouts (reranker SIGTERM is transient; Quaid recall degrades gracefully by skipping reranking and returning vector results).
 - Reranker SIGTERM is a transient OC infra issue; Quaid recall degrades gracefully (skips reranking, returns vector results).
 - M5 still blocked by OAuth rate limit (429 before first LLM turn).
 
