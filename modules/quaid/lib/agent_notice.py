@@ -373,6 +373,8 @@ def format_deferred_notice_hint() -> str:
     return (
         "<quaid_system_message>\n"
         f"Quaid has {pending_count} deferred maintenance {notice_word} waiting ({kind_summary}). "
-        "Drain and relay them now: run `quaid notify --deferred-drain` and summarize the results to the user.\n"
+        "These are buffered system notices. Do not retrieve or relay them unless you are confident a human user "
+        "is active and can see the reply. If appropriate, inspect with `quaid notify --deferred-status` or fetch "
+        "with `quaid notify --deferred-drain`, then summarize the results.\n"
         "</quaid_system_message>"
     )
