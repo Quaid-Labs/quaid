@@ -38,6 +38,7 @@ class ClaudeCodeInstanceManager(InstanceManager):
         token: str = "",
         deep_model: str = "",
         fast_model: str = "",
+        settings_path: Path | None = None,
         dry_run: bool = False,
     ) -> Path:
         """Create a Quaid instance silo and wire it into a CC project.
@@ -50,6 +51,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
             token: API-scoped OAuth token to store for daemon use.
             deep_model: Override for deep-reasoning model ID.
             fast_model: Override for fast-reasoning model ID.
+            settings_path: Optional path for Claude global settings hooks file.
+                          Defaults to ~/.claude/settings.json.
 
         Returns:
             The silo root path.
@@ -63,7 +66,7 @@ class ClaudeCodeInstanceManager(InstanceManager):
 
         if not dry_run:
             self._write_settings(project_dir, instance_id)
-            self._write_hooks(instance_id)
+            self._write_hooks(instance_id, settings_path=settings_path)
             self._store_auth_token(token)
             self._write_model_config(
                 silo_root,
@@ -159,8 +162,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
 
         return instance_id, was_new
 
-    def _write_hooks(self, instance_id: str) -> None:
-        """Write the 6 Quaid hook commands into ~/.claude/settings.json.
+    def _write_hooks(self, instance_id: str, settings_path: Path | None = None) -> None:
+        """Write the 6 Quaid hook commands into Claude Code settings.
 
         Mirrors what the JS installer's setupClaudeCodeHooks() does. Called
         by make_instance() so newly created project instances get hooks wired
@@ -188,7 +191,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
             "SubagentStop":     f"{env_prefix} {quaid_bin} hook-subagent-stop",
         }
 
-        settings_path = Path.home() / ".claude" / "settings.json"
+        if settings_path is None:
+            settings_path = Path.home() / ".claude" / "settings.json"
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
         settings: dict = {}
