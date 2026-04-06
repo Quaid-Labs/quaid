@@ -397,6 +397,40 @@ class TestNotifyAgent:
         sent_message = adapter.notify.call_args.args[0]
         assert sent_message.startswith("[Quaid warning]")
 
+    def test_falls_back_to_deferred_when_notify_returns_false(self, tmp_path):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
+        adapter.notify.return_value = False
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            ok = notify_agent("provider down", severity="error", source="provider")
+            assert ok is True
+
+        delayed = tmp_path / ".runtime" / "notes" / "delayed-llm-requests.json"
+        payload = json.loads(delayed.read_text(encoding="utf-8"))
+        requests = payload.get("requests", [])
+        assert len(requests) == 1
+        assert requests[0]["priority"] == "high"
+        assert "[Quaid error] [provider] provider down" in requests[0]["message"]
+
+    def test_falls_back_to_deferred_when_notify_raises(self, tmp_path):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
+        adapter.notify.side_effect = RuntimeError("bad channel")
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            ok = notify_agent("janitor summary", severity="warning", source="janitor")
+            assert ok is True
+
+        delayed = tmp_path / ".runtime" / "notes" / "delayed-llm-requests.json"
+        payload = json.loads(delayed.read_text(encoding="utf-8"))
+        requests = payload.get("requests", [])
+        assert len(requests) == 1
+        assert requests[0]["priority"] == "normal"
+        assert "[Quaid warning] [janitor] janitor summary" in requests[0]["message"]
+
 
 class TestDeferredNotifyCli:
     def test_deferred_status_cli_uses_wrapper_with_options(self, monkeypatch, capsys):

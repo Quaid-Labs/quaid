@@ -193,6 +193,27 @@ def notify_agent(
 
     formatted = _format_notice(text, severity=severity, source=source)
 
+    def _fallback_to_deferred() -> bool:
+        if dry_run:
+            return False
+        severity_token = _normalize_severity(severity)
+        priority = "normal"
+        if severity_token == "error":
+            priority = "high"
+        elif severity_token == "info":
+            priority = "low"
+        try:
+            return queue_deferred_notice(
+                formatted,
+                kind="agent_notice",
+                priority=priority,
+                source=str(source or "agent_notice").strip() or "agent_notice",
+                dedupe_key=f"notify-fallback:{dedupe_token}" if dedupe_token else None,
+            )
+        except Exception as deferred_exc:
+            logger.warning("Failed queueing deferred fallback for agent notice: %s", deferred_exc)
+            return False
+
     try:
         ok = bool(
             adapter.notify(
@@ -202,9 +223,12 @@ def notify_agent(
                 force=force,
             )
         )
+        if not ok:
+            logger.warning("Agent notice delivery returned False; queueing deferred fallback.")
+            return _fallback_to_deferred()
     except Exception as exc:
         logger.warning("Failed delivering agent notice: %s", exc)
-        return False
+        return _fallback_to_deferred()
 
     if ok and dedupe_token and ttl_seconds > 0 and not dry_run and state_path is not None:
         try:
