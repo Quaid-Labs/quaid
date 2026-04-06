@@ -105,7 +105,7 @@ echo ""
 ERRORS=0
 
 # --- Check 1: Remote ≠ local ---
-echo "[1/4] Verifying remote is not this machine..."
+echo "[1/6] Verifying remote is not this machine..."
 
 LOCAL_HOSTNAME="$(hostname -s 2>/dev/null || hostname)"
 LOCAL_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "")"
@@ -152,7 +152,7 @@ fi
 
 # --- Check 2: SSH connectivity ---
 echo ""
-echo "[2/4] Verifying SSH connectivity to $REMOTE_HOST..."
+echo "[2/6] Verifying SSH connectivity to $REMOTE_HOST..."
 
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would ssh $REMOTE_HOST 'echo ok'"
@@ -167,9 +167,52 @@ else
     fi
 fi
 
-# --- Check 3: Code sync to remote ---
+# --- Step 3: Upgrade platform CLIs ---
 echo ""
-echo "[3/5] Verifying remote has latest Quaid code..."
+echo "[3/6] Upgrading platform CLIs on remote to latest..."
+
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "  [dry-run] would upgrade claude, codex, openclaw to latest on $REMOTE_HOST"
+else
+    ssh "$REMOTE_HOST" bash -s << 'REMOTE_UPGRADE'
+set -euo pipefail
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)" 2>/dev/null || true
+
+upgrade_cli() {
+    local name="$1" cmd="$2"
+    printf "  upgrading %-12s ... " "$name"
+    if output=$(eval "$cmd" 2>&1); then
+        local ver
+        ver="$($name --version 2>/dev/null | head -1 || echo "?")"
+        echo "done ($ver)"
+    else
+        echo "WARN: upgrade failed (continuing)"
+        echo "$output" | tail -3 | sed 's/^/    /'
+    fi
+}
+
+upgrade_cli "claude"   "npm install -g @anthropic-ai/claude-code@latest --prefer-offline 2>/dev/null || npm install -g @anthropic-ai/claude-code@latest"
+upgrade_cli "codex"    "npm install -g @openai/codex@latest --prefer-offline 2>/dev/null || npm install -g @openai/codex@latest"
+# openclaw: try built-in updater, fall back to no-op if not available
+if command -v openclaw &>/dev/null; then
+    printf "  upgrading %-12s ... " "openclaw"
+    if openclaw update --yes 2>/dev/null; then
+        ver="$(openclaw --version 2>/dev/null | tail -1 || echo "?")"
+        echo "done ($ver)"
+    else
+        ver="$(openclaw --version 2>/dev/null | tail -1 || echo "?")"
+        echo "skipped (no update command or already latest: $ver)"
+    fi
+else
+    echo "  openclaw      ... not found, skipping"
+fi
+REMOTE_UPGRADE
+fi
+
+# --- Check 4: Code sync to remote ---
+echo ""
+echo "[4/6] Verifying remote has latest Quaid code..."
 
 LOCAL_DEV="$HOME/quaidcode/dev"
 LOCAL_HEAD="$(cd "$LOCAL_DEV" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -204,9 +247,9 @@ if [[ "$ERRORS" -gt 0 ]]; then
     exit 1
 fi
 
-# --- Step 4: Wipe ---
+# --- Step 5: Wipe ---
 echo ""
-echo "[4/5] Wiping Quaid on remote ($WIPE_PLATFORM)..."
+echo "[5/6] Wiping Quaid on remote ($WIPE_PLATFORM)..."
 
 if [[ "$SKIP_WIPE" == "1" ]]; then
     echo "  (skipped — --skip-wipe)"
@@ -217,9 +260,9 @@ else
     LIVETEST_WIPE_YES=1 "$SCRIPT_DIR/livetest-wipe.sh" "${WIPE_ARGS[@]}"
 fi
 
-# --- Step 5: Platform services ---
+# --- Step 6: Platform services ---
 echo ""
-echo "[5/5] Starting platform services on remote..."
+echo "[6/6] Starting platform services on remote..."
 
 if [[ "$SKIP_PLATFORM_START" == "1" ]]; then
     echo "  (skipped — --skip-platform-start)"
