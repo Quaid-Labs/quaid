@@ -104,6 +104,19 @@ const WORKSPACE = _resolveWorkspace();
 function _resolveQuaidInstance(): string {
   const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
   if (fromEnv) return fromEnv;
+  // OPENCLAW_CONFIG_PATH workaround: when the gateway process does not receive
+  // QUAID_INSTANCE in process.env, pull the fallback instance from the active
+  // OpenClaw config file (env.vars first, then top-level env keys).
+  try {
+    const cfgPath = _resolveOpenClawConfigPath();
+    if (cfgPath && fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const fromCfgVars = String(cfg?.env?.vars?.QUAID_INSTANCE || "").trim();
+      if (fromCfgVars) return fromCfgVars;
+      const fromCfgTop = String(cfg?.env?.QUAID_INSTANCE || "").trim();
+      if (fromCfgTop) return fromCfgTop;
+    }
+  } catch {}
   // OC plugin config schema rejects an "env" key, so there is no OC-native way to
   // inject QUAID_INSTANCE into the gateway plugin process.  Read from a sidecar file
   // written by the installer.  Try two locations: one relative to WORKSPACE (works

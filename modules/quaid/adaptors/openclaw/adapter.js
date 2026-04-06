@@ -72,6 +72,17 @@ const WORKSPACE = _resolveWorkspace();
 function _resolveQuaidInstance() {
   const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
   if (fromEnv) return fromEnv;
+  try {
+    const cfgPath = _resolveOpenClawConfigPath();
+    if (cfgPath && fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const fromCfgVars = String(cfg?.env?.vars?.QUAID_INSTANCE || "").trim();
+      if (fromCfgVars) return fromCfgVars;
+      const fromCfgTop = String(cfg?.env?.QUAID_INSTANCE || "").trim();
+      if (fromCfgTop) return fromCfgTop;
+    }
+  } catch {
+  }
   const candidates = [
     path.join(WORKSPACE, ".oc-instance-name"),
     path.join(os.homedir(), ".openclaw", "extensions", "quaid", ".oc-instance-name")
