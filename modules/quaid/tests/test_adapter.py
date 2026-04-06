@@ -538,7 +538,7 @@ class TestOpenClawAdapter:
         assert adapter.get_deep_provider_default() == "openai-codex"
         assert adapter.get_fast_provider_default() == "openai-codex"
         assert adapter.get_deep_model_default("default") == "gpt-5.4"
-        assert adapter.get_fast_model_default("default") == "gpt-5.1-codex-mini"
+        assert adapter.get_fast_model_default("default") == "gpt-5.3-codex-spark"
 
     def test_installer_review_model_pair_flags_unknown_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
@@ -623,10 +623,12 @@ class TestCodexAdapter:
     def test_installer_provider_surface_is_openai_models(self):
         adapter = CodexAdapter()
         assert adapter.installer_supported_providers() == ["openai"]
-        assert adapter.installer_default_models("openai") == {
-            "deep": "gpt-5.4",
-            "fast": "gpt-5.4-mini",
-        }
+        # When codex app-server is unavailable (e.g. in CI), probe falls through
+        # all candidates to the static fallback. Accept any valid fast candidate.
+        result = adapter.installer_default_models("openai")
+        assert result is not None
+        assert result["deep"] == "gpt-5.4"
+        assert result["fast"] in ("gpt-5.3-codex-spark", "gpt-5.4-mini", "gpt-5.4")
         assert adapter.get_deep_provider_default() == "openai"
         assert adapter.get_fast_provider_default() == "openai"
 

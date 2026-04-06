@@ -15,9 +15,18 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from lib.agent_notice import notify_agent
 from lib.providers import LLMProvider, LLMResult
 
 logger = logging.getLogger(__name__)
+
+
+def _try_notify(msg: str, **kwargs) -> None:
+    """Call notify_agent, swallowing any error if no adapter is configured."""
+    try:
+        notify_agent(msg, **kwargs)
+    except Exception:
+        logger.debug("notify_agent unavailable; logging provider error locally: %s", msg)
 
 
 def _coerce_text(value) -> str:
@@ -638,11 +647,20 @@ class CodexLLMProvider(LLMProvider):
         fast_reasoning_effort: str = "none",
         manager: Optional[_CodexAppServerManager] = None,
     ):
-        self._deep_model = str(deep_model or "gpt-5.4").strip()
-        self._fast_model = str(fast_model or "gpt-5.4-mini").strip()
+        self._deep_model = str(deep_model or "").strip()
+        self._fast_model = str(fast_model or "").strip()
         self._deep_reasoning_effort = str(deep_reasoning_effort or "high").strip()
         self._fast_reasoning_effort = str(fast_reasoning_effort or "none").strip()
         self._manager = manager
+        for tier, model in (("deep", self._deep_model), ("fast", self._fast_model)):
+            if not model:
+                msg = (
+                    f"CodexLLMProvider: no model configured for tier '{tier}'. "
+                    "Set fastReasoning/deepReasoning in config/memory.json."
+                )
+                _try_notify(msg, severity="error", source="llm_config",
+                            dedupe_key=f"codex-no-model:{tier}")
+                raise ValueError(msg)
 
     def _resolve_model(self, model_tier: str) -> str:
         if model_tier == "fast" and self._fast_model:
@@ -688,25 +706,34 @@ class CodexLLMProvider(LLMProvider):
     def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
         _ = max_tokens  # turn/start schema does not currently expose an output-token cap.
         prompt = self._build_prompt(messages)
-        if self._manager is not None:
-            result = self._manager.run_turn(
-                prompt=prompt,
-                model=self._resolve_model(model_tier),
-                effort=self._resolve_effort(model_tier),
-                service_tier="fast" if model_tier == "fast" else "",
-                timeout=timeout,
-                cwd=os.getcwd(),
+        model = self._resolve_model(model_tier)
+        try:
+            if self._manager is not None:
+                result = self._manager.run_turn(
+                    prompt=prompt,
+                    model=model,
+                    effort=self._resolve_effort(model_tier),
+                    service_tier="fast" if model_tier == "fast" else "",
+                    timeout=timeout,
+                    cwd=os.getcwd(),
+                )
+            else:
+                broker = get_platform_codex_broker_client()
+                result = broker.run_turn(
+                    prompt=prompt,
+                    model=model,
+                    effort=self._resolve_effort(model_tier),
+                    service_tier="fast" if model_tier == "fast" else "",
+                    timeout=timeout,
+                    cwd=os.getcwd(),
+                )
+        except Exception as exc:
+            msg = (
+                f"Quaid {model_tier} LLM call failed (Codex, model={model}): {exc}"
             )
-        else:
-            broker = get_platform_codex_broker_client()
-            result = broker.run_turn(
-                prompt=prompt,
-                model=self._resolve_model(model_tier),
-                effort=self._resolve_effort(model_tier),
-                service_tier="fast" if model_tier == "fast" else "",
-                timeout=timeout,
-                cwd=os.getcwd(),
-            )
+            _try_notify(msg, severity="error", source="provider",
+                        dedupe_key=f"codex-call-error:{model_tier}:{model}")
+            raise
         usage = result.get("usage") if isinstance(result, dict) else {}
         if not isinstance(usage, dict):
             usage = {}

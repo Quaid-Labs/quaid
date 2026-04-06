@@ -369,6 +369,33 @@ class OpenClawAdapter(QuaidAdapter):
         d = Path.home() / ".openclaw" / "sessions"
         return d if d.is_dir() else None
 
+    # OC gateway prepends "[Day Date HH:MM TZ]" to every user message.
+    # Also strips OC-injected "(untrusted metadata)" code blocks.
+    _OC_TIMESTAMP_PREFIX_RE = re.compile(r"^\[.*?\]\s*", re.MULTILINE)
+    _OC_UNTRUSTED_METADATA_RE = re.compile(
+        r"\w[\w\s]*\s*\(untrusted metadata\):[\s\S]*?```[\s\S]*?```",
+        re.IGNORECASE,
+    )
+    _QUAID_MEMORY_CONTEXT_RE = re.compile(
+        r"<quaid_memory_context>.*?</quaid_memory_context>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    _QUAID_NOTIFICATION_RE = re.compile(
+        r"<quaid_notification>.*?</quaid_notification>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+    def sanitize_transcript_text(self, text: str) -> str:
+        value = super().sanitize_transcript_text(text)
+        if not value:
+            return ""
+        value = self._OC_UNTRUSTED_METADATA_RE.sub("", value)
+        value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
+        value = self._QUAID_NOTIFICATION_RE.sub("", value)
+        # Strip gateway timestamp prefix from the start of each line.
+        value = self._OC_TIMESTAMP_PREFIX_RE.sub("", value)
+        return value.strip()
+
     def filter_system_messages(self, text: str) -> bool:
         if text.startswith("GatewayRestart:") or text.startswith("System:"):
             return True

@@ -45,7 +45,7 @@ class ProviderUnavailableError(Exception):
     """
 
 
-def _short_error_text(exc: Exception | None, *, max_len: int = 240) -> str:
+def _short_error_text(exc: Optional[Exception], *, max_len: int = 240) -> str:
     if exc is None:
         text = "unknown error"
     else:

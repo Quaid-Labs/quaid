@@ -35,12 +35,12 @@ def test_get_llm_provider_notifies_and_reraises():
     fake_adapter.get_llm_provider.side_effect = RuntimeError("unknown provider")
 
     with patch.object(runtime_context, "get_adapter", return_value=fake_adapter), \
-         patch.object(runtime_context, "_notify_agent") as mock_notify:
+         patch.object(runtime_context, "_queue_deferred_notice") as mock_queue:
         with pytest.raises(RuntimeError, match="unknown provider"):
             runtime_context.get_llm_provider(model_tier="deep")
 
-    mock_notify.assert_called_once()
-    assert "deep language model provider" in mock_notify.call_args.args[0]
+    mock_queue.assert_called_once()
+    assert "deep language model provider" in mock_queue.call_args.args[0]
 
 
 def test_get_llm_provider_preserves_original_error_when_notify_fails(caplog):
@@ -51,11 +51,11 @@ def test_get_llm_provider_preserves_original_error_when_notify_fails(caplog):
     fake_adapter.get_llm_provider.side_effect = RuntimeError("unknown provider")
 
     with patch.object(runtime_context, "get_adapter", return_value=fake_adapter), \
-         patch.object(runtime_context, "_notify_agent", side_effect=RuntimeError("notify unavailable")):
+         patch.object(runtime_context, "_queue_deferred_notice", side_effect=RuntimeError("queue unavailable")):
         with pytest.raises(RuntimeError, match="unknown provider"):
             runtime_context.get_llm_provider(model_tier="deep")
 
-    assert "Failed surfacing provider access error to agent" in caplog.text
+    assert "Failed queuing provider access error as deferred notice" in caplog.text
 
 
 def test_fail_policy_logs_when_config_load_fails(caplog):

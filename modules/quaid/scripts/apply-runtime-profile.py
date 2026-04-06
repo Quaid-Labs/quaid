@@ -463,24 +463,9 @@ def _apply_quaid(quaid_cfg: Dict[str, Any], dev_root: Path) -> None:
     # Keep runtime-preflight stable even when a minimal/empty template is used.
     config["retrieval"].setdefault("maxLimit", 20)
     config["retrieval"].setdefault("retry_budget_ms", 8000)
-    config["models"].setdefault(
-        "fastReasoningModelClasses",
-        {
-            "openai": "gpt-5.4-mini",
-            "anthropic": "claude-haiku-4-5",
-            "openai-compatible": "gpt-5.4-mini",
-        },
-    )
-    config["models"].setdefault(
-        "deepReasoningModelClasses",
-        {
-            "openai": "gpt-5.4",
-            "anthropic": "claude-haiku-4-5",
-            "openai-compatible": "gpt-5.4",
-        },
-    )
-    config["models"].setdefault("fastReasoningEffort", "none")
-    config["models"].setdefault("deepReasoningEffort", "high")
+    # Model class defaults are not set here. Each adapter's installer_default_models()
+    # is the authoritative source for model selection. apply-runtime-profile merges
+    # whatever the adapter or runtime profile supplies via the providerModelClasses block.
 
     for section in ("models", "ollama", "users", "projects", "notifications", "retrieval"):
         updates = quaid_cfg.get(section)

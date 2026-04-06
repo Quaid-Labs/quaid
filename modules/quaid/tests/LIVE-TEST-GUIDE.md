@@ -55,3 +55,24 @@ destructive command sequences in an untracked companion file such as
 - If the cleared SHA is behind the intended release target, report that
   immediately so release can decide whether to rerun, approve the post-clear
   delta, or hold.
+
+## Platform Behavior Notes
+
+### Unified Search Surface
+
+`quaid search` and `quaid recall` are the primary search surfaces. There is no
+`quaid docs search` alias by design — the platform intentionally unifies all
+retrieval under one surface (`quaid recall` / `quaid search`). Do not treat a
+missing `quaid docs search` CLI alias as a test failure. If a milestone asks an
+agent to search documentation, the correct tool is `quaid recall` with an
+appropriate query. Flag as a pass if the agent uses `quaid recall` or `quaid
+search` for a doc-lookup task.
+
+### Deferred Notices
+
+Agents may encounter a `quaid notify --deferred-status` notice during a
+milestone (e.g. janitor or doc-update messages). This is expected behavior.
+A well-behaved agent drains the notice via `quaid notify --deferred-drain` and
+briefly relays the content ("I have a Quaid maintenance notice — [summary]").
+Acknowledge as a pass if the agent surfaces the notice, even if it asks the
+user before draining rather than draining proactively.

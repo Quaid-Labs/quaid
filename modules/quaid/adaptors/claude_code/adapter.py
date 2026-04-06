@@ -13,6 +13,7 @@ Uses CLI subcommands via the existing Bash tool + hooks for automation.
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,14 @@ from lib.instance import instance_slug_from_project_dir
 
 
 class ClaudeCodeAdapter(QuaidAdapter):
+    _QUAID_MEMORY_CONTEXT_RE = re.compile(
+        r"<quaid_memory_context>.*?</quaid_memory_context>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    _QUAID_NOTIFICATION_RE = re.compile(
+        r"<quaid_notification>.*?</quaid_notification>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     """Adapter for running Quaid inside Claude Code sessions."""
 
     def __init__(self, home: Optional[Path] = None):
@@ -318,6 +327,14 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def get_sessions_dir(self) -> Optional[Path]:
         d = Path.home() / ".claude" / "projects"
         return d if d.is_dir() else None
+
+    def sanitize_transcript_text(self, text: str) -> str:
+        value = super().sanitize_transcript_text(text)
+        if not value:
+            return ""
+        value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
+        value = self._QUAID_NOTIFICATION_RE.sub("", value)
+        return value.strip()
 
     def filter_system_messages(self, text: str) -> bool:
         if "<system-reminder>" in text:

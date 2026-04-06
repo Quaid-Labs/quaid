@@ -8,9 +8,22 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from lib.agent_notice import notify_agent
 from lib.providers import LLMProvider, LLMResult
 
 logger = logging.getLogger(__name__)
+
+
+def _try_notify(msg: str, **kwargs) -> None:
+    """Call notify_agent, swallowing any error if no adapter is configured.
+
+    Provider errors must always propagate to callers — notification failure
+    must never mask the original error (e.g. in tests or bare-script contexts).
+    """
+    try:
+        notify_agent(msg, **kwargs)
+    except Exception:
+        logger.debug("notify_agent unavailable; logging provider error locally: %s", msg)
 
 
 class GatewayLLMProvider(LLMProvider):
@@ -62,10 +75,13 @@ class GatewayLLMProvider(LLMProvider):
         tier = "fast" if model_tier == "fast" else "deep"
         model = self._fast_model if tier == "fast" else self._deep_model
         if not model:
-            raise RuntimeError(
+            msg = (
                 f"No model configured for tier '{tier}'. "
                 "Set fastReasoning/deepReasoning in config/memory.json."
             )
+            _try_notify(msg, severity="error", source="llm_config",
+                        dedupe_key=f"gateway-no-model:{tier}")
+            raise RuntimeError(msg)
         return model
 
     @staticmethod
@@ -132,7 +148,22 @@ class GatewayLLMProvider(LLMProvider):
             headers=headers,
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        try:
+            resp_cm = urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            msg = (
+                f"Quaid {model_tier} LLM call failed: HTTP {exc.code} from gateway "
+                f"(model={oc_model}). Check fastReasoning/deepReasoning in config/memory.json."
+            )
+            _try_notify(msg, severity="error", source="llm_config",
+                        dedupe_key=f"gateway-http-error:{model_tier}:{exc.code}")
+            raise RuntimeError(msg) from exc
+        except (OSError, TimeoutError) as exc:
+            msg = f"Quaid could not reach the OpenClaw gateway ({exc}). Is the gateway running?"
+            _try_notify(msg, severity="error", source="provider",
+                        dedupe_key=f"gateway-unreachable:{model_tier}")
+            raise
+        with resp_cm as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if not isinstance(data, dict):
                 raise RuntimeError(

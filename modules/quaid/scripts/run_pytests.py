@@ -14,6 +14,7 @@ import concurrent.futures
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -87,6 +88,7 @@ def run_one(
     timeout_s: int,
     marker_expr: str | None = None,
     tmpdir: Path | None = None,
+    unit_sandbox_root: Path | None = None,
 ) -> Result:
     rel = file_path.relative_to(ROOT)
     cmd = [
@@ -108,28 +110,69 @@ def run_one(
         env["TMPDIR"] = str(tmpdir)
         env["TMP"] = str(tmpdir)
         env["TEMP"] = str(tmpdir)
+    if unit_sandbox_root is not None:
+        home = unit_sandbox_root / "home"
+        quaid_home = unit_sandbox_root / "quaid-home"
+        xdg_config = home / ".config"
+        xdg_cache = home / ".cache"
+        xdg_state = home / ".local" / "state"
+        for p in (home, quaid_home, xdg_config, xdg_cache, xdg_state):
+            p.mkdir(parents=True, exist_ok=True)
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)  # Windows compatibility
+        env["QUAID_HOME"] = str(quaid_home)
+        env["XDG_CONFIG_HOME"] = str(xdg_config)
+        env["XDG_CACHE_HOME"] = str(xdg_cache)
+        env["XDG_STATE_HOME"] = str(xdg_state)
+    # Use process-group isolation so timeout cleanup can reap pytest children.
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    pytest_pattern = (
+        "pytest -q -o addopts= -o faulthandler_timeout=45 "
+        f"{rel}"
+    )
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            env=env,
-        )
-        out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+        out = (stdout or "") + ("\n" + stderr if stderr else "")
         status = "PASS" if proc.returncode == 0 else "FAIL"
-        return Result(file_path, proc.returncode, time.time() - t0, status, out)
-    except subprocess.TimeoutExpired as e:
-        def _to_text(v):
-            if v is None:
-                return ""
-            if isinstance(v, bytes):
-                return v.decode("utf-8", errors="replace")
-            return str(v)
-        out_stdout = _to_text(e.stdout)
-        out_stderr = _to_text(e.stderr)
-        out = out_stdout + (("\n" + out_stderr) if out_stderr else "")
+        rc = proc.returncode if proc.returncode is not None else 1
+        return Result(file_path, rc, time.time() - t0, status, out)
+    except subprocess.TimeoutExpired:
+        # Terminate whole process group first, then force-kill if needed.
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            # Descendants may keep inherited pipe FDs open; don't block teardown.
+            stdout, stderr = "", ""
+        # Last-resort cleanup: kill lingering pytest descendants for this file.
+        if shutil.which("pkill"):
+            subprocess.run(["pkill", "-TERM", "-f", pytest_pattern], check=False)
+            time.sleep(0.2)
+            subprocess.run(["pkill", "-KILL", "-f", pytest_pattern], check=False)
+        out = (stdout or "") + ("\n" + stderr if stderr else "")
         return Result(file_path, 124, time.time() - t0, "TIMEOUT", out)
 
 
@@ -147,6 +190,11 @@ def main() -> int:
         action="store_true",
         help="Disable stale temp cleanup and per-run temp sandboxing",
     )
+    parser.add_argument(
+        "--no-unit-sandbox",
+        action="store_true",
+        help="Disable HOME/QUAID_HOME sandboxing for --mode unit",
+    )
     args = parser.parse_args()
 
     files = gather_files(args.mode)
@@ -155,19 +203,25 @@ def main() -> int:
         return 0
 
     run_tmpdir: Path | None = None
+    unit_sandbox_root: Path | None = None
     if not args.no_temp_cleanup:
         TMP_ROOT.mkdir(parents=True, exist_ok=True)
         cleanup_stale_tmp_dirs(TMP_ROOT, older_than_hours=24)
         run_tmpdir = Path(tempfile.mkdtemp(prefix="run-", dir=str(TMP_ROOT)))
+        if args.mode == "unit" and not args.no_unit_sandbox:
+            unit_sandbox_root = run_tmpdir / "unit-sandbox"
+            unit_sandbox_root.mkdir(parents=True, exist_ok=True)
 
     print(f"[pytest:{args.mode}] files={len(files)} workers={args.workers} timeout={args.timeout}s")
+    if unit_sandbox_root is not None:
+        print(f"[pytest:{args.mode}] unit sandbox: {unit_sandbox_root}")
 
     results: list[Result] = []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
             marker_expr = "adapter_openclaw" if args.mode == "adapter_openclaw" else None
             fut_map = {
-                ex.submit(run_one, f, args.timeout, marker_expr, run_tmpdir): f
+                ex.submit(run_one, f, args.timeout, marker_expr, run_tmpdir, unit_sandbox_root): f
                 for f in files
             }
             for fut in concurrent.futures.as_completed(fut_map):

@@ -122,8 +122,9 @@ quaid notify --deferred-drain                 # fetch buffered notices when a hu
 ```
 
 - Deferred notices are non-urgent system messages from janitor, update checks, and similar background work.
-- Do not drain deferred notices unless you are confident a human user is active and can see the response.
-- Active outage/failure notices use the normal live notification path and should be relayed when surfaced.
+- **When you detect pending deferred notices at the start of a session or task, drain them proactively** using `quaid notify --deferred-drain` and relay the results to the user. Do not wait for the user to ask.
+- If a notice arrived mid-task, drain at the next natural break and mention it briefly ("I have a Quaid notice — [summary]").
+- Active outage/failure notices use the normal live notification path and should be relayed immediately when surfaced.
 
 ---
 
