@@ -103,6 +103,7 @@ def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     adapter.get_sessions_dir.return_value = str(sessions_dir)
     adapter.get_pending_context.return_value = ""
     adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.instance_root.return_value = tmp_path
 
     monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
     monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
@@ -521,6 +522,7 @@ class TestHookSessionInitRegistryAugmentation:
         adapter.projects_dir.return_value = projects_dir
         adapter.identity_dir.return_value = identity_dir
         adapter.data_dir.return_value = tmp_path / "data"
+        adapter.instance_root.return_value = tmp_path
 
         from core.interface import hooks
         monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)

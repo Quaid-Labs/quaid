@@ -386,6 +386,7 @@ class TestNotifyAgent:
     def test_dedupes_repeated_notices(self, tmp_path):
         adapter = MagicMock()
         adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
         adapter.notify.return_value = True
 
         with patch("lib.agent_notice.get_adapter", return_value=adapter):

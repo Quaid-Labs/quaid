@@ -108,6 +108,7 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     adapter.get_cli_tools_snippet.return_value = ""
     adapter.get_pending_context.return_value = ""
     adapter.data_dir.return_value = tmp_path / "data"
+    adapter.instance_root.return_value = tmp_path
 
     monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
     monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
