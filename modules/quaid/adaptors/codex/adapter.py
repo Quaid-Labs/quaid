@@ -522,12 +522,78 @@ class CodexAdapter(QuaidAdapter):
     def installer_supported_providers(self) -> list:
         return ["openai"]
 
+    # Fast-lane candidates in priority order.  The installer probes each via
+    # codex app-server and uses the first that responds.  Earlier entries are
+    # faster but may require a higher account tier (e.g. Pro for spark).
+    _FAST_LANE_CANDIDATES = [
+        "gpt-5.3-codex-spark",  # ~2.1s  — Pro only
+        "gpt-5.4-mini",          # ~3.0s  — broadly available
+        "gpt-5.4",               # ~10s   — always available, fallback
+    ]
+
     def installer_default_models(self, provider: str) -> Optional[dict]:
         if str(provider or "").strip().lower() != "openai":
             return None
-        # gpt-5.4-mini returns HTTP 400 on the Codex OAuth path (/v1/responses).
-        # Only gpt-5.4 is confirmed valid on this path for installer validation.
+        # Probe candidates via codex app-server in priority order.
+        # Returns the first model that responds, so the installer auto-selects
+        # the fastest tier the account supports without user configuration.
+        for fast_candidate in self._FAST_LANE_CANDIDATES:
+            try:
+                p = CodexLLMProvider(
+                    deep_model="gpt-5.4",
+                    fast_model=fast_candidate,
+                    fast_reasoning_effort="medium",
+                    deep_reasoning_effort="high",
+                )
+                result = p.llm_call(
+                    [{"role": "user", "content": "PING"}],
+                    model_tier="fast",
+                    max_tokens=8,
+                    timeout=15,
+                )
+                if str(getattr(result, "text", "") or "").strip():
+                    return {"deep": "gpt-5.4", "fast": fast_candidate}
+            except Exception:
+                continue
         return {"deep": "gpt-5.4", "fast": "gpt-5.4"}
+
+    def installer_supports_live_model_validation(self) -> bool:
+        return True
+
+    def installer_validate_model_pair_live(
+        self,
+        provider: str,
+        deep_model: str,
+        fast_model: str,
+    ) -> dict:
+        if str(provider or "").strip().lower() != "openai":
+            return {"supported": False, "ok": True, "message": "", "results": []}
+        results = []
+        for tier, model in (("fast", fast_model), ("deep", deep_model)):
+            p = CodexLLMProvider(
+                deep_model=str(deep_model or "").strip(),
+                fast_model=str(fast_model or "").strip(),
+                fast_reasoning_effort="medium",
+                deep_reasoning_effort="high",
+            )
+            response = p.llm_call(
+                [{"role": "user", "content": "PING"}],
+                model_tier=tier,
+                max_tokens=8,
+                timeout=20,
+            )
+            text = str(getattr(response, "text", "") or "").strip()
+            if not text:
+                raise RuntimeError(
+                    f"Codex {tier} model '{model}' returned an empty response to PING"
+                )
+            results.append({"tier": tier, "model": model, "text": text[:120]})
+        return {
+            "supported": True,
+            "ok": True,
+            "message": "Codex model validation passed",
+            "results": results,
+        }
 
     def get_fast_provider_default(self) -> str:
         return "openai"

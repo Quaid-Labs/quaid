@@ -32,7 +32,12 @@ class OpenClawAdapter(QuaidAdapter):
         # Only gpt-5.4 is confirmed valid on this path for installer validation.
         # gpt-5.1-codex-mini returns HTTP 400 during live PING validation.
         # gpt-5.2, gpt-5.4-mini also return HTTP 400.
-        "openai-codex": {"deep": "gpt-5.4", "fast": "gpt-5.4"},
+        # openai-codex routes through the OC gateway (x-openclaw-model header).
+        # Models must also be present in agents.defaults.models in openclaw.json
+        # or the gateway will reject them with 400 before they reach the Codex API.
+        # installer_validate_model_pair_live() calls installer_ensure_gateway_model_allowlist()
+        # before pinging, so the allowlist is updated automatically during install.
+        "openai-codex": {"deep": "gpt-5.4", "fast": "gpt-5.3-codex-spark"},
         "openrouter": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "together": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "ollama": {"deep": "llama3.1:70b", "fast": "llama3.1:8b"},
@@ -433,6 +438,13 @@ class OpenClawAdapter(QuaidAdapter):
             providers.add(str(detected).strip().lower())
         return sorted(providers)
 
+    # Fast-lane candidates for openai-codex provider, probed in priority order.
+    _OPENAI_CODEX_FAST_CANDIDATES = [
+        "gpt-5.3-codex-spark",  # ~2.1s via gateway — Pro only
+        "gpt-5.4-mini",          # ~3.0s via gateway — broadly available
+        "gpt-5.4",               # ~10s  via gateway — always available
+    ]
+
     def installer_default_models(self, provider: str) -> Optional[dict]:
         raw = str(provider or "").strip().lower()
         # Check exact match first so provider-specific overrides (e.g. openai-codex)
@@ -441,7 +453,46 @@ class OpenClawAdapter(QuaidAdapter):
             self._INSTALLER_MODEL_DEFAULTS.get(self._normalize_installer_provider(raw))
         if not model_pair:
             return None
+        # For openai-codex, probe candidates via gateway to discover the fastest
+        # model the account supports.  Falls back to static defaults if the
+        # gateway is unavailable or all probes fail.
+        if raw == "openai-codex":
+            probed = self._probe_openai_codex_fast_model()
+            if probed:
+                return {"deep": str(model_pair["deep"]), "fast": probed}
         return {"deep": str(model_pair["deep"]), "fast": str(model_pair["fast"])}
+
+    def _probe_openai_codex_fast_model(self) -> Optional[str]:
+        """Probe openai-codex fast-lane candidates via gateway; return best available."""
+        try:
+            port, token = self._get_gateway_auth()
+        except Exception:
+            return None
+        candidates = self._OPENAI_CODEX_FAST_CANDIDATES
+        # Ensure all candidates are in the allowlist before pinging.
+        self.installer_ensure_gateway_model_allowlist(
+            [f"openai-codex/{m}" for m in candidates]
+        )
+        for candidate in candidates:
+            try:
+                llm = GatewayLLMProvider(
+                    port=port,
+                    token=token,
+                    deep_model="gpt-5.4",
+                    fast_model=candidate,
+                    default_provider="openai-codex",
+                )
+                response = llm.llm_call(
+                    [{"role": "user", "content": "PING"}],
+                    model_tier="fast",
+                    max_tokens=8,
+                    timeout=15,
+                )
+                if str(getattr(response, "text", "") or "").strip():
+                    return candidate
+            except Exception:
+                continue
+        return None
 
     def get_fast_provider_default(self) -> str:
         detected = self._detect_gateway_primary_provider()
@@ -562,6 +613,45 @@ class OpenClawAdapter(QuaidAdapter):
     def installer_supports_live_model_validation(self) -> bool:
         return True
 
+    def installer_ensure_gateway_model_allowlist(self, model_strings: list) -> None:
+        """Add model strings to the OC gateway's per-agent model allowlist.
+
+        The OC gateway rejects any model not present in agents.defaults.models
+        with HTTP 400 before the request reaches the upstream provider.  Call
+        this before pinging a new model so the gateway lets it through.
+        """
+        cfg_path = Path.home() / ".openclaw" / "openclaw.json"
+        if not cfg_path.exists():
+            return
+        try:
+            import os as _os
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            models_map = (
+                cfg
+                .setdefault("agents", {})
+                .setdefault("defaults", {})
+                .setdefault("models", {})
+            )
+            changed = False
+            for m in model_strings:
+                key = str(m or "").strip()
+                if key and key not in models_map:
+                    models_map[key] = {}
+                    changed = True
+            if not changed:
+                return
+            tmp = str(cfg_path) + f".tmp-allowlist-{_os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+                f.write("\n")
+            _os.replace(tmp, cfg_path)
+        except Exception as e:
+            print(
+                f"[adapter] installer_ensure_gateway_model_allowlist: {e}",
+                file=sys.stderr,
+            )
+
     def installer_validate_model_pair_live(
         self,
         provider: str,
@@ -574,6 +664,13 @@ class OpenClawAdapter(QuaidAdapter):
         raw_provider = str(
             provider or self._detect_gateway_primary_provider() or "anthropic"
         ).strip().lower() or "anthropic"
+        # Ensure both models are in the OC gateway allowlist before pinging.
+        # The gateway rejects models not in agents.defaults.models with HTTP 400
+        # before they reach the upstream provider.
+        if raw_provider == "openai-codex":
+            self.installer_ensure_gateway_model_allowlist(
+                [f"openai-codex/{deep_model}", f"openai-codex/{fast_model}"]
+            )
         port, token = self._get_gateway_auth()
         llm = GatewayLLMProvider(
             port=port,
