@@ -46,6 +46,28 @@ function _normalizeWorkspacePath(rawPath: string): string {
   return path.resolve(expanded);
 }
 
+function _resolveOpenClawConfigPathCandidates(): string[] {
+  const candidates: string[] = [];
+  const envPath = String(process.env.OPENCLAW_CONFIG_PATH || "").trim();
+  if (envPath) {
+    candidates.push(_normalizeWorkspacePath(envPath));
+  }
+  candidates.push(path.join(os.homedir(), ".openclaw", "openclaw.json"));
+  return Array.from(new Set(candidates));
+}
+
+function _resolveOpenClawConfigPath(): string {
+  const candidates = _resolveOpenClawConfigPathCandidates();
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+function _openClawRootDir(): string {
+  return path.dirname(_resolveOpenClawConfigPath());
+}
+
 function _resolveWorkspace(): string {
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
@@ -57,7 +79,7 @@ function _resolveWorkspace(): string {
   }
 
   try {
-    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+    const cfgPath = _resolveOpenClawConfigPath();
     if (fs.existsSync(cfgPath)) {
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
       const list = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
@@ -1261,7 +1283,11 @@ const MAX_INJECTION_IDS_PER_SESSION = 4000;
 const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35_000;
 
 function getOpenClawSessionsPath(): string {
-  return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+  const primary = path.join(_openClawRootDir(), "agents", "main", "sessions", "sessions.json");
+  const fallback = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+  if (fs.existsSync(primary)) return primary;
+  if (primary !== fallback && fs.existsSync(fallback)) return fallback;
+  return primary;
 }
 
 // ============================================================================
@@ -1416,7 +1442,7 @@ function _getAnthropicCredential(): string | undefined {
 
 function _readOpenClawConfig(): any {
   try {
-    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+    const cfgPath = _resolveOpenClawConfigPath();
     if (!fs.existsSync(cfgPath)) { return {}; }
     return JSON.parse(fs.readFileSync(cfgPath, "utf8"));
   } catch (err: unknown) {

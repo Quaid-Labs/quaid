@@ -55,6 +55,33 @@ class OpenClawAdapter(QuaidAdapter):
         "anthropic-claude-code": "anthropic",
     }
 
+    def _openclaw_config_path_candidates(self) -> list[Path]:
+        """OpenClaw config candidates, honoring OPENCLAW_CONFIG_PATH first."""
+        candidates: list[Path] = []
+        env_path = str(os.environ.get("OPENCLAW_CONFIG_PATH", "")).strip()
+        if env_path:
+            expanded = Path(env_path).expanduser()
+            try:
+                candidates.append(expanded.resolve())
+            except (OSError, RuntimeError):
+                candidates.append(expanded)
+        candidates.append((Path.home() / ".openclaw" / "openclaw.json").resolve())
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for path_candidate in candidates:
+            key = str(path_candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(path_candidate)
+        return deduped
+
+    def _openclaw_root_dir(self) -> Path:
+        cfg_path = self.get_gateway_config_path()
+        if cfg_path is not None:
+            return cfg_path.parent
+        return (Path.home() / ".openclaw").resolve()
+
     @classmethod
     def _normalize_installer_provider(cls, provider: str) -> str:
         normalized = str(provider or "").strip().lower()
@@ -232,8 +259,8 @@ class OpenClawAdapter(QuaidAdapter):
         quaid_home() or instance_root().
         """
         # Fallback: resolve workspace from gateway config when env vars are absent.
-        cfg_path = Path.home() / ".openclaw" / "openclaw.json"
-        if cfg_path.exists():
+        cfg_path = self.get_gateway_config_path()
+        if cfg_path is not None and cfg_path.exists():
             try:
                 with open(cfg_path) as f:
                     cfg = json.load(f)
@@ -253,7 +280,8 @@ class OpenClawAdapter(QuaidAdapter):
             except (json.JSONDecodeError, KeyError):
                 pass
         raise RuntimeError(
-            "Could not resolve OpenClaw workspace from ~/.openclaw/openclaw.json. "
+            "Could not resolve OpenClaw workspace from OpenClaw config "
+            "(OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json). "
             "Set QUAID_HOME or configure adapter.type=standalone in config/memory.json."
         )
 
@@ -374,7 +402,7 @@ class OpenClawAdapter(QuaidAdapter):
         return None
 
     def get_sessions_dir(self) -> Optional[Path]:
-        d = Path.home() / ".openclaw" / "sessions"
+        d = self._openclaw_root_dir() / "sessions"
         return d if d.is_dir() else None
 
     # OC gateway prepends "[Day Date HH:MM TZ]" to every user message.
@@ -416,8 +444,59 @@ class OpenClawAdapter(QuaidAdapter):
         return False
 
     def get_gateway_config_path(self) -> Optional[Path]:
-        p = Path.home() / ".openclaw" / "openclaw.json"
-        return p if p.exists() else None
+        for path_candidate in self._openclaw_config_path_candidates():
+            if path_candidate.exists():
+                return path_candidate
+        return None
+
+    def parse_session_jsonl(self, path: Path) -> str:
+        """Parse OC session JSONL with envelope compatibility."""
+        messages = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                record = obj
+                row_type = str(record.get("type", "")).strip().lower()
+                if row_type == "message" and isinstance(record.get("message"), dict):
+                    record = record["message"]
+                elif row_type in ("event_msg", "response_item"):
+                    payload = record.get("payload")
+                    if isinstance(payload, dict):
+                        payload_type = str(payload.get("type", "")).strip().lower()
+                        if payload_type in ("user_message", "agent_message"):
+                            role = "user" if payload_type == "user_message" else "assistant"
+                            text = str(payload.get("message", "")).strip()
+                            if text:
+                                messages.append({"role": role, "content": text})
+                            continue
+                        record = payload
+
+                role = str(record.get("role", "")).strip().lower()
+                if role not in ("user", "assistant"):
+                    continue
+
+                content = record.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        str(c.get("text", "")).strip()
+                        for c in content
+                        if isinstance(c, dict) and str(c.get("text", "")).strip()
+                    )
+                if not isinstance(content, str) or not content.strip():
+                    continue
+
+                messages.append({"role": role, "content": content.strip()})
+
+        return self.build_transcript(messages)
 
     def get_bootstrap_markdown_globs(self) -> list:
         gateway_config_path = self.get_gateway_config_path()
@@ -761,7 +840,7 @@ class OpenClawAdapter(QuaidAdapter):
 
     def _get_agent_config_dir(self) -> Path:
         """Path to the gateway's agent config directory."""
-        return Path.home() / ".openclaw" / "agents" / "main" / "agent"
+        return self._openclaw_root_dir() / "agents" / "main" / "agent"
 
     def _resolve_anthropic_credential(self) -> Optional[str]:
         """Resolve an Anthropic API key or OAuth token from the gateway's auth store.
@@ -912,5 +991,10 @@ class OpenClawAdapter(QuaidAdapter):
 
     def _find_sessions_json(self) -> Optional[Path]:
         """Find the agent sessions.json file."""
-        p = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
-        return p if p.exists() else None
+        primary = self._openclaw_root_dir() / "agents" / "main" / "sessions" / "sessions.json"
+        if primary.exists():
+            return primary
+        fallback = (Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json").resolve()
+        if fallback.exists():
+            return fallback
+        return None

@@ -378,6 +378,32 @@ class TestOpenClawAdapter:
     def test_filter_normal_message(self):
         adapter = OpenClawAdapter()
         assert adapter.filter_system_messages("hello world") is False
+
+    def test_parse_session_jsonl_handles_event_envelopes(self, tmp_path):
+        session_file = tmp_path / "oc-session.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "user_message", "message": "First user event"},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "agent_message", "message": "First assistant event"},
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "User: First user event" in transcript
+        assert "Assistant: First assistant event" in transcript
         assert adapter.filter_system_messages("What about HEARTBEAT mechanisms?") is False
 
     def test_get_api_key_from_env(self, monkeypatch):
@@ -1280,6 +1306,19 @@ class TestSessionsEdgeCases:
         assert result is not None
         assert ".openclaw" in str(result)
 
+    def test_find_sessions_json_honors_openclaw_config_path(self, monkeypatch, tmp_path):
+        """OPENCLAW_CONFIG_PATH reroots sessions lookup."""
+        cfg_dir = tmp_path / "alt-oc"
+        sessions_dir = cfg_dir / "agents" / "main" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / "sessions.json").write_text("{}")
+        cfg_path = cfg_dir / "openclaw.json"
+        cfg_path.write_text("{}")
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(cfg_path))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "other-home")
+        adapter = OpenClawAdapter()
+        assert adapter._find_sessions_json() == sessions_dir / "sessions.json"
+
     def test_find_sessions_json_both_missing(self, monkeypatch, tmp_path):
         """Both candidate paths missing returns None."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1301,6 +1340,15 @@ class TestGatewayConfigPath:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         adapter = OpenClawAdapter()
         assert adapter.get_gateway_config_path() == config_path
+
+    def test_honors_openclaw_config_path_env(self, monkeypatch, tmp_path):
+        cfg_path = tmp_path / "oc-alt" / "openclaw.json"
+        cfg_path.parent.mkdir(parents=True)
+        cfg_path.write_text("{}")
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(cfg_path))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "other-home")
+        adapter = OpenClawAdapter()
+        assert adapter.get_gateway_config_path() == cfg_path
 
 
 class TestProviderFactoryMethods:
