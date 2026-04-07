@@ -26,6 +26,7 @@ def mock_adapter(tmp_path):
     """Set up a mock adapter with tmp_path as quaid_home."""
     adapter = MagicMock()
     adapter.quaid_home.return_value = tmp_path
+    adapter.instance_root.return_value = tmp_path / "test-instance"
     adapter.adapter_id.return_value = "test-adapter"
 
     with patch("lib.adapter.get_adapter", return_value=adapter):

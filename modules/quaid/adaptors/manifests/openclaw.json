@@ -5,6 +5,9 @@
   "install": {
     "selectLabel": "OpenClaw",
     "selectHint": "gateway-integrated runtime",
+    "compatibilityWarnings": [
+      "Platform has been tested primarily on Telegram. TUI interface is known to be unstable."
+    ],
     "sortOrder": 20
   },
   "runtime": {

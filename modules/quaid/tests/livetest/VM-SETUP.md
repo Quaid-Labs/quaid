@@ -80,8 +80,16 @@ ssh admin@$VM_IP 'echo ok'
 
 **3. Install platform CLIs**
 ```bash
+# Python 3.10+ (macOS ships with 3.9 which is too old for the Quaid installer)
+# brew installs its own python3 (latest); reinstall sqlite-vec after any brew python upgrade
+brew install python3
+
+# sqlite-vec (required by Quaid for vector retrieval)
+# --break-system-packages needed for brew-managed Python (PEP 668)
+python3 -m pip install --user sqlite-vec --break-system-packages
+
 # OpenClaw
-# Follow your OpenClaw install procedure for the account on this machine
+npm install -g openclaw@latest  # or follow openclaw install procedure
 
 # Codex
 npm install -g @openai/codex@latest
@@ -142,6 +150,7 @@ ssh admin@<vm-ip>
 openclaw update
 npm install -g @openai/codex@latest
 npm install -g @anthropic-ai/claude-code@latest
+python3 -m pip install --user --upgrade sqlite-vec --break-system-packages
 exit
 ```
 Then press ENTER in the upgrade script.

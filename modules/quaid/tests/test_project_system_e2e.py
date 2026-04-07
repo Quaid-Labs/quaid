@@ -40,6 +40,7 @@ def project_env(tmp_path):
 
     adapter = MagicMock()
     adapter.quaid_home.return_value = quaid_home
+    adapter.instance_root.return_value = quaid_home / "test-instance"
     adapter.adapter_id.return_value = "test-adapter"
     adapter.projects_dir.return_value = quaid_home / "shared" / "projects"
 

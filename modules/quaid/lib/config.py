@@ -16,7 +16,16 @@ from pathlib import Path
 def _workspace_root() -> Path:
     """Get workspace root from adapter (lazy to avoid circular import at module load)."""
     from lib.adapter import get_adapter
-    return get_adapter().instance_root()
+    root = get_adapter().instance_root()
+    if isinstance(root, Path):
+        return root
+    if isinstance(root, os.PathLike):
+        return Path(root)
+    if isinstance(root, str):
+        return Path(root)
+    raise TypeError(
+        f"Adapter instance_root() must return a path-like value, got {type(root).__name__}"
+    )
 
 
 def _get_cfg():

@@ -6,41 +6,67 @@ Platform-specific notes for the OC tester. Read this alongside `TESTER.SKILL.md`
 
 ## Launch
 
-After M0 install, start the OC interaction pane:
+After M0 install, keep the OC gateway running on the test VM and start the Telegram poller locally for inbound OC replies:
 
 ```bash
-tmux respawn-pane -k -t livetest:OC 'zsh -il'
-tmux send-keys -t livetest:OC "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:OC "openclaw tui" Enter
+ssh REMOTE_HOST 'curl -sf http://localhost:18789/health && echo "ok" || echo "down"'
+nohup ~/quaidcode/util/scripts/tg-poll --config ~/quaidcode/util/scripts/.tg-livetest-config --filter-from Bertrand_clawdbot_bot > /tmp/tg-poll-oc.log 2>&1 &
+echo $! > /tmp/tg-poll-oc.pid
 ```
 
-Respawn the pane again if it becomes contaminated mid-run.
+OC runs headlessly for livetest. No TUI pane is required.
+
+---
+
+## Telegram Setup
+
+Config: `~/quaidcode/util/scripts/.tg-livetest-config`
+
+- Livetester bot: `@Quaid_livetester_34726jfhs_bot`
+- OC bot: `@Bertrand_clawdbot_bot`
+- Group chat_id: `-5221680718`
+
+Start daemon:
+```bash
+nohup ~/quaidcode/util/scripts/tg-poll --config ~/quaidcode/util/scripts/.tg-livetest-config --filter-from Bertrand_clawdbot_bot > /tmp/tg-poll-oc.log 2>&1 &
+echo $! > /tmp/tg-poll-oc.pid
+```
+
+Stop daemon:
+```bash
+kill $(cat /tmp/tg-poll-oc.pid)
+```
+
+Send:
+```bash
+~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "message"
+```
+
+Receive:
+- replies arrive automatically in poller output as tagged lines:
+  `[telegram:Livetest] Bertrand_clawdbot_bot: <text>`
+- no explicit `tg recv` call is needed.
 
 ---
 
 ## Sending Messages
 
-**Via wrapper script** (preferred — cleans stale sessions before each call):
+Send all OC messages via Telegram:
 ```bash
-ssh REMOTE_HOST '/tmp/oc-send.sh "your message"'
-ssh REMOTE_HOST '/tmp/oc-send.sh "/reset"'
+~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "your message"
+~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/reset"
+~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/new"
+~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/compact"
 ```
+
+Lifecycle commands (`/reset`, `/new`, `/compact`) are sent as plain Telegram messages.
 
 **Avoid apostrophes** in OC messages — use "do not" instead of "don't".
 
-**If the wrapper is missing:**
-```bash
-ssh REMOTE_HOST 'pkill -f openclaw-agent 2>/dev/null; sleep 1; \
-  openclaw agent --agent main -m "message" > /tmp/oc-reply.txt 2>/tmp/oc-err.txt; \
-  cat /tmp/oc-reply.txt'
-```
+Replies arrive automatically in `tg-poll` stdout tagged as:
+`[telegram:Livetest] Bertrand_clawdbot_bot: <text>`
 
-For lifecycle commands (`/reset`, `/new`, `/compact`) during live milestones,
-send directly to the tmux pane instead:
-```bash
-tmux send-keys -t livetest:OC "/reset" Enter
-tmux capture-pane -t livetest:OC -p | tail -30
-```
+No tmux capture is needed for replies.
 
 ---
 
@@ -48,7 +74,7 @@ tmux capture-pane -t livetest:OC -p | tail -30
 
 | Trigger | How | Notes |
 |---------|-----|-------|
-| New session | `/new` | See version quirks below |
+| New session | `/new` | Lifecycle note below |
 | Session reset | `/reset` | Extracts pre-reset session |
 | Compaction | `/compact` | Extracts + compacts |
 | Timeout | inactivity > `capture.inactivityTimeoutMinutes` | Daemon-compaction signal (source: timeout_extract) |
@@ -58,27 +84,9 @@ After any extraction trigger, wait **30–60 seconds** before checking the DB.
 
 ---
 
-## `/new` Version Quirk
+## Lifecycle Command Note
 
-OC behaviour changed at version 2026.3.13:
-
-**OC < 2026.3.13 (TUI intercepts `/new`):**
-- TUI handles `/new` as a built-in command — does NOT pass it to the model
-- Sessions.json is NOT updated immediately after `/new` — send one follow-up
-  message (e.g. `Hello`) to write the new key and trigger `new_key_detected`
-- Hook trace marker: `session_index.new_key_detected` → `session_index.signal_queued`
-
-**OC ≥ 2026.3.13 (TUI passes `/new` to model):**
-- Model replies saying it does not know the `/new` command — this is expected
-- Adapter detects `/new` in the message event via `handleSlashLifecycleFromMessage`
-  and writes a ResetSignal for the pre-/new session
-- Extraction still fires — no follow-up message needed
-- Hook trace marker: `hook.message.command_detected` (command=new)
-
-Check the installed OC version to know which path applies:
-```bash
-ssh REMOTE_HOST 'openclaw --version 2>/dev/null || clawdbot --version 2>/dev/null'
-```
+Lifecycle commands are sent as Telegram messages; OC handles them via `handleSlashLifecycleFromMessage`.
 
 ---
 
@@ -159,8 +167,8 @@ to coordinator with the exact model name that was rejected — do not retry the
 install. The coordinator must resolve the gateway model configuration first.
 
 ### M1 — Extraction via `/new`
-Apply the version quirk above. Check hook trace for the correct marker for the
-installed OC version. FTS direct check is the primary verification — use
+Send `/new` as a Telegram message (see Lifecycle Command Note above). Check hook
+trace for the lifecycle marker. FTS direct check is the primary verification — use
 `sqlite3 ... nodes_fts` rather than `quaid recall` for exact keyword lookup.
 
 ### M4 — Timeout Extraction and Compaction
