@@ -4670,8 +4670,8 @@ function setupClaudeCodeHooks() {
   const existingPath = settings.env.PATH || "";
   if (!existingPath.includes(pluginBinDir)) {
     settings.env.PATH = existingPath
-      ? `${pluginBinDir}:${existingPath}`
-      : `${pluginBinDir}:/usr/local/bin:/usr/bin:/bin`;
+      ? `${pluginBinDir}:/opt/homebrew/bin:${existingPath}`
+      : `${pluginBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
     changed = true;
   }
   // Always remove QUAID_INSTANCE — it must not be baked into settings.env.
