@@ -474,6 +474,16 @@ function _adapterOptionsForSelect() {
   ];
 }
 
+function _adapterCompatibilityWarnings(adapterId) {
+  const manifest = _adapterManifestById(adapterId);
+  if (!manifest || !manifest.install || !Array.isArray(manifest.install.compatibilityWarnings)) {
+    return [];
+  }
+  return manifest.install.compatibilityWarnings
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+}
+
 function _readAdapterInstallerCapabilities(adapterId) {
   const normalized = String(adapterId || "").trim().toLowerCase();
   if (!normalized) return null;
@@ -2154,6 +2164,14 @@ async function step1_preflight() {
     // Promote to selected adapter for the rest of the install.
     _platformOverride = platform;
     syncInstallerInstanceEnv();
+  }
+
+  const platformCompatibilityWarnings = _adapterCompatibilityWarnings(resolvedInstallerPlatform());
+  if (platformCompatibilityWarnings.length > 0) {
+    log.warn("Platform compatibility notices:");
+    for (const msg of platformCompatibilityWarnings) {
+      log.warn(`  - ${msg}`);
+    }
   }
 
   const installState = detectExistingInstallState();
@@ -5410,6 +5428,7 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
       supportsTimeoutCompaction: _platformSupportsTimeoutCompaction(platform),
       usesHostManagedLlm: _platformUsesHostManagedLlmByDefault(platform),
     },
+    compatibilityWarnings: _adapterCompatibilityWarnings(platform),
     janitor: {
       askFirst: models?.janitorAskFirst ?? null,
       scheduleHour: schedule?.hour ?? null,
@@ -5464,6 +5483,7 @@ function formatPreInstallSurvey(plan) {
   if (plan?.platform === "openclaw" && plan?.notifications?.channel) {
     lines.push(`- Notification routing channel: ${plan.notifications.channel}`);
   }
+  lines.push(`- Platform compatibility notices: ${(Array.isArray(plan?.compatibilityWarnings) && plan.compatibilityWarnings.length > 0) ? plan.compatibilityWarnings.join(" | ") : "none"}`);
   lines.push(`- Janitor apply mode/policies: ${janitorPolicies}`);
   lines.push(`- Janitor schedule choice: ${scheduleValue}`);
   lines.push("");

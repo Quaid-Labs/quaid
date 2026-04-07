@@ -5,6 +5,9 @@
   "install": {
     "selectLabel": "Claude Code",
     "selectHint": "hooks + OAuth for Claude Code CLI",
+    "compatibilityWarnings": [
+      "Claude Code does not support timeout-based auto-compaction."
+    ],
     "sortOrder": 30
   },
   "runtime": {
