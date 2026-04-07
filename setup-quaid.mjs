@@ -4377,6 +4377,17 @@ except Exception as e:
     }
   }
 
+  // Clear any deferred notices generated during install (smoke test, janitor
+  // catch-up, etc.) so they don't contaminate the first real user session.
+  const notesDir = path.join(DATA_DIR, "..", ".runtime", "notes");
+  const deferredPath = path.join(notesDir, "delayed-llm-requests.json");
+  try {
+    if (fs.existsSync(deferredPath)) {
+      fs.unlinkSync(deferredPath);
+      log.info("Cleared install-time deferred notices");
+    }
+  } catch {}
+
   const nextSteps = [
     `${C.bcyan("→")} Read the quick guide: ${C.bcyan("projects/quaid/USER-GUIDE.md")}`,
     `${C.bcyan("→")} Facts are extracted automatically on context compaction and new sessions`,
@@ -4645,13 +4656,22 @@ function setupClaudeCodeHooks() {
     }
   }
 
-  // Write QUAID_HOME to the env block so all CC processes (hooks, Bash tool
-  // calls) know the workspace root. QUAID_INSTANCE is NOT written here —
-  // it is derived per-project at runtime via adapter.get_instance_name()
-  // reading CLAUDE_PROJECT_DIR, enabling per-project silo isolation.
+  // Write QUAID_HOME and PATH to the env block so all CC processes (hooks,
+  // Bash tool calls, and agent ad-hoc CLI invocations) can find quaid.
+  // QUAID_INSTANCE is NOT written here — it is derived per-project at
+  // runtime via adapter.get_instance_name() reading CLAUDE_PROJECT_DIR.
   if (!settings.env) settings.env = {};
   if (settings.env.QUAID_HOME !== WORKSPACE) {
     settings.env.QUAID_HOME = WORKSPACE;
+    changed = true;
+  }
+  // Add PLUGIN_DIR to PATH so `quaid` is callable without full path.
+  const pluginBinDir = path.dirname(quaidBin);
+  const existingPath = settings.env.PATH || "";
+  if (!existingPath.includes(pluginBinDir)) {
+    settings.env.PATH = existingPath
+      ? `${pluginBinDir}:${existingPath}`
+      : `${pluginBinDir}:/usr/local/bin:/usr/bin:/bin`;
     changed = true;
   }
   // Always remove QUAID_INSTANCE — it must not be baked into settings.env.
