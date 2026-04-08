@@ -2345,8 +2345,10 @@ async function step1_preflight() {
     _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
+      s.message("Restarting OpenClaw gateway...");
       const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
+        s.message("Waiting for gateway to come online...");
         await waitForGatewayWarmup(30_000);
       }
     }
@@ -2593,10 +2595,7 @@ async function step3_models() {
 
   // Run deferred platform preflight now that user has chosen
   if (!AGENT_MODE) {
-    const s = spinner();
-    s.start(`Checking ${adapterType} environment...`);
-    await step1_preflight(); // Re-run with platform now set
-    s.stop(C.green(`${adapterType} ready`));
+    await step1_preflight(); // Re-run with platform now set — has its own spinners
   }
 
   // Show platform-specific compatibility warnings after selection
