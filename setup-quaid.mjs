@@ -4,7 +4,7 @@
 // =============================================================================
 // Interactive installer using @clack/prompts (resolved from OpenClaw).
 // Supports two modes:
-//   - Standalone (default): Uses QUAID_HOME env or ~/quaid/ as home directory
+//   - Standalone (default): Uses fixed Quaid home (~/.quaid)
 //   - OpenClaw: detected via CLAWDBOT_WORKSPACE env or clawdbot/openclaw on PATH
 //
 // Author: Steadman Labs (https://github.com/quaid-labs)
@@ -16,7 +16,6 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 import {
   adapterSelectOptions,
   loadAdapterManifests,
@@ -213,7 +212,7 @@ function printUsageAndExit() {
   console.log(`Usage: node setup-quaid.mjs [options]
 
 Options:
-  --workspace <path>  Override workspace/home path (highest priority)
+  --workspace <path>  Deprecated. Installer home is fixed to ~/.quaid
   --owner-name <name> Person name used to tag memories (recommended for --agent)
   --adapter <id>      Force adapter/platform id (e.g. standalone, claude-code, openclaw, codex)
   --source <kind>     Plugin source: local (default), github, artifact
@@ -264,6 +263,33 @@ if (SURVEY_ONLY && !INSTALL_ARGS.dryRun) {
   process.exit(2);
 }
 
+const FIXED_QUAID_HOME = path.resolve(path.join(os.homedir(), ".quaid"));
+
+function _normalizeInstallPath(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return path.resolve(path.join(os.homedir(), value.slice(2)));
+  return path.resolve(value);
+}
+
+function _enforceFixedInstallHome() {
+  const requested = _normalizeInstallPath(
+    INSTALL_ARGS.workspace ||
+    process.env.QUAID_WORKSPACE ||
+    process.env.QUAID_HOME
+  );
+  if (requested && requested !== FIXED_QUAID_HOME) {
+    console.error("[x] Quaid installs now always use a fixed home path.");
+    console.error(`    Requested: ${requested}`);
+    console.error(`    Required:  ${FIXED_QUAID_HOME}`);
+    console.error("    Remove the custom workspace override and re-run install.");
+    process.exit(2);
+  }
+}
+
+_enforceFixedInstallHome();
+
 // --- Constants ---
 const VERSION = "0.2.15-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/releases/tag/v2026.3.7";
@@ -289,9 +315,9 @@ const TOTAL_INSTALL_STEPS = 7;
 //   - do not inspect adapter source, memory config files, or unrelated repo docs
 //   - do not run exploratory commands like find/pwd/broad grep before the survey
 // Thin prompt contract:
-//   - if the human only says "follow AI-INSTALL.md" with workspace/instance/owner,
+//   - if the human only says "follow AI-INSTALL.md" with adapter/owner,
 //     do not rediscover those values
-//   - if workspace, adapter/platform, and owner are already given,
+//   - if adapter/platform and owner are already given,
 //     execute the survey command immediately after the initial read; do not
 //     keep planning, run pwd/ls, or re-read the guide
 //   - run `node setup-quaid.mjs --agent --dry-run --survey ...` first and use
@@ -305,9 +331,9 @@ const AGENT_SURVEY_CONTRACT = {
   sourceOfTruth: "setup-quaid.mjs",
   rule: "Only the fields listed here belong in the pre-install survey.",
   firstCommand:
-    "node setup-quaid.mjs --agent --dry-run --survey --workspace <workspace> --adapter <target-platform> --owner-name <owner-name>",
+    "node setup-quaid.mjs --agent --dry-run --survey --adapter <target-platform> --owner-name <owner-name>",
   preSurveyRule:
-    "Before the survey, read only AI-INSTALL.md and setup-quaid.mjs plus minimal environment checks needed to fill defaults. If workspace, adapter/platform, and owner are already provided, execute the survey command immediately after that initial read. Do not browse adapter files, memory config files, unrelated repo docs, or run exploratory shell commands like pwd/ls/find.",
+    "Before the survey, read only AI-INSTALL.md and setup-quaid.mjs plus minimal environment checks needed to fill defaults. If adapter/platform and owner are already provided, execute the survey command immediately after that initial read. Do not browse adapter files, memory config files, unrelated repo docs, or run exploratory shell commands like pwd/ls/find.",
   outputRule:
     "Render the survey fields in contract order, show the selected value for each, and end with: Do you want to change any of these before I run install?",
   firstResponseRule:
@@ -323,12 +349,6 @@ const AGENT_SURVEY_CONTRACT = {
       notes: [
         "Use the human's real name, not the system username.",
       ],
-    },
-    {
-      id: "workspace_path",
-      label: "Workspace path",
-      source: "WORKSPACE resolution + installer args",
-      required: true,
     },
     {
       id: "adapter_type",
@@ -407,6 +427,7 @@ const AGENT_SURVEY_CONTRACT = {
     "Do not add survey sections for internal installer steps with no user choice.",
     "Do not use test-only controls like QUAID_TEST_ANSWERS in normal AI install guidance unless explicitly running a test harness.",
     "Workspace file import is not a standalone survey field unless the installer actually prompts for it.",
+    "Installer home is fixed to ~/.quaid and is not a user-selectable field.",
   ],
 };
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
@@ -433,13 +454,7 @@ function detectWorkspaceFromCli() {
 }
 const IS_CLAUDE_CODE = INSTALL_ARGS.claudeCode || process.env.QUAID_INSTALL_CLAUDE_CODE === "1";
 const IS_OPENCLAW = !IS_CLAUDE_CODE && !!(process.env.CLAWDBOT_WORKSPACE || which("clawdbot") || which("openclaw"));
-const WORKSPACE =
-  INSTALL_ARGS.workspace ||
-  process.env.QUAID_WORKSPACE ||
-  process.env.QUAID_HOME ||
-  process.env.CLAWDBOT_WORKSPACE ||
-  detectWorkspaceFromCli() ||
-  path.join(os.homedir(), "quaid");
+const WORKSPACE = FIXED_QUAID_HOME;
 const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1" || !process.stdin.isTTY;
 const DRY_RUN = !!(INSTALL_ARGS.dryRun || process.env.QUAID_INSTALL_DRY_RUN === "1");
 const MODULES_PLUGIN_DIR = path.join(WORKSPACE, "modules", "quaid");
@@ -2278,14 +2293,26 @@ function getLoadedOllamaModels() {
 
 function showBanner() {
   if (SURVEY_ONLY) return;
-  // Persistent header — shown at the top of every step
-  const lines = renderQuaidBanner(C, {
-    subtitle: "by Solomon Steadman",
-    title: " LONG-TERM MEMORY SYSTEM ",
-    topRightTail: "                                      ",
-    leftShift: 4,
-    footerRight: `v${VERSION}`,
-  });
+  const subtitle = "by Solomon Steadman";
+  const footerRight = `v${VERSION}`;
+  const subtitlePad = 37;
+  const subtitleRightEdge = subtitlePad + subtitle.length;
+  const footerPad = Math.max(0, subtitleRightEdge - footerRight.length);
+  const lines = [
+    "",
+    C.dim("    ·          ✦                          ·                                      "),
+    C.dim("✧        ·  ") + C.bmag("  ██████    ██    ██   ██████   ██  ██████") + C.dim("   ·        ✧"),
+    C.dim("      ✦    ") + C.bmag(" ██    ██   ██    ██  ██    ██  ██  ██   ██") + C.dim("      ✦"),
+    C.dim(" ·         ") + C.bmag(" ██    ██   ██    ██  ████████  ██  ██   ██") + C.dim("        ·"),
+    C.dim("    ·      ") + C.bmag(" ██ ▄▄ ██   ██    ██  ██    ██  ██  ██   ██") + C.dim("      ·"),
+    C.dim("✦           ") + C.bmag("  ██████    ▀██████▀  ██    ██  ██  ██████ ") + C.dim("      ✦"),
+    C.dim("      ✧    ") + C.bmag("     ▀▀") + C.dim("                                       ·        ✧"),
+    " ".repeat(subtitlePad) + C.dim(subtitle),
+    " ".repeat(footerPad) + C.dim(footerRight),
+    "",
+    " ".repeat(12) + C.dim("· ") + C.cyan("░▒▓") + C.bold(" LONG-TERM MEMORY SYSTEM ") + C.cyan("▓▒░") + C.dim(" ·"),
+    "",
+  ];
   console.log(lines.join("\n"));
 }
 
@@ -2315,7 +2342,7 @@ async function step1_preflight() {
   intro(C.dim("Checking your system..."));
 
   _refreshAdapterManifests();
-  log.info(C.dim(`Workspace: ${WORKSPACE}`));
+  log.info(C.dim(`Quaid home: ${WORKSPACE}`));
 
   // Snapshot existing files BEFORE any clawdbot commands — those commands load
   // the quaid plugin which creates data/memory.db, giving a false "dirty" signal.
@@ -2535,7 +2562,7 @@ async function step1_preflight() {
     s.message("Checking OpenClaw agent configuration...");
     let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
     if (!hasAgent) {
-      hasAgent = _ensureAgentsList(cfgCli, WORKSPACE);
+      hasAgent = _ensureAgentsList(cfgCli, detectWorkspaceFromCli());
     }
     _sanitizeOpenClawMemorySlot();
     _sanitizeOpenClawQuaidPluginEntry();
@@ -5303,7 +5330,7 @@ function notifyInstallCompletion(owner, models, embeddings, systems) {
   const summary = [
     "✅ Quaid install complete.",
     `Owner: ${owner.display}`,
-    `Workspace: ${WORKSPACE}`,
+    `Quaid home: ${WORKSPACE}`,
     `Models: deep=${models.highModel}, fast=${models.lowModel}`,
     `Embeddings: ${embeddings.embedModel}`,
     "No memory mutants detected.",
@@ -5432,7 +5459,6 @@ function formatPreInstallSurvey(plan) {
     : "not scheduled";
 
   lines.push(`- Owner name: ${plan?.owner || "unknown"}`);
-  lines.push(`- Workspace path: ${plan?.workspace || "unknown"}`);
   lines.push(`- Adapter type: ${plan?.platform || "unknown"}`);
   lines.push(`- LLM provider + deep/fast models: ${modelBits.join(", ") || "unknown"}`);
   lines.push(`- Embeddings provider/model: ${embedBits.join(", ") || "unknown"}`);
@@ -5486,7 +5512,7 @@ async function main() {
     syncInstallerInstanceEnv();
     if (AGENT_MODE) {
       log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
-      log.info(`Workspace override: ${WORKSPACE}`);
+      log.info(`Quaid home: ${WORKSPACE}`);
     }
     notifyInstallCheckpoint(0, TOTAL_INSTALL_STEPS, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
     const pluginSrc = await step1_preflight();

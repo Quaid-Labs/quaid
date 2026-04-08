@@ -109,7 +109,7 @@ codex auth login      # or follow Codex OAuth flow
 
 **5. Create quaid workspace directory**
 ```bash
-mkdir -p ~/quaid
+mkdir -p ~/.quaid
 ```
 
 **6. Verify**
@@ -216,7 +216,7 @@ The recommended base for live tests is `quaid-livetest-base` (create from one of
 - Check firewall: `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate`
 
 **"No such file" errors during preflight code sync:**
-- The workspace path in the VM (`~/quaid`) must exist: `ssh admin@<ip> 'mkdir -p ~/quaid'`
+- The Quaid home in the VM (`~/.quaid`) must exist: `ssh admin@<ip> 'mkdir -p ~/.quaid'`
 - Re-run preflight; it will rsync the code on next attempt
 
 **VM IP changes between boots:**

@@ -9,14 +9,13 @@ For thin-prompt installs, do this before anything else:
 ```bash
 cd "<repo-root-containing-this-guide>" && \
 node setup-quaid.mjs --agent --dry-run --survey \
-  --workspace "<workspace>" \
   --adapter <target-platform> \
   --owner-name "<owner-name>"
 ```
 
 Use the survey output from that command as your first conversational reply.
 Do not browse files, plan aloud, or inspect adapter code before running it.
-When the prompt already includes workspace, adapter/platform, and owner name,
+When the prompt already includes adapter/platform and owner name,
 your next action is to execute this command immediately. Do not keep reading the
 guide, run `pwd`, run `ls`, or keep planning first.
 
@@ -33,11 +32,11 @@ Concrete rule for local guides:
 
 Do not collapse that to `cd ~/quaid`.
 
-Workspace rule:
-- use the workspace path exactly as provided by the human / test prompt
-- do not rewrite, canonicalize, or substitute it with sandbox-style defaults
-- if the prompt gives an absolute workspace path, pass that exact absolute path
-- do not silently change it to a sandbox/home-default path or any other substitute
+Install home rule:
+- Quaid installs into the fixed home path `~/.quaid`
+- do not ask the human to choose a workspace path
+- do not pass a custom `--workspace` during normal installs
+- do not treat install home as a survey field or editable parameter
 
 ## Human Instructions for Agent (Copy/Paste)
 
@@ -45,7 +44,7 @@ Use this exact minimal prompt shape when asking an AI agent to install Quaid:
 
 1. Read `docs/AI-INSTALL.md` first and follow it exactly.
 2. Include and obey the mandatory first command from that guide before doing anything else.
-3. Install Quaid for me using this workspace, platform/adapter, and owner name.
+3. Install Quaid for me using this platform/adapter and owner name.
 4. Tell me when install is complete and `quaid doctor` is healthy.
 
 Do not duplicate the survey contract, defaults, or approval flow in the human's
@@ -61,7 +60,7 @@ Execution order is mandatory:
 3. Wait for human approval or edits.
 4. Only then run install.
 
-If workspace, adapter/platform, and owner name are already supplied in the prompt,
+If adapter/platform and owner name are already supplied in the prompt,
 do not loop on Step 1. Read enough to run the mandatory first command, then run it.
 
 Do not keep browsing, planning, or exploring code after you already have enough
@@ -98,7 +97,6 @@ When the human uses the thin prompt shape, treat it as this exact procedure:
 ```bash
 cd "<repo-root-containing-this-guide>" && \
 node setup-quaid.mjs --agent --dry-run --survey \
-  --workspace "<workspace>" \
   --adapter <target-platform> \
   --owner-name "<owner-name>"
 ```
@@ -107,8 +105,7 @@ node setup-quaid.mjs --agent --dry-run --survey \
 5. Wait for approval.
 6. Only then run install without `--dry-run --survey`.
 
-If the prompt already gives you all three install parameters:
-- workspace
+If the prompt already gives you both install parameters:
 - adapter/platform
 - owner name
 
@@ -134,13 +131,12 @@ Allowed pre-survey probes are limited to what is needed to fill the survey accur
 - `vm_stat`
 - `sysctl -n hw.memsize`
 
-If the prompt already gives you the workspace, adapter/platform, and owner, do not spend time rediscovering them.
+If the prompt already gives you the adapter/platform and owner, do not spend time rediscovering them.
 If the target platform is already known from the current agent/session, pass it explicitly with `--adapter`.
 If the guide path is local, use that checkout directly and do not inspect CLI
 arguments to prove that local source is allowed.
 For the live-test prompt path, `~/quaid/dev/docs/AI-INSTALL.md` means the command
-must run from `~/quaid/dev`, and the workspace argument must stay exactly as provided
-in the prompt.
+must run from `~/quaid/dev`.
 
 ## First Response Template (Mandatory)
 
@@ -154,7 +150,6 @@ Use this exact shape:
 Pre-install survey
 
 - Owner name: <value>
-- Workspace path: <value>
 - Adapter type: <value>
 - LLM provider + deep/fast models: <value>
 - Embeddings provider/model: <value>
@@ -229,7 +224,6 @@ The installer handles its own source download — do not `git clone` manually fi
 
 ```bash
 node setup-quaid.mjs --agent \
-  --workspace "/absolute/path/to/workspace" \
   --owner-name "<Person Name>" \
   --source github
 ```
@@ -237,7 +231,7 @@ node setup-quaid.mjs --agent \
 `--source github` fetches the latest release. The installer manages the temporary clone
 internally and cleans it up on exit — no leftover temp directories.
 
-`--workspace` is the safest way to avoid wrong workspace detection in non-interactive sessions.
+The install home is fixed to `~/.quaid`; do not add a custom workspace override.
 `--owner-name` ensures memory ownership is tagged to the human (not a system account).
 
 > **Do not run `git clone` manually before the installer.** If you clone first and then run
@@ -251,7 +245,6 @@ For pre-release validation, install directly from a branch or commit SHA:
 
 ```bash
 node setup-quaid.mjs --agent \
-  --workspace "/absolute/path/to/workspace" \
   --owner-name "<Person Name>" \
   --source github \
   --ref canary
@@ -261,7 +254,6 @@ Pin to an exact commit for reproducible tests:
 
 ```bash
 node setup-quaid.mjs --agent \
-  --workspace "/absolute/path/to/workspace" \
   --owner-name "<Person Name>" \
   --source github \
   --ref <commit-sha>
@@ -271,7 +263,6 @@ Artifact fallback (local file path or URL to a `.tar.gz` canary package):
 
 ```bash
 node setup-quaid.mjs --agent \
-  --workspace "/absolute/path/to/workspace" \
   --owner-name "<Person Name>" \
   --source artifact \
   --artifact "/path/to/quaid-plugin-<sha>.tar.gz"
@@ -313,7 +304,7 @@ To change the default embedding model after install, edit the relevant shared co
 
 ## Environment Variables (optional)
 
-- `QUAID_HOME`: explicit workspace/home path override (highest priority). **Do NOT set this globally in your shell profile** (e.g., `~/.zshrc`) — the hooks/installer manage it per-invocation. Setting it globally causes all adapter instances to share the same silo, corrupting cross-adapter isolation.
+- `QUAID_HOME`: runtime home path env managed by the installer/hooks. For normal installs, Quaid home is fixed to `~/.quaid`; do not use this as a user-facing install choice.
 - `QUAID_INSTANCE`: explicit instance identifier override (for example `openclaw-main`, `claude-code-main`, `codex-main`)
 - `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint (auto-detected when OpenClaw is installed)
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults
@@ -353,7 +344,6 @@ To change the default embedding model after install, edit the relevant shared co
 
 ```bash
 QUAID_INSTALL_AGENT=1 node setup-quaid.mjs --agent \
-  --workspace "/absolute/path/to/workspace" \
   --owner-name "<Person Name>"
 ```
 
@@ -510,4 +500,4 @@ quaid doctor
 
 Expected output from hooks check: `['SessionStart', 'UserPromptSubmit', 'PreCompact', 'SessionEnd', 'SubagentStart', 'SubagentStop']` (or similar — any subset present means hooks are wired).
 
-If OpenClaw is unavailable, run standalone mode and set workspace via `--workspace`.
+If OpenClaw is unavailable, run standalone mode. The install home remains `~/.quaid`.

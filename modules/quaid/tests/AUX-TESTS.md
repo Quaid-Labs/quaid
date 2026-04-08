@@ -191,13 +191,14 @@ needing to go through the full XP cross-registration ceremony.
 
 1. **On CC**: Create and index a doc in a shared project:
    ```bash
-   echo "# Shared Doc\nCross-platform test content." > ~/quaid/projects/shared-test/shared.md
-   quaid registry register ~/quaid/projects/shared-test/shared.md --project shared-test
+   mkdir -p /tmp/shared-test
+   echo "# Shared Doc\nCross-platform test content." > /tmp/shared-test/shared.md
+   quaid registry register /tmp/shared-test/shared.md --project shared-test
    quaid docs update --apply
    ```
 2. **On OC**: Register the same file without re-indexing:
    ```bash
-   quaid registry register ~/quaid/projects/shared-test/shared.md --project shared-test
+   quaid registry register /tmp/shared-test/shared.md --project shared-test
    ```
 3. **On OC**: Run docs update:
    ```bash

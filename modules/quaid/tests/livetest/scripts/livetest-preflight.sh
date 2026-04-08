@@ -251,7 +251,7 @@ else
     rsync -a --checksum \
         --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
         --exclude='.git/' --exclude='logs/' --exclude='.tmp/' \
-        "$LOCAL_DEV/modules/quaid/" "$REMOTE_HOST:~/quaid/plugins/quaid/" 2>&1 | tail -3
+        "$LOCAL_DEV/modules/quaid/" "$REMOTE_HOST:~/.quaid/plugins/quaid/" 2>&1 | tail -3
     echo "  $PASS  remote code synced (local HEAD: $LOCAL_HEAD)"
 fi
 

@@ -2,7 +2,7 @@
 
 ## Problem
 
-Everything currently shares one `QUAID_HOME` (`~/quaid/`). One config, one
+Everything currently shares one `QUAID_HOME` (`~/.quaid/`). One config, one
 DB, one daemon. Switching adapters requires restart and risks silent data
 corruption (daemon caches adapter, parses wrong transcript format).
 
@@ -53,7 +53,7 @@ QUAID_HOME/
 
 | Var | Purpose | Example |
 |-----|---------|---------|
-| `QUAID_HOME` | Root dir (contains all instances) | `~/quaid` |
+| `QUAID_HOME` | Root dir (contains all instances) | `~/.quaid` |
 | `QUAID_INSTANCE` | Instance identifier (folder name) | `openclaw` |
 
 Instance root = `$QUAID_HOME/$QUAID_INSTANCE`

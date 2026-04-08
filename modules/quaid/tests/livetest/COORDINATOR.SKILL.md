@@ -249,12 +249,11 @@ Tell the platform pane:
 > `~/quaid/dev/docs/AI-INSTALL.md`
 >
 > Use these parameters:
-> - Workspace: WORKSPACE
 > - Adapter/platform: PLATFORM
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
-> Use the workspace path exactly as written, and it must be an absolute path.
+> Quaid installs into `~/.quaid`; do not choose or pass a custom workspace path.
 > The guide path is inside the local canary checkout, so use that checkout directly as the install source.
 > Do not browse the web for install docs or source code during M0.
 > Do not install a release build or any non-canary branch.

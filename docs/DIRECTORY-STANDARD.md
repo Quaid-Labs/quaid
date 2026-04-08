@@ -195,7 +195,7 @@ quaid project update myapp --source-root ./myapp  # add later
 ## Full Directory Tree
 
 ```
-QUAID_HOME/                              # e.g. ~/quaid/
+QUAID_HOME/                              # e.g. ~/.quaid/
   config/
     memory.json                          # Main Quaid config
     adapters/

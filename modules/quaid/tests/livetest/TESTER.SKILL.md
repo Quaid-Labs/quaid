@@ -172,23 +172,22 @@ yourself.
     ```bash
     # OC tester
     ssh REMOTE_HOST 'cd ~/quaid/dev && QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs \
-      --dry-run --workspace WORKSPACE --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
+      --dry-run --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CC tester
     ssh REMOTE_HOST 'cd ~/quaid/dev && QUAID_INSTANCE=claude-code-livetest node setup-quaid.mjs \
-      --dry-run --workspace WORKSPACE --adapter claude-code --owner-name OWNER_NAME --agent 2>&1 | tail -40'
+      --dry-run --adapter claude-code --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CDX tester
     ssh REMOTE_HOST 'cd ~/quaid/dev && QUAID_INSTANCE=codex-livetest node setup-quaid.mjs \
-      --dry-run --workspace WORKSPACE --adapter codex --owner-name OWNER_NAME --agent 2>&1 | tail -40'
+      --dry-run --adapter codex --owner-name OWNER_NAME --agent 2>&1 | tail -40'
     ```
 
     Check the plan output:
     - `platform` matches your platform (openclaw / claude-code / codex)
-    - `workspace` is `WORKSPACE`
+    - `workspace` is `~/.quaid`
     - `instanceId` matches your silo name (openclaw-livetest / claude-code-livetest / codex-livetest)
     - No fatal errors
-    - `WORKSPACE` must be an absolute path, not `~` shorthand
 
     If the plan looks wrong, **stop and send an ISSUE to the coordinator** before
     proceeding. Do not run the real install if the dry-run plan is incorrect.
@@ -199,12 +198,11 @@ yourself.
    > `~/quaid/dev/docs/AI-INSTALL.md`
    >
    > Use these parameters:
-   > - Workspace: WORKSPACE
    > - Adapter/platform: PLATFORM
    > - Instance name: INSTANCE_NAME
    > - Owner name: OWNER_NAME
    >
-   > Use the workspace path exactly as written, and it must be an absolute path.
+   > Quaid installs into `~/.quaid`; do not choose or pass a custom workspace path.
    > The guide path is inside the local canary checkout, so use that checkout directly as the install source.
    > Do not browse the web for install docs or source code during M0.
    > Do not install a release build or any non-canary branch.
