@@ -847,6 +847,9 @@ function writeDaemonSignal(
   const sigPath = path.join(signalDir, fname);
   try {
     fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
+    // Signal writers must also act as daemon wakeup points so extraction
+    // resumes even when no normal prompt path fires after a crash.
+    pingDaemonAliveIfNeeded();
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
     return sigPath;
   } catch (err: unknown) {
@@ -866,6 +869,14 @@ function ensureDaemonAlive(): void {
   } catch (err: unknown) {
     console.warn(`[quaid][daemon] ensure_alive failed: ${String((err as Error)?.message || err)}`);
   }
+}
+
+function pingDaemonAliveIfNeeded(nowMs: number = Date.now()): void {
+  if (nowMs - _lastDaemonAliveCheckMs <= _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
+    return;
+  }
+  _lastDaemonAliveCheckMs = nowMs;
+  ensureDaemonAlive();
 }
 
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
@@ -2073,10 +2084,7 @@ notify_user(${JSON.stringify(message)})
       // is killed mid-session, rolling extraction silently stops.  Rate-limited to
       // once per minute so the subprocess cost is negligible.
       const nowMs = Date.now();
-      if (nowMs - _lastDaemonAliveCheckMs > _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
-        _lastDaemonAliveCheckMs = nowMs;
-        ensureDaemonAlive();
-      }
+      pingDaemonAliveIfNeeded(nowMs);
 
       // Inject project docs once per session on the first message.
       // - appendSystemContext: full TOOLS.md + AGENTS.md docs (appended after OC base prompt)

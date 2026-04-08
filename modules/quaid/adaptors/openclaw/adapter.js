@@ -609,6 +609,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
   const sigPath = path.join(signalDir, fname);
   try {
     fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 384 });
+    pingDaemonAliveIfNeeded();
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
     return sigPath;
   } catch (err) {
@@ -627,6 +628,13 @@ function ensureDaemonAlive() {
   } catch (err) {
     console.warn(`[quaid][daemon] ensure_alive failed: ${String(err?.message || err)}`);
   }
+}
+function pingDaemonAliveIfNeeded(nowMs = Date.now()) {
+  if (nowMs - _lastDaemonAliveCheckMs <= _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
+    return;
+  }
+  _lastDaemonAliveCheckMs = nowMs;
+  ensureDaemonAlive();
 }
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
@@ -1588,10 +1596,7 @@ notify_user(${JSON.stringify(message)})
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const nowMs = Date.now();
-      if (nowMs - _lastDaemonAliveCheckMs > _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
-        _lastDaemonAliveCheckMs = nowMs;
-        ensureDaemonAlive();
-      }
+      pingDaemonAliveIfNeeded(nowMs);
       let appendSystemContext;
       let prependSystemContext;
       if (isSystemEnabled2("projects")) {
