@@ -2573,16 +2573,13 @@ async function step2_owner() {
 async function step3_models() {
   stepHeader(3, TOTAL_INSTALL_STEPS, "MODELS", STEP_QUOTES.models);
 
-  log.info(C.dim("Quaid uses two LLM tiers: deep reasoning (extraction, review)"));
-  log.info(C.dim("and fast reasoning (reranking, classification)."));
-
   const janitorAskFirst = false; // Auto-apply by default
 
   // Platform/adapter selection — always ask, this is the primary choice
   const adapterOptions = _adapterOptionsForSelect();
   let adapterType = handleCancel(await select({
     message: "Which platform are you installing for?",
-    initialValue: resolvedInstallerPlatform() || "standalone",
+    initialValue: resolvedInstallerPlatform() || "claude-code",
     options: adapterOptions,
   }));
   _platformOverride = adapterType;
@@ -3130,222 +3127,20 @@ async function step4_embeddings() {
 async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAskFirst = true) {
   stepHeader(5, TOTAL_INSTALL_STEPS, "JANITOR", STEP_QUOTES.janitor);
 
-  log.info(C.dim("The janitor runs nightly: reviewing new facts, deduplication,"));
-  log.info(C.dim("contradiction detection, memory decay, and doc updates."));
-  log.info(C.dim("Takes 5-30 minutes. Budget capped at 60 minutes."));
-  log.info("");
-  log.info(C.dim("Scheduled via your bot's heartbeat by default (recommended)."));
-  log.info(C.dim("The bot passes its API key securely at runtime."));
+  log.info(C.dim("The janitor runs automatically from the extraction daemon."));
+  log.info(C.dim("It reviews facts, deduplicates, detects contradictions, and maintains docs."));
+  log.info(C.dim("Default schedule: 4:00 AM daily. Change later with quaid config edit."));
 
-  // Show existing scheduled tasks for reference
-  const existingTasks = getExistingScheduledTasks();
-  if (existingTasks.length > 0) {
-    log.info("");
-    log.info(C.bcyan("Existing scheduled tasks:"));
-    for (const task of existingTasks) {
-      log.info(C.dim(`  ${task}`));
-    }
-  }
+  const scheduleHour = 4;
 
-  const hour = handleCancel(await select({
-    message: "When should the janitor run?",
-    initialValue: "4",
-    options: [
-      { value: "2",    label: "2:00 AM",  hint: "Early morning" },
-      { value: "3",    label: "3:00 AM",  hint: "Before early morning" },
-      { value: "4",    label: "4:00 AM",  hint: "Recommended" },
-      { value: "5",    label: "5:00 AM",  hint: "Before most wake up" },
-      { value: "custom", label: "Custom",  hint: "Pick your own hour" },
-      { value: "skip", label: "Skip",     hint: "I'll configure it myself" },
-    ],
-  }));
+  let scheduled = true; // Daemon handles scheduling automatically
 
-  if (hour === "skip") {
-    log.warn("No schedule set.");
-    log.warn("You MUST add a janitor entry to your HEARTBEAT.md manually.");
-    log.warn(C.dim("See: https://github.com/quaid-labs/quaid#janitor-scheduling"));
-    return { hour: null, scheduled: false };
-  }
-
-  let scheduleHour;
-  if (hour === "custom") {
-    const customHour = handleCancel(await text({
-      message: "Hour to run (0-23):",
-      placeholder: "3",
-      validate: v => {
-        const n = parseInt(v);
-        if (isNaN(n) || n < 0 || n > 23) return "Enter a number 0-23";
-        return undefined;
-      },
-    }));
-    scheduleHour = parseInt(customHour);
-  } else {
-    scheduleHour = parseInt(hour);
-  }
-
-  const ampm = scheduleHour === 0 ? "12:00 AM"
-             : scheduleHour < 12 ? `${scheduleHour}:00 AM`
-             : scheduleHour === 12 ? "12:00 PM"
-             : `${scheduleHour - 12}:00 PM`;
-
-  let scheduled = false;
-
-  if (_isPlatform("claude-code")) {
-    // Claude Code: schedule via launchd plist (macOS) since there is no
-    // gateway heartbeat. The janitor uses the OAuth token from
-    // ~/.claude/.credentials.json — no API key env var needed.
-    if (process.platform === "darwin") {
-      scheduled = installLaunchdSchedule(scheduleHour);
-      if (scheduled) {
-        log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via launchd`);
-      } else {
-        log.warn("Could not install launchd schedule.");
-        log.warn(`Run manually: quaid janitor --apply --task all`);
-      }
-
-      const scheduleLines = [
-        C.yellow("The janitor is scheduled via macOS launchd."),
-        C.yellow("It uses your Claude Code OAuth token — no API key needed."),
-        "",
-        C.bold("The launchd agent runs daily and applies janitor maintenance."),
-        C.bold("It will review pending facts, deduplicate, and maintain your"),
-        C.bold("knowledge base automatically."),
-        "",
-        C.dim("To check status: launchctl list | grep quaid"),
-        C.dim("To unload: launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist"),
-      ];
-      note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
-
-      handleCancel(await confirm({
-        message: "I understand — the janitor runs nightly via launchd.",
-        initialValue: true,
-      }));
-    } else if (process.platform === "win32") {
-      // Windows: install via Task Scheduler (schtasks)
-      scheduled = installWindowsScheduledTask(scheduleHour);
-      if (scheduled) {
-        log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via Task Scheduler`);
-      } else {
-        log.warn("Could not install scheduled task.");
-        log.warn(`Run manually: quaid janitor --apply --task all`);
-      }
-
-      const scheduleLines = [
-        C.yellow("The janitor is scheduled via Windows Task Scheduler."),
-        C.yellow("It uses your Claude Code OAuth token — no API key needed."),
-        "",
-        C.bold("The scheduled task runs daily and applies janitor maintenance."),
-        "",
-        C.dim("To check: schtasks /query /tn QuaidJanitor"),
-        C.dim("To remove: schtasks /delete /tn QuaidJanitor /f"),
-      ];
-      note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
-
-      handleCancel(await confirm({
-        message: "I understand — the janitor runs nightly via Task Scheduler.",
-        initialValue: true,
-      }));
-    } else {
-      // Linux/other: install crontab entry
-      scheduled = installCrontabSchedule(scheduleHour);
-      if (scheduled) {
-        log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via crontab`);
-      } else {
-        log.warn("Could not install crontab schedule.");
-        log.warn(`Run manually: quaid janitor --apply --task all`);
-      }
-
-      const scheduleLines = [
-        C.yellow("The janitor is scheduled via crontab."),
-        C.yellow("It uses your Claude Code OAuth token — no API key needed."),
-        "",
-        C.bold("The cron job runs daily and applies janitor maintenance."),
-        "",
-        C.dim("To check: crontab -l | grep quaid"),
-        C.dim("To remove: crontab -l | grep -v quaid | crontab -"),
-      ];
-      note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
-
-      handleCancel(await confirm({
-        message: "I understand — the janitor runs nightly via crontab.",
-        initialValue: true,
-      }));
-    }
-  } else {
-    // OpenClaw / Standalone: schedule via HEARTBEAT.md (bot reads on wake)
-    scheduled = installHeartbeatSchedule(scheduleHour);
-
-    if (scheduled) {
-      log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via HEARTBEAT.md`);
-    } else {
-      log.warn("Could not update HEARTBEAT.md automatically.");
-      log.warn("Add this to your HEARTBEAT.md manually:");
-      log.warn(C.dim(`  Janitor check: if ${scheduleHour}:00, run quaid janitor --apply --task all`));
-    }
-
-    // Persistent warning — DO NOT REMOVE. The user must understand this.
-    const scheduleLines = [
-      C.yellow("The janitor runs via your bot's HEARTBEAT system."),
-      C.yellow("This keeps your API key secure — never stored in cron or launchd."),
-      "",
-      C.bold("Your bot reads HEARTBEAT.md on each wake, checks the time,"),
-      C.bold("and runs the janitor with secure key injection."),
-    ];
-
-    scheduleLines.push(
-      "",
-      C.bold("If Quaid warns the janitor hasn't run recently, check that"),
-      C.bold("your bot's heartbeat is active and the entry is in HEARTBEAT.md."),
-      C.bold("Ask your agent to fix it."),
-      "",
-      C.dim("Want cron instead? Set your API key in .env and ask your"),
-      C.dim("agent to configure it. (Not recommended — less secure.)"),
-    );
-    note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
-
-    handleCancel(await confirm({
-      message: "I understand — the janitor runs from the bot's heartbeat.",
-      initialValue: true,
-    }));
-  }
-
-  const approvalPolicies = janitorAskFirst
-    ? {
-        coreMarkdownWrites: "ask",
-        projectDocsWrites: "ask",
-        workspaceFileMovesDeletes: "ask",
-        destructiveMemoryOps: "auto",
-      }
-    : {
-        coreMarkdownWrites: "auto",
-        projectDocsWrites: "auto",
-        workspaceFileMovesDeletes: "auto",
-        destructiveMemoryOps: "auto",
-      };
-
-  if (false) {
-    log.message("");
-    log.info(C.bold("Janitor Approval Policies"));
-    log.info(C.dim("Choose where janitor should ask before applying changes."));
-
-    for (const row of [
-      ["coreMarkdownWrites", "Root core markdown writes (SOUL/USER/MEMORY/TOOLS)"],
-      ["projectDocsWrites", "Project docs writes outside projects/quaid"],
-      ["workspaceFileMovesDeletes", "Workspace file moves/deletes"],
-      ["destructiveMemoryOps", "Destructive memory DB ops (merges/supersedes/deletes)"],
-    ]) {
-      const [key, label] = row;
-      const mode = handleCancel(await select({
-        message: `${label}:`,
-        initialValue: approvalPolicies[key],
-        options: [
-          { value: "ask", label: "ask", hint: "queue for approval, notify user" },
-          { value: "auto", label: "auto", hint: "apply automatically during janitor run" },
-        ],
-      }));
-      approvalPolicies[key] = mode;
-    }
-  }
+  const approvalPolicies = {
+    coreMarkdownWrites: "auto",
+    projectDocsWrites: "auto",
+    workspaceFileMovesDeletes: "auto",
+    destructiveMemoryOps: "auto",
+  };
 
   return { hour: scheduleHour, scheduled, approvalPolicies };
 }
