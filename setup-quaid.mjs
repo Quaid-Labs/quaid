@@ -2572,11 +2572,30 @@ async function step3_models() {
 
   const janitorAskFirst = false; // Auto-apply by default
 
-  // Platform/adapter selection — always ask, this is the primary choice
-  const adapterOptions = _adapterOptionsForSelect();
+  // Platform/adapter selection — always ask, this is the primary choice.
+  // Show installed platforms first, then greyed-out uninstalled ones.
+  const _platformDetect = {
+    "openclaw": canRun("openclaw") || canRun("clawdbot"),
+    "claude-code": canRun("claude"),
+    "codex": canRun("codex"),
+  };
+  const allOptions = _adapterOptionsForSelect();
+  const installed = allOptions.filter(o => _platformDetect[o.value]);
+  const notInstalled = allOptions.filter(o => !_platformDetect[o.value]);
+  for (const o of notInstalled) {
+    o.hint = C.dim(`(not installed) ${o.hint || ""}`);
+  }
+  const adapterOptions = [];
+  if (installed.length > 0) {
+    adapterOptions.push(...installed);
+  }
+  if (notInstalled.length > 0) {
+    adapterOptions.push(...notInstalled);
+  }
+  const detectedPlatform = resolvedInstallerPlatform();
   let adapterType = handleCancel(await select({
     message: "Which platform are you installing for?",
-    initialValue: resolvedInstallerPlatform() || "claude-code",
+    initialValue: detectedPlatform || (installed.length > 0 ? installed[0].value : "claude-code"),
     options: adapterOptions,
   }));
   _platformOverride = adapterType;
