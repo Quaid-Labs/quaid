@@ -467,7 +467,6 @@ function _adapterOptionsForSelect() {
   const options = adapterSelectOptions(_adapterManifests);
   if (options.length > 0) return options;
   return [
-    { value: "standalone", label: "Standalone", hint: "local-only runtime (default)" },
     { value: "claude-code", label: "Claude Code", hint: "hooks + OAuth for Claude Code CLI" },
     { value: "openclaw", label: "OpenClaw", hint: "gateway-integrated runtime" },
     { value: "codex", label: "Codex", hint: "hooks + app-server sidecar runtime" },
@@ -2166,13 +2165,7 @@ async function step1_preflight() {
     syncInstallerInstanceEnv();
   }
 
-  const platformCompatibilityWarnings = _adapterCompatibilityWarnings(resolvedInstallerPlatform());
-  if (platformCompatibilityWarnings.length > 0) {
-    log.warn("Platform compatibility notices:");
-    for (const msg of platformCompatibilityWarnings) {
-      log.warn(`  - ${msg}`);
-    }
-  }
+  // Compatibility warnings shown after platform selection (in step2_config)
 
   const installState = detectExistingInstallState();
   _existingInstallDetected = !!installState.hasInstall;
@@ -2594,6 +2587,15 @@ async function step3_models() {
   }));
   _platformOverride = adapterType;
 
+  // Show platform-specific compatibility warnings after selection
+  const platformCompatibilityWarnings = _adapterCompatibilityWarnings(adapterType);
+  if (platformCompatibilityWarnings.length > 0) {
+    log.warn("Platform compatibility notices:");
+    for (const msg of platformCompatibilityWarnings) {
+      log.warn(`  - ${msg}`);
+    }
+  }
+
   // Use platform default LLM provider — no advanced setup needed
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
@@ -2609,7 +2611,7 @@ async function step3_models() {
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
     : ["anthropic", "openai", "openrouter", "together", "ollama"];
-  const hostManagedLlmDefault = _platformUsesHostManagedLlmByDefault(adapterType) && !advancedSetup;
+  const hostManagedLlmDefault = _platformUsesHostManagedLlmByDefault(adapterType) ;
   const adapterDefaultProvider = String(
     adapterCaps.defaultDeepProvider || adapterCaps.defaultFastProvider || ""
   ).trim().toLowerCase();
@@ -2704,7 +2706,7 @@ async function step3_models() {
     fastReasoningEffort = "medium";
   }
 
-  if (advancedSetup) {
+  if (false) {
     highModel = handleCancel(await text({
       message: "Deep reasoning model:",
       placeholder: highModel,
@@ -2840,7 +2842,7 @@ async function step3_models() {
 
   // Notifications
   let notifLevel = "normal";
-  if (advancedSetup) {
+  if (false) {
     notifLevel = handleCancel(await select({
       message: "Notification verbosity",
       initialValue: "normal",
@@ -2872,7 +2874,7 @@ async function step3_models() {
     return { janitor: "summary", extraction: "summary", retrieval: "off" };
   })();
 
-  const advancedNotif = advancedSetup && handleCancel(await confirm({
+  const advancedNotif = false && handleCancel(await confirm({
     message: "Advanced notification config?",
     initialValue: false,
   }));
@@ -2907,7 +2909,7 @@ async function step3_models() {
     notifLevel,
     notifConfig,
     notifChannel,
-    advancedSetup,
+    advancedSetup: false,
     adapterType,
     janitorAskFirst,
     autoCompactionOnTimeout,
@@ -3321,7 +3323,7 @@ async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAsk
         destructiveMemoryOps: "auto",
       };
 
-  if (advancedSetup) {
+  if (false) {
     log.message("");
     log.info(C.bold("Janitor Approval Policies"));
     log.info(C.dim("Choose where janitor should ask before applying changes."));
@@ -5445,7 +5447,7 @@ async function main() {
     const systems = { memory: true, journal: true, projects: true, workspace: true };
     let schedule = null;
     if (!_existingInstallDetected) {
-      schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
+      schedule = await step6_schedule(embeddings, false, models.janitorAskFirst);
       notifyInstallCheckpoint(
         5, TOTAL_INSTALL_STEPS, "janitor",
         "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
