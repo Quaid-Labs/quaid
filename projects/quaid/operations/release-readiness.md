@@ -1,16 +1,16 @@
-# Release Readiness (Alpha)
+# Release Readiness
 
 ## Positioning
 
-Quaid is ready for an **alpha OSS release** with explicit known issues and a public roadmap.
+Quaid is ready for a **stable OSS release** with explicit known issues and a public roadmap.
 
 Recommended framing:
-- "Alpha: production-minded architecture, active hardening in progress."
+- "Stable public release: production-minded architecture, active hardening in progress."
 - "Known issues documented; contributions welcome on high-impact items."
 
 ## Go / Hold
 
-### Go now (alpha)
+### Go now (stable)
 - Deterministic integration and mock-core tests in place.
 - E2E bootstrap/runtime flow exists with verification.
 - Provider abstraction is substantially improved and testable.
@@ -22,8 +22,8 @@ Recommended framing:
     `modules/quaid/tests/LIVE-TEST-GUIDE.md`
   - SHA comparison between the cleared run and current `HEAD`, with Solomon
     deciding whether any post-clear changes are acceptable
-- Installer: instance ID prompt, shared embeddings config, `quaid instances list`, `quaid config edit --shared/--instance` — all shipped.
-- Compatibility matrix populated for v0.2.15-alpha.
+- Installer: fixed `~/.quaid` home, shared embeddings config, platform compatibility warnings, and agent-install survey contract — all shipped.
+- Compatibility matrix populated for v0.3.0.
 
 ### Hold for broader release until
 - Command API path fully replaces slash-text fallback paths.
@@ -44,7 +44,7 @@ Recommended framing:
 - Janitor apply-mode E2E can block on approval-policy `ask`; this is expected unless policy is pinned to non-interactive behavior for the run.
 - Legacy contradiction task surface is retained for compatibility, but contradiction detection/resolution is decommissioned in active janitor `--task all` flow (stale handling is supersession/recency based).
 
-## Notification Posture (Alpha)
+## Notification Posture
 
 - Keep recommended default as `normal`:
   - `janitor: summary`
@@ -53,7 +53,7 @@ Recommended framing:
 - Use feature-level overrides for power users instead of a single global toggle.
 - Route asynchronous actionable janitor health requests through adapter-managed delayed request queues.
 
-## Immediate Post-Alpha Priorities
+## Immediate Post-Release Priorities
 
 1. Command-API-only control flow.
 2. Retrieval quality uplift for relationship/family queries (fact + graph parallel composition).

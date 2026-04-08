@@ -6,7 +6,7 @@
 # Run: bash setup-quaid.sh
 #
 # Modes:
-#   - Standalone (default): Uses QUAID_HOME env or ~/quaid/ as home directory
+#   - Standalone (default): Uses the fixed Quaid home at ~/.quaid
 #   - OpenClaw: detected via CLAWDBOT_WORKSPACE env or clawdbot/openclaw on PATH
 #
 # Prerequisites:
@@ -26,7 +26,7 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
 esac
 
 # --- Constants ---
-QUAID_VERSION="0.2.15-alpha"
+QUAID_VERSION="0.3.0"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
 # Gateway PR #13287 — required hooks for knowledge extraction

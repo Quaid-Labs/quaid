@@ -292,7 +292,7 @@ function _enforceFixedInstallHome() {
 _enforceFixedInstallHome();
 
 // --- Constants ---
-const VERSION = "0.2.15-alpha";
+const VERSION = "0.3.0";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/releases/tag/v2026.3.7";
 const MIN_GATEWAY_VERSION = "2026.3.7";
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";

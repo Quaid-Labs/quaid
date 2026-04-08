@@ -131,11 +131,11 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 
 ---
 
-## Early Alpha
+## Release Status
 
-Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
+Quaid `v0.3.0` is the first stable public release. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
 
-Known limitations for **v0.2.15-alpha**:
+Known limitations for **v0.3.0**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows is not supported. macOS and Linux only.
@@ -167,7 +167,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Maintainer Lifecycle](docs/MAINTAINER-LIFECYCLE.md) — Safe branch/release model for post-user operation
 - [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy
 - [Good First Issues](docs/GOOD-FIRST-ISSUES.md) — Small scoped tasks for new contributors
-- [v0.2.15-alpha Notes](docs/releases/v0.2.15-alpha.md) — Latest published release highlights and known limitations
+- [v0.3.0 Notes](docs/releases/v0.3.0.md) — Release highlights, compatibility, and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 
 ---

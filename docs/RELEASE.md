@@ -92,6 +92,20 @@ support-purge runbook.
 Run:
 
 ```bash
+node scripts/release-status.mjs
+```
+
+This gives a single local readout of:
+
+- version/file sync,
+- release notes / post docs present,
+- release evidence status,
+- compatibility clear / promotion status,
+- whether a local post-clear approval is still needed.
+
+Then run:
+
+```bash
 bash scripts/release-check.sh
 ```
 

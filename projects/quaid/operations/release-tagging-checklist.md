@@ -1,6 +1,6 @@
 # Release Tagging Checklist
 
-Replace `<version>` below with the actual release tag (e.g. `v0.2.15-alpha`).
+Replace `<version>` below with the actual release tag (e.g. `v0.3.0`).
 
 ## 1) Pre-tag checks
 - Run deterministic + integration + syntax gates.
@@ -31,7 +31,7 @@ Replace `<version>` below with the actual release tag (e.g. `v0.2.15-alpha`).
 ## 4) GitHub release
 - Create release from tag `<version>`.
 - Paste notes from `docs/releases/<version>.md`.
-- Mark as pre-release/alpha.
+- Mark as a stable public release.
 
 ## 5) Post-release
 - Publish the approved release post with links to the GitHub release and release notes.
