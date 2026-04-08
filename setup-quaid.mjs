@@ -745,7 +745,7 @@ function resolvedInstallerPlatform() {
   if (instanceId.startsWith("claude-code-")) return "claude-code";
   if (IS_CLAUDE_CODE) return "claude-code";
   if (IS_OPENCLAW) return "openclaw";
-  return "standalone";
+  return "";
 }
 
 function resolvedInstallerInstanceId(adapterType = "") {
@@ -2179,6 +2179,13 @@ async function step1_preflight() {
   // External adapter hooks can perform preflight checks or env bootstrap.
   runAdapterInstallHook(resolvedInstallerPlatform(), "preinstall");
 
+  // Platform-specific preflight deferred to after platform selection in interactive mode.
+  // In agent mode (--agent), platform is known from --adapter flag so run immediately.
+  if (!AGENT_MODE && !_platformOverride) {
+    s.stop(C.green("System check passed"));
+    return;
+  }
+
   if (_isPlatform("claude-code")) {
     // --- Claude Code mode ---
     s.start("Checking Claude Code...");
@@ -2583,6 +2590,14 @@ async function step3_models() {
     options: adapterOptions,
   }));
   _platformOverride = adapterType;
+
+  // Run deferred platform preflight now that user has chosen
+  if (!AGENT_MODE) {
+    const s = spinner();
+    s.start(`Checking ${adapterType} environment...`);
+    await step1_preflight(); // Re-run with platform now set
+    s.stop(C.green(`${adapterType} ready`));
+  }
 
   // Show platform-specific compatibility warnings after selection
   const platformCompatibilityWarnings = _adapterCompatibilityWarnings(adapterType);
