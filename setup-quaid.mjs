@@ -410,24 +410,13 @@ const AGENT_SURVEY_CONTRACT = {
         "If the adapter manifest has no warnings, render the value as none.",
       ],
     },
-    {
-      id: "janitor",
-      label: "Janitor apply mode/policies",
-      source: "step3_models() + step6_schedule()",
-      required: true,
-    },
-    {
-      id: "janitor_schedule",
-      label: "Janitor schedule choice",
-      source: "step6_schedule()",
-      required: true,
-    },
   ],
   notes: [
     "Do not add survey sections for internal installer steps with no user choice.",
     "Do not use test-only controls like QUAID_TEST_ANSWERS in normal AI install guidance unless explicitly running a test harness.",
     "Workspace file import is not a standalone survey field unless the installer actually prompts for it.",
     "Installer home is fixed to ~/.quaid and is not a user-selectable field.",
+    "Janitor runs automatically by default and is not a survey field unless the human explicitly asks to change janitor behavior.",
   ],
 };
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
@@ -3373,7 +3362,7 @@ async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAsk
 
   log.info(C.dim("The janitor runs automatically from the extraction daemon."));
   log.info(C.dim("It reviews facts, deduplicates, detects contradictions, and maintains docs."));
-  log.info(C.dim("Default schedule: 4:00 AM daily. Change later with quaid config edit."));
+  log.info(C.dim("Default schedule: 4:00 AM daily. Use your agents if you need to change janitor behavior later."));
 
   const scheduleHour = 4;
 
@@ -5450,14 +5439,6 @@ function formatPreInstallSurvey(plan) {
   if (plan?.notifications?.extraction) notifParts.push(`extraction ${plan.notifications.extraction}`);
   if (plan?.notifications?.retrieval) notifParts.push(`retrieval ${plan.notifications.retrieval}`);
 
-  const janitorPolicies = plan?.janitor?.approvalPolicies
-    ? Object.entries(plan.janitor.approvalPolicies).map(([k, v]) => `${k}=${v}`).join(", ")
-    : (plan?.janitor?.askFirst === false ? "auto defaults" : "ask defaults");
-
-  const scheduleValue = plan?.janitor?.scheduled
-    ? `scheduled around ${plan.janitor.scheduleHour}:00`
-    : "not scheduled";
-
   lines.push(`- Owner name: ${plan?.owner || "unknown"}`);
   lines.push(`- Adapter type: ${plan?.platform || "unknown"}`);
   lines.push(`- LLM provider + deep/fast models: ${modelBits.join(", ") || "unknown"}`);
@@ -5467,8 +5448,6 @@ function formatPreInstallSurvey(plan) {
     lines.push(`- Notification routing channel: ${plan.notifications.channel}`);
   }
   lines.push(`- Platform compatibility notices: ${(Array.isArray(plan?.compatibilityWarnings) && plan.compatibilityWarnings.length > 0) ? plan.compatibilityWarnings.join(" | ") : "none"}`);
-  lines.push(`- Janitor apply mode/policies: ${janitorPolicies}`);
-  lines.push(`- Janitor schedule choice: ${scheduleValue}`);
   lines.push("");
   lines.push("Do you want to change any of these before I run install?");
   return lines.join("\n");

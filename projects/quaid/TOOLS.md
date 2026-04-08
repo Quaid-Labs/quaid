@@ -118,12 +118,14 @@ quaid janitor --task all --apply              # add --approve when applyMode=ask
 quaid doctor
 quaid updater doc-health <project> [--dry-run]
 quaid notify --deferred-status                # inspect buffered janitor/update notices
-quaid notify --deferred-drain                 # fetch buffered notices when a human user is active
+quaid notify --deferred-drain                 # fetch buffered notices when a human user is present
 ```
 
 - Deferred notices are non-urgent system messages from janitor, update checks, and similar background work.
-- **When you detect pending deferred notices at the start of a session or task, drain them proactively** using `quaid notify --deferred-drain` and relay the results to the user. Do not wait for the user to ask.
-- If a notice arrived mid-task, drain at the next natural break and mention it briefly ("I have a Quaid notice — [summary]").
+- **Do not ask permission to read deferred notices.** They are normal Quaid context, not a privileged action.
+- **Only drain deferred notices when a human user is present.** Do not drain them during autonomous/background actions where no user is actively interacting.
+- **When you detect pending deferred notices at the start of a human-facing session or task, drain them proactively** using `quaid notify --deferred-drain` and relay the results to the user. Do not wait for the user to ask.
+- If a notice arrived mid-task, drain at the next natural break in the human-facing conversation and mention it briefly ("I have a Quaid notice — [summary]").
 - Active outage/failure notices use the normal live notification path and should be relayed immediately when surfaced.
 
 ---

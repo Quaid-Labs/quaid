@@ -45,7 +45,7 @@ Use this exact minimal prompt shape when asking an AI agent to install Quaid:
 1. Read `docs/AI-INSTALL.md` first and follow it exactly.
 2. Include and obey the mandatory first command from that guide before doing anything else.
 3. Install Quaid for me using this platform/adapter and owner name.
-4. Tell me when install is complete and `quaid doctor` is healthy.
+4. Tell me when install is complete and health checks passed.
 
 Do not duplicate the survey contract, defaults, or approval flow in the human's
 prompt. Those are defined here and in `setup-quaid.mjs`, and the agent must
@@ -156,8 +156,6 @@ Pre-install survey
 - Notification level + per-feature verbosity: <value>
 - Notification routing channel: <value>   # OpenClaw only; omit otherwise
 - Platform compatibility notices: <value>
-- Janitor apply mode/policies: <value>
-- Janitor schedule choice: <value>
 
 Do you want to change any of these before I run install?
 ```
@@ -300,7 +298,7 @@ It also creates a blank per-platform shared config at:
 The global file records the Ollama URL, embedding model, and embedding dimension so all instances on the same machine can share the same default model. The rule is **first-install-wins** for the global fallback: if `shared/config/global/memory.json` already has an `ollama` block, subsequent installs inherit it instead of overwriting it.
 
 At runtime, Quaid checks the platform-shared file first and falls back to the global file.
-To change the default embedding model after install, edit the relevant shared config file and re-run `quaid doctor` to verify.
+If the human wants to change embedding defaults later, tell them it is best to use their agents for Quaid config changes.
 
 ## Environment Variables (optional)
 
@@ -469,13 +467,13 @@ Minimum required summary fields:
 - Notification routing channel (`notifications.<feature>.channel`) for OpenClaw installs
 - Platform compatibility notices (`install.compatibilityWarnings` / survey output)
 - Embedding provider/model (`models.embeddingsProvider`, `ollama.embeddingModel`)
-- Janitor apply mode/policies (`janitor.applyMode`, `janitor.approvalPolicies.*`)
-- Janitor schedule choice (or explicit "not scheduled")
 
-The summary should also tell the user where to edit settings:
-
-- Interactive editor: `quaid config edit`
-- Config file: `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json` (use `quaid config path` to confirm the active path)
+Do not tell the user to edit Quaid config directly after install.
+Do not recommend shell-profile exports such as `export QUAID_INSTANCE=...`.
+Do not tell the user to add anything to shell rc files.
+Do not recommend `quaid doctor` or `quaid stats` as user next-steps in the install close-out.
+If post-install config changes are needed, say: `It is best to use your agents for any Quaid config changes.`
+Janitor behavior is automatic by default. Do not ask for separate permission to enable or run it unless the human explicitly asks to change janitor behavior.
 
 Do not present `memory`, `journal`, `projects`, or `workspace` as a survey field or configurable install choice.
 Those systems are always on by policy and should only be described if the user explicitly asks.
@@ -494,7 +492,7 @@ After install — Claude Code adapter:
 # Verify hooks are registered in ~/.claude/settings.json
 cat ~/.claude/settings.json | python3 -c "import sys,json; h=json.load(sys.stdin).get('hooks',{}); print([k for k in h if 'quaid' in str(h[k]).lower()])"
 
-# Run doctor
+# Internal health check
 quaid doctor
 ```
 
