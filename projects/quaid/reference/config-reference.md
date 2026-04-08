@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `60ca88056cab`
+Source hash: `a2108233387a`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -132,6 +132,12 @@ Notes:
 | `janitor.contradiction.timeout_minutes` | `int` | `60` |  |
 | `janitor.contradiction.min_similarity` | `float` | `0.6` |  |
 | `janitor.contradiction.max_similarity` | `float` | `0.85` |  |
+
+## `livetest`
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `livetest.enable_extraction_buffer_log` | `bool` | `false` |  |
 
 ## `logging`
 
