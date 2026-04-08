@@ -1,7 +1,7 @@
 # Hooks and Session Lifecycle Reference
 
 This document describes Quaid's hook entry points, how they are wired into
-Claude Code and OpenClaw, and the full session lifecycle for each adapter.
+Claude Code, OpenClaw, and Codex, and the full session lifecycle for each adapter.
 
 Source files:
 - `modules/quaid/core/interface/hooks.py` — all hook implementations
@@ -439,13 +439,13 @@ hooks; the Python layer handles extraction signaling.
 
 ### Signal directory
 
-Signals are written at the **per-instance level** (not shared across adapters):
+Signals are written at the **QUAID_HOME level** (shared across adapters), so any running daemon can pick them up regardless of which instance is active:
 
 ```
-$QUAID_HOME/<instance>/data/extraction-signals/
+$QUAID_HOME/data/extraction-signals/
 ```
 
-Each adapter instance writes to its own signal directory under its instance root.
+All adapter instances write to this shared signal directory.
 
 ### Signal file format
 
@@ -649,7 +649,7 @@ Each adapter instance on a machine has its own `QUAID_HOME` silo.
 | CC settings (hook registration) | `~/.claude/settings.json` |
 | CC rules file (session context) | `<project-cwd>/.claude/rules/quaid-projects.md` |
 | CC instance silo | `$QUAID_HOME/` |
-| Extraction signals dir | `$QUAID_HOME/<instance>/data/extraction-signals/` |
+| Extraction signals dir | `$QUAID_HOME/data/extraction-signals/` |
 | Session cursors dir | `$QUAID_HOME/<instance>/data/session-cursors/` |
 | Subagent registry dir | `$QUAID_HOME/data/subagent-registry/` |
 | CC pending notifications | `$QUAID_HOME/<instance>/data/cc-pending-notifications.jsonl` |

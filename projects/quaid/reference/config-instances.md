@@ -46,6 +46,7 @@ writing any instance into a gateway config:
 |----------|----------------|
 | OpenClaw | `openclaw-` |
 | Claude Code | `claude-code-` |
+| Codex | `codex-` |
 
 A gateway config writer must reject any instance whose ID does not start with
 its platform's prefix. This prevents cross-platform contamination — for example,
@@ -367,7 +368,7 @@ Everything under `QUAID_HOME/<instance>/`:
 | `config/memory.json` | Instance-specific config (highest-priority layer) |
 | `data/memory.db` | SQLite memory database (nodes, edges, FTS, doc_registry, doc_chunks, vec_nodes, vec_doc_chunks) |
 | `data/memory_archive.db` | Archive database for graduated/decayed memories |
-| `data/extraction-signals/` | Signal files for async extraction daemon |
+| `data/extraction-signals/` | Signal files for async extraction daemon (shared at `QUAID_HOME/data/extraction-signals/`, not per-instance) |
 | `data/rolling-extraction/` | Rolling extraction staged state per session (raw facts/carryover awaiting final flush) |
 | `data/cc-pending-notifications.jsonl` | Deferred notifications queue (Claude Code adapter) |
 | `logs/` | Janitor stats, extraction logs, including rolling daemon telemetry under `logs/daemon/` |
@@ -435,7 +436,7 @@ Projects and memories are local to each machine.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `QUAID_HOME` | Root directory containing all instances | `~/quaid` |
+| `QUAID_HOME` | Root directory containing all instances | `~/.quaid` |
 | `QUAID_INSTANCE` | Active instance identifier | (required, no default) |
 | `CLAWDBOT_WORKSPACE` | Alias for `QUAID_HOME` (backward compat) | — |
 | `PYTHONPATH` | Set automatically by the `quaid` shell script to include `SCRIPT_DIR` | — |
@@ -495,6 +496,7 @@ Built-in adapter types:
 | `standalone` | `StandaloneAdapter` | Direct API, no gateway |
 | `claude-code` | `ClaudeCodeAdapter` | Claude Code sessions |
 | `openclaw` | `OpenClawAdapter` | OpenClaw gateway |
+| `codex` | `CodexAdapter` | Codex sessions |
 
 ---
 

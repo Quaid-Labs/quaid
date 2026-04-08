@@ -5,15 +5,10 @@ It reflects broad areas of active focus, not delivery guarantees.
 
 ## Current Focus
 
-- **Top priority after release: Codex adaptor**
-  - Build a first-class Codex host adaptor now that hook support is available.
-  - Match OpenClaw/Claude Code baseline capabilities for install, extraction, recall injection, and diagnostics.
-  - Keep host-specific behavior inside adaptor surfaces while reusing shared runtime behavior.
-
 - **Reliability and correctness**
   - Continue hardening extraction, recall, and janitor paths.
   - Reduce failure ambiguity with better diagnostics and test isolation.
-  - Keep OpenClaw and Claude Code integrations stable as primary production paths.
+  - Keep OpenClaw, Claude Code, and Codex integrations stable as primary production paths.
   - Parallelize janitor task execution after architectural boundary enforcement is complete.
 
 - **Benchmark rigor**

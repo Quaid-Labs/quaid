@@ -561,7 +561,7 @@ Centralized modules extracted from duplicated code across `datastore/memorydb/me
 
 | Module | Purpose |
 |--------|---------|
-| `lib/adapter.py` | Platform adapter layer — `QuaidAdapter` ABC with `StandaloneAdapter` (`~/quaid/`) and `OpenClawAdapter`. All modules route through `get_adapter()` for paths, notifications, credentials, sessions. Adapter selection is config-driven via `config/memory.json` (`adapter.type`). `QUAID_HOME`/`CLAWDBOT_WORKSPACE` are path hints for locating config. Tests use `set_adapter()`/`reset_adapter()` for isolation. **Includes sanitization hooks** for scrubbing personal data during release preparation. |
+| `lib/adapter.py` | Platform adapter layer — `QuaidAdapter` ABC with `StandaloneAdapter` (`~/.quaid/`) and `OpenClawAdapter`. All modules route through `get_adapter()` for paths, notifications, credentials, sessions. Adapter selection is config-driven via `config/memory.json` (`adapter.type`). `QUAID_HOME`/`CLAWDBOT_WORKSPACE` are path hints for locating config. Tests use `set_adapter()`/`reset_adapter()` for isolation. **Includes sanitization hooks** for scrubbing personal data during release preparation. |
 | `lib/config.py` | DB paths, Ollama URL, embedding params — reads from `config/memory.json` via `config.py`. Env var overrides: `MEMORY_DB_PATH`, `MEMORY_ARCHIVE_DB_PATH`, `OLLAMA_URL`. Path resolution delegated to `lib/adapter.py`. |
 | `lib/database.py` | `get_connection(db_path)` — SQLite factory with Row + FK enforcement |
 | `lib/embeddings.py` | `get_embedding(text)`, `pack_embedding()`, `unpack_embedding()` — embedding calls routed through configured provider (Ollama by default) |
@@ -1562,7 +1562,7 @@ Workspace monitoring uses a built-in bootstrap file set (`AGENTS.md`, `SOUL.md`,
 Quaid supports multiple isolated memory instances on the same machine (e.g. one for OpenClaw, one for Claude Code). Each instance has its own database, config, and logs while sharing embeddings config and the project registry.
 
 **Environment variables:**
-- `QUAID_HOME` — root directory containing all instances (default: `~/quaid`). Set once per machine.
+- `QUAID_HOME` — root directory containing all instances (default: `~/.quaid`). Set once per machine.
 - `QUAID_INSTANCE` — identifier for the active instance (required; e.g. `openclaw`, `claude-code`). Set by each adapter's runtime hooks — do NOT set globally in shell profile.
 
 **Instance directory layout:**

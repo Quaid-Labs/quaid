@@ -22,7 +22,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 
 ## File Placement — MANDATORY RULES
 
-**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, `~/quaid/scratch/`, or any path outside a tracked quaid project.** No exceptions. "Temporary", "throwaway", "quick", or "hello world" files are NOT exempt — they go in the misc project.
+**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, `~/.quaid/scratch/`, or any path outside a tracked quaid project.** No exceptions. "Temporary", "throwaway", "quick", or "hello world" files are NOT exempt — they go in the misc project.
 
 **Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
 
@@ -32,7 +32,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
    # The misc project is pre-created. Write directly to its directory:
    $QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE  # confirm path
    # Then write your file there, e.g.:
-   # ~/quaid/projects/misc--$QUAID_INSTANCE/hello.py
+   # ~/.quaid/projects/misc--$QUAID_INSTANCE/hello.py
    ```
    Always tell the user you wrote to misc and offer to promote to a real project.
 3. **Durable new work** → create a project first, then write files:
@@ -56,9 +56,9 @@ Correct response:
 # Step 1: confirm misc project path
 $QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE
 # Step 2: write the file inside that project
-# e.g. write to ~/quaid/projects/misc--$QUAID_INSTANCE/hello.py
+# e.g. write to ~/.quaid/projects/misc--$QUAID_INSTANCE/hello.py
 ```
-Tell the user: "I wrote it to the misc project at `~/quaid/projects/misc--$QUAID_INSTANCE/hello.py`."
+Tell the user: "I wrote it to the misc project at `~/.quaid/projects/misc--$QUAID_INSTANCE/hello.py`."
 Do NOT write to `/tmp/hello.py` or any other path.
 
 **Example — user asks to build a new tool:**

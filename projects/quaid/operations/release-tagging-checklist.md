@@ -18,6 +18,8 @@ Replace `<version>` below with the actual release tag (e.g. `v0.2.15-alpha`).
   - Windows lightly tested
   - OpenClaw-first maturity
 - Review release notes: `docs/releases/<version>.md`.
+- Draft the release post from `docs/releases/RELEASE-POST-TEMPLATE.md`.
+- Get approval on the exact public release-post copy before publishing it anywhere.
 
 ## 3) Version + tag
 - Create annotated tag:
@@ -32,6 +34,7 @@ Replace `<version>` below with the actual release tag (e.g. `v0.2.15-alpha`).
 - Mark as pre-release/alpha.
 
 ## 5) Post-release
+- Publish the approved release post with links to the GitHub release and release notes.
 - Open follow-up tracking issue for top alpha hardening work.
 - Confirm bootstrap repo updates are also pushed from the configured
   `paths.developmentDirectory/bootstrap` checkout (separate repo).

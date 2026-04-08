@@ -12,7 +12,7 @@ In scope:
 - Fact capture and retrieval
 - Knowledge maintenance lifecycle (review, dedup, contradiction handling, decay)
 - Personality and project knowledge layers
-- Adapter-based host integration (OpenClaw-first, system-agnostic architecture)
+- Adapter-based host integration (OpenClaw, Claude Code, and Codex as active integrations; system-agnostic architecture)
 
 Out of scope (for now):
 

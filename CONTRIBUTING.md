@@ -89,7 +89,7 @@ See `docs/RELEASE.md` for ownership guard details and expected attribution setti
 
 Public history should use the maintainer canonical GitHub noreply identity.
 
-- Name: `solstead`
+- Name: `Solomon Steadman`
 - Email: `168413654+solstead@users.noreply.github.com`
 
 Do not use personal/private email addresses in public commits.

@@ -2,7 +2,7 @@
 
 Quaid is a persistent knowledge layer for AI agents. It extracts personal and project-relevant facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
 
-Quaid ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw), a Claude Code adapter, and a standalone CLI for direct operations.
+Quaid ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw), Claude Code, and Codex, plus a standalone CLI for direct operations.
 
 This document is for engineers who want to understand how the system works.
 
@@ -24,42 +24,42 @@ This document is for engineers who want to understand how the system works.
 
 ## 1. System Overview
 
-Quaid exposes its knowledge layer through three interfaces: a **CLI** (standalone, no gateway needed), an **OpenClaw plugin** (deepest integration with automatic lifecycle hooks), and a **Claude Code adapter** (hook-driven host integration).
+Quaid exposes its knowledge layer through four interfaces: a **CLI** (standalone, no gateway needed), an **OpenClaw plugin** (deepest integration with automatic lifecycle hooks), a **Claude Code adapter** (hook-driven host integration), and a **Codex adapter** (hook-based lifecycle with host-managed provider path).
 
 ### High-Level Architecture
 
 ```
-     CLI                OpenClaw Gateway        Claude Code
- (quaid recall,             |                   hooks / rules
-  quaid store, ...)    Lifecycle hooks               |
-          |            (compaction, reset,          |
-          v             agent turn)                 v
-    +----------+             |               +------+------+
-    | extract  |      +------+-------+       | adaptors/   |
-    | .py CLI  |      | adaptors/     |      | claude_code |
-    |          |      | openclaw/     |      |             |
-    +----+-----+      | index.ts      |      +------+------+
-         |            | (TS plugin)   |             |
-         +------------+-------+--------+-------------+
+     CLI          OpenClaw Gateway    Claude Code        Codex
+ (quaid recall,        |              hooks / rules    hooks / stop
+  quaid store, ...)  Lifecycle           |                 |
+          |          hooks               |                 |
+          v       (compaction,           v                 v
+    +----------+   reset, turn)   +------+------+   +-----+------+
+    | extract  |      +------+    | adaptors/   |   | adaptors/  |
+    | .py CLI  |      | adap/|    | claude_code |   | codex/     |
+    |          |      | openclaw  |             |   |            |
+    +----+-----+      | index.ts  +------+------+   +-----+------+
+         |            | (plugin)  |             |         |
+         +------------+-----+-----+-------------+---------+
+                             |
+          +------v------+           +----------+
+          |  Python API  |           | Retrieval|
+          | (core/interface/api.py)  | Pipeline |
+          +--------------+           +----------+
+                 |                        |
+                 +------ SQLite DB -------+
                               |
-           +------v------+           +----------+
-           |  Python API  |           | Retrieval|
-           | (core/interface/api.py)  | Pipeline |
-           +--------------+           +----------+
-                  |                        |
-                  +------ SQLite DB -------+
-                               |
-                        +------v------+
-                        |   Janitor   |
-                        |  (nightly)  |
-                        +-------------+
+                       +------v------+
+                       |   Janitor   |
+                       |  (nightly)  |
+                       +-------------+
 ```
 
 ### Three Main Loops
 
 **Extraction** -- Triggered by context compaction, session reset, direct CLI module invocation (`python3 ingest/extract.py`), or adapter lifecycle signals. A deep-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
 
-**Retrieval** -- Fires before each agent turn (OpenClaw / Claude Code) or via `quaid recall` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
+**Retrieval** -- Fires before each agent turn (OpenClaw / Claude Code / Codex) or via `quaid recall` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
 Project knowledge retrieval remains a first-class path: host adapters expose `projects_search` where appropriate, and the CLI exposes the same capability through `quaid recall "query" '{"stores": ["docs"]}'`.
 
@@ -135,13 +135,14 @@ Conversation messages
 
 ### Trigger Points
 
-Extraction can be triggered from any of Quaid's three interfaces:
+Extraction can be triggered from any of Quaid's four interfaces:
 
 - **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/adapter.ts`): Compaction extraction uses gateway hook `before_compaction` (context being compacted). Reset/new extraction is routed via OpenClaw internal workspace hooks (`command:new`, `command:reset`) that queue `ResetSignal` for Quaid processing, due to upstream typed-hook boundary issues for `before_reset` (https://github.com/openclaw/openclaw/issues/23895). Programmatic compaction is available via gateway RPC `sessions.compact`.
 - **CLI module** (`modules/quaid/ingest/extract.py`): `python3 ingest/extract.py <file>` accepts JSONL session files or plain text transcripts.
 - **Claude Code adapter** (`modules/quaid/adaptors/claude_code/`): Hook output is translated into daemon signals and session-init context.
+- **Codex adapter** (`modules/quaid/adaptors/codex/`): Extraction runs from the `Stop` hook (`hook-codex-stop`); session-init context written at `SessionStart`.
 
-All three paths converge on the same extraction logic and produce identical results.
+All four paths converge on the same extraction logic and produce identical results.
 
 ### Extraction Steps
 
