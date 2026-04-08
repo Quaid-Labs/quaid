@@ -510,6 +510,9 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
             "raw_project_logs": {},
             "rolling_batches": 0,
             "processed_line_offset": 0,
+            "buffered_line_offset": 0,
+            "semantic_buffer": "",
+            "semantic_buffer_tokens": 0,
             "facts_skipped": 0,
             "payload_duplicate_facts_collapsed": 0,
             "carry_duplicate_facts_dropped": 0,
@@ -532,6 +535,9 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
             "raw_project_logs": {},
             "rolling_batches": 0,
             "processed_line_offset": 0,
+            "buffered_line_offset": 0,
+            "semantic_buffer": "",
+            "semantic_buffer_tokens": 0,
             "facts_skipped": 0,
             "payload_duplicate_facts_collapsed": 0,
             "carry_duplicate_facts_dropped": 0,
@@ -551,6 +557,9 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
             "raw_project_logs": {},
             "rolling_batches": 0,
             "processed_line_offset": 0,
+            "buffered_line_offset": 0,
+            "semantic_buffer": "",
+            "semantic_buffer_tokens": 0,
             "facts_skipped": 0,
             "payload_duplicate_facts_collapsed": 0,
             "carry_duplicate_facts_dropped": 0,
@@ -568,6 +577,9 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
     data.setdefault("raw_project_logs", {})
     data.setdefault("rolling_batches", 0)
     data.setdefault("processed_line_offset", 0)
+    data.setdefault("buffered_line_offset", int(data.get("processed_line_offset", 0) or 0))
+    data.setdefault("semantic_buffer", "")
+    data.setdefault("semantic_buffer_tokens", 0)
     data.setdefault("facts_skipped", 0)
     data.setdefault("payload_duplicate_facts_collapsed", 0)
     data.setdefault("carry_duplicate_facts_dropped", 0)
@@ -1126,6 +1138,91 @@ def read_transcript_slice(transcript_path: str, from_line: int) -> List[str]:
     return lines
 
 
+def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
+    """Parse raw session JSONL lines into the semantic transcript text the model sees."""
+    if not lines:
+        return ""
+    if adapter is None:
+        return "".join(lines)
+
+    tmp_dir = _tmp_dir()
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".jsonl", delete=False, encoding="utf-8", dir=str(tmp_dir)
+        ) as tmp:
+            tmp.writelines(lines)
+            tmp_path = tmp.name
+        parsed = adapter.parse_session_jsonl(Path(tmp_path))
+        return str(parsed or "").strip()
+    except Exception as exc:
+        logger.warning("failed parsing transcript window for semantic rolling budget: %s", exc)
+        return ""
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _append_semantic_buffer(state: Dict[str, Any], parsed_text: str, line_offset: int) -> Dict[str, Any]:
+    """Append parsed transcript text to the persisted semantic rolling buffer."""
+    from lib.tokens import estimate_tokens
+
+    merged = dict(state or {})
+    existing = str(merged.get("semantic_buffer", "") or "").strip()
+    incoming = str(parsed_text or "").strip()
+    if existing and incoming:
+        combined = f"{existing}\n\n{incoming}"
+    else:
+        combined = existing or incoming
+    merged["semantic_buffer"] = combined
+    merged["semantic_buffer_tokens"] = estimate_tokens(combined) if combined else 0
+    merged["buffered_line_offset"] = max(
+        int(merged.get("buffered_line_offset", 0) or 0),
+        int(line_offset or 0),
+    )
+    merged["processed_line_offset"] = int(merged["buffered_line_offset"])
+    return merged
+
+
+def _semantic_buffer_has_content(state: Dict[str, Any]) -> bool:
+    return bool(str((state or {}).get("semantic_buffer", "") or "").strip())
+
+
+def _buffer_transcript_tail(
+    transcript_path: str,
+    start_line: int,
+    state: Dict[str, Any],
+    *,
+    adapter=None,
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    """Parse new raw session lines into the semantic rolling buffer."""
+    lines = read_transcript_slice(transcript_path, start_line)
+    metrics = {
+        "raw_lines_added": len(lines),
+        "semantic_chars_added": 0,
+        "semantic_tokens_added": 0,
+        "buffered_line_offset": int(start_line or 0),
+    }
+    if not lines:
+        return dict(state or {}), metrics
+
+    before_tokens = int((state or {}).get("semantic_buffer_tokens", 0) or 0)
+    parsed_text = _parse_transcript_lines(lines, adapter=adapter)
+    merged = _append_semantic_buffer(state, parsed_text, start_line + len(lines))
+    metrics["semantic_chars_added"] = len(str(parsed_text or "").strip())
+    metrics["semantic_tokens_added"] = max(
+        0,
+        int(merged.get("semantic_buffer_tokens", 0) or 0) - before_tokens,
+    )
+    metrics["buffered_line_offset"] = int(
+        merged.get("buffered_line_offset", start_line + len(lines)) or 0
+    )
+    return merged, metrics
+
+
 def count_transcript_lines(transcript_path: str) -> int:
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
@@ -1180,29 +1277,7 @@ def read_transcript_token_window(
     adapter=None,
 ) -> List[str]:
     """Read a single message-aligned transcript window up to the token budget."""
-    def _window_has_extractable_conversation(current_lines: List[str]) -> bool:
-        if not current_lines:
-            return False
-        if adapter is None:
-            return True
-        tmp_dir = _tmp_dir()
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".jsonl", delete=False, encoding="utf-8", dir=str(tmp_dir)
-            ) as tmp:
-                tmp.writelines(current_lines)
-                tmp_path = tmp.name
-            parsed = adapter.parse_session_jsonl(Path(tmp_path))
-            return bool(str(parsed or "").strip())
-        except Exception:
-            return True
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+    from lib.tokens import estimate_tokens
 
     lines: List[str] = []
     approx_tokens = 0
@@ -1213,16 +1288,33 @@ def read_transcript_token_window(
             for i, line in enumerate(f):
                 if i < from_line:
                     continue
-                line_tokens = max(1, len(line) // 4)
-                # Oversized single rows can exceed this rolling window budget.
-                # Keep them in the returned slice so cursor advancement remains
-                # monotonic and downstream transcript/extraction chunking can
-                # still split/process the content normally; just do not let
-                # them consume this window's token/line budget.
-                if line_tokens > max_tokens:
+                if saw_extractable_conversation and max_lines > 0 and budgeted_lines >= max_lines:
+                    break
+                if adapter is None:
+                    line_tokens = max(1, len(line) // 4)
+                    # Oversized single rows can exceed this rolling window budget.
+                    # Keep them in the returned slice so cursor advancement remains
+                    # monotonic and downstream transcript/extraction chunking can
+                    # still split/process the content normally; just do not let
+                    # them consume this window's token/line budget.
+                    if line_tokens > max_tokens:
+                        lines.append(line)
+                        saw_extractable_conversation = True
+                        if len(lines) >= MAX_TRANSCRIPT_LINES:
+                            logger.warning(
+                                "transcript %s: token window capped at %d lines (from offset %d)",
+                                transcript_path,
+                                MAX_TRANSCRIPT_LINES,
+                                from_line,
+                            )
+                            break
+                        continue
+                    if saw_extractable_conversation and budgeted_lines > 0 and approx_tokens + line_tokens > max_tokens:
+                        break
                     lines.append(line)
-                    if not saw_extractable_conversation:
-                        saw_extractable_conversation = _window_has_extractable_conversation(lines)
+                    approx_tokens += line_tokens
+                    budgeted_lines += 1
+                    saw_extractable_conversation = True
                     if len(lines) >= MAX_TRANSCRIPT_LINES:
                         logger.warning(
                             "transcript %s: token window capped at %d lines (from offset %d)",
@@ -1232,15 +1324,16 @@ def read_transcript_token_window(
                         )
                         break
                     continue
-                if saw_extractable_conversation and max_lines > 0 and budgeted_lines >= max_lines:
-                    break
-                if saw_extractable_conversation and budgeted_lines > 0 and approx_tokens + line_tokens > max_tokens:
+                candidate = lines + [line]
+                candidate_parsed = _parse_transcript_lines(candidate, adapter=adapter)
+                candidate_extractable = bool(candidate_parsed)
+                candidate_tokens = estimate_tokens(candidate_parsed) if candidate_extractable else 0
+                if saw_extractable_conversation and budgeted_lines > 0 and candidate_extractable and candidate_tokens > max_tokens:
                     break
                 lines.append(line)
-                approx_tokens += line_tokens
-                budgeted_lines += 1
-                if not saw_extractable_conversation:
-                    saw_extractable_conversation = _window_has_extractable_conversation(lines)
+                if candidate_extractable:
+                    saw_extractable_conversation = True
+                    budgeted_lines += 1
                 if len(lines) >= MAX_TRANSCRIPT_LINES:
                     logger.warning(
                         "transcript %s: token window capped at %d lines (from offset %d)",
@@ -1564,12 +1657,33 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     chunk_budget = _get_capture_chunk_tokens()
     chunk_line_budget = _get_capture_chunk_max_lines()
     adapter = None
-    if rolling_mode:
-        try:
-            from lib.adapter import get_adapter
-            adapter = get_adapter()
-        except Exception:
-            adapter = None
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+    except Exception:
+        adapter = None
+    semantic_buffer_metrics = {
+        "raw_lines_added": 0,
+        "semantic_chars_added": 0,
+        "semantic_tokens_added": 0,
+        "buffered_line_offset": int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
+    }
+    buffered_line_offset = max(
+        int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
+        int(cursor_offset or 0),
+    )
+    if rolling_mode and total_lines > buffered_line_offset:
+        staged_state, semantic_buffer_metrics = _buffer_transcript_tail(
+            transcript_path,
+            buffered_line_offset,
+            staged_state,
+            adapter=adapter,
+        )
+        write_rolling_state(session_id, staged_state)
+        buffered_line_offset = int(
+            staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
+        )
+    read_start_offset = cursor_offset if rolling_mode else buffered_line_offset
     new_lines = (
         read_transcript_token_window(
             transcript_path,
@@ -1579,12 +1693,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             adapter=adapter,
         )
         if rolling_mode
-        else read_transcript_slice(transcript_path, cursor_offset)
+        else read_transcript_slice(transcript_path, read_start_offset)
     )
 
     if not new_lines:
         logger.info("[%s] session %s: no new content past cursor (offset=%d)", label, session_id, cursor_offset)
-        if not rolling_mode and staged_state_has_payload(staged_state):
+        if not rolling_mode and (staged_state_has_payload(staged_state) or _semantic_buffer_has_content(staged_state)):
             new_lines = []
         else:
             if signal_type == "session_end":
@@ -1647,6 +1761,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 from lib.adapter import get_adapter
                 adapter = get_adapter()
             transcript_text = adapter.parse_session_jsonl(Path(tmp_path))
+        if rolling_mode:
+            transcript_text = str(staged_state.get("semantic_buffer", "") or "").strip()
+        elif _semantic_buffer_has_content(staged_state):
+            buffered_text = str(staged_state.get("semantic_buffer", "") or "").strip()
+            tail_text = str(transcript_text or "").strip()
+            transcript_text = f"{buffered_text}\n\n{tail_text}" if buffered_text and tail_text else (buffered_text or tail_text)
 
         if not rolling_mode and not transcript_text.strip():
             if staged_state_has_payload(staged_state):
@@ -1656,7 +1776,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             else:
                 logger.info("[%s] session %s: empty transcript after parsing", label, session_id)
-                write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+                write_cursor(session_id, total_lines, transcript_path)
                 mark_signal_processed(signal_data)
                 return
 
@@ -1746,12 +1866,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             operation_phase = "rolling_stage_extract"
             if not transcript_text.strip():
                 logger.info("[%s] session %s: empty rolling transcript after parsing", label, session_id)
-                write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+                staged_state["semantic_buffer"] = ""
+                staged_state["semantic_buffer_tokens"] = 0
+                staged_state["buffered_line_offset"] = buffered_line_offset
+                staged_state["processed_line_offset"] = buffered_line_offset
+                write_rolling_state(session_id, staged_state)
+                write_cursor(session_id, buffered_line_offset, transcript_path)
                 mark_signal_processed(signal_data)
                 return
             stage_started_at = time.time()
-            line_chars = sum(len(line) for line in new_lines)
-            line_estimated_tokens = sum(max(1, len(line) // 4) for line in new_lines)
+            line_chars = int(semantic_buffer_metrics.get("semantic_chars_added", 0) or len(transcript_text))
+            line_estimated_tokens = int(
+                staged_state.get("semantic_buffer_tokens", 0)
+                or semantic_buffer_metrics.get("semantic_tokens_added", 0)
+                or 0
+            )
             max_line_chars = max((len(line) for line in new_lines), default=0)
             max_line_estimated_tokens = max((max(1, len(line) // 4) for line in new_lines), default=0)
             carry_facts_in = len(staged_state.get("carry_facts", []) or [])
@@ -1799,23 +1928,27 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     reason=f"non_provider_failure_{_failed_chunks}_of_{chunks_total}_chunks",
                 )
             staged_state = merge_staged_payloads(staged_state, stage_result)
-            staged_state["processed_line_offset"] = cursor_offset + len(new_lines)
+            staged_state["processed_line_offset"] = buffered_line_offset
+            staged_state["buffered_line_offset"] = buffered_line_offset
+            staged_state["semantic_buffer"] = ""
+            staged_state["semantic_buffer_tokens"] = 0
             staged_state["transcript_path"] = transcript_path
             write_rolling_state(session_id, staged_state)
-            write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+            write_cursor(session_id, buffered_line_offset, transcript_path)
             mark_signal_processed(signal_data)
             write_rolling_metric(
                 "rolling_stage",
                 session_id,
                 signal_type=signal_type,
-                line_count=len(new_lines),
+                line_count=int(semantic_buffer_metrics.get("raw_lines_added", len(new_lines)) or 0),
                 line_chars=line_chars,
                 line_estimated_tokens=line_estimated_tokens,
                 max_line_chars=max_line_chars,
                 max_line_estimated_tokens=max_line_estimated_tokens,
                 chunk_budget_tokens=chunk_budget,
                 chunk_budget_lines=chunk_line_budget,
-                new_cursor_offset=cursor_offset + len(new_lines),
+                buffered_line_offset=buffered_line_offset,
+                new_cursor_offset=buffered_line_offset,
                 staged_fact_count=len(staged_state.get("raw_facts", []) or []),
                 rolling_batches=int(staged_state.get("rolling_batches", 0) or 0),
                 carry_facts_in=carry_facts_in,
@@ -1863,22 +1996,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 ),
                 wall_seconds=round(time.time() - stage_started_at, 3),
             )
-            if total_lines > cursor_offset + len(new_lines):
-                remaining_tokens = estimate_unextracted_tokens(transcript_path, cursor_offset + len(new_lines), chunk_budget)
-                if (
-                    remaining_tokens >= chunk_budget
-                    or (chunk_line_budget > 0 and len(new_lines) >= chunk_line_budget)
-                ):
-                    write_signal(
-                        signal_type="rolling",
-                        session_id=session_id,
-                        transcript_path=transcript_path,
-                        meta={
-                            "reason": "continued_chunk_budget",
-                            "chunk_tokens": chunk_budget,
-                            "chunk_lines": chunk_line_budget,
-                        },
-                    )
             return
 
         tail_result = None
@@ -1999,7 +2116,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
 
-        write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+        write_cursor(session_id, total_lines, transcript_path)
         clear_rolling_state(session_id)
         if mark_harvested_fn is not None:
             try:
@@ -2449,6 +2566,12 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
+    adapter = None
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+    except Exception:
+        adapter = None
 
     for cursor_file in cursor_dir.glob("*.json"):
         try:
@@ -2465,24 +2588,41 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
 
         cursor_offset = int(data.get("line_offset", 0) or 0)
         total_lines = count_transcript_lines(transcript_path)
-        if total_lines <= cursor_offset:
-            continue
+        state = read_rolling_state(session_id)
+        buffered_line_offset = max(
+            int(state.get("buffered_line_offset", cursor_offset) or 0),
+            cursor_offset,
+        )
+        if total_lines > buffered_line_offset:
+            state, _buffer_metrics = _buffer_transcript_tail(
+                transcript_path,
+                buffered_line_offset,
+                state,
+                adapter=adapter,
+            )
+            write_rolling_state(session_id, state)
+            buffered_line_offset = int(state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset)
 
-        unextracted_tokens = estimate_unextracted_tokens(transcript_path, cursor_offset, chunk_budget)
-        if unextracted_tokens < chunk_budget:
+        semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
+        if semantic_tokens < chunk_budget:
             continue
 
         logger.info(
-            "session %s crossed rolling extract budget (%d >= %d tokens), generating rolling signal",
+            "session %s crossed rolling extract budget (%d >= %d semantic tokens), generating rolling signal",
             session_id,
-            unextracted_tokens,
+            semantic_tokens,
             chunk_budget,
         )
         write_signal(
             signal_type="rolling",
             session_id=session_id,
             transcript_path=transcript_path,
-            meta={"reason": "chunk_budget", "chunk_tokens": chunk_budget},
+            meta={
+                "reason": "semantic_chunk_budget",
+                "chunk_tokens": chunk_budget,
+                "semantic_buffer_tokens": semantic_tokens,
+                "buffered_line_offset": buffered_line_offset,
+            },
         )
 
 

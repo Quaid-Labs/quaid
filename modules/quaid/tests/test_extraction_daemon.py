@@ -742,6 +742,145 @@ class TestRollingExtraction:
             }
         ]
 
+    def test_check_chunk_ready_sessions_uses_semantic_buffer_not_raw_json_size(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        machine_noise = json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "x" * 1200}],
+                },
+            }
+        ) + "\n"
+        user_line = json.dumps(
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "hi"}}
+        ) + "\n"
+        transcript_path.write_text(machine_noise + user_line, encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                return "User: hi"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 20)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            state = extraction_daemon.read_rolling_state("sess-roll")
+            assert captured == []
+            assert state["semantic_buffer"] == "User: hi"
+            assert state["semantic_buffer_tokens"] < 20
+            assert state["buffered_line_offset"] == 2
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+    def test_check_chunk_ready_sessions_accumulates_semantic_buffer_across_checks(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        first_line = json.dumps(
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "short note"}}
+        ) + "\n"
+        transcript_path.write_text(first_line, encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                messages = []
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    payload = json.loads(raw)
+                    event_payload = payload.get("payload", {})
+                    message = event_payload.get("message")
+                    if message:
+                        messages.append(f"User: {message}")
+                return "\n\n".join(messages)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 8)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            first_state = extraction_daemon.read_rolling_state("sess-roll")
+            assert captured == []
+            assert first_state["buffered_line_offset"] == 1
+            assert "short note" in first_state["semantic_buffer"]
+
+            second_line = json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "another longer note with extra words"},
+                }
+            ) + "\n"
+            transcript_path.write_text(first_line + second_line, encoding="utf-8")
+
+            extraction_daemon.check_chunk_ready_sessions()
+            second_state = extraction_daemon.read_rolling_state("sess-roll")
+            assert len(captured) == 1
+            assert captured[0]["signal_type"] == "rolling"
+            assert captured[0]["meta"]["reason"] == "semantic_chunk_budget"
+            assert second_state["buffered_line_offset"] == 2
+            assert "short note" in second_state["semantic_buffer"]
+            assert "another longer note with extra words" in second_state["semantic_buffer"]
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_process_signal_rolling_stage_then_flush_publishes_staged_payload(self, monkeypatch, tmp_path):
         import sys
         import types
@@ -989,6 +1128,178 @@ class TestRollingExtraction:
             assert flush_metric["dedup_token_prefilter_terms"] == 0
             assert flush_metric["dedup_token_prefilter_skips"] == 0
             assert flush_metric["embedding_cache_requested"] == 0
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
+    def test_process_signal_session_end_flushes_buffered_semantic_tail_without_new_raw_lines(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"My sister is Diana"}\n'
+            '{"role":"assistant","content":"Her daughter is Alice"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        config_dir = tmp_path / "rolling-inst" / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "memory.json").write_text(
+            json.dumps({"adapter": {"type": "standalone"}}),
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
+        extraction_daemon.write_rolling_state(
+            "sess-roll",
+            {
+                "session_id": "sess-roll",
+                "transcript_path": str(transcript_path),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: My sister is Diana\n\nAssistant: Her daughter is Alice",
+                "semantic_buffer_tokens": 12,
+                "carry_facts": [],
+                "raw_facts": [],
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def quaid_home(self):
+                return tmp_path / "rolling-inst"
+
+            def instance_root(self):
+                return tmp_path / "rolling-inst"
+
+            def data_dir(self):
+                return tmp_path / "rolling-inst" / "data"
+
+            def parse_session_jsonl(self, path):
+                return "unused when semantic buffer is present"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        seen_transcripts = []
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+                "dry_run": True,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "carry_facts": [],
+                "carry_duplicate_facts_dropped": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "chunk_calls": 1,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: {
+                **payload,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(
+            ingest_runtime_mod,
+            "run_session_logs_ingest",
+            lambda **kwargs: {"status": "indexed"},
+        )
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(
+            docs_updater_mod,
+            "update_project_docs",
+            lambda snapshots, extraction_result: {"docs_updated": 0},
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_read_usage_totals",
+            lambda: {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "fast_calls": 0,
+                "fast_input_tokens": 0,
+                "fast_output_tokens": 0,
+                "deep_calls": 0,
+                "deep_input_tokens": 0,
+                "deep_output_tokens": 0,
+            },
+        )
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id="sess-roll",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert seen_transcripts == ["User: My sister is Diana\n\nAssistant: Her daughter is Alice"]
+            assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
+            assert not extraction_daemon._rolling_state_path("sess-roll").exists()
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry
