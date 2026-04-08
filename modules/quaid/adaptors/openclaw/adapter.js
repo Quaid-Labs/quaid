@@ -112,7 +112,11 @@ function _pythonVersionOk(bin) {
     return false;
   }
   try {
-    const result = spawnSync(candidate, ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"], { stdio: "ignore" });
+    const result = spawnSync(
+      candidate,
+      ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+      { stdio: "ignore" }
+    );
     return !result.error && result.status === 0;
   } catch {
     return false;
