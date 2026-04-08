@@ -500,6 +500,11 @@ class AdapterConfig:
 
 
 @dataclass
+class LivetestConfig:
+    enable_extraction_buffer_log: bool = False
+
+
+@dataclass
 class PluginSlotsConfig:
     adapter: str = ""  # single active adapter plugin ID
     ingest: List[str] = field(default_factory=list)  # enabled ingest plugin IDs
@@ -520,6 +525,7 @@ class PluginsConfig:
 @dataclass
 class MemoryConfig:
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
+    livetest: LivetestConfig = field(default_factory=LivetestConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     core: CoreConfig = field(default_factory=CoreConfig)
     systems: SystemsConfig = field(default_factory=SystemsConfig)
@@ -559,6 +565,7 @@ _KNOWN_TOP_LEVEL_CONFIG_KEYS = {
     "docs",
     "identity",
     "janitor",
+    "livetest",
     "logging",
     "models",
     "notifications",
@@ -1526,6 +1533,12 @@ def _load_config_inner() -> MemoryConfig:
         projects=systems_data.get('projects', True),
         workspace=systems_data.get('workspace', True),
     )
+    livetest_data = config_data.get('livetest', {})
+    livetest = LivetestConfig(
+        enable_extraction_buffer_log=bool(
+            _cfg_get(livetest_data, 'enable_extraction_buffer_log', False)
+        ),
+    )
     raw_prompt_set = config_data.get("prompt_set", "default")
     if raw_prompt_set is None:
         prompt_set = "default"
@@ -1534,6 +1547,7 @@ def _load_config_inner() -> MemoryConfig:
 
     candidate = MemoryConfig(
         adapter=adapter,
+        livetest=livetest,
         plugins=plugins,
         core=core_cfg,
         systems=systems,

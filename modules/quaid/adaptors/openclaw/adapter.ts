@@ -7,7 +7,7 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -146,10 +146,53 @@ function _resolvePythonPluginRoot(): string {
   return path.join(WORKSPACE, "plugins", "quaid");
 }
 const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
-// Allow override of the Python binary for environments where "python3" in PATH
-// resolves to the wrong interpreter (e.g. macOS system Python 3.9 instead of
-// the Homebrew Python 3.14 that has sqlite_vec installed).
-const PYTHON_BIN = String(process.env.QUAID_PYTHON_BIN || "python3").trim() || "python3";
+function _pythonVersionOk(bin: string): boolean {
+  const candidate = String(bin || "").trim();
+  if (!candidate) {
+    return false;
+  }
+  try {
+    const result = spawnSync(
+      candidate,
+      ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+      { stdio: "ignore" },
+    );
+    return !result.error && result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function _resolvePythonBin(): string {
+  const explicit = String(process.env.QUAID_PYTHON_BIN || "").trim();
+  const candidates = [
+    explicit,
+    "/opt/homebrew/bin/python3",
+    "/opt/homebrew/bin/python3.13",
+    "/opt/homebrew/bin/python3.12",
+    "/opt/homebrew/bin/python3.11",
+    "/opt/homebrew/bin/python3.10",
+    "/usr/local/bin/python3",
+    "/usr/local/bin/python3.13",
+    "/usr/local/bin/python3.12",
+    "/usr/local/bin/python3.11",
+    "/usr/local/bin/python3.10",
+    "python3.13",
+    "python3.12",
+    "python3.11",
+    "python3.10",
+    "python3",
+  ];
+  for (const candidate of candidates) {
+    if (_pythonVersionOk(candidate)) {
+      process.env.QUAID_PYTHON_BIN = candidate;
+      return candidate;
+    }
+  }
+  return explicit || "python3";
+}
+
+const PYTHON_BIN = _resolvePythonBin();
 const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 // When QUAID_INSTANCE is set, the Python bridge must point MEMORY_DB_PATH at the

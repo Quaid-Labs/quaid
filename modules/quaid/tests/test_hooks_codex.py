@@ -141,6 +141,25 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert "emitted Codex startup context" in err
 
 
+def test_runtime_context_block_includes_quaid_home_and_instance_without_metadata(monkeypatch, tmp_path):
+    from core.runtime import system_context
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
+    monkeypatch.setattr(system_context, "collect_system_context_metadata", lambda **kwargs: {"entries": []})
+
+    content = system_context.build_system_context_block()
+
+    assert content == "\n".join(
+        [
+            "[Quaid runtime]",
+            f"QUAID_HOME: {tmp_path}",
+            "QUAID_INSTANCE: codex-test",
+            "instance: codex-test",
+        ]
+    )
+
+
 def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypatch, tmp_path):
     projects_dir = tmp_path / "projects"
     identity_dir = tmp_path / "identity"

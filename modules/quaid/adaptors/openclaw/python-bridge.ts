@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -12,10 +12,53 @@ function _resolveTimeoutMs(name: string, fallbackMs: number): number {
 
 export const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
 
-// Allow override of the Python binary for environments where "python3" in PATH
-// resolves to the wrong interpreter (e.g. macOS system Python 3.9 instead of
-// the Homebrew Python 3.14 that has sqlite_vec).
-const PYTHON_BIN = String(process.env.QUAID_PYTHON_BIN || "python3").trim() || "python3";
+function _pythonVersionOk(bin: string): boolean {
+  const candidate = String(bin || "").trim();
+  if (!candidate) {
+    return false;
+  }
+  try {
+    const result = spawnSync(
+      candidate,
+      ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+      { stdio: "ignore" },
+    );
+    return !result.error && result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function _resolvePythonBin(): string {
+  const explicit = String(process.env.QUAID_PYTHON_BIN || "").trim();
+  const candidates = [
+    explicit,
+    "/opt/homebrew/bin/python3",
+    "/opt/homebrew/bin/python3.13",
+    "/opt/homebrew/bin/python3.12",
+    "/opt/homebrew/bin/python3.11",
+    "/opt/homebrew/bin/python3.10",
+    "/usr/local/bin/python3",
+    "/usr/local/bin/python3.13",
+    "/usr/local/bin/python3.12",
+    "/usr/local/bin/python3.11",
+    "/usr/local/bin/python3.10",
+    "python3.13",
+    "python3.12",
+    "python3.11",
+    "python3.10",
+    "python3",
+  ];
+  for (const candidate of candidates) {
+    if (_pythonVersionOk(candidate)) {
+      process.env.QUAID_PYTHON_BIN = candidate;
+      return candidate;
+    }
+  }
+  return explicit || "python3";
+}
+
+const PYTHON_BIN = _resolvePythonBin();
 
 function _formatBridgeErrorDetail(stderrText: string, stdoutText: string): string {
   const timeoutHint =

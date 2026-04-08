@@ -127,13 +127,16 @@ def build_system_context_block(
 ) -> str:
     payload = collect_system_context_metadata(config=config, workspace_root=workspace_root, strict=strict)
     entries = list(payload.get("entries") or [])
-    if not entries:
-        return ""
-
     lines: List[str] = ["[Quaid runtime]"]
+    home = str(os.environ.get("QUAID_HOME", "") or "").strip()
+    if home:
+        lines.append(f"QUAID_HOME: {home}")
     instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
     if instance:
+        lines.append(f"QUAID_INSTANCE: {instance}")
         lines.append(f"instance: {instance}")
+    if not entries and len(lines) == 1:
+        return ""
     for entry in entries:
         label = str(entry.get("label", "") or "").strip()
         value = str(entry.get("value", "") or "").strip()

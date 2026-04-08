@@ -140,6 +140,47 @@ def _log_path() -> Path:
     return d / "extraction-daemon.log"
 
 
+def _extraction_buffer_log_path() -> Path:
+    d = _instance_root() / "logs" / "daemon"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "extraction-buffer.log"
+
+
+def _extraction_buffer_log_enabled() -> bool:
+    try:
+        from config import get_config
+        cfg = get_config()
+        livetest = getattr(cfg, "livetest", None)
+        return bool(getattr(livetest, "enable_extraction_buffer_log", False))
+    except Exception:
+        return False
+
+
+def _write_extraction_buffer_log(
+    session_id: str,
+    *,
+    phase: str,
+    signal_type: str,
+    transcript_text: str,
+) -> None:
+    text = str(transcript_text or "").strip()
+    if not text or not _extraction_buffer_log_enabled():
+        return
+    try:
+        path = _extraction_buffer_log_path()
+        timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        header = (
+            f"=== {timestamp} session={session_id} phase={phase} "
+            f"signal={signal_type} chars={len(text)} ===\n"
+        )
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(header)
+            handle.write(text)
+            handle.write("\n\n")
+    except Exception as exc:
+        logger.warning("failed writing extraction buffer log for %s: %s", session_id, exc)
+
+
 def _install_state_path() -> Path:
     return _instance_root() / "data" / "installed-at.json"
 
@@ -1930,6 +1971,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             staged_state = merge_staged_payloads(staged_state, stage_result)
             staged_state["processed_line_offset"] = buffered_line_offset
             staged_state["buffered_line_offset"] = buffered_line_offset
+            _write_extraction_buffer_log(
+                session_id,
+                phase="rolling_stage",
+                signal_type=signal_type,
+                transcript_text=transcript_text,
+            )
             staged_state["semantic_buffer"] = ""
             staged_state["semantic_buffer_tokens"] = 0
             staged_state["transcript_path"] = transcript_path
@@ -2116,6 +2163,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
 
+        _write_extraction_buffer_log(
+            session_id,
+            phase="final_flush",
+            signal_type=signal_type,
+            transcript_text=transcript_text,
+        )
         write_cursor(session_id, total_lines, transcript_path)
         clear_rolling_state(session_id)
         if mark_harvested_fn is not None:

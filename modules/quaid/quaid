@@ -60,10 +60,50 @@ elif [[ ":${PYTHONPATH}:" != *":${SCRIPT_DIR}:"* ]]; then
   export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
 fi
 
-# Honour QUAID_PYTHON_BIN if set (allows host environments to point at a
-# specific Python interpreter, e.g. /opt/homebrew/bin/python3 instead of the
-# system python3 that may lack sqlite_vec or other required extensions).
-PYTHON_BIN="${QUAID_PYTHON_BIN:-python3}"
+# Resolve a Python 3.10+ interpreter without trusting PATH order.
+# LaunchAgents often resolve "python3" to the macOS system Python 3.9, which
+# cannot run Quaid's newer syntax and may not have sqlite-vec installed.
+_python_bin_ok() {
+  local bin="${1:-}"
+  [[ -n "$bin" ]] || return 1
+  if [[ "$bin" == */* && ! -x "$bin" ]]; then
+    return 1
+  fi
+  "$bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+
+_resolve_python_bin() {
+  local candidates=()
+  [[ -n "${QUAID_PYTHON_BIN:-}" ]] && candidates+=("${QUAID_PYTHON_BIN}")
+  candidates+=(
+    "/opt/homebrew/bin/python3"
+    "/opt/homebrew/bin/python3.13"
+    "/opt/homebrew/bin/python3.12"
+    "/opt/homebrew/bin/python3.11"
+    "/opt/homebrew/bin/python3.10"
+    "/usr/local/bin/python3"
+    "/usr/local/bin/python3.13"
+    "/usr/local/bin/python3.12"
+    "/usr/local/bin/python3.11"
+    "/usr/local/bin/python3.10"
+    "python3.13"
+    "python3.12"
+    "python3.11"
+    "python3.10"
+    "python3"
+  )
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if _python_bin_ok "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' "${QUAID_PYTHON_BIN:-python3}"
+}
+
+PYTHON_BIN="$(_resolve_python_bin)"
+export QUAID_PYTHON_BIN="$PYTHON_BIN"
 
 case "$CMD" in
   # Lifecycle hooks (adapter-agnostic)

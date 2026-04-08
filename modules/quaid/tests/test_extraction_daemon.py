@@ -897,7 +897,12 @@ class TestRollingExtraction:
         config_dir = tmp_path / "rolling-inst" / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
         (config_dir / "memory.json").write_text(
-            json.dumps({"adapter": {"type": "standalone"}}),
+            json.dumps(
+                {
+                    "adapter": {"type": "standalone"},
+                    "livetest": {"enableExtractionBufferLog": True},
+                }
+            ),
             encoding="utf-8",
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
@@ -1079,6 +1084,12 @@ class TestRollingExtraction:
             assert stage_metric["embedding_cache_requested"] == 1
             assert stage_metric["embedding_cache_warmed"] == 1
             assert stage_metric["assessment_usable"] == 1
+            buffer_log = (tmp_path / "rolling-inst" / "logs" / "daemon" / "extraction-buffer.log").read_text(
+                encoding="utf-8"
+            )
+            assert "phase=rolling_stage" in buffer_log
+            assert "signal=rolling" in buffer_log
+            assert "User: My sister is Diana" in buffer_log
 
             flush_signal = extraction_daemon.write_signal(
                 signal_type="session_end",
@@ -1158,7 +1169,12 @@ class TestRollingExtraction:
         config_dir = tmp_path / "rolling-inst" / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
         (config_dir / "memory.json").write_text(
-            json.dumps({"adapter": {"type": "standalone"}}),
+            json.dumps(
+                {
+                    "adapter": {"type": "standalone"},
+                    "livetest": {"enableExtractionBufferLog": True},
+                }
+            ),
             encoding="utf-8",
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
@@ -1300,6 +1316,12 @@ class TestRollingExtraction:
             assert seen_transcripts == ["User: My sister is Diana\n\nAssistant: Her daughter is Alice"]
             assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
             assert not extraction_daemon._rolling_state_path("sess-roll").exists()
+            buffer_log = (tmp_path / "rolling-inst" / "logs" / "daemon" / "extraction-buffer.log").read_text(
+                encoding="utf-8"
+            )
+            assert "phase=final_flush" in buffer_log
+            assert "signal=session_end" in buffer_log
+            assert "Her daughter is Alice" in buffer_log
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry
