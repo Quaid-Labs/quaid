@@ -4,8 +4,9 @@
   "name": "Standalone",
   "install": {
     "selectLabel": "Standalone",
-    "selectHint": "local-only runtime (default)",
-    "sortOrder": 10
+    "selectHint": "local-only runtime (not supported)",
+    "sortOrder": 99,
+    "hidden": true
   },
   "runtime": {
     "instancePrefix": "standalone",

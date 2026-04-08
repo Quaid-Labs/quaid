@@ -122,7 +122,7 @@ export function loadAdapterManifests(workspace) {
 export function adapterSelectOptions(manifests) {
   const list = Array.isArray(manifests) ? manifests : [];
   return list
-    .filter((m) => m && m.install && m.install.selectLabel)
+    .filter((m) => m && m.install && m.install.selectLabel && !m.install.hidden)
     .map((m) => ({
       value: m.id,
       label: String(m.install.selectLabel || m.name || m.id),

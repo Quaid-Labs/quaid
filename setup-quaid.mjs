@@ -2152,20 +2152,8 @@ async function step1_preflight() {
 
   const s = spinner();
 
-  // --- Platform selection ---
-  // If not explicitly set via CLI flag, ask in interactive mode.
-  if (!IS_OPENCLAW && !IS_CLAUDE_CODE && !AGENT_MODE && !_testAnswers) {
-    const adapterOptions = _adapterOptionsForSelect();
-    const platform = handleCancel(await select({
-      message: "Which platform are you installing Quaid for?",
-      options: adapterOptions,
-    }));
-    // Promote to selected adapter for the rest of the install.
-    _platformOverride = platform;
-    syncInstallerInstanceEnv();
-  }
-
-  // Compatibility warnings shown after platform selection (in step2_config)
+  // Platform selection happens in step3_models (interactive) or via --adapter (agent mode).
+  // Preflight only runs generic checks. Platform-specific checks run after selection.
 
   const installState = detectExistingInstallState();
   _existingInstallDetected = !!installState.hasInstall;
@@ -2181,7 +2169,7 @@ async function step1_preflight() {
 
   // Platform-specific preflight deferred to after platform selection in interactive mode.
   // In agent mode (--agent), platform is known from --adapter flag so run immediately.
-  if (!AGENT_MODE && !_platformOverride) {
+  if (!AGENT_MODE && !FORCED_ADAPTER_TYPE) {
     s.stop(C.green("System check passed"));
     return;
   }
