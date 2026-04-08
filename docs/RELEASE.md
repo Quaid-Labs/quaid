@@ -165,10 +165,11 @@ For live clears:
 
 - `--install-verified true` means M0/install produced a clean silo with no manual patching.
 - If a live run required a manual config patch, record it with `--install-verified false`; release promotion will block until the install path is re-cleared or manually accepted with a code change.
-- Compatibility rows are only for host pairs:
+- Compatibility rows are required for host pairs:
   - `Quaid/OpenClaw`
   - `Quaid/Claude Code`
-- XP is part of release readiness, but it does not create its own compatibility row.
+  - `Quaid/Codex`
+- XP is part of release readiness, but it does not replace host compatibility rows.
 - Live clears write the accepted cleared runtime SHA into `compatibility.json` on `canary`.
 - If `HEAD` has already moved by the time the live lane records the clear, pass
   `--sha <cleared-runtime-sha>` so the row reflects what was actually tested.
@@ -214,6 +215,29 @@ Build installer artifact locally:
 ```bash
 ./scripts/build-release-tarball.sh
 ```
+
+## Release Post
+
+For public releases, prepare a release post alongside the GitHub release.
+
+Use the template at:
+
+```text
+docs/releases/RELEASE-POST-TEMPLATE.md
+```
+
+Workflow:
+
+1. Draft the exact post from the template.
+2. Fill in release-specific highlights, supported hosts, and known limitations.
+3. Get approval on the final wording before posting publicly.
+4. Publish it only after the GitHub release is live, so links resolve cleanly.
+
+At minimum, the release post should link:
+
+- the GitHub release
+- `docs/releases/v<version>.md`
+- the repo / install entrypoint
 
 ## Optional: Git Hook
 

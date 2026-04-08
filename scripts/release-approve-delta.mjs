@@ -11,7 +11,7 @@ const COMPAT_PATH = process.env.QUAID_COMPATIBILITY_PATH || path.join(ROOT, "com
 const APPROVAL_PATH =
   process.env.QUAID_RELEASE_APPROVAL_PATH || path.join(ROOT, ".release-approval.local.json");
 const VALID_SLOTS = ["unit", "ci", "xp"];
-const VALID_HOSTS = ["openclaw", "claude-code"];
+const VALID_HOSTS = ["openclaw", "claude-code", "codex"];
 const DEFAULT_APPROVER = "Solomon Steadman";
 
 function usage() {

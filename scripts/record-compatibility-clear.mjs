@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const COMPAT_PATH = process.env.QUAID_COMPATIBILITY_PATH || path.join(ROOT, "compatibility.json");
-const VALID_HOSTS = new Set(["openclaw", "claude-code"]);
+const VALID_HOSTS = new Set(["openclaw", "claude-code", "codex"]);
 
 function usage() {
   console.log(`Usage:
-  node scripts/record-compatibility-clear.mjs --host <openclaw|claude-code> --host-version <version> [--sha <commit>] [--notes <text>] [--install-verified true|false]
+  node scripts/record-compatibility-clear.mjs --host <openclaw|claude-code|codex> --host-version <version> [--sha <commit>] [--notes <text>] [--install-verified true|false]
 `);
 }
 

@@ -38,8 +38,8 @@ destructive command sequences in an untracked companion file such as
 - Treat compatibility as a live-test output, not as a separate matrix promise.
 - Only update `compatibility.json` after the full current live suite is green
   and Solomon has reviewed the clear run and accepted it as a real clear.
-- Record host clears separately for `Quaid/OpenClaw` and `Quaid/Claude Code`.
-- XP is part of release readiness, but it does not create its own compatibility row.
+- Record host clears separately for `Quaid/OpenClaw`, `Quaid/Claude Code`, and `Quaid/Codex`.
+- XP is part of release readiness, but it does not replace host compatibility rows.
 - Do not wait for release-SHA reconciliation once Solomon has accepted the clear.
 - Use `node scripts/record-compatibility-clear.mjs` to write the cleared runtime
   SHA as the pending `quaid_range` for the host pair.

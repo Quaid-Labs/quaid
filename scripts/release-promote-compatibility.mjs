@@ -10,7 +10,7 @@ const COMPAT_PATH = process.env.QUAID_COMPATIBILITY_PATH || path.join(ROOT, "com
 const PKG_PATH = path.join(ROOT, "modules", "quaid", "package.json");
 const APPROVAL_PATH =
   process.env.QUAID_RELEASE_APPROVAL_PATH || path.join(ROOT, ".release-approval.local.json");
-const REQUIRED_HOSTS = ["openclaw", "claude-code"];
+const REQUIRED_HOSTS = ["openclaw", "claude-code", "codex"];
 
 function die(message, code = 1) {
   console.error(`[release-compat] ${message}`);
