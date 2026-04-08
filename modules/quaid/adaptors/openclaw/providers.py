@@ -150,6 +150,7 @@ class GatewayLLMProvider(LLMProvider):
             "Content-Type": "application/json",
             "x-openclaw-scopes": "operator.write",
             "x-openclaw-model": oc_model,
+            "x-openclaw-session-mode": "stateless",
         }
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
