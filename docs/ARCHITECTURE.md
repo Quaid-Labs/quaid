@@ -766,7 +766,7 @@ These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and 
 | Variable | Purpose |
 |----------|---------|
 | `QUAID_HOME` | Root directory containing all instances (default `~/.quaid/`) |
-| `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, or `claude_code` |
+| `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, `claude_code`, or `codex` |
 | `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations (default `"default"`) |
 | `CLAWDBOT_WORKSPACE` | Root workspace hint for OpenClaw integrations |
 | `MEMORY_DB_PATH` | Override database path |

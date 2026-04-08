@@ -24,9 +24,11 @@ Quaid is instance-based. By default, Quaid keeps its own runtime state under `~/
 - `<QUAID_HOME>/<instance>/logs/`: runtime and janitor logs
 - `<QUAID_HOME>/projects/`: canonical project docs, registry metadata, and Quaid-managed project state
 - `<QUAID_HOME>/shared/config/<platform>/memory.json`: platform-level shared overrides
+- `<QUAID_HOME>/shared/config/global/memory.json`: machine-wide global shared settings (embeddings, Ollama)
 
 Important:
 - Model/provider overrides should be platform-scoped (`shared/config/<platform>/...`), not global.
+- Embeddings settings live in the global shared config and must be consistent across all instances on a machine.
 - Different platforms can have different providers and model lanes.
 - `~/.quaid/` is Quaid's home, not a general-purpose workspace. Real project files can live elsewhere and be linked into projects.
 

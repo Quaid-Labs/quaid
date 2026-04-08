@@ -1328,20 +1328,18 @@ Set in `lib/database.get_connection()`:
 
 ### 4.1 Config Layer Architecture — Four-Layer Merge Chain
 
-Config is loaded by `_load_config_inner()` in `config.py`. `_config_paths()` returns four paths in highest-priority-first order; the loader iterates them in reverse (lowest first) and deep-merges each file that exists:
+Config is loaded by `_load_config_inner()` in `config.py`. `_config_paths()` returns three paths in highest-priority-first order; the loader iterates them in reverse (lowest first) and deep-merges each file that exists:
 
 | Priority | Path | Purpose |
 |----------|------|---------|
 | **0 (highest)** | `QUAID_HOME/<instance>/config/memory.json` | Per-instance overrides (identity, capture timeouts, domain preferences) |
-| **1** | `QUAID_HOME/shared/config/memory.json` | Machine-wide shared settings (embeddings model, Ollama URL) |
-| **2** | `~/.quaid/memory-config.json` | User-level fallback (rarely used) |
-| **3 (lowest)** | `./memory-config.json` | Local cwd override (dev/testing only) |
+| **1** | `QUAID_HOME/shared/config/<platform>/memory.json` | Platform-specific shared settings |
+| **2 (lowest)** | `QUAID_HOME/shared/config/global/memory.json` | Machine-wide global shared settings (embeddings model, Ollama URL) |
 
 Rules:
-- The shared config is written by the first installer; subsequent instances on the same machine inherit it automatically.
-- Embeddings config (`ollama.*`, `embeddings.*`) must live in shared config so all instances use the same model and produce comparable embeddings.
+- The global shared config is written by the first installer; subsequent instances on the same machine inherit it automatically.
+- Embeddings config (`ollama.*`, `embeddings.*`) must live in global shared config so all instances use the same model and produce comparable embeddings.
 - Instance config holds per-adapter settings that should differ between instances (identity, session timeouts, retrieval preferences).
-- A local `./memory-config.json` in the cwd can override everything (rarely used; intended for local dev/testing only).
 - Missing layers are silently skipped; only files that exist are merged.
 - Deep merge semantics: nested dicts are merged recursively; scalar and list values in higher-priority layers overwrite lower-priority values entirely.
 
@@ -1559,7 +1557,7 @@ Workspace monitoring uses a built-in bootstrap file set (`AGENTS.md`, `SOUL.md`,
 
 ### 4.12 Instance Management
 
-Quaid supports multiple isolated memory instances on the same machine (e.g. one for OpenClaw, one for Claude Code). Each instance has its own database, config, and logs while sharing embeddings config and the project registry.
+Quaid supports multiple isolated memory instances on the same machine (e.g. one for OpenClaw, one for Claude Code, one for Codex). Each instance has its own database, config, and logs while sharing embeddings config and the project registry.
 
 **Environment variables:**
 - `QUAID_HOME` — root directory containing all instances (default: `~/.quaid`). Set once per machine.

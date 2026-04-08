@@ -138,7 +138,7 @@ Up to 100 signals are processed per poll cycle (`MAX_SIGNALS_PER_POLL = 100`).
 | `type` | Signal type: `compaction`, `reset`, `session_end`, or `timeout` |
 | `session_id` | Session identifier (alphanumeric + `_-`, max 128 chars) |
 | `transcript_path` | Absolute path to the adapter's `.jsonl` session file |
-| `adapter` | Adapter name: `"claude-code"`, `"openclaw"`, `"unknown"` |
+| `adapter` | Adapter name: `"claude-code"`, `"openclaw"`, `"codex"`, `"unknown"` |
 | `supports_compaction_control` | Whether OC can delay compaction until extraction finishes |
 | `timestamp` | ISO-8601 UTC timestamp of when the signal was written |
 | `meta` | Reserved for future use, currently `{}` |

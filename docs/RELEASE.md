@@ -104,7 +104,7 @@ This runs:
 1. docs consistency
 2. privacy audit (tracked tree plus reachable git history against local blocked markers)
 3. release evidence check (`unit` + `ci` + `xp` must be recorded against HEAD)
-4. compatibility promotion (`openclaw` + `claude-code` live clears must exist, be install-verified, and match HEAD)
+4. compatibility promotion (`openclaw` + `claude-code` + `codex` live clears must exist, be install-verified, and match HEAD)
 5. release metadata/version consistency
 6. ownership/attribution verification
 7. strict TypeScript/JavaScript runtime pair check
@@ -159,6 +159,7 @@ the clear run and accepted it as real:
 ```bash
 node scripts/record-compatibility-clear.mjs --host openclaw --host-version 2026.3.23 --install-verified true
 node scripts/record-compatibility-clear.mjs --host claude-code --host-version 2.1.72 --install-verified true
+node scripts/record-compatibility-clear.mjs --host codex --host-version <version> --install-verified true
 ```
 
 For live clears:

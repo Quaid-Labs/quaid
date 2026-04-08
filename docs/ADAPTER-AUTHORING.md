@@ -93,6 +93,7 @@ See existing implementations:
 
 - `modules/quaid/adaptors/openclaw/adapter.py`
 - `modules/quaid/adaptors/claude_code/adapter.py`
+- `modules/quaid/adaptors/codex/adapter.py`
 
 ### Required `QuaidAdapter` methods
 

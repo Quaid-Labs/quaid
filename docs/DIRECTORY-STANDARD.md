@@ -37,6 +37,7 @@ are.
 |---------|-------|----------|
 | Claude Code | `CLAUDE.md` | Project working directory (user's cwd) |
 | OpenClaw | `SOUL.md`, `USER.md`, `ENVIRONMENT.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TODO.md` | OC workspace root (`~/.openclaw/workspace/`) |
+| Codex | `AGENTS.md` | Project working directory (user's cwd) |
 | Future adapter | Whatever the platform uses | Adapter declares it |
 
 **Rules**:
@@ -61,6 +62,7 @@ deprecated utility alias — prefer `adapter.identity_dir()` in new code.)
 |---------|-----------|-------------|
 | Claude Code | `claude-code` | `QUAID_HOME/claude-code/identity/` |
 | OpenClaw | `openclaw` | `QUAID_HOME/openclaw/identity/` |
+| Codex | `codex` | `QUAID_HOME/codex/identity/` |
 | Standalone | `standalone` | `QUAID_HOME/` (backward compat) |
 
 **Contents**:

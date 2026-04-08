@@ -45,7 +45,7 @@ current, which adapters participate. It is workspace-centric.
 
 - **Canonical path**: where Quaid's project metadata lives (`QUAID_HOME/projects/<name>/`)
 - **Source root**: where the user's actual project files live (optional)
-- **Instance**: an adapter (OpenClaw or Claude Code) linked to the project
+- **Instance**: an adapter (OpenClaw, Claude Code, or Codex) linked to the project
 - **Shadow git**: invisible git tracking of `source_root` changes
 - **Doc registry**: the SQLite record of which files belong to a project
 
@@ -914,7 +914,7 @@ quaid global-registry remove <name> # --force overrides multi-instance guard
 quaid global-registry rename <name> <new>
 ```
 
-Reads `QUAID_HOME/projects/project-registry.json`. When OC and CC run on the same machine and
+Reads `QUAID_HOME/projects/project-registry.json`. When multiple adapters (e.g. OC, CC, Codex) run on the same machine and
 share a `QUAID_HOME`, this shows the complete cross-adapter project list.
 
 **`quaid global-registry list`** calls `lib/project_registry.list_all()`:
@@ -931,7 +931,7 @@ canonical project path. This is not exposed in `core/project_registry.link_proje
 
 ## 8. Cross-Instance Workflow
 
-When OpenClaw and Claude Code share the same `QUAID_HOME` (same machine):
+When multiple adapters (e.g. OpenClaw, Claude Code, Codex) share the same `QUAID_HOME` (same machine):
 
 - **`project-registry.json` is shared.** Both adapters read and write the same file.
   File locking in `core/project_registry._save_registry()` prevents corruption on

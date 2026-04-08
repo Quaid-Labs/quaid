@@ -39,7 +39,7 @@ Recommended framing:
 
 - Some runtime/gateway restore flows can require a restart retry.
 - Janitor scope currently includes workspace editing unless explicitly constrained.
-- Non-OpenClaw adapter coverage is still early compared to the OpenClaw path.
+- Claude Code and Codex adapter coverage is less complete than OpenClaw; some lifecycle signals and timeout-based compaction are not available on those hosts.
 - OpenClaw typed plugin hooks can miss `before_reset` across bundle boundaries (upstream: https://github.com/openclaw/openclaw/issues/23895). Quaid mitigates reset/new extraction via internal workspace command hooks (`command:new`, `command:reset`) while compaction remains on `before_compaction`.
 - Janitor apply-mode E2E can block on approval-policy `ask`; this is expected unless policy is pinned to non-interactive behavior for the run.
 - Legacy contradiction task surface is retained for compatibility, but contradiction detection/resolution is decommissioned in active janitor `--task all` flow (stale handling is supersession/recency based).

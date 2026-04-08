@@ -500,8 +500,10 @@ ls -la ~/.quaid/projects/staging/
 
 **Setup:**
 ```bash
-ssh <oc-host> "touch $QUAID_HOME/claudecode/modules/quaid/core/lifecycle/janitor.py"
+ssh <oc-host> "touch <dev-checkout>/modules/quaid/core/lifecycle/janitor.py"
 ```
+
+Replace `<dev-checkout>` with the path to the dev checkout on `<oc-host>` (configured via `paths.devRoot`).
 
 **Then say to the agent:**
 > "Search docs for janitor pipeline"
@@ -510,7 +512,7 @@ ssh <oc-host> "touch $QUAID_HOME/claudecode/modules/quaid/core/lifecycle/janitor
 
 **Reset:**
 ```bash
-ssh <oc-host> "cd $QUAID_HOME/claudecode/modules/quaid && git checkout core/lifecycle/janitor.py"
+ssh <oc-host> "cd <dev-checkout>/modules/quaid && git checkout core/lifecycle/janitor.py"
 ```
 
 ---
@@ -529,7 +531,9 @@ ssh <oc-host> "cd $QUAID_HOME/claudecode/modules/quaid && git checkout core/life
 ### Quick CLI Verification
 
 ```bash
-ssh <oc-host> "cd $QUAID_HOME/claudecode/modules/quaid && \
+ssh <oc-host> "cd <dev-checkout>/modules/quaid && \
   QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   python3 datastore/docsdb/registry.py list --project quaid"
 ```
+
+Replace `<dev-checkout>` with the path to the dev checkout on `<oc-host>` (configured via `paths.devRoot`).

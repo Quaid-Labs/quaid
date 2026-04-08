@@ -141,7 +141,7 @@ targets.
 
 ## 2. Config Layer Merge Chain
 
-### The four search paths
+### The three search paths
 
 `config.py`'s `_config_paths()` returns paths in **highest-priority-first**
 order. The loader iterates them in **reverse** (lowest first) and deep-merges
@@ -150,9 +150,8 @@ each file that exists:
 | Priority | Path | Purpose |
 |---|---|---|
 | 0 (highest) | `QUAID_HOME/<instance>/config/memory.json` | Per-instance overrides |
-| 1 | `QUAID_HOME/shared/config/memory.json` | Machine-wide shared settings |
-| 2 | `~/.quaid/memory-config.json` | User-level fallback (rarely used) |
-| 3 (lowest) | `./memory-config.json` | Local cwd override (rarely used) |
+| 1 | `QUAID_HOME/shared/config/<platform>/memory.json` | Platform-specific shared settings |
+| 2 (lowest) | `QUAID_HOME/shared/config/global/memory.json` | Machine-wide global shared settings |
 
 The `_workspace_root()` used in `_config_paths()` resolves to
 `get_adapter().instance_root()` via `lib/runtime_context.get_workspace_dir()`.
@@ -173,7 +172,11 @@ after merging.
 - `plugins.slots.*` — which plugins are active
 - `users.*`, `notifications.*`, `logging.*`
 
-**Shared config** (`QUAID_HOME/shared/config/memory.json`):
+**Platform shared config** (`QUAID_HOME/shared/config/<platform>/memory.json`):
+- Platform-specific overrides that apply to all instances of a given adapter type.
+- Use to set provider or model defaults that differ per platform (e.g. Claude Code vs Codex).
+
+**Global shared config** (`QUAID_HOME/shared/config/global/memory.json`):
 - `ollama.url` — Ollama server URL (shared across all instances on the machine)
 - `ollama.embeddingModel` — embedding model name
 - `ollama.embeddingDim` — embedding vector dimension
@@ -181,7 +184,7 @@ after merging.
 **Why embeddings must be shared:** All instances on the same machine that
 share a `QUAID_HOME` must use identical embedding models. Embedding vectors
 are stored in `vec_nodes` and are model-specific — mixing models produces
-incompatible vector spaces. Placing `ollama.*` in shared config enforces
+incompatible vector spaces. Placing `ollama.*` in global shared config enforces
 consistency. Changing `embeddingModel` requires re-embedding all nodes (see
 the warning block in `memory.json`).
 
@@ -384,7 +387,7 @@ on `QuaidAdapter` all derive from `instance_root()`.
 
 ### Same QUAID_HOME, multiple instances
 
-This is the standard setup on a single machine where OpenClaw and Claude Code
+This is the standard setup on a single machine where OpenClaw, Claude Code, and Codex
 share the same memory workspace:
 
 ```
