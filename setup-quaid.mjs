@@ -2097,7 +2097,7 @@ function showBanner() {
   if (SURVEY_ONLY) return;
   // Persistent header — shown at the top of every step
   const lines = renderQuaidBanner(C, {
-    subtitle: "by Douglas Quaid",
+    subtitle: "by Solomon Steadman",
     title: " LONG-TERM MEMORY SYSTEM ",
     topRightTail: "                                      ",
     footerLines: [
@@ -2336,41 +2336,21 @@ async function step1_preflight() {
     const cfgCli = canRun("clawdbot") ? "clawdbot" : "openclaw";
     let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
     if (!hasAgent) {
-      log.warn("No agents.list detected; attempting auto-heal in ~/.openclaw/openclaw.json");
       hasAgent = _ensureAgentsList(cfgCli, WORKSPACE);
     }
-    if (!hasAgent) {
-      log.warn(
-        "OpenClaw agents.list is still missing. Install continues, but run `openclaw setup` if agent sessions fail.",
-      );
-    }
-    if (_sanitizeOpenClawMemorySlot()) {
-      log.info("Healed stale plugins.slots.memory=quaid to memory-core (quaid not installed)");
-    }
-    if (_sanitizeOpenClawQuaidPluginEntry()) {
-      log.info("Removed invalid plugins.entries.quaid keys (workspace/hooks) from ~/.openclaw/openclaw.json");
-    }
-    if (_removeOpenClawPluginsAllowQuaid()) {
-      log.info("Removed stale plugins.allow entry for quaid before plugin registration");
-    }
+    _sanitizeOpenClawMemorySlot();
+    _sanitizeOpenClawQuaidPluginEntry();
+    _removeOpenClawPluginsAllowQuaid();
     const _ocRuntimeInstance = resolvedInstallerInstanceId();
-    if (_ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance)) {
-      log.info(`Seeded OpenClaw config env.vars with QUAID_INSTANCE=${_ocRuntimeInstance} (gateway default for plugin startup; per-agent calls override via buildPythonEnv)`);
-    }
+    _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
-      log.info("Enabled gateway.http.endpoints.responses.enabled=true in ~/.openclaw/openclaw.json");
       const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
-        log.info("Restarted OpenClaw gateway to apply endpoint config");
         await waitForGatewayWarmup(30_000);
-      } else {
-        log.warn("Could not auto-restart OpenClaw gateway. Restart it manually to apply endpoint config.");
       }
     }
-    if (_ensureOpenClawCompactionModeDefault()) {
-      log.info("Set agents.defaults.compaction.mode=default in ~/.openclaw/openclaw.json");
-    }
+    _ensureOpenClawCompactionModeDefault();
     s.stop(C.green("OpenClaw") + " gateway running");
   } else {
     // --- Non-OpenClaw installs: ensure workspace directory exists ---
@@ -2573,10 +2553,8 @@ async function step2_owner() {
   log.message("");
 
   const seedName =
-    String(INSTALL_ARGS.ownerName || process.env.QUAID_OWNER_NAME || shell("git config user.name 2>/dev/null") || "").trim();
-  if (seedName) {
-    log.info(`Suggested: ${C.bcyan(seedName)}`);
-  } else if (AGENT_MODE && !_existingInstallDetected) {
+    String(INSTALL_ARGS.ownerName || process.env.QUAID_OWNER_NAME || "").trim();
+  if (AGENT_MODE && !seedName && !_existingInstallDetected) {
     throw new Error("Agent mode requires --owner-name or QUAID_OWNER_NAME so memories are tagged to the person.");
   } else if (AGENT_MODE && _existingInstallDetected) {
     throw new Error(
@@ -2605,28 +2583,20 @@ async function step3_models() {
   log.info(C.dim("Quaid uses two LLM tiers: deep reasoning (extraction, review)"));
   log.info(C.dim("and fast reasoning (reranking, classification)."));
 
-  const janitorAskFirst = handleCancel(await confirm({
-    message: "Sometimes Quaid changes files and memory records to organize them. Should it ask first before applying those changes?",
-    initialValue: false,
-  }));
+  const janitorAskFirst = false; // Auto-apply by default
 
-  const advancedSetup = handleCancel(await confirm({
-    message: "Advanced setup? (recommended keeps sane defaults)",
-    initialValue: false,
+  // Platform/adapter selection — always ask, this is the primary choice
+  const adapterOptions = _adapterOptionsForSelect();
+  let adapterType = handleCancel(await select({
+    message: "Which platform are you installing for?",
+    initialValue: resolvedInstallerPlatform() || "standalone",
+    options: adapterOptions,
   }));
+  _platformOverride = adapterType;
 
+  // Use platform default LLM provider — no advanced setup needed
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
-  let adapterType = resolvedInstallerPlatform() || "standalone";
-  if (advancedSetup) {
-    const adapterOptions = _adapterOptionsForSelect();
-    adapterType = handleCancel(await select({
-      message: "Agent system adapter",
-      initialValue: adapterType,
-      options: adapterOptions,
-    }));
-  }
-  _platformOverride = adapterType;
   syncInstallerInstanceEnv(adapterType);
   // Instance IDs are runtime-owned and provision automatically on first use.
   // Installer keeps the deterministic default (<platform>-main) unless the
@@ -2634,15 +2604,7 @@ async function step3_models() {
 
   const adapterCaps = _readAdapterInstallerCapabilities(adapterType) || {};
   const supportsTimeoutCompaction = _platformSupportsTimeoutCompaction(adapterType);
-  const autoCompactionOnTimeout = supportsTimeoutCompaction
-    ? handleCancel(await confirm({
-        message: "Do you want to trade off a little less quality for a LOT of savings by auto-compacting after timeout memory extraction?",
-        initialValue: true,
-      }))
-    : false;
-  if (!supportsTimeoutCompaction) {
-    log.info(C.dim("Timeout auto-compaction is not supported on this platform; leaving it disabled."));
-  }
+  const autoCompactionOnTimeout = supportsTimeoutCompaction; // Auto-enable if supported
 
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
@@ -2692,15 +2654,7 @@ async function step3_models() {
     if (!supportedProviders.includes(provider)) {
       provider = supportedProviders[0] || "anthropic";
     }
-    if (advancedSetup) {
-      provider = handleCancel(await select({
-        message: "LLM provider",
-        initialValue: provider,
-        options: providerOptions.length > 0 ? providerOptions : [
-          { value: provider, label: provider, hint: "adapter-defined provider" },
-        ],
-      }));
-    }
+    // Use platform default provider — no prompt needed
   }
 
   if (!hostManagedLlmDefault && provider !== "anthropic") {
@@ -3058,14 +3012,8 @@ async function step4_embeddings() {
   }
 
   if (!ollamaRunning && (process.env.QUAID_TEST_NO_OLLAMA || !canRun("ollama"))) {
-    log.warn("Ollama not found.");
-    log.info(C.dim("Ollama runs embedding models locally — free, fast, and private."));
-    log.info(C.dim("Without it, semantic recall degrades substantially."));
-    const install = handleCancel(await confirm({
-      message: "Install Ollama now? (recommended)",
-      initialValue: true,
-    }));
-    if (install) {
+    log.info("Ollama not found — installing (required for semantic recall).");
+    {
       const s = spinner();
       s.start("Installing Ollama...");
       try {
