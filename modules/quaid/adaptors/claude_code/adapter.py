@@ -32,6 +32,20 @@ class ClaudeCodeAdapter(QuaidAdapter):
         r"<quaid_notification>.*?</quaid_notification>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _LOCAL_COMMAND_CAVEAT_RE = re.compile(
+        r"<local-command-caveat>.*?</local-command-caveat>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    _LOCAL_COMMAND_STDOUT_RE = re.compile(
+        r"<local-command-stdout>.*?(?:</local-command-stdout>|$)",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    _LOCAL_COMMAND_METADATA_RE = re.compile(
+        r"<command-name>.*?</command-name>\s*"
+        r"<command-message>.*?</command-message>\s*"
+        r"<command-args>.*?</command-args>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     """Adapter for running Quaid inside Claude Code sessions."""
 
     def __init__(self, home: Optional[Path] = None):
@@ -342,6 +356,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
             return ""
         value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
         value = self._QUAID_NOTIFICATION_RE.sub("", value)
+        value = self._LOCAL_COMMAND_CAVEAT_RE.sub("", value)
+        value = self._LOCAL_COMMAND_METADATA_RE.sub("", value)
+        value = self._LOCAL_COMMAND_STDOUT_RE.sub("", value)
         return value.strip()
 
     def filter_system_messages(self, text: str) -> bool:
