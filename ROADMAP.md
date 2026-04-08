@@ -57,8 +57,9 @@ for agents.
   - Reduce hard-coded assumptions in recall, writing, and maintenance paths.
 
 - **Host-owned adapter ecosystem**
-  - Keep the first-party focus on OpenClaw, Claude Code, and Codex.
+  - Keep the near-term first-party focus on OpenClaw, Claude Code, and Codex.
   - Tighten adapter contracts so other hosts can own their own adapters in their own codebases.
+  - Make it plausible over time for even the current big-three adapters to move outward if their host teams want to own them directly.
   - Preserve cross-host behavior through stable contracts rather than pulling every integration into the core repo.
 
 - **Operational UX**
