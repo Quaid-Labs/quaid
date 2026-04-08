@@ -290,9 +290,9 @@ registration is:
 
 Each command is prefixed with environment variables:
 ```
-QUAID_HOME='<your-instance-dir>'
-QUAID_INSTANCE='claude-code'
-<your-instance-dir>/modules/quaid/quaid hook-<name>
+QUAID_HOME='<quaid-home>'
+QUAID_INSTANCE='<instance-id>'
+<quaid-home>/modules/quaid/quaid hook-<name>
 ```
 
 The `QUAID_HOME` and `QUAID_INSTANCE` values isolate this Claude Code

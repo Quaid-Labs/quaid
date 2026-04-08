@@ -65,11 +65,11 @@ supports forced compaction).
 1. Set timeout to 1 minute and restart the daemon:
    ```bash
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+     ~/.quaid/modules/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
+     ~/.quaid/modules/quaid/quaid daemon stop 2>&1; sleep 2; \
      QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
+     ~/.quaid/modules/quaid/quaid daemon start 2>&1'
    ```
 
 2. Start a fresh CC session in `livetest:CC` from `/tmp/cc-livetest`. Tell CC
@@ -85,11 +85,11 @@ supports forced compaction).
 4. Restore and restart:
    ```bash
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+     ~/.quaid/modules/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
+     ~/.quaid/modules/quaid/quaid daemon stop 2>&1; sleep 2; \
      QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
+     ~/.quaid/modules/quaid/quaid daemon start 2>&1'
    ```
 
 **M4 PASS criteria (CC):** Timeout fact extracted and stored. Daemon log shows
@@ -101,7 +101,7 @@ extraction verified (no compaction, expected for CC)."
 ## Daemon Management
 
 CC runs its own extraction daemon independent of OpenClaw. The `quaid` CLI
-path is `~/.quaid/plugins/quaid/quaid` — the installed runtime. Do NOT use
+path is `~/.quaid/modules/quaid/quaid` — the installed runtime. Do NOT use
 `~/.openclaw/extensions/quaid/quaid` for CC daemon management; that path
 only exists if OpenClaw is installed and would silently break on systems
 without it.
@@ -109,7 +109,7 @@ without it.
 Check status with:
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-  ~/.quaid/plugins/quaid/quaid daemon status 2>&1'
+  ~/.quaid/modules/quaid/quaid daemon status 2>&1'
 ```
 
 Verify instance root, log file, and pid file all point to `CC_INSTANCE`.
@@ -151,7 +151,7 @@ ssh REMOTE_HOST 'sqlite3 WORKSPACE/CC_INSTANCE/data/memory.db "SELECT COUNT(*) F
 
 # CLI
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-  ~/.quaid/plugins/quaid/quaid recall "query" 2>&1'
+  ~/.quaid/modules/quaid/quaid recall "query" 2>&1'
 ```
 
 ---

@@ -30,21 +30,21 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 2. **Throwaway / one-off / scratch / quick / hello-world** → use the misc project as the owner, but do not treat `~/.quaid/` as the working directory:
    ```bash
    # The misc project is pre-created. Confirm it exists:
-   $QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE
+   quaid project show misc--$QUAID_INSTANCE
    # Write the file at a real working path, then register it to misc:
-   $QUAID_HOME/plugins/quaid/quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
+   quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
    ```
    Prefer a user-visible working path or the active repo. Always tell the user the file is tracked by the misc project and offer to promote it to a real project.
 3. **Durable new work** → create a project first, then write files:
    ```bash
-   $QUAID_HOME/plugins/quaid/quaid registry create-project <name> --source-roots <path>
+   quaid registry create-project <name> --source-roots <path>
    # THEN write files / spawn sub-agents
    ```
 4. **User specifies a path outside the project system** → write there, then register the file so the project tracks it:
    ```bash
    # Write the file at the user's requested path (e.g. ~/my-scripts/tool.py)
    # Then link it into the owning project:
-   $QUAID_HOME/plugins/quaid/quaid registry register ~/my-scripts/tool.py --project <name>
+   quaid registry register ~/my-scripts/tool.py --project <name>
    ```
    Always tell the user the file is tracked via the registry even though it lives outside the project directory.
 
@@ -54,10 +54,10 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 Correct response:
 ```bash
 # Step 1: confirm misc project exists
-$QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE
+quaid project show misc--$QUAID_INSTANCE
 # Step 2: write the file at a real working path
 # Step 3: register it to misc
-$QUAID_HOME/plugins/quaid/quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
+quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
 ```
 Tell the user: "I tracked it under the misc project so it stays in Quaid's project system."
 Do NOT write to `/tmp/hello.py` or any other path.
@@ -68,7 +68,7 @@ Do NOT write to `/tmp/hello.py` or any other path.
 Correct response:
 ```bash
 # Step 1: create a project BEFORE doing any work or spawning sub-agents
-$QUAID_HOME/plugins/quaid/quaid registry create-project my-cli-tool --source-roots /path/to/script
+quaid registry create-project my-cli-tool --source-roots /path/to/script
 # Step 2: then proceed with the work
 ```
 
@@ -76,7 +76,7 @@ $QUAID_HOME/plugins/quaid/quaid registry create-project my-cli-tool --source-roo
 
 ## Tool Access
 
-Use Quaid via your Bash tool. Prefer `$QUAID_HOME/plugins/quaid/quaid`; some hosts do not place `quaid` on `PATH`. `QUAID_HOME` and `QUAID_INSTANCE` are set in your environment by the adapter — do not override them. See `TOOLS.md` for the full command reference.
+Use Quaid via your Bash tool. Prefer `quaid`. If it is not on `PATH`, use `$QUAID_HOME/modules/quaid/quaid` for current installs or `$QUAID_HOME/plugins/quaid/quaid` on older installs. `QUAID_HOME` and `QUAID_INSTANCE` are set in your environment by the adapter — do not override them. See `TOOLS.md` for the full command reference.
 
 ---
 

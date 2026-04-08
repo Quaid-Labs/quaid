@@ -74,5 +74,6 @@ Agents may encounter a `quaid notify --deferred-status` notice during a
 milestone (e.g. janitor or doc-update messages). This is expected behavior.
 A well-behaved agent drains the notice via `quaid notify --deferred-drain` and
 briefly relays the content ("I have a Quaid maintenance notice — [summary]").
-Acknowledge as a pass if the agent surfaces the notice, even if it asks the
-user before draining rather than draining proactively.
+Acknowledge as a pass when the agent drains the notice without asking
+permission, as long as a human user is actively present in the conversation.
+Do not treat "asked before draining" as the preferred behavior.

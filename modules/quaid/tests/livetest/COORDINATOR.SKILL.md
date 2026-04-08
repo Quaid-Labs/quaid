@@ -352,8 +352,8 @@ After the platform reports completion:
 2. **Health check passes:**
    ```bash
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=OC_INSTANCE ~/.openclaw/extensions/quaid/quaid doctor 2>&1 | tail -5'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE ~/.openclaw/extensions/quaid/quaid doctor 2>&1 | tail -5'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE WORKSPACE/plugins/quaid/quaid doctor 2>&1 | tail -5'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE WORKSPACE/modules/quaid/quaid doctor 2>&1 | tail -5'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE WORKSPACE/modules/quaid/quaid doctor 2>&1 | tail -5'
    ```
 
 ### Post-install coordinator steps (after M0 PASS, before M1)

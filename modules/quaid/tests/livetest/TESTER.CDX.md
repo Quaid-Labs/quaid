@@ -186,7 +186,7 @@ ssh REMOTE_HOST 'sqlite3 WORKSPACE/CDX_INSTANCE/data/memory.db "SELECT COUNT(*) 
 
 # CLI
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE \
-  WORKSPACE/plugins/quaid/quaid recall "query" 2>&1'
+  WORKSPACE/modules/quaid/quaid recall "query" 2>&1'
 ```
 
 ---

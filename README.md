@@ -86,15 +86,15 @@ Terminology:
 
 Headline launch summary:
 
-|        | Quaid Sonnet | FC Sonnet | OpenClaw Native |
-|--------|--------------|-----------|-----------------|
-| AL-S   | 92.23%       | 92.90%    | 69.40%          |
-| AL-L   | 87.81%       | 87.70%    | 63.06%          |
-| AL-L OBD | 89.58%     | 87.70%    | 63.06%          |
+|        | Quaid Sonnet/Sonnet | FC Sonnet | OpenClaw Native |
+|--------|---------------------|-----------|-----------------|
+| AL-S   | 92.23%              | 92.90%    | 69.40%          |
+| AL-L   | 87.81%              | 87.70%    | 63.06%          |
+| AL-L OBD | 89.58%            | 87.70%    | unknown         |
 
-Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AL-S` remains the clean reference lane. `AL-L` and `AL-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the FC Sonnet baseline. In the long-form FC rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row.
+Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AL-S` remains the clean reference lane. `AL-L` and `AL-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the FC Sonnet baseline. In the long-form FC rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row where a published baseline exists.
 
-Token-cost reference from the Sonnet evaluation study (`AGENTLIFE_TECHNICAL_REPORT_20260329.md`):
+Historical token-cost reference from the March 29 Sonnet/Haiku study (`AGENTLIFE_TECHNICAL_REPORT_20260329.md`):
 - `AL-S`: Quaid Sonnet/Haiku (`r880`, `r847`) reached `87.69%` at `5,753,673` eval tokens, versus FC Sonnet (`r606`) at `92.90%` and `29,828,646` eval tokens.
 - `AL-L`: Quaid Sonnet/Haiku (`r895`, `r863`) reached `85.82%` at `5,917,209` eval tokens, versus FC Sonnet (`r857`) at `87.70%` and `34,596,206` eval tokens.
 - Sonnet eval study: `AL-L` Haiku-ingest + Sonnet-eval (`r944`) reached `88.69%` at `8,382,952` eval tokens, versus the same FC Sonnet row at `34,596,206`.
@@ -105,6 +105,7 @@ Benchmark note: AgentLife uses synthetic high-density conversations designed to 
 
 Use these canonical links:
 - [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
+- [AgentLife Technical Report (2026-03-29)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260329.md)
 - [AgentLife Technical Report (2026-04-05)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260405.md)
 
 ---
@@ -154,7 +155,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [User Guide](projects/quaid/USER-GUIDE.md) — Day-1 usage, project system basics, and file locations
 - [Adapter Authoring](docs/ADAPTER-AUTHORING.md) — How to integrate Quaid with your own host platform
 - [AgentLife Repository](https://github.com/quaid-labs/agentlife) — Benchmark source, datasets, and runbooks
-- [AgentLife Technical Report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT.md) — Full matrix, run IDs, and methodology
+- [AgentLife Technical Reports](https://github.com/quaid-labs/agentlife/tree/main/published/runbooks) — Public matrices, run IDs, and methodology reports
 - [Platform Compatibility](docs/COMPATIBILITY.md) — OpenClaw, Claude Code, and Codex capability matrix
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
