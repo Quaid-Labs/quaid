@@ -505,10 +505,13 @@ def hook_inject(args):
             }
         }))
 
-    except RuntimeError:
-        raise
-    except Exception as e:
+    except (RuntimeError, Exception) as e:
         fallback_context_parts = []
+        if isinstance(e, RuntimeError) and ("LLM" in str(e) or "provider" in str(e).lower() or "failHard" in str(e)):
+            # Provider/LLM failure — surface to agent so they can inform the user
+            fallback_context_parts.append(
+                f"<quaid_system_message>[Quaid error] {_safe_agent_error(e)}</quaid_system_message>"
+            )
         if pending_context:
             fallback_context_parts.append(pending_context)
         if deferred_notice_hint:
