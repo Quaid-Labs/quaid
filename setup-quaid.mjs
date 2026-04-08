@@ -2152,8 +2152,39 @@ async function step1_preflight() {
 
   const s = spinner();
 
-  // Platform selection happens in step3_models (interactive) or via --adapter (agent mode).
-  // Preflight only runs generic checks. Platform-specific checks run after selection.
+  // Platform selection — ask here so platform-specific preflight runs with the right target.
+  if (!AGENT_MODE && !FORCED_ADAPTER_TYPE && !_platformOverride) {
+    s.stop(C.green("System check passed"));
+    const _platformDetect = {
+      "openclaw": canRun("openclaw") || canRun("clawdbot"),
+      "claude-code": canRun("claude"),
+      "codex": canRun("codex"),
+    };
+    const allOptions = _adapterOptionsForSelect();
+    const installedOpts = allOptions.filter(o => _platformDetect[o.value]);
+    const notInstalledOpts = allOptions.filter(o => !_platformDetect[o.value]);
+    for (const o of notInstalledOpts) {
+      o.hint = C.dim(`(not installed) ${o.hint || ""}`);
+    }
+    const adapterOptions = [...installedOpts, ...notInstalledOpts];
+    const platform = handleCancel(await select({
+      message: "Which platform are you installing for?",
+      initialValue: installedOpts.length > 0 ? installedOpts[0].value : "claude-code",
+      options: adapterOptions,
+    }));
+    _platformOverride = platform;
+    syncInstallerInstanceEnv();
+
+    // Show platform-specific compatibility warnings
+    const warnings = _adapterCompatibilityWarnings(platform);
+    if (warnings.length > 0) {
+      for (const msg of warnings) {
+        log.warn(`  ${msg}`);
+      }
+    }
+
+    s.start(`Checking ${platform} environment...`);
+  }
 
   const installState = detectExistingInstallState();
   _existingInstallDetected = !!installState.hasInstall;
@@ -2166,13 +2197,6 @@ async function step1_preflight() {
 
   // External adapter hooks can perform preflight checks or env bootstrap.
   runAdapterInstallHook(resolvedInstallerPlatform(), "preinstall");
-
-  // Platform-specific preflight deferred to after platform selection in interactive mode.
-  // In agent mode (--agent), platform is known from --adapter flag so run immediately.
-  if (!AGENT_MODE && !FORCED_ADAPTER_TYPE) {
-    s.stop(C.green("System check passed"));
-    return;
-  }
 
   if (_isPlatform("claude-code")) {
     // --- Claude Code mode ---
@@ -2572,47 +2596,8 @@ async function step3_models() {
 
   const janitorAskFirst = false; // Auto-apply by default
 
-  // Platform/adapter selection — always ask, this is the primary choice.
-  // Show installed platforms first, then greyed-out uninstalled ones.
-  const _platformDetect = {
-    "openclaw": canRun("openclaw") || canRun("clawdbot"),
-    "claude-code": canRun("claude"),
-    "codex": canRun("codex"),
-  };
-  const allOptions = _adapterOptionsForSelect();
-  const installed = allOptions.filter(o => _platformDetect[o.value]);
-  const notInstalled = allOptions.filter(o => !_platformDetect[o.value]);
-  for (const o of notInstalled) {
-    o.hint = C.dim(`(not installed) ${o.hint || ""}`);
-  }
-  const adapterOptions = [];
-  if (installed.length > 0) {
-    adapterOptions.push(...installed);
-  }
-  if (notInstalled.length > 0) {
-    adapterOptions.push(...notInstalled);
-  }
-  const detectedPlatform = resolvedInstallerPlatform();
-  let adapterType = handleCancel(await select({
-    message: "Which platform are you installing for?",
-    initialValue: detectedPlatform || (installed.length > 0 ? installed[0].value : "claude-code"),
-    options: adapterOptions,
-  }));
-  _platformOverride = adapterType;
-
-  // Run deferred platform preflight now that user has chosen
-  if (!AGENT_MODE) {
-    await step1_preflight(); // Re-run with platform now set — has its own spinners
-  }
-
-  // Show platform-specific compatibility warnings after selection
-  const platformCompatibilityWarnings = _adapterCompatibilityWarnings(adapterType);
-  if (platformCompatibilityWarnings.length > 0) {
-    log.warn("Platform compatibility notices:");
-    for (const msg of platformCompatibilityWarnings) {
-      log.warn(`  - ${msg}`);
-    }
-  }
+  // Platform was already selected in step1_preflight
+  let adapterType = resolvedInstallerPlatform() || "claude-code";
 
   // Use platform default LLM provider — no advanced setup needed
   const _modelSpinner = spinner();
