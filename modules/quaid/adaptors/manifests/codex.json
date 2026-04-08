@@ -7,7 +7,7 @@
     "selectHint": "hooks + app-server sidecar for Codex CLI/app",
     "compatibilityWarnings": [
       "Codex does not support timeout-based auto-compaction.",
-      "Codex shows hook output in the view and can be noisy; it is recommended to turn Quaid notifications off to avoid duplicate messages."
+      "IMPORTANT: Codex shows all injected Quaid context directly in the view. This is noisy, and it is recommended to turn Quaid notifications off to avoid duplicate messages."
     ],
     "sortOrder": 25
   },

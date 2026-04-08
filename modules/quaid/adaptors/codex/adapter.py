@@ -52,6 +52,14 @@ class CodexAdapter(QuaidAdapter):
         env = os.environ.get("QUAID_HOME", "").strip()
         return Path(env).resolve() if env else Path.home() / "quaid"
 
+    @classmethod
+    def installer_adapter_id(cls) -> str:
+        return "codex"
+
+    @classmethod
+    def installer_cli_candidates(cls) -> list[str]:
+        return ["codex"]
+
     def adapter_id(self) -> str:
         return "codex"
 
@@ -522,13 +530,14 @@ class CodexAdapter(QuaidAdapter):
     def installer_supported_providers(self) -> list:
         return ["openai"]
 
-    # Fast-lane candidates in priority order.  The installer probes each via
-    # codex app-server and uses the first that responds.  Earlier entries are
-    # faster but may require a higher account tier (e.g. Pro for spark).
+    # Fast-lane candidates in priority order. The installer probes each via
+    # codex app-server and uses the first that responds.
+    # Prefer gpt-5.4-mini over spark: spark quality has been unreliable in
+    # benchmark and live install runs.
     _FAST_LANE_CANDIDATES = [
-        "gpt-5.3-codex-spark",  # ~2.1s  — Pro only
-        "gpt-5.4-mini",          # ~3.0s  — broadly available
-        "gpt-5.4",               # ~10s   — always available, fallback
+        "gpt-5.4-mini",         # broadly available, preferred default
+        "gpt-5.3-codex-spark",  # fallback when mini is unavailable
+        "gpt-5.4",              # always available, last fallback
     ]
 
     def installer_default_models(self, provider: str) -> Optional[dict]:
@@ -600,4 +609,3 @@ class CodexAdapter(QuaidAdapter):
 
     def get_deep_provider_default(self) -> str:
         return "openai"
-

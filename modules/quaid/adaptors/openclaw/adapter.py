@@ -55,6 +55,14 @@ class OpenClawAdapter(QuaidAdapter):
         "anthropic-claude-code": "anthropic",
     }
 
+    @classmethod
+    def installer_adapter_id(cls) -> str:
+        return "openclaw"
+
+    @classmethod
+    def installer_cli_candidates(cls) -> list[str]:
+        return ["openclaw", "clawdbot"]
+
     def _openclaw_config_path_candidates(self) -> list[Path]:
         """OpenClaw config candidates, honoring OPENCLAW_CONFIG_PATH first."""
         candidates: list[Path] = []

@@ -377,7 +377,17 @@ const AGENT_SURVEY_CONTRACT = {
         "For non-OpenClaw installs, omit notification routing channel from the survey entirely.",
         "Do not mention OpenClaw channels, last_used, or routing fallbacks on Codex/Claude Code installs.",
         "For OpenClaw installs, survey the explicit runtime notification channel.",
-        "Do not rely on implicit last_used during install.",
+        "If no active OpenClaw route is detected, the survey may show last_used fallback.",
+      ],
+    },
+    {
+      id: "platform_compatibility_notices",
+      label: "Platform compatibility notices",
+      source: "adapter manifest install.compatibilityWarnings",
+      required: true,
+      notes: [
+        "Always include this field in the survey.",
+        "If the adapter manifest has no warnings, render the value as none.",
       ],
     },
     {
@@ -483,10 +493,47 @@ function _adapterCompatibilityWarnings(adapterId) {
     .filter(Boolean);
 }
 
+function _normalizeAdapterInstallState(raw) {
+  const status = String(raw?.status || "").trim().toLowerCase();
+  const reason = String(raw?.reason || "").trim();
+  if (status === "already_installed" || status === "cannot_install") {
+    return { status, reason };
+  }
+  return { status: "can_install", reason };
+}
+
+function _readAdapterInstallState(adapterId) {
+  try {
+    return _normalizeAdapterInstallState(_runAdapterInstallerJson(adapterId, [
+      "import json, os, sys",
+      "sys.path.insert(0, os.environ.get('QUAID_PYTHONPATH', ''))",
+      "from lib.adapter import _load_adapter_class_from_manifest",
+      "aid = os.environ.get('QUAID_ADAPTER_TYPE', '').strip()",
+      "adapter_cls = _load_adapter_class_from_manifest(aid)",
+      "state = adapter_cls.installer_install_state(os.environ.get('QUAID_HOME', ''))",
+      "if not isinstance(state, dict):",
+      "    raise RuntimeError('installer_install_state must return a dict')",
+      "print(json.dumps({'status': str(state.get('status', '')).strip().lower(), 'reason': str(state.get('reason', '')).strip()}))",
+    ]));
+  } catch {
+    return { status: "can_install", reason: "" };
+  }
+}
+
+function _formatAdapterInstallHint(status, baseHint, reason = "") {
+  const stateLabel = status === "already_installed"
+    ? "already installed"
+    : status === "cannot_install"
+      ? "cannot install"
+      : "can install";
+  const detail = String(reason || "").trim() || String(baseHint || "").trim();
+  return detail ? `${stateLabel} · ${detail}` : stateLabel;
+}
+
 function _readAdapterInstallerCapabilities(adapterId) {
   const normalized = String(adapterId || "").trim().toLowerCase();
   if (!normalized) return null;
-  const instanceId = process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(normalized);
+  const instanceId = resolvedInstallerInstanceId(normalized);
   const py = [
     "import json, os, sys",
     "sys.path.insert(0, os.environ.get('QUAID_PYTHONPATH', ''))",
@@ -580,7 +627,7 @@ function _readAdapterInstallerCapabilities(adapterId) {
 function _runAdapterInstallerJson(adapterId, pyLines) {
   const normalized = String(adapterId || "").trim().toLowerCase();
   if (!normalized) return null;
-  const instanceId = process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(normalized);
+  const instanceId = resolvedInstallerInstanceId(normalized);
   const res = spawnSync("python3", ["-c", pyLines.join("\n")], {
     encoding: "utf8",
     env: {
@@ -1144,6 +1191,104 @@ const _clack = clack;
 const { intro: _intro, outro: _outro, note: _note, cancel: _cancel, isCancel: _isCancel, log: _log, spinner: _spinner } = _clack;
 
 const _noop = () => {};
+const _activeInstallerSpinners = new Set();
+
+function _pauseActiveSpinnersForInput() {
+  const paused = [];
+  for (const spin of Array.from(_activeInstallerSpinners)) {
+    try {
+      if (spin && typeof spin._pauseForPrompt === "function" && spin._pauseForPrompt()) {
+        paused.push(spin);
+      }
+    } catch {
+      // Best-effort only — input should still proceed.
+    }
+  }
+  return paused;
+}
+
+function _resumePausedSpinners(paused) {
+  for (const spin of paused) {
+    try {
+      if (spin && typeof spin._resumeAfterPrompt === "function") {
+        spin._resumeAfterPrompt();
+      }
+    } catch {
+      // Best-effort only — losing a spinner is less harmful than breaking input.
+    }
+  }
+}
+
+async function _withPausedSpinners(fn) {
+  const paused = _pauseActiveSpinnersForInput();
+  try {
+    return await fn();
+  } finally {
+    _resumePausedSpinners(paused);
+  }
+}
+
+function _makeManagedSpinner(factory) {
+  return () => {
+    const base = factory();
+    let running = false;
+    let paused = false;
+    let lastMessage = null;
+
+    const managed = {
+      start(message) {
+        if (running) {
+          return undefined;
+        }
+        lastMessage = typeof message === "string" ? message : lastMessage;
+        paused = false;
+        running = true;
+        _activeInstallerSpinners.add(managed);
+        return base.start(message);
+      },
+      stop(message, code) {
+        paused = false;
+        running = false;
+        _activeInstallerSpinners.delete(managed);
+        return base.stop(message, code);
+      },
+      message(message) {
+        lastMessage = typeof message === "string" ? message : lastMessage;
+        if (running && typeof base.message === "function") {
+          return base.message(message);
+        }
+        return undefined;
+      },
+      _pauseForPrompt() {
+        if (!running) return false;
+        running = false;
+        paused = true;
+        _activeInstallerSpinners.delete(managed);
+        try {
+          base.stop("Waiting for input...");
+        } catch {
+          // Ignore stop issues; prompt should still render.
+        }
+        return true;
+      },
+      _resumeAfterPrompt() {
+        if (!paused || lastMessage === null) return;
+        paused = false;
+        running = true;
+        _activeInstallerSpinners.add(managed);
+        try {
+          base.start(lastMessage);
+        } catch {
+          running = false;
+          _activeInstallerSpinners.delete(managed);
+        }
+      },
+    };
+
+    return managed;
+  };
+}
+
 const intro = SURVEY_ONLY ? _noop : _intro;
 const outro = SURVEY_ONLY ? _noop : _outro;
 const note = SURVEY_ONLY ? _noop : _note;
@@ -1174,7 +1319,7 @@ const select = _testAnswers
         log.info(C.dim(`[agent] select "${opts.message}" → ${picked}`));
         return picked;
       }
-    : _clack.select;
+    : async (opts) => _withPausedSpinners(() => _clack.select(opts));
 const confirm = _testAnswers
   ? async (opts) => { const a = _nextAnswer("confirm", opts.message); log.info(C.dim(`[test] confirm "${opts.message}" → ${a}`)); return a; }
   : AGENT_MODE
@@ -1184,7 +1329,7 @@ const confirm = _testAnswers
         log.info(C.dim(`[agent] confirm "${opts.message}" → ${picked}`));
         return picked;
       }
-    : _clack.confirm;
+    : async (opts) => _withPausedSpinners(() => _clack.confirm(opts));
 const text = _testAnswers
   ? async (opts) => { const a = _nextAnswer("text", opts.message); log.info(C.dim(`[test] text "${opts.message}" → ${a}`)); return a; }
   : AGENT_MODE
@@ -1199,12 +1344,49 @@ const text = _testAnswers
         log.info(C.dim(`[agent] text "${opts.message}" → ${picked}`));
         return picked;
       }
-    : _clack.text;
-const spinner = _testAnswers
-  ? () => ({ start: (m) => log.info(C.dim(`[test] spinner: ${m}`)), stop: (m) => log.info(C.dim(`[test] done: ${m}`)) })
+    : async (opts) => _withPausedSpinners(() => _clack.text(opts));
+function _emitInstallerStatus(kind, message, code) {
+  const text = typeof message === "string" ? message.trim() : "";
+  if (!text || SURVEY_ONLY) return;
+
+  const hasRed = text.includes("\u001b[31m");
+  const hasYellow = text.includes("\u001b[33m");
+  const hasDim = text.includes("\u001b[2m");
+  const looksWarning = /\b(failed|failure|could not|unavailable|skipped|needs attention)\b/i.test(text);
+
+  if (kind === "start") {
+    log.step(text);
+    return;
+  }
+  if (kind === "message") {
+    log.message(text);
+    return;
+  }
+  if (code === 2 || hasRed) {
+    log.error(text);
+    return;
+  }
+  if (hasYellow || looksWarning) {
+    log.warn(text);
+    return;
+  }
+  if (hasDim) {
+    log.message(text);
+    return;
+  }
+  log.success(text);
+}
+
+const spinnerFactory = _testAnswers
+  ? () => ({ start: (m) => log.info(C.dim(`[test] spinner: ${m}`)), stop: (m) => log.info(C.dim(`[test] done: ${m}`)), message: _noop })
   : SURVEY_ONLY
     ? () => ({ start: _noop, stop: _noop, message: _noop })
-  : _clack.spinner;
+    : () => ({
+        start: (m) => _emitInstallerStatus("start", m),
+        stop: (m, code) => _emitInstallerStatus("stop", m, code),
+        message: (m) => _emitInstallerStatus("message", m),
+      });
+const spinner = _makeManagedSpinner(spinnerFactory);
 
 // --- Helpers ---
 function shell(cmd, trim = true) {
@@ -2055,14 +2237,16 @@ function getSystemRAM() {
 
 async function waitForKey(msg = "Press any key to continue...") {
   if (_testAnswers || AGENT_MODE) return; // skip in test + agent mode
-  log.message(C.dim(msg));
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    await new Promise((resolve) => process.stdin.once("data", resolve));
-    process.stdin.setRawMode(false);
-    process.stdin.pause();
-  }
+  await _withPausedSpinners(async () => {
+    log.message(C.dim(msg));
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      await new Promise((resolve) => process.stdin.once("data", resolve));
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+    }
+  });
 }
 
 function clearScreen() {
@@ -2099,9 +2283,8 @@ function showBanner() {
     subtitle: "by Solomon Steadman",
     title: " LONG-TERM MEMORY SYSTEM ",
     topRightTail: "                                      ",
-    footerLines: [
-      " ".repeat(48) + C.dim(`v${VERSION}`),
-    ],
+    leftShift: 4,
+    footerRight: `v${VERSION}`,
   });
   console.log(lines.join("\n"));
 }
@@ -2154,22 +2337,21 @@ async function step1_preflight() {
 
   // Platform selection — ask here so platform-specific preflight runs with the right target.
   if (!AGENT_MODE && !FORCED_ADAPTER_TYPE && !_platformOverride) {
-    s.stop(C.green("System check passed"));
-    const _platformDetect = {
-      "openclaw": canRun("openclaw") || canRun("clawdbot"),
-      "claude-code": canRun("claude"),
-      "codex": canRun("codex"),
-    };
-    const allOptions = _adapterOptionsForSelect();
-    const installedOpts = allOptions.filter(o => _platformDetect[o.value]);
-    const notInstalledOpts = allOptions.filter(o => !_platformDetect[o.value]);
-    for (const o of notInstalledOpts) {
-      o.hint = C.dim(`(not installed) ${o.hint || ""}`);
+    const adapterOptions = _adapterOptionsForSelect().map((opt) => {
+      const installState = _readAdapterInstallState(opt.value);
+      return {
+        ...opt,
+        hint: C.dim(_formatAdapterInstallHint(installState.status, opt.hint, installState.reason)),
+        disabled: installState.status !== "can_install",
+      };
+    });
+    const firstSelectable = adapterOptions.find((opt) => !opt.disabled);
+    if (!firstSelectable) {
+      bail("No installable platforms were detected on this system.");
     }
-    const adapterOptions = [...installedOpts, ...notInstalledOpts];
     const platform = handleCancel(await select({
       message: "Which platform are you installing for?",
-      initialValue: installedOpts.length > 0 ? installedOpts[0].value : "claude-code",
+      initialValue: firstSelectable?.value || "claude-code",
       options: adapterOptions,
     }));
     _platformOverride = platform;
@@ -2184,6 +2366,8 @@ async function step1_preflight() {
     }
 
     s.start(`Checking ${platform} environment...`);
+  } else {
+    s.start(`Checking ${resolvedInstallerPlatform() || "installer"} environment...`);
   }
 
   const installState = detectExistingInstallState();
@@ -2196,11 +2380,12 @@ async function step1_preflight() {
   }
 
   // External adapter hooks can perform preflight checks or env bootstrap.
+  s.message(`Running ${resolvedInstallerPlatform() || "platform"} preflight...`);
   runAdapterInstallHook(resolvedInstallerPlatform(), "preinstall");
 
   if (_isPlatform("claude-code")) {
     // --- Claude Code mode ---
-    s.start("Checking Claude Code...");
+    s.message("Checking Claude Code...");
     const hasClaude = canRun("claude");
     if (!hasClaude) {
       s.stop(C.yellow("Claude Code CLI not found"), 2);
@@ -2290,7 +2475,7 @@ async function step1_preflight() {
     }
   } else if (_isPlatform("openclaw")) {
     // --- OpenClaw installed ---
-    s.start("Scanning for OpenClaw...");
+    s.message("Scanning for OpenClaw...");
     if (!canRun("clawdbot") && !canRun("openclaw")) {
       s.stop(C.red("OpenClaw not found"), 2);
       note(
@@ -2314,6 +2499,7 @@ async function step1_preflight() {
       ["gateway", "probe"],
     ];
     const statusBins = ["clawdbot", "openclaw"].filter((bin) => canRun(bin));
+    s.message("Checking OpenClaw gateway status...");
     for (const bin of statusBins) {
       for (const args of statusChecks) {
         const res = runCliWithTimeout(bin, args, 8_000);
@@ -2346,6 +2532,7 @@ async function step1_preflight() {
 
     // --- Onboarding / agents list ---
     const cfgCli = canRun("clawdbot") ? "clawdbot" : "openclaw";
+    s.message("Checking OpenClaw agent configuration...");
     let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
     if (!hasAgent) {
       hasAgent = _ensureAgentsList(cfgCli, WORKSPACE);
@@ -2368,7 +2555,7 @@ async function step1_preflight() {
     s.stop(C.green("OpenClaw") + " gateway running");
   } else {
     // --- Non-OpenClaw installs: ensure workspace directory exists ---
-    s.start("Checking workspace directory...");
+    s.message("Checking workspace directory...");
     fs.mkdirSync(WORKSPACE, { recursive: true });
     s.stop(C.green(_installerPlatformLabel()) + C.dim(` — workspace: ${WORKSPACE}`));
   }
@@ -2519,6 +2706,8 @@ async function step1_preflight() {
 
     const doBackup = handleCancel(await confirm({ message: "Create a backup now?" }));
     if (doBackup) {
+      const backupSpinner = spinner();
+      backupSpinner.start("Creating backup...");
       const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const backupDir = path.join(WORKSPACE, `.quaid-backup-${ts}`);
       fs.mkdirSync(backupDir, { recursive: true });
@@ -2529,12 +2718,12 @@ async function step1_preflight() {
       }
       if (_hasConfig) { fs.copyFileSync(path.join(CONFIG_DIR, "memory.json"), path.join(backupDir, "memory.json")); count++; }
       if (_hasDb) { fs.copyFileSync(path.join(DATA_DIR, "memory.db"), path.join(backupDir, "memory.db")); count++; }
+      backupSpinner.stop(C.green("Backup created"));
 
       note(
         `${C.green(count + " files")} backed up to:\n${C.bcyan(backupDir)}\n\n` +
-        `To uninstall Quaid and restore this backup later:\n` +
-        `  ${C.bcyan("quaid uninstall")}\n\n` +
-        `Backups are stored alongside your workspace.`,
+        `Backups are stored alongside your workspace.\n` +
+        `Restore manually from this folder if you decide to roll back the install.`,
         C.bmag("BACKUP COMPLETE")
       );
       await waitForKey();
@@ -2601,7 +2790,7 @@ async function step3_models() {
 
   // Use platform default LLM provider — no advanced setup needed
   const _modelSpinner = spinner();
-  _modelSpinner.start("Detecting models and provider...");
+  _modelSpinner.start("Reading adapter/provider defaults...");
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
   syncInstallerInstanceEnv(adapterType);
@@ -2664,15 +2853,6 @@ async function step3_models() {
     // Use platform default provider — no prompt needed
   }
 
-  _modelSpinner.message(`Provider: ${provider}`);
-
-  if (!hostManagedLlmDefault && provider !== "anthropic") {
-    log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
-    log.warn(C.bold("Extraction quality may vary. You can switch providers later in config."));
-    log.message("");
-    await waitForKey();
-  }
-
   let highModel, lowModel;
   let deepReasoningEffort = "high";
   let fastReasoningEffort = "none";
@@ -2728,15 +2908,31 @@ async function step3_models() {
     modelsExplicitlyProvided = true;
   }
 
+  _modelSpinner.stop(C.green(`Provider: ${provider}`));
+
+  if (!hostManagedLlmDefault && provider !== "anthropic") {
+    log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
+    log.warn(C.bold("Extraction quality may vary. You can switch providers later in config."));
+    log.message("");
+    await waitForKey();
+  }
+
   let modelReview = null;
+  const reviewSpinner = spinner();
+  reviewSpinner.start("Reviewing fast/deep model pairing...");
   try {
     modelReview = _reviewAdapterInstallerModelPair(adapterType, provider, highModel, lowModel) || null;
+    if (modelReview?.needsClarification) {
+      reviewSpinner.stop(C.yellow("Model pair needs confirmation"));
+    } else {
+      reviewSpinner.stop(C.green("Model pair reviewed"));
+    }
   } catch (err) {
+    reviewSpinner.stop(C.yellow("Model pair review unavailable"));
     log.warn(`Could not review installer model pair via adapter '${adapterType}': ${err.message}`);
   }
 
   if (modelReview?.needsClarification && !modelsExplicitlyProvided) {
-    _modelSpinner.stop(C.yellow("Model pair needs confirmation"));
     const clarificationReason = String(modelReview.reason || "").trim()
       || `No adapter fast/deep mapping is defined for provider '${provider}'.`;
     log.warn(clarificationReason);
@@ -2796,8 +2992,6 @@ async function step3_models() {
       modelsExplicitlyProvided = true;
     }
   }
-
-  _modelSpinner.stop(C.green(`Provider: ${provider}`));
 
   if (!AGENT_MODE || modelsExplicitlyProvided || !modelReview?.needsClarification) {
     log.info(`Deep reasoning: ${C.bcyan(highModel)}  |  Fast reasoning: ${C.bcyan(lowModel)}`);
@@ -2959,6 +3153,9 @@ function detectSharedEmbeddings(cfg) {
 async function step4_embeddings() {
   stepHeader(4, TOTAL_INSTALL_STEPS, "EMBEDDINGS", STEP_QUOTES.embeddings);
 
+  const envSpinner = spinner();
+  envSpinner.start("Checking embeddings environment...");
+
   // Embeddings config is machine-wide — only ask once per machine.
   // Check platform-shared first, then global shared fallback.
   const platformKey = resolvedInstallerPlatform();
@@ -2972,6 +3169,7 @@ async function step4_embeddings() {
       const sharedCfg = JSON.parse(fs.readFileSync(sharedConfigPath, "utf8"));
       const found = detectSharedEmbeddings(sharedCfg);
       if (found) {
+        envSpinner.stop(C.green("Embeddings inherited from shared config"));
         log.info(C.dim("Embeddings already configured in shared config — inheriting."));
         log.info(`  provider: ${C.cyan(found.provider)}  model: ${C.cyan(found.embedModel)}  dim: ${found.embedDim || "auto"}`);
         log.info(C.dim(`  source: ${sharedConfigPath}`));
@@ -2986,10 +3184,8 @@ async function step4_embeddings() {
   log.info(C.dim("so Quaid can find relevant memories by meaning, not just keywords."));
   const { total: totalRam, free: freeRam } = getSystemRAM();
   log.info(C.dim(`System RAM: ${totalRam}GB total, ~${freeRam}GB available`));
-  const recommendedByRam =
-    (freeRam >= 4 || totalRam >= 12) ? "nomic-embed-text" :
-    "all-minilm";
-  log.info(C.dim(`Recommended embedding by RAM: ${recommendedByRam}`));
+  log.info(C.dim(`"nomic-embed-text" is the default embedding engine and uses about 300MB of RAM when kept alive.`));
+  log.info(C.dim("Keeping it alive is recommended so embeddings stay responsive."));
 
   // Check Ollama
   let ollamaRunning = false;
@@ -2999,6 +3195,12 @@ async function step4_embeddings() {
   } else {
     try { execSync(`curl -sf ${JSON.stringify(OLLAMA_TAGS_URL)}`, { stdio: "pipe" }); ollamaRunning = true; } catch {}
   }
+
+  envSpinner.stop(
+    ollamaRunning
+      ? C.green("Embeddings environment checked")
+      : C.yellow("Embeddings environment checked — Ollama needs attention")
+  );
 
   if (!ollamaRunning && !process.env.QUAID_TEST_NO_OLLAMA && canRun("ollama")) {
     log.warn("Ollama is installed but not running.");
@@ -3054,9 +3256,12 @@ async function step4_embeddings() {
   let embedModel, embedDim;
 
   if (ollamaRunning) {
+    const inspectSpinner = spinner();
+    inspectSpinner.start("Inspecting local Ollama models...");
     const { total, free } = getSystemRAM();
     const pulledModels = getOllamaModels();
     const loadedModels = getLoadedOllamaModels();
+    inspectSpinner.stop(C.green("Ollama embeddings environment ready"));
 
     // Find which known embedding models are already pulled
     const installedEmbedModels = Object.keys(EMBED_MODELS).filter(
@@ -3128,7 +3333,6 @@ async function step4_embeddings() {
     log.success("Keyword-only mode (FTS5 full-text search)");
   }
 
-  log.warn(C.bold("Changing embedding models later requires re-embedding all stored facts."));
   log.message("");
   await waitForKey();
   return { embedModel, embedDim };
@@ -3463,11 +3667,14 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   }
   const skipBinShim = String(process.env.QUAID_INSTALL_SKIP_BIN_SHIM || "").trim() === "1";
   if (skipBinShim) {
-    log.info("Skipping ~/bin/quaid shim update (QUAID_INSTALL_SKIP_BIN_SHIM=1).");
-  } else if (ensureQuaidCliShim(PLUGIN_DIR)) {
-    log.info(`Updated CLI shim: ${path.join(os.homedir(), "bin", "quaid")} -> ${path.join(PLUGIN_DIR, "quaid")}`);
+    log.info("Skipping quaid CLI shim update (QUAID_INSTALL_SKIP_BIN_SHIM=1).");
   } else {
-    log.warn("Could not update ~/bin/quaid shim automatically.");
+    const shimPath = ensureQuaidCliShim(PLUGIN_DIR);
+    if (shimPath) {
+      log.info(`Updated CLI shim: ${shimPath} -> ${path.join(PLUGIN_DIR, "quaid")}`);
+    } else {
+      log.warn("Could not update quaid CLI shim automatically.");
+    }
   }
 
   // Install Node dependencies (typebox etc.)
@@ -3523,12 +3730,9 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
   }
   if (_isPlatform("claude-code")) {
+    s.start("Configuring Claude Code hooks...");
     setupClaudeCodeHooks();
-  }
-
-  // sqlite-vec is required and already checked in preflight; re-verify here.
-  if (!_hasSqliteVec()) {
-    throw new Error("sqlite-vec is required for vector retrieval");
+    s.stop(C.green("Claude Code hooks configured"));
   }
 
   // Initialize database
@@ -3576,6 +3780,7 @@ print(int(row[0] if row else 0))
 
   // Installer-owned contract bootstrap: load config once so datastore init/config
   // hooks run exactly once (for all enabled datastores).
+  s.start("Bootstrapping datastores...");
   const domainInitScript = `
 import os, sys
 ${PY_ENV_SETUP}
@@ -3594,6 +3799,7 @@ print('[+] Datastore init hooks complete')
     const detail = String(domainInitResult.stderr || domainInitResult.stdout || "").trim();
     log.warn(`Datastore init hook bootstrap failed during install; continuing. ${detail || ""}`.trim());
   }
+  s.stop(C.green("Datastore bootstrap complete"));
 
   // Contract-owned project workspace dirs should exist after datastore init hooks.
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
@@ -3604,6 +3810,7 @@ print('[+] Datastore init hooks complete')
     : SCRATCH_DIR;
   const contractOwnedDirs = Array.from(new Set([PROJECTS_DIR, instanceProjectsDir(), TEMP_DIR, instanceMiscDir]));
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
+  s.start("Reconciling workspace structure...");
   if (missingContractOwnedDirs.length > 0) {
     for (const dir of missingContractOwnedDirs) {
       fs.mkdirSync(dir, { recursive: true });
@@ -3632,8 +3839,10 @@ print('[+] Datastore init hooks complete')
   } else if (!fs.existsSync(instanceMiscDir)) {
     log.warn("misc project dir missing after datastore init hooks; skipping git history bootstrap.");
   }
+  s.stop(C.green("Workspace structure ready"));
 
   // Create workspace files
+  s.start("Creating workspace baseline files...");
   for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
     const fp = path.join(WORKSPACE, f);
     if (!fs.existsSync(fp)) {
@@ -3652,6 +3861,7 @@ print('[+] Datastore init hooks complete')
     }
     log.info("Journal files created");
   }
+  s.stop(C.green("Workspace baseline files ready"));
 
   // Initialize git repo for workspace (required for doc staleness tracking)
   const gitDir = path.join(WORKSPACE, ".git");
@@ -3730,15 +3940,17 @@ except Exception as e:
       s.stop(C.red("OpenClaw plugin registration failed"));
       throw new Error(reg.reason || "openclaw plugins install/enable failed");
     }
-    s.stop(C.green("OpenClaw plugin registered"));
+    s.message("Waiting for OpenClaw gateway to restart and warm up...");
     if (_ensureOpenClawPluginsAllowQuaid()) {
       log.info("Ensured plugins.allow includes: quaid");
     }
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 60_000);
+    s.message("Finalizing OpenClaw hook configuration...");
     enableRequiredOpenClawHooks();
     // enableRequiredOpenClawHooks writes openclaw.json directly, which may trigger a gateway
     // config reload. Give the gateway time to settle before proceeding.
     await waitForGatewayWarmup(30_000);
+    s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
 
   // Workspace migration is intentionally not part of installer flow.
@@ -3826,6 +4038,7 @@ print(total_docs)
     const quaidSourceRoots = JSON.stringify(quaidSourceRoot ? [quaidSourceRoot] : []);
     // Register Quaid as a project unless it was already covered by existing project scan.
     const quaidAlreadyRegisteredViaExisting = existingDirs.includes("quaid");
+    s.start("Registering bundled project docs...");
     const regQuaidScript = `
 import os, sys
 ${PY_ENV_SETUP}
@@ -3893,6 +4106,7 @@ except ValueError:
       stdio: "pipe",
       env: { ...process.env, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE },
     });
+    s.stop(C.green("Bundled project docs registered"));
   }
 
   if (!postInstallStateStabilized) {
@@ -3904,7 +4118,9 @@ except ValueError:
       + `${postInstall.timeoutBuffersCleared} stale timeout buffer(s).`
     );
   }
+  s.start("Running platform post-install tasks...");
   runAdapterInstallHook(resolvedInstallerPlatform(), "postinstall");
+  s.stop(C.green("Platform post-install tasks complete"));
   log.success("Installation complete!");
   // Write install timestamp so the session-index watcher knows to ignore
   // sessions that predate this install (prevents orphan extraction fan-out
@@ -3977,7 +4193,7 @@ c.close()
     checks.push(`${C.red("■")} Embeddings   ${C.dim("—")} Ollama not running`);
   }
 
-  checks.push(`${C.green("■")} LLM (high)   ${C.dim("—")} ${models.highModel}`);
+  checks.push(`${C.green("■")} LLM (deep)   ${C.dim("—")} ${models.highModel}`);
   checks.push(`${C.green("■")} LLM (fast)   ${C.dim("—")} ${models.lowModel}`);
 
   const _valInstanceId = (process.env.QUAID_INSTANCE || "").trim();
@@ -4002,7 +4218,9 @@ c.close()
   // after any install-triggered restart before bailing — a genuinely missing gateway
   // is an OpenClaw problem, not a Quaid install problem.
   if (_isPlatform("openclaw")) {
+    s.start("Confirming OpenClaw gateway is online...");
     if (!(await waitForGatewayWarmup(15_000))) {
+      s.stop(C.red("OpenClaw gateway unavailable"));
       cancel(
         "OpenClaw gateway is not running or not reachable.\n" +
         "Start the OpenClaw gateway and re-run the installer.\n" +
@@ -4010,6 +4228,7 @@ c.close()
       );
       process.exit(1);
     }
+    s.stop(C.green("OpenClaw gateway reachable"));
   }
   s.start("Smoke test (store + recall)...");
   const smokeSafeId = owner.id.replace(/'/g, "\\'");
@@ -4084,17 +4303,9 @@ except Exception as e:
     `${C.bcyan("→")} Read the quick guide: ${C.bcyan("projects/quaid/USER-GUIDE.md")}`,
     `${C.bcyan("→")} Facts are extracted automatically on context compaction and new sessions`,
     `${C.bcyan("→")} The nightly janitor reviews, deduplicates, and maintains memories`,
-    `${C.bcyan("→")} Run the janitor now to discover and organize your projects:`,
-    `   ${C.bcyan("cd modules/quaid && python3 core/lifecycle/janitor.py --task workspace --apply")}`,
-    `   The janitor will scan TOOLS.md and AGENTS.md for project specs`,
-    `   and flag them for review. Your agent will walk you through the`,
-    `   findings on your next conversation and help organize them.`,
-    `${C.bcyan("→")} Run ${C.bcyan("quaid doctor")} anytime to check system health`,
-    `${C.bcyan("→")} Run ${C.bcyan("quaid stats")} to see your memory database grow`,
-    `${C.bcyan("→")} Run ${C.bcyan("quaid config edit")} to customize advanced settings anytime`,
+    `${C.bcyan("→")} ${C.bold("It is best to use your agents for any Quaid config changes.")}`,
     "",
     C.dim(`Docs: ${PROJECT_URL}`),
-    C.dim(`Uninstall: quaid uninstall`),
   ].join("\n");
   note(nextSteps, C.bmag("NEXT STEPS"));
 
@@ -4235,11 +4446,45 @@ function ensureQuaidCliShim(pluginDirPath) {
   try {
     const target = path.join(pluginDirPath, "quaid");
     if (!fs.existsSync(target)) {
-      return false;
+      return "";
     }
-    const binDir = path.join(os.homedir(), "bin");
-    const shimPath = path.join(binDir, "quaid");
-    fs.mkdirSync(binDir, { recursive: true });
+    const preferredDirs = Array.from(new Set([
+      ...String(process.env.PATH || "")
+        .split(path.delimiter)
+        .map((entry) => String(entry || "").trim())
+        .filter(Boolean),
+      path.join(os.homedir(), "bin"),
+      path.join(os.homedir(), ".local", "bin"),
+    ]));
+
+    let shimDir = "";
+    for (const candidate of preferredDirs) {
+      if (!candidate) continue;
+      const normalized = candidate.replace(/^~(?=$|\/)/, os.homedir());
+      if (
+        normalized !== path.join(os.homedir(), "bin")
+        && normalized !== path.join(os.homedir(), ".local", "bin")
+        && normalized !== "/usr/local/bin"
+        && normalized !== "/opt/homebrew/bin"
+      ) {
+        continue;
+      }
+      try {
+        fs.mkdirSync(normalized, { recursive: true });
+        fs.accessSync(normalized, fs.constants.W_OK);
+        shimDir = normalized;
+        break;
+      } catch {
+        // Keep looking for a writable PATH directory.
+      }
+    }
+
+    if (!shimDir) {
+      shimDir = path.join(os.homedir(), "bin");
+      fs.mkdirSync(shimDir, { recursive: true });
+    }
+
+    const shimPath = path.join(shimDir, "quaid");
     fs.rmSync(shimPath, { force: true });
     fs.symlinkSync(target, shimPath);
 
@@ -4252,21 +4497,21 @@ function ensureQuaidCliShim(pluginDirPath) {
         const env = parsed.env || (parsed.env = {});
         const vars = env.vars || (env.vars = {});
         const existing = String(vars.PATH || "").trim();
-        if (!existing.includes(binDir)) {
-          vars.PATH = existing ? `${binDir}:${existing}` : `${binDir}:/usr/local/bin:/usr/bin:/bin`;
+        if (!existing.includes(shimDir)) {
+          vars.PATH = existing ? `${shimDir}:${existing}` : `${shimDir}:/usr/local/bin:/usr/bin:/bin`;
           const tmpPath = `${cfgPath}.tmp-shim-${process.pid}-${Date.now()}`;
           fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
           fs.renameSync(tmpPath, cfgPath);
-          log.info(`Added ${binDir} to OC agent PATH`);
+          log.info(`Added ${shimDir} to OC agent PATH`);
         }
       }
     } catch {
       // PATH update is best-effort; shim still works via full path
     }
 
-    return true;
+    return shimPath;
   } catch {
-    return false;
+    return "";
   }
 }
 

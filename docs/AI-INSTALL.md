@@ -45,8 +45,8 @@ Use this exact minimal prompt shape when asking an AI agent to install Quaid:
 
 1. Read `docs/AI-INSTALL.md` first and follow it exactly.
 2. Include and obey the mandatory first command from that guide before doing anything else.
-2. Install Quaid for me using this workspace, platform/adapter, instance name, and owner name.
-3. Tell me when install is complete and `quaid doctor` is healthy.
+3. Install Quaid for me using this workspace, platform/adapter, and owner name.
+4. Tell me when install is complete and `quaid doctor` is healthy.
 
 Do not duplicate the survey contract, defaults, or approval flow in the human's
 prompt. Those are defined here and in `setup-quaid.mjs`, and the agent must
@@ -61,7 +61,7 @@ Execution order is mandatory:
 3. Wait for human approval or edits.
 4. Only then run install.
 
-If workspace, adapter/platform, instance name, and owner are already supplied in the prompt,
+If workspace, adapter/platform, and owner name are already supplied in the prompt,
 do not loop on Step 1. Read enough to run the mandatory first command, then run it.
 
 Do not keep browsing, planning, or exploring code after you already have enough
@@ -134,14 +134,13 @@ Allowed pre-survey probes are limited to what is needed to fill the survey accur
 - `vm_stat`
 - `sysctl -n hw.memsize`
 
-If the prompt already gives you the workspace, adapter/platform, instance, and owner, do not spend time rediscovering them.
+If the prompt already gives you the workspace, adapter/platform, and owner, do not spend time rediscovering them.
 If the target platform is already known from the current agent/session, pass it explicitly with `--adapter`.
 If the guide path is local, use that checkout directly and do not inspect CLI
 arguments to prove that local source is allowed.
 For the live-test prompt path, `~/quaid/dev/docs/AI-INSTALL.md` means the command
 must run from `~/quaid/dev`, and the workspace argument must stay exactly as provided
 in the prompt.
-must run from `~/quaid/dev`.
 
 ## First Response Template (Mandatory)
 
@@ -161,6 +160,7 @@ Pre-install survey
 - Embeddings provider/model: <value>
 - Notification level + per-feature verbosity: <value>
 - Notification routing channel: <value>   # OpenClaw only; omit otherwise
+- Platform compatibility notices: <value>
 - Janitor apply mode/policies: <value>
 - Janitor schedule choice: <value>
 
@@ -277,31 +277,44 @@ node setup-quaid.mjs --agent \
   --artifact "/path/to/quaid-plugin-<sha>.tar.gz"
 ```
 
-## Instance ID (Silo Name)
+## Instance ID Defaults
 
-The installer prompts for an **instance ID** — a short name for the memory silo (e.g. `claude-code`, `openclaw`, `codex`).
-Two installs with the same ID share memory; different IDs get independent databases.
+Current installer behavior does **not** prompt for an instance ID during the standard flow.
+Instead, it uses a deterministic default based on the target platform:
+
+- `claude-code` -> `claude-code-main`
+- `codex` -> `codex-main`
+- `openclaw` -> `openclaw-main`
+- `standalone` -> `standalone`
+
+Two installs with the same instance ID share memory; different IDs get independent silos.
 The ID becomes a subdirectory under `QUAID_HOME`: `<QUAID_HOME>/<instance-id>/`.
 
-In agent/non-interactive mode the adapter-derived default is used without prompting.
-To pre-set the instance ID and skip the prompt, set `QUAID_INSTANCE`.
+To override the default instance ID, set `QUAID_INSTANCE` before running install.
 
 ## Shared Embeddings Config
 
-On first install the installer writes a machine-wide embeddings config to:
+On first install the installer writes the shared embeddings block to:
 
 ```
-<QUAID_HOME>/shared/config/memory.json
+<QUAID_HOME>/shared/config/global/memory.json
 ```
 
-This file records the Ollama URL, embedding model, and embedding dimension so all instances on the same machine use the same model (required for cross-instance memory inspection). The rule is **first-install-wins**: if `shared/config/memory.json` already has an `ollama` block, subsequent installs skip writing it and inherit the existing setup.
+It also creates a blank per-platform shared config at:
 
-To change the shared embedding model after install, edit `<QUAID_HOME>/shared/config/memory.json` directly and re-run `quaid doctor` to verify.
+```
+<QUAID_HOME>/shared/config/<platform>/memory.json
+```
+
+The global file records the Ollama URL, embedding model, and embedding dimension so all instances on the same machine can share the same default model. The rule is **first-install-wins** for the global fallback: if `shared/config/global/memory.json` already has an `ollama` block, subsequent installs inherit it instead of overwriting it.
+
+At runtime, Quaid checks the platform-shared file first and falls back to the global file.
+To change the default embedding model after install, edit the relevant shared config file and re-run `quaid doctor` to verify.
 
 ## Environment Variables (optional)
 
 - `QUAID_HOME`: explicit workspace/home path override (highest priority). **Do NOT set this globally in your shell profile** (e.g., `~/.zshrc`) — the hooks/installer manage it per-invocation. Setting it globally causes all adapter instances to share the same silo, corrupting cross-adapter isolation.
-- `QUAID_INSTANCE`: pre-set instance identifier; installer skips the instance prompt and uses this value directly (e.g. `openclaw`, `claude-code`, `codex`)
+- `QUAID_INSTANCE`: explicit instance identifier override (for example `openclaw-main`, `claude-code-main`, `codex-main`)
 - `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint (auto-detected when OpenClaw is installed)
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults
 - `QUAID_INSTALL_CLAUDE_CODE=1`: force installer into Claude Code adapter mode (equivalent to `--claude-code` flag)
@@ -310,7 +323,7 @@ To change the shared embedding model after install, edit `<QUAID_HOME>/shared/co
 - `QUAID_INSTALL_REF`: git branch/tag/commit (for github source)
 - `QUAID_INSTALL_GITHUB_REPO`: repo override (default `quaid-labs/quaid`)
 - `QUAID_INSTALL_ARTIFACT`: local path or URL to `.tar.gz` (for artifact source)
-- `QUAID_INSTALL_PROVIDER`: force LLM provider selection (e.g. `anthropic`, `claude-code`, `openai-compatible`)
+- `QUAID_INSTALL_PROVIDER`: force LLM provider selection when supported by the adapter (for example `anthropic`, `openai`, `openrouter`, `together`, `ollama`)
 - `QUAID_INSTALL_NOTIFY=0|1`: disable/enable installer progress notifications in agent mode
 - `QUAID_INSTALL_NOTIFY_PROGRESS=0|1`: disable/enable step checkpoint notifications
 - `QUAID_INSTALL_NOTIFY_COMPLETE=0|1`: disable/enable completion notification
@@ -325,24 +338,23 @@ To change the shared embedding model after install, edit `<QUAID_HOME>/shared/co
   headless environment where auto-detection may be unreliable.
 - The installer writes six hook entries to `~/.claude/settings.json`:
   `SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`.
-- On macOS, the janitor is scheduled via a launchd plist (`~/Library/LaunchAgents/com.quaid.janitor.plist`).
-  It runs `quaid janitor --task all --apply --time-budget 3600` at the configured hour (default 4:30 AM).
-  Logs go to `<QUAID_HOME>/logs/janitor/launchd.log` and `launchd-err.log`.
-  The plist embeds `QUAID_HOME` and `PYTHONPATH`. At runtime, the adapter reads the Claude Code OAuth token from `~/.claude/.credentials.json` (auto-refreshed by `hook-session-init`) or from `.auth-token` if pre-stored via `python3 config_cli.py set-auth` — no API key env var is needed.
-  Check status: `launchctl list | grep quaid`
-  Unload: `launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist`
-- The installer creates a per-instance identity directory at `<QUAID_HOME>/claude-code/identity/`
+- The janitor is configured in Quaid config and runs from the runtime/extraction layer; the installer no longer creates OS-level launchd/cron/task-scheduler janitor jobs in the standard path.
+- At runtime, the adapter reads the Claude Code OAuth token from `~/.claude/.credentials.json` (auto-refreshed by `hook-session-init`) or from `.auth-token` if pre-stored via `python3 config_cli.py set-auth` — no API key env var is needed.
+- The installer creates a per-instance identity directory at `<QUAID_HOME>/<instance-id>/identity/`
   for `USER.md`, `SOUL.md`, and `ENVIRONMENT.md`.
 
 ## OpenClaw-specific Notes
 
 - Installer now attempts to auto-heal missing `agents.list` in `~/.openclaw/openclaw.json`.
-- Installer sets `allowPromptInjection: true` in the plugin config so `before_prompt_build` can inject memory context into prompts.
+- Installer sanitizes stale `plugins.entries.quaid` keys that newer OpenClaw builds reject.
+- Installer registers the Quaid plugin, ensures the runtime instance env is written into the OpenClaw config, and waits for the gateway to come back online.
 
 ## Minimal Non-interactive Command
 
 ```bash
-QUAID_WORKSPACE="/absolute/path/to/workspace" QUAID_OWNER_NAME="<Person Name>" QUAID_INSTALL_AGENT=1 node setup-quaid.mjs --agent
+QUAID_INSTALL_AGENT=1 node setup-quaid.mjs --agent \
+  --workspace "/absolute/path/to/workspace" \
+  --owner-name "<Person Name>"
 ```
 
 ## Optional Dry Context Step for Agents
@@ -395,8 +407,9 @@ For supported provider lanes (Anthropic/OpenAI), Quaid provides suggested model 
 
 ### Notification Routing Guidance (Mandatory)
 
-For OpenClaw installs, do not leave Quaid runtime notifications on implicit `last_used` during install.
-The installer or agent should pin Quaid notifications to an explicit OpenClaw channel based on the active user route.
+For OpenClaw installs, the survey must include the runtime notification channel the install will use.
+If the installer can detect an active OpenClaw route, it should pin notifications to that explicit channel.
+If it cannot, the current installer falls back to `last_used`; the survey should say that plainly instead of pretending delivery is guaranteed.
 
 - include the planned notification routing channel in the pre-install survey
 - if installer progress needs explicit delivery, set:
@@ -406,7 +419,7 @@ The installer or agent should pin Quaid notifications to an explicit OpenClaw ch
 - for Telegram-driven installs, the expected runtime channel is usually `telegram`
 - the adapter is responsible for resolving that channel to the proper recent session target at send time
 
-If the active OpenClaw user route cannot be determined, the agent must say so clearly before install instead of pretending notifications are guaranteed.
+If the active OpenClaw user route cannot be determined, the agent must say so clearly in the survey.
 
 For non-OpenClaw installs:
 
@@ -463,7 +476,8 @@ Minimum required summary fields:
 - Adapter type (`adapter.type`)
 - LLM provider (`models.llmProvider`) and selected deep/fast models (`models.deepReasoning`, `models.fastReasoning`)
 - Notification settings (`notifications.level`, plus `notifications.janitor|extraction|retrieval.verbosity`)
-- Notification routing channel (`notifications.<feature>.channel`)
+- Notification routing channel (`notifications.<feature>.channel`) for OpenClaw installs
+- Platform compatibility notices (`install.compatibilityWarnings` / survey output)
 - Embedding provider/model (`models.embeddingsProvider`, `ollama.embeddingModel`)
 - Janitor apply mode/policies (`janitor.applyMode`, `janitor.approvalPolicies.*`)
 - Janitor schedule choice (or explicit "not scheduled")

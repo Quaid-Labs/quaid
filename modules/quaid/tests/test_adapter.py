@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -379,6 +380,19 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.filter_system_messages("hello world") is False
 
+    def test_installer_install_state_reports_already_installed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        cfg = tmp_path / "openclaw-main" / "config"
+        cfg.mkdir(parents=True)
+        (cfg / "memory.json").write_text("{}", encoding="utf-8")
+        state = OpenClawAdapter.installer_install_state(str(tmp_path))
+        assert state["status"] == "already_installed"
+
+    def test_installer_install_state_accepts_clawdbot_binary(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/clawdbot" if name == "clawdbot" else None)
+        state = OpenClawAdapter.installer_install_state(str(tmp_path))
+        assert state["status"] == "can_install"
+
     def test_parse_session_jsonl_handles_event_envelopes(self, tmp_path):
         session_file = tmp_path / "oc-session.jsonl"
         session_file.write_text(
@@ -650,11 +664,17 @@ class TestClaudeCodeAdapter:
         assert adapter.get_fast_provider_default() == "anthropic"
         assert adapter.installer_default_models("openai") is None
 
+    def test_installer_install_state_reports_missing_claude_cli(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        state = ClaudeCodeAdapter.installer_install_state(str(tmp_path))
+        assert state["status"] == "cannot_install"
+        assert "requires claude" in state["reason"]
 
 class TestCodexAdapter:
     def test_installer_provider_surface_is_openai_models(self):
         adapter = CodexAdapter()
         assert adapter.installer_supported_providers() == ["openai"]
+        assert adapter._FAST_LANE_CANDIDATES[0] == "gpt-5.4-mini"
         # When codex app-server is unavailable (e.g. in CI), probe falls through
         # all candidates to the static fallback. Accept any valid fast candidate.
         result = adapter.installer_default_models("openai")
@@ -663,6 +683,12 @@ class TestCodexAdapter:
         assert result["fast"] in ("gpt-5.3-codex-spark", "gpt-5.4-mini", "gpt-5.4")
         assert adapter.get_deep_provider_default() == "openai"
         assert adapter.get_fast_provider_default() == "openai"
+
+    def test_installer_install_state_reports_missing_codex_cli(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        state = CodexAdapter.installer_install_state(str(tmp_path))
+        assert state["status"] == "cannot_install"
+        assert "requires codex" in state["reason"]
 
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".codex" / "sessions"

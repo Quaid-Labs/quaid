@@ -44,6 +44,14 @@ class ClaudeCodeAdapter(QuaidAdapter):
         env = os.environ.get("QUAID_HOME", "").strip()
         return Path(env).resolve() if env else Path.home() / "quaid"
 
+    @classmethod
+    def installer_adapter_id(cls) -> str:
+        return "claude-code"
+
+    @classmethod
+    def installer_cli_candidates(cls) -> list[str]:
+        return ["claude"]
+
     def get_instance_name(self) -> str:
         """Derive a stable instance name from the CC project root.
 

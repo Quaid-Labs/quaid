@@ -545,6 +545,62 @@ class QuaidAdapter(abc.ABC):
         """LLM provider ids this adapter supports in guided install."""
         return ["anthropic", "openai", "openrouter", "together", "ollama"]
 
+    @classmethod
+    def installer_adapter_id(cls) -> str:
+        """Static adapter id for install-time logic that does not need an instance."""
+        return "standalone"
+
+    @classmethod
+    def installer_instance_prefix(cls) -> str:
+        adapter_id = str(cls.installer_adapter_id() or "").strip().lower()
+        if not adapter_id or adapter_id == "standalone":
+            return adapter_id
+        return f"{adapter_id}-"
+
+    @classmethod
+    def installer_cli_candidates(cls) -> List[str]:
+        """Host CLI names that indicate this adapter can be installed."""
+        return []
+
+    @classmethod
+    def installer_install_state(cls, workspace: str) -> Dict[str, str]:
+        """Adapter-owned install state for installer platform selection."""
+        root = Path(str(workspace or "").strip()).expanduser()
+        prefix = str(cls.installer_instance_prefix() or "").strip().lower()
+        adapter_id = str(cls.installer_adapter_id() or "").strip().lower()
+
+        try:
+            if root.exists():
+                for child in root.iterdir():
+                    if not child.is_dir():
+                        continue
+                    name = child.name.strip().lower()
+                    cfg_path = child / "config" / "memory.json"
+                    if not cfg_path.exists():
+                        continue
+                    if name == adapter_id or (prefix and name.startswith(prefix)):
+                        return {
+                            "status": "already_installed",
+                            "reason": f"{adapter_id} is already installed in this workspace.",
+                        }
+        except Exception:
+            pass
+
+        candidates = [
+            str(cmd).strip()
+            for cmd in (cls.installer_cli_candidates() or [])
+            if str(cmd).strip()
+        ]
+        if not candidates:
+            return {"status": "can_install", "reason": ""}
+        if any(shutil.which(cmd) for cmd in candidates):
+            return {"status": "can_install", "reason": ""}
+
+        return {
+            "status": "cannot_install",
+            "reason": f"requires {' or '.join(candidates)}",
+        }
+
     def installer_default_models(self, provider: str) -> Optional[Dict[str, str]]:
         """Default deep/fast lanes for installer provider selection.
 
@@ -1075,6 +1131,37 @@ def _load_adapter_manifest(adapter_id: str) -> dict:
 
 
 def _instantiate_adapter_from_manifest(adapter_id: str) -> QuaidAdapter:
+    klass = _load_adapter_class_from_manifest(adapter_id)
+    normalized = _normalize_adapter_id(adapter_id)
+    try:
+        adapter = klass()
+    except Exception as e:
+        raise RuntimeError(
+            f"Unsupported adapter type '{normalized}'. Failed to construct "
+            f"'{klass.__module__}.{klass.__name__}': {e}"
+        ) from e
+
+    required = (
+        "quaid_home",
+        "get_instance_name",
+        "notify",
+        "get_last_channel",
+        "get_api_key",
+        "get_sessions_dir",
+        "filter_system_messages",
+        "get_llm_provider",
+    )
+    missing = [name for name in required if not callable(getattr(adapter, name, None))]
+    if missing:
+        raise RuntimeError(
+            f"Unsupported adapter type '{normalized}'. Adapter class "
+            f"'{klass.__module__}.{klass.__name__}' missing required callables: {', '.join(missing)}"
+        )
+
+    return adapter
+
+
+def _load_adapter_class_from_manifest(adapter_id: str):
     normalized = _normalize_adapter_id(adapter_id)
     manifest = _load_adapter_manifest(normalized)
     runtime = manifest.get("runtime", {})
@@ -1118,33 +1205,7 @@ def _instantiate_adapter_from_manifest(adapter_id: str) -> QuaidAdapter:
             f"Unsupported adapter type '{normalized}'. Module '{module_name}' "
             f"does not export class '{class_name}'"
         )
-
-    try:
-        adapter = klass()
-    except Exception as e:
-        raise RuntimeError(
-            f"Unsupported adapter type '{normalized}'. Failed to construct "
-            f"'{module_name}.{class_name}': {e}"
-        ) from e
-
-    required = (
-        "quaid_home",
-        "get_instance_name",
-        "notify",
-        "get_last_channel",
-        "get_api_key",
-        "get_sessions_dir",
-        "filter_system_messages",
-        "get_llm_provider",
-    )
-    missing = [name for name in required if not callable(getattr(adapter, name, None))]
-    if missing:
-        raise RuntimeError(
-            f"Unsupported adapter type '{normalized}'. Adapter class "
-            f"'{module_name}.{class_name}' missing required callables: {', '.join(missing)}"
-        )
-
-    return adapter
+    return klass
 
 
 def _adapter_config_paths() -> List[Path]:
