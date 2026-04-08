@@ -1,6 +1,6 @@
 # Quaid — Tool Usage Guide
 
-Quaid is an active knowledge layer. Use the Quaid CLI via your Bash tool — no tool registration needed. Prefer `$QUAID_HOME/plugins/quaid/quaid`; use plain `quaid` only if it is already on `PATH`.
+Quaid is an active knowledge layer. Use the Quaid CLI via your Bash tool — no tool registration needed. The `quaid` binary should be on `PATH` (installer adds it). If not, use the full path at `$QUAID_HOME/../quaid-src/modules/quaid/quaid` or wherever the install source lives.
 
 **Environment:** `QUAID_HOME` and `QUAID_INSTANCE` are baked into hooks at install time. If calling the CLI from a shell outside of a hook, ensure both are set.
 

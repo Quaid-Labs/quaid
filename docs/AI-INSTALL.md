@@ -274,7 +274,6 @@ Instead, it uses a deterministic default based on the target platform:
 - `claude-code` -> `claude-code-main`
 - `codex` -> `codex-main`
 - `openclaw` -> `openclaw-main`
-- `standalone` -> `standalone`
 
 Two installs with the same instance ID share memory; different IDs get independent silos.
 The ID becomes a subdirectory under `QUAID_HOME`: `<QUAID_HOME>/<instance-id>/`.
@@ -498,4 +497,4 @@ quaid doctor
 
 Expected output from hooks check: `['SessionStart', 'UserPromptSubmit', 'PreCompact', 'SessionEnd', 'SubagentStart', 'SubagentStop']` (or similar — any subset present means hooks are wired).
 
-If OpenClaw is unavailable, run standalone mode. The install home remains `~/.quaid`.
+Supported platforms: OpenClaw, Claude Code, and Codex. The install home is `~/.quaid`.
