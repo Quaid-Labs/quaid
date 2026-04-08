@@ -2615,6 +2615,8 @@ async function step3_models() {
   }
 
   // Use platform default LLM provider — no advanced setup needed
+  const _modelSpinner = spinner();
+  _modelSpinner.start("Detecting models and provider...");
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
   syncInstallerInstanceEnv(adapterType);
@@ -2676,6 +2678,8 @@ async function step3_models() {
     }
     // Use platform default provider — no prompt needed
   }
+
+  _modelSpinner.message(`Provider: ${provider}`);
 
   if (!hostManagedLlmDefault && provider !== "anthropic") {
     log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
@@ -2747,6 +2751,7 @@ async function step3_models() {
   }
 
   if (modelReview?.needsClarification && !modelsExplicitlyProvided) {
+    _modelSpinner.stop(C.yellow("Model pair needs confirmation"));
     const clarificationReason = String(modelReview.reason || "").trim()
       || `No adapter fast/deep mapping is defined for provider '${provider}'.`;
     log.warn(clarificationReason);
@@ -2806,6 +2811,8 @@ async function step3_models() {
       modelsExplicitlyProvided = true;
     }
   }
+
+  _modelSpinner.stop(C.green(`Provider: ${provider}`));
 
   if (!AGENT_MODE || modelsExplicitlyProvided || !modelReview?.needsClarification) {
     log.info(`Deep reasoning: ${C.bcyan(highModel)}  |  Fast reasoning: ${C.bcyan(lowModel)}`);
