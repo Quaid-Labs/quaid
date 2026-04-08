@@ -53,6 +53,6 @@ Use this as the go/no-go gate for prelaunch and release candidates.
   definition in `modules/quaid/tests/LIVE-TEST-GUIDE.md`.
 - After the live suite clears, compare the cleared SHA against current `HEAD`
   and list any post-clear changes for Solomon before release approval.
-- Compatibility rows are written only for OpenClaw and Claude Code, and only
+- Compatibility rows are written for OpenClaw, Claude Code, and Codex, and only
   after the full live suite is green and the release-target SHA is fixed.
 - Benchmark lane notified only after all above gates pass.

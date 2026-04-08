@@ -25,12 +25,12 @@ Do not inspect installer flags just to confirm local-source behavior.
 `--source local` is already the default.
 
 Concrete rule for local guides:
-- if the guide path is `~/quaid/dev/docs/AI-INSTALL.md`
-- then the repo root is `~/quaid/dev`
+- if the guide path is `~/quaidcode/dev/docs/AI-INSTALL.md`
+- then the repo root is `~/quaidcode/dev`
 - so the mandatory first command must start with:
-  - `cd ~/quaid/dev && node setup-quaid.mjs ...`
+  - `cd ~/quaidcode/dev && node setup-quaid.mjs ...`
 
-Do not collapse that to `cd ~/quaid`.
+Do not collapse that to `cd ~/quaidcode`.
 
 Install home rule:
 - Quaid installs into the fixed home path `~/.quaid`
@@ -135,8 +135,8 @@ If the prompt already gives you the adapter/platform and owner, do not spend tim
 If the target platform is already known from the current agent/session, pass it explicitly with `--adapter`.
 If the guide path is local, use that checkout directly and do not inspect CLI
 arguments to prove that local source is allowed.
-For the live-test prompt path, `~/quaid/dev/docs/AI-INSTALL.md` means the command
-must run from `~/quaid/dev`.
+For the live-test prompt path, `~/quaidcode/dev/docs/AI-INSTALL.md` means the command
+must run from `~/quaidcode/dev`.
 
 ## First Response Template (Mandatory)
 

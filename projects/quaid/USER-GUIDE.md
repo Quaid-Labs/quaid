@@ -8,32 +8,33 @@ Quaid keeps long-lived memory across sessions, then injects only relevant contex
 
 ## Project system basics
 
-- Your projects live in `projects/`.
-- `projects/quaid/` is the built-in reference project.
-- Register project docs so Quaid can index and inject them during recall.
+- Your real project files usually stay where they already live.
+- Quaid tracks projects through a registry plus canonical project docs under `~/.quaid/projects/`.
+- `projects/quaid/` in this repo is the built-in reference project for Quaid itself.
+- Register project docs or source roots so Quaid can index and inject them during recall.
 - The janitor is the normal maintenance loop: dedup, cleanup, docs refresh, and project hygiene.
 
 ## Where your Quaid files live
 
-Quaid is instance-based. Each instance has its own silo:
+Quaid is instance-based. By default, Quaid keeps its own runtime state under `~/.quaid/`. Each instance has its own silo:
 
 - `<QUAID_HOME>/<instance>/config/memory.json`: runtime config for that instance
 - `<QUAID_HOME>/<instance>/data/memory.db`: memory database
 - `<QUAID_HOME>/<instance>/identity/`: Quaid-managed identity files
 - `<QUAID_HOME>/<instance>/logs/`: runtime and janitor logs
-- `<QUAID_HOME>/projects/`: shared project docs and project registry area
+- `<QUAID_HOME>/projects/`: canonical project docs, registry metadata, and Quaid-managed project state
 - `<QUAID_HOME>/shared/config/<platform>/memory.json`: platform-level shared overrides
 
 Important:
 - Model/provider overrides should be platform-scoped (`shared/config/<platform>/...`), not global.
 - Different platforms can have different providers and model lanes.
+- `~/.quaid/` is Quaid's home, not a general-purpose workspace. Real project files can live elsewhere and be linked into projects.
 
-## Commands you will actually use
+## How most people use Quaid
 
-- `quaid doctor` — health and wiring checks
-- `quaid stats` — quick memory stats
-- `quaid config edit` — edit current instance config
-- `quaid config edit --platform-shared` — edit platform shared config
+- Most users interact with Quaid through their agent rather than by driving the CLI directly.
+- If you want to change models, providers, notifications, or other behavior, ask the running agent to make the change so it preserves the correct platform and instance context.
+- If something looks wrong, ask the agent to inspect Quaid health and logs rather than guessing at shell commands.
 
 ## Pro tips (advanced)
 
@@ -43,9 +44,9 @@ Important:
 - Migrate memory between machines/agents:
   - Move or copy the entire instance folder (`<QUAID_HOME>/<instance>/`).
   - Keep `config/`, `data/`, and `identity/` together.
-  - Re-run `quaid doctor` after migration.
+  - After migration, ask your agent to verify the install before you rely on it.
 
 ## Safety notes
 
 - Back up instance directories before major changes.
-- If behavior looks wrong after edits/migration, check `logs/` and run `quaid doctor`.
+- If behavior looks wrong after edits or migration, start with the instance `logs/` directory and have your agent inspect the active Quaid instance.

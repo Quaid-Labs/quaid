@@ -22,19 +22,19 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 
 ## File Placement — MANDATORY RULES
 
-**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, `~/.quaid/scratch/`, or any path outside a tracked quaid project.** No exceptions. "Temporary", "throwaway", "quick", or "hello world" files are NOT exempt — they go in the misc project.
+**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, or `~/.quaid/scratch/`.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
 
 **Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
 
 1. **Existing project owns this work** → place the file inside that project's directory.
-2. **Throwaway / one-off / scratch / quick / hello-world** → write it to the misc project:
+2. **Throwaway / one-off / scratch / quick / hello-world** → use the misc project as the owner, but do not treat `~/.quaid/` as the working directory:
    ```bash
-   # The misc project is pre-created. Write directly to its directory:
-   $QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE  # confirm path
-   # Then write your file there, e.g.:
-   # ~/.quaid/projects/misc--$QUAID_INSTANCE/hello.py
+   # The misc project is pre-created. Confirm it exists:
+   $QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE
+   # Write the file at a real working path, then register it to misc:
+   $QUAID_HOME/plugins/quaid/quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
    ```
-   Always tell the user you wrote to misc and offer to promote to a real project.
+   Prefer a user-visible working path or the active repo. Always tell the user the file is tracked by the misc project and offer to promote it to a real project.
 3. **Durable new work** → create a project first, then write files:
    ```bash
    $QUAID_HOME/plugins/quaid/quaid registry create-project <name> --source-roots <path>
@@ -53,12 +53,13 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 
 Correct response:
 ```bash
-# Step 1: confirm misc project path
+# Step 1: confirm misc project exists
 $QUAID_HOME/plugins/quaid/quaid project show misc--$QUAID_INSTANCE
-# Step 2: write the file inside that project
-# e.g. write to ~/.quaid/projects/misc--$QUAID_INSTANCE/hello.py
+# Step 2: write the file at a real working path
+# Step 3: register it to misc
+$QUAID_HOME/plugins/quaid/quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
 ```
-Tell the user: "I wrote it to the misc project at `~/.quaid/projects/misc--$QUAID_INSTANCE/hello.py`."
+Tell the user: "I tracked it under the misc project so it stays in Quaid's project system."
 Do NOT write to `/tmp/hello.py` or any other path.
 
 **Example — user asks to build a new tool:**
@@ -117,7 +118,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 **Project and file placement**
 
 All files go inside a tracked quaid project OR are registered into one. `/tmp/` is never acceptable, even for throwaway work.
-- Misc project: `misc--$QUAID_INSTANCE` at `$QUAID_HOME/projects/misc--$QUAID_INSTANCE/` — use this for throwaway/one-off work. It is pre-created.
+- Misc project: `misc--$QUAID_INSTANCE` is the default owner for throwaway/one-off work. Prefer a real working path, then register that file to misc.
 - New work: create a project first (`quaid registry create-project`), then write files.
 - User specifies a path outside the project system: write there, then `quaid registry register <path> --project <name>` to link it.
 - See the **File Placement — MANDATORY RULES** section above for decision tree and examples.

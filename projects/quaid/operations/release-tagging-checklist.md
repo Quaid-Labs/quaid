@@ -11,12 +11,12 @@ Replace `<version>` below with the actual release tag (e.g. `v0.2.15-alpha`).
 - Confirm the configured `paths.devRoot` checkout is clean (`git status`).
 
 ## 2) Docs and messaging
-- Confirm README + roadmap match current alpha posture.
+- Confirm README + roadmap match current release posture.
 - Confirm known limitations are explicit:
   - parallel session edge cases
   - multi-user not fully hardened
   - Windows lightly tested
-  - OpenClaw-first maturity
+  - platform maturity/behavior differences across OpenClaw, Claude Code, and Codex
 - Review release notes: `docs/releases/<version>.md`.
 - Draft the release post from `docs/releases/RELEASE-POST-TEMPLATE.md`.
 - Get approval on the exact public release-post copy before publishing it anywhere.

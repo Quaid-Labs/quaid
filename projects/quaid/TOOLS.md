@@ -103,10 +103,9 @@ quaid global-registry list    # cross-instance project list
 ```
 
 **File placement:**
-- In-project files → `QUAID_HOME/projects/<name>/`
-- Project docs → `QUAID_HOME/projects/<name>/docs/`
-- External code files → link with `quaid registry register <path> --project <name>`
-- Ephemeral/drafts/quick work → project `misc--$QUAID_INSTANCE` at `$QUAID_HOME/projects/misc--$QUAID_INSTANCE/` (pre-created at install; always tell the user when writing here)
+- Canonical project docs and Quaid-managed metadata → `QUAID_HOME/projects/<name>/`
+- Real source/code files may live outside Quaid home — keep them in their real working location and link them with `quaid registry register <path> --project <name>`
+- Ephemeral/drafts/quick work → use project `misc--$QUAID_INSTANCE` as the owner, but prefer a real working path and register it immediately instead of treating `~/.quaid/` as a dump directory
 
 ---
 

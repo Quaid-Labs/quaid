@@ -94,6 +94,13 @@ Headline launch summary:
 
 Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AL-S` remains the clean reference lane. `AL-L` and `AL-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the FC Sonnet baseline. In the long-form FC rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row.
 
+Token-cost reference from the Sonnet evaluation study (`AGENTLIFE_TECHNICAL_REPORT_20260329.md`):
+- `AL-S`: Quaid Sonnet/Haiku (`r880`, `r847`) reached `87.69%` at `5,753,673` eval tokens, versus FC Sonnet (`r606`) at `92.90%` and `29,828,646` eval tokens.
+- `AL-L`: Quaid Sonnet/Haiku (`r895`, `r863`) reached `85.82%` at `5,917,209` eval tokens, versus FC Sonnet (`r857`) at `87.70%` and `34,596,206` eval tokens.
+- Sonnet eval study: `AL-L` Haiku-ingest + Sonnet-eval (`r944`) reached `88.69%` at `8,382,952` eval tokens, versus the same FC Sonnet row at `34,596,206`.
+
+Those study rows are the basis for the claim that Quaid can stay near full-context quality at roughly one-fifth the eval token cost on long-form lanes.
+
 Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
 
 Use these canonical links:

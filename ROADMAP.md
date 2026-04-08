@@ -1,63 +1,72 @@
 # Quaid Roadmap
 
-This roadmap intentionally avoids dates and version promises.
-It reflects broad areas of active focus, not delivery guarantees.
+This roadmap avoids dates and version promises.
+It reflects where Quaid is headed after the first stable release: cleaner
+architecture, stronger reliability, and a more capable long-term memory system
+for agents.
 
 ## Current Focus
 
+- **Architecture tightening**
+  - Simplify the runtime into cleaner, easier-to-manage boundaries.
+  - Reduce cross-layer coupling between adapters, core logic, ingest, and datastores.
+  - Replace more ad hoc background behavior with clearer supervised runtime ownership.
+  - Make Quaid easier to extend without adding more one-off special cases.
+
 - **Reliability and correctness**
-  - Continue hardening extraction, recall, and janitor paths.
-  - Reduce failure ambiguity with better diagnostics and test isolation.
-  - Keep OpenClaw, Claude Code, and Codex integrations stable as primary production paths.
-  - Parallelize janitor task execution after architectural boundary enforcement is complete.
+  - Harden extraction, recall, docs indexing, and janitor behavior under real long-running use.
+  - Keep live memory work from being blocked by unrelated background maintenance.
+  - Improve recovery after crashes, stalled workers, or host lifecycle edge cases.
+  - Keep failure modes explicit and diagnosable instead of silent or ambiguous.
 
-- **Benchmark rigor**
-  - Keep AgentLife runs reproducible and current.
-  - Publish clear release-candidate benchmark evidence with stable provenance.
-  - Improve retrieval quality in weaker categories without overfitting benchmark prompts.
+- **Host hardening**
+  - Keep OpenClaw, Claude Code, and Codex stable as supported public integrations.
+  - Close the highest-impact parity gaps between hosts without pretending they are identical.
+  - Improve install, upgrade, and runtime behavior before expanding to more platforms.
 
-- **Docs and OSS readiness**
-  - Keep public docs aligned with actual system behavior.
-  - Mark unproven surfaces as experimental instead of overpromising.
-  - Improve contributor onboarding and operational documentation.
+- **Operational clarity**
+  - Improve observability around recall results, misses, indexing state, and daemon health.
+  - Keep installer, AI-install, release, and compatibility workflows aligned with actual system behavior.
+  - Continue tightening docs so public guidance matches the real product surface.
 
-## Near-Term Exploration
+## What Comes Next
 
-- **Datastore modularity/plugin friendliness**
-  - Refactor datastore contracts so stores can be added or replaced cleanly without cross-layer coupling.
-  - Reduce hard-coded datastore assumptions in recall/write/maintenance paths.
-  - Define stable plugin-facing datastore capabilities before broadening host coverage.
+- **A more unified Quaid runtime**
+  - Move toward one clearer runtime ownership model per Quaid home instead of a collection of loosely related background processes.
+  - Split long-running maintenance work into better-isolated workers so one slow task cannot stall the rest of the system.
 
-- **Multi-user + group conversation memory**
-  - Partition memory by user/group identity with explicit routing and ownership guarantees.
-  - Support context muxing for fast participant/conversation switching.
-  - Add mixed-recall policies for shared/group threads without cross-user leakage.
+- **Stronger shared-memory foundations**
+  - Build the groundwork for multi-user, group, and shared-project memory without cross-user leakage.
+  - Improve routing and ownership rules so shared contexts stay useful without becoming unsafe.
 
-- **Graph and memory introspection**
-  - Better visibility into why recalls were returned (and why misses happened).
-  - Optional graph visualization/debug views.
+- **Better memory introspection**
+  - Make it easier to answer:
+    - why a memory was recalled
+    - why an expected memory was missed
+    - what source context a fact came from
+  - Add better debugging and graph-level visibility for operators and developers.
 
-- **Import and migration workflows**
-  - Evaluate practical import paths from other systems and prior agent histories.
-  - Prioritize low-risk, auditable migration flows.
+- **Safer import and migration workflows**
+  - Support audited ways to ingest prior agent history and external sources.
+  - Improve portability without turning migration into a black box.
 
-## Longer-Horizon Work
+## Longer-Horizon Direction
 
-- **Host coverage beyond current adapters**
-  - Expand validated host integrations while preserving behavior guarantees.
+- **Extensible datastore and plugin contracts**
+  - Make future stores and plugins easier to add cleanly.
+  - Reduce hard-coded assumptions in recall, writing, and maintenance paths.
 
-- **Multi-agent / multi-owner hardening**
-  - Strengthen isolation, governance, and conflict behavior under concurrent workloads.
+- **Host-owned adapter ecosystem**
+  - Keep the first-party focus on OpenClaw, Claude Code, and Codex.
+  - Tighten adapter contracts so other hosts can own their own adapters in their own codebases.
+  - Preserve cross-host behavior through stable contracts rather than pulling every integration into the core repo.
 
 - **Operational UX**
-  - Improve dashboards/visibility and config ergonomics as complexity grows.
+  - Improve dashboards, configuration ergonomics, and day-2 operating surfaces as Quaid grows.
 
-## Explicit Non-Goals (for now)
+## What This Roadmap Is Not
 
-- Broad claims of full compatibility across unvalidated host runtimes before validation.
-- Heavy platform-specific promises without repeatable install/test coverage.
-- Roadmap commitments tied to specific release dates.
-
----
-
-For detailed engineering tasks and speculative work, see internal TODO tracking.
+- It is not a date-based promise list.
+- It is not a claim that all host integrations already have the same maturity.
+- It is not a commitment to broad compatibility before validation exists.
+- It is not a plan to pause shipped-behavior work for cleanup-only refactors.
