@@ -1001,7 +1001,7 @@ const C = {
 
 // Known embedding models: model name → { dim, ramGB, quality }
 const EMBED_MODELS = {
-  "nomic-embed-text":    { dim: 768,  ramGB: 1.5, quality: "Best", rank: 1 },
+  "nomic-embed-text":    { dim: 768,  ramGB: 0.3, quality: "Best", rank: 1 },
   "qwen3-embedding:8b":  { dim: 4096, ramGB: 6,   quality: "High", rank: 2 },
   "bge-large":           { dim: 1024, ramGB: 1.2, quality: "Good", rank: 3 },
   "mxbai-embed-large":   { dim: 1024, ramGB: 1.2, quality: "Good", rank: 4 },
@@ -3036,14 +3036,6 @@ async function step4_embeddings() {
         }
         log.warn("You may need to start it manually: ollama serve");
       }
-    } else {
-      const proceedDegraded = handleCancel(await confirm({
-        message: "Continue without Ollama and accept degraded recall quality?",
-        initialValue: false,
-      }));
-      if (!proceedDegraded) {
-        bail("Install cancelled. Re-run after installing Ollama.");
-      }
     }
   }
 
@@ -3066,73 +3058,15 @@ async function step4_embeddings() {
     if (loadedModels.length > 0) {
       log.info(`Loaded (in VRAM): ${C.bcyan(loadedModels.map(m => `${m.name} (${m.vramGB}GB)`).join(", "))}`);
     }
-    log.warn("Embedding models use persistent RAM while Ollama is active.");
+    // Use nomic-embed-text — required, no choice needed
+    embedModel = "nomic-embed-text";
+    embedDim = 768;
+    log.info(`Embedding model: ${C.bcyan("nomic-embed-text")} (768 dim, ~274MB download)`);
 
-    // Build options — installed models first, sorted by quality
-    const loadedNames = loadedModels.map(m => m.name);
-    const options = [];
-    for (const [model, info] of Object.entries(EMBED_MODELS)) {
-      const installed = installedEmbedModels.includes(model);
-      const loaded = loadedNames.some(n => n.startsWith(model.split(":")[0]));
-      const fitsRAM = free >= info.ramGB || total >= (info.ramGB * 3);
-      let hint = `${info.dim} dim, ~${info.ramGB}GB RAM`;
-      if (loaded) {
-        hint += " — " + C.green("Loaded in VRAM");
-      } else if (installed) {
-        hint += " — " + C.green("Pulled");
-      } else if (!fitsRAM) {
-        hint += " — " + C.yellow("Low RAM");
-      }
-      if (info.rank === 1) hint += (installed || loaded) ? "" : ` — ${info.quality}`;
-      options.push({ value: model, label: model, hint });
-    }
-
-    // Cloud API embeddings — backend not yet implemented (see ROADMAP.md)
-    // options.push({
-    //   value: "text-embedding-3-small",
-    //   label: "OpenAI API (cloud)",
-    //   hint: "1536 dim, no GPU needed — requires OPENAI_API_KEY, ~$0.02/M tokens",
-    // });
-
-    // No embeddings at all
-    options.push({
-      value: "none",
-      label: "None (keyword search only)",
-      hint: "No vectors — FTS5 keyword search only, no semantic recall",
-    });
-
-    // Default: best installed model, or best that fits RAM, or smallest
-    let defaultModel;
-    if (installedEmbedModels.length > 0) {
-      // Pick the best quality model that's already installed
-      defaultModel = installedEmbedModels.sort(
-        (a, b) => EMBED_MODELS[a].rank - EMBED_MODELS[b].rank
-      )[0];
-    } else {
-      const canFit = Object.entries(EMBED_MODELS)
-        .filter(([, info]) => free >= info.ramGB || total >= (info.ramGB * 3))
-        .sort(([, a], [, b]) => a.rank - b.rank);
-      defaultModel = canFit.length > 0 ? canFit[0][0] : "all-minilm";
-    }
-
-    const choice = handleCancel(await select({
-      message: "Embedding model",
-      initialValue: defaultModel,
-      options,
-    }));
-
-    embedModel = choice;
-
-    if (choice === "none") {
-      embedDim = 0;
-      log.warn("No embedding model selected — semantic search disabled.");
-      log.info(C.dim("Quaid will use FTS5 keyword search only. You can add embeddings later."));
-      log.success("Keyword-only mode");
-    } else {
-      embedDim = EMBED_MODELS[choice]?.dim || 384;
+    {
 
       // Check if model is pulled, if not pull it
-      const hasPulled = installedEmbedModels.includes(choice);
+      const hasPulled = installedEmbedModels.includes(embedModel);
       if (hasPulled) {
         log.success(`${embedModel} already available`);
       } else {
