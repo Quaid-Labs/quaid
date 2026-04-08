@@ -41,6 +41,42 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     assert marked == []
 
 
+def test_daemon_loop_skips_stale_doc_indexing_when_signals_are_pending(monkeypatch):
+    pending_signal = {"session_id": "sess-late", "type": "session_end"}
+    read_calls = 0
+    indexed = []
+
+    def fake_read_pending_signals():
+        nonlocal read_calls
+        read_calls += 1
+        if read_calls == 1:
+            return []
+        if read_calls == 2:
+            return [pending_signal]
+        return []
+
+    def fake_sleep(_seconds):
+        raise _StopDaemonLoop()
+
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", fake_read_pending_signals)
+    monkeypatch.setattr(extraction_daemon, "process_signal", lambda _sig: None)
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "check_idle_sessions", lambda _mins: None)
+    monkeypatch.setattr(extraction_daemon, "_index_one_stale_doc", lambda: indexed.append(True))
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
+    monkeypatch.setattr(extraction_daemon, "_auto_register_untracked_docs", lambda: 0)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(_StopDaemonLoop):
+        extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+    assert indexed == []
+
+
 def test_start_daemon_returns_negative_one_when_pid_file_never_appears(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     read_pid_calls = 0

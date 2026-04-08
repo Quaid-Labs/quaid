@@ -2948,7 +2948,10 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             # Periodic stale-doc indexing — index one stale doc per cycle
             if now - last_stale_doc_check > _STALE_DOC_CHECK_INTERVAL:
                 try:
-                    _index_one_stale_doc()
+                    if read_pending_signals():
+                        logger.debug("skipping stale doc indexing while extraction signals are pending")
+                    else:
+                        _index_one_stale_doc()
                 except Exception as e:
                     logger.debug("stale doc indexing failed: %s", e)
                 last_stale_doc_check = now
