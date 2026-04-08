@@ -50,30 +50,6 @@ class TestLLMProviderSelection:
         llm = adapter.get_llm_provider()
         assert isinstance(llm, GatewayLLMProvider)
 
-    @pytest.mark.adapter_openclaw
-    def test_openclaw_deep_provider_override_can_bypass_gateway(self, monkeypatch, tmp_path):
-        """OpenClawAdapter should honor a deep anthropic override for non-gateway extraction."""
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
-        adapter = OpenClawAdapter()
-        set_adapter(adapter)
-        cfg = SimpleNamespace(
-            models=SimpleNamespace(
-                llm_provider="default",
-                deep_reasoning_provider="anthropic",
-                fast_reasoning_provider="default",
-                deep_reasoning="claude-sonnet-4-5",
-                fast_reasoning="claude-haiku-4-5",
-                deep_reasoning_effort="high",
-                fast_reasoning_effort="none",
-            )
-        )
-        with patch("config.get_config", return_value=cfg), \
-             patch.object(adapter, "_resolve_anthropic_credential", return_value="sk-ant-test"):
-            deep_llm = adapter.get_llm_provider(model_tier="deep")
-            fast_llm = adapter.get_llm_provider(model_tier="fast")
-        assert isinstance(deep_llm, AnthropicLLMProvider)
-        assert isinstance(fast_llm, GatewayLLMProvider)
-
     def test_standalone_produces_anthropic(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         adapter = StandaloneAdapter(home=tmp_path)

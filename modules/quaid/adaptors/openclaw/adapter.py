@@ -529,22 +529,11 @@ class OpenClawAdapter(QuaidAdapter):
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from config import get_config
-        from lib.providers import AnthropicLLMProvider
+        port, token = self._get_gateway_auth()
         cfg = get_config()
         deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
         fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
         provider = str(getattr(cfg.models, "llm_provider", "") or "").strip()
-        explicit_provider = False
-        if model_tier == "fast":
-            fast_provider = str(getattr(cfg.models, "fast_reasoning_provider", "") or "").strip()
-            if fast_provider and fast_provider != "default":
-                provider = fast_provider
-                explicit_provider = True
-        elif model_tier == "deep":
-            deep_provider = str(getattr(cfg.models, "deep_reasoning_provider", "") or "").strip()
-            if deep_provider and deep_provider != "default":
-                provider = deep_provider
-                explicit_provider = True
         if not provider or provider == "default":
             provider = self._detect_gateway_primary_provider() or "anthropic"
         fast_effort = str(getattr(cfg.models, "fast_reasoning_effort", "") or "").strip()
@@ -554,19 +543,6 @@ class OpenClawAdapter(QuaidAdapter):
                 "LLM provider requires deepReasoning and fastReasoning to be set in config/memory.json. "
                 f"Got deep={deep_model!r} fast={fast_model!r}."
             )
-        if explicit_provider and provider.lower() == "anthropic":
-            credential = self._resolve_anthropic_credential()
-            if not credential:
-                raise RuntimeError(
-                    "OpenClaw provider is 'anthropic' but no Anthropic credential could be "
-                    "resolved from the gateway auth store."
-                )
-            return AnthropicLLMProvider(
-                api_key=credential,
-                deep_model=deep_model,
-                fast_model=fast_model,
-            )
-        port, token = self._get_gateway_auth()
         return GatewayLLMProvider(
             port=port,
             token=token,

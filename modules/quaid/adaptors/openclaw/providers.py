@@ -13,6 +13,10 @@ from lib.providers import LLMProvider, LLMResult
 
 logger = logging.getLogger(__name__)
 
+_OFFLINE_EXTRACTION_PROMPT_PREFIX = (
+    "You are performing offline memory extraction on a transcript archive."
+)
+
 
 def _try_notify(msg: str, **kwargs) -> None:
     """Call notify_agent, swallowing any error if no adapter is configured.
@@ -85,6 +89,13 @@ class GatewayLLMProvider(LLMProvider):
         return model
 
     @staticmethod
+    def _wrap_internal_gateway_input(user_message: str) -> str:
+        text = str(user_message or "")
+        if text.startswith(_OFFLINE_EXTRACTION_PROMPT_PREFIX):
+            return f"<quaid_system_message>{text}</quaid_system_message>"
+        return text
+
+    @staticmethod
     def _extract_openresponses_text(data: dict) -> str:
         if not isinstance(data, dict):
             return ""
@@ -129,7 +140,7 @@ class GatewayLLMProvider(LLMProvider):
         body_dict: dict = {
             "model": "openclaw",
             "instructions": system_prompt,
-            "input": user_message,
+            "input": self._wrap_internal_gateway_input(user_message),
             "max_output_tokens": max_tokens,
         }
         if effort and effort != "none":
