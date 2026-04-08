@@ -3189,7 +3189,7 @@ async function step4_embeddings() {
         log.info(C.dim("Embeddings already configured in shared config — inheriting."));
         log.info(`  provider: ${C.cyan(found.provider)}  model: ${C.cyan(found.embedModel)}  dim: ${found.embedDim || "auto"}`);
         log.info(C.dim(`  source: ${sharedConfigPath}`));
-        log.info(C.dim("  To change the model, run: quaid config edit --shared or --platform-shared"));
+        log.info(C.dim("  If you want to change embedding defaults later, it is best to use your agents for Quaid config changes."));
         log.message("");
         return { embedModel: found.embedModel, embedDim: found.embedDim };
       }
