@@ -22,6 +22,7 @@ import {
   resolveAdapterHookScript,
   syncBuiltinAdapterManifests,
 } from "./modules/quaid/lib/adapter-manifests.mjs";
+import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2282,26 +2283,12 @@ function getLoadedOllamaModels() {
 
 function showBanner() {
   if (SURVEY_ONLY) return;
-  const subtitle = "by Solomon Steadman";
-  const footerRight = `v${VERSION}`;
-  const subtitlePad = 37;
-  const subtitleRightEdge = subtitlePad + subtitle.length;
-  const footerPad = Math.max(0, subtitleRightEdge - footerRight.length);
-  const lines = [
-    "",
-    C.dim("    ·          ✦                          ·                                      "),
-    C.dim("✧        ·  ") + C.bmag("  ██████    ██    ██   ██████   ██  ██████") + C.dim("   ·        ✧"),
-    C.dim("      ✦    ") + C.bmag(" ██    ██   ██    ██  ██    ██  ██  ██   ██") + C.dim("      ✦"),
-    C.dim(" ·         ") + C.bmag(" ██    ██   ██    ██  ████████  ██  ██   ██") + C.dim("        ·"),
-    C.dim("    ·      ") + C.bmag(" ██ ▄▄ ██   ██    ██  ██    ██  ██  ██   ██") + C.dim("      ·"),
-    C.dim("✦           ") + C.bmag("  ██████    ▀██████▀  ██    ██  ██  ██████ ") + C.dim("      ✦"),
-    C.dim("      ✧    ") + C.bmag("     ▀▀") + C.dim("                                       ·        ✧"),
-    " ".repeat(subtitlePad) + C.dim(subtitle),
-    " ".repeat(footerPad) + C.dim(footerRight),
-    "",
-    " ".repeat(12) + C.dim("· ") + C.cyan("░▒▓") + C.bold(" LONG-TERM MEMORY SYSTEM ") + C.cyan("▓▒░") + C.dim(" ·"),
-    "",
-  ];
+  const lines = renderQuaidBanner(C, {
+    subtitle: "by Solomon Steadman",
+    footerRight: `v${VERSION}`,
+    title: " LONG-TERM MEMORY SYSTEM ",
+    leftShift: 4,
+  });
   console.log(lines.join("\n"));
 }
 
