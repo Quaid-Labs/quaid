@@ -586,6 +586,96 @@ function isInternalSessionContext(event: any, ctx: any): boolean {
   return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:"));
 }
 
+function isInternalTranscriptMessages(messages: any[]): boolean {
+  for (const msg of Array.isArray(messages) ? messages : []) {
+    const text = String(facade.getMessageText(msg) || "").trim();
+    if (!text) continue;
+    const scrubbed = text.replace(/<quaid_system_message>[\s\S]*?<\/quaid_system_message>/gi, "").trim();
+    if (!scrubbed) continue;
+    if (/^Extract memorable facts and journal entries from this conversation chunk:/i.test(scrubbed)) {
+      return true;
+    }
+    if (scrubbed.startsWith("You are performing offline memory extraction on a transcript archive.")) {
+      return true;
+    }
+    if (facade.isInternalMaintenancePrompt(scrubbed)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sessionCursorPath(sessionId: string): string {
+  return path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors", `${String(sessionId || "").trim()}.json`);
+}
+
+function removeSessionCursor(sessionId: string): void {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return;
+  try {
+    fs.unlinkSync(sessionCursorPath(sid));
+  } catch {}
+}
+
+function removeQueuedSignalsForSession(sessionId: string): void {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return;
+  const signalDir = path.join(QUAID_INSTANCE_ROOT, "data", "extraction-signals");
+  try {
+    const names = fs.readdirSync(signalDir).filter((name) => name.endsWith(".json"));
+    for (const name of names) {
+      const signalPath = path.join(signalDir, name);
+      try {
+        const payload = JSON.parse(fs.readFileSync(signalPath, "utf8"));
+        if (String(payload?.session_id || "").trim() === sid) {
+          fs.unlinkSync(signalPath);
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
+function purgeInternalSessionArtifacts(): void {
+  const cursorDir = path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors");
+  const signalDir = path.join(QUAID_INSTANCE_ROOT, "data", "extraction-signals");
+  let removedCursors = 0;
+  let removedSignals = 0;
+
+  try {
+    const cursorNames = fs.readdirSync(cursorDir).filter((name) => name.endsWith(".json"));
+    for (const name of cursorNames) {
+      const cursorPath = path.join(cursorDir, name);
+      try {
+        const payload = JSON.parse(fs.readFileSync(cursorPath, "utf8"));
+        const transcriptPath = String(payload?.transcript_path || "").trim();
+        if (!transcriptPath || !fs.existsSync(transcriptPath)) continue;
+        if (!isInternalTranscriptMessages(parseSessionMessagesJsonl(transcriptPath))) continue;
+        fs.unlinkSync(cursorPath);
+        removedCursors += 1;
+      } catch {}
+    }
+  } catch {}
+
+  try {
+    const signalNames = fs.readdirSync(signalDir).filter((name) => name.endsWith(".json"));
+    for (const name of signalNames) {
+      const signalPath = path.join(signalDir, name);
+      try {
+        const payload = JSON.parse(fs.readFileSync(signalPath, "utf8"));
+        const transcriptPath = String(payload?.transcript_path || "").trim();
+        if (!transcriptPath || !fs.existsSync(transcriptPath)) continue;
+        if (!isInternalTranscriptMessages(parseSessionMessagesJsonl(transcriptPath))) continue;
+        fs.unlinkSync(signalPath);
+        removedSignals += 1;
+      } catch {}
+    }
+  } catch {}
+
+  if (removedCursors || removedSignals) {
+    console.log(`[quaid][cleanup] removed ${removedCursors} internal cursor(s) and ${removedSignals} internal signal(s)`);
+  }
+}
+
 function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteractiveSession | null {
   const entries = (Object.entries(data || {}) as Array<[string, any]>)
     .filter(([key, row]) => (
@@ -2586,6 +2676,21 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             || resolveSessionKeyForSessionId(sessionId)
             || ""
           ).trim();
+          const hasInternalTranscript = isInternalTranscriptMessages(messages);
+          if (hasInternalTranscript) {
+            if (sessionId) {
+              removeSessionCursor(sessionId);
+              removeQueuedSignalsForSession(sessionId);
+            }
+            writeHookTrace("hook.transcript_update.skipped", {
+              reason: "internal_maintenance_transcript",
+              parsed_session_id: sessionId,
+              parsed_session_key: sessionKey,
+              session_file: sessionFile,
+              message_count: messages.length,
+            });
+            return;
+          }
           // Use sessionId from the transcript file path directly — it is authoritative
           // for which session is being updated. The previous rerouting to
           // currentInteractiveSession (mtime-based "most active" heuristic) was
@@ -2650,19 +2755,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               parsed_session_key: sessionKey,
               session_file: sessionFile,
             });
-          }
-          const hasExtractionPrompt = messages.some((m: any) =>
-            /^Extract memorable facts and journal entries from this conversation chunk:/i.test(
-              String(facade.getMessageText(m) || "").trim()
-            )
-          );
-          if (hasExtractionPrompt) {
-            writeHookTrace("hook.transcript_update.skipped", {
-              reason: "internal_extraction_transcript",
-              session_file: sessionFile,
-              message_count: messages.length,
-            });
-            return;
           }
           writeHookTrace("hook.transcript_update.received", {
             update_session_id: String(update?.sessionId || ""),
@@ -3585,6 +3677,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // Start the shared extraction daemon
     ensureDaemonAlive();
     console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
+    purgeInternalSessionArtifacts();
     startSessionIndexWatcher();
 
     // Session-transition fallback for OC TUI /new visual-only transitions:
@@ -4553,4 +4646,5 @@ export const __test = {
   summarizeRecallResults,
   selectAutoInjectQuery,
   isInternalSessionContext,
+  isInternalTranscriptMessages,
 };

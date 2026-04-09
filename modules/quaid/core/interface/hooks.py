@@ -1290,11 +1290,23 @@ def hook_subagent_start(args):
         print(f"[quaid][subagent-start] invalid JSON on stdin: {e}", file=sys.stderr)
         return
 
+    _write_hook_trace("hook.subagent.start.received", {
+        "session_id": str(hook_input.get("session_id") or "").strip(),
+        "agent_id": str(hook_input.get("agent_id") or "").strip(),
+        "agent_type": str(hook_input.get("agent_type") or "").strip(),
+        "keys": sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
+    })
+
     parent_session_id = hook_input.get("session_id", "").strip()
     child_id = hook_input.get("agent_id", "").strip()
     child_type = hook_input.get("agent_type", "").strip()
 
     if not parent_session_id or not child_id:
+        _write_hook_trace("hook.subagent.start.skipped", {
+            "reason": "missing_ids",
+            "session_id": parent_session_id,
+            "agent_id": child_id,
+        })
         return
 
     try:
@@ -1304,8 +1316,18 @@ def hook_subagent_start(args):
             child_id=child_id,
             child_type=child_type or None,
         )
+        _write_hook_trace("hook.subagent.start.registered", {
+            "session_id": parent_session_id,
+            "agent_id": child_id,
+            "agent_type": child_type,
+        })
         print(f"[quaid][subagent-start] registered {child_id} under {parent_session_id}", file=sys.stderr)
     except Exception as e:
+        _write_hook_trace("hook.subagent.start.error", {
+            "session_id": parent_session_id,
+            "agent_id": child_id,
+            "error": str(e),
+        })
         print(f"[quaid][subagent-start] error: {e}", file=sys.stderr)
 
 
@@ -1325,11 +1347,23 @@ def hook_subagent_stop(args):
         print(f"[quaid][subagent-stop] invalid JSON on stdin: {e}", file=sys.stderr)
         return
 
+    _write_hook_trace("hook.subagent.stop.received", {
+        "session_id": str(hook_input.get("session_id") or "").strip(),
+        "agent_id": str(hook_input.get("agent_id") or "").strip(),
+        "agent_transcript_path": str(hook_input.get("agent_transcript_path") or "").strip(),
+        "keys": sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
+    })
+
     parent_session_id = hook_input.get("session_id", "").strip()
     child_id = hook_input.get("agent_id", "").strip()
     transcript_path = hook_input.get("agent_transcript_path", "").strip()
 
     if not parent_session_id or not child_id:
+        _write_hook_trace("hook.subagent.stop.skipped", {
+            "reason": "missing_ids",
+            "session_id": parent_session_id,
+            "agent_id": child_id,
+        })
         return
 
     # Expand ~ in transcript path
@@ -1368,8 +1402,18 @@ def hook_subagent_stop(args):
             child_id=child_id,
             transcript_path=transcript_path or None,
         )
+        _write_hook_trace("hook.subagent.stop.completed", {
+            "session_id": parent_session_id,
+            "agent_id": child_id,
+            "agent_transcript_path": transcript_path,
+        })
         print(f"[quaid][subagent-stop] completed {child_id} under {parent_session_id}", file=sys.stderr)
     except Exception as e:
+        _write_hook_trace("hook.subagent.stop.error", {
+            "session_id": parent_session_id,
+            "agent_id": child_id,
+            "error": str(e),
+        })
         print(f"[quaid][subagent-stop] error: {e}", file=sys.stderr)
 
 

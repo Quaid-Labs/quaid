@@ -300,6 +300,32 @@ class TestParseSessionJsonl:
         assert "Her daughter is Alice." not in result
         assert "Assistant: Normal assistant reply." in result
 
+    def test_strips_dedup_review_prompt_block(self, tmp_path):
+        from ingest.extract import parse_session_jsonl
+
+        jsonl_file = tmp_path / "session.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": (
+                        "You are reviewing 50 dedup rejections in a personal knowledge base.\n\n"
+                        "When in doubt, CONFIRM.\n"
+                        "1. Log ID: abc\n"
+                        "   New text: \"A\"\n"
+                        "   Existing text: \"B\""
+                    ),
+                }
+            ),
+            json.dumps({"role": "assistant", "content": "Normal assistant reply."}),
+        ]
+        jsonl_file.write_text("\n".join(lines))
+
+        result = parse_session_jsonl(str(jsonl_file))
+        assert "dedup rejections" not in result
+        assert "Log ID:" not in result
+        assert "Assistant: Normal assistant reply." in result
+
 
 # ---------------------------------------------------------------------------
 # extract_from_transcript tests

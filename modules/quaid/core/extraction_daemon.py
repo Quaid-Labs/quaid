@@ -1709,6 +1709,23 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         pass
 
+    adapter = None
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+    except Exception:
+        adapter = None
+
+    try:
+        is_subagent_session_fn = getattr(adapter, "is_subagent_session", None) if adapter is not None else None
+        if callable(is_subagent_session_fn) and is_subagent_session_fn(session_id, Path(transcript_path)):
+            logger.info("[%s] session %s: adapter-marked subagent, skipping standalone extraction", label, session_id)
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(session_id, lock_fd)
+            return
+    except Exception:
+        pass
+
     # FIFO ordering: if this is a session_end signal but a rolling signal for
     # the same session is still pending (not yet processing), defer this
     # session_end so rolling can stage its facts first.  Without this, a
@@ -1940,12 +1957,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     chunk_budget = _get_capture_chunk_tokens()
     chunk_line_budget = _get_capture_chunk_max_lines()
-    adapter = None
-    try:
-        from lib.adapter import get_adapter
-        adapter = get_adapter()
-    except Exception:
-        adapter = None
     semantic_buffer_metrics = {
         "raw_lines_added": 0,
         "semantic_chars_added": 0,
@@ -2117,6 +2128,15 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 from core.subagent_registry import get_harvestable, mark_harvested
                 harvestable = get_harvestable(session_id)
                 mark_harvested_fn = mark_harvested
+                discover_children_fn = getattr(adapter, "discover_subagent_children", None) if adapter is not None else None
+                if callable(discover_children_fn):
+                    for child in discover_children_fn(session_id):
+                        child_id = str(child.get("child_id") or "").strip()
+                        if not child_id:
+                            continue
+                        if any(str(existing.get("child_id") or "").strip() == child_id for existing in harvestable):
+                            continue
+                        harvestable.append(child)
                 for child in harvestable:
                     child_path = child.get("transcript_path", "")
                     child_id = child.get("child_id", "")

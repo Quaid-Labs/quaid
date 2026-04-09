@@ -69,6 +69,10 @@ class QuaidAdapter(abc.ABC):
         r"=== END TRANSCRIPT CHUNK ===",
         flags=re.DOTALL,
     )
+    _DEDUP_REVIEW_PROMPT_RE = re.compile(
+        r"You are reviewing \d+ dedup rejections in a personal knowledge base\.\s*.*",
+        flags=re.DOTALL,
+    )
 
     # ---- Paths ----
 
@@ -308,7 +312,10 @@ class QuaidAdapter(abc.ABC):
         value = self.strip_quaid_system_messages(text)
         if not value:
             return ""
-        return self._OFFLINE_EXTRACTION_PROMPT_RE.sub("", value).strip()
+        value = self._OFFLINE_EXTRACTION_PROMPT_RE.sub("", value).strip()
+        if not value:
+            return ""
+        return self._DEDUP_REVIEW_PROMPT_RE.sub("", value).strip()
 
     @staticmethod
     def _transcript_label(role: str, source_type: str = "") -> str:
@@ -389,6 +396,15 @@ class QuaidAdapter(abc.ABC):
             else:
                 parts.append(block)
         return "\n\n".join(parts).strip()
+
+    def is_subagent_session(self, session_id: str, transcript_path: Optional[Path] = None) -> bool:
+        _ = session_id
+        _ = transcript_path
+        return False
+
+    def discover_subagent_children(self, parent_session_id: str) -> List[Dict[str, Any]]:
+        _ = parent_session_id
+        return []
 
     def parse_session_jsonl(self, path: Path) -> str:
         """Parse platform session JSONL into a normalized transcript."""

@@ -932,6 +932,92 @@ class TestCodexAdapter:
         assert "Subagent/User: My uncle owns a vineyard in Mendoza." in transcript
         assert "Subagent/Assistant: Noted." in transcript
 
+    def test_codex_adapter_detects_subagent_session_from_session_meta(self, tmp_path, monkeypatch):
+        session_id = "019d734c-2904-7d32-9f06-52011c9d1adb"
+        path = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "09"
+            / f"rollout-2026-04-09T17-31-04-{session_id}.jsonl"
+        )
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "session_meta",
+                            "payload": {
+                                "source": {
+                                    "subagent": {
+                                        "thread_spawn": {
+                                            "parent_thread_id": "parent-1",
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Hello"}}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        adapter = CodexAdapter()
+        assert adapter.is_subagent_session(session_id, path) is True
+
+    def test_codex_adapter_discovers_subagent_children_by_parent_thread_id(self, tmp_path, monkeypatch):
+        parent_session_id = "parent-1"
+        child_session_id = "019d734c-2904-7d32-9f06-52011c9d1adb"
+        child_path = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "09"
+            / f"rollout-2026-04-09T17-31-04-{child_session_id}.jsonl"
+        )
+        child_path.parent.mkdir(parents=True)
+        child_path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "session_meta",
+                            "payload": {
+                                "source": {
+                                    "subagent": {
+                                        "thread_spawn": {
+                                            "parent_thread_id": parent_session_id,
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Hello"}}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        adapter = CodexAdapter()
+        children = adapter.discover_subagent_children(parent_session_id)
+        assert children == [
+            {
+                "child_id": child_session_id,
+                "transcript_path": str(child_path),
+                "child_type": "codex-subagent",
+            }
+        ]
+
     def test_parse_session_jsonl_ignores_machine_context_fallback_rows(self, tmp_path):
         path = tmp_path / "rollout-machine-context.jsonl"
         path.write_text(

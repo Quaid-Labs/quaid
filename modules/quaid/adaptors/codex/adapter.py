@@ -42,6 +42,10 @@ class CodexAdapter(QuaidAdapter):
         r"<quaid_notification>.*?</quaid_notification>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _ROLLOUT_SESSION_ID_RE = re.compile(
+        r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$",
+        flags=re.IGNORECASE,
+    )
 
     def __init__(self, home: Optional[Path] = None):
         self._home = home
@@ -499,6 +503,68 @@ class CodexAdapter(QuaidAdapter):
             deduped.append(message)
             last_pair = pair
         return self.build_transcript(deduped)
+
+    @classmethod
+    def _path_session_id(cls, path: Path) -> str:
+        stem = path.stem
+        match = cls._ROLLOUT_SESSION_ID_RE.search(stem)
+        return str(match.group(1) if match else "").strip()
+
+    @staticmethod
+    def _subagent_parent_id_from_path(path: Path) -> str:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(obj.get("type") or "").strip() != "session_meta":
+                        continue
+                    payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+                    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+                    subagent = source.get("subagent") if isinstance(source, dict) else {}
+                    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else {}
+                    if isinstance(spawn, dict):
+                        return str(spawn.get("parent_thread_id") or "").strip()
+        except OSError:
+            return ""
+        return ""
+
+    def is_subagent_session(self, session_id: str, transcript_path: Optional[Path] = None) -> bool:
+        path = transcript_path or self.get_session_path(session_id)
+        if path is None or not path.is_file():
+            return False
+        return bool(self._subagent_parent_id_from_path(path))
+
+    def discover_subagent_children(self, parent_session_id: str) -> list[dict]:
+        parent = str(parent_session_id or "").strip()
+        if not parent:
+            return []
+        sessions_dir = self.get_sessions_dir()
+        if sessions_dir is None:
+            return []
+        found: list[dict] = []
+        seen_ids: set[str] = set()
+        for path in sessions_dir.rglob("rollout-*.jsonl"):
+            child_parent = self._subagent_parent_id_from_path(path)
+            if child_parent != parent:
+                continue
+            child_id = self._path_session_id(path) or path.stem
+            if not child_id or child_id in seen_ids:
+                continue
+            seen_ids.add(child_id)
+            found.append(
+                {
+                    "child_id": child_id,
+                    "transcript_path": str(path),
+                    "child_type": "codex-subagent",
+                }
+            )
+        return found
 
     def resolve_stop_hook_signal(self, hook_input, transcript_path):
         command = self._detect_lifecycle_command(hook_input, transcript_path)
