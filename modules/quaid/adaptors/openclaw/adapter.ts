@@ -204,7 +204,7 @@ const _instanceForDbPath = _resolveQuaidInstance();
 const DB_PATH = _instanceForDbPath
   ? path.join(WORKSPACE, "instances", _instanceForDbPath, "data", "memory.db")
   : path.join(WORKSPACE, "data", "memory.db");
-const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
+const QUAID_RUNTIME_DIR = path.join(WORKSPACE, "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
 const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");
 const QUAID_INJECTION_LOG_DIR = path.join(QUAID_RUNTIME_DIR, "injection");

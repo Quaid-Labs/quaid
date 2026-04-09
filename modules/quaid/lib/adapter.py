@@ -1105,7 +1105,7 @@ def _registry_quaid_home() -> Path:
 def _adapter_manifest_candidates(adapter_id: str) -> List[Path]:
     normalized = _normalize_adapter_id(adapter_id)
     candidates: List[Path] = [
-        _registry_quaid_home() / ".quaid" / "adaptors" / normalized / "adapter.json",
+        _registry_quaid_home() / "adaptors" / normalized / "adapter.json",
         Path(__file__).resolve().parent.parent / "adaptors" / "manifests" / f"{normalized}.json",
     ]
     out: List[Path] = []

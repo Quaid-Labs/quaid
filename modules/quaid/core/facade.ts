@@ -886,7 +886,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
   }
 
-  const INJECTION_LOG_DIR = path.join(deps.workspace, ".quaid", "runtime", "injection");
+  const INJECTION_LOG_DIR = path.join(deps.workspace, "runtime", "injection");
 
   function getInjectionLogPath(sessionId: string): string {
     return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
@@ -1681,7 +1681,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     messages: unknown[],
     label: string,
     sessionId?: string,
-    tempDir: string = path.join(deps.workspace, ".quaid", "tmp"),
+    tempDir: string = path.join(deps.workspace, "runtime", "tmp"),
   ): Promise<void> {
     if (!deps.isSystemEnabled("workspace")) {
       return;
@@ -2464,7 +2464,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   const _memoryNotes = new Map<string, string[]>();
   const _memoryNotesTouchedAt = new Map<string, number>();
-  const NOTES_DIR = path.join(deps.workspace, ".quaid", "runtime", "notes");
+  const NOTES_DIR = path.join(deps.workspace, "runtime", "notes");
 
   function getNotesPath(sessionId: string): string {
     return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
@@ -2611,7 +2611,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const journalEnabled = deps.isSystemEnabled("journal") && journalConfig.enabled !== false;
     const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
     const triggerType = resolveExtractionTrigger(label);
-    const tmpDir = path.join(deps.workspace, ".quaid", "tmp");
+    const tmpDir = path.join(deps.workspace, "runtime", "tmp");
     fs.mkdirSync(tmpDir, { recursive: true });
     const tmpPath = path.join(tmpDir, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     fs.writeFileSync(tmpPath, transcriptForExtraction, { mode: 0o600 });

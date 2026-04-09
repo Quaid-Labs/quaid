@@ -441,7 +441,7 @@ function createQuaidFacade(deps) {
     const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
     fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 384 });
   }
-  const INJECTION_LOG_DIR = path.join(deps.workspace, ".quaid", "runtime", "injection");
+  const INJECTION_LOG_DIR = path.join(deps.workspace, "runtime", "injection");
   function getInjectionLogPath(sessionId) {
     return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
   }
@@ -1131,7 +1131,7 @@ function createQuaidFacade(deps) {
     const nonBootstrapUserTexts = userTexts.filter((text) => !text.startsWith(bootstrapPrompt));
     return nonBootstrapUserTexts.length === 0;
   }
-  async function updateDocsFromTranscript(messages, label, sessionId, tempDir = path.join(deps.workspace, ".quaid", "tmp")) {
+  async function updateDocsFromTranscript(messages, label, sessionId, tempDir = path.join(deps.workspace, "runtime", "tmp")) {
     if (!deps.isSystemEnabled("workspace")) {
       return;
     }
@@ -1807,7 +1807,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
   }
   const _memoryNotes = /* @__PURE__ */ new Map();
   const _memoryNotesTouchedAt = /* @__PURE__ */ new Map();
-  const NOTES_DIR = path.join(deps.workspace, ".quaid", "runtime", "notes");
+  const NOTES_DIR = path.join(deps.workspace, "runtime", "notes");
   function getNotesPath(sessionId) {
     return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
   }
@@ -1944,7 +1944,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const journalEnabled = deps.isSystemEnabled("journal") && journalConfig.enabled !== false;
     const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
     const triggerType = resolveExtractionTrigger(label);
-    const tmpDir = path.join(deps.workspace, ".quaid", "tmp");
+    const tmpDir = path.join(deps.workspace, "runtime", "tmp");
     fs.mkdirSync(tmpDir, { recursive: true });
     const tmpPath = path.join(tmpDir, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     fs.writeFileSync(tmpPath, transcriptForExtraction, { mode: 384 });
