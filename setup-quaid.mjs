@@ -2752,7 +2752,7 @@ async function step2_owner() {
     String(INSTALL_ARGS.ownerName || process.env.QUAID_OWNER_NAME || "").trim();
   if (AGENT_MODE && !seedName && !_existingInstallDetected) {
     throw new Error("Agent mode requires --owner-name or QUAID_OWNER_NAME so memories are tagged to the person.");
-  } else if (AGENT_MODE && _existingInstallDetected) {
+  } else if (AGENT_MODE && !seedName && _existingInstallDetected) {
     throw new Error(
       "Agent mode detected an existing install but could not resolve owner identity from existing config. "
       + "Provide --owner-name (or QUAID_OWNER_NAME) to proceed."
