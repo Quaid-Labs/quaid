@@ -27,10 +27,21 @@ from lib.adapter import set_adapter, reset_adapter, TestAdapter
 
 @contextmanager
 def _adapter_patch(tmp_path):
-    """Context manager that sets the adapter to use tmp_path as quaid home.
+    """Context manager that sets the adapter to use tmp_path as visible content root.
 
-    Yields the instance root path (where files are resolved).
+    Yields the visible root path where workspace markdown files are resolved.
     """
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    try:
+        yield adapter.visible_home()
+    finally:
+        reset_adapter()
+
+
+@contextmanager
+def _hidden_adapter_patch(tmp_path):
+    """Context manager that yields the hidden instance root for runtime/log tests."""
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     try:
@@ -151,6 +162,26 @@ class TestGetMonitoredFiles:
             bootstrap_files = [k for k in result if k.startswith("projects/")]
             for bf in bootstrap_files:
                 assert result[bf]["maxLines"] == 100  # _BOOTSTRAP_MAX_LINES
+
+    def test_bootstrap_globs_resolve_from_visible_home(self, tmp_path):
+        """Bootstrap discovery uses the visible Quaid root, not the hidden instance root."""
+        cfg = _make_config_with_core_md(files={})
+        hidden_root = tmp_path / ".quaid"
+        visible_root = tmp_path / "quaid"
+        (hidden_root / "instances" / "pytest-runner").mkdir(parents=True)
+        (hidden_root / "instances" / "pytest-runner" / "memory.json").write_text("{}")
+        tools_path = visible_root / "projects" / "demo" / "TOOLS.md"
+        tools_path.parent.mkdir(parents=True, exist_ok=True)
+        tools_path.write_text("# Demo Tools\n", encoding="utf-8")
+
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs",
+                   return_value=["projects/*/TOOLS.md"]), \
+             patch("core.lifecycle.workspace_audit.get_visible_quaid_home", return_value=visible_root):
+            from core.lifecycle.workspace_audit import get_monitored_files
+            result = get_monitored_files()
+            assert "projects/demo/TOOLS.md" in result
+            assert result["projects/demo/TOOLS.md"]["maxLines"] == 100
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +501,7 @@ class TestProjectReviewQueue:
         """Queueing a review creates the JSON file."""
         from core.lifecycle.workspace_audit import _queue_project_review
 
-        with _adapter_patch(tmp_path) as iroot:
+        with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(
                 section="My API Docs",
@@ -494,7 +525,7 @@ class TestProjectReviewQueue:
         """Multiple queues accumulate in the same file."""
         from core.lifecycle.workspace_audit import _queue_project_review
 
-        with _adapter_patch(tmp_path) as iroot:
+        with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(section="First", source_file="TOOLS.md")
             _queue_project_review(section="Second", source_file="AGENTS.md")
@@ -508,7 +539,7 @@ class TestProjectReviewQueue:
         """If existing file is corrupt, starts fresh (doesn't crash)."""
         from core.lifecycle.workspace_audit import _queue_project_review
 
-        with _adapter_patch(tmp_path) as iroot:
+        with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
             pending_file.write_text("{broken json")
@@ -521,7 +552,7 @@ class TestProjectReviewQueue:
         """get_pending_project_reviews returns queued items without deleting."""
         from core.lifecycle.workspace_audit import _queue_project_review, get_pending_project_reviews
 
-        with _adapter_patch(tmp_path) as iroot:
+        with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(section="Test", source_file="TOOLS.md")
             reviews = get_pending_project_reviews()
@@ -534,14 +565,14 @@ class TestProjectReviewQueue:
         """get_pending_project_reviews returns [] if no file."""
         from core.lifecycle.workspace_audit import get_pending_project_reviews
 
-        with _adapter_patch(tmp_path):
+        with _hidden_adapter_patch(tmp_path):
             assert get_pending_project_reviews() == []
 
     def test_get_returns_empty_for_corrupt_file(self, tmp_path):
         """get_pending_project_reviews returns [] if file is corrupt."""
         from core.lifecycle.workspace_audit import get_pending_project_reviews
 
-        with _adapter_patch(tmp_path) as iroot:
+        with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
             pending_file.write_text("not valid json!")
@@ -550,7 +581,7 @@ class TestProjectReviewQueue:
     def test_get_logs_warning_for_corrupt_file(self, tmp_path, caplog):
         from core.lifecycle.workspace_audit import get_pending_project_reviews
 
-        with _adapter_patch(tmp_path) as iroot:
+        with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
             pending_file.write_text("not valid json!")
@@ -562,7 +593,7 @@ class TestProjectReviewQueue:
         """clear_pending_project_reviews removes the file."""
         from core.lifecycle.workspace_audit import _queue_project_review, clear_pending_project_reviews
 
-        with _adapter_patch(tmp_path) as iroot:
+        with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(section="Test", source_file="TOOLS.md")
             pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
@@ -574,7 +605,7 @@ class TestProjectReviewQueue:
         """clear_pending_project_reviews is safe on missing file."""
         from core.lifecycle.workspace_audit import clear_pending_project_reviews
 
-        with _adapter_patch(tmp_path):
+        with _hidden_adapter_patch(tmp_path):
             clear_pending_project_reviews()  # Should not raise
 
     def test_queue_rejects_unknown_kwargs(self):

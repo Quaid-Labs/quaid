@@ -9,8 +9,10 @@ from lib.instance import (
     RESERVED_INSTANCE_NAMES,
     validate_instance_id,
     quaid_home,
+    visible_home,
     instance_id,
     instance_root,
+    visible_instance_root,
     shared_dir,
     shared_projects_dir,
     shared_registry_path,
@@ -81,6 +83,23 @@ class TestQuaidHome:
         assert quaid_home() == Path.home() / ".quaid"
 
 
+class TestVisibleHome:
+    def test_from_env(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+        assert visible_home() == tmp_path
+
+    def test_default(self, monkeypatch):
+        monkeypatch.delenv("QUAID_HOME", raising=False)
+        monkeypatch.delenv("QUAID_VISIBLE_HOME", raising=False)
+        assert visible_home() == Path.home() / "quaid"
+
+    def test_derives_from_hidden_home(self, monkeypatch, tmp_path):
+        hidden = tmp_path / ".quaid-custom"
+        monkeypatch.setenv("QUAID_HOME", str(hidden))
+        monkeypatch.delenv("QUAID_VISIBLE_HOME", raising=False)
+        assert visible_home() == tmp_path / "quaid-custom"
+
+
 class TestInstanceId:
     def test_from_env(self, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "openclaw")
@@ -103,6 +122,11 @@ class TestInstanceRoot:
         monkeypatch.setenv("QUAID_INSTANCE", "openclaw")
         assert instance_root() == tmp_path / "instances" / "openclaw"
 
+    def test_visible_instance_root_resolves(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw")
+        assert visible_instance_root() == tmp_path / "instances" / "openclaw"
+
 
 class TestSharedPaths:
     def test_shared_dir(self, monkeypatch, tmp_path):
@@ -111,10 +135,12 @@ class TestSharedPaths:
 
     def test_shared_projects_dir(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
         assert shared_projects_dir() == tmp_path / "projects"
 
     def test_shared_registry_path(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
         assert shared_registry_path() == tmp_path / "projects" / "project-registry.json"
 
 

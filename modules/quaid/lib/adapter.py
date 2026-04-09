@@ -1417,7 +1417,15 @@ def _auto_provision_from_env_if_needed() -> None:
         class _BootstrapAdapter:
             """Minimal adapter stand-in used only during first-use silo creation."""
             def quaid_home(self):  # type: ignore[override]
-                return Path(home)
+                return Path(home).resolve()
+            def visible_home(self):  # type: ignore[override]
+                explicit = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
+                if explicit:
+                    return Path(explicit).resolve()
+                root = self.quaid_home()
+                if root.name.startswith(".") and len(root.name) > 1:
+                    return root.with_name(root.name[1:])
+                return root
             def adapter_id(self):  # type: ignore[override]
                 return adapter_type
             def agent_id_prefix(self):  # type: ignore[override]

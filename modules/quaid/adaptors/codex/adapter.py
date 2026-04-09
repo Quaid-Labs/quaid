@@ -232,7 +232,7 @@ class CodexAdapter(QuaidAdapter):
                 instance_name = instance_id()
             except Exception:
                 instance_name = ""
-        home = self.quaid_home()
+        home = self.visible_home()
         misc_path = home / "projects" / f"misc--{instance_name}" if instance_name else None
         if not instance_name or misc_path is None:
             return ""

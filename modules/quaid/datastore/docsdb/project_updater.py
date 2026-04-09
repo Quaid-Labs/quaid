@@ -78,7 +78,7 @@ def _resolve_path(relative: str) -> Path:
         and relative != "projects/staging"
         and not relative.startswith("projects/staging/")
     ):
-            return get_visible_quaid_home() / relative
+        return get_visible_quaid_home() / relative
     if relative.startswith("shared/"):
         return get_quaid_home() / relative
     return _workspace() / relative

@@ -189,12 +189,12 @@ tests/livetest/scripts/livetest-preflight.sh --wipe-platform cc --skip-platform-
 
 ```bash
 LOCAL_SHA=$(cd DEV_ROOT && git rev-parse --short HEAD)
-ssh REMOTE_HOST 'cd WORKSPACE/dev && git rev-parse --short HEAD'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && git rev-parse --short HEAD'
 ```
 
 If different, update and restart:
 ```bash
-ssh REMOTE_HOST 'cd WORKSPACE/dev && git pull --ff-only origin canary'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && git pull --ff-only origin canary'
 ```
 
 ### Full Wipe Details

@@ -1438,7 +1438,7 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
 def _clear_processed_snippets(filename: str, processed_texts: List[str]) -> None:
     """Remove processed snippets from a .snippets.md file."""
     base_name = filename.removesuffix('.md')
-        snippets_path = _visible_instance_dir() / f"{base_name}.snippets.md"
+    snippets_path = _visible_instance_dir() / f"{base_name}.snippets.md"
 
     if not snippets_path.exists():
         return

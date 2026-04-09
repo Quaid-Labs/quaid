@@ -275,12 +275,12 @@ is current just because local `canary` is current.
 Minimum check:
 ```bash
 LOCAL_SHA=$(cd /path/to/quaid && git rev-parse --short HEAD)
-ssh REMOTE_HOST 'cd WORKSPACE/dev && git rev-parse --short HEAD'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && git rev-parse --short HEAD'
 ```
 
 If the remote SHA differs, update it before launching that loop iteration:
 ```bash
-ssh REMOTE_HOST 'cd WORKSPACE/dev && git pull --ff-only origin canary'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && git pull --ff-only origin canary'
 ```
 
 After any remote code update, restart the relevant runtime/daemon before
