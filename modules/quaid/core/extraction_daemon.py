@@ -1951,7 +1951,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             transcript_text = adapter.parse_session_jsonl(Path(tmp_path))
         if rolling_mode:
             transcript_text = str(staged_state.get("semantic_buffer", "") or "").strip()
-        elif _semantic_buffer_has_content(staged_state):
+        if not rolling_mode and _semantic_buffer_has_content(staged_state):
             if int(staged_state.get("semantic_buffer_tokens", 0) or 0) >= chunk_budget:
                 operation_phase = "rolling_stage_extract"
                 staged_state = _stage_semantic_buffer_payload(
