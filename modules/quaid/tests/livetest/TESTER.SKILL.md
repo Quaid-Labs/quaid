@@ -16,6 +16,17 @@ Read both files before starting. The platform supplement defines launch commands
 extraction triggers, milestone gotchas, and which milestones apply or are skipped
 for your platform. When this file and the supplement conflict, the supplement wins.
 
+Also read these Quaid reference files for CLI syntax and tool usage:
+- `projects/quaid/TOOLS.md` — CLI commands, recall syntax, store flags, project commands
+- `projects/quaid/AGENTS.md` — operating rules and retrieval discipline
+
+Key CLI patterns you will need:
+- `quaid recall "query"` — search memory nodes
+- `quaid recall "query" '{"stores":["docs"]}'` — search project docs
+- `quaid project create <name>` — create a project (NOT `registry create-project`)
+- `quaid store "fact"` — manual fact storage (avoid during extraction tests)
+- `quaid janitor --task edges --apply` — backfill edges
+
 ---
 
 ## Identity and Setup
@@ -26,7 +37,7 @@ At the start of every session:
    - Which platform you are testing (OC, CC, or CDX)
    - Your own tmux pane address (e.g. `livetest:OC.0`)
    - The **coordinator's pane address** (e.g. `main:4.0`) — use this as the
-     target for all STATUS and ISSUE messages you send back
+     mailbox address for all routine STATUS and ISSUE reports you send back
    - The canonical `livetest` tmux session is local, not remote
    - The visible platform lane is the right-hand pane in your platform window and SSHes into the remote
      host, not a tester process running on the remote host
@@ -66,8 +77,8 @@ conflict, the guide wins.
 2. Read any platform-specific notes for that milestone in your platform supplement.
 3. Execute the required steps (send messages, wait for processing, run DB queries).
 4. Verify against the pass criteria.
-5. Send a STATUS message to the coordinator.
-6. If it fails: send an ISSUE message and wait for the coordinator's response.
+5. Post a STATUS item to the coordinator mailbox.
+6. If it fails: post an ISSUE item and wait for the coordinator's response.
 
 ### Quality-Retry Rule Before Escalation
 
@@ -113,15 +124,26 @@ For recall-quality contamination cases, check for rows matching things like:
 - `returned only`
 - assistant/debug summaries of the failed attempt
 
-If the audit still finds contamination, stop and send an ISSUE instead of
+If the audit still finds contamination, stop and post an ISSUE instead of
 starting the rerun.
 
 ### Waiting after extraction triggers
 
-After any reset, compact, or lifecycle extraction trigger, wait 30–60 seconds
-before checking the DB. The extraction pipeline needs time to process.
+**Extraction is async.** After any lifecycle trigger (`/new`, `/clear`,
+`/reset`, `/compact`), the daemon must: detect the signal, read the
+transcript, call the LLM for extraction, process the response, and write
+facts to the DB. This takes **30–60 seconds minimum**, sometimes longer
+if the LLM is slow or the transcript is large.
 
-Exception: CDX extraction is synchronous — see `TESTER.CDX.md`.
+**Do NOT check FTS or DB immediately after a trigger.** Wait at least 60
+seconds, then check. If results are empty, wait another 30 seconds and
+recheck. A 5-second check will almost always return empty — that is not
+a failure, it is checking too early.
+
+The daemon log shows progress — if you see `daemon-reset` or
+`daemon-session_end` lines appearing for your session, extraction is
+in progress. If 90 seconds pass with no daemon activity for your session,
+then post an ISSUE.
 
 ### Sanitized Transcript Hygiene Audit
 
@@ -189,7 +211,7 @@ yourself.
     - `instanceId` matches your silo name (openclaw-livetest / claude-code-livetest / codex-livetest)
     - No fatal errors
 
-    If the plan looks wrong, **stop and send an ISSUE to the coordinator** before
+    If the plan looks wrong, **stop and post an ISSUE to the coordinator mailbox** before
     proceeding. Do not run the real install if the dry-run plan is incorrect.
 
 2. **Tell the platform to install** by sending it this message (swap in your values):
@@ -213,7 +235,7 @@ yourself.
 
 3. **Do not provide specific installer commands.** The platform reads the guide and
    figures out the steps. Answer clarifying questions naturally. If the platform
-   cannot complete the install after reasonable attempts, send an ISSUE to the
+   cannot complete the install after reasonable attempts, post an ISSUE to the
    coordinator — do not run the install yourself.
 
 4. **Handle installer credential prompts** — if the installer exits with an
@@ -242,7 +264,7 @@ yourself.
 
 **M0 PASS:** Platform self-installed from canary AND pre-install survey visible AND install messages visible AND `quaid doctor` healthy.
 **M0 FAIL:** Platform could not install, silent install, or `quaid doctor` errors.
-On FAIL: send an ISSUE to the coordinator with the full platform pane capture.
+On FAIL: post an ISSUE to the coordinator mailbox with the full platform pane capture.
 
 ---
 
@@ -251,15 +273,15 @@ On FAIL: send an ISSUE to the coordinator with the full platform pane capture.
 ### Status updates (after each milestone)
 ```
 TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-  tests/livetest/scripts/tmux-msg.sh <coordinator-pane> \
-  "STATUS: M3 PASS — 20 nodes, 12 edges, compact extraction verified"
+  tests/livetest/scripts/tmux-mailbox.sh post --kind STATUS --lane OC <coordinator-pane> \
+  "M3 PASS — 20 nodes, 12 edges, compact extraction verified"
 ```
 
 ### Issue reports (when something fails)
 ```
 TMUX_MSG_SENDER=codex-livetester TMUX_MSG_SOURCE=<your-window> \
-  tests/livetest/scripts/tmux-msg.sh <coordinator-pane> \
-  "ISSUE [M5]: injection returned empty context. Command: ssh ... quaid recall. Error: [first 3 lines]. Tried: waited 60s, re-checked DB."
+  tests/livetest/scripts/tmux-mailbox.sh post --kind ISSUE --lane OC <coordinator-pane> \
+  "M5 FAIL — injection returned empty context. Command: ssh ... quaid recall. Error: [first 3 lines]. Tried: waited 60s, re-checked DB."
 ```
 
 Every issue report must include:
@@ -296,7 +318,7 @@ This applies to both ISSUE reports (blockers) and STATUS reports (PASS and PASS-
 
 ### Waiting for coordinator response
 
-After sending an ISSUE, **wait for the coordinator's reply before doing anything
+After posting an ISSUE, **wait for the coordinator's reply before doing anything
 else.** Do not attempt alternative fixes, do not skip the milestone, do not mark
 it PASS. The coordinator will fix the issue and tell you when to retry.
 
@@ -312,15 +334,13 @@ wait for their ruling. The coordinator applies the four-condition test.
 
 ## Sending Messages — Important Rules
 
-- Always use `tests/livetest/scripts/tmux-msg.sh` for inter-agent messages.
-  Never use raw `tmux send-keys` for messages to other agents.
-- Always include `TMUX_MSG_SENDER` and `TMUX_MSG_SOURCE` env vars.
-- **Never set `TMUX_MSG_WAIT=0`** for STATUS or ISSUE messages to the
-  coordinator. The default wait (60s) lets the draft-detection logic hold off
-  until they finish typing. The busy check only fires when the coordinator is
-  actively typing in the input prompt — not during tool call processing.
-- Only use `THIS_IS_A_CRITICAL_MESSAGE=true` for genuine INTERRUPT-level
-  escalations where you need to break through mid-sentence typing.
+- Use `tests/livetest/scripts/tmux-mailbox.sh` for routine STATUS and ISSUE traffic.
+- Use `tests/livetest/scripts/tmux-msg.sh` only for urgent interrupts, explicit
+  self-tests, or one-off coordinator nudges.
+- Never use raw `tmux send-keys` for messages to other agents.
+- Always include `TMUX_MSG_SENDER` and `TMUX_MSG_SOURCE` env vars when posting or sending.
+- Only use `THIS_IS_A_CRITICAL_MESSAGE=true` with `tmux-msg.sh` for genuine
+  INTERRUPT-level escalations where you need to break through mid-sentence typing.
 - Avoid bracket characters `[` and `]` in tmux messages — they can trigger
   shell quote mode in the receiving pane.
 

@@ -1,5 +1,8 @@
 #!/bin/bash
-# tmux-msg.sh — Send a message to a running Claude Code or Codex session via tmux
+# tmux-msg.sh — Send a direct message to a running Claude Code or Codex session via tmux
+#
+# For queue-backed routine traffic, prefer tmux-mailbox.sh. This script is the
+# direct-delivery path for urgent interrupts, self-tests, and one-off nudges.
 #
 # Usage:
 #   tmux-msg.sh <target> <message>

@@ -62,7 +62,7 @@ chains. The agent reads the guide and installs itself.
 ### Livetester
 
 - Follow milestone steps in order, exactly as written.
-- Report every failure and anomaly to the coordinator as an ISSUE message.
+- Post every failure and anomaly into the coordinator mailbox as an ISSUE item.
 - Proactively surface diagnostic data (logs, DB counts, daemon status, pane
   captures) with every ISSUE.
 - Pause and wait for coordinator go-ahead before proceeding past a failure.
@@ -112,7 +112,7 @@ local tester must survive.
 COORDINATOR_PANE=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}')
 ```
 
-Pass this to every tester at boot so they can send STATUS/ISSUE messages back.
+Pass this to every tester at boot so they can post into your mailbox.
 
 ### Scripts
 
@@ -120,7 +120,8 @@ Shipped with the livetest suite (relative to repo root):
 - `tests/livetest/scripts/livetest-preflight.sh` — safety checks, wipe, platform start
 - `tests/livetest/scripts/livetest-wipe.sh` — wipe Quaid from remote
 - `tests/livetest/scripts/livetest-platform-start.sh` — start platform services
-- `tests/livetest/scripts/tmux-msg.sh` — inter-agent messaging
+- `tests/livetest/scripts/tmux-msg.sh` — direct pane messaging for urgent interrupts and self-tests
+- `tests/livetest/scripts/tmux-mailbox.sh` — queue-backed mailbox for routine STATUS/ISSUE traffic
 - `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
 
 ### Start Tester Agents
@@ -455,10 +456,17 @@ Three platforms (OC, CC, CDX) run M0–M15 in parallel. One platform runs M0
 alone first (lead platform, rotated each run); the other two start after the
 lead M0 passes. The run is not complete until all three platforms reach M15 PASS.
 
-Platform lifecycle commands vary:
-- **CC**: `/clear`, `/compact`, `/exit`
-- **CDX**: `/new` (only — no `/clear` or `/compact`)
-- **OC**: `/new`, `/clear`, `/compact` (via TUI or Telegram text)
+Platform lifecycle commands:
+- **CC**: `/clear`
+- **CDX**: `/new`
+- **OC**: `/new`, `/reset`
+
+**Seed fact delivery**: When telling the agent a fact for extraction testing,
+phrase it so the agent does NOT proactively store it via `quaid store`. The
+goal is for the fact to live in the conversation transcript and be extracted
+by the daemon on the next lifecycle boundary. Prefix seed facts with something
+like: "Just making conversation, don't store this — " or frame them as casual
+chat the agent would naturally respond to without tool use.
 
 ### M0 — Agent-Driven Install
 
@@ -506,8 +514,8 @@ Seed a fact, send `/clear` (CDX: use `/new`), verify extraction.
 
 ### M3 — Rolling Extraction + `/compact`
 
-Seed a fact, build >1500 tokens of context (3–4 exchanges), verify
-`rolling_stage` events, then send `/compact` (CDX: use `/new`) and verify
+Seed a fact, build >1500 tokens of context (3–4 exchanges), **wait for
+`rolling_stage` to fire**, then send the lifecycle command and verify
 `rolling_flush`.
 
 **Seed fact**: "My sister started her ceramics studio this spring, she fires
@@ -519,11 +527,25 @@ everything in a wood-burning kiln she built herself."
 2. "What should she watch for during reduction and cooling to avoid cracks?"
 3. "Any practical checklist for loading and venting that style of kiln?"
 
-**Before `/compact`** — verify rolling fired:
+**CRITICAL: Verify buffer tokens crossed threshold, then wait for rolling_stage.**
+
+After the follow-up exchanges, first check the buffer has crossed 1500 tokens:
+```bash
+ssh REMOTE_HOST 'for f in WORKSPACE/instances/INSTANCE/data/rolling-extraction/*.json; do \
+  python3 -c "import json; d=json.load(open(\"$f\")); \
+  print(d.get(\"session_id\",\"\")[:12], \"tokens:\", d.get(\"semantic_buffer_tokens\",0))" \
+  2>/dev/null; done'
+```
+If tokens are below 1500, send more follow-up exchanges to build context.
+
+Once tokens are >= 1500, wait **15–30 seconds** without sending any messages,
+then check for `rolling_stage`:
 ```bash
 ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl | tail -5'
 ```
-Expected: at least one `rolling_stage` event.
+Expected: at least one `rolling_stage` event for this session. If it hasn't
+appeared yet, wait longer — do NOT send the lifecycle command until
+`rolling_stage` has fired. Sending it too early preempts the rolling check.
 
 **After `/compact`** — verify flush:
 ```bash
@@ -689,7 +711,7 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI docs che
 ssh REMOTE_HOST 'echo "# M10 test\nThe carillon clock rings at noon." > /tmp/m10-test-doc.md'
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI registry register /tmp/m10-test-doc.md --project quaid 2>&1'
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI docs update --apply 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI recall "carillon clock" 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI recall "carillon clock" '\''{"stores":["docs"]}'\'' 2>&1'
 ```
 
 **Session CLI test:**

@@ -54,17 +54,20 @@ echo "Latest: OC=$(npm view openclaw version) CC=$(npm view @anthropic-ai/claude
 ```
 If outdated: update the base snapshot (not the run VM). Versions must be pinned in the snapshot.
 
-## OC Telegram Quirks
+## OC Interaction
 
-The OC Telegram agent has limitations vs CC/CDX:
+OC live testing uses the TUI (`openclaw tui`) for all interaction.
+Extraction is triggered by `/new` in the TUI — the adapter detects the
+new session key in sessions.json and signals extraction for the old session.
+After `/new`, send one follow-up message in the new session to ensure the
+session key is written to sessions.json.
 
-1. **No slash commands in groups.** `/new`, `/clear`, `/compact` are chat text. Use `tg-extract` for extraction.
-2. **No shell tool access.** Agent cannot run `quaid recall` or any CLI. M6/M8 are PASS-WITH-NOTE.
-3. **Single session.** All Telegram messages accumulate in one session with no boundaries.
-4. **Send messages via testbox bot:** `tg --config .tg-livetest-send '@Quaid_livetester... MESSAGE'`
-5. **NEVER use .tg-livetest-config for sends** — that's OC's own bot, OC ignores its own messages.
-6. **Extraction trigger:** `tg-extract <VM_IP>` (writes compaction signal, waits 45s).
-7. **For M11 snippets:** send `type: "reset"` signal, not compaction.
+**Do NOT use tg-extract or any manual signal injection.** These bypass the
+feature under test and poison reset-dedupe markers, preventing the adapter's
+native `/new` detection from working on subsequent attempts.
+
+If `/new` does not trigger extraction, that is a bug to investigate and fix —
+not a condition to work around with manual signals.
 
 ## Post-first-M0: Global Livetest Config
 
@@ -122,7 +125,7 @@ Use this as a routine live-test check, not only after a known failure.
 ### Confirm your coordinator pane address
 
 Do this before spawning any testers. The script auto-detects the sending pane,
-but you still need the address to pass to testers so they can message you back.
+but you still need the address to pass to testers so they can post into your mailbox.
 
 ```bash
 COORDINATOR_PANE=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}')
@@ -134,8 +137,20 @@ If the message appears in your pane, the address is correct. If the script error
 or the message does not arrive, you are not in tmux or the pane address is wrong —
 resolve this before continuing (see README prerequisite).
 
-Pass `$COORDINATOR_PANE` to every tester at boot so they know where to send
-STATUS and ISSUE messages. Do not proceed to session setup until the self-test passes.
+Use your pane address as your mailbox address. Testers post routine STATUS and ISSUE
+items there with `tests/livetest/scripts/tmux-mailbox.sh`. Do not proceed to session
+setup until the self-test passes.
+
+Quick mailbox self-check:
+
+```bash
+TMUX_MSG_SENDER=coordinator \
+  tests/livetest/scripts/tmux-mailbox.sh post --kind STATUS "$COORDINATOR_PANE" \
+  "coordinator mailbox self-test"
+tests/livetest/scripts/tmux-mailbox.sh next "$COORDINATOR_PANE"
+# copy the ID from the output, then ack it:
+tests/livetest/scripts/tmux-mailbox.sh ack "$COORDINATOR_PANE" <message-id>
+```
 
 ---
 
@@ -178,7 +193,8 @@ Scripts shipped with the livetest suite (relative to repo root):
 - `tests/livetest/scripts/livetest-preflight.sh` — safety checks, wipe, platform start (run before every run)
 - `tests/livetest/scripts/livetest-wipe.sh` — wipe Quaid from remote (called by preflight)
 - `tests/livetest/scripts/livetest-platform-start.sh` — start platform services on remote (called by preflight)
-- `tests/livetest/scripts/tmux-msg.sh` — inter-agent messaging
+- `tests/livetest/scripts/tmux-msg.sh` — direct pane messaging for urgent interrupts and self-tests
+- `tests/livetest/scripts/tmux-mailbox.sh` — queue-backed mailbox for routine STATUS/ISSUE traffic
 - `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
 
 Start a tester agent in each left pane using the CLI from your config
@@ -205,8 +221,8 @@ Also include in the opening message:
 - Its own tmux pane address (e.g. `livetest:OC.0`)
 - **Your coordinator pane address** (from `tmux.coordinator_pane` in config)
 
-The tester uses your pane address as the target for all STATUS and ISSUE messages.
-Without it, testers cannot reach you.
+The tester uses your pane address as the mailbox target for all routine STATUS
+and ISSUE traffic. Without it, testers cannot post into your mailbox.
 
 Start nudge loops for each tester window (keeps agents active during long runs):
 ```bash
@@ -551,7 +567,10 @@ If the latter — stop. Wrong responses to failures:
 
 ### Coordinator responsibilities during the run
 
-- Monitor for ISSUE messages from testers.
+- Monitor the mailbox, not just the pane scrollback. Handle one pending item at a time:
+  `tests/livetest/scripts/tmux-mailbox.sh next "$COORDINATOR_PANE"`
+- After you have handled an item, acknowledge it:
+  `tests/livetest/scripts/tmux-mailbox.sh ack "$COORDINATOR_PANE" <message-id>`
 - When an issue arrives: investigate → fix → commit → build runtime → deploy → tell
   tester to retry. Do not ask for a retry before the fix is deployed.
 - Log every fix commit to `unreviewed-commits.md` immediately (do not batch).
