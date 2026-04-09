@@ -300,6 +300,13 @@ describe("QuaidFacade", () => {
     expect(execPython).toHaveBeenCalledWith("store", ["--text", "hello"]);
   });
 
+  it("addEdge calls execPython with 'create-edge'", async () => {
+    const execPython = vi.fn(async () => "ok");
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    await facade.addEdge(["Alice", "parent_of", "Bob"]);
+    expect(execPython).toHaveBeenCalledWith("create-edge", ["Alice", "parent_of", "Bob"]);
+  });
+
   it("forget calls execPython with 'forget'", async () => {
     const execPython = vi.fn(async () => "deleted");
     const facade = createQuaidFacade(makeMockDeps({ execPython }));

@@ -42,6 +42,11 @@ _COMMANDS = [
         "description": "Explicitly storing or saving a new fact, preference, decision, or memory",
         "hint": 'Store memory: quaid store "the fact"',
     },
+    {
+        "id": "add_edge",
+        "description": "Explicitly asserting a structured relationship between two entities",
+        "hint": 'Create relationship edge: quaid add-edge "<subject>" <relation> "<object>"',
+    },
 ]
 
 
@@ -190,6 +195,16 @@ class TestPlanToolHint:
             )
         assert result is not None
         assert "store" in result.lower()
+
+    def test_add_edge_query_returns_hint(self):
+        """An explicit graph-write request should hint at quaid add-edge."""
+        with patch("lib.llm_clients.call_fast_reasoning", _llm_returns("add_edge")):
+            result = plan_tool_hint(
+                "Create a relationship edge showing Alice is Bob's parent.",
+                commands=_COMMANDS,
+            )
+        assert result is not None
+        assert "add-edge" in result
 
     def test_empty_query_returns_none(self):
         """Empty or whitespace query must return None without calling the LLM."""

@@ -4,6 +4,7 @@
 # Usage:
 #   quaid search "query" --owner quaid
 #   quaid store "fact" --owner quaid
+#   quaid add-edge "Alice" parent_of "Bob" --owner quaid
 #   quaid stats
 #   quaid get-edges <node_id>
 #   quaid janitor --task all --dry-run
@@ -275,7 +276,10 @@ else:
     ;;
 
 # Everything else goes to memory_graph.py
-store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|backfill-hashes|health|event)
+store|stats|recall|get-edges|get-node|delete-node|create-edge|add-edge|delete-edges-by-fact|backfill-hashes|health|event)
+    if [[ "$CMD" == "add-edge" ]]; then
+      CMD="create-edge"
+    fi
     exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
     ;;
 
@@ -407,7 +411,8 @@ PYEOF
     echo "quaid - Total Recall memory system"
     echo ""
     echo "Memory commands:"
-    echo "  store <text>         Store a new memory"
+    echo "  store <text>         Store a fact or note exactly as written"
+    echo "  add-edge <subject> <relation> <object>  Create an explicit relationship edge"
     echo "  recall <query>       Recall memories (default: vector + graph)"
     echo "  recall <q> '{...}'   Recall with JSON config (stores, limit, domain_filter, etc.)"
     echo "  stats                Database statistics"
@@ -415,6 +420,7 @@ PYEOF
     echo "  doctor               Alias for health"
     echo "  get-node <id>        Get a specific node"
     echo "  get-edges <id>       Get edges for a node"
+    echo "  create-edge ...      Alias: low-level graph edge command"
     echo "  event [subcmd]       Event bus (emit/list/process/capabilities)"
     echo ""
     echo ""

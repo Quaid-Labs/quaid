@@ -198,6 +198,25 @@ class TestStoreRecallRoundTrip:
             assert node1 is not None
             assert node2 is not None
 
+    def test_api_add_edge_alias_routes_to_create_edge(self, tmp_path):
+        """Public API add_edge() should behave like create_edge()."""
+        from core.interface.api import add_edge
+        from datastore.memorydb.memory_graph import store
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store(text="Alice is Bob's parent", owner_id="quaid", skip_dedup=True)
+            result = add_edge(
+                subject_name="Alice",
+                relation="parent_of",
+                object_name="Bob",
+                owner_id="quaid",
+            )
+            assert result is not None
+            assert result.get("status") in {"created", "exists"}
+
 
 # ---------------------------------------------------------------------------
 # Store → Status transitions (pending → active lifecycle)

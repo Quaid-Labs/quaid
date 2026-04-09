@@ -284,6 +284,23 @@ def create_edge(
     )
 
 
+def add_edge(
+    subject_name: str,
+    relation: str,
+    object_name: str,
+    owner_id: str,
+    source_fact_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Alias for create_edge() that matches the public CLI verb."""
+    return create_edge(
+        subject_name=subject_name,
+        relation=relation,
+        object_name=object_name,
+        owner_id=owner_id,
+        source_fact_id=source_fact_id,
+    )
+
+
 def forget(
     node_id: Optional[str] = None,
     query: Optional[str] = None,
@@ -359,6 +376,7 @@ __all__ = [
     "store",
     "recall",
     "search",
+    "add_edge",
     "create_edge",
     "forget",
     "get_memory",

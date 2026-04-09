@@ -40,8 +40,14 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     id: "store",
     description:
-      "Explicitly storing or saving a new fact, preference, decision, or memory for future recall",
+      "Explicitly storing or saving a new fact, preference, decision, or memory for future recall. This stores the text as written and does not create graph edges.",
     hint: 'Store memory: quaid store "the fact"',
+  },
+  {
+    id: "add_edge",
+    description:
+      "Explicitly asserting a structured relationship between two entities when subject, relation, and object are already known.",
+    hint: 'Create relationship edge: quaid add-edge "<subject>" <relation> "<object>"',
   },
   {
     id: "delete_project",

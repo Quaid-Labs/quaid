@@ -2753,6 +2753,7 @@ ${combined}` : combined;
     stats: () => datastoreBridge.stats(),
     getStatsParsed,
     store: (args) => datastoreBridge.store(args),
+    addEdge: (args) => datastoreBridge.addEdge(args),
     forget: (args) => datastoreBridge.forget(args),
     // Tool hint planner — delegates to knowledge engine (orchestration layer).
     planToolHint: (query) => knowledgeEngine.planToolHint(query),

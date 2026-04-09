@@ -228,6 +228,7 @@ export type QuaidFacade = {
 
   // --- Write / delete ---
   store: (args: string[]) => Promise<string>;
+  addEdge: (args: string[]) => Promise<string>;
   forget: (args: string[]) => Promise<string>;
   searchBySession: (sessionId: string, limit?: number) => Promise<string>;
 
@@ -3572,6 +3573,7 @@ ${lines.join("\n")}
     stats: () => datastoreBridge.stats(),
     getStatsParsed,
     store: (args) => datastoreBridge.store(args),
+    addEdge: (args) => datastoreBridge.addEdge(args),
     forget: (args) => datastoreBridge.forget(args),
 
     // Tool hint planner — delegates to knowledge engine (orchestration layer).
