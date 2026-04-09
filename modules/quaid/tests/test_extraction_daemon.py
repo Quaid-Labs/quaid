@@ -266,22 +266,47 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
     from ingest import extract as extract_mod
 
     def fake_extract_from_transcript(transcript, **kwargs):
-        captured["transcript"] = transcript
+        captured.setdefault("transcripts", []).append(transcript)
+        if transcript.startswith("Subagent/User:"):
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [
+                    {
+                        "text": "User's uncle owns a vineyard in Mendoza.",
+                        "speaker": "user",
+                        "category": "fact",
+                        "extraction_confidence": "high",
+                    }
+                ],
+                "facts": [],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }
         return {
             "chunks_processed": 1,
             "chunks_total": 1,
             "unclassified_empty_payloads": 0,
+            "raw_facts": [],
             "facts": [],
             "soul_snippets": {},
             "journal_entries": {},
             "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
         }
 
     monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
     monkeypatch.setattr(
         extract_mod,
         "apply_extracted_payloads",
-        lambda *args, **kwargs: {"facts_stored": 0, "facts_skipped": 0, "facts": []},
+        lambda payload, *args, **kwargs: captured.setdefault("flush_payload", payload) or {"facts_stored": 0, "facts_skipped": 0, "facts": []},
     )
 
     try:
@@ -300,8 +325,11 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
             _sys.modules.pop("core.subagent_registry", None)
         reset_adapter()
 
-    assert "Subagent/User: Child fact from subagent." in captured["transcript"]
-    assert "Subagent/Assistant: Child reply." in captured["transcript"]
+    assert any("Subagent/User: Child fact from subagent." in item for item in captured["transcripts"])
+    stamped = captured["flush_payload"]["raw_facts"][0]
+    assert stamped["source"] == "subagent"
+    assert stamped["_source_label"].endswith("-subagent-extraction")
+    assert stamped["_source_id"] == "child-1"
     assert captured["harvested"] == [("parent-1", "child-1")]
 
 

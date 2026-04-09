@@ -1083,6 +1083,103 @@ def build_flush_payload(state: Dict[str, Any], tail_result: Optional[Dict[str, A
     return combined
 
 
+def _merge_unique_project_logs(
+    existing: Dict[str, List[str]],
+    incoming: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    merged = dict(existing or {})
+    for project_name, items in (incoming or {}).items():
+        merged[str(project_name)] = _merge_unique_strings(
+            merged.get(str(project_name), []),
+            list(items or []),
+        )
+    return merged
+
+
+def _stamp_subagent_payload(
+    payload_result: Dict[str, Any],
+    *,
+    source_label: str,
+    child_id: str,
+) -> Dict[str, Any]:
+    stamped = dict(payload_result or {})
+    stamped_facts: List[Dict[str, Any]] = []
+    for fact in list(stamped.get("raw_facts", []) or []):
+        if not isinstance(fact, dict):
+            continue
+        item = dict(fact)
+        item["source"] = "subagent"
+        item["_source_label"] = source_label
+        item["_source_id"] = child_id
+        stamped_facts.append(item)
+    stamped["raw_facts"] = stamped_facts
+    return stamped
+
+
+def _append_payload_result(
+    payload: Dict[str, Any],
+    extra_result: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(extra_result, dict):
+        return payload
+    payload["facts_skipped"] = int(payload.get("facts_skipped", 0) or 0) + int(extra_result.get("facts_skipped", 0) or 0)
+    payload["carry_duplicate_facts_dropped"] = int(
+        payload.get("carry_duplicate_facts_dropped", 0) or 0
+    ) + int(extra_result.get("carry_duplicate_facts_dropped", 0) or 0)
+    payload["payload_duplicate_facts_collapsed"] = int(
+        payload.get("payload_duplicate_facts_collapsed", 0) or 0
+    ) + int(extra_result.get("payload_duplicate_facts_collapsed", 0) or 0)
+    payload["raw_facts"].extend(list(extra_result.get("raw_facts", []) or []))
+    from ingest.extract import collapse_duplicate_payload_facts
+    payload["raw_facts"], extra_collapsed = collapse_duplicate_payload_facts(payload["raw_facts"])
+    payload["payload_duplicate_facts_collapsed"] += int(extra_collapsed)
+    payload["raw_snippets"] = {
+        **dict(payload.get("raw_snippets", {}) or {}),
+        **{
+            str(filename): _merge_unique_strings(
+                dict(payload.get("raw_snippets", {}) or {}).get(str(filename), []),
+                list(items or []),
+            )
+            for filename, items in (extra_result.get("raw_snippets", {}) or {}).items()
+        },
+    }
+    for filename, text in (extra_result.get("raw_journal", {}) or {}).items():
+        if not isinstance(text, str) or not text.strip():
+            continue
+        existing = str((payload.get("raw_journal", {}) or {}).get(filename, "") or "").strip()
+        if existing:
+            payload["raw_journal"][filename] = f"{existing}\n\n{text.strip()}"
+        else:
+            payload["raw_journal"][filename] = text.strip()
+    payload["raw_project_logs"] = _merge_unique_project_logs(
+        dict(payload.get("raw_project_logs", {}) or {}),
+        dict(extra_result.get("raw_project_logs", {}) or {}),
+    )
+    for key in (
+        "chunks_processed",
+        "chunks_total",
+        "root_chunks",
+        "split_events",
+        "split_child_chunks",
+        "leaf_chunks",
+        "chunk_calls",
+        "deep_calls",
+        "repair_calls",
+        "assessment_usable",
+        "assessment_nothing_usable",
+        "assessment_needs_smaller_chunk",
+        "unclassified_empty_payloads",
+    ):
+        payload[key] = int(payload.get(key, 0) or 0) + int(extra_result.get(key, 0) or 0)
+    for key in _semantic_stage_metrics_defaults().keys():
+        payload[key] = int(payload.get(key, 0) or 0) + int(extra_result.get(key, 0) or 0)
+    payload["max_split_depth"] = max(
+        int(payload.get("max_split_depth", 0) or 0),
+        int(extra_result.get("max_split_depth", 0) or 0),
+    )
+    return payload
+
+
 def _rolling_metrics_path() -> Path:
     path = _instance_root() / "logs" / "daemon" / "rolling-extraction.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2008,6 +2105,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     return
 
         harvestable = []
+        harvestable_payloads: List[Dict[str, str]] = []
         snapshots = []
         mark_harvested_fn = None
         if transcript_text.strip() and not rolling_mode:
@@ -2035,7 +2133,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                                         "extraction chunker will handle splitting",
                                         label, session_id, child_id, len(child_text),
                                     )
-                                transcript_text += f"\n\n{child_text}"
+                                harvestable_payloads.append({
+                                    "child_id": child_id,
+                                    "child_text": child_text,
+                                })
                                 merged_chars += len(child_text)
                                 logger.info(
                                     "[%s] session %s: merged subagent %s transcript (%d chars)",
@@ -2134,6 +2235,28 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         usage_before_publish = usage_after_extract
         operation_phase = "build_flush_payload"
         flush_payload = build_flush_payload(staged_state, tail_result)
+        if harvestable_payloads:
+            for child_payload in harvestable_payloads:
+                child_id = str(child_payload.get("child_id") or "").strip()
+                child_text = str(child_payload.get("child_text") or "").strip()
+                if not child_id or not child_text:
+                    continue
+                child_result = extract_from_transcript(
+                    transcript=child_text,
+                    owner_id=owner,
+                    label=f"{label}-subagent",
+                    session_id=session_id,
+                    dry_run=True,
+                    carry_facts=[],
+                )
+                flush_payload = _append_payload_result(
+                    flush_payload,
+                    _stamp_subagent_payload(
+                        child_result,
+                        source_label=f"{label}-subagent-extraction",
+                        child_id=child_id,
+                    ),
+                )
         operation_phase = "flush_publish"
         publish_started_at = time.time()
         result = apply_extracted_payloads(

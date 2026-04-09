@@ -1642,7 +1642,8 @@ def apply_extracted_payloads(
 
         project = fact.get("project")
         knowledge_type = "preference" if category == "preference" else "fact"
-        source_label = f"{label}-extraction"
+        source_label = str(fact.get("_source_label") or f"{label}-extraction")
+        source_id_value = str(fact.get("_source_id") or session_id or "")
         speaker_label, source_type = _normalize_fact_provenance(
             fact,
             label=label,
@@ -1671,7 +1672,7 @@ def apply_extracted_payloads(
                 provenance_confidence=conf_num,
                 privacy=privacy,
                 source=source_label,
-                source_id=session_id,
+                source_id=source_id_value or session_id,
                 owner_id=owner_id,
                 session_id=session_id,
                 knowledge_type=knowledge_type,
@@ -1801,6 +1802,8 @@ def apply_extracted_payloads(
                         domains = [d for d in domains if d]
                         project = fact.get("project")
                         knowledge_type = "preference" if category == "preference" else "fact"
+                        source_label = str(fact.get("_source_label") or f"{label}-extraction")
+                        source_id_value = str(fact.get("_source_id") or session_id or "")
                         speaker_label, source_type = _normalize_fact_provenance(
                             fact,
                             label=label,
@@ -1817,7 +1820,7 @@ def apply_extracted_payloads(
                             provenance_confidence=conf_num,
                             privacy=privacy,
                             source=source_label,
-                            source_id=session_id,
+                            source_id=source_id_value or session_id,
                             owner_id=owner_id,
                             session_id=session_id,
                             knowledge_type=knowledge_type,
