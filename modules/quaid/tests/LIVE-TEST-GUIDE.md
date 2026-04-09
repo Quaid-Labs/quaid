@@ -603,19 +603,18 @@ bash/shell tool, independent of auto-inject:
   about my exercise habits?"
 
 **Pass**: Agent runs `quaid recall` and answers from stored memory.
-**OC Telegram**: PASS-WITH-NOTE (no shell tool access).
 
 ### M7 — Graph Traversal Verification
 
-**Phase 1 — Edge extraction**: Store four relationship facts via CLI:
-```bash
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI store "David is the user'\''s brother" 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI store "David is married to Lisa" 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI store "David has a son named Oliver" 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI store "David works at Google" 2>&1'
-```
+**Phase 1 — Edge extraction**: Tell the agent four David relationship facts
+in CONVERSATION (do not use `quaid store`). Use the do-not-store prefix:
 
-Verify edges:
+> "Just making conversation, do not store this manually — my brother David
+> works at Google. David is married to Lisa, and they have a son named
+> Oliver."
+
+Trigger extraction (platform lifecycle command). Wait 60s. The extraction
+pipeline should create both fact nodes AND relationship edges. Verify:
 ```bash
 ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
   "SELECT s.name, e.relation, t.name FROM edges e \
@@ -624,7 +623,11 @@ ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
    ORDER BY s.name, e.relation;"'
 ```
 
-**Phase 2 — Janitor edge backfill**: Store an attribute fact, run backfill:
+**Note**: Edge extraction requires a stronger model (Sonnet/GPT-5.4). The
+coordinator will bump the deep model before M7 and restore after.
+
+**Phase 2 — Janitor edge backfill**: Store one attribute fact via CLI, then
+run backfill to verify the janitor can create edges retroactively:
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI store "David is 42 years old" 2>&1'
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI janitor --task edges --apply 2>&1'

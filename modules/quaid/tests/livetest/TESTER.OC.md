@@ -6,46 +6,20 @@ Platform-specific notes for the OC tester. Read this alongside `TESTER.SKILL.md`
 
 ## Launch
 
-After M0 install, keep the OC gateway running on the test VM and start the Telegram poller locally for inbound OC replies:
+After M0 install, start the OC TUI in the platform pane:
 
+```bash
+tmux send-keys -t livetest:OC.1 "ssh REMOTE_HOST" Enter
+tmux send-keys -t livetest:OC.1 "source ~/.zprofile; openclaw tui" Enter
+```
+
+Verify gateway health:
 ```bash
 ssh REMOTE_HOST 'curl -sf http://localhost:18789/health && echo "ok" || echo "down"'
-nohup ~/quaidcode/util/scripts/tg-poll --config ~/quaidcode/util/scripts/.tg-livetest-config --filter-from Bertrand_clawdbot_bot > /tmp/tg-poll-oc.log 2>&1 &
-echo $! > /tmp/tg-poll-oc.pid
 ```
 
-OC runs headlessly for livetest. No TUI pane is required.
-
----
-
-## Telegram Setup
-
-Config: `~/quaidcode/util/scripts/.tg-livetest-config`
-
-- Livetester bot: `@Quaid_livetester_34726jfhs_bot`
-- OC bot: `@Bertrand_clawdbot_bot`
-- Group chat_id: `-5221680718`
-
-Start daemon:
-```bash
-nohup ~/quaidcode/util/scripts/tg-poll --config ~/quaidcode/util/scripts/.tg-livetest-config --filter-from Bertrand_clawdbot_bot > /tmp/tg-poll-oc.log 2>&1 &
-echo $! > /tmp/tg-poll-oc.pid
-```
-
-Stop daemon:
-```bash
-kill $(cat /tmp/tg-poll-oc.pid)
-```
-
-Send:
-```bash
-~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "message"
-```
-
-Receive:
-- replies arrive automatically in poller output as tagged lines:
-  `[telegram:Livetest] Bertrand_clawdbot_bot: <text>`
-- no explicit `tg recv` call is needed.
+OC interaction happens through the TUI. Messages are sent via tmux send-keys
+to the TUI pane. Replies appear in the TUI output.
 
 ---
 
@@ -175,9 +149,11 @@ to coordinator with the exact model name that was rejected — do not retry the
 install. The coordinator must resolve the gateway model configuration first.
 
 ### M1 — Extraction via `/new`
-Send `/new` as a Telegram message (see Lifecycle Command Note above). Check hook
-trace for the lifecycle marker. FTS direct check is the primary verification — use
-`sqlite3 ... nodes_fts` rather than `quaid recall` for exact keyword lookup.
+Send `/new` in the TUI, then send a follow-up message (e.g. `Hello`) in the
+new session so the session key is written to sessions.json. The adapter
+detects the new key and signals extraction for the old session. Wait 60s,
+then verify via FTS direct check — use `sqlite3 ... nodes_fts` rather than
+`quaid recall` for exact keyword lookup.
 
 ### M4 — Timeout Extraction and Compaction
 OC is the only platform with both. See dedicated section above.
