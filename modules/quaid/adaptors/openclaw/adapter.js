@@ -214,6 +214,11 @@ const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions"
 const SESSION_INDEX_POLL_MS = 1e3;
 let sessionIndexWatcherStarted = false;
 let sessionIndexWatcherTimer = null;
+function isSameSessionTranscriptRollover(priorCount, currentCount, priorSize, currentSize) {
+  const rowTruncated = priorCount > 0 && currentCount >= 0 && currentCount < priorCount;
+  const sizeTruncated = priorSize > 0 && currentSize >= 0 && currentSize < priorSize;
+  return rowTruncated || sizeTruncated;
+}
 function getOpenClawSessionsBaseDir() {
   return path.dirname(getOpenClawSessionsPath());
 }
@@ -2028,6 +2033,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       console.log("[quaid] Registered runtime.events.onSessionTranscriptUpdate lifecycle fallback");
     }
     const sessionIndexMessageCounts = /* @__PURE__ */ new Map();
+    const sessionIndexTranscriptSizes = /* @__PURE__ */ new Map();
     const sessionLastFanoutSizeMap = /* @__PURE__ */ new Map();
     const seenSessionIndexCommandKeys = /* @__PURE__ */ new Set();
     const sessionKeyLastSeen = /* @__PURE__ */ new Map();
@@ -2124,16 +2130,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 if (priorSid === sessionId) continue;
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
                 const mtimeFloorMs = installedAtMs > 0 ? installedAtMs : watcherStartMs;
-                let priorSize = -1;
+                let priorSize2 = -1;
                 let priorMtime = 0;
                 try {
                   const st = fs.statSync(getOpenClawSessionFile(priorSid));
-                  priorSize = st.size;
+                  priorSize2 = st.size;
                   priorMtime = st.mtimeMs;
                 } catch {
                 }
-                if (priorSize <= 0) {
-                  writeHookTrace("session_index.new_key_skip", { reason: "empty", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize });
+                if (priorSize2 <= 0) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "empty", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize2 });
                   continue;
                 }
                 if (priorMtime <= mtimeFloorMs) {
@@ -2146,8 +2152,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   continue;
                 }
                 const lastFanoutSize = sessionLastFanoutSizeMap.get(priorSid) ?? -1;
-                if (priorSize <= lastFanoutSize) {
-                  writeHookTrace("session_index.new_key_skip", { reason: "no_new_content", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize, last_fanout_size: lastFanoutSize });
+                if (priorSize2 <= lastFanoutSize) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "no_new_content", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize2, last_fanout_size: lastFanoutSize });
                   continue;
                 }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
@@ -2156,7 +2162,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   signature: `session_index:new_key:${key}`
                 })) continue;
                 facade.markLifecycleSignalFromHook(priorSid, "ResetSignal");
-                sessionLastFanoutSizeMap.set(priorSid, priorSize);
+                sessionLastFanoutSizeMap.set(priorSid, priorSize2);
                 writeDaemonSignal(priorSid, "reset", {
                   source: "session_index_new_key",
                   new_key: key,
@@ -2175,7 +2181,45 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             sessionTranscriptPaths.set(sessionId, sessionFile);
             const rows = parseSessionMessagesJsonl(sessionFile);
             const priorCount = sessionIndexMessageCounts.get(sessionId) || 0;
+            let currentSize = -1;
+            try {
+              currentSize = fs.statSync(sessionFile).size;
+            } catch {
+            }
+            const priorSize = sessionIndexTranscriptSizes.get(sessionId) ?? -1;
+            if (isSameSessionTranscriptRollover(priorCount, rows.length, priorSize, currentSize) && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
+              writeHookTrace("session_index.same_session_rollover_detected", {
+                key,
+                session_id: sessionId,
+                prior_count: priorCount,
+                current_count: rows.length,
+                prior_size: priorSize,
+                current_size: currentSize
+              });
+              if (facade.shouldProcessLifecycleSignal(sessionId, {
+                label: "ResetSignal",
+                source: "session_index",
+                signature: `session_index:same_session_rollover:${key}:${priorCount}:${priorSize}`
+              })) {
+                facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
+                writeDaemonSignal(sessionId, "reset", {
+                  source: "session_index_same_session_rollover",
+                  session_key: key,
+                  prior_rows: priorCount,
+                  current_rows: rows.length,
+                  prior_size: priorSize,
+                  current_size: currentSize
+                });
+                writeHookTrace("session_index.signal_queued", {
+                  signal: "reset",
+                  source: "same-session-rollover",
+                  session_id: sessionId,
+                  session_key: key
+                });
+              }
+            }
             sessionIndexMessageCounts.set(sessionId, rows.length);
+            sessionIndexTranscriptSizes.set(sessionId, currentSize);
             if (rows.length <= priorCount) {
               continue;
             }
@@ -3426,6 +3470,7 @@ const __test = {
     BACKLOG_NOTIFY_STALE_MS
   ),
   markLifecycleSignalFromHook: (sessionId, label) => facade.markLifecycleSignalFromHook(sessionId, label),
+  isSameSessionTranscriptRollover,
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,

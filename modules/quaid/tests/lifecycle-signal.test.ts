@@ -184,6 +184,18 @@ describe("lifecycle signal detection", () => {
     )).toBe("/tmp/quaid-home/instances/openclaw-livetest/data/memory.db");
   });
 
+  it("detects same-session transcript rollover when rows shrink in place", () => {
+    expect(__test.isSameSessionTranscriptRollover(12, 1, 4096, 128)).toBe(true);
+  });
+
+  it("detects same-session transcript rollover when size shrinks despite equal row counts", () => {
+    expect(__test.isSameSessionTranscriptRollover(3, 3, 4096, 64)).toBe(true);
+  });
+
+  it("does not flag rollover when transcript only grows", () => {
+    expect(__test.isSameSessionTranscriptRollover(3, 5, 128, 1024)).toBe(false);
+  });
+
   it("summarizes recall diagnostics for hook tracing", () => {
     expect(__test.summarizeRecallDiagnostics({
       meta: {
