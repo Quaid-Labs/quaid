@@ -50,7 +50,7 @@ def _write_adapter_manifest(
     class_name: str,
     runtime_path: str = "",
 ) -> None:
-    reg = tmp_path / ".quaid" / "adaptors" / adapter_id
+    reg = tmp_path / "adaptors" / adapter_id
     reg.mkdir(parents=True, exist_ok=True)
     runtime = {"module": module_name, "class": class_name}
     if runtime_path:
@@ -1228,7 +1228,7 @@ class TestAdapterSelectionEdgeCases:
             adapter_id="agentfoo",
             module_name="agentfoo_runtime",
             class_name="AgentFooAdapter",
-            runtime_path="../../../adapter_runtime",
+            runtime_path="../../adapter_runtime",
         )
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = get_adapter()
@@ -1236,7 +1236,7 @@ class TestAdapterSelectionEdgeCases:
 
     def test_manifest_runtime_loader_rejects_missing_runtime_fields(self, monkeypatch, tmp_path):
         _write_adapter_config(tmp_path, "agentfoo")
-        reg = tmp_path / ".quaid" / "adaptors" / "agentfoo"
+        reg = tmp_path / "adaptors" / "agentfoo"
         reg.mkdir(parents=True, exist_ok=True)
         (reg / "adapter.json").write_text(
             json.dumps(

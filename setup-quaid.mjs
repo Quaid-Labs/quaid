@@ -1689,7 +1689,7 @@ function _ensureAgentsList(cli, workspacePath) {
       workspacePath ||
       parsed?.workspace ||
       parsed?.agents?.defaults?.workspace ||
-      path.join(os.homedir(), "quaid");
+      FIXED_QUAID_HOME;
     if (!parsed.agents || typeof parsed.agents !== "object") parsed.agents = {};
     parsed.agents.list = [
       {

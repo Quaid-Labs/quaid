@@ -395,14 +395,14 @@ describe("QuaidFacade", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-path-"));
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
     expect(facade.getInjectionLogPath("session-123")).toBe(
-      path.join(workspace, ".quaid", "runtime", "injection", "memory-injection-session-123.log"),
+      path.join(workspace, "runtime", "injection", "memory-injection-session-123.log"),
     );
     await rm(workspace, { recursive: true, force: true });
   });
 
   it("pruneInjectionLogFiles keeps latest 400 memory-injection logs", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-prune-"));
-    const injectionDir = path.join(workspace, ".quaid", "runtime", "injection");
+    const injectionDir = path.join(workspace, "runtime", "injection");
     await mkdir(injectionDir, { recursive: true });
     for (let i = 0; i < 402; i += 1) {
       await writeFile(path.join(injectionDir, `memory-injection-${i}.log`), String(i), "utf8");
@@ -1162,7 +1162,7 @@ describe("QuaidFacade", () => {
 
   it("load/save/reset injection dedup state round-trips", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-state-"));
-    await mkdir(path.join(workspace, ".quaid", "runtime", "injection"), { recursive: true });
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
     expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual([]);
     const merged = facade.saveInjectedMemoryKeys(
@@ -1183,7 +1183,7 @@ describe("QuaidFacade", () => {
 
   it("prepareAutoInjectionContext applies privacy filter, dedup, and context merge", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-"));
-    await mkdir(path.join(workspace, ".quaid", "runtime", "injection"), { recursive: true });
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
     const baseMemories = [
       { text: "public fact", category: "fact", similarity: 0.9 },
@@ -1591,9 +1591,9 @@ describe("QuaidFacade", () => {
   it("collectJanitorNudges emits install/approval nudges with cooldown persistence", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-nudges-"));
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
-    const statePath = path.join(workspace, ".quaid", "runtime", "notes", "janitor-nudge-state.json");
-    const pendingInstallMigrationPath = path.join(workspace, ".quaid", "runtime", "pending-install-migration.json");
-    const pendingApprovalRequestsPath = path.join(workspace, ".quaid", "runtime", "notes", "pending-approval-requests.json");
+    const statePath = path.join(workspace, "runtime", "notes", "janitor-nudge-state.json");
+    const pendingInstallMigrationPath = path.join(workspace, "runtime", "pending-install-migration.json");
+    const pendingApprovalRequestsPath = path.join(workspace, "runtime", "notes", "pending-approval-requests.json");
     await mkdir(path.dirname(pendingInstallMigrationPath), { recursive: true });
     await mkdir(path.dirname(pendingApprovalRequestsPath), { recursive: true });
     await writeFile(pendingInstallMigrationPath, JSON.stringify({ status: "pending" }), "utf8");
@@ -1626,7 +1626,7 @@ describe("QuaidFacade", () => {
   it("maybeQueueJanitorHealthAlert persists cooldown state", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-health-"));
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
-    const statePath = path.join(workspace, ".quaid", "runtime", "notes", "janitor-nudge-state.json");
+    const statePath = path.join(workspace, "runtime", "notes", "janitor-nudge-state.json");
     const first = facade.maybeQueueJanitorHealthAlert({
       statePath,
       nowMs: 1_700_000_000_000,
