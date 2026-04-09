@@ -4,7 +4,7 @@ Quaid is an active knowledge layer. Use the Quaid CLI via your Bash tool — no 
 
 **Environment:** `QUAID_HOME` and `QUAID_INSTANCE` are baked into hooks at install time. If calling the CLI from a shell outside of a hook, ensure both are set.
 
-**For full project docs, architecture, and reference index:** every tracked project has its own `PROJECT.md` at `QUAID_HOME/projects/<project-name>/PROJECT.md`. Read the relevant project's `PROJECT.md` first. If you do not know the project name yet, docs recall/search will try to infer it and surface the best matching `PROJECT.md`.
+**For full project docs, architecture, and reference index:** every tracked project has its own `PROJECT.md` at `QUAID_VISIBLE_HOME/projects/<project-name>/PROJECT.md`. Read the relevant project's `PROJECT.md` first. If you do not know the project name yet, docs recall/search will try to infer it and surface the best matching `PROJECT.md`.
 
 ---
 
@@ -103,7 +103,7 @@ quaid global-registry list    # cross-instance project list
 ```
 
 **File placement:**
-- Canonical project docs and Quaid-managed metadata → `QUAID_HOME/projects/<name>/`
+- Canonical project docs and Quaid-managed metadata → `QUAID_VISIBLE_HOME/projects/<name>/`
 - Real source/code files may live outside Quaid home — keep them in their real working location and link them with `quaid registry register <path> --project <name>`
 - Ephemeral/drafts/quick work → use project `misc--$QUAID_INSTANCE` as the owner, but prefer a real working path and register it immediately instead of treating `~/quaid/` as a dump directory
 

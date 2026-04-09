@@ -21,7 +21,7 @@ Both fast and deep lanes are set to this model (deep lane is overwritten with
 the fast lane value — same rule as OC/CC). Verify from config before sending
 any milestone prompts:
 ```bash
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"WORKSPACE/CDX_INSTANCE/config/memory.json\")); \
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"WORKSPACE/instances/CDX_INSTANCE/memory.json\")); \
   print(\"fast:\", d[\"models\"][\"fastReasoning\"]); print(\"deep:\", d[\"models\"][\"deepReasoning\"])"'
 ```
 

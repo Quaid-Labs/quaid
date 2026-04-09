@@ -22,7 +22,7 @@ Recommended framing:
     `modules/quaid/tests/LIVE-TEST-GUIDE.md`
   - SHA comparison between the cleared run and current `HEAD`, with Solomon
     deciding whether any post-clear changes are acceptable
-- Installer: fixed `~/quaid` home, shared embeddings config, platform compatibility warnings, and agent-install survey contract — all shipped.
+- Installer: fixed split-home layout (`~/.quaid` hidden + `~/quaid` visible), shared embeddings config, platform compatibility warnings, and agent-install survey contract — all shipped.
 - Compatibility matrix populated for v0.3.0-alpha.
 
 ### Hold for broader release until

@@ -42,7 +42,7 @@ Everything Quaid does should be invisible to the human by default:
   sees `.gitignore` or exclude lists.
 - **Directory structures**: The LLM tells the human "I saved your itinerary
   to your Japan Trip folder," not "I wrote to
-  `QUAID_HOME/projects/japan-trip/docs/itinerary.md`."
+  `QUAID_VISIBLE_HOME/projects/japan-trip/docs/itinerary.md`."
 - **Extraction**: Facts are extracted silently. The human doesn't know about
   daemons, cursors, or signal files.
 

@@ -255,7 +255,7 @@ class OpenClawAdapter(QuaidAdapter):
     def quaid_home(self) -> Path:
         """Root directory containing all Quaid instances (QUAID_HOME)."""
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env).resolve() if env else Path.home() / "quaid"
+        return Path(env).resolve() if env else Path.home() / ".quaid"
 
     def oc_workspace(self) -> Path:
         """OpenClaw workspace directory (platform-specific, not Quaid instance root).

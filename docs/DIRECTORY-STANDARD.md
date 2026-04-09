@@ -54,31 +54,32 @@ are.
 journal distillations, memory summaries. This is what Quaid "learns" about
 the user and itself over time.
 
-**Location**: Derived via `adapter.identity_dir()`. The adapter provides its
-`adapter_id` string; core computes the path. (`quaid_identity_dir()` is a
-deprecated utility alias — prefer `adapter.identity_dir()` in new code.)
+**Location**: Derived via `adapter.identity_dir()`. Identity files now live in
+the visible root under `QUAID_VISIBLE_HOME/instances/<instance>/`. The adapter
+provides its `adapter_id` string; core computes the path. (`quaid_identity_dir()`
+is a deprecated utility alias — prefer `adapter.identity_dir()` in new code.)
 
 | Adapter | adapter_id | Identity dir |
 |---------|-----------|-------------|
-| Claude Code | `claude-code` | `QUAID_HOME/claude-code/identity/` |
-| OpenClaw | `openclaw` | `QUAID_HOME/openclaw/identity/` |
-| Codex | `codex` | `QUAID_HOME/codex/identity/` |
-| Standalone | `standalone` | `QUAID_HOME/` (backward compat) |
+| Claude Code | `claude-code` | `QUAID_VISIBLE_HOME/instances/claude-code-*/` |
+| OpenClaw | `openclaw` | `QUAID_VISIBLE_HOME/instances/openclaw-*/` |
+| Codex | `codex` | `QUAID_VISIBLE_HOME/instances/codex-*/` |
+| Standalone | `standalone` | `QUAID_VISIBLE_HOME/instances/standalone-*/` |
 
 **Contents**:
 ```
-identity/
-  SOUL.md              # Generated personality traits
-  SOUL.snippets.md     # Pending personality snippets
-  USER.md              # Generated user profile
-  USER.snippets.md     # Pending user snippets
-  ENVIRONMENT.md       # Learned behaviors and environment context
-  ENVIRONMENT.snippets.md # Pending environment snippets
+SOUL.md                   # Generated personality traits
+SOUL.snippets.md          # Pending personality snippets
+USER.md                   # Generated user profile
+USER.snippets.md          # Pending user snippets
+ENVIRONMENT.md            # Learned behaviors and environment context
+ENVIRONMENT.snippets.md   # Pending environment snippets
+journal/                  # Journal markdown
 ```
 
 **Rules**:
 - Each adapter instance gets its own identity silo.
-- The janitor writes here, not to QUAID_HOME root.
+- The janitor writes here, not to `QUAID_HOME` root.
 - Identity is NOT shared across adapters. If the same person uses CC and OC,
   each adapter builds its own identity from its own conversations.
 - Identity files are injected into the LLM context by the adapter's hooks
@@ -97,7 +98,7 @@ be a lowest-common-denominator compromise.
 Architecture docs, API references, meeting notes, specs — anything the LLM
 might need to recall during conversations.
 
-**Location**: `QUAID_HOME/projects/<name>/docs/`
+**Location**: `QUAID_VISIBLE_HOME/projects/<name>/docs/`
 
 ```
 projects/
@@ -115,8 +116,7 @@ projects/
 ```
 
 **Rules**:
-- Quaid's docsdb indexes these directly — no boundary issues, it's Quaid's
-  own Python code reading from QUAID_HOME.
+- Quaid's docsdb indexes these directly from the visible projects root.
 - The LLM creates and manages these files via Quaid's tools.
 - The human can also edit these directly (they live in a visible location).
 - Project docs are shared across adapters — if CC and OC both work on
@@ -130,14 +130,14 @@ projects/
 every session. Tool references, behavioral rules, project-specific
 instructions.
 
-**Canonical location**: `QUAID_HOME/projects/<name>/TOOLS.md` and
-`QUAID_HOME/projects/<name>/AGENTS.md`
+**Canonical location**: `QUAID_VISIBLE_HOME/projects/<name>/TOOLS.md` and
+`QUAID_VISIBLE_HOME/projects/<name>/AGENTS.md`
 
 **Injection path varies by adapter**:
 
 | Adapter | How injected | Sync needed? |
 |---------|-------------|-------------|
-| Claude Code | `hooks.py` reads directly from `QUAID_HOME/projects/` | No — reads from canonical location |
+| Claude Code | `hooks.py` reads directly from `QUAID_VISIBLE_HOME/projects/` | No — reads from canonical location |
 | OpenClaw | ExtraBootstrapFiles hook reads from OC workspace | **Yes** — files must be copied inside workspace boundary |
 
 ### OC Sync Engine
@@ -150,14 +150,14 @@ Quaid's canonical project location is outside this boundary.
 canonical location to the OC workspace. The adapter requests this service.
 
 ```
-Canonical:  QUAID_HOME/projects/myapp/TOOLS.md
+Canonical:  QUAID_VISIBLE_HOME/projects/myapp/TOOLS.md
      Sync:  ~/.openclaw/workspace/plugins/quaid/projects/myapp/TOOLS.md  (copy)
 ```
 
 See [Project System Spec](../projects/quaid/reference/projects-reference.md) for sync engine details.
 
 **Rules**:
-- Canonical location is always `QUAID_HOME/projects/<name>/`.
+- Canonical location is always `QUAID_VISIBLE_HOME/projects/<name>/`.
 - OC workspace copies are read-only shadows. Never edit there.
 - A `README.md` in the OC sync target explains where canonical files live.
 - CC never needs sync — it reads directly.
@@ -197,38 +197,20 @@ quaid project update myapp --source-root ./myapp  # add later
 ## Full Directory Tree
 
 ```
-QUAID_HOME/                              # e.g. ~/quaid/
-  config/
-    memory.json                          # Main Quaid config
-    adapters/
-      claude-code/
-        .auth-token                      # CC adapter auth (Layer 0: infra)
-      openclaw/
-        .auth-token                      # OC adapter auth
-  claude-code/
-    identity/                            # Layer 2: CC generated identity
-      SOUL.md
-      USER.md
-      ENVIRONMENT.md
-      *.snippets.md
-  openclaw/
-    identity/                            # Layer 2: OC generated identity
-      SOUL.md
-      USER.md
-      ENVIRONMENT.md
-      *.snippets.md
-  projects/
-    <name>/
-      PROJECT.md                         # Project metadata
-      TOOLS.md                           # Layer 4: project context
-      AGENTS.md                          # Layer 4: project context
-      docs/                              # Layer 3: project docs
-        *.md
-  data/
-    memory.db                            # Graph database
-    docsdb/                              # Document store
-    session-cursors/                     # Daemon state
-    extraction-signals/                  # Daemon signals
+QUAID_HOME/                              # e.g. ~/.quaid/
+  shared/
+    config/
+      global/memory.json                 # Hidden machine-wide shared config
+      <platform>/memory.json             # Hidden platform-shared config
+  instances/
+    <instance>/
+      memory.json                        # Hidden per-instance config
+      data/                              # Hidden DB + daemon state
+      logs/                              # Hidden logs
+  runtime/                               # Hidden shared runtime state
+  adaptors/                              # Hidden adapter manifests
+  plugins/                               # Hidden installed plugin/runtime
+  modules/                               # Hidden runtime code
   .git-tracking/
     <project>/                           # Layer 5: shadow git metadata
       HEAD
@@ -236,10 +218,22 @@ QUAID_HOME/                              # e.g. ~/quaid/
       refs/
       info/
         exclude                          # LLM-managed ignore patterns
-  project-registry.json                  # Global project registry
-  logs/
-  journal/
-  backups/
+
+QUAID_VISIBLE_HOME/                      # e.g. ~/quaid/
+  instances/
+    <instance>/
+      SOUL.md                            # Layer 2: generated identity
+      USER.md
+      ENVIRONMENT.md
+      *.snippets.md
+      journal/
+  projects/
+    <name>/
+      PROJECT.md                         # Project metadata
+      TOOLS.md                           # Layer 4: project context
+      AGENTS.md                          # Layer 4: project context
+      docs/                              # Layer 3: project docs
+        *.md
 ```
 
 ---
@@ -248,11 +242,12 @@ QUAID_HOME/                              # e.g. ~/quaid/
 
 ### Claude Code
 
-CC has no workspace boundary. It reads everything directly from QUAID_HOME.
+CC has no workspace boundary. It reads visible project and identity files
+directly from Quaid's split roots.
 
 ```
-QUAID_HOME/
-  claude-code/identity/    → hooks.py reads identity from here
+QUAID_VISIBLE_HOME/
+  instances/<instance>/    → hooks.py reads identity from here
   projects/<name>/         → hooks.py reads TOOLS.md/AGENTS.md from here
   projects/<name>/docs/    → docsdb indexes from here
 ```
@@ -272,14 +267,14 @@ must be inside this boundary.
     projects/<name>/
       TOOLS.md                   → Layer 4: synced copy (read-only)
       AGENTS.md                  → synced copy (read-only)
-      README.md                  → "Canonical files at QUAID_HOME/projects/<name>/"
+      README.md                  → "Canonical files at QUAID_VISIBLE_HOME/projects/<name>/"
 
-QUAID_HOME/
-  openclaw/identity/             → Layer 2: generated identity
+QUAID_VISIBLE_HOME/
+  instances/<instance>/          → Layer 2: generated identity
   projects/<name>/               → Layer 3+4: canonical project files
 ```
 
-The sync engine copies Layer 4 files from QUAID_HOME into the OC workspace
+The sync engine copies Layer 4 files from `QUAID_VISIBLE_HOME` into the OC workspace
 on each daemon tick.
 
 ---
@@ -289,20 +284,16 @@ on each daemon tick.
 ### From current layout (pre-standard)
 
 Current state:
-- Identity files (SOUL.md, USER.md, MEMORY.md) at QUAID_HOME root
-- Snippets files at QUAID_HOME root
-- CC identity dir exists but empty
-- OC identity dir doesn't exist
-- Janitor writes to QUAID_HOME root
+- Hidden runtime state lives under `QUAID_HOME`
+- Visible identity and journals live under `QUAID_VISIBLE_HOME/instances/<instance>/`
+- Canonical project docs live under `QUAID_VISIBLE_HOME/projects/`
 
 Migration steps:
-1. Create `QUAID_HOME/<adapter>/identity/` directories
-2. Move `*.snippets.md` from root to adapter identity dir
-3. Seed identity dir with copies of root SOUL/USER/MEMORY.md
-4. Update janitor to use `adapter.identity_dir()` for writes
-5. Update hooks to use `adapter.identity_dir()` for reads (CC already does)
-6. Root-level SOUL/USER/MEMORY.md become OC's base context (Layer 1)
-   or can be removed if OC workspace has its own copies
+1. Keep config/data/logs in hidden `QUAID_HOME/instances/<instance>/`
+2. Keep identity/snippets/journal in visible `QUAID_VISIBLE_HOME/instances/<instance>/`
+3. Update janitor to use `adapter.identity_dir()` / `adapter.journal_dir()`
+4. Update hooks to read from visible identity paths
+5. Keep project docs canonical in `QUAID_VISIBLE_HOME/projects/`
 
 ### Future adapters
 

@@ -1,8 +1,8 @@
 # Quaid Config & Instance Reference
 
 Technical reference for the Quaid instance model and configuration system.
-Covers instance identity, the config merge chain, the config CLI, and
-per-instance vs. shared state layout.
+Covers instance identity, the config merge chain, the config CLI, and the
+split visible/hidden Quaid home layout.
 
 For a generated key-by-key defaults table sourced directly from
 `modules/quaid/config.py`, see [`config-reference.md`](./config-reference.md).
@@ -14,8 +14,9 @@ For a generated key-by-key defaults table sourced directly from
 ### What is a Quaid instance?
 
 A Quaid instance is an isolated memory silo identified by a short string (the
-instance ID). Each instance has its own config, database, logs, and identity
-files under `QUAID_HOME/<instance_id>/`.
+instance ID). Hidden runtime state lives under
+`QUAID_HOME/instances/<instance_id>/`. Visible identity and journal files live
+under `QUAID_VISIBLE_HOME/instances/<instance_id>/`.
 
 Two processes with the same `QUAID_HOME` and `QUAID_INSTANCE` share memory.
 Two processes with different `QUAID_INSTANCE` values are fully isolated, even
@@ -67,8 +68,9 @@ QUAID_INSTANCE=claude-code quaid recall "query"
 
 ### What counts as an initialized instance?
 
-`lib/instance.list_instances()` considers a directory under `QUAID_HOME` an
-instance if and only if it contains `config/memory.json`. Directories that
+`lib/instance.list_instances()` considers a directory under
+`QUAID_HOME/instances/` an instance if and only if it contains `memory.json`.
+Directories that
 exist but lack this file are ignored by `quaid instances list`.
 
 ### adapter_id vs instance_id
@@ -89,23 +91,40 @@ The Claude Code adapter (`adaptors/claude_code/adapter.py`) returns
 `"claude-code"` from `adapter_id()`. The OpenClaw adapter returns
 `"openclaw"`. The base `StandaloneAdapter` returns `"standalone"`.
 
-### instance_root() path
+### Instance paths
+
+Hidden instance root:
 
 ```
-QUAID_HOME/<instance_id>/
+QUAID_HOME/instances/<instance_id>/
 ```
 
-Computed by `lib/instance.instance_root()` = `quaid_home() / instance_id()`.
-All per-instance paths derive from this root:
+Visible instance root:
 
 ```
-QUAID_HOME/<instance_id>/
-  config/memory.json      instance-specific config
+QUAID_VISIBLE_HOME/instances/<instance_id>/
+```
+
+Computed by:
+
+- `lib/instance.instance_root()` = hidden root
+- `lib/instance.visible_instance_root()` = visible root
+
+Per-instance paths derive from those roots:
+
+```text
+QUAID_HOME/instances/<instance_id>/
+  memory.json             instance-specific config
   data/memory.db          SQLite database
   data/memory_archive.db  archive database
   data/extraction-signals/ async extraction signal files
   logs/                   janitor stats, extraction logs
-  identity/               Quaid-managed identity files (SOUL.md, USER.md, etc.)
+
+QUAID_VISIBLE_HOME/instances/<instance_id>/
+  SOUL.md                 Quaid-managed identity file
+  USER.md
+  ENVIRONMENT.md
+  *.snippets.md
   journal/                journal entries for distillation
 ```
 
@@ -118,21 +137,21 @@ seed material, not the live writable copies.
 For a real instance, the writable files live under:
 
 ```text
-QUAID_HOME/<instance_id>/identity/
+QUAID_VISIBLE_HOME/instances/<instance_id>/
   SOUL.md
   USER.md
   ENVIRONMENT.md
 ```
 
 At install or workspace bootstrap time, the base templates are copied into the
-instance `identity/` directory. After that:
+visible instance directory. After that:
 
-- janitor distillation and snippet compaction update the instance `identity/`
-  files
+- janitor distillation and snippet compaction update the visible instance
+  identity files
 - `projects/quaid/*.md` remain stable base templates / companion context
 - hook injection reads the per-instance identity files, not the project bases
 
-If `identity/SOUL.md`, `identity/USER.md`, or `identity/ENVIRONMENT.md` are
+If `SOUL.md`, `USER.md`, or `ENVIRONMENT.md` are
 missing, runtime may seed them from the corresponding `projects/quaid/` base
 files, but it should never treat the project copies as the canonical writable
 targets.
@@ -149,7 +168,7 @@ each file that exists:
 
 | Priority | Path | Purpose |
 |---|---|---|
-| 0 (highest) | `QUAID_HOME/<instance>/config/memory.json` | Per-instance overrides |
+| 0 (highest) | `QUAID_HOME/instances/<instance>/memory.json` | Per-instance overrides |
 | 1 | `QUAID_HOME/shared/config/<platform>/memory.json` | Platform-specific shared settings |
 | 2 (lowest) | `QUAID_HOME/shared/config/global/memory.json` | Machine-wide global shared settings |
 
@@ -165,7 +184,7 @@ after merging.
 
 ### Which settings belong at which layer
 
-**Instance config** (`QUAID_HOME/<instance>/config/memory.json`):
+**Instance config** (`QUAID_HOME/instances/<instance>/memory.json`):
 - `adapter.type` — which adapter class to instantiate
 - `models.llmProvider`, `models.deepReasoning`, `models.fastReasoning` — LLM routing
 - `janitor.*`, `retrieval.*`, `capture.*`, `decay.*` — instance-specific tuning
@@ -231,13 +250,15 @@ p = Path(str(cfg.database.path)).expanduser()
 return p if p.is_absolute() else _workspace_root() / p
 ```
 
-`_workspace_root()` calls `get_adapter().instance_root()` (the per-instance
-silo root, e.g. `QUAID_HOME/claude-code/`). With the default relative path
-this produces `QUAID_HOME/<instance_id>/data/memory.db`.
+`_workspace_root()` calls `get_adapter().instance_root()` (the hidden
+per-instance silo root, e.g. `QUAID_HOME/instances/claude-code-main/`). With
+the default relative path this produces
+`QUAID_HOME/instances/<instance_id>/data/memory.db`.
 
 Each instance should set an explicit absolute path, or a path relative to its
 instance directory. For example, two instances would use their respective instance roots:
-`QUAID_HOME/claude-code/data/memory.db` and `QUAID_HOME/openclaw/data/memory.db`.
+`QUAID_HOME/instances/claude-code-main/data/memory.db` and
+`QUAID_HOME/instances/openclaw-main/data/memory.db`.
 Separate databases mean instances do not share memory — cross-instance recall
 requires the global project registry and canonical projects directory.
 
@@ -254,10 +275,10 @@ All subcommands accept `--shared` / `--instance <id>` flags (mutually exclusive)
 
 | Flag | Config file targeted |
 |---|---|
-| `--shared` | `QUAID_HOME/shared/config/memory.json` |
-| `--instance <id>` | `QUAID_HOME/<id>/config/memory.json` |
-| (neither, `QUAID_INSTANCE` set) | `QUAID_HOME/<QUAID_INSTANCE>/config/memory.json` |
-| (neither, `QUAID_INSTANCE` unset) | `QUAID_HOME/shared/config/memory.json` |
+| `--shared` | `QUAID_HOME/shared/config/global/memory.json` |
+| `--instance <id>` | `QUAID_HOME/instances/<id>/memory.json` |
+| (neither, `QUAID_INSTANCE` set) | `QUAID_HOME/instances/<QUAID_INSTANCE>/memory.json` |
+| (neither, `QUAID_INSTANCE` unset) | `QUAID_HOME/shared/config/global/memory.json` |
 
 ### Command reference
 
@@ -334,7 +355,7 @@ Quaid home: /your/quaid/home
 
 The `*` marker identifies the instance matching the current `QUAID_INSTANCE`
 env var. If `QUAID_INSTANCE` is set but the directory does not yet have
-`config/memory.json`, it appears as `(current — not yet initialised)`.
+`memory.json`, it appears as `(current — not yet initialised)`.
 
 The JSON form (`--json`) returns:
 ```json
@@ -343,17 +364,17 @@ The JSON form (`--json`) returns:
 
 ---
 
-## 6. Shared State at QUAID_HOME Level
+## 6. Shared State at Root Level
 
-The following files and directories live at `QUAID_HOME/` root and are shared
-across all instances under that home:
+The following files and directories are shared across all instances:
 
 | Path | Purpose |
 |---|---|
-| `shared/config/memory.json` | Machine-wide shared config (embeddings, Ollama) |
-| `projects/` | Canonical project directories for shared projects |
-| `projects/project-registry.json` | Global project registry cross-instances (`lib/instance.shared_registry_path()`) |
-| `.env` | API key fallback file (loaded when `failHard=false`) |
+| `QUAID_HOME/shared/config/global/memory.json` | Machine-wide shared config (embeddings, Ollama) |
+| `QUAID_HOME/shared/config/<platform>/memory.json` | Platform-scoped shared overrides |
+| `QUAID_VISIBLE_HOME/projects/` | Canonical project directories for shared projects |
+| `QUAID_VISIBLE_HOME/projects/project-registry.json` | Global project registry cross-instances (`lib/instance.shared_registry_path()`) |
+| `QUAID_HOME/.env` | API key fallback file (loaded when `failHard=false`) |
 
 The canonical projects directory is returned by both
 `lib/instance.shared_projects_dir()` and `QuaidAdapter.projects_dir()`. Projects
@@ -364,22 +385,29 @@ so they remain discoverable across instance boundaries.
 
 ## 7. Per-Instance State
 
-Everything under `QUAID_HOME/<instance>/`:
+Hidden instance state (`QUAID_HOME/instances/<instance>/`):
 
 | Path | Purpose |
 |---|---|
-| `config/memory.json` | Instance-specific config (highest-priority layer) |
+| `memory.json` | Instance-specific config (highest-priority layer) |
 | `data/memory.db` | SQLite memory database (nodes, edges, FTS, doc_registry, doc_chunks, vec_nodes, vec_doc_chunks) |
 | `data/memory_archive.db` | Archive database for graduated/decayed memories |
-| `data/extraction-signals/` | Signal files for async extraction daemon (shared at `QUAID_HOME/data/extraction-signals/`, not per-instance) |
+| `data/extraction-signals/` | Signal files for async extraction daemon |
 | `data/rolling-extraction/` | Rolling extraction staged state per session (raw facts/carryover awaiting final flush) |
 | `data/cc-pending-notifications.jsonl` | Deferred notifications queue (Claude Code adapter) |
 | `logs/` | Janitor stats, extraction logs, including rolling daemon telemetry under `logs/daemon/` |
-| `identity/` | Quaid-managed identity files (SOUL.md, USER.md, ENVIRONMENT.md, *.snippets.md) |
+
+Visible instance state (`QUAID_VISIBLE_HOME/instances/<instance>/`):
+
+| Path | Purpose |
+|---|---|
+| `SOUL.md` / `USER.md` / `ENVIRONMENT.md` | Quaid-managed identity files |
+| `*.snippets.md` | Pending snippet staging files |
 | `journal/` | Journal entries awaiting distillation into core markdown |
 
-The `data_dir()`, `config_dir()`, `logs_dir()`, and `identity_dir()` methods
-on `QuaidAdapter` all derive from `instance_root()`.
+The `data_dir()`, `config_dir()`, and `logs_dir()` methods derive from
+`instance_root()` (hidden). `identity_dir()` and `journal_dir()` derive from
+`visible_instance_root()`.
 
 ---
 
@@ -391,42 +419,55 @@ This is the standard setup on a single machine where OpenClaw, Claude Code, and 
 share the same memory workspace:
 
 ```
-QUAID_HOME=/your/quaid/home
+QUAID_HOME=/your/.quaid
+QUAID_VISIBLE_HOME=/your/quaid
 
-/your/quaid/home/
+/your/.quaid/
   shared/
-    config/memory.json          ← shared embeddings/Ollama config
+    config/global/memory.json   ← shared embeddings/Ollama config
+  instances/
+    openclaw-main/
+      memory.json               ← openclaw instance config
+      data/memory.db            ← openclaw's private memory DB
+    claude-code-main/
+      memory.json               ← claude-code instance config
+      data/memory.db            ← claude-code's private memory DB
+
+/your/quaid/
   projects/
     project-registry.json       ← registry visible to all instances
     <project-name>/             ← shared project canonical dirs
-  openclaw/
-    config/memory.json          ← openclaw instance config
-    data/memory.db              ← openclaw's private memory DB
-    identity/                   ← SOUL.md, USER.md, etc.
-  claude-code/
-    config/memory.json          ← claude-code instance config
-    data/memory.db              ← claude-code's private memory DB
-    identity/
+  instances/
+    openclaw-main/
+      SOUL.md
+      USER.md
+      ENVIRONMENT.md
+      journal/
+    claude-code-main/
+      SOUL.md
+      USER.md
+      ENVIRONMENT.md
+      journal/
 ```
 
 Each instance has its own isolated database. The shared project registry
 ensures that `quaid recall` (docs store) and `quaid registry list` see the same
 projects from any instance. Embeddings must use the same model (enforced by
-`shared/config/memory.json`) so that cross-instance doc search produces
+`shared/config/global/memory.json`) so that cross-instance doc search produces
 comparable vectors.
 
 ### Separate QUAID_HOME per adapter
 
-Some adapters maintain a separate `QUAID_HOME` silo:
+Some deployments maintain a separate hidden `QUAID_HOME` silo:
 
 ```
-QUAID_HOME=/your/quaid/claudecode   (Claude Code adapter)
-QUAID_HOME=/your/quaid/agents       (OpenClaw agent instances)
+QUAID_HOME=/your/.quaid-claudecode   (Claude Code adapter)
+QUAID_HOME=/your/.quaid-agents       (OpenClaw agent instances)
 ```
 
 These silos do not share a project registry or databases. Projects are not
 automatically visible across silos. Each silo maintains its own
-`shared/config/memory.json` for embeddings consistency within that silo.
+`shared/config/global/memory.json` for embeddings consistency within that silo.
 
 ### Separate machines
 
@@ -439,7 +480,8 @@ Projects and memories are local to each machine.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `QUAID_HOME` | Root directory containing all instances | `~/quaid` |
+| `QUAID_HOME` | Hidden root directory containing runtime state and all instances | `~/.quaid` |
+| `QUAID_VISIBLE_HOME` | Visible root directory containing instance markdown and projects | `~/quaid` |
 | `QUAID_INSTANCE` | Active instance identifier | (required, no default) |
 | `CLAWDBOT_WORKSPACE` | Alias for `QUAID_HOME` (backward compat) | — |
 | `PYTHONPATH` | Set automatically by the `quaid` shell script to include `SCRIPT_DIR` | — |
@@ -471,7 +513,7 @@ collisions.
 
 ## 10. Adapter Type Selection
 
-The adapter type is read from `config/memory.json` at startup by
+The adapter type is read from `memory.json` at startup by
 `lib/adapter._read_adapter_type_from_config()`. Accepted formats:
 
 ```json
@@ -482,12 +524,12 @@ The adapter type is read from `config/memory.json` at startup by
 
 Search path for adapter config (priority order):
 
-1. `QUAID_HOME/<QUAID_INSTANCE>/config/memory.json`
-2. `QUAID_HOME/claude-code-<slug>/config/memory.json` when `QUAID_INSTANCE` is unset and `CLAUDE_PROJECT_DIR` is set
+1. `QUAID_HOME/instances/<QUAID_INSTANCE>/memory.json`
+2. `QUAID_HOME/instances/claude-code-<slug>/memory.json` when `QUAID_INSTANCE` is unset and `CLAUDE_PROJECT_DIR` is set
 3. `QUAID_HOME/config/memory.json` (legacy flat layout)
-4. `QUAID_WORKSPACE/config/memory.json` or `CLAWDBOT_WORKSPACE/config/memory.json`
-5. `./config/memory.json` (cwd)
-6. `./memory-config.json` (cwd)
+4. `QUAID_WORKSPACE/config/memory.json` or `CLAWDBOT_WORKSPACE/config/memory.json` (legacy compatibility)
+5. `./config/memory.json` (cwd legacy fallback)
+6. `./memory-config.json` (cwd legacy fallback)
 
 The first file found that contains a non-empty `adapter.type` wins. Quaid
 fails with a descriptive error if no adapter type can be resolved.

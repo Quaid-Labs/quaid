@@ -4,7 +4,7 @@
 // =============================================================================
 // Interactive installer using @clack/prompts (resolved from OpenClaw).
 // Supports two modes:
-//   - Standalone (default): Uses fixed Quaid home (~/quaid)
+//   - Standalone (default): Uses hidden Quaid home (~/.quaid) with visible workspace (~/quaid)
 //   - OpenClaw: detected via OPENCLAW_WORKSPACE env or openclaw on PATH
 //
 // Author: Steadman Labs (https://github.com/quaid-labs)
@@ -213,7 +213,7 @@ function printUsageAndExit() {
   console.log(`Usage: node setup-quaid.mjs [options]
 
 Options:
-  --workspace <path>  Deprecated. Installer home is fixed to ~/quaid
+  --workspace <path>  Deprecated. Installer home is fixed to ~/.quaid
   --owner-name <name> Person name used to tag memories (recommended for --agent)
   --adapter <id>      Force adapter/platform id (e.g. standalone, claude-code, openclaw, codex)
   --source <kind>     Plugin source: local (default), github, artifact
@@ -264,7 +264,8 @@ if (SURVEY_ONLY && !INSTALL_ARGS.dryRun) {
   process.exit(2);
 }
 
-const FIXED_QUAID_HOME = path.resolve(path.join(os.homedir(), "quaid"));
+const FIXED_QUAID_HOME = path.resolve(path.join(os.homedir(), ".quaid"));
+const FIXED_VISIBLE_HOME = path.resolve(path.join(os.homedir(), "quaid"));
 
 function _normalizeInstallPath(raw) {
   const value = String(raw || "").trim();
@@ -416,7 +417,7 @@ const AGENT_SURVEY_CONTRACT = {
     "Do not add survey sections for internal installer steps with no user choice.",
     "Do not use test-only controls like QUAID_TEST_ANSWERS in normal AI install guidance unless explicitly running a test harness.",
     "Workspace file import is not a standalone survey field unless the installer actually prompts for it.",
-    "Installer home is fixed to ~/quaid and is not a user-selectable field.",
+    "Installer home is fixed to ~/.quaid (visible workspace: ~/quaid) and is not a user-selectable field.",
     "Janitor runs automatically by default and is not a survey field unless the human explicitly asks to change janitor behavior.",
   ],
 };
@@ -444,6 +445,7 @@ function detectWorkspaceFromCli() {
 const IS_CLAUDE_CODE = INSTALL_ARGS.claudeCode || process.env.QUAID_INSTALL_CLAUDE_CODE === "1";
 const IS_OPENCLAW = !IS_CLAUDE_CODE && !!(process.env.OPENCLAW_WORKSPACE || which("openclaw"));
 const WORKSPACE = FIXED_QUAID_HOME;
+const VISIBLE_HOME = FIXED_VISIBLE_HOME;
 const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1" || !process.stdin.isTTY;
 const DRY_RUN = !!(INSTALL_ARGS.dryRun || process.env.QUAID_INSTALL_DRY_RUN === "1");
 const MODULES_PLUGIN_DIR = path.join(WORKSPACE, "modules", "quaid");
@@ -451,14 +453,31 @@ const LEGACY_PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
 const PLUGIN_DIR = fs.existsSync(path.join(MODULES_PLUGIN_DIR, "package.json"))
   ? MODULES_PLUGIN_DIR
   : LEGACY_PLUGIN_DIR;
-const CONFIG_DIR = path.join(WORKSPACE, "config");
+const LEGACY_CONFIG_DIR = path.join(WORKSPACE, "config");
 const DATA_DIR = path.join(WORKSPACE, "data");
-const JOURNAL_DIR = path.join(WORKSPACE, "journal");
 const LOGS_DIR = path.join(WORKSPACE, "logs");
-const PROJECTS_DIR = path.join(WORKSPACE, "projects");
+const PROJECTS_DIR = path.join(VISIBLE_HOME, "projects");
 const TEMP_DIR = path.join(WORKSPACE, "temp");
 const SCRATCH_DIR = path.join(WORKSPACE, "scratch");
 const ADAPTER_REGISTRY_DIR = path.join(WORKSPACE, "adaptors");
+const HIDDEN_INSTANCES_DIR = path.join(WORKSPACE, "instances");
+const VISIBLE_INSTANCES_DIR = path.join(VISIBLE_HOME, "instances");
+
+process.env.QUAID_HOME = WORKSPACE;
+process.env.QUAID_VISIBLE_HOME = VISIBLE_HOME;
+process.env.QUAID_WORKSPACE = WORKSPACE;
+
+function hiddenInstanceDir(instanceId = resolvedInstallerInstanceId()) {
+  return path.join(HIDDEN_INSTANCES_DIR, instanceId);
+}
+
+function visibleInstanceDir(instanceId = resolvedInstallerInstanceId()) {
+  return path.join(VISIBLE_INSTANCES_DIR, instanceId);
+}
+
+function instanceConfigPath(instanceId = resolvedInstallerInstanceId()) {
+  return path.join(hiddenInstanceDir(instanceId), "memory.json");
+}
 
 let _adapterManifests = [];
 let _existingInstallDetected = false;
@@ -611,6 +630,7 @@ function _readAdapterInstallerCapabilities(adapterId) {
     env: {
       ...process.env,
       QUAID_HOME: WORKSPACE,
+      QUAID_VISIBLE_HOME: VISIBLE_HOME,
       QUAID_WORKSPACE: WORKSPACE,
       QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
       QUAID_ADAPTER_TYPE: normalized,
@@ -637,6 +657,7 @@ function _runAdapterInstallerJson(adapterId, pyLines) {
     env: {
       ...process.env,
       QUAID_HOME: WORKSPACE,
+      QUAID_VISIBLE_HOME: VISIBLE_HOME,
       QUAID_WORKSPACE: WORKSPACE,
       QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
       QUAID_ADAPTER_TYPE: normalized,
@@ -738,6 +759,7 @@ function runAdapterInstallHook(adapterId, hookName) {
     env: {
       ...process.env,
       QUAID_HOME: WORKSPACE,
+      QUAID_VISIBLE_HOME: VISIBLE_HOME,
       QUAID_WORKSPACE: WORKSPACE,
       QUAID_ADAPTER_ID: String(adapterId || ""),
       QUAID_ADAPTER_MANIFEST_PATH: String(manifest.__path || ""),
@@ -752,16 +774,10 @@ function runAdapterInstallHook(adapterId, hookName) {
 }
 
 /**
- * Returns the instance-level projects directory.
+ * Returns the canonical visible projects directory.
  * Must be called after syncInstallerInstanceEnv() has run.
- * For non-standalone adapters: WORKSPACE/instances/<instanceId>/projects
- * For standalone: WORKSPACE/projects (same as PROJECTS_DIR)
  */
 function instanceProjectsDir() {
-  const instanceId = resolvedInstallerInstanceId();
-  if (instanceId && instanceId !== "standalone") {
-    return path.join(WORKSPACE, "instances", instanceId, "projects");
-  }
   return PROJECTS_DIR;
 }
 const OLLAMA_BASE_URL = (process.env.OLLAMA_URL || "http://localhost:11434")
@@ -818,16 +834,16 @@ function syncInstallerInstanceEnv(adapterType = "") {
 
 /**
  * List existing Quaid instance names by scanning WORKSPACE/instances for
- * directories that contain config/memory.json.
+ * directories that contain memory.json.
  */
 function listExistingInstances() {
   try {
-    const instancesDir = path.join(WORKSPACE, "instances");
+    const instancesDir = HIDDEN_INSTANCES_DIR;
     if (!fs.existsSync(instancesDir)) return [];
     return fs.readdirSync(instancesDir)
       .filter(name => {
         if (name.startsWith(".")) return false;
-        const cfgPath = path.join(instancesDir, name, "config", "memory.json");
+        const cfgPath = path.join(instancesDir, name, "memory.json");
         return fs.existsSync(cfgPath);
       })
       .sort();
@@ -844,7 +860,7 @@ function detectExistingInstallState() {
     String(resolvedInstallerPlatform() || "").trim().toLowerCase(),
     "memory.json"
   );
-  const legacyConfig = path.join(CONFIG_DIR, "memory.json");
+  const legacyConfig = path.join(LEGACY_CONFIG_DIR, "memory.json");
   const legacyDb = path.join(DATA_DIR, "memory.db");
   const pluginMarker = fs.existsSync(path.join(PLUGIN_DIR, "package.json"));
   const hasInstall = (
@@ -862,9 +878,14 @@ function resolveExistingOwnerIdentity() {
   const candidates = [];
   const instances = listExistingInstances();
   for (const instanceId of instances) {
-    candidates.push(path.join(WORKSPACE, "instances", instanceId, "config", "memory.json"));
+    candidates.push(instanceConfigPath(instanceId));
   }
-  candidates.push(path.join(CONFIG_DIR, "memory.json"));
+  const platformKey = String(resolvedInstallerPlatform() || "").trim().toLowerCase();
+  if (platformKey) {
+    candidates.push(path.join(WORKSPACE, "shared", "config", platformKey, "memory.json"));
+  }
+  candidates.push(path.join(WORKSPACE, "shared", "config", "global", "memory.json"));
+  candidates.push(path.join(LEGACY_CONFIG_DIR, "memory.json"));
   for (const cfgPath of candidates) {
     if (!fs.existsSync(cfgPath)) continue;
     try {
@@ -929,13 +950,15 @@ async function promptInstanceId(adapterType) {
   log.message(
     "Each Quaid install gets an instance ID — a short name for its memory silo.\n" +
     "Two installs with the " + C.bold("same") + " ID share memory. Different IDs = separate memory.\n" +
-    "The ID becomes a folder under your Quaid home: " + C.dim(WORKSPACE + "/<id>/")
+    "The ID becomes a pair of folders under Quaid:\n" +
+    "  hidden state: " + C.dim(WORKSPACE + "/instances/<id>/") + "\n" +
+    "  visible files: " + C.dim(VISIBLE_HOME + "/instances/<id>/")
   );
 
   if (existing.length > 0) {
     log.message("Existing instances: " + existing.map(n => C.cyan(n)).join("  "));
   } else {
-    log.message(C.dim("No existing instances found under " + WORKSPACE));
+    log.message(C.dim("No existing instances found under " + HIDDEN_INSTANCES_DIR));
   }
 
   if (adapterType === "claude-code") {
@@ -2302,7 +2325,8 @@ async function step1_preflight() {
   intro(C.dim("Checking your system..."));
 
   _refreshAdapterManifests();
-  log.info(C.dim(`Quaid home: ${WORKSPACE}`));
+  log.info(C.dim(`Quaid system home: ${WORKSPACE}`));
+  log.info(C.dim(`Quaid visible home: ${VISIBLE_HOME}`));
 
   // Snapshot existing files BEFORE any openclaw commands — those commands load
   // the quaid plugin which creates data/memory.db, giving a false "dirty" signal.
@@ -2316,8 +2340,8 @@ async function step1_preflight() {
     "HEARTBEAT.md",
     "TODO.md",
   ]
-    .filter(f => fs.existsSync(path.join(WORKSPACE, f)));
-  const _hasConfig = fs.existsSync(path.join(CONFIG_DIR, "memory.json"));
+    .filter(f => fs.existsSync(path.join(VISIBLE_HOME, f)));
+  const _hasConfig = fs.existsSync(path.join(LEGACY_CONFIG_DIR, "memory.json"));
   const _hasDb = fs.existsSync(path.join(DATA_DIR, "memory.db"));
 
   const s = spinner();
@@ -2696,14 +2720,14 @@ async function step1_preflight() {
       const backupSpinner = spinner();
       backupSpinner.start("Creating backup...");
       const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const backupDir = path.join(WORKSPACE, `.quaid-backup-${ts}`);
+      const backupDir = path.join(VISIBLE_HOME, `.quaid-backup-${ts}`);
       fs.mkdirSync(backupDir, { recursive: true });
       let count = 0;
       for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md", "TOOLS.md", "AGENTS.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md"]) {
-        const src = path.join(WORKSPACE, f);
+        const src = path.join(VISIBLE_HOME, f);
         if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(backupDir, f)); count++; }
       }
-      if (_hasConfig) { fs.copyFileSync(path.join(CONFIG_DIR, "memory.json"), path.join(backupDir, "memory.json")); count++; }
+      if (_hasConfig) { fs.copyFileSync(path.join(LEGACY_CONFIG_DIR, "memory.json"), path.join(backupDir, "memory.json")); count++; }
       if (_hasDb) { fs.copyFileSync(path.join(DATA_DIR, "memory.db"), path.join(backupDir, "memory.db")); count++; }
       backupSpinner.stop(C.green("Backup created"));
 
@@ -3631,7 +3655,17 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Create directories
   s.start("Creating directories...");
-  for (const dir of [path.join(WORKSPACE, "instances"), CONFIG_DIR, DATA_DIR, JOURNAL_DIR, LOGS_DIR, path.join(JOURNAL_DIR, "archive")]) {
+  for (const dir of [
+    HIDDEN_INSTANCES_DIR,
+    VISIBLE_INSTANCES_DIR,
+    DATA_DIR,
+    LOGS_DIR,
+    TEMP_DIR,
+    SCRATCH_DIR,
+    PROJECTS_DIR,
+    ADAPTER_REGISTRY_DIR,
+    path.join(WORKSPACE, "shared", "config"),
+  ]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   s.stop(C.green("Directories created"));
@@ -3686,22 +3720,22 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Required by the janitor's snippet processor for all adapter types.
   // Use the resolved QUAID_INSTANCE so the directory matches the actual silo path.
   const resolvedInstanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
-  if (resolvedInstanceId && resolvedInstanceId !== "standalone") {
-    const identityDir = path.join(WORKSPACE, "instances", resolvedInstanceId, "identity");
-    if (!fs.existsSync(identityDir)) {
-      fs.mkdirSync(identityDir, { recursive: true });
-      log.info(`Created identity directory: ${identityDir}`);
+  if (resolvedInstanceId) {
+    const hiddenRoot = hiddenInstanceDir(resolvedInstanceId);
+    const visibleRoot = visibleInstanceDir(resolvedInstanceId);
+    for (const dir of [hiddenRoot, path.join(hiddenRoot, "data"), path.join(hiddenRoot, "logs"), visibleRoot]) {
+      fs.mkdirSync(dir, { recursive: true });
     }
+    log.info(`Created hidden instance directory: ${hiddenRoot}`);
+    log.info(`Created visible instance directory: ${visibleRoot}`);
     for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
-      const fp = path.join(identityDir, f);
+      const fp = path.join(visibleRoot, f);
       if (!fs.existsSync(fp)) {
         fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
-        log.info(`Created identity/${f}`);
+        log.info(`Created ${f}`);
       }
     }
-    // Create per-instance journal directory. Runtime expects instance_root/journal
-    // (adapter.journal_dir returns instance_root/journal), not workspace/journal.
-    const instanceJournalDir = path.join(WORKSPACE, "instances", resolvedInstanceId, "journal");
+    const instanceJournalDir = path.join(visibleRoot, "journal");
     if (!fs.existsSync(instanceJournalDir)) {
       fs.mkdirSync(instanceJournalDir, { recursive: true });
       log.info(`Created journal directory: ${instanceJournalDir}`);
@@ -3709,7 +3743,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     // Create misc project dir in projects/misc--{instanceId}/.
     // Lives as a real tracked project — all registry tooling works automatically.
     for (const bucket of [`misc--${resolvedInstanceId}`]) {
-      const bucketDir = path.join(WORKSPACE, "projects", bucket);
+      const bucketDir = path.join(PROJECTS_DIR, bucket);
       if (!fs.existsSync(bucketDir)) {
         fs.mkdirSync(bucketDir, { recursive: true });
         log.info(`Created project bucket dir: projects/${bucket}/`);
@@ -3792,9 +3826,8 @@ print('[+] Datastore init hooks complete')
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
   // install always yields expected workspace shape.
   // misc is a tracked project in projects/misc--{instanceId}/
-  const instanceMiscDir = (resolvedInstanceId && resolvedInstanceId !== "standalone")
-    ? path.join(WORKSPACE, "projects", `misc--${resolvedInstanceId}`)
-    : SCRATCH_DIR;
+  const miscBucketId = resolvedInstanceId || resolvedInstallerInstanceId();
+  const instanceMiscDir = path.join(PROJECTS_DIR, `misc--${miscBucketId}`);
   const contractOwnedDirs = Array.from(new Set([PROJECTS_DIR, instanceProjectsDir(), TEMP_DIR, instanceMiscDir]));
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   s.start("Reconciling workspace structure...");
@@ -3828,69 +3861,43 @@ print('[+] Datastore init hooks complete')
   }
   s.stop(C.green("Workspace structure ready"));
 
-  // Create workspace files
-  s.start("Creating workspace baseline files...");
-  for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
-    const fp = path.join(WORKSPACE, f);
-    if (!fs.existsSync(fp)) {
-      fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
-      log.info(`Created ${f}`);
-    }
-  }
+  s.start("Finalizing visible workspace...");
+  s.stop(C.green("Visible workspace ready"));
 
-  // Create journal files
-  if (systems.journal) {
-    for (const f of ["SOUL", "USER", "MEMORY"]) {
-      const jf = path.join(JOURNAL_DIR, `${f}.journal.md`);
-      if (!fs.existsSync(jf)) {
-        fs.writeFileSync(jf, `# ${f} Journal\n`);
-      }
-    }
-    log.info("Journal files created");
-  }
-  s.stop(C.green("Workspace baseline files ready"));
-
-  // Initialize git repo for workspace (required for doc staleness tracking)
-  const gitDir = path.join(WORKSPACE, ".git");
+  // Initialize git repo for the visible workspace (required for doc/project tracking)
+  const gitDir = path.join(VISIBLE_HOME, ".git");
   if (!fs.existsSync(gitDir)) {
     s.start("Initializing git repository...");
-    spawnSync("git", ["init"], { cwd: WORKSPACE, stdio: "pipe" });
-    // Create .gitignore for runtime artifacts
+    fs.mkdirSync(VISIBLE_HOME, { recursive: true });
+    spawnSync("git", ["init"], { cwd: VISIBLE_HOME, stdio: "pipe" });
+    // Create .gitignore for generated/editor artifacts in the visible workspace.
     const gitignore = [
-      "# Runtime data",
-      "data/*.db",
-      "data/*.db-*",
-      "logs/",
-      "temp/",
-      ".env",
-      ".env.*",
+      "# OS",
+      ".DS_Store",
+      "Thumbs.db",
       "",
       "# Python",
       "__pycache__/",
       "*.pyc",
       ".pytest_cache/",
       "",
-      "# OS",
-      ".DS_Store",
-      "Thumbs.db",
-      "",
       "# Build",
       "node_modules/",
       "build/",
       "",
     ].join("\n");
-    const ignorePath = path.join(WORKSPACE, ".gitignore");
+    const ignorePath = path.join(VISIBLE_HOME, ".gitignore");
     if (!fs.existsSync(ignorePath)) {
       fs.writeFileSync(ignorePath, gitignore);
     }
     // Initial commit so git diff/log have a baseline
-    spawnSync("git", ["add", "-A"], { cwd: WORKSPACE, stdio: "pipe" });
-    const initCommit = spawnSync("git", ["commit", "-m", "Initial Quaid workspace"], { cwd: WORKSPACE, stdio: "pipe" });
+    spawnSync("git", ["add", "-A"], { cwd: VISIBLE_HOME, stdio: "pipe" });
+    const initCommit = spawnSync("git", ["commit", "-m", "Initial Quaid workspace"], { cwd: VISIBLE_HOME, stdio: "pipe" });
     if (initCommit.status !== 0) {
       const fallbackCommit = spawnSync(
         "git",
         ["-c", "user.name=Quaid Installer", "-c", "user.email=installer@local", "commit", "-m", "Initial Quaid workspace"],
-        { cwd: WORKSPACE, stdio: "pipe" },
+        { cwd: VISIBLE_HOME, stdio: "pipe" },
       );
       if (fallbackCommit.status !== 0) {
         s.stop(C.yellow("Git initialized (baseline commit skipped: identity not configured)"));
@@ -4079,7 +4086,7 @@ except ValueError:
 `;
         const result = spawnSync("python3", ["-c", regScript], {
           cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env, QUAID_HOME: WORKSPACE },
+          env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME },
         });
         if ((result.stdout || "").trim() === "created") {
           log.info(`Registered shared bucket: ${bucket.name}`);
@@ -4091,7 +4098,7 @@ except ValueError:
     spawnSync("python3", ["scripts/sync-tools-domain-block.py", "--workspace", WORKSPACE], {
       cwd: PLUGIN_DIR,
       stdio: "pipe",
-      env: { ...process.env, QUAID_HOME: WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE },
+      env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME, OPENCLAW_WORKSPACE: WORKSPACE },
     });
     s.stop(C.green("Bundled project docs registered"));
   }
@@ -4184,9 +4191,12 @@ c.close()
   checks.push(`${C.green("■")} LLM (fast)   ${C.dim("—")} ${models.lowModel}`);
 
   const _valInstanceId = (process.env.QUAID_INSTANCE || "").trim();
+  const _platformKey = String(resolvedInstallerPlatform() || "").trim().toLowerCase();
   const _configCheckPath = _valInstanceId
-    ? path.join(WORKSPACE, "instances", _valInstanceId, "config", "memory.json")
-    : path.join(CONFIG_DIR, "memory.json");
+    ? instanceConfigPath(_valInstanceId)
+    : (_platformKey
+        ? path.join(WORKSPACE, "shared", "config", _platformKey, "memory.json")
+        : path.join(WORKSPACE, "shared", "config", "global", "memory.json"));
   if (fs.existsSync(_configCheckPath)) {
     checks.push(`${C.green("■")} Config       ${C.dim("—")} OK`);
   } else {
@@ -4277,7 +4287,7 @@ except Exception as e:
 
   // Clear any deferred notices generated during install (smoke test, janitor
   // catch-up, etc.) so they don't contaminate the first real user session.
-  const notesDir = path.join(DATA_DIR, "..", ".runtime", "notes");
+  const notesDir = path.join(WORKSPACE, ".runtime", "notes");
   const deferredPath = path.join(notesDir, "delayed-llm-requests.json");
   try {
     if (fs.existsSync(deferredPath)) {
@@ -4524,7 +4534,7 @@ function setupClaudeCodeHooks() {
   // Include QUAID_INSTANCE so that hooks fired outside an active session context
   // (e.g. SessionEnd, which fires after /exit when per-project env vars are no
   // longer injected by Claude Code) can still resolve the correct silo.
-  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_INSTANCE='${syncInstallerInstanceEnv()}'`;
+  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_VISIBLE_HOME='${VISIBLE_HOME}' QUAID_INSTANCE='${syncInstallerInstanceEnv()}'`;
 
   const desiredHooks = {
     SessionStart: [
@@ -4586,6 +4596,10 @@ function setupClaudeCodeHooks() {
   if (!settings.env) settings.env = {};
   if (settings.env.QUAID_HOME !== WORKSPACE) {
     settings.env.QUAID_HOME = WORKSPACE;
+    changed = true;
+  }
+  if (settings.env.QUAID_VISIBLE_HOME !== VISIBLE_HOME) {
+    settings.env.QUAID_VISIBLE_HOME = VISIBLE_HOME;
     changed = true;
   }
   // Add PLUGIN_DIR to PATH so `quaid` is callable without full path.
@@ -4890,13 +4904,13 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     log.info(`Created blank shared platform config: ${sharedPlatformConfigPath}`);
   }
 
-  // Write config to the instance root (QUAID_HOME/instances/<instance>/config/memory.json).
+  // Write config to the hidden instance root (QUAID_HOME/instances/<instance>/memory.json).
   // This is the authoritative instance config path; the old flat QUAID_HOME/config/
   // path is no longer written.
   const instanceId = (process.env.QUAID_INSTANCE || "").trim();
   if (instanceId) {
     // Explicit instance: write directly to instance config path.
-    const instanceConfigDir = path.join(WORKSPACE, "instances", instanceId, "config");
+    const instanceConfigDir = hiddenInstanceDir(instanceId);
     fs.mkdirSync(instanceConfigDir, { recursive: true });
     const configJson = JSON.stringify(config, null, 2) + "\n";
     fs.writeFileSync(path.join(instanceConfigDir, "memory.json"), configJson);
@@ -4910,9 +4924,6 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     fs.writeFileSync(sharedPlatformConfigPath, configJson);
     log.info(`Wrote shared platform config: ${sharedPlatformConfigPath}`);
   }
-  // Always write flat config as fallback layer.
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), JSON.stringify(config, null, 2) + "\n");
 }
 
 function copyDirSync(src, dest) {

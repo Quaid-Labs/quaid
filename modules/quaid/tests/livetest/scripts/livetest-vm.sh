@@ -440,7 +440,7 @@ cmd_setup_base() {
     echo "   4. Log in to each platform CLI:"
     echo "        openclaw auth login"
     echo "        codex auth login   # or equivalent"
-    echo "   5. Set up Quaid home: mkdir -p ~/quaid"
+    echo "   5. Set up Quaid homes: mkdir -p ~/.quaid ~/quaid"
     echo "   6. Shut down the VM cleanly (sudo shutdown -h now)"
     echo ""
     echo " After setup, the VM is your credential snapshot."

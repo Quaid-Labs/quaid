@@ -22,12 +22,16 @@ from typing import Dict, List, Any, Optional
 
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
-from lib.runtime_context import get_workspace_dir, get_bootstrap_markdown_globs
+from lib.runtime_context import get_bootstrap_markdown_globs, get_visible_quaid_home, get_workspace_dir
 from lib.fail_policy import is_fail_hard_enabled
 
 # Configuration
 def _workspace_dir() -> Path:
     return get_workspace_dir()
+
+
+def _content_root() -> Path:
+    return get_visible_quaid_home()
 
 logger = logging.getLogger(__name__)
 _MOVE_TO_DOCS_TARGET_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -221,9 +225,9 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
         if glob_pattern.startswith("/") or ".." in glob_pattern:
             logger.warning(f"Skipping unsafe bootstrap glob: {glob_pattern}")
             continue
-        full_pattern = str(_workspace_dir() / glob_pattern)
+        full_pattern = str(_content_root() / glob_pattern)
         for match in sorted(globmod.glob(full_pattern)):
-            rel_path = os.path.relpath(match, _workspace_dir())
+            rel_path = os.path.relpath(match, _content_root())
             # Double-check: resolved path must be inside workspace
             if rel_path.startswith(".."):
                 logger.warning(f"Skipping path outside workspace: {match}")
@@ -372,7 +376,7 @@ def backup_workspace_files(files: Optional[List[str]] = None) -> Dict[str, str]:
     backups = {}
 
     for filename in files_to_backup:
-        source = _workspace_dir() / filename
+        source = _content_root() / filename
         if source.exists():
             # Flatten slashes for relative paths (e.g. projects/quaid/TOOLS.md → projects--quaid--TOOLS.md)
             flat_name = filename.replace("/", "--")
@@ -391,7 +395,7 @@ def get_file_mtimes() -> Dict[str, float]:
     files_config = get_monitored_files()
     mtimes = {}
     for filename in files_config.keys():
-        filepath = _workspace_dir() / filename
+        filepath = _content_root() / filename
         if filepath.exists():
             mtimes[filename] = filepath.stat().st_mtime
     return mtimes
@@ -447,7 +451,7 @@ def get_file_line_counts() -> Dict[str, int]:
     files_config = get_monitored_files()
     counts = {}
     for filename in files_config.keys():
-        filepath = _workspace_dir() / filename
+        filepath = _content_root() / filename
         if filepath.exists():
             counts[filename] = len(filepath.read_text().splitlines())
     return counts
@@ -479,7 +483,7 @@ def _read_file_contents(changed_files: List[str]) -> Dict[str, str]:
     """Read contents of changed workspace files."""
     contents = {}
     for filename in changed_files:
-        filepath = _workspace_dir() / filename
+        filepath = _content_root() / filename
         if filepath.exists():
             contents[filename] = filepath.read_text()
     return contents
@@ -538,7 +542,7 @@ def apply_review_decisions(dry_run: bool = True,
         by_file[filename].append(d)
 
     for filename, file_decisions in by_file.items():
-        filepath = _workspace_dir() / filename
+        filepath = _content_root() / filename
         if not filepath.exists():
             continue
 
@@ -653,9 +657,9 @@ def apply_review_decisions(dry_run: bool = True,
                             )
                             stats["errors"] = stats.get("errors", 0) + 1
                             continue
-                        target_path = (_workspace_dir() / target).resolve()
+                        target_path = (_content_root() / target).resolve()
                         # Prevent path traversal from LLM-controlled target
-                        if not str(target_path).startswith(str(_workspace_dir().resolve())):
+                        if not str(target_path).startswith(str(_content_root().resolve())):
                             logger.error(f"Path traversal blocked: {target}")
                             stats["errors"] = stats.get("errors", 0) + 1
                             continue

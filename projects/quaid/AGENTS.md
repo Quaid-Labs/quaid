@@ -22,12 +22,12 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 
 ## File Placement — MANDATORY RULES
 
-**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, or `~/quaid/scratch/`.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
+**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, or anywhere under `~/quaid/` or `~/.quaid/` except through Quaid's own managed flows.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
 
 **Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
 
 1. **Existing project owns this work** → place the file inside that project's directory.
-2. **Throwaway / one-off / scratch / quick / hello-world** → use the misc project as the owner, but do not treat `~/quaid/` as the working directory:
+2. **Throwaway / one-off / scratch / quick / hello-world** → use the misc project as the owner, but do not treat `~/quaid/` or `~/.quaid/` as the working directory:
    ```bash
    # The misc project is pre-created. Confirm it exists:
    quaid project show misc--$QUAID_INSTANCE
@@ -98,7 +98,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 ## Operating Rules
 
 **Retrieval discipline**
-- Every tracked project has its own `PROJECT.md` at `QUAID_HOME/projects/<project-name>/PROJECT.md`.
+- Every tracked project has its own `PROJECT.md` at `QUAID_VISIBLE_HOME/projects/<project-name>/PROJECT.md`.
 - If you are actively working on a project, load that project's `PROJECT.md` first. Treat it as the overview and navigation map before wandering the tree.
 - Always use memory/project tools before claiming missing context.
 - Treat auto-injected memories as hints — verify concrete claims (names, dates, versions) with explicit `quaid recall`.
@@ -111,7 +111,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - Project file writes may be tracked from actual filesystem changes, but important conclusions, decisions, explanations, and outcomes should still be stated explicitly if they are worth remembering.
 
 **Fail-hard**
-- Controlled by `retrieval.fail_hard` in `config/memory.json`.
+- Controlled by `retrieval.fail_hard` in the active instance `memory.json`.
 - When `true`: never degrade silently — surface the error.
 - When `false`: degrade with loud warnings/diagnostics.
 

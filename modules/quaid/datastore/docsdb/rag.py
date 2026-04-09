@@ -26,7 +26,7 @@ from lib.embeddings import (
 )
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.fail_policy import is_fail_hard_enabled
-from lib.runtime_context import get_workspace_dir
+from lib.runtime_context import get_visible_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,17 @@ logger = logging.getLogger(__name__)
 DB_PATH = get_db_path()
 def _workspace() -> Path:
     return get_workspace_dir()
+
+
+def _resolve_project_root(raw: str) -> Path:
+    p = Path(str(raw or "").strip())
+    if p.is_absolute():
+        return p
+    if not str(raw or "").strip():
+        return _workspace()
+    if str(raw).startswith("projects/") or str(raw) == "projects":
+        return get_visible_quaid_home() / raw
+    return _workspace() / raw
 
 def _rag_config():
     """Get RAG config section (lazy import to avoid circular deps)."""
@@ -769,9 +780,9 @@ class DocsRAG:
             for project_name, defn in (cfg.projects.definitions or {}).items():
                 candidate_roots = []
                 if getattr(defn, "home_dir", None):
-                    candidate_roots.append((workspace / defn.home_dir).resolve())
+                    candidate_roots.append(_resolve_project_root(defn.home_dir).resolve())
                 for root in getattr(defn, "source_roots", []) or []:
-                    candidate_roots.append((workspace / root).resolve())
+                    candidate_roots.append(_resolve_project_root(root).resolve())
 
                 for candidate in candidate_roots:
                     prefix = str(candidate)
@@ -842,7 +853,7 @@ class DocsRAG:
             cfg = get_config()
             defn = cfg.projects.definitions.get(project)
             if defn and defn.home_dir:
-                md_path = _workspace() / defn.home_dir / "PROJECT.md"
+                md_path = _resolve_project_root(defn.home_dir) / "PROJECT.md"
                 if md_path.exists():
                     return md_path.read_text(encoding="utf-8")
         except Exception:
@@ -1024,8 +1035,8 @@ class DocsRAG:
             defn = cfg.projects.definitions.get(project)
             if defn:
                 return {
-                    "home_dir": str(_workspace() / defn.home_dir),
-                    "source_roots": [str(_workspace() / r) for r in defn.source_roots],
+                    "home_dir": str(_resolve_project_root(defn.home_dir)),
+                    "source_roots": [str(_resolve_project_root(r)) for r in defn.source_roots],
                 }
         except Exception:
             pass
@@ -1141,7 +1152,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
 
             if cfg.projects.enabled:
                 for proj_name, proj_defn in cfg.projects.definitions.items():
-                    proj_dir = workspace / proj_defn.home_dir
+                    proj_dir = _resolve_project_root(proj_defn.home_dir)
                     if proj_dir.exists():
                         result.logs.append(f"Reindexing project {proj_name}: {proj_dir}...")
                         proj_result = rag.reindex_all(str(proj_dir), force=False)

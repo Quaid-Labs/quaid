@@ -402,7 +402,7 @@ _BROKER_CLIENT: Optional["_CodexPlatformBrokerClient"] = None
 
 def _quaid_home_dir() -> Path:
     env = str(os.environ.get("QUAID_HOME", "") or "").strip()
-    return Path(env).resolve() if env else (Path.home() / "quaid")
+    return Path(env).resolve() if env else (Path.home() / ".quaid")
 
 
 def _broker_run_dir() -> Path:

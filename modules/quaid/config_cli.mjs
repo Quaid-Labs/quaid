@@ -85,8 +85,8 @@ function workspaceRoot() {
  * Priority (CLI wins over env):
  *   --shared              → QUAID_HOME/shared/config/global/memory.json
  *   --platform-shared [p] → QUAID_HOME/shared/config/<platform>/memory.json
- *   --instance <id>       → QUAID_HOME/<id>/config/memory.json
- *   QUAID_INSTANCE env    → QUAID_HOME/<QUAID_INSTANCE>/config/memory.json
+ *   --instance <id>       → QUAID_HOME/instances/<id>/memory.json
+ *   QUAID_INSTANCE env    → QUAID_HOME/instances/<QUAID_INSTANCE>/memory.json
  *   (none)                → QUAID_HOME/shared/config/global/memory.json  (default)
  */
 function platformFromInstanceName(instanceName) {
@@ -138,7 +138,7 @@ function resolveConfigTarget() {
   return {
     kind: "instance",
     instanceId,
-    configPath: path.join(home, instanceId, "config", "memory.json"),
+    configPath: path.join(home, "instances", instanceId, "memory.json"),
     label: `instance '${instanceId}'`,
   };
 }

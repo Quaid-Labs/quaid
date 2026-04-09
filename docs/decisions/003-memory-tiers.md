@@ -65,4 +65,4 @@ if not accessed in 30+ days:
 ## See Also
 
 - `modules/quaid/core/lifecycle/janitor.py`
-- `config/memory.json` § decay settings
+- instance `memory.json` § decay settings

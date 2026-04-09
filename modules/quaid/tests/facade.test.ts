@@ -101,8 +101,8 @@ describe("QuaidFacade", () => {
 
   it("injectProjectContext adds runtime metadata and strips TOOLS domain block", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-context-"));
-    const projectsDir = path.join(workspace, "shared", "projects", "quaid");
-    const identityDir = path.join(workspace, "instance-a", "identity");
+    const projectsDir = path.join(workspace, "projects", "quaid");
+    const identityDir = path.join(workspace, "instances", "instance-a");
     await mkdir(projectsDir, { recursive: true });
     await mkdir(identityDir, { recursive: true });
     await writeFile(path.join(identityDir, "USER.md"), "User likes coffee", "utf8");
@@ -131,7 +131,7 @@ describe("QuaidFacade", () => {
           "active domains: personal, technical",
           "active graph relation types: neighbor_of, parent_of",
           "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
-          "linked projects: quaid (/tmp/workspace/shared/projects/quaid); misc--instance-a (/tmp/workspace/shared/projects/misc--instance-a)",
+          "linked projects: quaid (/tmp/workspace/projects/quaid); misc--instance-a (/tmp/workspace/projects/misc--instance-a)",
           "runtime note: Preinject does not cover project or docs detail. If a query depends on these projects, files, paths, tests, bugs, or architecture docs, use project recall explicitly.",
         ].join("\n");
       }
@@ -140,7 +140,7 @@ describe("QuaidFacade", () => {
 
     const facade = createQuaidFacade(makeMockDeps({
       workspace,
-      instanceRoot: path.join(workspace, "instance-a"),
+      instanceRoot: path.join(workspace, "instances", "instance-a"),
       execPython,
       getMemoryConfig: vi.fn(() => ({
         retrieval: {
@@ -155,7 +155,7 @@ describe("QuaidFacade", () => {
     expect(out).toContain("instance: instance-a");
     expect(out).toContain("active domains: personal, technical");
     expect(out).toContain("active graph relation types: neighbor_of, parent_of");
-    expect(out).toContain("linked projects: quaid (/tmp/workspace/shared/projects/quaid); misc--instance-a (/tmp/workspace/shared/projects/misc--instance-a)");
+    expect(out).toContain("linked projects: quaid (/tmp/workspace/projects/quaid); misc--instance-a (/tmp/workspace/projects/misc--instance-a)");
     expect(out).toContain("Preinject does not cover project or docs detail.");
     expect(out).toContain("--- quaid/TOOLS.md ---");
     expect(out).toContain("before domains");

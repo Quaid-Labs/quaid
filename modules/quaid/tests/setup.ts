@@ -6,6 +6,15 @@ import * as path from 'node:path'
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
+const VISIBLE_HOME = process.env.QUAID_VISIBLE_HOME
+  || (() => {
+    const resolved = path.resolve(WORKSPACE)
+    const base = path.basename(resolved)
+    if (base.startsWith(".") && base.length > 1) {
+      return path.join(path.dirname(resolved), base.slice(1))
+    }
+    return resolved
+  })()
 const TEST_INSTANCE = process.env.QUAID_INSTANCE || 'pytest-runner'
 const PYTHON_SCRIPT = (() => {
   const modernPath = path.join(WORKSPACE, "modules/quaid/datastore/memorydb/memory_graph.py")
@@ -17,7 +26,7 @@ const PYTHON_MODULE_ROOT = path.resolve(path.dirname(PYTHON_SCRIPT), "../..")
 function ensureAdapterConfig(): void {
   const payload = JSON.stringify({ adapter: { type: "standalone" } }, null, 2)
   // Instance-aware config path
-  const instanceCfgPath = path.join(WORKSPACE, TEST_INSTANCE, "config", "memory.json")
+  const instanceCfgPath = path.join(WORKSPACE, "instances", TEST_INSTANCE, "memory.json")
   try {
     if (!fs.existsSync(instanceCfgPath)) {
       fs.mkdirSync(path.dirname(instanceCfgPath), { recursive: true })
@@ -58,6 +67,7 @@ export class TestMemoryInterface {
           MOCK_EMBEDDINGS: "1",
           QUAID_DISABLE_LLM: "1",
           QUAID_HOME: WORKSPACE,
+          QUAID_VISIBLE_HOME: VISIBLE_HOME,
           QUAID_INSTANCE: TEST_INSTANCE,
           OPENCLAW_WORKSPACE: WORKSPACE,
           PYTHONPATH: process.env.PYTHONPATH

@@ -49,7 +49,7 @@ Quaid can run through multiple provider paths. They do not have the same cost pr
 
 If provider resolution fails:
 
-1. Check `config/memory.json` provider fields.
+1. Check instance `memory.json` provider fields.
 1. Check OpenClaw auth profiles and `lastGood` profile mapping.
 1. Re-run release/runtime checks:
    - `bash scripts/release-check.sh`

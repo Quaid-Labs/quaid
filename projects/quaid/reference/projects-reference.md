@@ -43,7 +43,7 @@ current, which adapters participate. It is workspace-centric.
 
 ### Key concepts
 
-- **Canonical path**: where Quaid's project metadata lives (`QUAID_HOME/projects/<name>/`)
+- **Canonical path**: where Quaid's project metadata lives (`QUAID_VISIBLE_HOME/projects/<name>/`)
 - **Source root**: where the user's actual project files live (optional)
 - **Instance**: an adapter (OpenClaw, Claude Code, or Codex) linked to the project
 - **Shadow git**: invisible git tracking of `source_root` changes
@@ -62,7 +62,7 @@ data in different places. Confusing them is a common source of bugs.
 
 **Purpose:** Tracks project metadata — identity, instances, source roots, timestamps.
 
-**Authoritative store:** `QUAID_HOME/projects/project-registry.json` (JSON file, shared across instances)
+**Authoritative store:** `QUAID_VISIBLE_HOME/projects/project-registry.json` (JSON file, shared across instances)
 
 **Mirror:** SQLite `project_definitions` table in `memory.db` (seeded from JSON on first
 `DocsRegistry` instantiation; kept in sync by `DocsRegistry.save_project_definition()`)
@@ -98,7 +98,7 @@ global registry queries; high-frequency writes should go through `core/project_r
 **Purpose:** Tracks individual files registered to projects, content hashes, source
 mappings, and auto-update metadata.
 
-**Authoritative store:** SQLite `doc_registry` table in `QUAID_HOME/<instance>/data/memory.db`
+**Authoritative store:** SQLite `doc_registry` table in `QUAID_HOME/instances/<instance>/data/memory.db`
 
 **No JSON counterpart** — SQLite only.
 
@@ -220,7 +220,7 @@ Returns the entry dict.
 `datastore/docsdb/registry.py` has its own `create_project()` method used by
 `quaid registry create-project` (legacy path). It scaffolds the directory, writes a
 richer `PROJECT.md` template, saves to `project_definitions` SQLite table, and
-optionally patches `config/memory.json`. The two code paths differ slightly in template
+optionally patches instance `memory.json`. The two code paths differ slightly in template
 format and JSON config patching. `quaid project create` (the canonical interface) uses
 `core/project_registry.py`.
 
@@ -614,7 +614,7 @@ and source file changes. Spawned as a subprocess by compact/reset hooks.
 
 ### 6.1 Event Model
 
-Events are written as JSON files to `QUAID_HOME/<instance>/projects/staging/*.json`
+Events are written as JSON files to `QUAID_HOME/instances/<instance>/projects/staging/*.json`
 by the plugin. Each event has:
 
 ```json
@@ -797,8 +797,8 @@ quaid project list --json
 ```bash
 quaid project create <name> [--description "Display Name"] [--source-root /path]
 ```
-Creates `QUAID_HOME/projects/<name>/` with `PROJECT.md` and `docs/` subdir.
-Registers the project in `QUAID_HOME/projects/project-registry.json` and the SQLite
+Creates `QUAID_VISIBLE_HOME/projects/<name>/` with `PROJECT.md` and `docs/` subdir.
+Registers the project in `QUAID_VISIBLE_HOME/projects/project-registry.json` and the SQLite
 `project_definitions` table.
 
 Note: The older `quaid registry create-project <name> --label "..."` command still
@@ -914,7 +914,7 @@ quaid global-registry remove <name> # --force overrides multi-instance guard
 quaid global-registry rename <name> <new>
 ```
 
-Reads `QUAID_HOME/projects/project-registry.json`. When multiple adapters (e.g. OC, CC, Codex) run on the same machine and
+Reads `QUAID_VISIBLE_HOME/projects/project-registry.json`. When multiple adapters (e.g. OC, CC, Codex) run on the same machine and
 share a `QUAID_HOME`, this shows the complete cross-adapter project list.
 
 **`quaid global-registry list`** calls `lib/project_registry.list_all()`:
@@ -938,7 +938,7 @@ When multiple adapters (e.g. OpenClaw, Claude Code, Codex) share the same `QUAID
   concurrent writes.
 
 - **`doc_registry` is per-instance.** Each adapter has its own `memory.db` at
-  `QUAID_HOME/<instance>/data/memory.db`. Files registered by OC are not visible
+  `QUAID_HOME/instances/<instance>/data/memory.db`. Files registered by OC are not visible
   to CC's doc registry, and vice versa. However, both adapters use the same
   Ollama/embeddings backend, so once each indexes the same content they will
   produce equivalent embeddings.
@@ -999,7 +999,7 @@ People commit `CLAUDE.md` to their GitHub repo so collaborators get the same pro
 context. The analogous Quaid approach for project files:
 
 1. **Copy on publish:** The LLM copies relevant files (`TOOLS.md`, `AGENTS.md`, selected
-   docs) from `QUAID_HOME/projects/<name>/` into the repo. These become static files in
+   docs) from `QUAID_VISIBLE_HOME/projects/<name>/` into the repo. These become static files in
    the repo, like `CLAUDE.md` today.
 2. **Future: `quaid export`:** A CLI command that exports a project's context files to a
    target directory, formatted for repo inclusion. One-shot copy, not a live sync.
@@ -1022,7 +1022,7 @@ the wrong function was called.
 **`project_definitions` table seeding:** `DocsRegistry.ensure_table()` calls
 `_seed_projects_from_json()` on every instantiation, but it is guarded by a
 `COUNT(*) > 0` check — only runs when the table is empty. On established instances
-the SQLite table is the source of truth, not `config/memory.json`.
+the SQLite table is the source of truth, not instance `memory.json`.
 
 **`delete_project` SQLite scope:** Only the calling instance's `memory.db` is
 cleaned up. If OC and CC both have docs registered for the same project and OC

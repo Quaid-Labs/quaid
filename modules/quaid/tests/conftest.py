@@ -15,8 +15,8 @@ if not os.environ.get("QUAID_HOME"):
 if not os.environ.get("QUAID_INSTANCE"):
     os.environ["QUAID_INSTANCE"] = _DEFAULT_INSTANCE
 
-# Instance-aware config: QUAID_HOME/<instance>/config/memory.json
-_instance_cfg = _DEFAULT_TEST_HOME / _DEFAULT_INSTANCE / "config" / "memory.json"
+# Instance-aware config: QUAID_HOME/instances/<instance>/memory.json
+_instance_cfg = _DEFAULT_TEST_HOME / "instances" / _DEFAULT_INSTANCE / "memory.json"
 _instance_cfg.parent.mkdir(parents=True, exist_ok=True)
 if not _instance_cfg.exists():
     _instance_cfg.write_text('{"adapter":{"type":"standalone"}}', encoding="utf-8")

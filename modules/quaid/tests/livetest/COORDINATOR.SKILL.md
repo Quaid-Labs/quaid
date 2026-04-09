@@ -69,9 +69,9 @@ The OC Telegram agent has limitations vs CC/CDX:
 
 After the first M0 clears, inject test-specific config overrides:
 ```bash
-ssh admin@$VM_IP 'mkdir -p ~/quaid/shared/config/global && \
+ssh admin@$VM_IP 'mkdir -p ~/.quaid/shared/config/global && \
   echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":1500}}" \
-  > ~/quaid/shared/config/global/memory.json'
+  > ~/.quaid/shared/config/global/memory.json'
 ```
 This sets: extraction buffer logging (for sanitizer audits) and chunk_tokens=1500
 (triggers rolling extraction in normal test sessions; production default is 8000).
@@ -323,14 +323,14 @@ guide on canary and installs Quaid itself. Do not run the installer directly.
 Tell the platform pane:
 
 > Please install Quaid by following the local AI install guide exactly, including its mandatory first command:
-> `~/quaid/dev/docs/AI-INSTALL.md`
+> `~/quaidcode/dev/docs/AI-INSTALL.md`
 >
 > Use these parameters:
 > - Adapter/platform: PLATFORM
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
-> Quaid installs into `~/quaid`; do not choose or pass a custom workspace path.
+> Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not choose or pass a custom workspace path.
 > The guide path is inside the local canary checkout, so use that checkout directly as the install source.
 > Do not browse the web for install docs or source code during M0.
 > Do not install a release build or any non-canary branch.
@@ -444,36 +444,47 @@ fresh and unmodified.
 ```
 Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
 
-1. Verify ~/quaid exists:
-   ssh REMOTE_HOST 'ls -la ~/quaid 2>&1'
-   Expected: directory exists. If it does not, report FAIL — the installer wrote
+1. Verify both Quaid roots exist:
+   ssh REMOTE_HOST 'ls -la ~/.quaid 2>&1; ls -la ~/quaid 2>&1'
+   Expected: both directories exist. If either does not, report FAIL — the installer wrote
    to the wrong location.
 
-2. Verify ~/quaid has the expected structure:
-   ssh REMOTE_HOST 'find ~/quaid -maxdepth 3 -type d | sort'
-   Expected directories (at minimum):
-   - ~/quaid/modules/quaid/     (runtime code)
-   - ~/quaid/shared/config/     (shared config)
-   - ~/quaid/instances/INSTANCE/config/   (instance config)
-   - ~/quaid/instances/INSTANCE/data/     (database)
+2. Verify ~/.quaid has the expected hidden structure:
+   ssh REMOTE_HOST 'find ~/.quaid -maxdepth 4 -type d | sort'
+   Expected directories/files (at minimum):
+   - ~/.quaid/modules/quaid/               (runtime code)
+   - ~/.quaid/shared/config/               (shared config)
+   - ~/.quaid/instances/INSTANCE/data/     (database)
+   - ~/.quaid/instances/INSTANCE/logs/     (logs)
+   - ~/.quaid/instances/INSTANCE/memory.json (instance config)
 
-3. Verify instance config landed in the right place:
-   ssh REMOTE_HOST 'cat ~/quaid/instances/INSTANCE/config/memory.json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"models:\", d.get(\"models\",{})); print(\"capture:\", d.get(\"capture\",{}))"'
+3. Verify ~/quaid has the expected visible structure:
+   ssh REMOTE_HOST 'find ~/quaid -maxdepth 4 | sort'
+   Expected directories/files (at minimum):
+   - ~/quaid/projects/
+   - ~/quaid/instances/INSTANCE/
+   - ~/quaid/instances/INSTANCE/journal/
+   - ~/quaid/instances/INSTANCE/SOUL.md
+   - ~/quaid/instances/INSTANCE/USER.md
+   - ~/quaid/instances/INSTANCE/ENVIRONMENT.md
+
+4. Verify instance config landed in the right place:
+   ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/memory.json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"models:\", d.get(\"models\",{})); print(\"capture:\", d.get(\"capture\",{}))"'
    Expected: models.fastReasoning and capture section present.
 
-4. Verify shared platform config exists:
-   ssh REMOTE_HOST 'ls -la ~/quaid/shared/config/PLATFORM/ 2>&1'
+5. Verify shared platform config exists:
+   ssh REMOTE_HOST 'ls -la ~/.quaid/shared/config/PLATFORM/ 2>&1'
    Expected: memory.json exists.
 
-5. Platform-specific checks:
-   - OC: verify ~/.openclaw/extensions/quaid/ is a symlink or copy pointing to ~/quaid/modules/quaid/
+6. Platform-specific checks:
+   - OC: verify ~/.openclaw/extensions/quaid/ is a symlink or copy pointing to ~/.quaid/modules/quaid/
    - CC: verify ~/.claude/settings.json has Quaid hooks registered
    - CDX: verify ~/.codex/hooks.json has Quaid hooks registered
 
-6. Verify NO stale legacy paths:
-   ssh REMOTE_HOST 'ls -la ~/.quaid 2>&1; ls -la ~/quaid/config/memory.json 2>&1'
-   Both should be "No such file or directory". If either exists, the installer
-   is writing to a legacy path.
+7. Verify NO stale flat or misplaced paths:
+   ssh REMOTE_HOST 'ls -la ~/.quaid/config/memory.json 2>&1; ls -la ~/quaid/shared/config 2>&1; ls -la ~/quaid/modules 2>&1'
+   All three should be "No such file or directory". If any exist, the installer
+   is writing to a stale path.
 
 Report: PASS if all checks pass, FAIL with details for any violation.
 ```
@@ -493,7 +504,7 @@ ssh REMOTE_HOST "mkdir -p WORKSPACE/config/adapters/claude-code && echo -n '$TOK
 ```bash
 for INSTANCE in OC_INSTANCE CC_INSTANCE; do
   ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/$INSTANCE/config/memory.json'
+import json; p = 'WORKSPACE/instances/$INSTANCE/memory.json'
 with open(p) as f: d = json.load(f)
 fast = d['models']['fastReasoning']
 d['models']['deepReasoning'] = fast
@@ -507,7 +518,7 @@ done
 ```bash
 for INSTANCE in OC_INSTANCE CC_INSTANCE CDX_INSTANCE; do
   ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/$INSTANCE/config/memory.json'
+import json; p = 'WORKSPACE/instances/$INSTANCE/memory.json'
 with open(p) as f: d = json.load(f)
 d.setdefault('capture', {})['chunk_tokens'] = 1500
 with open(p, 'w') as f: json.dump(d, f, indent=2)
@@ -633,13 +644,13 @@ that should not be visible to a user.
 Audit the extraction buffer log for platform PLATFORM on REMOTE_HOST.
 
 Read the full extraction buffer log:
-  ssh REMOTE_HOST 'cat ~/quaid/instances/INSTANCE/logs/daemon/extraction-buffer.jsonl 2>/dev/null'
+  ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/logs/daemon/extraction-buffer.log 2>/dev/null'
 
 Also read the daemon log:
-  ssh REMOTE_HOST 'cat ~/quaid/instances/INSTANCE/logs/daemon/extraction-daemon.log 2>/dev/null'
+  ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/logs/daemon/extraction-daemon.log 2>/dev/null'
 
 And the rolling extraction log:
-  ssh REMOTE_HOST 'cat ~/quaid/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl 2>/dev/null'
+  ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl 2>/dev/null'
 
 Scan every line for system information that should NOT appear in user-facing
 logs or extraction output. Flag any of the following:

@@ -115,7 +115,7 @@ This section records behaviors discovered during live testing that materially ch
 
 **Impact:** Recall quality degrades silently when the HyDE LLM call times out — the system falls back to raw vector similarity without the HyDE-boosted query, producing weaker results. The issue is intermittent (query-complexity-dependent) and not visible to the user unless they inspect logs.
 
-**Current workaround:** Set `retrieval.useHyde = false` in the CDX silo's `config/memory.json`. This disables HyDE entirely for CDX, eliminating the LLM dependency from the recall path. Recall quality is lower without HyDE but stable.
+**Current workaround:** Set `retrieval.useHyde = false` in the CDX silo's instance `memory.json`. This disables HyDE entirely for CDX, eliminating the LLM dependency from the recall path. Recall quality is lower without HyDE but stable.
 
 **Future path:** Investigate the Codex CLI LLM call timeout in `core/llm/`. Either raise the timeout for the HyDE step, make HyDE calls async with fallback, or expose a per-adapter HyDE toggle in the adapter config contract.
 

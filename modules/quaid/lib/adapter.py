@@ -8,14 +8,14 @@ Provides an abstract interface that Quaid modules call for:
 - Platform-specific filtering (HEARTBEAT, gateway messages)
 
 Built-in adapters currently include:
-- StandaloneAdapter: works anywhere (~/quaid/)
+- StandaloneAdapter: works anywhere (hidden QUAID_HOME with visible QUAID_VISIBLE_HOME)
 - Additional host-specific adapters from `adaptors/` (for gateway/runtime integrations)
   - OpenClawAdapter: for OpenClaw gateway runtime
   - ClaudeCodeAdapter: for Claude Code sessions (hooks + CLI)
   - CodexAdapter: for Codex CLI/app sessions (hooks + app-server sidecar)
 
 Adapter selection (get_adapter()):
-1. config/memory.json adapter type  (required)
+1. memory.json adapter type  (required)
 
 Tests use set_adapter() / reset_adapter() for isolation.
 """
@@ -74,37 +74,52 @@ class QuaidAdapter(abc.ABC):
 
     @abc.abstractmethod
     def quaid_home(self) -> Path:
-        """Root directory containing all Quaid instances (QUAID_HOME)."""
+        """Hidden root directory containing all Quaid instances (QUAID_HOME)."""
         ...
+
+    def visible_home(self) -> Path:
+        """Visible user-facing Quaid root (QUAID_VISIBLE_HOME)."""
+        explicit = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
+        if explicit:
+            return Path(explicit).resolve()
+        root = self.quaid_home()
+        if root.name.startswith(".") and len(root.name) > 1:
+            return root.with_name(root.name[1:])
+        return root
 
     def instance_id(self) -> str:
         """Instance identifier for this adapter's silo.
 
-        Reads from QUAID_INSTANCE env var. Each instance has its own
-        config, data, DB, daemon, and identity under QUAID_HOME/instances/<instance_id>/.
+        Reads from QUAID_INSTANCE env var. Each instance has its own hidden
+        config/data/logs under QUAID_HOME/instances/<instance_id>/ and visible
+        markdown/journal files under QUAID_VISIBLE_HOME/instances/<instance_id>/.
         """
         from lib.instance import instance_id as _instance_id
         return _instance_id()
 
     def instance_root(self) -> Path:
-        """Resolved instance root: QUAID_HOME/instances/INSTANCE_ID."""
+        """Resolved hidden instance root: QUAID_HOME/instances/INSTANCE_ID."""
         return self.quaid_home() / "instances" / self.instance_id()
+
+    def visible_instance_root(self) -> Path:
+        """Resolved visible instance root: QUAID_VISIBLE_HOME/instances/INSTANCE_ID."""
+        return self.visible_home() / "instances" / self.instance_id()
 
     def data_dir(self) -> Path:
         return self.instance_root() / "data"
 
     def config_dir(self) -> Path:
-        return self.instance_root() / "config"
+        return self.instance_root()
 
     def logs_dir(self) -> Path:
         return self.instance_root() / "logs"
 
     def journal_dir(self) -> Path:
-        return self.instance_root() / "journal"
+        return self.visible_instance_root() / "journal"
 
     def projects_dir(self) -> Path:
         """Canonical projects directory (cross-instance)."""
-        return self.quaid_home() / "projects"
+        return self.visible_home() / "projects"
 
     def adapter_id(self) -> str:
         """Short identifier for this adapter type (e.g. 'claude-code', 'openclaw').
@@ -138,16 +153,15 @@ class QuaidAdapter(abc.ABC):
         return HostInfo(platform=self.adapter_id(), version="unknown")
 
     def identity_dir(self) -> Path:
-        """Per-instance Quaid-managed identity directory.
+        """Per-instance visible identity root.
 
-        Lives at instance_root/identity/. This is where Quaid writes
-        generated identity (SOUL.md, USER.md, ENVIRONMENT.md, *.snippets.md).
-        NOT where platform-native context lives (that's get_base_context_files).
+        Identity markdown lives flat at visible_instance_root():
+        SOUL.md, USER.md, ENVIRONMENT.md, and *.snippets.md.
         """
-        return self.instance_root() / "identity"
+        return self.visible_instance_root()
 
     def core_markdown_dir(self) -> Path:
-        return self.instance_root()
+        return self.visible_instance_root()
 
     def get_instance_type(self) -> str:
         """Return how this adapter determines instance identity.
@@ -587,7 +601,7 @@ class QuaidAdapter(abc.ABC):
                     if not child.is_dir():
                         continue
                     name = child.name.strip().lower()
-                    cfg_path = child / "config" / "memory.json"
+                    cfg_path = child / "memory.json"
                     if not cfg_path.exists():
                         continue
                     if name == adapter_id or (prefix and name.startswith(prefix)):
@@ -711,7 +725,7 @@ class QuaidAdapter(abc.ABC):
 class StandaloneAdapter(QuaidAdapter):
     """Default adapter for standalone Quaid installations.
 
-    - Home dir: QUAID_HOME env or ~/quaid/
+    - Home dir: QUAID_HOME env or ~/.quaid/
     - Notifications: stderr
     - Credentials: env var → .env file in quaid home
     - Sessions: quaid_home/sessions/ (if exists)
@@ -726,7 +740,7 @@ class StandaloneAdapter(QuaidAdapter):
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env).resolve() if env else Path.home() / "quaid"
+        return Path(env).resolve() if env else Path.home() / ".quaid"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
                dry_run: bool = False, force: bool = False) -> bool:
@@ -753,7 +767,7 @@ class StandaloneAdapter(QuaidAdapter):
         # 2. .env file in quaid home (noisy fallback only when failHard=false)
         print(
             f"[adapter][FALLBACK] {env_var_name} not found in env; "
-            "attempting ~/quaid/.env lookup because failHard is disabled.",
+            "attempting QUAID_HOME/.env lookup because failHard is disabled.",
             file=sys.stderr,
         )
         env_file = self.quaid_home() / ".env"
@@ -895,7 +909,7 @@ class StandaloneAdapter(QuaidAdapter):
             if not api_key:
                 raise RuntimeError(
                     "LLM provider is 'anthropic' but ANTHROPIC_API_KEY not found. "
-                    "Set it in your environment or in ~/quaid/.env."
+                    "Set it in your environment or in QUAID_HOME/.env."
                 )
             resolved_deep = deep_model
             resolved_fast = fast_model
@@ -950,21 +964,29 @@ def quaid_identity_dir(quaid_home: Path, adapter_id: str) -> Path:
     DEPRECATED: Use adapter.identity_dir() instead, which routes through
     instance_root(). This function is kept for backward compat during migration.
 
-    Returns: QUAID_HOME/<instance_id>/identity/ (via instance resolution)
+    Returns: QUAID_VISIBLE_HOME/instances/<instance_id>/ (via instance resolution)
     """
+    def _visible_root_from_hidden(root: Path) -> Path:
+        name = root.name
+        if name.startswith(".") and len(name) > 1:
+            return root.with_name(name[1:])
+        return root
+
     from lib.instance import instance_id as _instance_id
     try:
         iid = _instance_id()
-        return quaid_home / iid / "identity"
+        return _visible_root_from_hidden(quaid_home) / "instances" / iid
     except Exception:
-        # Fallback for contexts where QUAID_INSTANCE isn't set (legacy)
+        visible_root = _visible_root_from_hidden(quaid_home)
         if not adapter_id or adapter_id == "standalone":
-            return quaid_home
-        return quaid_home / adapter_id / "identity"
+            return visible_root
+        return visible_root / "instances" / adapter_id
 
 
 def quaid_projects_dir(quaid_home: Path) -> Path:
     """Canonical projects directory."""
+    if quaid_home.name.startswith(".") and len(quaid_home.name) > 1:
+        return quaid_home.with_name(quaid_home.name[1:]) / "projects"
     return quaid_home / "projects"
 
 
@@ -1063,9 +1085,9 @@ class TestAdapter(StandaloneAdapter):
         # Create instance directory structure
         iid = self.instance_id()
         iroot = home / "instances" / iid
-        (iroot / "config").mkdir(parents=True, exist_ok=True)
+        iroot.mkdir(parents=True, exist_ok=True)
         (iroot / "data").mkdir(parents=True, exist_ok=True)
-        cfg = iroot / "config" / "memory.json"
+        cfg = iroot / "memory.json"
         if not cfg.exists():
             cfg.write_text('{"adapter":{"type":"standalone"}}', encoding="utf-8")
 
@@ -1099,7 +1121,7 @@ def _normalize_adapter_id(value: str) -> str:
 
 def _registry_quaid_home() -> Path:
     env = os.environ.get("QUAID_HOME", "").strip()
-    return Path(env).resolve() if env else Path.home() / "quaid"
+    return Path(env).resolve() if env else Path.home() / ".quaid"
 
 
 def _adapter_manifest_candidates(adapter_id: str) -> List[Path]:
@@ -1223,7 +1245,7 @@ def _load_adapter_class_from_manifest(adapter_id: str):
 def _adapter_config_paths() -> List[Path]:
     """Candidate config files for adapter selection (priority order).
 
-    Instance-aware: checks QUAID_HOME/QUAID_INSTANCE/config/memory.json first.
+    Instance-aware: checks QUAID_HOME/instances/QUAID_INSTANCE/memory.json first.
     Falls back to legacy flat paths for backward compat during transition.
     """
     paths: List[Path] = []
@@ -1233,7 +1255,7 @@ def _adapter_config_paths() -> List[Path]:
 
     # Primary: instance-specific config
     if home and instance:
-        paths.append(Path(home) / "instances" / instance / "config" / "memory.json")
+        paths.append(Path(home) / "instances" / instance / "memory.json")
 
     # Secondary: CLAUDE_PROJECT_DIR-derived instance path when QUAID_INSTANCE is not
     # yet set.  Instance derivation normally happens after config is found (in
@@ -1248,14 +1270,14 @@ def _adapter_config_paths() -> List[Path]:
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(_cpd)
             paths.append(
-                Path(home) / "instances" / f"claude-code-{_slug}" / "config" / "memory.json"
+                Path(home) / "instances" / f"claude-code-{_slug}" / "memory.json"
             )
         _codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
         if _codex_project_dir:
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(_codex_project_dir)
             paths.append(
-                Path(home) / "instances" / f"codex-{_slug}" / "config" / "memory.json"
+                Path(home) / "instances" / f"codex-{_slug}" / "memory.json"
             )
 
     # Legacy: flat QUAID_HOME/config/memory.json
@@ -1322,7 +1344,7 @@ def _read_adapter_type_from_config() -> str:
     searched = ", ".join(str(p) for p in _adapter_config_paths())
     if last_existing is None:
         raise RuntimeError(
-            "No config file found for adapter selection. Create config/memory.json "
+            "No config file found for adapter selection. Create memory.json "
             "with {\"adapter\": {\"type\": \"<adapter-id>\"}}. "
             f"Searched: {searched}"
         )
@@ -1380,7 +1402,7 @@ def _auto_provision_from_env_if_needed() -> None:
     if not home or not instance:
         return
     silo_root = Path(home) / "instances" / instance
-    if (silo_root / "config" / "memory.json").exists():
+    if (silo_root / "memory.json").exists():
         return  # Already initialised — nothing to do
 
     adapter_type = _infer_adapter_type_from_instance(instance)
@@ -1417,7 +1439,7 @@ def _auto_provision_from_env_if_needed() -> None:
 def get_adapter() -> QuaidAdapter:
     """Get the current adapter (resolved on first call).
 
-    Selection: config/memory.json adapter.type under QUAID_HOME.
+    Selection: memory.json adapter.type under QUAID_HOME.
     Each QUAID_HOME silo has its own config that declares which adapter owns it.
 
     On first resolution, also bootstraps QUAID_INSTANCE from

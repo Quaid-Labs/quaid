@@ -53,6 +53,7 @@ from lib.runtime_context import (
     get_data_dir,
     get_llm_provider,
     get_quaid_home,
+    get_visible_quaid_home,
     get_workspace_dir,
     queue_deferred_notice,
 )
@@ -66,7 +67,7 @@ def _workspace() -> Path:
 def _resolve_path(relative: str) -> Path:
     """Resolve a runtime path to absolute.
 
-    Canonical project homes live at QUAID_HOME/projects/, but per-instance
+    Canonical project homes live at QUAID_VISIBLE_HOME/projects/, but per-instance
     staging still lives at <instance>/projects/staging/.
     """
     p = Path(relative)
@@ -77,7 +78,7 @@ def _resolve_path(relative: str) -> Path:
         and relative != "projects/staging"
         and not relative.startswith("projects/staging/")
     ):
-        return get_quaid_home() / relative
+            return get_visible_quaid_home() / relative
     if relative.startswith("shared/"):
         return get_quaid_home() / relative
     return _workspace() / relative

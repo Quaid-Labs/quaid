@@ -36,10 +36,15 @@ def _registry_path() -> Path:
     """Resolve the global registry file path."""
     try:
         from lib.adapter import get_adapter
-        return get_adapter().quaid_home() / "projects" / "project-registry.json"
+        return get_adapter().projects_dir() / "project-registry.json"
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
-        root = Path(home).resolve() if home else Path.home() / "quaid"
+        visible = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
+        if visible:
+            return Path(visible).resolve() / "projects" / "project-registry.json"
+        root = Path(home).resolve() if home else Path.home() / ".quaid"
+        if root.name.startswith(".") and len(root.name) > 1:
+            root = root.with_name(root.name[1:])
         return root / "projects" / "project-registry.json"
 
 
@@ -150,8 +155,14 @@ def _create_project_symlink(name: str, canonical_path: str) -> None:
         projects_dir = get_adapter().projects_dir()
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
-        root = Path(home).resolve() if home else Path.home() / "quaid"
-        projects_dir = root / "projects"
+        visible = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
+        if visible:
+            projects_dir = Path(visible).resolve() / "projects"
+        else:
+            root = Path(home).resolve() if home else Path.home() / ".quaid"
+            if root.name.startswith(".") and len(root.name) > 1:
+                root = root.with_name(root.name[1:])
+            projects_dir = root / "projects"
 
     link_path = projects_dir / name
     canonical = Path(canonical_path)

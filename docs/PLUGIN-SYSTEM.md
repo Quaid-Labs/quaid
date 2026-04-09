@@ -72,7 +72,7 @@ Runtime preflight is invoked from config boot when `plugins.enabled=true`. It va
 
 ## Config (optional template)
 
-`config/memory.json` supports this `plugins` block when explicitly configured:
+Instance `memory.json` supports this `plugins` block when explicitly configured:
 
 ```json
 {

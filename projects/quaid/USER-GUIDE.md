@@ -16,13 +16,21 @@ Quaid keeps long-lived memory across sessions, then injects only relevant contex
 
 ## Where your Quaid files live
 
-Quaid is instance-based. By default, Quaid keeps its own runtime state under `~/quaid/`. Each instance has its own silo:
+Quaid uses a split layout:
 
-- `<QUAID_HOME>/<instance>/config/memory.json`: runtime config for that instance
-- `<QUAID_HOME>/<instance>/data/memory.db`: memory database
-- `<QUAID_HOME>/<instance>/identity/`: Quaid-managed identity files
-- `<QUAID_HOME>/<instance>/logs/`: runtime and janitor logs
-- `<QUAID_HOME>/projects/`: canonical project docs, registry metadata, and Quaid-managed project state
+- Hidden system home: `~/.quaid/` (`QUAID_HOME`)
+- Visible user-facing home: `~/quaid/` (`QUAID_VISIBLE_HOME`)
+
+Each instance uses both:
+
+- `<QUAID_HOME>/instances/<instance>/memory.json`: runtime config for that instance
+- `<QUAID_HOME>/instances/<instance>/data/memory.db`: memory database
+- `<QUAID_HOME>/instances/<instance>/logs/`: runtime and janitor logs
+- `<QUAID_VISIBLE_HOME>/instances/<instance>/SOUL.md`: Quaid-managed identity file
+- `<QUAID_VISIBLE_HOME>/instances/<instance>/USER.md`: Quaid-managed identity file
+- `<QUAID_VISIBLE_HOME>/instances/<instance>/ENVIRONMENT.md`: Quaid-managed identity file
+- `<QUAID_VISIBLE_HOME>/instances/<instance>/journal/`: journal files
+- `<QUAID_VISIBLE_HOME>/projects/`: canonical project docs, registry metadata, and Quaid-managed project state
 - `<QUAID_HOME>/shared/config/<platform>/memory.json`: platform-level shared overrides
 - `<QUAID_HOME>/shared/config/global/memory.json`: machine-wide global shared settings (embeddings, Ollama)
 
@@ -30,7 +38,8 @@ Important:
 - Model/provider overrides should be platform-scoped (`shared/config/<platform>/...`), not global.
 - Embeddings settings live in the global shared config and must be consistent across all instances on a machine.
 - Different platforms can have different providers and model lanes.
-- `~/quaid/` is Quaid's home, not a general-purpose workspace. Real project files can live elsewhere and be linked into projects.
+- `~/quaid/` is Quaid's visible surface, not a general-purpose workspace. Real project files can live elsewhere and be linked into projects.
+- `~/.quaid/` is the hidden system root. Do not hand-edit it unless you are debugging or doing maintenance.
 
 ## How most people use Quaid
 
@@ -44,8 +53,10 @@ Important:
   - You can symlink one instance directory to another to force shared state.
   - Do this only if you fully understand the blast radius.
 - Migrate memory between machines/agents:
-  - Move or copy the entire instance folder (`<QUAID_HOME>/<instance>/`).
-  - Keep `config/`, `data/`, and `identity/` together.
+  - Move or copy both the hidden and visible instance folders:
+    - `<QUAID_HOME>/instances/<instance>/`
+    - `<QUAID_VISIBLE_HOME>/instances/<instance>/`
+  - Keep `memory.json`, `data/`, `logs/`, visible identity files, and `journal/` together.
   - After migration, ask your agent to verify the install before you rely on it.
 
 ## Safety notes

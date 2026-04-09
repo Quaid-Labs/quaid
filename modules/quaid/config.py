@@ -1,7 +1,7 @@
 """
 Configuration loader for Memory System
 
-Loads memory-specific settings from <quaid_home>/config/memory.json
+Loads memory-specific settings from <instance_root>/memory.json
 Falls back to sensible defaults if config is missing.
 """
 
@@ -96,11 +96,11 @@ def _config_paths() -> list:
     Merge order (lowest → highest at load time):
       2. QUAID_HOME/shared/config/global/memory.json           — global shared fallback
       1. QUAID_HOME/shared/config/<platform>/memory.json       — platform shared overrides
-      0. QUAID_HOME/<instance>/config/memory.json              — per-instance config (highest priority)
+      0. QUAID_HOME/instances/<instance>/memory.json           — per-instance config (highest priority)
     """
     root = _workspace_root()
     return [
-        root / "config" / "memory.json",
+        root / "memory.json",
         _platform_shared_config_path(),
         _global_shared_config_path(),
     ]

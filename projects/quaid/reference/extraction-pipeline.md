@@ -200,13 +200,13 @@ Rolling extraction has two phases:
 Per-session staged state lives at:
 
 ```
-QUAID_HOME/<instance>/data/rolling-extraction/<session_id>.json
+QUAID_HOME/instances/<instance>/data/rolling-extraction/<session_id>.json
 ```
 
 Rolling daemon telemetry is appended to:
 
 ```
-QUAID_HOME/<instance>/logs/daemon/rolling-extraction.jsonl
+QUAID_HOME/instances/<instance>/logs/daemon/rolling-extraction.jsonl
 ```
 
 Important event types:
@@ -276,7 +276,7 @@ the last cursor write (file rotation), the cursor is reset to 0.
 
 Each session has a cursor file at:
 ```
-QUAID_HOME/<instance>/data/session-cursors/<session_id>.json
+QUAID_HOME/instances/<instance>/data/session-cursors/<session_id>.json
 ```
 
 The cursor records the last processed line offset. Only lines after the cursor are
@@ -296,7 +296,7 @@ resets to 0.
 
 New lines (from cursor to EOF) are written to a per-instance temp file:
 ```
-QUAID_HOME/<instance>/data/tmp/<random>.jsonl
+QUAID_HOME/instances/<instance>/data/tmp/<random>.jsonl
 ```
 
 Maximum 50,000 lines are read per extraction (`MAX_TRANSCRIPT_LINES`). If capped, a
@@ -663,12 +663,12 @@ quaid daemon run
 
 | File | Path |
 |------|------|
-| PID file | `QUAID_HOME/<instance>/data/extraction-daemon.pid` |
-| Log file | `QUAID_HOME/<instance>/logs/daemon/extraction-daemon.log` |
+| PID file | `QUAID_HOME/instances/<instance>/data/extraction-daemon.pid` |
+| Log file | `QUAID_HOME/instances/<instance>/logs/daemon/extraction-daemon.log` |
 | Signal directory | `QUAID_HOME/data/extraction-signals/` |
-| Cursor files | `QUAID_HOME/<instance>/data/session-cursors/<session_id>.json` |
-| Carryover files | `QUAID_HOME/<instance>/data/extraction-carryover/<session_id>.json` |
-| Temp files | `QUAID_HOME/<instance>/data/tmp/` |
+| Cursor files | `QUAID_HOME/instances/<instance>/data/session-cursors/<session_id>.json` |
+| Carryover files | `QUAID_HOME/instances/<instance>/data/extraction-carryover/<session_id>.json` |
+| Temp files | `QUAID_HOME/instances/<instance>/data/tmp/` |
 
 ### PID file and stale detection
 

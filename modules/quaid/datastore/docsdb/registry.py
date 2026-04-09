@@ -53,7 +53,7 @@ from lib.project_templates import (
     render_project_md_template,
     replace_managed_block,
 )
-from lib.runtime_context import get_quaid_home, get_workspace_dir
+from lib.runtime_context import get_quaid_home, get_visible_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,10 @@ def _run_locked_write_with_retry(op, *, op_name: str, max_attempts: int = 3, bas
 def _workspace() -> Path:
     return get_workspace_dir()
 
+
+def _visible_home() -> Path:
+    return get_visible_quaid_home()
+
 # Strict project name validation — prevents path traversal
 _PROJECT_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')
 
@@ -102,10 +106,12 @@ def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None
         # Per-instance paths: must be under instance_root.
         # Canonical project paths (projects/...): must be under quaid_home.
         workspace_real = _workspace().resolve()
-        quaid_home_real = get_quaid_home().resolve()
+        hidden_home_real = get_quaid_home().resolve()
+        visible_home_real = _visible_home().resolve()
         inside_instance = str(real).startswith(str(workspace_real) + "/") or real == workspace_real
-        inside_home = str(real).startswith(str(quaid_home_real) + "/") or real == quaid_home_real
-        if not inside_instance and not inside_home:
+        inside_hidden = str(real).startswith(str(hidden_home_real) + "/") or real == hidden_home_real
+        inside_visible = str(real).startswith(str(visible_home_real) + "/") or real == visible_home_real
+        if not inside_instance and not inside_hidden and not inside_visible:
             raise ValueError(f"Refusing {label} outside workspace: {real}")
     except (OSError, ValueError) as e:
         raise ValueError(f"Invalid {label}: {e}")
@@ -123,9 +129,23 @@ def _format_bullets(items: List[str], *, empty: str) -> str:
     return "\n".join(f"- `{item}`" for item in cleaned)
 
 
+def _resolve_registry_relative_path(path_str: str) -> Path:
+    p = Path(path_str)
+    if p.is_absolute():
+        return p
+    if path_str == "projects" or (
+        path_str.startswith("projects/")
+        and path_str != "projects/staging"
+        and not path_str.startswith("projects/staging/")
+    ):
+        return _visible_home() / path_str
+    if path_str.startswith("shared/"):
+        return get_quaid_home() / path_str
+    return _workspace() / path_str
+
+
 def _display_registry_path(path_str: str, project_home: Path) -> str:
-    path = Path(path_str)
-    abs_path = path if path.is_absolute() else _workspace() / path_str
+    abs_path = _resolve_registry_relative_path(path_str)
     resolved = abs_path.resolve()
     try:
         return str(resolved.relative_to(project_home.resolve()))
@@ -137,12 +157,13 @@ def _to_registry_path(abs_path: Path) -> str:
     """Normalize an absolute path into the registry's relative path form."""
     resolved = abs_path.resolve()
     workspace = _workspace().resolve()
-    quaid_home = get_quaid_home().resolve()
-    projects_root = (quaid_home / "projects").resolve()
+    hidden_home = get_quaid_home().resolve()
+    visible_home = _visible_home().resolve()
+    projects_root = (visible_home / "projects").resolve()
 
     try:
         resolved.relative_to(projects_root)
-        return str(resolved.relative_to(quaid_home))
+        return str(resolved.relative_to(visible_home))
     except ValueError:
         pass
 
@@ -152,7 +173,7 @@ def _to_registry_path(abs_path: Path) -> str:
         pass
 
     try:
-        return str(resolved.relative_to(quaid_home))
+        return str(resolved.relative_to(hidden_home))
     except ValueError:
         return str(resolved)
 
@@ -386,7 +407,7 @@ class DocsRegistry:
             if row[0] > 0:
                 return
 
-            config_path = _workspace() / "config" / "memory.json"
+            config_path = _workspace() / "memory.json"
             if not config_path.exists():
                 return
 
@@ -1452,8 +1473,8 @@ class DocsRegistry:
         return projects
 
     def _update_config(self, mutator_fn) -> bool:
-        """Apply a mutation to config/memory.json atomically. Returns True if updated."""
-        config_path = _workspace() / "config" / "memory.json"
+        """Apply a mutation to memory.json atomically. Returns True if updated."""
+        config_path = _workspace() / "memory.json"
         if not config_path.exists():
             return False
         try:
@@ -1485,7 +1506,7 @@ class DocsRegistry:
     def _resolve_path(self, relative: str) -> Path:
         """Resolve a workspace-relative path to absolute.
 
-        Canonical project paths live at QUAID_HOME/projects/, while
+        Canonical project paths live at QUAID_VISIBLE_HOME/projects/, while
         per-instance staging still lives under the instance workspace at
         projects/staging/. Paths starting with 'shared/' also live at
         QUAID_HOME for the remaining shared-config surfaces.
@@ -1498,7 +1519,7 @@ class DocsRegistry:
             and relative != "projects/staging"
             and not relative.startswith("projects/staging/")
         ):
-            return get_quaid_home() / relative
+            return _visible_home() / relative
         if relative.startswith("shared/"):
             return get_quaid_home() / relative
         return _workspace() / relative

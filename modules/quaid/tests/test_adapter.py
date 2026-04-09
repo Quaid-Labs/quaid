@@ -104,7 +104,7 @@ class TestStandaloneAdapter:
     def test_quaid_home_default(self, tmp_path, monkeypatch):
         monkeypatch.delenv("QUAID_HOME", raising=False)
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
     def test_quaid_home_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -121,7 +121,7 @@ class TestStandaloneAdapter:
 
     def test_config_dir(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        assert standalone.config_dir() == tmp_path / "instances" / iid / "config"
+        assert standalone.config_dir() == tmp_path / "instances" / iid
 
     def test_logs_dir(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -274,7 +274,7 @@ class TestOwnerResolution:
 
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        cfg_dir = tmp_path / "instances" / iid / "config"
+        cfg_dir = tmp_path / "instances" / iid
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "memory.json").write_text(
             """
@@ -302,7 +302,7 @@ class TestOpenClawAdapter:
     def test_quaid_home_default(self, monkeypatch):
         monkeypatch.delenv("QUAID_HOME", raising=False)
         adapter = OpenClawAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
     def test_oc_workspace_raises_without_env(self, monkeypatch, tmp_path):
         monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
@@ -382,7 +382,7 @@ class TestOpenClawAdapter:
 
     def test_installer_install_state_reports_already_installed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda _name: None)
-        cfg = tmp_path / "instances" / "openclaw-main" / "config"
+        cfg = tmp_path / "instances" / "openclaw-main"
         cfg.mkdir(parents=True)
         (cfg / "memory.json").write_text("{}", encoding="utf-8")
         state = OpenClawAdapter.installer_install_state(str(tmp_path))
@@ -1152,12 +1152,12 @@ class TestEmptyEnvVars:
     def test_empty_quaid_home_uses_default(self, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", "")
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
     def test_whitespace_quaid_home_uses_default(self, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", "   ")
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
     def test_empty_openclaw_workspace_raises(self, monkeypatch, tmp_path):
         # OPENCLAW_WORKSPACE is no longer read by the OC adapter; the error

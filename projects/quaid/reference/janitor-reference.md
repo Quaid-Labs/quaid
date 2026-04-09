@@ -44,7 +44,7 @@ The janitor is decoupled from the host platform (OpenClaw/ClawdBot) via an adapt
 
 ## Security
 
-The janitor requires LLM access for review/dedup/docs tasks. Provider/model routing is resolved through the adapter/provider layer and `config/memory.json` model tier settings; core janitor logic is provider-agnostic.
+The janitor requires LLM access for review/dedup/docs tasks. Provider/model routing is resolved through the adapter/provider layer and instance `memory.json` model tier settings; core janitor logic is provider-agnostic.
 
 **Personal data sanitization:** Prompts reference the configured owner generically rather than embedding hardcoded personal identifiers.
 
@@ -92,7 +92,7 @@ Single-pass review of changed workspace markdown files:
 
 ### Task 1b: Documentation Staleness (Opus)
 Detects and updates stale docs using git-based drift detection via `detect_drift_from_git()`:
-1. Check `config/memory.json → docs.sourceMapping` for monitored files
+1. Check instance `memory.json → docs.sourceMapping` for monitored files
 2. Compare source file vs doc file git commit timestamps (not just mtime) for accurate staleness scoring
 3. Gather git diffs since doc was last modified
 4. Call Opus to update doc based on diffs
@@ -181,7 +181,7 @@ Uses the Ebbinghaus forgetting curve with access-scaled half-life:
 - `half_life = baseHalfLifeDays × (1 + accessBonusFactor × access_count) × (1 + 0.5 × storage_strength) × (2 if verified)`
 - `t` = days since last access
 
-**Config** (`config/memory.json → decay`):
+**Config** (instance `memory.json → decay`):
 - `mode`: `"exponential"` (Ebbinghaus) or `"linear"` (legacy)
 - `baseHalfLifeDays`: `60` — base half-life before access scaling
 - `accessBonusFactor`: `0.15` — each access extends half-life by 15%
@@ -361,7 +361,7 @@ python3 core/lifecycle/janitor.py --task review --apply --approve
 python3 core/lifecycle/janitor.py --task rag --apply --approve
 ```
 
-> **`--approve` flag:** If `janitor.applyMode=ask` is set in `config/memory.json` (the default for some setups), running with `--apply` alone will print a dry-run result and prompt you to re-run with `--approve`. Pass both `--apply --approve` to actually execute changes. When `applyMode=auto` (the standard cron default), `--approve` is a no-op and `--apply` suffices.
+> **`--approve` flag:** If `janitor.applyMode=ask` is set in instance `memory.json` (the default for some setups), running with `--apply` alone will print a dry-run result and prompt you to re-run with `--approve`. Pass both `--apply --approve` to actually execute changes. When `applyMode=auto` (the standard cron default), `--approve` is a no-op and `--apply` suffices.
 
 ## `applyMode` Config (`janitor.apply_mode` / `janitor.applyMode`)
 
@@ -399,9 +399,9 @@ Every run writes `api_usage` to `logs/janitor-stats.json`:
 
 ## LLM Provider Dispatch
 
-The janitor uses the same provider-agnostic model-tier architecture as the rest of Quaid. Rather than hardcoding a single provider, model references in `config/memory.json` are resolved through adapter/provider dispatch and gateway state.
+The janitor uses the same provider-agnostic model-tier architecture as the rest of Quaid. Rather than hardcoding a single provider, model references in instance `memory.json` are resolved through adapter/provider dispatch and gateway state.
 
-Model names are resolved via `models.deep_reasoning` / `models.fast_reasoning` and `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` in `config/memory.json`, with adapter/provider dispatch selecting the active provider.
+Model names are resolved via `models.deep_reasoning` / `models.fast_reasoning` and `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` in instance `memory.json`, with adapter/provider dispatch selecting the active provider.
 
 The provider/adapter refactor separates LLM and embedding concerns into distinct interfaces, keeping janitor logic independent of provider-specific details.
 
@@ -474,7 +474,7 @@ The `--full-scan` flag bypasses the status filter for backfill runs (e.g., initi
 
 ## Configuration
 
-Settings are driven by `config/memory.json`. Key sections used by the janitor:
+Settings are driven by instance `memory.json`. Key sections used by the janitor:
 
 | Config Section | Used By | Settings |
 |----------------|---------|----------|
@@ -487,7 +487,7 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 | `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` | all LLM tasks | Provider→tier model-class maps used when tier is `default` |
 | `core.parallel` | lifecycle registry | Concurrency, timeouts, and locking for lifecycle routines — `lifecyclePrepassWorkers` (default 3), `lifecyclePrepassTimeoutSeconds` (default 1200), `lifecyclePrepassTimeoutRetries` (default 1), `lockWaitSeconds` (default 120), `lockRequireRegistration` (default true). All keys accept snake_case aliases. |
 
-Model names are resolved from `config/memory.json` by model tier, then routed through adapter/provider dispatch using active gateway provider/auth state.
+Model names are resolved from instance `memory.json` by model tier, then routed through adapter/provider dispatch using active gateway provider/auth state.
 
 **Owner identity:** The `users.default_owner` config value is injected into all LLM prompts that reference the memory owner. This replaces previously hardcoded owner references, making the janitor portable across installations.
 

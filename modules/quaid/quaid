@@ -36,19 +36,34 @@ SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 CMD="${1:-help}"
 shift 2>/dev/null || true
 
-# Ensure adapter config discovery has a canonical root.
-# Quaid core resolves config from QUAID_HOME/config/memory.json.
+# Ensure adapter config discovery has canonical hidden + visible roots.
 if [[ -z "${QUAID_HOME:-}" && -n "${OPENCLAW_WORKSPACE:-}" ]]; then
   export QUAID_HOME="$OPENCLAW_WORKSPACE"
 fi
 if [[ -z "${OPENCLAW_WORKSPACE:-}" && -n "${QUAID_HOME:-}" ]]; then
   export OPENCLAW_WORKSPACE="$QUAID_HOME"
 fi
+if [[ -z "${QUAID_VISIBLE_HOME:-}" && -n "${QUAID_HOME:-}" ]]; then
+  _qh_base="$(basename "${QUAID_HOME}")"
+  if [[ "${_qh_base}" == .* && "${_qh_base}" != "." ]]; then
+    export QUAID_VISIBLE_HOME="$(cd "$(dirname "${QUAID_HOME}")" && pwd)/${_qh_base#.}"
+  else
+    export QUAID_VISIBLE_HOME="$(cd "${QUAID_HOME}" && pwd)"
+  fi
+fi
 if [[ -z "${QUAID_HOME:-}" ]]; then
   ROOT_CANDIDATE="$(cd "$SCRIPT_DIR/../.." && pwd)"
-  if [[ -f "$ROOT_CANDIDATE/config/memory.json" ]]; then
+  if [[ -d "$ROOT_CANDIDATE/instances" || -d "$ROOT_CANDIDATE/shared" ]]; then
     export QUAID_HOME="$ROOT_CANDIDATE"
     export OPENCLAW_WORKSPACE="$ROOT_CANDIDATE"
+    if [[ -z "${QUAID_VISIBLE_HOME:-}" ]]; then
+      _qh_base="$(basename "$ROOT_CANDIDATE")"
+      if [[ "${_qh_base}" == .* && "${_qh_base}" != "." ]]; then
+        export QUAID_VISIBLE_HOME="$(cd "$(dirname "$ROOT_CANDIDATE")" && pwd)/${_qh_base#.}"
+      else
+        export QUAID_VISIBLE_HOME="$(cd "$ROOT_CANDIDATE" && pwd)"
+      fi
+    fi
   fi
 fi
 
@@ -290,8 +305,8 @@ subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
 rest = sys.argv[3:]
 
 # Instantiate the adapter directly from the namespace rather than reading
-# config/memory.json via get_adapter(). This allows commands like make_instance
-# to run even when the target silo doesn't have config/memory.json yet.
+# memory.json via get_adapter(). This allows commands like make_instance
+# to run even when the target silo doesn't have memory.json yet.
 if adapter_ns == "claudecode":
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
     adapter = ClaudeCodeAdapter()

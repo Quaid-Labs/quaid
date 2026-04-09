@@ -84,7 +84,7 @@ class InstanceManager:
         instance_id = self.resolve_instance_id(label)
         validate_instance_id(instance_id)
 
-        silo_root = self.adapter.quaid_home() / "instances" / instance_id
+        silo_root = self.adapter.instance_root().parent / instance_id
 
         if instance_exists(instance_id):
             raise ValueError(
@@ -97,13 +97,17 @@ class InstanceManager:
         return silo_root
 
     def _init_silo(self, silo_root: Path, instance_id: str) -> None:
-        """Initialize a silo with config, DB, identity stubs, and PROJECT.md."""
-        for subdir in ("config", "data", "identity", "journal", "logs"):
+        """Initialize hidden and visible instance directories."""
+        visible_root = self.adapter.visible_home() / "instances" / instance_id
+        silo_root.mkdir(parents=True, exist_ok=True)
+        for subdir in ("data", "logs"):
             (silo_root / subdir).mkdir(parents=True, exist_ok=True)
+        visible_root.mkdir(parents=True, exist_ok=True)
+        (visible_root / "journal").mkdir(parents=True, exist_ok=True)
 
         # Config — fold defaults into existing config (fill missing keys without
         # clobbering values that were written by the installer or a prior run).
-        config_path = silo_root / "config" / "memory.json"
+        config_path = silo_root / "memory.json"
         existing: dict = {}
         if config_path.exists():
             try:
@@ -129,41 +133,19 @@ class InstanceManager:
                 db_path.chmod(0o600)
 
         # Identity files — seed from shared project templates when available,
-        # fall back to minimal stubs so the silo is always self-consistent.
+        # fall back to minimal stubs so the visible instance is always self-consistent.
         try:
-            from lib.adapter import get_adapter
-            _quaid_home = get_adapter().quaid_home()
+            _template_dir = self.adapter.visible_home() / "projects" / "quaid"
         except Exception:
-            _quaid_home = None
-        _template_dir = (
-            _quaid_home / "shared" / "projects" / "quaid"
-            if _quaid_home else None
-        )
+            _template_dir = None
         for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
-            fpath = silo_root / "identity" / fname
+            fpath = visible_root / fname
             if not fpath.exists():
                 template = _template_dir / fname if _template_dir else None
                 if template and template.exists():
                     fpath.write_bytes(template.read_bytes())
                 else:
                     fpath.write_text(f"# {fname[:-3]}\n", encoding="utf-8")
-
-        # PROJECT.md
-        project_md = silo_root / "PROJECT.md"
-        if not project_md.exists():
-            project_md.write_text(
-                f"# Quaid Instance: {instance_id}\n\n"
-                "Quaid knowledge layer instance.\n\n"
-                "## Identity\n"
-                "- `identity/SOUL.md` — Agent personality and interaction style\n"
-                "- `identity/USER.md` — About the user\n"
-                "- `identity/ENVIRONMENT.md` — Environmental context and learned behaviors\n\n"
-                "## Structure\n"
-                "- `data/` — Memory database (SQLite)\n"
-                "- `journal/` — Journal entries\n"
-                "- `logs/` — Janitor and system logs\n",
-                encoding="utf-8",
-            )
 
         # Misc project — per-instance scratch pad registered at silo creation so
         # agents can find it immediately without a manual create-project step.

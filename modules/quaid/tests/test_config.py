@@ -256,7 +256,7 @@ class TestConfigPathResolution:
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/instances/claude-code-main/config/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/claude-code-main/memory.json")
         assert paths[1] == Path("/tmp/quaid/shared/config/claude-code/memory.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
 
@@ -267,7 +267,7 @@ class TestConfigPathResolution:
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/instances/codex-main/config/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/codex-main/memory.json")
         assert paths[1] == Path("/tmp/quaid/shared/config/codex/memory.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
 
@@ -278,7 +278,7 @@ class TestConfigPathResolution:
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/instances/openclaw-livetest/config/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/openclaw-livetest/memory.json")
         assert paths[1] == Path("/tmp/quaid/shared/config/openclaw/memory.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
 
@@ -287,7 +287,7 @@ class TestConfigPathResolution:
 
         global_cfg = tmp_path / "shared" / "config" / "global" / "memory.json"
         platform_cfg = tmp_path / "shared" / "config" / "claude-code" / "memory.json"
-        instance_cfg = tmp_path / "instances" / "claude-code-main" / "config" / "memory.json"
+        instance_cfg = tmp_path / "instances" / "claude-code-main" / "memory.json"
         global_cfg.parent.mkdir(parents=True, exist_ok=True)
         platform_cfg.parent.mkdir(parents=True, exist_ok=True)
         instance_cfg.parent.mkdir(parents=True, exist_ok=True)

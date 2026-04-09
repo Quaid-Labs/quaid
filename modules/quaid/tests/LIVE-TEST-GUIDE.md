@@ -12,7 +12,7 @@ These are read from `tests/livetest/livetest-config.json`:
 | Placeholder | Meaning |
 |-------------|---------|
 | `REMOTE_HOST` | Test VM/host (SSH target) |
-| `WORKSPACE` | Quaid home on remote (`~/quaid`) |
+| `WORKSPACE` | Hidden Quaid system home on remote (`~/.quaid`) |
 | `OC_INSTANCE` | OC silo name (e.g. `openclaw-livetest`) |
 | `CC_INSTANCE` | CC silo name (e.g. `claude-code-livetest`) |
 | `CDX_INSTANCE` | CDX silo name (e.g. `codex-livetest`) |
@@ -249,7 +249,7 @@ cd DEV_ROOT/modules/quaid && npm run build:runtime
 rsync -av --checksum \
   --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
   --exclude='.git/' --exclude='logs/' --exclude='.env*' \
-  DEV_ROOT/ REMOTE_HOST:~/quaid/dev/
+  DEV_ROOT/ REMOTE_HOST:~/quaidcode/dev/
 ```
 
 ---
@@ -265,7 +265,7 @@ before starting the next platform. Fixed order masks order-dependent bugs.
 
 Each tester runs `--dry-run` before the real install:
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid/dev && QUAID_INSTANCE=OC_INSTANCE node setup-quaid.mjs \
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=OC_INSTANCE node setup-quaid.mjs \
   --dry-run --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 ```
 
@@ -303,14 +303,14 @@ ssh REMOTE_HOST "mkdir -p WORKSPACE/config/adapters/claude-code && \
 Send to each platform:
 
 > Please install Quaid by following the AI install guide:
-> `~/quaid/dev/docs/AI-INSTALL.md`
+> `~/quaidcode/dev/docs/AI-INSTALL.md`
 >
 > Use these parameters:
 > - Adapter/platform: PLATFORM
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
-> Quaid installs into `~/quaid`; do not pass a custom workspace path.
+> Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not pass a custom workspace path.
 > Tell me when Quaid is installed and `quaid doctor` returns healthy.
 
 ### Post-Install Examination
@@ -318,21 +318,22 @@ Send to each platform:
 After each platform's M0 passes, verify the filesystem (see
 `COORDINATOR.SKILL.md` for the full subagent prompt):
 
-1. **`~/quaid` exists** — Quaid installs into the visible `~/quaid` home.
-2. **`~/quaid` has correct structure**: `modules/quaid/`, `shared/config/`,
-   `instances/INSTANCE/config/`, `instances/INSTANCE/data/`.
-3. **Instance config has models and capture sections.**
-4. **Shared platform config exists** at `~/quaid/shared/config/PLATFORM/`.
-5. **Platform hooks registered** (CC: settings.json, CDX: hooks.json, OC:
+1. **`~/.quaid` and `~/quaid` both exist** — hidden runtime state and visible markdown/projects are split across both roots.
+2. **`~/.quaid` has correct hidden structure**: `modules/quaid/`, `shared/config/`,
+   `instances/INSTANCE/memory.json`, `instances/INSTANCE/data/`, `instances/INSTANCE/logs/`.
+3. **`~/quaid` has correct visible structure**: `instances/INSTANCE/`, `instances/INSTANCE/journal/`, `projects/`.
+4. **Instance config has models and capture sections.**
+5. **Shared platform config exists** at `~/.quaid/shared/config/PLATFORM/`.
+6. **Platform hooks registered** (CC: settings.json, CDX: hooks.json, OC:
    extensions symlink).
-6. **No stale legacy paths** (`~/.quaid`, `~/quaid/config/memory.json`).
+7. **No stale flat or misplaced paths** (`~/.quaid/config/memory.json`, `~/quaid/shared/config/`, `~/quaid/modules/`).
 
 ### Post-Install Coordinator Steps
 
 **Overwrite deep lane with fast lane** (all silos — HARD RULE):
 ```bash
 ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/INSTANCE/config/memory.json'
+import json; p = 'WORKSPACE/instances/INSTANCE/memory.json'
 with open(p) as f: d = json.load(f)
 d['models']['deepReasoning'] = d['models']['fastReasoning']
 with open(p, 'w') as f: json.dump(d, f, indent=2)
@@ -343,7 +344,7 @@ print('deep set to', d['models']['fastReasoning'])
 **Set live-test chunk_tokens** (all silos — lowers rolling threshold for short tests):
 ```bash
 ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/INSTANCE/config/memory.json'
+import json; p = 'WORKSPACE/instances/INSTANCE/memory.json'
 with open(p) as f: d = json.load(f)
 d.setdefault('capture', {})['chunk_tokens'] = 1500
 with open(p, 'w') as f: json.dump(d, f, indent=2)
@@ -425,7 +426,7 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE \
 ```
 
 Where `QUAID_CLI` is the quaid binary path on the remote (varies by platform —
-OC: `~/.openclaw/extensions/quaid/quaid`, CC: `~/quaid/modules/quaid/quaid`,
+OC: `~/.openclaw/extensions/quaid/quaid`, CC: `~/.quaid/modules/quaid/quaid`,
 CDX: same as OC or CC depending on install).
 
 ### Hot-Deploy (mid-test fix)
@@ -738,8 +739,8 @@ transactional content).
 ### M13 — CC Multi-Instance Verification (CC only)
 
 1. Run `quaid claudecode make_instance /path/to/project m13test`.
-2. Verify silo created with `config/`, `data/`, `identity/`, `journal/`, `logs/`.
-3. Verify `config/memory.json` has `adapter.type == "claude-code"`.
+2. Verify hidden silo created with `memory.json`, `data/`, `logs/` and visible silo created with flat identity files plus `journal/`.
+3. Verify `memory.json` has `adapter.type == "claude-code"`.
 4. Verify `.claude/settings.json` in the project dir has correct `QUAID_INSTANCE`.
 5. Verify `quaid instances list` includes the new instance.
 6. Verify dry-run (`--dry-run`) creates no silo.

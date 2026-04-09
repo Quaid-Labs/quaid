@@ -3,7 +3,7 @@
 Integrates Quaid as a lifecycle-aware memory layer for Claude Code sessions.
 Uses CLI subcommands via the existing Bash tool + hooks for automation.
 
-- Home dir: QUAID_HOME env or ~/quaid/
+- Home dir: QUAID_HOME env or ~/.quaid (visible files under ~/quaid/)
 - Notifications: deferred via pending file → surfaced in next UserPromptSubmit
 - Credentials: env var → ~/.claude/.credentials.json OAuth token
 - Sessions: ~/.claude/projects/ (Claude Code transcripts)
@@ -56,7 +56,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env).resolve() if env else Path.home() / "quaid"
+        return Path(env).resolve() if env else Path.home() / ".quaid"
 
     @classmethod
     def installer_adapter_id(cls) -> str:
@@ -287,7 +287,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
             "### Claude Code Instance Commands (`quaid claudecode`)\n\n"
             "- `quaid claudecode make_instance <path> <name>` — Create a Quaid instance "
             "for a Claude Code project. Initializes a silo at "
-            f"`~/quaid/{prefix}-<name>/` and writes `QUAID_INSTANCE={prefix}-<name>` "
+            f"`~/quaid/instances/{prefix}-<name>/` and writes `QUAID_INSTANCE={prefix}-<name>` "
             "into `<path>/.claude/settings.json`. Use this to give a CC project its own "
             "isolated memory store.\n"
             "  - `--dry-run` — Preview without making changes\n"

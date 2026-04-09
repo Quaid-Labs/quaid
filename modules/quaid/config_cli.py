@@ -39,8 +39,8 @@ def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path
 
     Priority (first match wins):
       --shared flag          → QUAID_HOME/shared/config/global/memory.json
-      --instance <id> flag   → QUAID_HOME/instances/<id>/config/memory.json
-      QUAID_INSTANCE env     → QUAID_HOME/instances/<QUAID_INSTANCE>/config/memory.json
+      --instance <id> flag   → QUAID_HOME/instances/<id>/memory.json
+      QUAID_INSTANCE env     → QUAID_HOME/instances/<QUAID_INSTANCE>/memory.json
       (none)                 → QUAID_HOME/shared/config/global/memory.json  (default)
 
     Returns (config_path, label).
@@ -63,7 +63,7 @@ def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path
         return home / "shared" / "config" / "global" / "memory.json", "shared global fallback"
 
     instance_id = instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
-    return home / "instances" / instance_id / "config" / "memory.json", f"instance '{instance_id}'"
+    return home / "instances" / instance_id / "memory.json", f"instance '{instance_id}'"
 
 
 def _config_path(args: argparse.Namespace | None = None) -> Path:
@@ -457,7 +457,7 @@ def main() -> int:
         epilog=(
             "Target flags (mutually exclusive): --shared targets QUAID_HOME/shared/config/global/memory.json; "
             "--platform-shared [platform] targets QUAID_HOME/shared/config/<platform>/memory.json; "
-            "--instance <id> targets QUAID_HOME/instances/<id>/config/memory.json. "
+            "--instance <id> targets QUAID_HOME/instances/<id>/memory.json. "
             "When neither is given, QUAID_INSTANCE env is used, else shared is the default."
         ),
     )

@@ -27,7 +27,7 @@ Quaid is a graph-based persistent knowledge layer for AI agents. It ships with d
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
 - **Embeddings:** Ollama local server (nomic-embed-text, 768 dimensions)
 - **LLM calls:** provider-routed deep-reasoning and fast-reasoning LLM tiers
-- **Config:** JSON config file at `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json`
+- **Config:** JSON config file at `<QUAID_HOME>/instances/<INSTANCE_ID>/memory.json`
 
 **Retrieval pipeline (current):**
 ```
@@ -116,7 +116,7 @@ Write request
 | `core/knowledge-engine.ts` | TypeScript recall router | `createKnowledgeEngine(deps)` — routed recall via fast-reasoning LLM prepass (`routeRecallPlan`) or direct explicit-stores mode. Handles dedup, source-type boosting, fail-open fallback, and repair retry on malformed router JSON. Project catalog is capped at 40 entries in router prompt. |
 | `core/session-timeout.ts` | Idle-session extraction | `SessionTimeoutManager` — debounced timer per session; fires extraction (via daemon signal) when no `onAgentStart` clears it within `timeoutMinutes`. Stale-sweep recovers sessions missed during process downtime. |
 | `core/knowledge-stores.ts` | Datastore registry | `STORE_REGISTRY` — canonical list of datastores with defaults for flat vs. graph-expand recall. `getRoutableDatastoreKeys()` excludes `vector` (aggregate) from router choices. |
-| `core/project-catalog.ts` | Project catalog reader | `createProjectCatalogReader` — reads project names and descriptions from `config/memory.json -> projects.definitions`. Falls back to `TOOLS.md`/`PROJECT.md` first-useful-line extraction. |
+| `core/project-catalog.ts` | Project catalog reader | `createProjectCatalogReader` — reads project names and descriptions from instance `memory.json -> projects.definitions`. Falls back to `TOOLS.md`/`PROJECT.md` first-useful-line extraction. |
 | `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
 | `core/spawn-with-timeout.ts` | Subprocess spawning | `spawnWithTimeout` — spawns a child process with SIGTERM + SIGKILL escalation on timeout. Used by all Python bridge calls from the TypeScript layer. |
 | `orchestrator/default-orchestrator.ts` | Orchestrator entry shim | Re-exports `createKnowledgeEngine` and related types from `core/knowledge-engine.ts` — the stable public surface adapters use for routed recall. |
@@ -179,7 +179,7 @@ There is no `PostCompact` hook wired. `hook-inject-compact` exists as a callable
 1. Calls `ensure_alive()` to start the extraction daemon if needed.
 2. For adapters that track session transitions (e.g. Codex), signals extraction for the session that just ended via `/new` or process restart.
 3. Seeds an extraction cursor for the current session so the daemon can discover it for timeout-based extraction.
-4. Scans `$QUAID_HOME/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_HOME/<INSTANCE_ID>/identity/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
+4. Scans `$QUAID_VISIBLE_HOME/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
 
 The write is idempotent — if content is unchanged the file is not touched, preventing unnecessary prompt cache invalidation. Claude Code auto-loads `rules/*.md` and preserves them through compaction (unlike `additionalContext` which is lost on compaction).
 
@@ -277,33 +277,37 @@ Triggers `nodes_ai`, `nodes_ad`, `nodes_au` keep `nodes_fts` in sync with `nodes
 
 Each Quaid instance (adapter silo) lives in its own subdirectory under `QUAID_HOME`. Two environment variables control which silo is active:
 
-- `QUAID_HOME` — root directory (default `~/quaid/`)
+- `QUAID_HOME` — hidden root directory (default `~/.quaid/`)
+- `QUAID_VISIBLE_HOME` — visible user-facing root directory (default `~/quaid/`)
 - `QUAID_INSTANCE` — instance identifier, e.g. `openclaw`, `claude-code`, or `codex` (no default; required)
 
 ```
-$QUAID_HOME/
-├── shared/                          # Cross-instance shared resources
-│   ├── config/
-│   │   └── memory.json              # Machine-wide embeddings config (Ollama URL, model, dim)
-│   │                                # First-install-wins: written once, inherited by all instances
-│   ├── projects/                    # Shared project docs (TOOLS.md, AGENTS.md, etc.)
-│   │   └── <project-name>/
-│   └── project-registry.json        # Global registry (projects -> instances)
-└── <INSTANCE_ID>/                   # Per-instance silo (e.g. "openclaw", "claude-code", "codex")
-    ├── config/
-    │   └── memory.json              # Instance config (adapter.type, models, janitor, etc.)
-    ├── data/
-    │   ├── memory.db                # SQLite database
-    │   ├── extraction-signals/      # Signals from hooks -> daemon
-    │   ├── session-cursors/         # Extraction progress per session
-    │   └── extraction-daemon.pid    # Daemon PID file
-    ├── identity/                    # Quaid-managed identity files
-    │   ├── USER.md
-    │   ├── SOUL.md
-    │   └── ENVIRONMENT.md
-    ├── journal/                     # Journal files (journal/*.journal.md, archive/)
-    ├── logs/                        # Structured JSONL logs, janitor checkpoints
-    └── *.snippets.md                # Soul snippet staging files
+$QUAID_HOME/                         # Hidden system root (~/.quaid)
+├── shared/
+│   └── config/
+│       ├── global/memory.json       # Machine-wide embeddings config
+│       └── <platform>/memory.json   # Platform-shared overrides
+├── instances/
+│   └── <INSTANCE_ID>/               # Hidden per-instance silo
+│       ├── memory.json              # Instance config (adapter.type, models, janitor, etc.)
+│       ├── data/
+│       │   ├── memory.db            # SQLite database
+│       │   ├── extraction-signals/  # Signals from hooks -> daemon
+│       │   ├── session-cursors/     # Extraction progress per session
+│       │   └── extraction-daemon.pid
+│       └── logs/                    # Structured JSONL logs, janitor checkpoints
+└── runtime/                         # Shared hidden runtime state
+
+$QUAID_VISIBLE_HOME/                 # Visible user-facing root (~/quaid)
+├── projects/
+│   └── <project-name>/
+└── instances/
+    └── <INSTANCE_ID>/
+        ├── USER.md
+        ├── SOUL.md
+        ├── ENVIRONMENT.md
+        ├── *.snippets.md
+        └── journal/
 ```
 
 Reserved instance names (cannot be used as instance identifiers): `shared`, `projects`, `config`, `data`, `logs`, `temp`, `tmp`, `quaid`, `plugins`, `lib`, `core`, `docs`, `assets`, `release`, `scripts`, `test`, `tests`, `benchmark`, `node_modules`.
@@ -312,12 +316,12 @@ Reserved instance names (cannot be used as instance identifiers): `shared`, `pro
 
 ## Configuration
 
-Config is loaded from `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json` (the per-instance config). Parsed by `config.py` into typed dataclasses. A shared config at `<QUAID_HOME>/shared/config/memory.json` provides machine-wide defaults (embeddings model, Ollama URL) that instance configs can override.
+Config is loaded from `<QUAID_HOME>/instances/<INSTANCE_ID>/memory.json` (the per-instance config). Parsed by `config.py` into typed dataclasses. Shared config at `<QUAID_HOME>/shared/config/global/memory.json` provides machine-wide defaults (embeddings model, Ollama URL), while `<QUAID_HOME>/shared/config/<platform>/memory.json` provides platform-scoped overrides.
 
 ### Config Tree
 
 ```
-config/memory.json
+memory.json
   models                   -- Model IDs, context windows, max output tokens
     fastReasoning           -- "default" (resolved at runtime; CC adapter default: "claude-haiku-4-5")
     deepReasoning          -- "default" (resolved at runtime; CC adapter default: "claude-sonnet-4-6")
@@ -709,9 +713,10 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations | `"default"` |
-| `QUAID_HOME` | Root directory containing all Quaid instances | `~/quaid/` |
+| `QUAID_HOME` | Hidden root directory containing Quaid runtime state and instances | `~/.quaid/` |
+| `QUAID_VISIBLE_HOME` | Visible root directory containing projects and instance markdown | `~/quaid/` |
 | `QUAID_INSTANCE` | Instance identifier — selects which silo under `QUAID_HOME` is active (e.g. `openclaw`, `claude-code`, `codex`) | Required — no implicit default |
-| `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, `claude-code`, or `codex` | Required |
+| `adapter.type` (in instance `memory.json`) | Select adapter: `standalone`, `openclaw`, `claude-code`, or `codex` | Required |
 | `CLAWDBOT_WORKSPACE` | OC adapter workspace root (Python adapter). Also accepted by the TS adapter as lowest-priority fallback after `QUAID_HOME` and `QUAID_WORKSPACE`. | Optional |
 | `QUAID_WORKSPACE` | OC TS adapter workspace root (second-priority, after `QUAID_HOME`). | Optional |
 | `QUAID_MESSAGE_CLI` | Override the `openclaw` binary path used for OC notifications. Skips auto-detection. | Not set |
@@ -729,7 +734,7 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 
 API key fallback chain for Python adapters: `ANTHROPIC_API_KEY` env var -> `.env` file at `QUAID_HOME/.env` (only attempted when `retrieval.fail_hard=false`; skipped in the default strict mode). In OC, the Python adapter also resolves credentials from `~/.openclaw/agents/main/agent/auth-profiles.json` (gateway credential store) for internal LLM calls. There is no macOS Keychain fallback in any adapter.
 
-OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthropic API directly). CC uses OAuth direct API via `ClaudeCodeOAuthLLMProvider`. The active LLM provider for each adapter is determined by `adapter.type` in `config/memory.json` and resolved through the facade tier system (`deep`/`fast`).
+OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthropic API directly). CC uses OAuth direct API via `ClaudeCodeOAuthLLMProvider`. The active LLM provider for each adapter is determined by `adapter.type` in instance `memory.json` and resolved through the facade tier system (`deep`/`fast`).
 
 ---
 

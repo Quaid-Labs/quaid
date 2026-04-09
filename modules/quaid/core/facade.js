@@ -91,13 +91,13 @@ function createQuaidFacade(deps) {
       let instanceName = deps.instanceRoot ? path.basename(deps.instanceRoot) : null;
       if (!instanceName) {
         try {
-          const projectsDir = path.join(deps.workspace, "shared", "projects");
+          const projectsDir = path.join(resolveVisibleHome(), "projects");
           const found = fs.readdirSync(projectsDir).find((d) => d.startsWith("misc--"));
           if (found) instanceName = found.replace(/^misc--/, "");
         } catch {
         }
       }
-      const miscPath = instanceName ? path.join(deps.workspace, "shared", "projects", `misc--${instanceName}`) : null;
+      const miscPath = instanceName ? path.join(resolveVisibleHome(), "projects", `misc--${instanceName}`) : null;
       return COMMAND_REGISTRY.map((entry) => ({
         ...entry,
         hint: miscPath ? entry.hint.replace(/\{misc_path\}/g, miscPath).replace(/\{instance\}/g, instanceName) : entry.hint
@@ -108,7 +108,7 @@ function createQuaidFacade(deps) {
     },
     recallJournalStore: async (query, limit) => {
       const journalConfig = deps.getMemoryConfig().docs?.journal || {};
-      const journalDir = path.join(deps.workspace, journalConfig.journalDir || "journal");
+      const journalDir = path.join(resolveVisibleInstanceRoot(), journalConfig.journalDir || "journal");
       return recallFromJournal(query, limit, journalDir);
     },
     recallProjectStore: async (query, limit, project, docs) => {
@@ -1554,6 +1554,30 @@ Consider running: docs staleness updater (update-stale --apply)`;
       results: docResults
     };
   }
+  function resolveVisibleHome() {
+    const explicit = String(process.env.QUAID_VISIBLE_HOME || "").trim();
+    if (explicit) return explicit;
+    const root = path.resolve(deps.workspace);
+    const base = path.basename(root);
+    if (base.startsWith(".") && base.length > 1) {
+      return path.join(path.dirname(root), base.slice(1));
+    }
+    return root;
+  }
+  function resolveVisibleInstanceRoot() {
+    const explicitInstance = String(process.env.QUAID_INSTANCE || "").trim();
+    const instanceName = deps.instanceRoot ? path.basename(deps.instanceRoot) : explicitInstance;
+    return instanceName ? path.join(resolveVisibleHome(), "instances", instanceName) : resolveVisibleHome();
+  }
+  function resolveProjectHome(homeDir) {
+    const raw = String(homeDir || "").trim();
+    if (!raw) return "";
+    if (path.isAbsolute(raw)) return raw;
+    if (raw === "projects" || raw.startsWith("projects/")) {
+      return path.join(resolveVisibleHome(), raw);
+    }
+    return path.join(deps.workspace, raw);
+  }
   function loadProjectMarkdown(project) {
     const projectName = String(project || "").trim();
     if (!projectName) return "";
@@ -1561,7 +1585,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
       const cfg = deps.getMemoryConfig();
       const homeDir = String(cfg?.projects?.definitions?.[projectName]?.homeDir || "").trim();
       if (!homeDir) return "";
-      const mdPath = path.join(deps.workspace, homeDir, "PROJECT.md");
+      const mdPath = path.join(resolveProjectHome(homeDir), "PROJECT.md");
       if (!fs.existsSync(mdPath)) return "";
       return fs.readFileSync(mdPath, "utf-8");
     } catch {
@@ -2646,7 +2670,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
     let prepend = existingContext;
     try {
       const sections = [];
-      const identityDir = path.join(deps.instanceRoot || deps.workspace, "identity");
+      const identityDir = resolveVisibleInstanceRoot();
       for (const idFile of ["USER.md", "SOUL.md", "ENVIRONMENT.md"]) {
         const filePath = path.join(identityDir, idFile);
         if (fs.existsSync(filePath)) {
@@ -2658,7 +2682,7 @@ ${content}`);
           }
         }
       }
-      const projectsDir = path.join(deps.workspace, "shared", "projects");
+      const projectsDir = path.join(resolveVisibleHome(), "projects");
       let subdirs = [];
       try {
         subdirs = fs.readdirSync(projectsDir).filter((name) => {

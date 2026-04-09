@@ -157,6 +157,17 @@ def _hook_trace_path() -> Path:
     return root / "logs" / "quaid-hook-trace.jsonl"
 
 
+def _visible_home_fallback() -> Path:
+    home = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
+    if home:
+        return Path(home).resolve()
+    hidden = os.environ.get("QUAID_HOME", "").strip()
+    root = Path(hidden).resolve() if hidden else Path.home() / ".quaid"
+    if root.name.startswith(".") and len(root.name) > 1:
+        return root.with_name(root.name[1:])
+    return root
+
+
 def _write_hook_trace(event: str, payload: dict | None = None) -> None:
     trace_path = _hook_trace_path()
     entry = {
@@ -902,9 +913,7 @@ def _get_projects_dir() -> Path:
         adapter = get_adapter()
         return adapter.projects_dir()
     except Exception:
-        home = os.environ.get("QUAID_HOME", "").strip()
-        base = Path(home).resolve() if home else Path.home() / "quaid"
-        return base / "projects"
+        return _visible_home_fallback() / "projects"
 
 
 def _get_identity_dir() -> Path:
@@ -914,9 +923,11 @@ def _get_identity_dir() -> Path:
         adapter = get_adapter()
         return adapter.identity_dir()
     except Exception:
-        # Fallback: quaid_home root (backward compat with standalone)
-        home = os.environ.get("QUAID_HOME", "").strip()
-        return Path(home).resolve() if home else Path.home() / "quaid"
+        instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+        base = _visible_home_fallback()
+        if instance:
+            return base / "instances" / instance
+        return base
 
 
 def hook_session_init(args):

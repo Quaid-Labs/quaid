@@ -1367,17 +1367,17 @@ fi
 # Instance isolation: set QUAID_INSTANCE and create per-instance directory tree.
 export QUAID_INSTANCE="${E2E_INSTANCE}"
 export QUAID_HOME="${E2E_WS}"
-_iroot="${E2E_WS}/${E2E_INSTANCE}"
-for _subdir in config data identity journal logs; do
+_iroot="${E2E_WS}/instances/${E2E_INSTANCE}"
+for _subdir in data logs; do
   mkdir -p "${_iroot}/${_subdir}"
 done
-# Seed instance-level adapter config from flat config if it exists.
-if [[ -f "${E2E_WS}/config/memory.json" ]] && [[ ! -f "${_iroot}/config/memory.json" ]]; then
-  cp "${E2E_WS}/config/memory.json" "${_iroot}/config/memory.json"
-  echo "[e2e] Copied adapter config to instance path: ${_iroot}/config/memory.json"
-elif [[ ! -f "${_iroot}/config/memory.json" ]]; then
-  echo '{"adapter":{"type":"standalone"}}' > "${_iroot}/config/memory.json"
-  echo "[e2e] Created default adapter config at instance path: ${_iroot}/config/memory.json"
+# Seed instance-level adapter config from legacy flat config if it exists.
+if [[ -f "${E2E_WS}/config/memory.json" ]] && [[ ! -f "${_iroot}/memory.json" ]]; then
+  cp "${E2E_WS}/config/memory.json" "${_iroot}/memory.json"
+  echo "[e2e] Copied adapter config to instance path: ${_iroot}/memory.json"
+elif [[ ! -f "${_iroot}/memory.json" ]]; then
+  echo '{"adapter":{"type":"standalone"}}' > "${_iroot}/memory.json"
+  echo "[e2e] Created default adapter config at instance path: ${_iroot}/memory.json"
 fi
 echo "[e2e] Instance isolation: QUAID_INSTANCE=${E2E_INSTANCE}, root=${_iroot}"
 
@@ -1462,7 +1462,7 @@ echo "[e2e] Ensuring required OpenClaw hooks are enabled..."
 enable_required_openclaw_hooks
 
 # Keep timeout override opt-in; default live checks should use installer/runtime defaults.
-MEMORY_CFG="${E2E_WS}/config/memory.json"
+MEMORY_CFG="${_iroot}/memory.json"
 if [[ ! -f "$MEMORY_CFG" ]]; then
   echo "[e2e] Waiting for installer memory config to appear: $MEMORY_CFG"
   if ! wait_for_path "$MEMORY_CFG" 20 1; then
@@ -1508,8 +1508,8 @@ fi
 
 # Patch Quaid LLM models to cheapest tier after installer (which defaults to gpt-5.4/gpt-5.4-mini).
 # The gateway only allows models that match its config; mismatch causes "model not allowed" errors.
-# Must patch BOTH workspace-level and instance-level configs.
-for _cfg in "$MEMORY_CFG" "${_iroot}/config/memory.json"; do
+# Must patch the instance config that the runtime reads.
+for _cfg in "$MEMORY_CFG"; do
   if [[ -f "$_cfg" ]]; then
     python3 - "$_cfg" <<'PY'
 import json, sys

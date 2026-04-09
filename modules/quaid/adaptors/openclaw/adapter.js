@@ -69,6 +69,17 @@ function _resolveWorkspace() {
   return _normalizeWorkspacePath(process.cwd());
 }
 const WORKSPACE = _resolveWorkspace();
+function _resolveVisibleWorkspace(root) {
+  const explicit = String(process.env.QUAID_VISIBLE_HOME || "").trim();
+  if (explicit) return _normalizeWorkspacePath(explicit);
+  const resolved = _normalizeWorkspacePath(root);
+  const base = path.basename(resolved);
+  if (base.startsWith(".") && base.length > 1) {
+    return path.join(path.dirname(resolved), base.slice(1));
+  }
+  return resolved;
+}
+const VISIBLE_WORKSPACE = _resolveVisibleWorkspace(WORKSPACE);
 function _resolveQuaidInstance() {
   const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
   if (fromEnv) return fromEnv;
@@ -751,6 +762,7 @@ function buildPythonEnv(extra = {}) {
     MEMORY_DB_PATH: memoryDbPath,
     MEMORY_RUNTIME_DIR: QUAID_RUNTIME_DIR,
     QUAID_HOME: WORKSPACE,
+    QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
     OPENCLAW_WORKSPACE: WORKSPACE,
     // Explicitly set QUAID_INSTANCE so Python subprocesses always know which
@@ -815,12 +827,13 @@ function createAdapterMemoryConfigResolver() {
     const candidates = [];
     const instance = String(process.env.QUAID_INSTANCE || "").trim();
     if (instance) {
-      candidates.push(path.join(WORKSPACE, "instances", instance, "config", "memory.json"));
+      candidates.push(path.join(WORKSPACE, "instances", instance, "memory.json"));
     }
     candidates.push(
-      path.join(WORKSPACE, "shared", "config", "memory.json"),
+      path.join(WORKSPACE, "shared", "config", "openclaw", "memory.json"),
+      path.join(WORKSPACE, "shared", "config", "global", "memory.json"),
       path.join(WORKSPACE, "config", "memory.json"),
-      path.join(os.homedir(), "quaid", "memory-config.json"),
+      path.join(os.homedir(), ".quaid", "memory-config.json"),
       path.join(process.cwd(), "memory-config.json")
     );
     return candidates;
@@ -1370,22 +1383,26 @@ const facade = createQuaidFacade({
   execExtractPipeline: (tmpPath, args) => _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", {}, EXTRACT_PIPELINE_TIMEOUT_MS),
   execDocsRag: (cmd, args) => _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", {
     QUAID_HOME: WORKSPACE,
+    QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE,
     OPENCLAW_WORKSPACE: WORKSPACE
   }),
   execDocsRegistry: (cmd, args) => _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", {
     QUAID_HOME: WORKSPACE,
+    QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE,
     OPENCLAW_WORKSPACE: WORKSPACE
   }),
   execDocsUpdater: (cmd, args) => {
     const apiKey = _getAnthropicCredential();
     return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {
       QUAID_HOME: WORKSPACE,
+      QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE,
       OPENCLAW_WORKSPACE: WORKSPACE,
       ...apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}
     });
   },
   execEvents: (cmd, args) => _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", {
     QUAID_HOME: WORKSPACE,
+    QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE,
     OPENCLAW_WORKSPACE: WORKSPACE
   }, EVENTS_EMIT_TIMEOUT_MS),
   // emitProjectEventBackground removed — project events now emitted from Python extraction.

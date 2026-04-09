@@ -7,10 +7,29 @@ function warnCatalog(message) {
 function firstUsefulLine(content) {
   return String(content || "").split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#") && !line.startsWith("|")) || "";
 }
+function resolveVisibleHome(deps) {
+  const explicit = String(process.env.QUAID_VISIBLE_HOME || "").trim();
+  if (explicit) return explicit;
+  const root = deps.path.resolve(deps.workspace);
+  const base = deps.path.basename(root);
+  if (base.startsWith(".") && base.length > 1) {
+    return deps.path.join(deps.path.dirname(root), base.slice(1));
+  }
+  return root;
+}
+function resolveProjectHome(deps, homeDir) {
+  const raw = String(homeDir || "").trim();
+  if (!raw) return "";
+  if (deps.path.isAbsolute(raw)) return raw;
+  if (raw === "projects" || raw.startsWith("projects/")) {
+    return deps.path.join(resolveVisibleHome(deps), raw);
+  }
+  return deps.path.join(deps.workspace, raw);
+}
 function getProjectDescriptionFromToolsMd(deps, homeDir) {
   try {
     if (!homeDir) return "";
-    const toolsPath = deps.path.join(deps.workspace, homeDir, "TOOLS.md");
+    const toolsPath = deps.path.join(resolveProjectHome(deps, homeDir), "TOOLS.md");
     if (!deps.fs.existsSync(toolsPath)) return "";
     const content = deps.fs.readFileSync(toolsPath, "utf8");
     const m = content.match(/^\s*(?:Project\s+Description|Description)\s*:\s*(.+)$/im);
@@ -24,7 +43,7 @@ function getProjectDescriptionFromToolsMd(deps, homeDir) {
 function getProjectDescriptionFromProjectMd(deps, homeDir) {
   try {
     if (!homeDir) return "";
-    const projectPath = deps.path.join(deps.workspace, homeDir, "PROJECT.md");
+    const projectPath = deps.path.join(resolveProjectHome(deps, homeDir), "PROJECT.md");
     if (!deps.fs.existsSync(projectPath)) return "";
     const content = deps.fs.readFileSync(projectPath, "utf8");
     const m = content.match(/^\s*Description\s*:\s*(.+)$/im);

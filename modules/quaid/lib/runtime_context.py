@@ -33,21 +33,33 @@ def get_adapter_instance() -> "QuaidAdapter":
 
 
 def get_workspace_dir() -> Path:
-    """Return the active instance root directory.
+    """Return the active hidden instance root directory.
 
-    This is the per-instance silo (QUAID_HOME/QUAID_INSTANCE), not the
-    QUAID_HOME root. Config, data, logs, and identity all resolve relative
-    to this path.
+    This is the per-instance hidden silo (QUAID_HOME/instances/QUAID_INSTANCE),
+    not the visible root. Config, data, logs, and runtime state resolve here.
     """
     return get_adapter().instance_root()
 
 
 def get_quaid_home() -> Path:
-    """Return the QUAID_HOME root (not the per-instance silo).
-
-    Use this for paths that live at the QUAID_HOME level, e.g. projects/.
-    """
+    """Return the hidden QUAID_HOME root (not the per-instance silo)."""
     return get_adapter().quaid_home()
+
+
+def get_visible_workspace_dir() -> Path:
+    return get_adapter().visible_instance_root()
+
+
+def get_visible_quaid_home() -> Path:
+    return get_adapter().visible_home()
+
+
+def get_projects_dir() -> Path:
+    return get_adapter().projects_dir()
+
+
+def get_identity_dir() -> Path:
+    return get_adapter().identity_dir()
 
 
 def get_data_dir() -> Path:

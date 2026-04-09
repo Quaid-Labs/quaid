@@ -33,7 +33,9 @@ Concrete rule for local guides:
 Do not collapse that to `cd ~/quaidcode`.
 
 Install home rule:
-- Quaid installs into the fixed home path `~/quaid`
+- Quaid uses a fixed split layout:
+  - hidden system home: `~/.quaid` (`QUAID_HOME`)
+  - visible user-facing home: `~/quaid` (`QUAID_VISIBLE_HOME`)
 - do not ask the human to choose a workspace path
 - do not pass a custom `--workspace` during normal installs
 - do not treat install home as a survey field or editable parameter
@@ -229,7 +231,7 @@ node setup-quaid.mjs --agent \
 `--source github` fetches the latest release. The installer manages the temporary clone
 internally and cleans it up on exit — no leftover temp directories.
 
-The install home is fixed to `~/quaid`; do not add a custom workspace override.
+Quaid uses the fixed split home layout (`~/.quaid` hidden, `~/quaid` visible); do not add a custom workspace override.
 `--owner-name` ensures memory ownership is tagged to the human (not a system account).
 
 > **Do not run `git clone` manually before the installer.** If you clone first and then run
@@ -276,7 +278,8 @@ Instead, it uses a deterministic default based on the target platform:
 - `openclaw` -> `openclaw-main`
 
 Two installs with the same instance ID share memory; different IDs get independent silos.
-The ID becomes a subdirectory under `QUAID_HOME`: `<QUAID_HOME>/<instance-id>/`.
+The hidden instance state lives under `<QUAID_HOME>/instances/<instance-id>/`.
+Visible identity and journal files live under `<QUAID_VISIBLE_HOME>/instances/<instance-id>/`.
 
 To override the default instance ID, set `QUAID_INSTANCE` before running install.
 
@@ -301,7 +304,8 @@ If the human wants to change embedding defaults later, tell them it is best to u
 
 ## Environment Variables (optional)
 
-- `QUAID_HOME`: runtime home path env managed by the installer/hooks. For normal installs, Quaid home is fixed to `~/quaid`; do not use this as a user-facing install choice.
+- `QUAID_HOME`: hidden runtime home path env managed by the installer/hooks. For normal installs, Quaid home is fixed to `~/.quaid`; do not use this as a user-facing install choice.
+- `QUAID_VISIBLE_HOME`: visible user-facing home path env managed by the installer/hooks. For normal installs, this is fixed to `~/quaid`.
 - `QUAID_INSTANCE`: explicit instance identifier override (for example `openclaw-main`, `claude-code-main`, `codex-main`)
 - `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint (auto-detected when OpenClaw is installed)
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults
@@ -328,8 +332,8 @@ If the human wants to change embedding defaults later, tell them it is best to u
   `SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`.
 - The janitor is configured in Quaid config and runs from the runtime/extraction layer; the installer no longer creates OS-level launchd/cron/task-scheduler janitor jobs in the standard path.
 - At runtime, the adapter reads the Claude Code OAuth token from `~/.claude/.credentials.json` (auto-refreshed by `hook-session-init`) or from `.auth-token` if pre-stored via `python3 config_cli.py set-auth` — no API key env var is needed.
-- The installer creates a per-instance identity directory at `<QUAID_HOME>/<instance-id>/identity/`
-  for `USER.md`, `SOUL.md`, and `ENVIRONMENT.md`.
+- The installer creates visible instance identity files at `<QUAID_VISIBLE_HOME>/instances/<instance-id>/`
+  (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) plus `journal/`.
 
 ## OpenClaw-specific Notes
 
@@ -497,4 +501,4 @@ quaid doctor
 
 Expected output from hooks check: `['SessionStart', 'UserPromptSubmit', 'PreCompact', 'SessionEnd', 'SubagentStart', 'SubagentStop']` (or similar — any subset present means hooks are wired).
 
-Supported platforms: OpenClaw, Claude Code, and Codex. The install home is `~/quaid`.
+Supported platforms: OpenClaw, Claude Code, and Codex. Quaid uses the fixed split home layout (`~/.quaid` hidden, `~/quaid` visible).

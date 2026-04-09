@@ -106,13 +106,13 @@ class ClaudeCodeInstanceManager(InstanceManager):
             print(f"  Warning: could not write auth token: {e}")
 
     def _write_model_config(self, silo_root: Path, deep_model: str, fast_model: str) -> None:
-        """Write model IDs into the instance config/memory.json.
+        """Write model IDs into the instance memory.json.
 
         The daemon reads models.deep_reasoning and models.fast_reasoning from
         this file.  Without explicit values the provider has no fallback and
         will raise at call time.
         """
-        config_path = silo_root / "config" / "memory.json"
+        config_path = silo_root / "memory.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         cfg = {}
@@ -140,14 +140,13 @@ class ClaudeCodeInstanceManager(InstanceManager):
         """
         instance_id = self.resolve_instance_id(name)
         silo_root = self.adapter.quaid_home() / "instances" / instance_id
-        # Use config dir existence as the "silo is initialized" signal
-        was_new = not (silo_root / "config").exists()
+        was_new = not (silo_root / "memory.json").exists()
 
         if was_new:
             self.create(name)
             # Write model config inline — avoid _write_model_config() stdout
             # prints which would corrupt hook JSON output on stdout
-            config_path = silo_root / "config" / "memory.json"
+            config_path = silo_root / "memory.json"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             cfg: dict = {}
             if config_path.is_file():
@@ -180,7 +179,12 @@ class ClaudeCodeInstanceManager(InstanceManager):
         quaid_bin = str(_candidate) if _candidate.is_file() else (_shutil.which("quaid") or "quaid")
 
         workspace = str(self.adapter.quaid_home())
-        env_prefix = f"QUAID_HOME='{workspace}' QUAID_INSTANCE='{instance_id}'"
+        visible_home = str(self.adapter.visible_home())
+        env_prefix = (
+            f"QUAID_HOME='{workspace}' "
+            f"QUAID_VISIBLE_HOME='{visible_home}' "
+            f"QUAID_INSTANCE='{instance_id}'"
+        )
 
         desired: dict = {
             "SessionStart":     f"{env_prefix} {quaid_bin} hook-session-init",
@@ -220,6 +224,9 @@ class ClaudeCodeInstanceManager(InstanceManager):
         env = settings.setdefault("env", {})
         if env.get("QUAID_HOME") != workspace:
             env["QUAID_HOME"] = workspace
+            changed = True
+        if env.get("QUAID_VISIBLE_HOME") != visible_home:
+            env["QUAID_VISIBLE_HOME"] = visible_home
             changed = True
 
         if changed:

@@ -9,7 +9,7 @@ This file is the starter brief for working on Quaid itself. It should help an ag
 - Status: prerelease, ship-first.
 - Current priority is installability, live reliability, recall correctness, and distillation quality, not broad cleanup or backcompat work.
 - Architectural boundaries exist, but some drift remains; prefer small fixes that move behavior toward the intended layer model without widening that drift.
-- Identity files (`SOUL.md`, `USER.md`, `ENVIRONMENT.md`) are live outputs written per instance under `identity/`. The copies in this project are base templates and should stay stable.
+- Identity files (`SOUL.md`, `USER.md`, `ENVIRONMENT.md`) are live outputs written per instance under `QUAID_VISIBLE_HOME/instances/<instance>/`. The copies in this project are base templates and should stay stable.
 - `PROJECT.md` should stay distilled. Use `PROJECT.log` for full chronology and raw operational history.
 
 ## Start Here By Task
@@ -30,7 +30,7 @@ This file is the starter brief for working on Quaid itself. It should help an ag
 
 ### Project Home
 <!-- BEGIN:PROJECT_HOME -->
-- `QUAID_HOME/projects/quaid`
+- `QUAID_VISIBLE_HOME/projects/quaid`
 <!-- END:PROJECT_HOME -->
 
 ### Source Roots
@@ -73,7 +73,7 @@ This file is the starter brief for working on Quaid itself. It should help an ag
 - Quaid is shipping before major cleanup. Prefer the smallest safe fix that improves live behavior.
 - Benchmark and live validation lanes are fail-hard; do not hide provider/runtime failures behind silent fallbacks.
 - Intended layer model is adaptor -> facade -> orchestration -> core -> ingest -> datastore -> janitor, with the daemon treated as its own operational component.
-- Shared project docs and per-instance identity are different concerns. Project templates live here; generated identity lives under each instance's `identity/` directory.
+- Shared project docs and per-instance identity are different concerns. Project templates live here; generated identity lives under each instance's visible instance directory.
 - `PROJECT.md` is for distilled overview and current frontier. `PROJECT.log` is the append-only history.
 
 ## Where To Learn More

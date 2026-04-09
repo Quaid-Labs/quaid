@@ -33,7 +33,12 @@ from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.fail_policy import is_fail_hard_enabled
 from lib.markdown import strip_protected_regions
-from lib.runtime_context import get_workspace_dir
+from lib.runtime_context import (
+    get_identity_dir as _runtime_identity_dir,
+    get_projects_dir as _runtime_projects_dir,
+    get_visible_workspace_dir,
+    get_workspace_dir,
+)
 from lib.tokens import estimate_tokens
 from prompt_sets import get_prompt
 
@@ -41,29 +46,30 @@ from prompt_sets import get_prompt
 def _workspace_dir() -> Path:
     return get_workspace_dir()
 
+
+def _visible_instance_dir() -> Path:
+    return get_visible_workspace_dir()
+
 def _identity_dir() -> Path:
     """Resolve Quaid-managed identity dir for snippet/identity file writes.
 
     Generated identity files (*.snippets.md, SOUL.md, USER.md, ENVIRONMENT.md)
     live in the adapter's identity silo, not the workspace root.
-    Uses the core utility function quaid_identity_dir().
-    See docs/DIRECTORY-STANDARD.md Layer 2.
+    Identity markdown lives flat in the visible instance root.
     """
     try:
-        from lib.adapter import get_adapter, quaid_identity_dir
-        adapter = get_adapter()
-        d = quaid_identity_dir(adapter.quaid_home(), adapter.adapter_id())
+        d = _runtime_identity_dir()
         d.mkdir(parents=True, exist_ok=True)
         return d
     except Exception:
-        return get_workspace_dir()
+        return _visible_instance_dir()
 
 def _backup_dir() -> Path:
     return _workspace_dir() / "backups" / "soul-snippets"
 
 
 def _project_file_path(filename: str) -> Path:
-    return _workspace_dir() / "projects" / "quaid" / filename
+    return _runtime_projects_dir() / "quaid" / filename
 
 
 def _root_file_path(filename: str) -> Path:
@@ -78,7 +84,7 @@ def _root_file_path(filename: str) -> Path:
     }
     if filename in _IDENTITY_FILES:
         return _identity_dir() / filename
-    return _workspace_dir() / filename
+    return _visible_instance_dir() / filename
 
 
 def _ensure_project_file(filename: str) -> Path:
@@ -182,7 +188,7 @@ def _refresh_generated_memory_projection() -> None:
     To avoid clobbering user-authored content, only rewrite the root file if it
     is missing or already marked as Quaid-generated projection content.
     """
-    snippets_path = _workspace_dir() / "ENVIRONMENT.snippets.md"
+    snippets_path = _visible_instance_dir() / "ENVIRONMENT.snippets.md"
     memory_path = _root_file_path("ENVIRONMENT.md")
     existing = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
     legacy_projection = bool(_LEGACY_GENERATED_MEMORY_PROJECTION_MARKER_RE.search(existing))
@@ -212,7 +218,7 @@ def _refresh_generated_user_snippets_projection() -> None:
     OpenClaw fresh-session startup still reads USER.md directly. Preserve any
     user-authored content and only replace the managed projection block.
     """
-    snippets_path = _workspace_dir() / "USER.snippets.md"
+    snippets_path = _visible_instance_dir() / "USER.snippets.md"
     user_path = _root_file_path("USER.md")
     existing = user_path.read_text(encoding="utf-8") if user_path.exists() else "# USER\n"
 
@@ -497,7 +503,7 @@ def _get_journal_dir() -> Path:
     """Get journal directory path."""
     cfg = _get_journal_config()
     dirname = cfg.journal_dir if cfg else "journal"
-    return _workspace_dir() / dirname
+    return _visible_instance_dir() / dirname
 
 
 def _get_core_markdown_config(filename: str) -> Dict[str, Any]:
@@ -748,7 +754,7 @@ def write_snippet_entry(filename: str, snippets: List[str],
         return False
 
     base_name = filename.removesuffix('.md')
-    snippets_path = _workspace_dir() / f"{base_name}.snippets.md"
+    snippets_path = _visible_instance_dir() / f"{base_name}.snippets.md"
 
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -1153,7 +1159,7 @@ def migrate_snippets_to_journal() -> int:
 
     for filename in target_files:
         base_name = filename.removesuffix('.md')
-        snippets_path = _workspace_dir() / f"{base_name}.snippets.md"
+        snippets_path = _visible_instance_dir() / f"{base_name}.snippets.md"
 
         if not snippets_path.exists():
             continue
@@ -1212,7 +1218,7 @@ def read_snippets_file(filename: str) -> Tuple[str, List[Dict[str, Any]]]:
     {"header": "## Compaction — 2026-02-10 14:30:22", "snippets": ["text1", "text2"]}
     """
     base_name = filename.removesuffix('.md')
-    snippets_path = _workspace_dir() / f"{base_name}.snippets.md"
+    snippets_path = _visible_instance_dir() / f"{base_name}.snippets.md"
 
     if not snippets_path.exists():
         return "", []
@@ -1250,7 +1256,7 @@ def read_parent_file(filename: str) -> str:
 
 def read_project_generated_file(filename: str) -> str:
     """Read the generated project markdown companion for context."""
-    project_path = _workspace_dir() / "projects" / "quaid" / filename
+    project_path = _runtime_projects_dir() / "quaid" / filename
     if not project_path.exists():
         return ""
     return project_path.read_text(encoding='utf-8')
@@ -1432,7 +1438,7 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
 def _clear_processed_snippets(filename: str, processed_texts: List[str]) -> None:
     """Remove processed snippets from a .snippets.md file."""
     base_name = filename.removesuffix('.md')
-    snippets_path = _workspace_dir() / f"{base_name}.snippets.md"
+        snippets_path = _visible_instance_dir() / f"{base_name}.snippets.md"
 
     if not snippets_path.exists():
         return

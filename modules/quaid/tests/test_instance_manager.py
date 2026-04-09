@@ -46,6 +46,8 @@ class TestInstanceManagerBase:
         adapter = MagicMock()
         adapter.agent_id_prefix.return_value = "claude-code"
         adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
         mgr = InstanceManager(adapter)
 
         with patch("lib.instance.instance_exists", return_value=False), \
@@ -61,22 +63,24 @@ class TestInstanceManagerBase:
         adapter.agent_id_prefix.return_value = "claude-code"
         adapter.adapter_id.return_value = "claude-code"
         adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
         mgr = InstanceManager(adapter)
 
         with patch("lib.instance.instance_exists", return_value=False), \
              patch("lib.instance.validate_instance_id"):
             silo = mgr.create("proj")
 
-        assert (silo / "config").is_dir()
         assert (silo / "data").is_dir()
-        assert (silo / "identity").is_dir()
-        assert (silo / "journal").is_dir()
         assert (silo / "logs").is_dir()
-        assert (silo / "identity" / "SOUL.md").is_file()
-        assert (silo / "identity" / "USER.md").is_file()
-        assert (silo / "identity" / "ENVIRONMENT.md").is_file()
-        assert (silo / "PROJECT.md").is_file()
-        config = json.loads((silo / "config" / "memory.json").read_text())
+        assert (silo / "memory.json").is_file()
+        visible = tmp_path / "visible" / "instances" / "claude-code-proj"
+        assert visible.is_dir()
+        assert (visible / "journal").is_dir()
+        assert (visible / "SOUL.md").is_file()
+        assert (visible / "USER.md").is_file()
+        assert (visible / "ENVIRONMENT.md").is_file()
+        config = json.loads((silo / "memory.json").read_text())
         assert config["adapter"]["type"] == adapter.adapter_id()
 
     def test_create_raises_if_exists(self, tmp_path):
@@ -85,6 +89,8 @@ class TestInstanceManagerBase:
         adapter.agent_id_prefix.return_value = "claude-code"
         adapter.adapter_id.return_value = "claude-code"
         adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
         mgr = InstanceManager(adapter)
 
         with patch("lib.instance.instance_exists", return_value=True), \
@@ -111,6 +117,8 @@ class TestClaudeCodeInstanceManager:
         adapter.agent_id_prefix.return_value = "claude-code"
         adapter.adapter_id.return_value = "claude-code"
         adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "quaid" / "instances" / "claude-code-main"
         (tmp_path / "quaid").mkdir()
         mgr = ClaudeCodeInstanceManager(adapter)
 
@@ -142,6 +150,8 @@ class TestClaudeCodeInstanceManager:
         adapter.agent_id_prefix.return_value = "claude-code"
         adapter.adapter_id.return_value = "claude-code"
         adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "quaid" / "instances" / "claude-code-main"
         (tmp_path / "quaid").mkdir()
         mgr = ClaudeCodeInstanceManager(adapter)
 
@@ -172,6 +182,8 @@ class TestClaudeCodeInstanceManager:
         adapter = MagicMock()
         adapter.agent_id_prefix.return_value = "claude-code"
         adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "quaid" / "instances" / "claude-code-main"
         (tmp_path / "quaid").mkdir()
         mgr = ClaudeCodeInstanceManager(adapter)
 

@@ -10,6 +10,19 @@ function _resolveTimeoutMs(name: string, fallbackMs: number): number {
   return Math.floor(raw);
 }
 
+function _resolveVisibleHome(root: string): string {
+  const explicit = String(process.env.QUAID_VISIBLE_HOME || "").trim();
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  const resolved = path.resolve(root);
+  const base = path.basename(resolved);
+  if (base.startsWith(".") && base.length > 1) {
+    return path.join(path.dirname(resolved), base.slice(1));
+  }
+  return resolved;
+}
+
 export const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
 
 function _pythonVersionOk(bin: string): boolean {
@@ -98,6 +111,7 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
           ...process.env,
           MEMORY_DB_PATH: config.dbPath,
           QUAID_HOME: config.workspace,
+          QUAID_VISIBLE_HOME: _resolveVisibleHome(config.workspace),
           QUAID_WORKSPACE: config.workspace,
           OPENCLAW_WORKSPACE: config.workspace,
           PYTHONPATH: pythonPath,
