@@ -4909,22 +4909,26 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   // Write config to the instance root (QUAID_HOME/<instance>/config/memory.json).
   // This is the authoritative instance config path; the old flat QUAID_HOME/config/
   // path is no longer written.
-  // Resolve instance ID: explicit env var > installer-resolved default.
-  // Without this, CC/CDX installs without QUAID_INSTANCE set write config
-  // to the flat QUAID_HOME/config/ path, but the daemon reads from
-  // QUAID_HOME/<instance>/config/ — causing empty instance configs.
-  const instanceId = (process.env.QUAID_INSTANCE || "").trim() || resolvedInstallerInstanceId();
+  const instanceId = (process.env.QUAID_INSTANCE || "").trim();
   if (instanceId) {
+    // Explicit instance: write directly to instance config path.
     const instanceConfigDir = path.join(WORKSPACE, instanceId, "config");
     fs.mkdirSync(instanceConfigDir, { recursive: true });
     const configJson = JSON.stringify(config, null, 2) + "\n";
     fs.writeFileSync(path.join(instanceConfigDir, "memory.json"), configJson);
     log.info(`Wrote instance config: ${instanceConfigDir}/memory.json`);
   }
-  // Always write flat config too as fallback layer.
+  // All platforms: write config to shared platform config so all instances
+  // inherit models, users, capture settings. Instance silos are created at
+  // runtime (folder-based for CC/CDX, gateway-managed for OC).
+  if (!fs.existsSync(sharedPlatformConfigPath) || fs.readFileSync(sharedPlatformConfigPath, "utf8").trim() === "{}") {
+    const configJson = JSON.stringify(config, null, 2) + "\n";
+    fs.writeFileSync(sharedPlatformConfigPath, configJson);
+    log.info(`Wrote shared platform config: ${sharedPlatformConfigPath}`);
+  }
+  // Always write flat config as fallback layer.
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  const configJson = JSON.stringify(config, null, 2) + "\n";
-  fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), configJson);
+  fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), JSON.stringify(config, null, 2) + "\n");
 }
 
 function copyDirSync(src, dest) {
