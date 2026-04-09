@@ -166,6 +166,36 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("injectProjectContext warns and skips visible-home root files when instance is unknown", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-context-no-instance-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const prevInstance = process.env.QUAID_INSTANCE;
+    const prevVisible = process.env.QUAID_VISIBLE_HOME;
+    delete process.env.QUAID_INSTANCE;
+    process.env.QUAID_VISIBLE_HOME = workspace;
+
+    await writeFile(path.join(workspace, "USER.md"), "Root-visible user file", "utf8");
+
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      instanceRoot: undefined,
+      execPython: vi.fn(async () => ""),
+    }));
+
+    const out = await facade.injectProjectContext(undefined);
+    expect(out ?? "").not.toContain("Root-visible user file");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("unable to resolve visible instance root"),
+    );
+
+    warn.mockRestore();
+    if (prevInstance === undefined) delete process.env.QUAID_INSTANCE;
+    else process.env.QUAID_INSTANCE = prevInstance;
+    if (prevVisible === undefined) delete process.env.QUAID_VISIBLE_HOME;
+    else process.env.QUAID_VISIBLE_HOME = prevVisible;
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("initializeDatastoreIfMissing creates db dir and calls init callback once", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-db-init-"));
     const dbPath = path.join(workspace, "data", "memory.db");

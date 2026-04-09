@@ -1,6 +1,18 @@
 import { spawn, spawnSync } from "child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+
+function _normalizeWorkspacePath(rawPath: string): string {
+  const trimmed = String(rawPath || "").trim();
+  if (!trimmed) {
+    return path.resolve(process.cwd());
+  }
+  const expanded = trimmed.startsWith("~")
+    ? path.join(os.homedir(), trimmed.slice(1))
+    : trimmed;
+  return path.resolve(expanded);
+}
 
 function _resolveTimeoutMs(name: string, fallbackMs: number): number {
   const raw = Number(process.env[name] || "");
@@ -13,9 +25,9 @@ function _resolveTimeoutMs(name: string, fallbackMs: number): number {
 function _resolveVisibleHome(root: string): string {
   const explicit = String(process.env.QUAID_VISIBLE_HOME || "").trim();
   if (explicit) {
-    return path.resolve(explicit);
+    return _normalizeWorkspacePath(explicit);
   }
-  const resolved = path.resolve(root);
+  const resolved = _normalizeWorkspacePath(root);
   const base = path.basename(resolved);
   if (base.startsWith(".") && base.length > 1) {
     return path.join(path.dirname(resolved), base.slice(1));

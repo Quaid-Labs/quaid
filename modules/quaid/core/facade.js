@@ -108,7 +108,11 @@ function createQuaidFacade(deps) {
     },
     recallJournalStore: async (query, limit) => {
       const journalConfig = deps.getMemoryConfig().docs?.journal || {};
-      const journalDir = path.join(resolveVisibleInstanceRoot(), journalConfig.journalDir || "journal");
+      const visibleInstanceRoot = resolveVisibleInstanceRoot();
+      if (!visibleInstanceRoot) {
+        return [];
+      }
+      const journalDir = path.join(visibleInstanceRoot, journalConfig.journalDir || "journal");
       return recallFromJournal(query, limit, journalDir);
     },
     recallProjectStore: async (query, limit, project, docs) => {
@@ -1567,7 +1571,11 @@ Consider running: docs staleness updater (update-stale --apply)`;
   function resolveVisibleInstanceRoot() {
     const explicitInstance = String(process.env.QUAID_INSTANCE || "").trim();
     const instanceName = deps.instanceRoot ? path.basename(deps.instanceRoot) : explicitInstance;
-    return instanceName ? path.join(resolveVisibleHome(), "instances", instanceName) : resolveVisibleHome();
+    if (!instanceName) {
+      console.warn("[quaid][facade] unable to resolve visible instance root: missing instanceRoot and QUAID_INSTANCE");
+      return null;
+    }
+    return path.join(resolveVisibleHome(), "instances", instanceName);
   }
   function resolveProjectHome(homeDir) {
     const raw = String(homeDir || "").trim();
@@ -2671,14 +2679,16 @@ ${header}${journalContent}` : `${header}${journalContent}`;
     try {
       const sections = [];
       const identityDir = resolveVisibleInstanceRoot();
-      for (const idFile of ["USER.md", "SOUL.md", "ENVIRONMENT.md"]) {
-        const filePath = path.join(identityDir, idFile);
-        if (fs.existsSync(filePath)) {
-          try {
-            const content = fs.readFileSync(filePath, "utf8").trim();
-            if (content) sections.push(`--- ${idFile} ---
+      if (identityDir) {
+        for (const idFile of ["USER.md", "SOUL.md", "ENVIRONMENT.md"]) {
+          const filePath = path.join(identityDir, idFile);
+          if (fs.existsSync(filePath)) {
+            try {
+              const content = fs.readFileSync(filePath, "utf8").trim();
+              if (content) sections.push(`--- ${idFile} ---
 ${content}`);
-          } catch {
+            } catch {
+            }
           }
         }
       }

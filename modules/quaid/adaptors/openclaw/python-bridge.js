@@ -1,6 +1,15 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+function _normalizeWorkspacePath(rawPath) {
+  const trimmed = String(rawPath || "").trim();
+  if (!trimmed) {
+    return path.resolve(process.cwd());
+  }
+  const expanded = trimmed.startsWith("~") ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
+  return path.resolve(expanded);
+}
 function _resolveTimeoutMs(name, fallbackMs) {
   const raw = Number(process.env[name] || "");
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -8,19 +17,30 @@ function _resolveTimeoutMs(name, fallbackMs) {
   }
   return Math.floor(raw);
 }
-export const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 12e4);
-function _formatBridgeErrorDetail(stderrText, stdoutText) {
-  const timeoutHint = /timed out|timeout|Gateway LLM proxy transient error|URLError|TimeoutError/i.test(stderrText) ? "[hint] upstream llm timeout/connection issue detected" : "";
-  const compactStderr = stderrText.length > 900 ? `${stderrText.slice(0, 420)} ... [truncated] ... ${stderrText.slice(-420)}` : stderrText;
-  return [timeoutHint, compactStderr ? `stderr: ${compactStderr}` : "", stdoutText ? `stdout: ${stdoutText}` : ""].filter(Boolean).join(" | ").slice(0, 2e3);
+function _resolveVisibleHome(root) {
+  const explicit = String(process.env.QUAID_VISIBLE_HOME || "").trim();
+  if (explicit) {
+    return _normalizeWorkspacePath(explicit);
+  }
+  const resolved = _normalizeWorkspacePath(root);
+  const base = path.basename(resolved);
+  if (base.startsWith(".") && base.length > 1) {
+    return path.join(path.dirname(resolved), base.slice(1));
+  }
+  return resolved;
 }
+const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 12e4);
 function _pythonVersionOk(bin) {
   const candidate = String(bin || "").trim();
   if (!candidate) {
     return false;
   }
   try {
-    const result = spawnSync(candidate, ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"], { stdio: "ignore" });
+    const result = spawnSync(
+      candidate,
+      ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+      { stdio: "ignore" }
+    );
     return !result.error && result.status === 0;
   } catch {
     return false;
@@ -54,8 +74,16 @@ function _resolvePythonBin() {
   }
   return explicit || "python3";
 }
-const _PYTHON_BIN = _resolvePythonBin();
-export function createPythonBridgeExecutor(config) {
+const PYTHON_BIN = _resolvePythonBin();
+function _formatBridgeErrorDetail(stderrText, stdoutText) {
+  const timeoutHint = /timed out|timeout|Gateway LLM proxy transient error|URLError|TimeoutError/i.test(stderrText) ? "[hint] upstream llm timeout/connection issue detected" : "";
+  return [
+    timeoutHint,
+    stderrText ? `stderr: ${stderrText}` : "",
+    stdoutText ? `stdout: ${stdoutText}` : ""
+  ].filter(Boolean).join(" | ");
+}
+function createPythonBridgeExecutor(config) {
   const explicitRoot = String(config.pluginRoot || "").trim();
   const modernRoot = path.join(config.workspace, "modules", "quaid");
   const legacyRoot = path.join(config.workspace, "plugins", "quaid");
@@ -65,12 +93,13 @@ export function createPythonBridgeExecutor(config) {
   const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;
   return async function execPython(command, args = []) {
     return new Promise((resolve, reject) => {
-      const proc = spawn(_PYTHON_BIN, [config.scriptPath, command, ...args], {
+      const proc = spawn(PYTHON_BIN, [config.scriptPath, command, ...args], {
         cwd: config.workspace,
         env: {
           ...process.env,
           MEMORY_DB_PATH: config.dbPath,
           QUAID_HOME: config.workspace,
+          QUAID_VISIBLE_HOME: _resolveVisibleHome(config.workspace),
           QUAID_WORKSPACE: config.workspace,
           OPENCLAW_WORKSPACE: config.workspace,
           PYTHONPATH: pythonPath
@@ -118,3 +147,7 @@ export function createPythonBridgeExecutor(config) {
     });
   };
 }
+export {
+  PYTHON_BRIDGE_TIMEOUT_MS,
+  createPythonBridgeExecutor
+};
