@@ -137,7 +137,7 @@ def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
 
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-    cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
     cursor_dir.mkdir(parents=True, exist_ok=True)
     (cursor_dir / "sess-1.json").write_text(
         (
@@ -187,7 +187,7 @@ def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypat
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
 
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-    cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
     cursor_dir.mkdir(parents=True, exist_ok=True)
     (cursor_dir / "sess-1.json").write_text(
         (
@@ -236,7 +236,7 @@ def test_check_idle_sessions_timeout_signal_carries_compaction_metadata(monkeypa
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
 
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-    cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
     cursor_dir.mkdir(parents=True, exist_ok=True)
     (cursor_dir / "sess-compact.json").write_text(
         (
@@ -300,7 +300,7 @@ class TestSignalDirIsolation:
 
         sig_dir = extraction_daemon._signal_dir()
 
-        assert str(sig_dir).startswith(str(tmp_path / "cc-instance")), (
+        assert str(sig_dir).startswith(str(tmp_path / "instances" / "cc-instance")), (
             f"signal dir {sig_dir} should be under instance root, not quaid home root"
         )
         # Must NOT be directly under QUAID_HOME
@@ -325,7 +325,7 @@ class TestSignalDirIsolation:
 
         cursor_dir = extraction_daemon._cursor_dir()
 
-        assert str(cursor_dir).startswith(str(tmp_path / "oc-instance"))
+        assert str(cursor_dir).startswith(str(tmp_path / "instances" / "oc-instance"))
 
     def test_two_different_instances_get_different_cursor_dirs(self, monkeypatch, tmp_path):
         """Two QUAID_INSTANCE values must produce two distinct cursor dirs."""
@@ -665,7 +665,7 @@ class TestCheckIdleSessions:
     """Additional coverage for check_idle_sessions() paths."""
 
     def _setup_cursor(self, tmp_path, instance_id, session_id, line_offset, transcript_path):
-        cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
+        cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
         cursor_dir.mkdir(parents=True, exist_ok=True)
         cursor_file = cursor_dir / f"{session_id}.json"
         cursor_file.write_text(
@@ -679,7 +679,7 @@ class TestCheckIdleSessions:
         return cursor_file
 
     def _setup_rolling_state(self, tmp_path, instance_id, session_id, carry_facts, transcript_path):
-        rolling_dir = tmp_path / instance_id / "data" / "rolling-extraction"
+        rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
         rolling_dir.mkdir(parents=True, exist_ok=True)
         state_file = rolling_dir / f"{session_id}.json"
         state_file.write_text(
@@ -713,7 +713,7 @@ class TestCheckIdleSessions:
 
 class TestRollingExtraction:
     def _setup_cursor(self, tmp_path, instance_id, session_id, line_offset, transcript_path):
-        cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
+        cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
         cursor_dir.mkdir(parents=True, exist_ok=True)
         cursor_file = cursor_dir / f"{session_id}.json"
         cursor_file.write_text(
@@ -727,7 +727,7 @@ class TestRollingExtraction:
         return cursor_file
 
     def _setup_rolling_state(self, tmp_path, instance_id, session_id, carry_facts, transcript_path):
-        rolling_dir = tmp_path / instance_id / "data" / "rolling-extraction"
+        rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
         rolling_dir.mkdir(parents=True, exist_ok=True)
         state_file = rolling_dir / f"{session_id}.json"
         state_file.write_text(
@@ -930,9 +930,9 @@ class TestRollingExtraction:
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
-        config_dir = tmp_path / "rolling-inst" / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "config.json").write_text(
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
             json.dumps(
                 {
                     "adapter": {"type": "standalone"},
@@ -958,13 +958,13 @@ class TestRollingExtraction:
             fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
         class _FakeAdapter:
             def quaid_home(self):
-                return tmp_path / "rolling-inst"
+                return tmp_path
 
             def instance_root(self):
-                return tmp_path / "rolling-inst"
+                return instance_root
 
             def data_dir(self):
-                return tmp_path / "rolling-inst" / "data"
+                return instance_root / "data"
 
             def parse_session_jsonl(self, path):
                 return 'User: My sister is Diana\n\nAssistant: Noted'
@@ -1120,7 +1120,7 @@ class TestRollingExtraction:
             assert stage_metric["embedding_cache_requested"] == 1
             assert stage_metric["embedding_cache_warmed"] == 1
             assert stage_metric["assessment_usable"] == 1
-            buffer_log = (tmp_path / "rolling-inst" / "logs" / "daemon" / "extraction-buffer.log").read_text(
+            buffer_log = (instance_root / "logs" / "daemon" / "extraction-buffer.log").read_text(
                 encoding="utf-8"
             )
             assert "phase=rolling_stage" in buffer_log
@@ -1202,9 +1202,9 @@ class TestRollingExtraction:
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
-        config_dir = tmp_path / "rolling-inst" / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "config.json").write_text(
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
             json.dumps(
                 {
                     "adapter": {"type": "standalone"},
@@ -1224,7 +1224,7 @@ class TestRollingExtraction:
                 "semantic_buffer": "User: My sister is Diana\n\nAssistant: Her daughter is Alice",
                 "semantic_buffer_tokens": 12,
                 "carry_facts": [],
-                "raw_facts": [],
+                "raw_facts": [{"text": "Owner has a sister named Diana", "category": "fact"}],
             },
         )
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
@@ -1242,13 +1242,13 @@ class TestRollingExtraction:
 
         class _FakeAdapter:
             def quaid_home(self):
-                return tmp_path / "rolling-inst"
+                return tmp_path
 
             def instance_root(self):
-                return tmp_path / "rolling-inst"
+                return instance_root
 
             def data_dir(self):
-                return tmp_path / "rolling-inst" / "data"
+                return instance_root / "data"
 
             def parse_session_jsonl(self, path):
                 return "unused when semantic buffer is present"
@@ -1284,7 +1284,7 @@ class TestRollingExtraction:
                 "raw_snippets": {},
                 "raw_journal": {},
                 "raw_project_logs": {},
-                "carry_facts": [],
+                "carry_facts": [{"text": "Owner has a sister named Diana"}],
                 "carry_duplicate_facts_dropped": 0,
                 "chunks_processed": 1,
                 "chunks_total": 1,
@@ -1352,12 +1352,205 @@ class TestRollingExtraction:
             assert seen_transcripts == ["User: My sister is Diana\n\nAssistant: Her daughter is Alice"]
             assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
             assert not extraction_daemon._rolling_state_path("sess-roll").exists()
-            buffer_log = (tmp_path / "rolling-inst" / "logs" / "daemon" / "extraction-buffer.log").read_text(
+            buffer_log = (instance_root / "logs" / "daemon" / "extraction-buffer.log").read_text(
                 encoding="utf-8"
             )
             assert "phase=final_flush" in buffer_log
             assert "signal=session_end" in buffer_log
             assert "Her daughter is Alice" in buffer_log
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
+    def test_process_signal_session_end_emits_rolling_stage_before_flushing_over_budget_buffer(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"My sister is Diana"}\n'
+            '{"role":"assistant","content":"Her daughter is Alice"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
+            json.dumps(
+                {
+                    "adapter": {"type": "standalone"},
+                    "livetest": {"enableExtractionBufferLog": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
+        extraction_daemon.write_rolling_state(
+            "sess-roll",
+            {
+                "session_id": "sess-roll",
+                "transcript_path": str(transcript_path),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: My sister is Diana\n\nAssistant: Her daughter is Alice",
+                "semantic_buffer_tokens": 12,
+                "carry_facts": [],
+                "raw_facts": [],
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8_000: 10)
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                return "unused when semantic buffer is present"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        seen_transcripts = []
+        rolling_metrics = []
+        stage_payload = {
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "dry_run": True,
+            "raw_facts": [{"text": "Owner has a sister named Diana", "category": "fact"}],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [{"text": "Owner has a sister named Diana"}],
+            "carry_duplicate_facts_dropped": 0,
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "root_chunks": 1,
+            "split_events": 0,
+            "split_child_chunks": 0,
+            "leaf_chunks": 1,
+            "max_split_depth": 0,
+            "chunk_calls": 1,
+            "deep_calls": 1,
+            "repair_calls": 0,
+            "assessment_usable": 1,
+            "assessment_nothing_usable": 0,
+            "assessment_needs_smaller_chunk": 0,
+            "unclassified_empty_payloads": 0,
+        }
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or dict(stage_payload),
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: {
+                **payload,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(
+            ingest_runtime_mod,
+            "run_session_logs_ingest",
+            lambda **kwargs: {"status": "indexed"},
+        )
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(
+            docs_updater_mod,
+            "update_project_docs",
+            lambda snapshots, extraction_result: {"docs_updated": 0},
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_read_usage_totals",
+            lambda: {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "fast_calls": 0,
+                "fast_input_tokens": 0,
+                "fast_output_tokens": 0,
+                "deep_calls": 0,
+                "deep_input_tokens": 0,
+                "deep_output_tokens": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_rolling_metric",
+            lambda event, session_id, **data: rolling_metrics.append(
+                {"event": event, "session_id": session_id, **data}
+            ),
+        )
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id="sess-roll",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert seen_transcripts == ["User: My sister is Diana\n\nAssistant: Her daughter is Alice"]
+            assert [metric["event"] for metric in rolling_metrics[-2:]] == ["rolling_stage", "rolling_flush"]
+            assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
+            assert not extraction_daemon._rolling_state_path("sess-roll").exists()
+            buffer_log = (instance_root / "logs" / "daemon" / "extraction-buffer.log").read_text(
+                encoding="utf-8"
+            )
+            assert "phase=rolling_stage" in buffer_log
+            assert "signal=session_end" in buffer_log
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry
@@ -1386,9 +1579,9 @@ class TestRollingExtraction:
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
-        config_dir = tmp_path / "rolling-inst" / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "config.json").write_text(
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
             json.dumps({"adapter": {"type": "standalone"}}),
             encoding="utf-8",
         )
@@ -1409,13 +1602,13 @@ class TestRollingExtraction:
             fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
         class _FakeAdapter:
             def quaid_home(self):
-                return tmp_path / "rolling-inst"
+                return tmp_path
 
             def instance_root(self):
-                return tmp_path / "rolling-inst"
+                return instance_root
 
             def data_dir(self):
-                return tmp_path / "rolling-inst" / "data"
+                return instance_root / "data"
 
             def parse_session_jsonl(self, path):
                 return 'User: My sister is Diana\n\nAssistant: Noted'

@@ -1264,6 +1264,152 @@ def _buffer_transcript_tail(
     return merged, metrics
 
 
+def _stage_semantic_buffer_payload(
+    *,
+    session_id: str,
+    signal_type: str,
+    transcript_path: str,
+    label: str,
+    owner: str,
+    staged_state: Dict[str, Any],
+    buffered_line_offset: int,
+    new_lines: List[str],
+    semantic_buffer_metrics: Dict[str, int],
+    chunk_budget: int,
+    chunk_line_budget: int,
+) -> Dict[str, Any]:
+    transcript_text = str(staged_state.get("semantic_buffer", "") or "").strip()
+    staged_state = dict(staged_state or {})
+    if not transcript_text:
+        staged_state["semantic_buffer"] = ""
+        staged_state["semantic_buffer_tokens"] = 0
+        staged_state["buffered_line_offset"] = buffered_line_offset
+        staged_state["processed_line_offset"] = buffered_line_offset
+        staged_state["transcript_path"] = transcript_path
+        write_rolling_state(session_id, staged_state)
+        return staged_state
+
+    from ingest.extract import extract_from_transcript
+
+    stage_started_at = time.time()
+    line_chars = int(semantic_buffer_metrics.get("semantic_chars_added", 0) or len(transcript_text))
+    line_estimated_tokens = int(
+        staged_state.get("semantic_buffer_tokens", 0)
+        or semantic_buffer_metrics.get("semantic_tokens_added", 0)
+        or 0
+    )
+    max_line_chars = max((len(line) for line in new_lines), default=0)
+    max_line_estimated_tokens = max((max(1, len(line) // 4) for line in new_lines), default=0)
+    carry_facts_in = len(staged_state.get("carry_facts", []) or [])
+    stage_result = extract_from_transcript(
+        transcript=transcript_text,
+        owner_id=owner,
+        label=label,
+        session_id=session_id,
+        dry_run=True,
+        carry_facts=list(staged_state.get("carry_facts", []) or []),
+        wall_timeout_seconds=600.0,
+    )
+    stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
+    chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
+    chunks_total = int(stage_result.get("chunks_total", 0) or 0)
+    unclassified_empty = int(stage_result.get("unclassified_empty_payloads", 0) or 0)
+    if unclassified_empty > 0:
+        logger.warning(
+            "[%s] session %s: %d/%d chunks returned empty payloads "
+            "(model responded but no extractable signal); counting as processed",
+            label, session_id, unclassified_empty, chunks_total,
+        )
+    failed_chunks = chunks_total - chunks_processed - unclassified_empty
+    if failed_chunks > 0:
+        logger.error(
+            "[%s] session %s: %d/%d chunks failed extraction "
+            "(non-provider failure); saving transcript for janitor recovery",
+            label, session_id, failed_chunks, chunks_total,
+        )
+        _save_deferred_extraction(
+            session_id=session_id,
+            transcript_text=transcript_text,
+            owner_id=owner,
+            label=label,
+            reason=f"non_provider_failure_{failed_chunks}_of_{chunks_total}_chunks",
+        )
+    staged_state = merge_staged_payloads(staged_state, stage_result)
+    staged_state["processed_line_offset"] = buffered_line_offset
+    staged_state["buffered_line_offset"] = buffered_line_offset
+    _write_extraction_buffer_log(
+        session_id,
+        phase="rolling_stage",
+        signal_type=signal_type,
+        transcript_text=transcript_text,
+    )
+    staged_state["semantic_buffer"] = ""
+    staged_state["semantic_buffer_tokens"] = 0
+    staged_state["transcript_path"] = transcript_path
+    write_rolling_state(session_id, staged_state)
+    write_rolling_metric(
+        "rolling_stage",
+        session_id,
+        signal_type=signal_type,
+        line_count=int(semantic_buffer_metrics.get("raw_lines_added", len(new_lines)) or 0),
+        line_chars=line_chars,
+        line_estimated_tokens=line_estimated_tokens,
+        max_line_chars=max_line_chars,
+        max_line_estimated_tokens=max_line_estimated_tokens,
+        chunk_budget_tokens=chunk_budget,
+        chunk_budget_lines=chunk_line_budget,
+        buffered_line_offset=buffered_line_offset,
+        new_cursor_offset=buffered_line_offset,
+        staged_fact_count=len(staged_state.get("raw_facts", []) or []),
+        rolling_batches=int(staged_state.get("rolling_batches", 0) or 0),
+        carry_facts_in=carry_facts_in,
+        carry_facts_out=len(stage_result.get("carry_facts", []) or []),
+        payload_duplicate_facts_collapsed=int(
+            staged_state.get("payload_duplicate_facts_collapsed", 0) or 0
+        ),
+        carry_duplicate_facts_dropped=int(stage_result.get("carry_duplicate_facts_dropped", 0) or 0),
+        embedding_cache_requested=int(stage_embedding_stats.get("requested", 0) or 0),
+        embedding_cache_unique=int(stage_embedding_stats.get("unique", 0) or 0),
+        embedding_cache_hits=int(stage_embedding_stats.get("cache_hits", 0) or 0),
+        embedding_cache_warmed=int(stage_embedding_stats.get("warmed", 0) or 0),
+        embedding_cache_failed=int(stage_embedding_stats.get("failed", 0) or 0),
+        stage_raw_fact_count=len(stage_result.get("raw_facts", []) or []),
+        chunks_processed=chunks_processed,
+        chunks_total=chunks_total,
+        root_chunks=int(stage_result.get("root_chunks", 0) or 0),
+        split_events=int(stage_result.get("split_events", 0) or 0),
+        split_child_chunks=int(stage_result.get("split_child_chunks", 0) or 0),
+        leaf_chunks=int(stage_result.get("leaf_chunks", 0) or 0),
+        max_split_depth=int(stage_result.get("max_split_depth", 0) or 0),
+        deep_calls=int(stage_result.get("deep_calls", 0) or 0),
+        repair_calls=int(stage_result.get("repair_calls", 0) or 0),
+        assessment_usable=int(stage_result.get("assessment_usable", 0) or 0),
+        assessment_nothing_usable=int(stage_result.get("assessment_nothing_usable", 0) or 0),
+        assessment_needs_smaller_chunk=int(stage_result.get("assessment_needs_smaller_chunk", 0) or 0),
+        unclassified_empty_payloads=int(stage_result.get("unclassified_empty_payloads", 0) or 0),
+        staged_semantic_duplicate_facts_collapsed=int(
+            staged_state.get("staged_semantic_duplicate_facts_collapsed", 0) or 0
+        ),
+        staged_semantic_auto_reject_hits=int(
+            staged_state.get("staged_semantic_auto_reject_hits", 0) or 0
+        ),
+        staged_semantic_gray_zone_rows=int(
+            staged_state.get("staged_semantic_gray_zone_rows", 0) or 0
+        ),
+        staged_semantic_llm_checks=int(
+            staged_state.get("staged_semantic_llm_checks", 0) or 0
+        ),
+        staged_semantic_llm_same_hits=int(
+            staged_state.get("staged_semantic_llm_same_hits", 0) or 0
+        ),
+        staged_semantic_llm_different_hits=int(
+            staged_state.get("staged_semantic_llm_different_hits", 0) or 0
+        ),
+        wall_seconds=round(time.time() - stage_started_at, 3),
+    )
+    return staged_state
+
+
 def count_transcript_lines(transcript_path: str) -> int:
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
@@ -1789,6 +1935,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     try:
         from ingest.extract import extract_from_transcript, apply_extracted_payloads
 
+        owner = _get_owner_id()
         transcript_text = ""
         if new_lines:
             tmp_dir = _tmp_dir()
@@ -1805,6 +1952,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if rolling_mode:
             transcript_text = str(staged_state.get("semantic_buffer", "") or "").strip()
         elif _semantic_buffer_has_content(staged_state):
+            if int(staged_state.get("semantic_buffer_tokens", 0) or 0) >= chunk_budget:
+                operation_phase = "rolling_stage_extract"
+                staged_state = _stage_semantic_buffer_payload(
+                    session_id=session_id,
+                    signal_type=signal_type,
+                    transcript_path=transcript_path,
+                    label=label,
+                    owner=owner,
+                    staged_state=staged_state,
+                    buffered_line_offset=buffered_line_offset,
+                    new_lines=new_lines,
+                    semantic_buffer_metrics=semantic_buffer_metrics,
+                    chunk_budget=chunk_budget,
+                    chunk_line_budget=chunk_line_budget,
+                )
             buffered_text = str(staged_state.get("semantic_buffer", "") or "").strip()
             tail_text = str(transcript_text or "").strip()
             transcript_text = f"{buffered_text}\n\n{tail_text}" if buffered_text and tail_text else (buffered_text or tail_text)
@@ -1845,7 +2007,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     mark_signal_processed(signal_data)
                     return
 
-        owner = _get_owner_id()
         harvestable = []
         snapshots = []
         mark_harvested_fn = None
@@ -1915,134 +2076,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 write_cursor(session_id, buffered_line_offset, transcript_path)
                 mark_signal_processed(signal_data)
                 return
-            stage_started_at = time.time()
-            line_chars = int(semantic_buffer_metrics.get("semantic_chars_added", 0) or len(transcript_text))
-            line_estimated_tokens = int(
-                staged_state.get("semantic_buffer_tokens", 0)
-                or semantic_buffer_metrics.get("semantic_tokens_added", 0)
-                or 0
-            )
-            max_line_chars = max((len(line) for line in new_lines), default=0)
-            max_line_estimated_tokens = max((max(1, len(line) // 4) for line in new_lines), default=0)
-            carry_facts_in = len(staged_state.get("carry_facts", []) or [])
-            stage_result = extract_from_transcript(
-                transcript=transcript_text,
-                owner_id=owner,
-                label=label,
+            staged_state = _stage_semantic_buffer_payload(
                 session_id=session_id,
-                dry_run=True,
-                carry_facts=list(staged_state.get("carry_facts", []) or []),
-                wall_timeout_seconds=600.0,
-            )
-            stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
-            chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
-            chunks_total = int(stage_result.get("chunks_total", 0) or 0)
-            unclassified_empty = int(stage_result.get("unclassified_empty_payloads", 0) or 0)
-            if unclassified_empty > 0:
-                # Model responded but produced no extractable signal and didn't
-                # explicitly say "nothing_usable". This is a model quality issue,
-                # not a provider error — the LLM ran, it just didn't find facts.
-                # Count as processed; the extraction prompt should return
-                # "nothing_usable" for genuinely empty content.
-                logger.warning(
-                    "[%s] session %s: %d/%d chunks returned empty payloads "
-                    "(model responded but no extractable signal); counting as processed",
-                    label, session_id, unclassified_empty, chunks_total,
-                )
-            _failed_chunks = chunks_total - chunks_processed - unclassified_empty
-            if _failed_chunks > 0:
-                # Confirmed provider outages raise ProviderUnavailableError from
-                # call_llm, which propagates up and kills the daemon (auto-restarts
-                # on next hook call). If we reach this point, it means chunks failed
-                # for a non-provider reason (deadline exhaustion, extraction bug).
-                # Save transcript for janitor recovery and proceed.
-                logger.error(
-                    "[%s] session %s: %d/%d chunks failed extraction "
-                    "(non-provider failure); saving transcript for janitor recovery",
-                    label, session_id, _failed_chunks, chunks_total,
-                )
-                _save_deferred_extraction(
-                    session_id=session_id,
-                    transcript_text=transcript_text,
-                    owner_id=owner,
-                    label=label,
-                    reason=f"non_provider_failure_{_failed_chunks}_of_{chunks_total}_chunks",
-                )
-            staged_state = merge_staged_payloads(staged_state, stage_result)
-            staged_state["processed_line_offset"] = buffered_line_offset
-            staged_state["buffered_line_offset"] = buffered_line_offset
-            _write_extraction_buffer_log(
-                session_id,
-                phase="rolling_stage",
                 signal_type=signal_type,
-                transcript_text=transcript_text,
+                transcript_path=transcript_path,
+                label=label,
+                owner=owner,
+                staged_state=staged_state,
+                buffered_line_offset=buffered_line_offset,
+                new_lines=new_lines,
+                semantic_buffer_metrics=semantic_buffer_metrics,
+                chunk_budget=chunk_budget,
+                chunk_line_budget=chunk_line_budget,
             )
-            staged_state["semantic_buffer"] = ""
-            staged_state["semantic_buffer_tokens"] = 0
-            staged_state["transcript_path"] = transcript_path
-            write_rolling_state(session_id, staged_state)
             write_cursor(session_id, buffered_line_offset, transcript_path)
             mark_signal_processed(signal_data)
-            write_rolling_metric(
-                "rolling_stage",
-                session_id,
-                signal_type=signal_type,
-                line_count=int(semantic_buffer_metrics.get("raw_lines_added", len(new_lines)) or 0),
-                line_chars=line_chars,
-                line_estimated_tokens=line_estimated_tokens,
-                max_line_chars=max_line_chars,
-                max_line_estimated_tokens=max_line_estimated_tokens,
-                chunk_budget_tokens=chunk_budget,
-                chunk_budget_lines=chunk_line_budget,
-                buffered_line_offset=buffered_line_offset,
-                new_cursor_offset=buffered_line_offset,
-                staged_fact_count=len(staged_state.get("raw_facts", []) or []),
-                rolling_batches=int(staged_state.get("rolling_batches", 0) or 0),
-                carry_facts_in=carry_facts_in,
-                carry_facts_out=len(stage_result.get("carry_facts", []) or []),
-                payload_duplicate_facts_collapsed=int(
-                    staged_state.get("payload_duplicate_facts_collapsed", 0) or 0
-                ),
-                carry_duplicate_facts_dropped=int(stage_result.get("carry_duplicate_facts_dropped", 0) or 0),
-                embedding_cache_requested=int(stage_embedding_stats.get("requested", 0) or 0),
-                embedding_cache_unique=int(stage_embedding_stats.get("unique", 0) or 0),
-                embedding_cache_hits=int(stage_embedding_stats.get("cache_hits", 0) or 0),
-                embedding_cache_warmed=int(stage_embedding_stats.get("warmed", 0) or 0),
-                embedding_cache_failed=int(stage_embedding_stats.get("failed", 0) or 0),
-                stage_raw_fact_count=len(stage_result.get("raw_facts", []) or []),
-                chunks_processed=chunks_processed,
-                chunks_total=chunks_total,
-                root_chunks=int(stage_result.get("root_chunks", 0) or 0),
-                split_events=int(stage_result.get("split_events", 0) or 0),
-                split_child_chunks=int(stage_result.get("split_child_chunks", 0) or 0),
-                leaf_chunks=int(stage_result.get("leaf_chunks", 0) or 0),
-                max_split_depth=int(stage_result.get("max_split_depth", 0) or 0),
-                deep_calls=int(stage_result.get("deep_calls", 0) or 0),
-                repair_calls=int(stage_result.get("repair_calls", 0) or 0),
-                assessment_usable=int(stage_result.get("assessment_usable", 0) or 0),
-                assessment_nothing_usable=int(stage_result.get("assessment_nothing_usable", 0) or 0),
-                assessment_needs_smaller_chunk=int(stage_result.get("assessment_needs_smaller_chunk", 0) or 0),
-                unclassified_empty_payloads=int(stage_result.get("unclassified_empty_payloads", 0) or 0),
-                staged_semantic_duplicate_facts_collapsed=int(
-                    staged_state.get("staged_semantic_duplicate_facts_collapsed", 0) or 0
-                ),
-                staged_semantic_auto_reject_hits=int(
-                    staged_state.get("staged_semantic_auto_reject_hits", 0) or 0
-                ),
-                staged_semantic_gray_zone_rows=int(
-                    staged_state.get("staged_semantic_gray_zone_rows", 0) or 0
-                ),
-                staged_semantic_llm_checks=int(
-                    staged_state.get("staged_semantic_llm_checks", 0) or 0
-                ),
-                staged_semantic_llm_same_hits=int(
-                    staged_state.get("staged_semantic_llm_same_hits", 0) or 0
-                ),
-                staged_semantic_llm_different_hits=int(
-                    staged_state.get("staged_semantic_llm_different_hits", 0) or 0
-                ),
-                wall_seconds=round(time.time() - stage_started_at, 3),
-            )
             return
 
         tail_result = None
