@@ -44,6 +44,8 @@ function parseInstallArgs(argv) {
     artifact: "",
     agent: false,
     claudeCode: false,
+    force: false,
+    addInstance: false,
     dryRun: false,
     survey: false,
     help: false,
@@ -192,6 +194,14 @@ function parseInstallArgs(argv) {
       opts.claudeCode = true;
       continue;
     }
+    if (arg === "--force") {
+      opts.force = true;
+      continue;
+    }
+    if (arg === "--add-instance") {
+      opts.addInstance = true;
+      continue;
+    }
     if (arg === "--dry-run") {
       opts.dryRun = true;
       continue;
@@ -222,6 +232,10 @@ Options:
   --artifact <path>   Local file path or URL to .tar.gz when --source artifact
   --agent             Non-interactive agent mode (accepts sane defaults)
   --claude-code       Install for Claude Code (hooks + OAuth provider)
+  --add-instance      Allow install on a host that already has Quaid and
+                      provision a new silo without rewriting the OpenClaw
+                      fallback QUAID_INSTANCE.
+  --force             Allow a full reinstall on a host that already has Quaid.
   --dry-run           Run all prompts and checks but skip writes — outputs the
                       install plan and exits. Useful for validating interactive
                       UX and comparing against agent-mode output.
@@ -246,6 +260,9 @@ const INSTALL_REF = String(INSTALL_ARGS.ref || process.env.QUAID_INSTALL_REF || 
 const INSTALL_GITHUB_REPO = String(INSTALL_ARGS.githubRepo || process.env.QUAID_INSTALL_GITHUB_REPO || "quaid-labs/quaid").trim();
 const INSTALL_ARTIFACT = String(INSTALL_ARGS.artifact || process.env.QUAID_INSTALL_ARTIFACT || "").trim();
 const SURVEY_ONLY = !!INSTALL_ARGS.survey;
+const FORCE_INSTALL = !!INSTALL_ARGS.force;
+const ADD_INSTANCE_MODE = !!INSTALL_ARGS.addInstance;
+const ALLOW_EXISTING_INSTALL = FORCE_INSTALL || ADD_INSTANCE_MODE;
 if (!["local", "github", "artifact"].includes(INSTALL_SOURCE)) {
   console.error(`[x] Invalid --source: ${INSTALL_SOURCE}`);
   console.error("    Expected one of: local, github, artifact");
@@ -892,6 +909,29 @@ function detectExistingInstallState() {
     || pluginMarker
   );
   return { hasInstall, instances };
+}
+
+function _existingInstallGuardMessage(installState) {
+  const instances = Array.isArray(installState?.instances) ? installState.instances : [];
+  const existingInstanceId = String(process.env.QUAID_INSTANCE || "").trim();
+  const details = instances.length > 0
+    ? `Existing instances: ${instances.join(", ")}`
+    : "Existing Quaid files were detected on this host.";
+  const requested = existingInstanceId
+    ? `Requested instance: ${existingInstanceId}`
+    : "Requested instance: (default installer instance)";
+  const platform = String(resolvedInstallerPlatform() || "").trim().toLowerCase();
+  const modeHint = platform === "openclaw"
+    ? "Re-run with --add-instance to create another silo without changing the OpenClaw fallback instance, or use --force to intentionally re-run the full install."
+    : "Re-run with --add-instance to provision another silo, or use --force to intentionally re-run the full install."
+  return [
+    "Quaid is already installed on this host.",
+    details,
+    requested,
+    "",
+    "A second full install is blocked by default so the installer does not rewrite active host configuration accidentally.",
+    modeHint,
+  ].join("\n");
 }
 
 function resolveExistingOwnerIdentity() {
@@ -2495,10 +2535,18 @@ async function step1_preflight() {
   const installState = detectExistingInstallState();
   _existingInstallDetected = !!installState.hasInstall;
   if (_existingInstallDetected) {
+    if (!ALLOW_EXISTING_INSTALL) {
+      bail(_existingInstallGuardMessage(installState));
+    }
     const details = installState.instances.length > 0
       ? ` (${installState.instances.length} existing instance${installState.instances.length === 1 ? "" : "s"})`
       : "";
     log.info(C.dim(`Existing Quaid install detected${details}. First-install-only setup will be skipped.`));
+    if (ADD_INSTANCE_MODE) {
+      log.info(C.dim("Add-instance mode enabled: installer will provision the new silo without rewriting the OpenClaw fallback instance."));
+    } else if (FORCE_INSTALL) {
+      log.warn("Force mode enabled: installer is allowed to re-run against an existing host install.");
+    }
   }
 
   // External adapter hooks can perform preflight checks or env bootstrap.
@@ -2663,7 +2711,11 @@ async function step1_preflight() {
     _sanitizeOpenClawQuaidPluginEntry();
     _removeOpenClawPluginsAllowQuaid();
     const _ocRuntimeInstance = resolvedInstallerInstanceId();
-    _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);
+    if (!(_existingInstallDetected && ADD_INSTANCE_MODE)) {
+      _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);
+    } else {
+      log.info(C.dim("Existing OpenClaw install detected — leaving fallback QUAID_INSTANCE unchanged in add-instance mode."));
+    }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
       s.message("Restarting OpenClaw gateway...");
