@@ -196,6 +196,27 @@ describe("lifecycle signal detection", () => {
     expect(__test.isSameSessionTranscriptRollover(3, 5, 128, 1024)).toBe(false);
   });
 
+  it("prefers previousSessionEntry.sessionFile for reset/new lifecycle extraction", () => {
+    expect(
+      __test.resolveLifecycleTranscriptPath("reset", {
+        context: {
+          previousSessionEntry: { sessionFile: "/tmp/prev.jsonl" },
+          sessionEntry: { sessionFile: "/tmp/current.jsonl" },
+        },
+      }, {}),
+    ).toBe("/tmp/prev.jsonl");
+  });
+
+  it("falls back to current sessionEntry.sessionFile for compaction lifecycle extraction", () => {
+    expect(
+      __test.resolveLifecycleTranscriptPath("compact", {
+        context: {
+          sessionEntry: { sessionFile: "/tmp/current.jsonl" },
+        },
+      }, {}),
+    ).toBe("/tmp/current.jsonl");
+  });
+
   it("summarizes recall diagnostics for hook tracing", () => {
     expect(__test.summarizeRecallDiagnostics({
       meta: {

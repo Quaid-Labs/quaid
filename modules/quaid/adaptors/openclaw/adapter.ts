@@ -334,6 +334,32 @@ function isSameSessionTranscriptRollover(
   return rowTruncated || sizeTruncated;
 }
 
+function resolveLifecycleTranscriptPath(
+  action: "new" | "reset" | "compact",
+  event: any,
+  ctx: any,
+): string {
+  const candidates: string[] = [];
+  const pushCandidate = (value: unknown) => {
+    const candidate = String(value || "").trim();
+    if (candidate) candidates.push(candidate);
+  };
+
+  if (action === "new" || action === "reset") {
+    pushCandidate(event?.context?.previousSessionEntry?.sessionFile);
+    pushCandidate(event?.previousSessionEntry?.sessionFile);
+  }
+
+  pushCandidate(event?.context?.sessionEntry?.sessionFile);
+  pushCandidate(ctx?.sessionEntry?.sessionFile);
+  pushCandidate(event?.sessionEntry?.sessionFile);
+  pushCandidate(event?.context?.sessionFile);
+  pushCandidate(ctx?.sessionFile);
+  pushCandidate(event?.sessionFile);
+
+  return candidates[0] || "";
+}
+
 function getOpenClawSessionsBaseDir(): string {
   return path.dirname(getOpenClawSessionsPath());
 }
@@ -3241,17 +3267,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     ) => {
       try {
         const sessionId = resolveLifecycleCommandTargetSessionId(action, event, ctx);
+        const preferredTranscriptPath = resolveLifecycleTranscriptPath(action, event, ctx);
         writeHookTrace("hook.command.received", {
           action,
           hook_session_id: sessionId || "",
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
           previous_session_entry_id: String(event?.previousSessionEntry?.sessionId || ""),
           previous_session_id: String(event?.previousSessionId || ""),
+          preferred_transcript_path: preferredTranscriptPath,
           transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || ""),
         });
         if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled("memory")) {
           return;
         }
+        preserveSessionTranscript(sessionId, preferredTranscriptPath, `command-${action}`);
         const signature = `hook:command_${action}`;
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
           label: "ResetSignal",
@@ -4039,9 +4068,11 @@ notify_memory_extraction(
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const extractionSessionId = facade.resolveLifecycleHookSessionId(event, ctx, conversationMessages);
+        const preferredTranscriptPath = resolveLifecycleTranscriptPath("reset", event, ctx);
         writeHookTrace("hook.before_reset.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",
+          preferred_transcript_path: preferredTranscriptPath,
           reason: String(reason || "unknown"),
           event_message_count: messages.length,
           conversation_message_count: conversationMessages.length,
@@ -4064,7 +4095,7 @@ notify_memory_extraction(
         // Snapshot the transcript synchronously before OC tears it down.
         // writeDaemonSignal (called inside doExtraction) reads sessionTranscriptPaths,
         // which preserveSessionTranscript updates to point at the preserved copy.
-        preserveSessionTranscript(extractionSessionId, null, "before_reset");
+        preserveSessionTranscript(extractionSessionId, preferredTranscriptPath, "before_reset");
 
         const doExtraction = async () => {
           // before_reset can race with session teardown; queue signal for worker tick.
@@ -4381,6 +4412,7 @@ export const __test = {
   markLifecycleSignalFromHook: (sessionId: string, label: "ResetSignal" | "CompactionSignal") =>
     facade.markLifecycleSignalFromHook(sessionId, label),
   isSameSessionTranscriptRollover,
+  resolveLifecycleTranscriptPath,
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
