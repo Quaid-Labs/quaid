@@ -326,6 +326,33 @@ class TestParseSessionJsonl:
         assert "Log ID:" not in result
         assert "Assistant: Normal assistant reply." in result
 
+    def test_strips_dedup_compare_prompt_block(self, tmp_path):
+        from ingest.extract import parse_session_jsonl
+
+        jsonl_file = tmp_path / "session.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": (
+                        "Compare Statement A against each candidate statement below.\n\n"
+                        "Statement A (new): \"A\"\n\n"
+                        "Candidates:\n1. \"B\"\n\n"
+                        "Respond with JSON only as an array of objects:\n"
+                        "[{\"pair\":1,\"is_same\":true}]"
+                    ),
+                }
+            ),
+            json.dumps({"role": "assistant", "content": "Normal assistant reply."}),
+        ]
+        jsonl_file.write_text("\n".join(lines))
+
+        result = parse_session_jsonl(str(jsonl_file))
+        assert "Compare Statement A" not in result
+        assert "Statement A (new):" not in result
+        assert "Candidates:" not in result
+        assert "Assistant: Normal assistant reply." in result
+
 
 # ---------------------------------------------------------------------------
 # extract_from_transcript tests

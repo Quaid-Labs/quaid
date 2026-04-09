@@ -169,6 +169,16 @@ describe("lifecycle signal detection", () => {
     ])).toBe(true);
   });
 
+  it("treats dedup compare transcripts as internal maintenance", () => {
+    expect(__test.isInternalTranscriptMessages([
+      {
+        role: "user",
+        content:
+          "Compare Statement A against each candidate statement below.\n\nStatement A (new): \"A\"\n\nCandidates:\n1. \"B\"\n\nRespond with JSON only as an array of objects:\n[{\"pair\":1,\"is_same\":true}]",
+      },
+    ])).toBe(true);
+  });
+
   it("extracts auto-inject query from direct event text when prompt/messages are empty", () => {
     const selected = __test.selectAutoInjectQuery(
       {

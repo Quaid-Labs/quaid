@@ -73,6 +73,11 @@ class QuaidAdapter(abc.ABC):
         r"You are reviewing \d+ dedup rejections in a personal knowledge base\.\s*.*",
         flags=re.DOTALL,
     )
+    _DEDUP_COMPARE_PROMPT_RE = re.compile(
+        r"Compare Statement A against each candidate statement below\.\s*.*"
+        r"Respond with JSON only as an array of objects:\s*\[.*",
+        flags=re.DOTALL,
+    )
 
     # ---- Paths ----
 
@@ -315,7 +320,10 @@ class QuaidAdapter(abc.ABC):
         value = self._OFFLINE_EXTRACTION_PROMPT_RE.sub("", value).strip()
         if not value:
             return ""
-        return self._DEDUP_REVIEW_PROMPT_RE.sub("", value).strip()
+        value = self._DEDUP_REVIEW_PROMPT_RE.sub("", value).strip()
+        if not value:
+            return ""
+        return self._DEDUP_COMPARE_PROMPT_RE.sub("", value).strip()
 
     @staticmethod
     def _transcript_label(role: str, source_type: str = "") -> str:
