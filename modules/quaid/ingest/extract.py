@@ -143,12 +143,10 @@ def _publish_trace_enabled() -> bool:
 def _publish_trace_path() -> Optional[Path]:
     if not _publish_trace_enabled():
         return None
-    workspace_raw = str(os.environ.get("OPENCLAW_WORKSPACE", "") or "").strip()
     instance = str(os.environ.get("QUAID_INSTANCE", "benchrunner") or "benchrunner").strip() or "benchrunner"
-    if not workspace_raw:
-        return None
-    workspace = Path(workspace_raw)
-    path = workspace / "instances" / instance / "logs" / "daemon" / "publish-trace.jsonl"
+    from lib.adapter import get_adapter
+
+    path = get_adapter().quaid_home() / "instances" / instance / "logs" / "daemon" / "publish-trace.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -31,12 +31,14 @@ def workspace_dir(tmp_path):
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     iroot = adapter.instance_root()
+    vroot = adapter.visible_instance_root()
 
     os.environ["OPENCLAW_WORKSPACE"] = str(iroot)
+    os.environ["QUAID_VISIBLE_HOME"] = str(tmp_path)
     os.environ["MOCK_EMBEDDINGS"] = "1"
 
-    # Create required directories
-    (iroot / "journal").mkdir(exist_ok=True)
+    # Create required directories in both hidden and visible roots.
+    (vroot / "journal").mkdir(parents=True, exist_ok=True)
 
     # Create minimal config
     config = {
@@ -59,8 +61,17 @@ def workspace_dir(tmp_path):
     reset_adapter()
     if "OPENCLAW_WORKSPACE" in os.environ:
         del os.environ["OPENCLAW_WORKSPACE"]
+    if "QUAID_VISIBLE_HOME" in os.environ:
+        del os.environ["QUAID_VISIBLE_HOME"]
     if "MOCK_EMBEDDINGS" in os.environ:
         del os.environ["MOCK_EMBEDDINGS"]
+
+
+@pytest.fixture
+def visible_workspace_dir(workspace_dir):
+    from lib.adapter import get_adapter
+
+    return get_adapter().visible_instance_root()
 
 
 @pytest.fixture
@@ -72,6 +83,7 @@ def mock_opus_response():
             {
                 "text": "Test user likes coffee",
                 "category": "preference",
+                "speaker": "user",
                 "domains": ["personal"],
                 "extraction_confidence": "high",
                 "keywords": "beverage drink caffeine morning",
@@ -82,6 +94,7 @@ def mock_opus_response():
             {
                 "text": "Test user's sister lives in Portland",
                 "category": "fact",
+                "speaker": "user",
                 "domains": ["personal"],
                 "extraction_confidence": "medium",
                 "keywords": "family sibling location oregon",
@@ -461,6 +474,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "User's mother is Wendy",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "high",
                 }
@@ -674,6 +688,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "Maya's half marathon finish time was 2:14",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "medium",
                     "keywords": "half marathon time",
@@ -681,6 +696,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "  Maya's half marathon finish time was 2:14  ",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["health", "personal"],
                     "extraction_confidence": "high",
                     "keywords": "running exact time",
@@ -726,8 +742,13 @@ class TestExtractFromTranscript:
 
         mock_llm.return_value = (json.dumps({
             "facts": [
-                {"text": "hi", "category": "fact"},
-                {"text": "User likes coffee very much", "category": "preference", "domains": ["personal"]},
+                {"text": "hi", "category": "fact", "speaker": "user"},
+                {
+                    "text": "User likes coffee very much",
+                    "category": "preference",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                },
             ]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -747,8 +768,18 @@ class TestExtractFromTranscript:
 
         mock_llm.return_value = (json.dumps({
             "facts": [
-                {"text": "User likes coffee a lot", "extraction_confidence": "high", "domains": ["personal"]},
-                {"text": "User might enjoy tea sometimes", "extraction_confidence": "low", "domains": ["personal"]},
+                {
+                    "text": "User likes coffee a lot",
+                    "speaker": "user",
+                    "extraction_confidence": "high",
+                    "domains": ["personal"],
+                },
+                {
+                    "text": "User might enjoy tea sometimes",
+                    "speaker": "user",
+                    "extraction_confidence": "low",
+                    "domains": ["personal"],
+                },
             ]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -775,12 +806,14 @@ class TestExtractFromTranscript:
                 {
                     "text": "Maya mentioned dietary tagging for the recipe app",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["project"],
                     "extraction_confidence": "high",
                 },
                 {
                     "text": "Maya's birthday dinner is planned for May 18",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "medium",
                 },
@@ -836,6 +869,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "maya currently lives in South Austin",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "high",
                     "edges": [{"subject": "maya", "relation": "lives_at", "object": "Austin"}],
@@ -843,6 +877,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "maya works as a product manager at a company called TechFlow",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["project"],
                     "extraction_confidence": "high",
                     "edges": [{"subject": "maya", "relation": "works_at", "object": "TechFlow"}],
@@ -942,6 +977,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "Maya's birthday dinner is planned for May 18",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "high",
                     "edges": [{"subject": "Maya", "relation": "plans", "object": "birthday dinner"}],
@@ -1018,12 +1054,14 @@ class TestExtractFromTranscript:
                 {
                     "text": "Maya's birthday dinner is planned for May 18",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "high",
                 },
                 {
                     "text": "Maya wants dietary tagging in the recipe app",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["project"],
                     "extraction_confidence": "high",
                 },
@@ -1105,6 +1143,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "Maya wants dietary tagging in the recipe app",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["project"],
                     "extraction_confidence": "high",
                 },
@@ -1165,6 +1204,7 @@ class TestExtractFromTranscript:
                 {
                     "text": "Maya's birthday dinner is planned for May 18",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "high",
                 },
@@ -1200,7 +1240,7 @@ class TestExtractFromTranscript:
             )
 
         assert applied["facts_stored"] == 1
-        trace_path = workspace_dir / "benchrunner" / "logs" / "daemon" / "publish-trace.jsonl"
+        trace_path = workspace_dir.parent / "benchrunner" / "logs" / "daemon" / "publish-trace.jsonl"
         rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         events = [row["event"] for row in rows]
         assert "publish_start" in events
@@ -1217,9 +1257,14 @@ class TestExtractFromTranscript:
         mock_llm.return_value = (json.dumps({
             "facts": [
                 "not-a-dict",
-                {"text": 123, "category": "fact"},
+                {"text": 123, "category": "fact", "speaker": "user"},
                 {"category": "fact"},
-                {"text": "User likes orange juice", "category": "preference", "domains": ["personal"]},
+                {
+                    "text": "User likes orange juice",
+                    "category": "preference",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                },
             ]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -1238,7 +1283,12 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
-            "facts": [{"text": "User likes oolong tea", "category": "fact", "domains": ["personal"]}]
+            "facts": [{
+                "text": "User likes oolong tea",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+            }]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
 
@@ -1265,7 +1315,12 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
-            "facts": [{"text": "User likes green tea", "category": "fact", "domains": ["personal"]}]
+            "facts": [{
+                "text": "User likes green tea",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+            }]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
 
@@ -1284,7 +1339,11 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
-            "facts": [{"text": "User likes jasmine tea in the morning", "category": "fact"}]
+            "facts": [{
+                "text": "User likes jasmine tea in the morning",
+                "category": "fact",
+                "speaker": "user",
+            }]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
 
@@ -1308,11 +1367,13 @@ class TestExtractFromTranscript:
                 {
                     "text": "User likes jasmine tea in the morning",
                     "category": "fact",
+                    "speaker": "user",
                     "domains": ["not_a_real_domain"],
                 },
                 {
                     "text": "User prefers black coffee after lunch",
                     "category": "preference",
+                    "speaker": "user",
                     "domains": ["personal"],
                 },
             ]
@@ -1335,7 +1396,12 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
-            "facts": [{"text": "User likes jasmine tea in the morning", "category": "fact", "domains": ["personal"]}]
+            "facts": [{
+                "text": "User likes jasmine tea in the morning",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+            }]
         }), 1.0)
         cfg = SimpleNamespace(
             capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_tokens=8000),
@@ -1361,7 +1427,7 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
-    def test_snippets_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
+    def test_snippets_written(self, mock_store, mock_llm, mock_opus_response, visible_workspace_dir):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
@@ -1376,12 +1442,12 @@ class TestExtractFromTranscript:
         assert "SOUL.md" in result["snippets"]
         assert len(result["snippets"]["SOUL.md"]) == 1
         # Check snippet file was created
-        snippet_file = workspace_dir / "SOUL.snippets.md"
+        snippet_file = visible_workspace_dir / "SOUL.snippets.md"
         assert snippet_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
-    def test_journal_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
+    def test_journal_written(self, mock_store, mock_llm, mock_opus_response, visible_workspace_dir):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
@@ -1394,12 +1460,12 @@ class TestExtractFromTranscript:
         )
 
         assert "SOUL.md" in result["journal"]
-        journal_file = workspace_dir / "journal" / "SOUL.journal.md"
+        journal_file = visible_workspace_dir / "journal" / "SOUL.journal.md"
         assert journal_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
-    def test_no_snippets_flag(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
+    def test_no_snippets_flag(self, mock_store, mock_llm, mock_opus_response, visible_workspace_dir):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
@@ -1413,12 +1479,12 @@ class TestExtractFromTranscript:
 
         # Snippets parsed but not written
         assert "SOUL.md" in result["snippets"]
-        snippet_file = workspace_dir / "SOUL.snippets.md"
+        snippet_file = visible_workspace_dir / "SOUL.snippets.md"
         assert not snippet_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
-    def test_no_journal_flag(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
+    def test_no_journal_flag(self, mock_store, mock_llm, mock_opus_response, visible_workspace_dir):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
@@ -1431,7 +1497,7 @@ class TestExtractFromTranscript:
         )
 
         assert "SOUL.md" in result["journal"]
-        journal_file = workspace_dir / "journal" / "SOUL.journal.md"
+        journal_file = visible_workspace_dir / "journal" / "SOUL.journal.md"
         assert not journal_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
@@ -1466,6 +1532,7 @@ class TestExtractFromTranscript:
             "facts": [{
                 "text": "Alice is friends with Bob the great",
                 "category": "relationship",
+                "speaker": "user",
                 "domains": ["personal"],
                 "edges": [{"subject": "Alice", "relation": "friend_of", "object": "Bob"}],
             }],
@@ -1502,6 +1569,7 @@ class TestExtractFromTranscript:
                         {
                             "text": "Maya changed jobs from TechFlow to Stripe",
                             "category": "fact",
+                            "speaker": "user",
                             "domains": ["work"],
                             "extraction_confidence": "high",
                         }
@@ -1540,6 +1608,7 @@ class TestExtractFromTranscript:
         repeated_fact = {
             "text": "Maya changed jobs from TechFlow to Stripe",
             "category": "fact",
+            "speaker": "user",
             "domains": ["work"],
             "extraction_confidence": "high",
         }
@@ -1594,8 +1663,18 @@ class TestExtractFromTranscript:
         mock_repair.return_value = None
         mock_llm.side_effect = [
             ("not valid json", 0.3),
-            (json.dumps({"facts": [{"text": "Maya lives in Austin.", "domains": ["personal"]}]}), 0.2),
-            (json.dumps({"facts": [{"text": "Maya works at Stripe.", "domains": ["personal"]}]}), 0.2),
+            (
+                json.dumps(
+                    {"facts": [{"text": "Maya lives in Austin.", "speaker": "user", "domains": ["personal"]}]}
+                ),
+                0.2,
+            ),
+            (
+                json.dumps(
+                    {"facts": [{"text": "Maya works at Stripe.", "speaker": "user", "domains": ["personal"]}]}
+                ),
+                0.2,
+            ),
         ]
         mock_store.return_value = {"id": "n1", "status": "created"}
 
@@ -1699,7 +1778,7 @@ class TestExtractFromTranscript:
                 fact_text = "Maya lives in Austin."
             else:
                 raise AssertionError(f"unexpected prompt: {prompt[:120]}")
-            return json.dumps({"facts": [{"text": fact_text, "domains": ["personal"]}]}), 0.1
+            return json.dumps({"facts": [{"text": fact_text, "speaker": "user", "domains": ["personal"]}]}), 0.1
 
         mock_chunk.return_value = root_chunks
         mock_llm.side_effect = _fake_llm
