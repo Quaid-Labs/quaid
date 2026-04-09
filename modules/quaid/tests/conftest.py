@@ -29,8 +29,8 @@ if not _adapter_cfg.exists():
 
 # Ensure a workspace hint exists before collection so module-level imports that
 # resolve paths have a stable home directory context.
-if not os.environ.get("CLAWDBOT_WORKSPACE"):
-    os.environ["CLAWDBOT_WORKSPACE"] = _DEFAULT_WORKSPACE
+if not os.environ.get("OPENCLAW_WORKSPACE"):
+    os.environ["OPENCLAW_WORKSPACE"] = _DEFAULT_WORKSPACE
 
 from lib.adapter import reset_adapter
 
@@ -50,10 +50,10 @@ def _ensure_instance_env(monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", _DEFAULT_INSTANCE)
 
 @pytest.fixture(autouse=True)
-def _ensure_clawdbot_workspace(monkeypatch):
-    """Ensure CLAWDBOT_WORKSPACE is set unless a test explicitly removes it."""
-    if not os.environ.get("CLAWDBOT_WORKSPACE"):
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", _DEFAULT_WORKSPACE)
+def _ensure_openclaw_workspace(monkeypatch):
+    """Ensure OPENCLAW_WORKSPACE is set unless a test explicitly removes it."""
+    if not os.environ.get("OPENCLAW_WORKSPACE"):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", _DEFAULT_WORKSPACE)
 
 
 @pytest.fixture

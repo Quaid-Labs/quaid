@@ -21,11 +21,11 @@ def main() -> int:
     root = _plugin_root()
     workspace = str(args.workspace or "").strip()
     if not workspace:
-        workspace = str(os.environ.get("QUAID_HOME", "") or os.environ.get("CLAWDBOT_WORKSPACE", "")).strip()
+        workspace = str(os.environ.get("QUAID_HOME", "") or os.environ.get("OPENCLAW_WORKSPACE", "")).strip()
     if not workspace:
         workspace = str(root.parent.parent)
     os.environ["QUAID_HOME"] = workspace
-    os.environ["CLAWDBOT_WORKSPACE"] = workspace
+    os.environ["OPENCLAW_WORKSPACE"] = workspace
     sys.path.insert(0, str(root))
 
     from lib.config import get_db_path  # noqa: E402

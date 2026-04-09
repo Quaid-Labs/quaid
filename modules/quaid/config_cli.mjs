@@ -10,7 +10,7 @@ function tryImportClackPath() {
   const candidates = [];
 
   try {
-    const which = spawnSync("sh", ["-c", "command -v openclaw || command -v clawdbot"], {
+    const which = spawnSync("sh", ["-c", "command -v openclaw"], {
       stdio: ["ignore", "pipe", "ignore"],
       encoding: "utf8",
     });
@@ -74,7 +74,7 @@ function handleCancel(v, msg = "Cancelled") {
 }
 
 function workspaceRoot() {
-  const envRoot = String(process.env.QUAID_HOME || process.env.CLAWDBOT_WORKSPACE || "").trim();
+  const envRoot = String(process.env.QUAID_HOME || process.env.OPENCLAW_WORKSPACE || "").trim();
   if (envRoot) return envRoot;
   return process.cwd();
 }
@@ -177,7 +177,7 @@ function runConfigCallbacksAfterSave() {
     env: {
       ...process.env,
       QUAID_HOME: workspaceRoot(),
-      CLAWDBOT_WORKSPACE: workspaceRoot(),
+      OPENCLAW_WORKSPACE: workspaceRoot(),
     },
     encoding: "utf8",
   });

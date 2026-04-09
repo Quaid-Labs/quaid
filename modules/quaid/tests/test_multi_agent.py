@@ -21,7 +21,7 @@ def _make_cc_adapter(tmp_path: Path):
 def _make_oc_adapter(tmp_path: Path):
     """Build an OpenClawAdapter with a tmp quaid_home.
 
-    CLAWDBOT_WORKSPACE is normally required by oc_workspace(); patch it to
+    OPENCLAW_WORKSPACE is normally required by oc_workspace(); patch it to
     a tmp dir so we can construct the adapter without a real OC install.
     """
     from adaptors.openclaw.adapter import OpenClawAdapter

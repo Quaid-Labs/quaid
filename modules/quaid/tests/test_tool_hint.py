@@ -264,7 +264,7 @@ class TestResolveCommandRegistry:
         """Without instance info, {misc_path} stays as-is in the hint."""
         monkeypatch.delenv("QUAID_HOME", raising=False)
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
-        monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
         resolved = resolve_command_registry()
         misc_entry = next(c for c in resolved if c["id"] == "misc_project")
         assert "{misc_path}" in misc_entry["hint"]

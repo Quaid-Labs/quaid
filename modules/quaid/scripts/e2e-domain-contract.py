@@ -15,7 +15,7 @@ def main() -> int:
     os.close(db_fd)
     db_path = Path(db_path_raw)
 
-    os.environ["CLAWDBOT_WORKSPACE"] = str(ws)
+    os.environ["OPENCLAW_WORKSPACE"] = str(ws)
     os.environ["QUAID_HOME"] = str(ws)
     os.environ["MEMORY_DB_PATH"] = str(db_path)
 

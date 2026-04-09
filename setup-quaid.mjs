@@ -5,7 +5,7 @@
 // Interactive installer using @clack/prompts (resolved from OpenClaw).
 // Supports two modes:
 //   - Standalone (default): Uses fixed Quaid home (~/.quaid)
-//   - OpenClaw: detected via CLAWDBOT_WORKSPACE env or clawdbot/openclaw on PATH
+//   - OpenClaw: detected via OPENCLAW_WORKSPACE env or openclaw on PATH
 //
 // Author: Steadman Labs (https://github.com/quaid-labs)
 // License: MIT
@@ -437,13 +437,12 @@ function readWorkspaceFromOpenClawConfig() {
 }
 function detectWorkspaceFromCli() {
   return (
-    shell("clawdbot config get workspace 2>/dev/null </dev/null") ||
     shell("openclaw config get workspace 2>/dev/null </dev/null") ||
     readWorkspaceFromOpenClawConfig()
   );
 }
 const IS_CLAUDE_CODE = INSTALL_ARGS.claudeCode || process.env.QUAID_INSTALL_CLAUDE_CODE === "1";
-const IS_OPENCLAW = !IS_CLAUDE_CODE && !!(process.env.CLAWDBOT_WORKSPACE || which("clawdbot") || which("openclaw"));
+const IS_OPENCLAW = !IS_CLAUDE_CODE && !!(process.env.OPENCLAW_WORKSPACE || which("openclaw"));
 const WORKSPACE = FIXED_QUAID_HOME;
 const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1" || !process.stdin.isTTY;
 const DRY_RUN = !!(INSTALL_ARGS.dryRun || process.env.QUAID_INSTALL_DRY_RUN === "1");
@@ -1018,7 +1017,7 @@ function _installerPlatformLabel() {
 // Python env setup — always set canonical Quaid root, plus workspace hint.
 const PY_ENV_SETUP =
   `os.environ['QUAID_HOME'] = ${JSON.stringify(WORKSPACE)}\n` +
-  `os.environ['CLAWDBOT_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}\n` +
+  `os.environ['OPENCLAW_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}\n` +
   `os.environ['QUAID_INSTANCE'] = ${JSON.stringify(syncInstallerInstanceEnv())}`;
 
 // Step-specific quotes — each tied to the step's theme
@@ -1070,7 +1069,7 @@ function readPkgName(pkgDir) {
   }
 }
 
-function findPackageRootFrom(startPath, allowedNames = new Set(["openclaw", "clawdbot"])) {
+function findPackageRootFrom(startPath, allowedNames = new Set(["openclaw"])) {
   let dir = startPath;
   try {
     const st = fs.statSync(startPath);
@@ -1098,9 +1097,9 @@ function findPackageRootFrom(startPath, allowedNames = new Set(["openclaw", "cla
 
 function discoverOpenClawRoots() {
   const roots = new Set();
-  const allowed = new Set(["openclaw", "clawdbot"]);
+  const allowed = new Set(["openclaw"]);
 
-  for (const cli of ["clawdbot", "openclaw"]) {
+  for (const cli of ["openclaw"]) {
     const cliBin = shell(`command -v ${cli} 2>/dev/null`) || "";
     if (!cliBin) continue;
     for (const candidate of [cliBin, fs.existsSync(cliBin) ? fs.realpathSync(cliBin) : ""]) {
@@ -1114,7 +1113,7 @@ function discoverOpenClawRoots() {
   if (npmRoot && fs.existsSync(npmRoot)) {
     for (const entry of fs.readdirSync(npmRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      if (!entry.name.startsWith("openclaw") && !entry.name.startsWith("clawdbot")) continue;
+      if (!entry.name.startsWith("openclaw")) continue;
       const dir = path.join(npmRoot, entry.name);
       const root = findPackageRootFrom(dir, allowed) || (fs.existsSync(path.join(dir, "package.json")) ? dir : null);
       if (root) roots.add(root);
@@ -1125,11 +1124,8 @@ function discoverOpenClawRoots() {
     path.join(os.homedir(), "openclaw"),
     path.join(os.homedir(), "openclaw-source"),
     "/opt/homebrew/lib/node_modules/openclaw",
-    "/opt/homebrew/lib/node_modules/clawdbot",
     "/usr/local/lib/node_modules/openclaw",
-    "/usr/local/lib/node_modules/clawdbot",
     "/usr/lib/node_modules/openclaw",
-    "/usr/lib/node_modules/clawdbot",
   ]) {
     if (!fs.existsSync(path.join(dir, "package.json"))) continue;
     const root = findPackageRootFrom(dir, allowed) || dir;
@@ -1809,7 +1805,7 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
     if (!_assertInstancePrefix(nextInstance, "openclaw")) return false;
     const currentInstance = String(parsed.env.vars.QUAID_INSTANCE || "").trim();
     const currentHome = String(parsed.env.vars.QUAID_HOME || "").trim();
-    const currentWorkspace = String(parsed.env.vars.CLAWDBOT_WORKSPACE || "").trim();
+    const currentWorkspace = String(parsed.env.vars.OPENCLAW_WORKSPACE || "").trim();
     const currentInstanceTop = String(parsed.env.QUAID_INSTANCE || "").trim();
     const currentHomeTop = String(parsed.env.QUAID_HOME || "").trim();
     if (
@@ -1824,7 +1820,7 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
     // Write to env.vars (per-process env block read by the OC Python plugin layer)
     parsed.env.vars.QUAID_INSTANCE = nextInstance;
     parsed.env.vars.QUAID_HOME = WORKSPACE;
-    parsed.env.vars.CLAWDBOT_WORKSPACE = WORKSPACE;
+    parsed.env.vars.OPENCLAW_WORKSPACE = WORKSPACE;
     // Also write to top-level env keys (read by OC gateway for plugin startup env)
     parsed.env.QUAID_INSTANCE = nextInstance;
     parsed.env.QUAID_HOME = WORKSPACE;
@@ -2026,7 +2022,7 @@ function _ensureOpenClawCompactionModeDefault() {
 }
 
 function _registerOpenClawQuaidPlugin(pluginPath) {
-  const cli = canRun("openclaw") ? "openclaw" : (canRun("clawdbot") ? "clawdbot" : "");
+  const cli = canRun("openclaw") ? "openclaw" : "";
   if (!cli) return { ok: false, reason: "OpenClaw CLI not found" };
   const normalize = (s) => String(s || "").toLowerCase();
   const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
@@ -2319,7 +2315,7 @@ async function step1_preflight() {
   _refreshAdapterManifests();
   log.info(C.dim(`Quaid home: ${WORKSPACE}`));
 
-  // Snapshot existing files BEFORE any clawdbot commands — those commands load
+  // Snapshot existing files BEFORE any openclaw commands — those commands load
   // the quaid plugin which creates data/memory.db, giving a false "dirty" signal.
   const _existingFiles = [
     "SOUL.md",
@@ -2478,7 +2474,7 @@ async function step1_preflight() {
   } else if (_isPlatform("openclaw")) {
     // --- OpenClaw installed ---
     s.message("Scanning for OpenClaw...");
-    if (!canRun("clawdbot") && !canRun("openclaw")) {
+    if (!canRun("openclaw")) {
       s.stop(C.red("OpenClaw not found"), 2);
       note(
         "Quaid is a plugin for OpenClaw and requires it to run.\n\n" +
@@ -2500,7 +2496,7 @@ async function step1_preflight() {
       ["status"],
       ["gateway", "probe"],
     ];
-    const statusBins = ["clawdbot", "openclaw"].filter((bin) => canRun(bin));
+    const statusBins = ["openclaw"].filter((bin) => canRun(bin));
     s.message("Checking OpenClaw gateway status...");
     for (const bin of statusBins) {
       for (const args of statusChecks) {
@@ -2522,7 +2518,7 @@ async function step1_preflight() {
         "Quaid needs the gateway running to read your config\n" +
         "and hook into conversation events.\n\n" +
         "Start it with:\n" +
-        "  clawdbot gateway start\n\n" +
+        "  openclaw gateway start\n\n" +
         "Then re-run this installer.",
         "Gateway offline"
       );
@@ -2533,7 +2529,7 @@ async function step1_preflight() {
     }
 
     // --- Onboarding / agents list ---
-    const cfgCli = canRun("clawdbot") ? "clawdbot" : "openclaw";
+    const cfgCli = "openclaw";
     s.message("Checking OpenClaw agent configuration...");
     let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
     if (!hasAgent) {
@@ -2701,7 +2697,7 @@ async function step1_preflight() {
   await waitForKey("Press any key to begin installation...");
 
   // --- Backup (only if existing files) ---
-  // Uses snapshots from before clawdbot commands (which create data/memory.db)
+  // Uses snapshots from before openclaw commands (which create data/memory.db)
   if (!_existingInstallDetected && (_existingFiles.length > 0 || _hasConfig || _hasDb)) {
     log.warn("Quaid's nightly janitor modifies your workspace markdown files");
     log.warn("(SOUL.md, USER.md, etc.) to keep them current. Back up first.");
@@ -3982,7 +3978,7 @@ except Exception as e:
       }
     } catch { /* no projects dir yet */ }
 
-    // Register any existing project directories (e.g. migrating from clawdbot)
+    // Register any existing project directories (e.g. migrating from a previous install)
     if (existingDirs.length > 0) {
       log.info(`Found ${C.bcyan(existingDirs.length)} existing project dir(s): ${C.bcyan(existingDirs.join(", "))}`);
       s.start("Registering existing projects...");
@@ -4106,7 +4102,7 @@ except ValueError:
     spawnSync("python3", ["scripts/sync-tools-domain-block.py", "--workspace", WORKSPACE], {
       cwd: PLUGIN_DIR,
       stdio: "pipe",
-      env: { ...process.env, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE },
+      env: { ...process.env, QUAID_HOME: WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE },
     });
     s.stop(C.green("Bundled project docs registered"));
   }
@@ -4358,9 +4354,8 @@ function findGateway() {
 
   // Prefer the package root backing the currently active CLI binary.
   // This avoids picking stale npm-backup trees during e2e bootstrap.
-  for (const cli of ["openclaw", "clawdbot"]) {
-    const cliBin = shell(`command -v ${cli} 2>/dev/null`) || "";
-    if (!cliBin) continue;
+  const cliBin = shell("command -v openclaw 2>/dev/null") || "";
+  if (cliBin) {
     const real = fs.existsSync(cliBin) ? fs.realpathSync(cliBin) : cliBin;
     const cliRoot = findPackageRootFrom(real);
     if (cliRoot && usable.includes(cliRoot)) {
@@ -5103,7 +5098,7 @@ async function waitForGatewayWarmup(timeoutMs = 12000) {
 let _installNotifyUnavailableLogged = false;
 
 function _resolveInstallerMessageCli() {
-  return shell("command -v openclaw 2>/dev/null") || shell("command -v clawdbot 2>/dev/null") || "";
+  return shell("command -v openclaw 2>/dev/null") || "";
 }
 
 function _resolveLastChannelFromSessions() {
@@ -5203,7 +5198,7 @@ print("ok" if ok else "unavailable")
   const env = { ...process.env };
   const sep = process.platform === "win32" ? ";" : ":";
   env.QUAID_HOME = WORKSPACE;
-  env.CLAWDBOT_WORKSPACE = WORKSPACE;
+  env.OPENCLAW_WORKSPACE = WORKSPACE;
   env.PYTHONPATH = env.PYTHONPATH ? `${pythonRoot}${sep}${env.PYTHONPATH}` : pythonRoot;
   env.QUAID_INSTANCE = env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedInstallerPlatform());
 
@@ -5265,7 +5260,7 @@ print("ok" if ok else "no_channel")
   const env = { ...process.env };
   const sep = process.platform === "win32" ? ";" : ":";
   env.QUAID_HOME = WORKSPACE;
-  env.CLAWDBOT_WORKSPACE = WORKSPACE;
+  env.OPENCLAW_WORKSPACE = WORKSPACE;
   env.PYTHONPATH = env.PYTHONPATH ? `${PLUGIN_DIR}${sep}${env.PYTHONPATH}` : PLUGIN_DIR;
 
   const res = spawnSync("python3", ["-c", py], {

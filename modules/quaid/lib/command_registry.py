@@ -65,7 +65,7 @@ def resolve_command_registry(
 
     workspace = (
         os.environ.get("QUAID_HOME", "")
-        or os.environ.get("CLAWDBOT_WORKSPACE", "")
+        or os.environ.get("OPENCLAW_WORKSPACE", "")
     ).strip()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
 

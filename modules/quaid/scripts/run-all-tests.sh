@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix="quaid-plugin-health-") as tmp:
             **os.environ,
             "PYTHONPATH": ".",
             "QUAID_HOME": str(tmp_path),
-            "CLAWDBOT_WORKSPACE": str(tmp_path),
+            "OPENCLAW_WORKSPACE": str(tmp_path),
             "QUAID_INSTANCE": "smoke-test",
         },
     )

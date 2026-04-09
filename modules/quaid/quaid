@@ -38,17 +38,17 @@ shift 2>/dev/null || true
 
 # Ensure adapter config discovery has a canonical root.
 # Quaid core resolves config from QUAID_HOME/config/memory.json.
-if [[ -z "${QUAID_HOME:-}" && -n "${CLAWDBOT_WORKSPACE:-}" ]]; then
-  export QUAID_HOME="$CLAWDBOT_WORKSPACE"
+if [[ -z "${QUAID_HOME:-}" && -n "${OPENCLAW_WORKSPACE:-}" ]]; then
+  export QUAID_HOME="$OPENCLAW_WORKSPACE"
 fi
-if [[ -z "${CLAWDBOT_WORKSPACE:-}" && -n "${QUAID_HOME:-}" ]]; then
-  export CLAWDBOT_WORKSPACE="$QUAID_HOME"
+if [[ -z "${OPENCLAW_WORKSPACE:-}" && -n "${QUAID_HOME:-}" ]]; then
+  export OPENCLAW_WORKSPACE="$QUAID_HOME"
 fi
 if [[ -z "${QUAID_HOME:-}" ]]; then
   ROOT_CANDIDATE="$(cd "$SCRIPT_DIR/../.." && pwd)"
   if [[ -f "$ROOT_CANDIDATE/config/memory.json" ]]; then
     export QUAID_HOME="$ROOT_CANDIDATE"
-    export CLAWDBOT_WORKSPACE="$ROOT_CANDIDATE"
+    export OPENCLAW_WORKSPACE="$ROOT_CANDIDATE"
   fi
 fi
 

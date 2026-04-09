@@ -274,7 +274,7 @@ def _trace_enabled() -> bool:
         return True
     workspace = str(
         os.environ.get("QUAID_WORKSPACE", "")
-        or os.environ.get("CLAWDBOT_WORKSPACE", "")
+        or os.environ.get("OPENCLAW_WORKSPACE", "")
         or ""
     ).strip()
     return "/runs/quaid-" in workspace
@@ -283,7 +283,7 @@ def _trace_enabled() -> bool:
 def _trace_path() -> Optional[Path]:
     workspace = str(
         os.environ.get("QUAID_WORKSPACE", "")
-        or os.environ.get("CLAWDBOT_WORKSPACE", "")
+        or os.environ.get("OPENCLAW_WORKSPACE", "")
         or ""
     ).strip()
     if not workspace:

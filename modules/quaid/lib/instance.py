@@ -8,7 +8,7 @@ Zero imports from lib.adapter, config, or any core module.
 Reads only os.environ and pathlib.Path.
 
 Environment:
-    QUAID_HOME      Root dir containing all instances (default: ~/quaid)
+    QUAID_HOME      Root dir containing all instances (default: ~/.quaid)
     QUAID_INSTANCE  Instance identifier (required — no implicit default)
 """
 
@@ -68,10 +68,10 @@ def validate_instance_id(name: str) -> str:
 def quaid_home() -> Path:
     """Root directory containing all Quaid instances.
 
-    Reads from QUAID_HOME env var. Defaults to ~/quaid.
+    Reads from QUAID_HOME env var. Defaults to ~/.quaid.
     """
     env = os.environ.get("QUAID_HOME", "").strip()
-    return Path(env).resolve() if env else Path.home() / "quaid"
+    return Path(env).resolve() if env else Path.home() / ".quaid"
 
 
 def instance_id() -> str:

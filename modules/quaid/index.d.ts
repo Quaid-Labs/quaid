@@ -1,5 +1,5 @@
 /**
- * quaid - Local graph-based memory plugin for Clawdbot
+ * quaid - Local graph-based memory plugin for OpenClaw
  *
  * Uses SQLite + Ollama embeddings for fully local memory storage.
  * Replaces memory-lancedb with no external API dependencies.

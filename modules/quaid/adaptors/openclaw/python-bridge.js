@@ -72,7 +72,7 @@ export function createPythonBridgeExecutor(config) {
           MEMORY_DB_PATH: config.dbPath,
           QUAID_HOME: config.workspace,
           QUAID_WORKSPACE: config.workspace,
-          CLAWDBOT_WORKSPACE: config.workspace,
+          OPENCLAW_WORKSPACE: config.workspace,
           PYTHONPATH: pythonPath
         }
       });

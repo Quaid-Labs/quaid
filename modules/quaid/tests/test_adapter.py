@@ -88,7 +88,7 @@ def standalone(tmp_path):
 @pytest.fixture
 def openclaw_adapter(tmp_path, monkeypatch):
     """Create an OpenClawAdapter with a test API key."""
-    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     # Write a .env with a test API key so get_llm_provider() works
     (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=sk-test-fixture\n")
     adapter = OpenClawAdapter()
@@ -104,7 +104,7 @@ class TestStandaloneAdapter:
     def test_quaid_home_default(self, tmp_path, monkeypatch):
         monkeypatch.delenv("QUAID_HOME", raising=False)
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
     def test_quaid_home_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -302,10 +302,10 @@ class TestOpenClawAdapter:
     def test_quaid_home_default(self, monkeypatch):
         monkeypatch.delenv("QUAID_HOME", raising=False)
         adapter = OpenClawAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
     def test_oc_workspace_raises_without_env(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
         with pytest.raises(RuntimeError, match="QUAID_HOME|openclaw.json"):
@@ -326,8 +326,8 @@ class TestOpenClawAdapter:
         assert adapter.oc_workspace() == workspace
 
     def test_oc_workspace_fallback_to_openclaw_json(self, tmp_path, monkeypatch):
-        """When CLAWDBOT_WORKSPACE unset, falls back to ~/.openclaw/openclaw.json."""
-        monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
+        """When OPENCLAW_WORKSPACE unset, falls back to ~/.openclaw/openclaw.json."""
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         workspace = tmp_path / "my-workspace"
         workspace.mkdir()
@@ -342,7 +342,7 @@ class TestOpenClawAdapter:
 
     def test_oc_workspace_ignores_non_openclaw_config(self, tmp_path, monkeypatch):
         """Only ~/.openclaw/openclaw.json is used for workspace fallback."""
-        monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
         ws_new = tmp_path / "workspace-openclaw"
@@ -388,8 +388,8 @@ class TestOpenClawAdapter:
         state = OpenClawAdapter.installer_install_state(str(tmp_path))
         assert state["status"] == "already_installed"
 
-    def test_installer_install_state_accepts_clawdbot_binary(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/clawdbot" if name == "clawdbot" else None)
+    def test_installer_install_state_accepts_openclaw_binary(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/openclaw" if name == "openclaw" else None)
         state = OpenClawAdapter.installer_install_state(str(tmp_path))
         assert state["status"] == "can_install"
 
@@ -440,7 +440,7 @@ class TestOpenClawAdapter:
             assert adapter.get_api_key("TEST_KEY") == "sk-from-ws-env"
 
     def test_get_api_key_from_env_file_blocked_when_failhard_enabled(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("TEST_KEY", raising=False)
         (tmp_path / ".env").write_text("TEST_KEY=sk-from-ws-env\n")
         adapter = OpenClawAdapter()
@@ -1027,7 +1027,7 @@ class TestAdapterSelection:
     def test_config_openclaw(self, monkeypatch, tmp_path):
         _write_adapter_config(tmp_path, "openclaw")
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         adapter = get_adapter()
         assert isinstance(adapter, OpenClawAdapter)
 
@@ -1040,7 +1040,7 @@ class TestAdapterSelection:
     def test_missing_adapter_raises(self, monkeypatch, tmp_path):
         reset_adapter()
         monkeypatch.delenv("QUAID_HOME", raising=False)
-        monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
         monkeypatch.chdir(tmp_path)
         with pytest.raises(RuntimeError, match="No config file found|must set adapter type"):
             get_adapter()
@@ -1152,25 +1152,25 @@ class TestEmptyEnvVars:
     def test_empty_quaid_home_uses_default(self, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", "")
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
     def test_whitespace_quaid_home_uses_default(self, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", "   ")
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / "quaid"
+        assert adapter.quaid_home() == Path.home() / ".quaid"
 
-    def test_empty_clawdbot_workspace_raises(self, monkeypatch, tmp_path):
-        # CLAWDBOT_WORKSPACE is no longer read by the OC adapter; the error
+    def test_empty_openclaw_workspace_raises(self, monkeypatch, tmp_path):
+        # OPENCLAW_WORKSPACE is no longer read by the OC adapter; the error
         # comes from missing openclaw.json when no workspace can be resolved.
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", "")
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", "")
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
         with pytest.raises(RuntimeError, match="openclaw.json"):
             adapter.oc_workspace()
 
-    def test_whitespace_clawdbot_workspace_raises(self, monkeypatch, tmp_path):
-        # Same as above — whitespace CLAWDBOT_WORKSPACE is also ignored.
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", "   ")
+    def test_whitespace_openclaw_workspace_raises(self, monkeypatch, tmp_path):
+        # Same as above — whitespace OPENCLAW_WORKSPACE is also ignored.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", "   ")
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
         with pytest.raises(RuntimeError, match="openclaw.json"):
@@ -1183,7 +1183,7 @@ class TestAdapterSelectionEdgeCases:
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
         (tmp_path / "config" / "memory.json").write_text('{"adapter":"OpenClaw"}')
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         adapter = get_adapter()
         assert isinstance(adapter, OpenClawAdapter)
 
@@ -1259,7 +1259,7 @@ class TestAdapterSelectionEdgeCases:
 class TestKeychainFallback:
     def test_no_keychain_fallback(self, tmp_path, monkeypatch):
         """Keychain lookup was removed — env+file miss returns None."""
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = OpenClawAdapter()
         result = adapter.get_api_key("ANTHROPIC_API_KEY")
@@ -1267,7 +1267,7 @@ class TestKeychainFallback:
 
     def test_env_file_miss_returns_none(self, tmp_path, monkeypatch):
         """Missing env var + no .env file returns None."""
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         adapter = OpenClawAdapter()
         result = adapter.get_api_key("OPENAI_API_KEY")
@@ -1611,7 +1611,7 @@ class TestResolveAnthropicCredential:
 
     def _make_adapter(self, tmp_path, monkeypatch):
         """Create an OpenClawAdapter with agent config dir pointed at tmp_path."""
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = OpenClawAdapter()
         # Point agent config dir to a fake location so we don't read real creds

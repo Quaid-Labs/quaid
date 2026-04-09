@@ -61,7 +61,7 @@ class OpenClawAdapter(QuaidAdapter):
 
     @classmethod
     def installer_cli_candidates(cls) -> list[str]:
-        return ["openclaw", "clawdbot"]
+        return ["openclaw"]
 
     def _openclaw_config_path_candidates(self) -> list[Path]:
         """OpenClaw config candidates, honoring OPENCLAW_CONFIG_PATH first."""
@@ -189,8 +189,6 @@ class OpenClawAdapter(QuaidAdapter):
         candidates = [
             shutil.which("openclaw"),
             "/opt/homebrew/bin/openclaw",
-            shutil.which("clawdbot"),
-            "/opt/homebrew/bin/clawdbot",
         ]
         for candidate in candidates:
             if candidate and Path(candidate).exists():
@@ -257,7 +255,7 @@ class OpenClawAdapter(QuaidAdapter):
     def quaid_home(self) -> Path:
         """Root directory containing all Quaid instances (QUAID_HOME)."""
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env).resolve() if env else Path.home() / "quaid"
+        return Path(env).resolve() if env else Path.home() / ".quaid"
 
     def oc_workspace(self) -> Path:
         """OpenClaw workspace directory (platform-specific, not Quaid instance root).

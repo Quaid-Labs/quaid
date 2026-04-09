@@ -46,7 +46,7 @@ Options:
   --check              Check latest release without installing
   --tag <tag>          Update to a specific git tag/ref (default: latest release)
   --repo <owner/repo>  GitHub repo (default: ${DEFAULT_REPO})
-  --workspace <path>   Override QUAID_HOME/CLAWDBOT_WORKSPACE during update
+  --workspace <path>   Override QUAID_HOME/OPENCLAW_WORKSPACE during update
   --dry-run            Show actions without executing install
   --force              Install even when versions match
   --keep-temp          Keep extracted temporary files (debug)
@@ -97,7 +97,7 @@ function resolveWorkspace(explicitWorkspace = "") {
   if (explicit) return explicit;
   const envHome = String(process.env.QUAID_HOME || "").trim();
   if (envHome) return envHome;
-  const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
+  const envWorkspace = String(process.env.OPENCLAW_WORKSPACE || "").trim();
   if (envWorkspace) return envWorkspace;
   return path.resolve(PLUGIN_ROOT, "..", "..");
 }

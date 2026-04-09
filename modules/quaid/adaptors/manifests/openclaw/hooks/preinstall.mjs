@@ -7,7 +7,7 @@ function canRun(cmd) {
   return res.status === 0;
 }
 
-if (!canRun("openclaw") && !canRun("clawdbot")) {
+if (!canRun("openclaw")) {
   console.warn("[quaid][adapter:openclaw][preinstall] OpenClaw CLI not found yet; continuing.");
 }
 

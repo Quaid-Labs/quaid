@@ -3,10 +3,8 @@
 import { spawnSync } from "node:child_process";
 
 function resolveCli() {
-  for (const cli of ["openclaw", "clawdbot"]) {
-    const ok = spawnSync("sh", ["-lc", `command -v ${cli} >/dev/null 2>&1`], { stdio: "ignore" });
-    if (ok.status === 0) return cli;
-  }
+  const ok = spawnSync("sh", ["-lc", "command -v openclaw >/dev/null 2>&1"], { stdio: "ignore" });
+  if (ok.status === 0) return "openclaw";
   return "";
 }
 

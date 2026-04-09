@@ -68,7 +68,7 @@ def _registry_path() -> Path:
     except Exception:
         import os
         home = os.environ.get("QUAID_HOME", "").strip()
-        root = Path(home).resolve() if home else Path.home() / "quaid"
+        root = Path(home).resolve() if home else Path.home() / ".quaid"
         return root / "projects" / "project-registry.json"
 
 

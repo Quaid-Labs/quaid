@@ -1,5 +1,5 @@
 /**
- * quaid - Total Recall memory system plugin for Clawdbot
+ * quaid - Total Recall memory system plugin for OpenClaw
  *
  * Uses SQLite + Ollama embeddings for fully local memory storage.
  * Replaces memory-lancedb with no external API dependencies.
@@ -1035,7 +1035,7 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
     MEMORY_RUNTIME_DIR: QUAID_RUNTIME_DIR,
     QUAID_HOME: WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
-    CLAWDBOT_WORKSPACE: WORKSPACE,
+    OPENCLAW_WORKSPACE: WORKSPACE,
     // Explicitly set QUAID_INSTANCE so Python subprocesses always know which
     // agent silo they are serving. Callers pass agent-specific overrides via
     // extra (e.g. getInstanceId(agentLabel)) when routing to a non-primary agent.
@@ -1807,22 +1807,22 @@ const facade = createQuaidFacade({
     _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", {}, EXTRACT_PIPELINE_TIMEOUT_MS),
   execDocsRag: (cmd, args) =>
     _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", {
-      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+      QUAID_HOME: WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
     }),
   execDocsRegistry: (cmd, args) =>
     _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", {
-      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+      QUAID_HOME: WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
     }),
   execDocsUpdater: (cmd, args) => {
     const apiKey = _getAnthropicCredential();
     return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {
-      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+      QUAID_HOME: WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
       ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
     });
   },
   execEvents: (cmd, args) =>
     _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", {
-      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+      QUAID_HOME: WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
     }, EVENTS_EMIT_TIMEOUT_MS),
   // emitProjectEventBackground removed — project events now emitted from Python extraction.
   callLLM: callConfiguredLLM,

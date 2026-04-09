@@ -32,7 +32,7 @@ def workspace_dir(tmp_path):
     set_adapter(adapter)
     iroot = adapter.instance_root()
 
-    os.environ["CLAWDBOT_WORKSPACE"] = str(iroot)
+    os.environ["OPENCLAW_WORKSPACE"] = str(iroot)
     os.environ["MOCK_EMBEDDINGS"] = "1"
 
     # Create required directories
@@ -58,8 +58,8 @@ def workspace_dir(tmp_path):
     yield iroot
 
     reset_adapter()
-    if "CLAWDBOT_WORKSPACE" in os.environ:
-        del os.environ["CLAWDBOT_WORKSPACE"]
+    if "OPENCLAW_WORKSPACE" in os.environ:
+        del os.environ["OPENCLAW_WORKSPACE"]
     if "MOCK_EMBEDDINGS" in os.environ:
         del os.environ["MOCK_EMBEDDINGS"]
 

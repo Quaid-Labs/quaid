@@ -105,7 +105,7 @@ def test_test_adapter_llm_calls_initially_empty(tmp_path):
 
 @pytest.mark.adapter_openclaw
 def test_openclaw_contract(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     adapter = OpenClawAdapter()
     _assert_common_contract(adapter)
 
@@ -120,7 +120,7 @@ def test_openclaw_contract(tmp_path, monkeypatch):
 
 @pytest.mark.adapter_openclaw
 def test_openclaw_channel_info_shape(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     sessions_file = tmp_path / "sessions.json"
     sessions_file.write_text(json.dumps({
         "agent:main:main": {

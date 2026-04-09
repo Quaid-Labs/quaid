@@ -124,8 +124,8 @@ class QuaidAdapter(abc.ABC):
         - Standalone: subclass must implement
 
         The instance name is combined with the adapter prefix to form the full
-        QUAID_INSTANCE silo identifier (e.g. "users-clawdbot-myapp" becomes
-        "claude-code-users-clawdbot-myapp").
+        QUAID_INSTANCE silo identifier (e.g. "users-openclaw-myapp" becomes
+        "claude-code-users-openclaw-myapp").
         """
 
     def get_host_info(self) -> "HostInfo":
@@ -725,7 +725,7 @@ class StandaloneAdapter(QuaidAdapter):
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env).resolve() if env else Path.home() / "quaid"
+        return Path(env).resolve() if env else Path.home() / ".quaid"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
                dry_run: bool = False, force: bool = False) -> bool:
@@ -1098,7 +1098,7 @@ def _normalize_adapter_id(value: str) -> str:
 
 def _registry_quaid_home() -> Path:
     env = os.environ.get("QUAID_HOME", "").strip()
-    return Path(env).resolve() if env else Path.home() / "quaid"
+    return Path(env).resolve() if env else Path.home() / ".quaid"
 
 
 def _adapter_manifest_candidates(adapter_id: str) -> List[Path]:
@@ -1263,7 +1263,7 @@ def _adapter_config_paths() -> List[Path]:
 
     workspace_root = (
         os.environ.get("QUAID_WORKSPACE", "").strip()
-        or os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
+        or os.environ.get("OPENCLAW_WORKSPACE", "").strip()
     )
     if workspace_root:
         paths.append(Path(workspace_root) / "config" / "memory.json")

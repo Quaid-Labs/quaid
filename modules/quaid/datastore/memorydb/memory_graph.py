@@ -2902,7 +2902,7 @@ def graph_aware_recall(
 
 
 # ==========================================================================
-# High-level API for Clawdbot integration
+# High-level API for OpenClaw integration
 # ==========================================================================
 
 _graph: Optional[MemoryGraph] = None

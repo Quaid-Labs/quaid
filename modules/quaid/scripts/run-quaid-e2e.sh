@@ -974,8 +974,6 @@ enable_required_openclaw_hooks() {
   local cli=""
   if command -v openclaw >/dev/null 2>&1; then
     cli="openclaw"
-  elif command -v clawdbot >/dev/null 2>&1; then
-    cli="clawdbot"
   else
     echo "[e2e] ERROR: OpenClaw CLI not found; cannot enable required hooks." >&2
     return 1
@@ -1863,7 +1861,6 @@ def assert_notify_worker_healthy(start_line: int) -> None:
         return
     bad = []
     patterns = (
-        "No such file or directory: 'clawdbot'",
         "No such file or directory: 'openclaw'",
         "No message CLI found",
     )
@@ -2286,7 +2283,7 @@ def _spawn_janitor_probe() -> subprocess.Popen:
     py_path = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
     env["QUAID_HOME"] = ws
-    env["CLAWDBOT_WORKSPACE"] = ws
+    env["OPENCLAW_WORKSPACE"] = ws
     env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
     janitor_script = os.path.join(ws, "modules", "quaid", "core", "lifecycle", "janitor.py")
     return subprocess.Popen(
@@ -2634,7 +2631,7 @@ if isinstance(project_defs, dict) and project_defs:
     updater_py_path = updater_env.get("PYTHONPATH", "")
     updater_env["PYTHONPATH"] = "modules/quaid" + (f":{updater_py_path}" if updater_py_path else "")
     updater_env["QUAID_HOME"] = ws
-    updater_env["CLAWDBOT_WORKSPACE"] = ws
+    updater_env["OPENCLAW_WORKSPACE"] = ws
     updater_env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
     updater_script = os.path.join(ws, "modules", "quaid", "datastore", "docsdb", "project_updater.py")
     updater_probe = subprocess.Popen(
@@ -2684,7 +2681,7 @@ cleanup_env = dict(os.environ)
 cleanup_py_path = cleanup_env.get("PYTHONPATH", "")
 cleanup_env["PYTHONPATH"] = "modules/quaid" + (f":{cleanup_py_path}" if cleanup_py_path else "")
 cleanup_env["QUAID_HOME"] = ws
-cleanup_env["CLAWDBOT_WORKSPACE"] = ws
+cleanup_env["OPENCLAW_WORKSPACE"] = ws
 cleanup_env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
 cleanup_script = os.path.join(ws, "modules", "quaid", "core", "lifecycle", "janitor.py")
 cleanup_probe = subprocess.Popen(
@@ -2991,7 +2988,7 @@ def run_direct_extract_fallback(
     env = os.environ.copy()
     py_path = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
-    env["CLAWDBOT_WORKSPACE"] = ws
+    env["OPENCLAW_WORKSPACE"] = ws
     env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
     try:
         proc = subprocess.run(
@@ -3623,7 +3620,6 @@ console.log(signalPath);
 
 def assert_no_fatal_notify_errors(lines) -> None:
     patterns = (
-        "No such file or directory: 'clawdbot'",
         "No such file or directory: 'openclaw'",
         "No message CLI found",
     )

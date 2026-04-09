@@ -79,7 +79,7 @@ function makeFakeApi() {
 }
 
 async function loadAdapterWithWorkspace(workspace: string): Promise<AdapterPlugin> {
-  vi.stubEnv("CLAWDBOT_WORKSPACE", workspace);
+  vi.stubEnv("OPENCLAW_WORKSPACE", workspace);
   vi.stubEnv("QUAID_HOME", workspace);
   vi.resetModules();
   const module = await import("../adaptors/openclaw/adapter.js");

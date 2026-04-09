@@ -713,7 +713,7 @@ class TestDocsRegistryGc:
         set_adapter(adapter)
         iroot = adapter.instance_root()
         monkeypatch.setenv("MEMORY_DB_PATH", str(iroot / "gc_test.db"))
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(iroot))  # kept for backward compat
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(iroot))  # kept for backward compat
 
         config_dir = iroot / "config"
         config_dir.mkdir(exist_ok=True)

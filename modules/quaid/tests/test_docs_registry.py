@@ -26,7 +26,7 @@ def setup_env(tmp_path, monkeypatch):
 
     _tmp_db = iroot / "test_registry.db"
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_db))
-    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(iroot))  # kept for backward compat
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(iroot))  # kept for backward compat
 
     # Create minimal config
     config_dir = iroot / "config"

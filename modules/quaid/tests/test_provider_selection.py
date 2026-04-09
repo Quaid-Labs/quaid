@@ -44,7 +44,7 @@ class TestLLMProviderSelection:
     @pytest.mark.adapter_openclaw
     def test_openclaw_produces_gateway(self, monkeypatch, tmp_path):
         """OpenClawAdapter.get_llm_provider() returns GatewayLLMProvider."""
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         adapter = OpenClawAdapter()
         set_adapter(adapter)
         llm = adapter.get_llm_provider()

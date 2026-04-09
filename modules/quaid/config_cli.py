@@ -12,7 +12,7 @@ from typing import Any
 
 
 def _workspace_root() -> Path:
-    for env in ("QUAID_HOME", "CLAWDBOT_WORKSPACE"):
+    for env in ("QUAID_HOME", "OPENCLAW_WORKSPACE"):
         value = os.getenv(env, "").strip()
         if value:
             return Path(value)

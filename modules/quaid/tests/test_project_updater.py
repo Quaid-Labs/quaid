@@ -24,7 +24,7 @@ def setup_env(tmp_path, monkeypatch):
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     iroot = adapter.instance_root()
-    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(iroot))  # kept for backward compat
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(iroot))  # kept for backward compat
 
     # Create directories
     (iroot / "config").mkdir(exist_ok=True)

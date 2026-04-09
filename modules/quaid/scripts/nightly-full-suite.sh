@@ -108,7 +108,7 @@ msg = " | ".join(parts)
 sys.path.insert(0, str(repo / "modules" / "quaid"))
 try:
     os.environ.setdefault("QUAID_HOME", str(repo))
-    os.environ.setdefault("CLAWDBOT_WORKSPACE", str(repo))
+    os.environ.setdefault("OPENCLAW_WORKSPACE", str(repo))
     from core.runtime.notify import notify_user
 
     ok = notify_user(msg, channel_override="telegram")

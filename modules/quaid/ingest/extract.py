@@ -143,7 +143,7 @@ def _publish_trace_enabled() -> bool:
 def _publish_trace_path() -> Optional[Path]:
     if not _publish_trace_enabled():
         return None
-    workspace_raw = str(os.environ.get("CLAWDBOT_WORKSPACE", "") or "").strip()
+    workspace_raw = str(os.environ.get("OPENCLAW_WORKSPACE", "") or "").strip()
     instance = str(os.environ.get("QUAID_INSTANCE", "benchrunner") or "benchrunner").strip() or "benchrunner"
     if not workspace_raw:
         return None

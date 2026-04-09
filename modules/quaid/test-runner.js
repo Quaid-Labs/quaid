@@ -6,8 +6,8 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const LOGS_DIR = process.env.CLAWDBOT_WORKSPACE
-  ? path.join(process.env.CLAWDBOT_WORKSPACE, 'logs')
+const LOGS_DIR = process.env.OPENCLAW_WORKSPACE
+  ? path.join(process.env.OPENCLAW_WORKSPACE, 'logs')
   : path.join(path.resolve(process.cwd(), '../..'), 'logs')
 const LOG_FILE = path.join(LOGS_DIR, 'test-results.jsonl')
 const LOG_KEEP_LINES = 3

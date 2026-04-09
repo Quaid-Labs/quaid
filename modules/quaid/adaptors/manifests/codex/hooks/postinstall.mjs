@@ -131,7 +131,7 @@ const defaultHome = escapeShellDefault(workspace);
 const defaultInstance = escapeShellDefault(instance);
 const envPrefix = [
   `QUAID_HOME="\${QUAID_HOME:-${defaultHome}}"`,
-  `CLAWDBOT_WORKSPACE="\${CLAWDBOT_WORKSPACE:-${defaultHome}}"`,
+  `OPENCLAW_WORKSPACE="\${OPENCLAW_WORKSPACE:-${defaultHome}}"`,
   `QUAID_INSTANCE="\${QUAID_INSTANCE:-${defaultInstance}}"`,
 ].join(" ");
 

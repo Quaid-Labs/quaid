@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
+const WORKSPACE = process.env.OPENCLAW_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
 const TEST_INSTANCE = process.env.QUAID_INSTANCE || 'pytest-runner'
@@ -59,7 +59,7 @@ export class TestMemoryInterface {
           QUAID_DISABLE_LLM: "1",
           QUAID_HOME: WORKSPACE,
           QUAID_INSTANCE: TEST_INSTANCE,
-          CLAWDBOT_WORKSPACE: WORKSPACE,
+          OPENCLAW_WORKSPACE: WORKSPACE,
           PYTHONPATH: process.env.PYTHONPATH
             ? `${PYTHON_MODULE_ROOT}:${process.env.PYTHONPATH}`
             : PYTHON_MODULE_ROOT,
