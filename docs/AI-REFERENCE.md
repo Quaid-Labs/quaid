@@ -636,7 +636,7 @@ quaid recall <query> '{"stores":["docs"]}'  # Search project documentation
 # Manage
 quaid forget [query]          # Delete a memory (--id <id>)
 quaid create-edge <s> <r> <o> # Create a relationship edge
-quaid registry <subcmd>       # Project/doc registry (list/read/register/create-project/...)
+quaid registry <subcmd>       # Doc/file registry (list/read/register/...)
 quaid updater <subcmd>        # Project event processor
 
 # Admin
@@ -684,7 +684,7 @@ python3 datastore/docsdb/rag.py search "query text"     # RAG search (free, loca
 # Projects
 python3 datastore/docsdb/registry.py list --project quaid
 python3 datastore/docsdb/registry.py find-project <file_path>
-python3 datastore/docsdb/registry.py create-project <name> --label "Human Name"
+python3 core/project_registry_cli.py create <name> --description "Human Name"
 python3 datastore/docsdb/registry.py discover --project <name>
 python3 datastore/docsdb/registry.py gc                        # Garbage collect
 

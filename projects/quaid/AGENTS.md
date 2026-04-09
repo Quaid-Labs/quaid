@@ -37,7 +37,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
    Prefer a user-visible working path or the active repo. Always tell the user the file is tracked by the misc project and offer to promote it to a real project.
 3. **Durable new work** → create a project first, then write files:
    ```bash
-   quaid registry create-project <name> --source-roots <path>
+   quaid project create <name> --source-root <path>
    # THEN write files / spawn sub-agents
    ```
 4. **User specifies a path outside the project system** → write there, then register the file so the project tracks it:
@@ -68,7 +68,7 @@ Do NOT write to `/tmp/hello.py` or any other path.
 Correct response:
 ```bash
 # Step 1: create a project BEFORE doing any work or spawning sub-agents
-quaid registry create-project my-cli-tool --source-roots /path/to/script
+quaid project create my-cli-tool --source-root /path/to/script
 # Step 2: then proceed with the work
 ```
 
@@ -119,7 +119,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 
 All files go inside a tracked quaid project OR are registered into one. `/tmp/` is never acceptable, even for throwaway work.
 - Misc project: `misc--$QUAID_INSTANCE` is the default owner for throwaway/one-off work. Prefer a real working path, then register that file to misc.
-- New work: create a project first (`quaid registry create-project`), then write files.
+- New work: create a project first (`quaid project create`), then write files.
 - User specifies a path outside the project system: write there, then `quaid registry register <path> --project <name>` to link it.
 - See the **File Placement — MANDATORY RULES** section above for decision tree and examples.
 

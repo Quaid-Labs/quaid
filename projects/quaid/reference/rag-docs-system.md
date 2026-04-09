@@ -395,7 +395,7 @@ quaid registry list
 quaid registry list --project <name>
 quaid docs list
 quaid docs list --project <name>
-quaid registry create-project <name> [--label "Label"] [--source-roots path1 path2]
+quaid project create <name> [--description "Label"] [--source-root /path]
 
 # --- Indexing ---
 quaid janitor --task rag --apply --approve            # Recommended: all three passes

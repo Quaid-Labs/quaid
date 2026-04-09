@@ -30,7 +30,7 @@ _COMMANDS = [
             "Durable work: essays, articles, reports, research notes, blog posts, "
             "video scripts, screenplays, travel plans, trip itineraries, project plans"
         ),
-        "hint": "Durable work — create a project first: quaid registry create-project <name>",
+        "hint": "Durable work — create a project first: quaid project create <name>",
     },
     {
         "id": "recall",
@@ -102,7 +102,7 @@ class TestPlanToolHint:
                 commands=_COMMANDS,
             )
         assert result is not None
-        assert "create-project" in result or "project" in result.lower()
+        assert "project create" in result
 
     def test_essay_query_returns_hint(self):
         """An essay-writing request should hint at project creation."""

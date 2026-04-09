@@ -11,8 +11,6 @@ Usage:
   python3 docs_registry.py read <identifier>
   python3 docs_registry.py unregister <file_path>
   python3 docs_registry.py find-project <file_path>
-  python3 docs_registry.py create-project <name> [--label ...] [--source-roots ...]
-  python3 docs_registry.py delete-project <name> [--yes]
   python3 docs_registry.py move-file <path> --to-project <name>
   python3 docs_registry.py verify --project <name> [--json]
   python3 docs_registry.py discover --project <name>
@@ -897,7 +895,7 @@ class DocsRegistry:
         cfg = self._get_config()
         if name in cfg.projects.definitions:
             raise ValueError(
-                f"Project '{name}' already exists. Use rename-project or delete-project first."
+                f"Project '{name}' already exists. Use `quaid project rename` or `quaid project delete` first."
             )
 
         label = label or name.replace("-", " ").title()

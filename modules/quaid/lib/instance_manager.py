@@ -148,7 +148,7 @@ class InstanceManager:
                     fpath.write_text(f"# {fname[:-3]}\n", encoding="utf-8")
 
         # Misc project — per-instance scratch pad registered at silo creation so
-        # agents can find it immediately without a manual create-project step.
+        # agents can find it immediately without a manual project-create step.
         try:
             misc_name = f"misc--{instance_id}"
             misc_desc = "Scratch pad for ephemeral and temporary files."

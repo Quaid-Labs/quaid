@@ -33,7 +33,7 @@ Run order:
 
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid registry create-project oc-test-proj --label 'OC Test Project'"
+  ~/.local/bin/quaid project create oc-test-proj --description 'OC Test Project'"
 ```
 
 **Expected:** `Created project 'oc-test-proj' at .../projects/oc-test-proj`
@@ -41,7 +41,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 **Verify:**
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid registry list | grep oc-test-proj"
+  ~/.local/bin/quaid project list | grep oc-test-proj"
 ```
 
 ---
@@ -142,13 +142,13 @@ CC uses the same `QUAID_HOME` as OC but `QUAID_INSTANCE=claude-code`. The `claud
 
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
-  ~/.local/bin/quaid registry create-project cc-test-proj --label 'CC Test Project'"
+  ~/.local/bin/quaid project create cc-test-proj --description 'CC Test Project'"
 ```
 
 **Verify:**
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
-  ~/.local/bin/quaid registry list | grep cc-test-proj"
+  ~/.local/bin/quaid project list | grep cc-test-proj"
 ```
 
 ---
@@ -263,7 +263,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 ```bash
 # Create project
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid registry create-project shared-xp-proj --label 'Cross-Platform Test'"
+  ~/.local/bin/quaid project create shared-xp-proj --description 'Cross-Platform Test'"
 
 # Write and register a doc
 ssh <oc-host> "echo '# OC contribution — memory architecture overview' > /tmp/oc-xp-doc.md && \

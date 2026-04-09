@@ -117,7 +117,7 @@ For each confirmed project:
 
 ```bash
 # Create the project (scaffolds canonical dir, PROJECT.md, and docs/ subdir)
-quaid project create <name> --label "<Label>" --description "<description>"
+quaid project create <name> --description "<description>"
 
 # If the project has external docs to index (doc registry, not project registry)
 quaid registry register <absolute/path/to/doc.md> --project <name>

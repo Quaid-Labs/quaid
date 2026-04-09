@@ -9,7 +9,7 @@ const COMMAND_REGISTRY = [
     id: "create_project",
     description:
       "Durable work that should be tracked: essays, articles, reports, research notes, blog posts, video scripts, screenplays, outlines, travel plans, trip itineraries, project plans, or any multi-file long-lived work",
-    hint: "Durable work — create a project first: quaid registry create-project <name>",
+    hint: "Durable work — create a project first: quaid project create <name>",
   },
   {
     id: "recall",

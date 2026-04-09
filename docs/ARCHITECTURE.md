@@ -687,7 +687,7 @@ The projects system tracks documentation across the codebase and keeps it up to 
 **Doc Registry** (`datastore/docsdb/registry.py`): SQLite-backed CRUD for documents and projects. Maps file paths to projects, tracks document metadata (type, title, last indexed), and provides CLI for management.
 
 ```bash
-python3 datastore/docsdb/registry.py create-project myproject --label "My Project"
+python3 core/project_registry_cli.py create myproject --description "My Project"
 python3 datastore/docsdb/registry.py register path/to/doc.md --project myproject
 python3 datastore/docsdb/registry.py find-project path/to/file.py   # Which project owns this file?
 python3 datastore/docsdb/registry.py discover --project myproject    # Auto-discover docs in project dir
@@ -704,7 +704,7 @@ python3 datastore/docsdb/registry.py discover --project myproject    # Auto-disc
 ### Auto-Discovery
 
 Each project directory under `projects/` can contain:
-- `PROJECT.md` -- Generated project documentation (scaffolded by `create-project`)
+- `PROJECT.md` -- Generated project documentation (scaffolded by `project create`)
 - `TOOLS.md` -- Tool usage guidance (what to call, when, and why; loaded into agent context)
 - `AGENTS.md` -- Project behavior and operating rules (loaded into agent context)
 

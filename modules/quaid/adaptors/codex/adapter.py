@@ -240,14 +240,14 @@ class CodexAdapter(QuaidAdapter):
             "### Codex Project Placement Rules\n\n"
             f"- Active instance: `{instance_name}`\n"
             "- Before writing any file, running a multi-step task, or delegating work, first create a tracked project:\n"
-            "  - `quaid registry create-project <name> --source-roots <path>`\n"
+            "  - `quaid project create <name> --source-root <path>`\n"
             "- If the user asks to change a project's metadata, update the registry directly:\n"
             "  - `quaid project update <name> --description \"...\"`\n"
             "- Do not treat edits to `PROJECT.md` as the authoritative way to change project description metadata.\n"
             "- Do not write files outside tracked projects.\n"
             "- For throwaway or temporary work, use the misc project for this instance:\n"
             f"  - `misc--{instance_name}` at `{misc_path}/`\n"
-            f"  - If it is missing, register it first with `quaid registry create-project misc--{instance_name} --source-roots {misc_path}/`\n"
+            f"  - If it is missing, create it first with `quaid project create misc--{instance_name} --source-root {misc_path}/`\n"
             "- Always tell the user which project received the file.\n"
         )
 

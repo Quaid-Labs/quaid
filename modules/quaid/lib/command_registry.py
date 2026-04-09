@@ -31,7 +31,7 @@ COMMAND_REGISTRY: list[dict] = [
             "travel plans, trip itineraries, project plans, or any multi-file "
             "long-lived work"
         ),
-        "hint": "Durable work — create a project first: quaid registry create-project <name>",
+        "hint": "Durable work — create a project first: quaid project create <name>",
     },
     {
         "id": "recall",

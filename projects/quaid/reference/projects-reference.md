@@ -229,10 +229,10 @@ Returns the entry dict.
 
 **Note on `DocsRegistry.create_project()`:** The `DocsRegistry` class in
 `datastore/docsdb/registry.py` has its own `create_project()` method used by
-`quaid registry create-project` (legacy path). It scaffolds the directory, writes a
-richer `PROJECT.md` template, saves to `project_definitions` SQLite table, and
-optionally patches instance `config.json`. The two code paths differ slightly in template
-format and JSON config patching. `quaid project create` (the canonical interface) uses
+internal project scaffolding and registry synchronization. It scaffolds the directory,
+writes a richer `PROJECT.md` template, saves to `project_definitions` SQLite table, and
+optionally patches instance `config.json`. It is not a public CLI surface.
+`quaid project create` is the canonical user-facing interface and uses
 `core/project_registry.py`.
 
 ### 3.2 `link_project(name)`
@@ -812,9 +812,8 @@ Creates `QUAID_VISIBLE_HOME/projects/<name>/` with `PROJECT.md` and `docs/` subd
 Registers the project in `QUAID_HOME/project-registry.json` and the SQLite
 `project_definitions` table.
 
-Note: The older `quaid registry create-project <name> --label "..."` command still
-works (routes through `datastore/docsdb/registry.py`) but `quaid project create` is
-the canonical interface.
+Use `quaid project create` as the canonical interface. The registry CLI no longer
+exposes a public `create-project` command.
 
 #### Show a project
 ```bash
