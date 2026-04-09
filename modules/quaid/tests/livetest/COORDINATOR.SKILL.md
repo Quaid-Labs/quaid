@@ -7,6 +7,83 @@ passes with zero new commits.
 
 ---
 
+## VM Management (tart)
+
+Live tests run on tart VMs cloned from a locked base snapshot. The base snapshot
+has OC, CC, CDX, Homebrew, Python 3.10, Node, Telegram, and SSH pre-configured.
+No Quaid installed — M0 tests the installer.
+
+```bash
+# Reset VM (clone from locked base, boot fresh)
+tart delete quaid-livetest-run 2>/dev/null
+tart clone quaid-livetest-base quaid-livetest-run
+chmod +w ~/.tart/vms/quaid-livetest-run/disk.img
+tart run quaid-livetest-run --no-graphics &
+sleep 15 && VM_IP=$(tart ip quaid-livetest-run)
+
+# SSH key setup (base has key baked in, but new clone may need it)
+cat ~/.ssh/id_ed25519.pub | sshpass -p 'admin' ssh -o StrictHostKeyChecking=no admin@$VM_IP \
+  'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
+
+# Sync source (NOT to ~/.quaid — separate dir)
+rsync -az --exclude=node_modules --exclude=.git --exclude=__pycache__ \
+  --exclude='*.MagicMock*' --exclude='memory.db*' --exclude='.ci-local-logs' \
+  --exclude='.pytest-home' --exclude='.tmp' --exclude='.quaid' --exclude='pytest-runner' \
+  /path/to/quaidcode/dev/ admin@$VM_IP:/Users/admin/quaid-src/
+```
+
+**"Reset VM" always means clone from base — never snapshot current dirty state.**
+
+To update the base snapshot (unlock, modify, re-lock):
+```bash
+chmod +w ~/.tart/vms/quaid-livetest-base/disk.img
+tart run quaid-livetest-base --no-graphics &
+# ... make changes (e.g. update platform versions) ...
+tart stop quaid-livetest-base
+chmod -w ~/.tart/vms/quaid-livetest-base/disk.img
+```
+
+### Platform version checks
+
+Before starting a run, verify platform versions are current:
+```bash
+ssh admin@$VM_IP 'source ~/.zprofile
+echo "Installed: OC=$(openclaw --version) CC=$(claude --version | head -1) CDX=$(codex --version | head -1)"
+echo "Latest: OC=$(npm view openclaw version) CC=$(npm view @anthropic-ai/claude-code version) CDX=$(npm view @openai/codex version)"'
+```
+If outdated: update the base snapshot (not the run VM). Versions must be pinned in the snapshot.
+
+## OC Telegram Quirks
+
+The OC Telegram agent has limitations vs CC/CDX:
+
+1. **No slash commands in groups.** `/new`, `/clear`, `/compact` are chat text. Use `tg-extract` for extraction.
+2. **No shell tool access.** Agent cannot run `quaid recall` or any CLI. M6/M8 are PASS-WITH-NOTE.
+3. **Single session.** All Telegram messages accumulate in one session with no boundaries.
+4. **Send messages via testbox bot:** `tg --config .tg-livetest-send '@Quaid_livetester... MESSAGE'`
+5. **NEVER use .tg-livetest-config for sends** — that's OC's own bot, OC ignores its own messages.
+6. **Extraction trigger:** `tg-extract <VM_IP>` (writes compaction signal, waits 45s).
+7. **For M11 snippets:** send `type: "reset"` signal, not compaction.
+
+## Post-first-M0: Global Livetest Config
+
+After the first M0 clears, inject test-specific config overrides:
+```bash
+ssh admin@$VM_IP 'mkdir -p ~/.quaid/shared/config/global && \
+  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":1500}}" \
+  > ~/.quaid/shared/config/global/memory.json'
+```
+This sets: extraction buffer logging (for sanitizer audits) and chunk_tokens=1500
+(triggers rolling extraction in normal test sessions; production default is 8000).
+Do this once per run. Restart daemons after.
+
+## CC Auth Token
+
+When the CC installer asks for an auth token, provide the Yuni Anthropic OAuth
+token. Write it to the path the installer specifies. NEVER write a placeholder.
+
+---
+
 ## Before You Start
 
 Read `tests/livetest/README.md` for the full architecture and prerequisites.
