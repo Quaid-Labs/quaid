@@ -1647,6 +1647,61 @@ def estimate_unextracted_tokens(transcript_path: str, from_line: int, max_tokens
     return approx_tokens
 
 
+def _load_runtime_adapter():
+    try:
+        from lib.adapter import get_adapter
+        return get_adapter()
+    except Exception:
+        return None
+
+
+def _is_internal_transcript_session(
+    session_id: str,
+    transcript_path: str,
+    adapter=None,
+) -> bool:
+    """Return True when a non-empty raw transcript sanitizes to nothing."""
+    try:
+        if not transcript_path or not os.path.isfile(transcript_path):
+            return False
+        total_lines = count_transcript_lines(transcript_path)
+        if total_lines <= 0:
+            return False
+        active_adapter = adapter if adapter is not None else _load_runtime_adapter()
+        if active_adapter is None:
+            return False
+        transcript_text = active_adapter.parse_session_jsonl(Path(transcript_path))
+        return not bool((transcript_text or "").strip())
+    except Exception:
+        return False
+
+
+def _purge_internal_session_artifacts(session_id: str) -> None:
+    """Delete cursor, rolling state, and queued signals for an internal session."""
+    try:
+        (_cursor_dir() / f"{_validate_session_id(session_id)}.json").unlink()
+    except OSError:
+        pass
+    clear_rolling_state(session_id)
+    _cursor_end_timeout_fired.discard(session_id)
+    try:
+        for f in _signal_dir().iterdir():
+            if not f.name.endswith(".json"):
+                continue
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if _validate_session_id(data.get("session_id", "")) != session_id:
+                continue
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Core extraction processing
 # ---------------------------------------------------------------------------
@@ -1717,6 +1772,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         adapter = None
 
     try:
+        if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+            logger.info("[%s] session %s: internal maintenance transcript, purging stale artifacts", label, session_id)
+            _purge_internal_session_artifacts(session_id)
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(session_id, lock_fd)
+            return
         is_subagent_session_fn = getattr(adapter, "is_subagent_session", None) if adapter is not None else None
         if callable(is_subagent_session_fn) and is_subagent_session_fn(session_id, Path(transcript_path)):
             logger.info("[%s] session %s: adapter-marked subagent, skipping standalone extraction", label, session_id)
@@ -2640,6 +2701,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     now = time.time()
     timeout_seconds = timeout_minutes * 60
     installed_at_ts = _read_installed_at()
+    adapter = _load_runtime_adapter()
 
     # B002: Cache registered subagent IDs once instead of scanning per cursor file
     registered_subagents: set = set()
@@ -2668,6 +2730,10 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+            logger.info("session %s is internal maintenance-only during idle scan, purging stale artifacts", session_id)
+            _purge_internal_session_artifacts(session_id)
             continue
 
         # Skip registered subagents — their transcripts are merged into parent extraction
@@ -2807,12 +2873,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
-    adapter = None
-    try:
-        from lib.adapter import get_adapter
-        adapter = get_adapter()
-    except Exception:
-        adapter = None
+    adapter = _load_runtime_adapter()
 
     for cursor_file in cursor_dir.glob("*.json"):
         try:
@@ -2823,6 +2884,10 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+            logger.info("session %s is internal maintenance-only during rolling scan, purging stale artifacts", session_id)
+            _purge_internal_session_artifacts(session_id)
             continue
         if session_id in pending_session_ids:
             continue

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { __test } from "../adaptors/openclaw/adapter.js";
 
@@ -177,6 +178,28 @@ describe("lifecycle signal detection", () => {
           "Compare Statement A against each candidate statement below.\n\nStatement A (new): \"A\"\n\nCandidates:\n1. \"B\"\n\nRespond with JSON only as an array of objects:\n[{\"pair\":1,\"is_same\":true}]",
       },
     ])).toBe(true);
+  });
+
+  it("parses event_msg payloads before internal transcript detection", () => {
+    const tmpFile = `/tmp/quaid-oc-internal-${Date.now()}.jsonl`;
+    fs.writeFileSync(
+      tmpFile,
+      `${JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "user_message",
+          message:
+            "Compare Statement A against each candidate statement below.\n\nStatement A (new): \"A\"\n\nCandidates:\n1. \"B\"\n\nRespond with JSON only as an array of objects:\n[{\"pair\":1,\"is_same\":true}]",
+        },
+      })}\n`,
+      "utf8",
+    );
+    try {
+      const messages = __test.parseSessionMessagesJsonl(tmpFile);
+      expect(__test.isInternalTranscriptMessages(messages)).toBe(true);
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
   });
 
   it("extracts auto-inject query from direct event text when prompt/messages are empty", () => {

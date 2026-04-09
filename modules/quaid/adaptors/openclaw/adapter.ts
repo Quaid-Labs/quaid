@@ -1667,8 +1667,44 @@ function parseSessionMessagesJsonl(sessionFile: string): any[] {
       const entry = JSON.parse(line);
       if (entry.type === "message" && entry.message) {
         messages.push(entry.message);
-      } else if (entry.role) {
+        continue;
+      }
+      if (entry.role) {
         messages.push(entry);
+        continue;
+      }
+
+      let record = entry;
+      if ((entry.type === "event_msg" || entry.type === "response_item") && entry.payload && typeof entry.payload === "object") {
+        const payload = entry.payload;
+        const payloadType = String(payload.type || "").trim().toLowerCase();
+        if (payloadType === "user_message" || payloadType === "agent_message") {
+          const role = payloadType === "user_message" ? "user" : "assistant";
+          const text = String(payload.message || "").trim();
+          if (text) {
+            messages.push({ role, content: text });
+          }
+          continue;
+        }
+        record = payload;
+      }
+
+      const role = String(record?.role || "").trim().toLowerCase();
+      if (role === "user" || role === "assistant") {
+        let normalizedContent = record?.content ?? record?.text ?? record?.message ?? "";
+        if (Array.isArray(normalizedContent)) {
+          normalizedContent = normalizedContent
+            .map((part: any) => {
+              if (!part || typeof part !== "object") return "";
+              return String(part.text || "").trim();
+            })
+            .filter(Boolean)
+            .join(" ");
+        }
+        const text = String(normalizedContent || "").trim();
+        if (text) {
+          messages.push({ role, content: text });
+        }
       }
     } catch (err: unknown) {
       console.warn(`[quaid] session file line parse failed: ${String((err as Error)?.message || err)}`);
@@ -4647,4 +4683,5 @@ export const __test = {
   selectAutoInjectQuery,
   isInternalSessionContext,
   isInternalTranscriptMessages,
+  parseSessionMessagesJsonl,
 };
