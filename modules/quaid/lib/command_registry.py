@@ -40,7 +40,7 @@ COMMAND_REGISTRY: list[dict] = [
             "project history, codebase details, architecture, tests, schemas, or "
             "anything the user wants to look up from stored knowledge."
         ),
-        "hint": 'Search memories: quaid recall "<query>"',
+        "hint": 'Search memories (thorough, can take 10-30s): quaid recall "<query>"',
     },
     {
         "id": "store",

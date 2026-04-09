@@ -15,7 +15,7 @@ const COMMAND_REGISTRY = [
     id: "recall",
     description:
       "Searching or recalling memories, facts, preferences, past conversations, or anything the user wants to look up from stored knowledge",
-    hint: 'Search memories: quaid recall "your query"',
+    hint: 'Search memories (thorough, can take 10-30s): quaid recall "your query"',
   },
   {
     id: "store",

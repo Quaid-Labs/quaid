@@ -6868,7 +6868,10 @@ def plan_tool_hint(
     ) -> Optional[str]:
         if command_id == "recall":
             quoted_query = _safe_shell_text(clean)
-            return f"<tool_hint>Search memories: quaid recall \"{quoted_query}\"</tool_hint>"
+            return (
+                f"<tool_hint>Search memories (thorough, can take 10-30s): "
+                f"quaid recall \"{quoted_query}\"</tool_hint>"
+            )
 
         if command_id == "store":
             quoted_query = _safe_shell_text(clean)

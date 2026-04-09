@@ -35,7 +35,7 @@ _COMMANDS = [
     {
         "id": "recall",
         "description": "Searching or recalling memories, facts, preferences, past conversations",
-        "hint": 'Search memories: quaid recall "<query>"',
+        "hint": 'Search memories (thorough, can take 10-30s): quaid recall "<query>"',
     },
     {
         "id": "store",
@@ -158,7 +158,7 @@ class TestPlanToolHint:
             )
         assert result is not None
         assert "recall" in result.lower()
-        assert result == '<tool_hint>Search memories: quaid recall "What do you remember about my diet preferences?"</tool_hint>'
+        assert result == '<tool_hint>Search memories (thorough, can take 10-30s): quaid recall "What do you remember about my diet preferences?"</tool_hint>'
 
     def test_docs_recall_query_stays_generic(self):
         with patch(
@@ -175,7 +175,7 @@ class TestPlanToolHint:
                 commands=_COMMANDS,
             )
         assert result is not None
-        assert result == '<tool_hint>Search memories: quaid recall "How does the recipe app authenticate users?"</tool_hint>'
+        assert result == '<tool_hint>Search memories (thorough, can take 10-30s): quaid recall "How does the recipe app authenticate users?"</tool_hint>'
 
     def test_recall_query_heuristics_fill_defaults_when_router_omits_options(self):
         with patch("lib.llm_clients.call_fast_reasoning", _llm_returns("recall")):
@@ -184,7 +184,7 @@ class TestPlanToolHint:
                 commands=_COMMANDS,
             )
         assert result is not None
-        assert result == '<tool_hint>Search memories: quaid recall "How is Maya related to Linda?"</tool_hint>'
+        assert result == '<tool_hint>Search memories (thorough, can take 10-30s): quaid recall "How is Maya related to Linda?"</tool_hint>'
 
     def test_store_query_returns_hint(self):
         """A memory store request should hint at quaid store."""
