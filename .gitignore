@@ -33,6 +33,9 @@ __pycache__/
 .pytest_cache/
 # MagicMock artifact files (accidentally created by pytest tmp_path)
 *MagicMock*
+<MagicMock*
+# Literal-tilde test artifacts created from unexpanded "~/" paths
+~/
 # Temporary files
 *.tmp
 *.bak

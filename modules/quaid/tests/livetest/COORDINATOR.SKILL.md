@@ -27,7 +27,8 @@ cat ~/.ssh/id_ed25519.pub | sshpass -p 'admin' ssh -o StrictHostKeyChecking=no a
 
 # Sync source (NOT to ~/quaid — separate dir)
 rsync -az --exclude=node_modules --exclude=.git --exclude=__pycache__ \
-  --exclude='*.MagicMock*' --exclude='memory.db*' --exclude='.ci-local-logs' \
+  --exclude='*MagicMock*' --exclude='<MagicMock*' --exclude='~/' \
+  --exclude='memory.db*' --exclude='.ci-local-logs' \
   --exclude='.pytest-home' --exclude='.tmp' --exclude='pytest-runner' \
   /path/to/quaidcode/dev/ admin@$VM_IP:/Users/admin/quaid-src/
 ```

@@ -28,6 +28,17 @@ from adaptors.openclaw.providers import GatewayLLMProvider
 from adaptors.codex.providers import CodexLLMProvider, _CodexAppServerManager
 
 
+class _AdapterPathStub:
+    def __init__(self, root: Path):
+        self._root = root
+
+    def quaid_home(self) -> Path:
+        return self._root
+
+    def instance_root(self) -> Path:
+        return self._root / "instances" / "pytest-runner"
+
+
 # ---------------------------------------------------------------------------
 # LLMResult dataclass
 # ---------------------------------------------------------------------------
@@ -761,7 +772,7 @@ class TestClaudeCodeLLMProvider:
         mock_result.stderr = ""
 
         with patch("lib.providers.is_fail_hard_enabled", return_value=False), \
-             patch("lib.adapter.get_adapter", return_value=MagicMock(quaid_home=lambda: tmp_path)), \
+             patch("lib.adapter.get_adapter", return_value=_AdapterPathStub(tmp_path)), \
              patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
             p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
             passed_env = mock_run.call_args.kwargs["env"]
@@ -779,7 +790,7 @@ class TestClaudeCodeLLMProvider:
         mock_result.stderr = ""
 
         with patch("lib.providers.is_fail_hard_enabled", return_value=False), \
-             patch("lib.adapter.get_adapter", return_value=MagicMock(quaid_home=lambda: tmp_path)), \
+             patch("lib.adapter.get_adapter", return_value=_AdapterPathStub(tmp_path)), \
              patch("lib.providers.logger.warning") as log_warning, \
              patch("lib.providers.subprocess.run", return_value=mock_result):
             p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
@@ -799,7 +810,7 @@ class TestClaudeCodeLLMProvider:
         mock_result.stderr = ""
 
         with patch("lib.providers.is_fail_hard_enabled", return_value=False), \
-             patch("lib.adapter.get_adapter", return_value=MagicMock(quaid_home=lambda: tmp_path)), \
+             patch("lib.adapter.get_adapter", return_value=_AdapterPathStub(tmp_path)), \
              patch("builtins.open", side_effect=OSError("boom")), \
              patch("lib.providers.logger.error") as log_error, \
              patch("lib.providers.subprocess.run", return_value=mock_result):
@@ -819,7 +830,7 @@ class TestClaudeCodeLLMProvider:
         mock_result.stderr = ""
 
         with patch("lib.providers.is_fail_hard_enabled", return_value=True), \
-             patch("lib.adapter.get_adapter", return_value=MagicMock(quaid_home=lambda: tmp_path)), \
+             patch("lib.adapter.get_adapter", return_value=_AdapterPathStub(tmp_path)), \
              patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
             with pytest.raises(RuntimeError, match="CLAUDE_CODE_OAUTH_TOKEN is required"):
                 p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
