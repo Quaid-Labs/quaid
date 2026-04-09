@@ -2075,9 +2075,9 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   // Force-refresh plugin install to avoid stale extension code lingering at ~/.openclaw/extensions/quaid.
   // Some OpenClaw builds report "already installed" and keep old files instead of replacing contents.
   try {
-    // Preserve symlinks while staging. Dereferencing can fail when optional
-    // dependency links point outside the plugin tree and are absent locally.
-    fs.cpSync(pluginPath, stagedPluginPath, { recursive: true, dereference: false });
+    // Stage real files so the installed extension never retains dangling
+    // symlinks from the source tree.
+    fs.cpSync(pluginPath, stagedPluginPath, { recursive: true, dereference: true });
   } catch (err) {
     return { ok: false, reason: `failed to stage plugin source: ${String(err)}` };
   }
@@ -2121,7 +2121,11 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   // has a wiring bug in the manifest loader that prevents it from working. Direct
   // registration achieves the same result and is more reliable across OC versions.
   try {
-    fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, force: true });
+    fs.cpSync(stagedPluginPath, extensionDir, {
+      recursive: true,
+      force: true,
+      dereference: true,
+    });
   } catch (err) {
     return { ok: false, reason: `failed to copy plugin to extension dir: ${String(err)}` };
   }
