@@ -54,6 +54,7 @@ class OpenClawAdapter(QuaidAdapter):
         "openai-codex": "openai",
         "anthropic-claude-code": "anthropic",
     }
+    _NON_ROUTABLE_NOTIFY_CHANNELS = {"webchat"}
 
     @classmethod
     def installer_adapter_id(cls) -> str:
@@ -304,6 +305,12 @@ class OpenClawAdapter(QuaidAdapter):
             return False
 
         effective_channel = channel_override or info.channel
+        if str(effective_channel or "").strip().lower() in self._NON_ROUTABLE_NOTIFY_CHANNELS:
+            print(
+                f"[notify] Channel not routable via message CLI: {effective_channel}",
+                file=sys.stderr,
+            )
+            return False
         message_cli = self._resolve_message_cli()
         if not message_cli:
             print("[notify] No message CLI found (expected openclaw)", file=sys.stderr)

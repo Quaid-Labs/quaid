@@ -1306,6 +1306,20 @@ class TestNotifyEdgeCases:
             idx = cmd.index("--channel")
             assert cmd[idx + 1] == "discord"
 
+    def test_notify_skips_non_routable_webchat_channel(self, monkeypatch, capsys):
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="webchat", target="thread:abc", account_id="default",
+            session_key="agent:main:main"
+        )
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+        with patch("adaptors.openclaw.adapter.subprocess.run") as mock_run:
+            result = adapter.notify("test")
+        assert result is False
+        assert "Channel not routable via message CLI: webchat" in capsys.readouterr().err
+        mock_run.assert_not_called()
+
     def test_notify_channel_override_resolves_recent_route_for_channel(self, tmp_path, monkeypatch):
         import json
         sessions_file = tmp_path / "sessions.json"
