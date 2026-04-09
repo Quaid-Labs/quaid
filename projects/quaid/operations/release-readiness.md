@@ -2,7 +2,7 @@
 
 ## Positioning
 
-Quaid is ready for a **stable OSS release** with explicit known issues and a public roadmap.
+Quaid is ready for a **public alpha OSS release** with explicit known issues and a public roadmap.
 
 Recommended framing:
 - "Stable public release: production-minded architecture, active hardening in progress."
@@ -10,7 +10,7 @@ Recommended framing:
 
 ## Go / Hold
 
-### Go now (stable)
+### Go now (public alpha)
 - Deterministic integration and mock-core tests in place.
 - E2E bootstrap/runtime flow exists with verification.
 - Provider abstraction is substantially improved and testable.
@@ -23,7 +23,7 @@ Recommended framing:
   - SHA comparison between the cleared run and current `HEAD`, with Solomon
     deciding whether any post-clear changes are acceptable
 - Installer: fixed `~/.quaid` home, shared embeddings config, platform compatibility warnings, and agent-install survey contract — all shipped.
-- Compatibility matrix populated for v0.3.0.
+- Compatibility matrix populated for v0.3.0-alpha.
 
 ### Hold for broader release until
 - Command API path fully replaces slash-text fallback paths.

@@ -1,6 +1,6 @@
 # Release Tagging Checklist
 
-Replace `<version>` below with the actual release tag (e.g. `v0.3.0`).
+Replace `<version>` below with the actual release tag (e.g. `v0.3.0-alpha`).
 
 ## 1) Pre-tag checks
 - Run deterministic + integration + syntax gates.

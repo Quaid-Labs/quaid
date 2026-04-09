@@ -3,7 +3,7 @@
   "kill_message": null,
   "schema_version": 1,
   "updated_at": "2026-04-08",
-  "latest_quaid": "0.3.0",
+  "latest_quaid": "0.3.0-alpha",
   "update_message": null,
   "matrix": [
     {
