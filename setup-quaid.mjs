@@ -458,7 +458,7 @@ const LOGS_DIR = path.join(WORKSPACE, "logs");
 const PROJECTS_DIR = path.join(WORKSPACE, "projects");
 const TEMP_DIR = path.join(WORKSPACE, "temp");
 const SCRATCH_DIR = path.join(WORKSPACE, "scratch");
-const ADAPTER_REGISTRY_DIR = path.join(WORKSPACE, ".quaid", "adaptors");
+const ADAPTER_REGISTRY_DIR = path.join(WORKSPACE, "adaptors");
 
 let _adapterManifests = [];
 let _existingInstallDetected = false;
