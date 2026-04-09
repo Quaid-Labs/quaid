@@ -66,7 +66,7 @@ This file is the starter brief for working on Quaid itself. It should help an ag
 ## How To Validate
 - For targeted runtime changes, start with focused tests under `modules/quaid/tests/`.
 - For install/bootstrap changes, validate with a fresh instance through `setup-quaid.mjs` or `setup-quaid.sh`.
-- For adapter or lifecycle behavior, use the live/e2e scripts and reference docs under `modules/quaid/scripts/` and `operations/`.
+- For adapter or lifecycle behavior, use the live-test guides and reference docs under `modules/quaid/tests/` and `operations/`.
 - For heavy transcript or benchmark pressure, use the external benchmark harness rather than ad-hoc driver scripts.
 
 ## Key Constraints and Decisions

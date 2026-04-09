@@ -128,7 +128,7 @@ Write request
 |------|---------|
 | `modules/quaid/scripts/check-runtime-pairs.mjs` | Enforces TS/JS runtime pair sync (`--strict` checks HEAD commit too) |
 | `modules/quaid/scripts/run-all-tests.sh` | Orchestrated quick/full test launcher with syntax, integration, and Python isolated suites |
-| `modules/quaid/scripts/run-quaid-e2e-matrix.sh` | Bootstrap/runtime auth-path matrix runner with failure classification + JSON summary |
+| `modules/quaid/scripts/run-quaid-e2e-matrix.sh` | Deprecated historical e2e matrix runner retained only as reference; live tests are authoritative |
 | `scripts/check-docs-consistency.mjs` | GitHub-facing docs drift gate (README/ARCHITECTURE/AI-REFERENCE invariants) |
 | `scripts/release-verify.mjs` | Release/version consistency gate (package/setup/README/release-note alignment) |
 | `scripts/release-owner-check.mjs` | Ownership/attribution gate (author/committer identity + blocked bot/co-author tags) |

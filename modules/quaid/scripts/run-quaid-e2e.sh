@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+cat >&2 <<'EOF'
+[e2e] DEPRECATED: run-quaid-e2e.sh is no longer a supported Quaid validation lane.
+[e2e] Live tests are the authoritative host/runtime validation path.
+[e2e] Use modules/quaid/tests/LIVE-TEST-GUIDE.md instead.
+[e2e] This script is retained only as historical reference and intentionally exits.
+EOF
+exit 2
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BOOTSTRAP_ROOT="${QUAID_BOOTSTRAP_ROOT:-${PLUGIN_ROOT}}"

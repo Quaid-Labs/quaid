@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+cat >&2 <<'EOF'
+[e2e] DEPRECATED: nightly-full-suite.sh depended on the retired e2e lane and is intentionally disabled.
+[e2e] For ongoing validation, use the live-test workflow in modules/quaid/tests/LIVE-TEST-GUIDE.md.
+EOF
+exit 2
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 REPO_ROOT="${QUAID_REPO_ROOT:-${DEFAULT_REPO_ROOT}}"

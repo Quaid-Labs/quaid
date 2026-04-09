@@ -1,7 +1,11 @@
 # Quaid E2E Feature Matrix
 
-This matrix tracks what `modules/quaid/scripts/run-quaid-e2e.sh` validates today and what should be expanded next.
-For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
+Deprecated: this describes the historical e2e runner. Quaid release truth now
+comes from the live-test workflow in `modules/quaid/tests/LIVE-TEST-GUIDE.md`.
+Do not use this matrix as a release gate.
+
+This matrix records what `modules/quaid/scripts/run-quaid-e2e.sh` validated historically.
+For the archived rollout plan, see `docs/e2e-roadmap.md`.
 
 ## Automated Now
 

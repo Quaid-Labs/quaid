@@ -27,17 +27,14 @@ Use this as the go/no-go gate for prelaunch and release candidates.
 - TypeScript orchestrator/session timeout integration passes:
   - `npm run test:integration`
 
-## 3) E2E Runtime Gates
+## 3) Live Validation Gates
 
-- Janitor dry-run E2E passes:
-  - `bash scripts/run-quaid-e2e.sh --suite janitor --janitor-dry-run --quick-bootstrap --reuse-workspace --skip-llm-smoke --skip-live-events --skip-notify-matrix --janitor-timeout 300`
-- Janitor apply-mode E2E passes with non-interactive approval policy:
-  - run with `janitor.applyMode=auto` (and `janitor.approvalPolicies.*=auto` as needed) for the e2e workspace profile.
-- E2E summary integrity checks:
-  - no stage remains `running` in a `success` summary.
-- Lane progression policy:
-  - execute one provider/auth lane at a time when fixing failures;
-  - on failure, fix and re-run that lane before moving to the next lane.
+- Full current live suite passes, using:
+  - `modules/quaid/tests/LIVE-TEST-GUIDE.md`
+- Compatibility rows are written only after the live suite is green and the
+  cleared runtime SHA is fixed.
+- If `HEAD` moved after the clear, list the exact post-clear delta for release
+  approval before tagging.
 
 ## 4) Provider Matrix Smoke
 

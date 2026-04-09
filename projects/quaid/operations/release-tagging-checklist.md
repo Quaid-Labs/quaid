@@ -7,7 +7,8 @@ Replace `<version>` below with the actual release tag (e.g. `v0.3.0-alpha`).
 - Run focused regression suite:
   - `tests/test_providers.py`
   - `tests/test_soul_snippets.py`
-- Run e2e bootstrap flow at least once with quiet notifications.
+- Confirm a full live-suite clear exists for the release-target SHA, or that the
+  post-clear delta has been explicitly approved.
 - Confirm the configured `paths.devRoot` checkout is clean (`git status`).
 
 ## 2) Docs and messaging

@@ -13,7 +13,7 @@ Usage: $(basename "$0") [--quick|--full]
 
 Modes:
   --quick  Fast checks + isolated parallel Python unit tests (default)
-  --full   Quick suite plus TS full suite + Python integration/regression
+  --full   Quick suite plus TS full suite + Python integration/regression (live tests separate)
 USAGE
 }
 
@@ -43,15 +43,6 @@ run_optional_repo_checks() {
   if [[ -f "${REPO_ROOT}/scripts/release-verify.mjs" ]]; then
     run_stage "Release consistency check" node "${REPO_ROOT}/scripts/release-verify.mjs"
   fi
-}
-
-# Remove transient pytest temp sandboxes before bootstrap e2e.
-# These trees can contain non-regular entries (for example pytest's `current`)
-# that some installer copy paths cannot mirror on all filesystems (ENOTSUP).
-cleanup_pytest_run_artifacts() {
-  local local_tmp="${ROOT_DIR}/.tmp/pytest-runs"
-  local runtime_tmp="${REPO_ROOT}/test/modules/quaid/.tmp/pytest-runs"
-  rm -rf "$local_tmp" "$runtime_tmp" 2>/dev/null || true
 }
 
 # Best-effort TS dependency probe for clean dev workspaces.
@@ -144,25 +135,12 @@ if [[ "$MODE" == "full" ]]; then
   run_stage "Python integration suite (parallel isolated)" python3 scripts/run_pytests.py --mode integration --workers 2 --timeout 180
   run_stage "Python regression suite (parallel isolated)" python3 scripts/run_pytests.py --mode regression --workers 4 --timeout 600
 
-  # Bootstrap-driven end-to-end auth matrix (gateway/runtime wiring).
-  cleanup_pytest_run_artifacts
-  E2E_MATRIX_SCRIPT="${QUAID_E2E_MATRIX_SCRIPT:-$ROOT_DIR/scripts/run-quaid-e2e-matrix.sh}"
-  E2E_PATHS="${QUAID_E2E_PATHS:-openai-oauth,openai-api,anthropic-api}"
-  if [[ -x "$E2E_MATRIX_SCRIPT" ]]; then
-    if [[ -n "${QUAID_E2E_EXPECT:-}" ]]; then
-      run_stage "Bootstrap E2E auth matrix" "$E2E_MATRIX_SCRIPT" --paths "$E2E_PATHS" --expect "$QUAID_E2E_EXPECT"
-    else
-      run_stage "Bootstrap E2E auth matrix" "$E2E_MATRIX_SCRIPT" --paths "$E2E_PATHS"
-    fi
-  else
-    echo
-    echo "================================================================"
-    echo "[tests] Bootstrap E2E auth matrix"
-    echo "================================================================"
-    echo "[tests] SKIP: matrix script not found/executable at $E2E_MATRIX_SCRIPT"
-    echo "[tests] Hint: set QUAID_E2E_MATRIX_SCRIPT to modules/quaid/scripts/run-quaid-e2e-matrix.sh"
-    echo "[tests] Hint: set QUAID_E2E_PATHS to override auth lanes"
-  fi
+  echo
+  echo "================================================================"
+  echo "[tests] Live validation"
+  echo "================================================================"
+  echo "[tests] NOTE: legacy e2e automation is deprecated and no longer part of test:all:full"
+  echo "[tests] Use modules/quaid/tests/LIVE-TEST-GUIDE.md for authoritative host validation"
 fi
 
 echo

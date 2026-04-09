@@ -196,14 +196,15 @@ For live clears:
 
 ## E2E Policy
 
-E2E is diagnostic coverage now, not release truth.
+The old e2e automation is deprecated and is not part of release truth.
 
 - Blocking release truth is:
   - unit evidence
   - CI evidence
   - XP evidence
   - a full current live-suite clear, as defined by [LIVE-TEST-GUIDE.md](../modules/quaid/tests/LIVE-TEST-GUIDE.md)
-- Keep E2E for nightly or warning-only coverage until it is removed or rebuilt.
+- Do not treat `run-quaid-e2e.sh` or `run-quaid-e2e-matrix.sh` as a required pre-release gate.
+- If e2e is ever rebuilt, it should return as a new supported lane rather than a silently assumed one.
 
 ## Canary Pushes
 

@@ -1,6 +1,10 @@
 # Quaid E2E Roadmap
 
-This roadmap stages E2E expansion by risk and release impact. It is designed to run in an execution loop: implement, run, fix, repeat.
+Deprecated: this documents the historical e2e lane. Quaid release truth now
+comes from the live-test workflow in `modules/quaid/tests/LIVE-TEST-GUIDE.md`.
+Do not treat this roadmap as an active release plan.
+
+This document captured the historical plan for E2E expansion by risk and release impact.
 
 ## E2E Admission Rule
 

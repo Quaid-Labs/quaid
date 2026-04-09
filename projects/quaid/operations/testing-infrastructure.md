@@ -4,10 +4,10 @@ This document defines the current test stack, execution commands, and pass/fail 
 
 ## Goals
 - Keep local/PR validation deterministic and fast.
-- Keep live-provider behavior checked via e2e smoke flows.
+- Keep host/runtime behavior checked via the live-test workflow.
 - Separate model-drift risk from blocking correctness checks.
 - Prevent single hanging test from stalling the entire suite.
-- Keep e2e debugging deterministic by isolating failures to one auth/provider lane at a time.
+- Do not treat the legacy e2e lane as release truth.
 
 ## Test Layers
 
@@ -55,23 +55,20 @@ This document defines the current test stack, execution commands, and pass/fail 
   - Python compile check (`compileall`)
   - Node syntax checks on key JS runtime files
 
-### 6) E2E Runtime (smoke)
-- Purpose: validate real bootstrap/gateway/runtime orchestration and janitor path.
-- Scripts:
-  - `modules/quaid/scripts/run-quaid-e2e.sh`
-  - `modules/quaid/scripts/run-quaid-e2e-matrix.sh`
-- Scope:
-  - Gateway stop/start, e2e workspace bootstrap, integration tests, janitor run, restore to the test workspace.
-  - Bootstrap path executes canonical installer (`setup-quaid.mjs`), including datastore-init hooks and workspace dir initialization.
-- Bootstrap coupling:
-  - E2E runners live in `modules/quaid/scripts` and call bootstrap scripts via `QUAID_BOOTSTRAP_ROOT` (set to your local bootstrap repo path).
-  - Optional local env file: `modules/quaid/.env.e2e` (template: `modules/quaid/scripts/e2e.env.example`).
-- Notification safety:
-  - E2E should run with Quaid notifications set to `quiet` to prevent Telegram/DM spam during automation.
-  - Raise notification level only when explicitly testing notification UX.
-- Auth/key model:
-  - In host mode (OpenClaw), Quaid uses gateway-managed auth profiles.
-  - Standalone CLI tests can use local env keys (`.env`) when needed.
+### 6) Live Validation (authoritative)
+- Purpose: validate real install, host integration, extraction, retrieval, and maintenance behavior on the supported hosts.
+- Source of truth:
+  - `modules/quaid/tests/LIVE-TEST-GUIDE.md`
+- Notes:
+  - Live validation is the release-truth lane for OpenClaw, Claude Code, and Codex.
+  - Compatibility rows are written from accepted live clears, not from legacy e2e automation.
+
+### 7) Legacy E2E (deprecated)
+- `modules/quaid/scripts/run-quaid-e2e.sh`
+- `modules/quaid/scripts/run-quaid-e2e-matrix.sh`
+- Status:
+  - Deprecated and intentionally not part of `npm run test:all:full`
+  - Kept only as historical reference until removed or rebuilt
 
 ## Standard Commands
 
@@ -134,41 +131,7 @@ npm run test:coverage:py:full
 cd <test-workspace>/modules/quaid
 npm run test:all:full
 ```
-
-### E2E single provider
-```bash
-cd <test-workspace>/modules/quaid
-./scripts/run-quaid-e2e.sh --auth-path openai-oauth
-```
-
-### E2E with explicit notification level
-```bash
-cd <test-workspace>/modules/quaid
-./scripts/run-quaid-e2e.sh --auth-path openai-oauth --notify-level quiet
-```
-
-### E2E provider matrix
-```bash
-cd <test-workspace>/modules/quaid
-./scripts/run-quaid-e2e-matrix.sh --paths openai-oauth,openai-api,anthropic-api -- --skip-janitor
-```
-Per-path timeout defaults to `1200` seconds. Override with `QUAID_E2E_PATH_TIMEOUT_SEC=<seconds>` when needed.
-
-Matrix failure policy (required):
-- Run one lane at a time when diagnosing failures.
-- On first lane failure, stop matrix progression, fix that lane, rerun that same lane, then continue to next lane.
-- Do not parallelize fallback/fix attempts across multiple failing lanes.
-
-Default full-suite matrix lanes intentionally exclude `anthropic-oauth` (known unstable refresh behavior).
-Current default lanes in `run-all-tests.sh`:
-- `openai-oauth`
-- `openai-api`
-- `anthropic-api`
-
-Override with:
-```bash
-QUAID_E2E_PATHS="openai-oauth,openai-api,anthropic-api" npm run test:all:full
-```
+This no longer runs legacy e2e automation. Use the live-test guide separately for host validation.
 
 ## Projects System Live Testing
 
@@ -207,27 +170,10 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
 - Python integration tier passes.
 - Python regression tier passes.
 
-### E2E pass criteria
-- Bootstrap to the configured hidden e2e workspace succeeds.
-- Integration tests in e2e workspace pass.
-- Janitor run exits successfully.
-- Janitor verification passes:
-  - `janitor_runs` exists.
-  - New run row recorded.
-  - Run status is `completed`.
-  - Apply mode shows observable work (`memories_processed` or `actions_taken` or status-bucket deltas).
-- Cleanup/restore succeeds:
-  - The hidden e2e workspace is removed on success (unless `--keep-on-success`).
-  - Workspace restored to the test workspace.
-  - Gateway health recovered.
-- Summary integrity guard:
-  - E2E summary must not report `status=success` while any stage remains `running`.
-  - If a stage is still `running` at summary time, runner marks the run failed with `failure.reason=incomplete_stage_status`.
-
-### Janitor E2E mode guidance
-- Use `--janitor-dry-run` for non-interactive hardening sweeps.
-- Reason: apply mode can legitimately wait on approval-policy `ask` requests, which is not a regression by itself.
-- Use apply mode for release/benchmark validation only when approval policy is explicitly controlled.
+### Live validation pass criteria
+- The current live suite in `modules/quaid/tests/LIVE-TEST-GUIDE.md` passes on the supported hosts.
+- The cleared runtime SHA is recorded and matched against the intended release target.
+- Compatibility rows are written from that accepted clear.
 
 ## Determinism Policy
 - Blocking tests must not depend on live model text exactness.
@@ -240,5 +186,5 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
 
 ## Bootstrap Ownership
 - Runtime/bootstrap orchestration remains in the machine-local bootstrap repo (path set via `QUAID_BOOTSTRAP_ROOT`).
-- Quaid now keeps E2E entrypoints in `modules/quaid/scripts` so full test runs can execute from dev/test directly.
+- Legacy e2e entrypoints remain in `modules/quaid/scripts` only as historical reference until removal or replacement.
 - `paths.devRoot` must not store local secrets or host-specific credential material.

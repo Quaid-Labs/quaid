@@ -91,15 +91,16 @@ directory such as `~/quaidcode/`.
 These repo tools read `.quaid-dev.local.json` today:
 
 - `modules/quaid/scripts/bootstrap-local.sh`
-- `modules/quaid/scripts/run-quaid-e2e.sh`
 - `modules/quaid/scripts/apply-runtime-profile.py`
-- `modules/quaid/scripts/nightly-full-suite.sh`
 - `scripts/privacy-audit.mjs`
 - `scripts/release-owner-check.mjs`
 - `scripts/push-canary.sh`
 
 Benchmark and local automation tooling may also read the `auth` section for
 provider key paths.
+
+Deprecated historical scripts may still reference the local config, but they are
+not part of the supported validation/release path.
 
 ## Public Repo Rule
 
