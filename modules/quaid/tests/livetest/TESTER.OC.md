@@ -54,12 +54,12 @@ Receive:
 Send all OC messages via Telegram:
 ```bash
 ~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "your message"
-~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/reset"
+~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/clear"
 ~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/new"
 ~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/compact"
 ```
 
-Lifecycle commands (`/reset`, `/new`, `/compact`) are sent as plain Telegram messages.
+Lifecycle commands (`/clear`, `/new`, `/compact`) are sent as plain Telegram messages.
 
 **Avoid apostrophes** in OC messages — use "do not" instead of "don't".
 
@@ -75,7 +75,7 @@ No tmux capture is needed for replies.
 | Trigger | How | Notes |
 |---------|-----|-------|
 | New session | `/new` | Lifecycle note below |
-| Session reset | `/reset` | Extracts pre-reset session |
+| Session clear | `/clear` | Extracts current session |
 | Compaction | `/compact` | Extracts + compacts |
 | Timeout | inactivity > `capture.inactivityTimeoutMinutes` | Daemon-compaction signal (source: timeout_extract) |
 | Rolling | session crosses `capture.chunk_tokens` threshold | Daemon polls automatically |

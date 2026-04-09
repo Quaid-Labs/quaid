@@ -433,6 +433,54 @@ After the platform reports completion:
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE WORKSPACE/modules/quaid/quaid doctor 2>&1 | tail -5'
    ```
 
+### Post-Install Examination (after M0 PASS, before config patching)
+
+Run this immediately after each platform's M0 passes, before any post-install
+config changes. This catches installer filesystem mistakes while the install is
+fresh and unmodified.
+
+**Spawn a Sonnet subagent** to SSH into the remote and verify the filesystem:
+
+```
+Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
+
+1. Verify NO ~/quaid directory was created:
+   ssh REMOTE_HOST 'ls -la ~/quaid 2>&1'
+   Expected: "No such file or directory". If ~/quaid exists, report FAIL — the
+   installer wrote to the wrong location.
+
+2. Verify ~/.quaid exists and has the expected structure:
+   ssh REMOTE_HOST 'find ~/.quaid -maxdepth 3 -type d | sort'
+   Expected directories (at minimum):
+   - ~/.quaid/modules/quaid/     (runtime code)
+   - ~/.quaid/shared/config/     (shared config)
+   - ~/.quaid/INSTANCE/config/   (instance config)
+   - ~/.quaid/INSTANCE/data/     (database)
+
+3. Verify instance config landed in the right place:
+   ssh REMOTE_HOST 'cat ~/.quaid/INSTANCE/config/memory.json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"models:\", d.get(\"models\",{})); print(\"capture:\", d.get(\"capture\",{}))"'
+   Expected: models.fastReasoning and capture section present.
+
+4. Verify shared platform config exists:
+   ssh REMOTE_HOST 'ls -la ~/.quaid/shared/config/PLATFORM/ 2>&1'
+   Expected: memory.json exists.
+
+5. Platform-specific checks:
+   - OC: verify ~/.openclaw/extensions/quaid/ is a symlink or copy pointing to ~/.quaid/modules/quaid/
+   - CC: verify ~/.claude/settings.json has Quaid hooks registered
+   - CDX: verify ~/.codex/hooks.json has Quaid hooks registered
+
+6. Verify NO stale paths:
+   ssh REMOTE_HOST 'ls -la ~/quaid 2>&1; ls -la ~/.quaid/config/memory.json 2>&1'
+   Both should be "No such file or directory". If either exists, the installer
+   is writing to a legacy path.
+
+Report: PASS if all checks pass, FAIL with details for any violation.
+```
+
+If any check fails, the M0 result is downgraded to FAIL and the installer must
+be fixed before proceeding to M1.
+
 ### Post-install coordinator steps (after M0 PASS, before M1)
 
 **Write CC auth token** (required for daemon LLM calls):
@@ -569,6 +617,65 @@ Full suite passed with no code changes.
    commits and recommend a follow-up run to verify the fixes are clean.
 7. **Loop mode only (`loop: true` in config):** Return to Step 2 and start the
    next run with the new HEAD as RUN_START_SHA.
+
+---
+
+## Post-Test Examination (after all milestones, before end-of-run report)
+
+Run this after all platforms have completed their milestone suites (M1–M13 + XP).
+This catches system information leaking into user-visible logs and outputs.
+
+**Spawn Sonnet subagents** (one per platform, in parallel) to audit the buffered
+extraction logs. Each subagent reads the full log and reports any system info
+that should not be visible to a user.
+
+```
+Audit the extraction buffer log for platform PLATFORM on REMOTE_HOST.
+
+Read the full extraction buffer log:
+  ssh REMOTE_HOST 'cat ~/.quaid/INSTANCE/logs/daemon/extraction-buffer.jsonl 2>/dev/null'
+
+Also read the daemon log:
+  ssh REMOTE_HOST 'cat ~/.quaid/INSTANCE/logs/daemon/extraction-daemon.log 2>/dev/null'
+
+And the rolling extraction log:
+  ssh REMOTE_HOST 'cat ~/.quaid/INSTANCE/logs/daemon/rolling-extraction.jsonl 2>/dev/null'
+
+Scan every line for system information that should NOT appear in user-facing
+logs or extraction output. Flag any of the following:
+
+1. **API keys, tokens, or credentials** — any string that looks like an API key,
+   bearer token, auth header, or secret. Includes partial keys.
+2. **Internal file paths** — absolute paths from the host machine that reveal
+   system layout (e.g. /Users/admin/.quaid/..., /home/..., /opt/homebrew/...).
+   Relative paths within the Quaid workspace are OK.
+3. **Hook/system chatter** — lines that are clearly hook stderr, Python tracebacks,
+   or system-level diagnostic messages that leaked through adapter sanitization.
+   Examples: "hook.inject.session_transition_signal_written", Python import errors,
+   Node.js stack traces.
+4. **Extraction prompt leakage** — any text that looks like it came from the
+   extraction system prompt or LLM instructions rather than the user conversation.
+   Examples: "You are performing offline memory extraction", "Extract personal
+   facts from the following transcript".
+5. **Configuration dumps** — raw JSON config objects, model names with provider
+   prefixes (e.g. "anthropic/claude-haiku-4-5"), gateway URLs, port numbers.
+6. **Other agent/system metadata** — coordinator messages, tmux pane addresses,
+   tester instructions, run numbers, or any content that reveals the test harness.
+
+For each finding, report:
+- The log file and line number
+- The offending text (truncated to 200 chars if long)
+- Classification (credential, path, hook chatter, prompt leak, config, metadata)
+- Severity: CRITICAL (credentials/tokens), HIGH (prompt leaks, config dumps),
+  MEDIUM (paths, hook chatter), LOW (metadata)
+
+Report: CLEAN if no findings, or a structured list of findings sorted by severity.
+```
+
+Aggregate results across all three platform subagents. Any CRITICAL finding
+blocks the run from being marked CLEAN. HIGH findings should be logged as
+issues to fix before the next run. MEDIUM/LOW findings are informational but
+should be tracked.
 
 ---
 

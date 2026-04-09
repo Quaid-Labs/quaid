@@ -42,8 +42,8 @@ tmux send-keys -t livetest:CDX "" Enter
 
 Exit CDX with Ctrl+D or `/exit`.
 
-**Always wait for the current turn to fully finish** before sending `/clear` —
-CDX disables `/clear` while a task is still running.
+**Always wait for the current turn to fully finish** before sending `/new` —
+CDX disables `/new` while a task is still running.
 
 ---
 
@@ -66,11 +66,11 @@ CDX extraction is daemon-driven.
 **Do NOT fix `resolve_stop_hook_signal()` to always return a signal. This is intentional.**
 
 The CDX Stop hook (`hook_codex_stop`) only writes a `session_end` signal when
-it detects a lifecycle command (`/clear`, `/new`, `/reset`, `/restart`) in the
+it detects a lifecycle command (`/new`, `/restart`) in the
 transcript. On a plain task completion (no lifecycle command), it returns `None`
 and writes nothing. This is correct behavior.
 
-**Why detection fails for `/new` and `/clear`:** CDX CLI intercepts lifecycle
+**Why detection fails for `/new`:** CDX CLI intercepts lifecycle
 commands before the Stop hook fires and strips them from the transcript. The
 hook's transcript scan finds nothing and returns `None`.
 
@@ -100,11 +100,9 @@ That means CDX gets **timeout extraction** but **not timeout compaction**
 
 | Command | CDX equivalent | Notes |
 |---------|---------------|-------|
-| `/reset` | `/clear` | **Never send `/reset` to CDX** |
-| `/compact` | `/clear` | No timeout compaction |
-| `/new` | `/new` | Starts a fresh session |
-
-**Never send `/reset` to CDX.** CDX uses `/clear` for extraction triggers.
+| `/new` | `/new` | Primary extraction trigger (starts fresh session) |
+| `/clear` | `/new` | CDX has no `/clear` — use `/new` instead |
+| `/compact` | `/new` | No timeout compaction on CDX |
 
 ---
 
@@ -143,7 +141,7 @@ session-timeout manager. So M4 still applies to CDX, but the expected signal is
    ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
    ```
 2. Start a fresh visible CDX session, state one memorable fact, then let the
-   pane idle for >1 minute without `/new` or `/clear`.
+   pane idle for >1 minute without `/new`.
 3. Verify extraction fired:
    - daemon log shows timeout handling (`daemon-timeout` or equivalent timeout extraction path)
    - the fact is stored in DB / FTS
@@ -193,14 +191,14 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE \
 
 ## Milestone Notes
 
-### M2 — Extraction via `/clear`
-Use `/clear` (not `/reset`). Wait for the memorable turn to fully finish, then
-send `/clear`; `/clear` is the extraction trigger for this milestone. Verify the
-fact is stored after the clear boundary. Do not gate on snippet or journal
+### M2 — Extraction via `/new`
+Use `/new` (CDX has no `/clear`). Wait for the memorable turn to fully finish,
+then send `/new`; `/new` is the extraction trigger for this milestone. Verify the
+fact is stored after the session boundary. Do not gate on snippet or journal
 output — that is discretionary and covered in M11.
 
 ### M3 — Rolling Extraction
-CDX does not have `/compact`. After seeding and building context, use `/clear`
+CDX does not have `/compact` or `/clear`. After seeding and building context, use `/new`
 as the extraction trigger. Verify `rolling-extraction.jsonl` has `rolling_stage`
 and `rolling_flush` events the same as OC/CC.
 
