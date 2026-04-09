@@ -4909,19 +4909,22 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   // Write config to the instance root (QUAID_HOME/<instance>/config/memory.json).
   // This is the authoritative instance config path; the old flat QUAID_HOME/config/
   // path is no longer written.
-  const instanceId = (process.env.QUAID_INSTANCE || "").trim();
+  // Resolve instance ID: explicit env var > installer-resolved default.
+  // Without this, CC/CDX installs without QUAID_INSTANCE set write config
+  // to the flat QUAID_HOME/config/ path, but the daemon reads from
+  // QUAID_HOME/<instance>/config/ — causing empty instance configs.
+  const instanceId = (process.env.QUAID_INSTANCE || "").trim() || resolvedInstallerInstanceId();
   if (instanceId) {
     const instanceConfigDir = path.join(WORKSPACE, instanceId, "config");
     fs.mkdirSync(instanceConfigDir, { recursive: true });
     const configJson = JSON.stringify(config, null, 2) + "\n";
     fs.writeFileSync(path.join(instanceConfigDir, "memory.json"), configJson);
     log.info(`Wrote instance config: ${instanceConfigDir}/memory.json`);
-  } else {
-    // Fallback for non-instance installs (standalone without QUAID_INSTANCE set).
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    const configJson = JSON.stringify(config, null, 2) + "\n";
-    fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), configJson);
   }
+  // Always write flat config too as fallback layer.
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const configJson = JSON.stringify(config, null, 2) + "\n";
+  fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), configJson);
 }
 
 function copyDirSync(src, dest) {
