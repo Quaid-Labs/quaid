@@ -4733,6 +4733,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     capture: {
       enabled: true,
       strictness: "high",
+      chunk_tokens: 8000,
       inactivityTimeoutMinutes: 60,
       autoCompactionOnTimeout: models.autoCompactionOnTimeout ?? true,
       skipPatterns: ["^(thanks|ok|sure|yes|no)$", "^(hi|hello|hey)\\b"],
