@@ -8,7 +8,7 @@ function normalizeId(value) {
 }
 
 export function adapterRegistryDir(workspace) {
-  return path.join(String(workspace || "").trim(), ".quaid", "adaptors");
+  return path.join(String(workspace || "").trim(), "adaptors");
 }
 
 export function validateAdapterManifest(raw) {
