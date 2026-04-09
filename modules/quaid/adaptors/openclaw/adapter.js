@@ -210,6 +210,8 @@ function readInstalledAtMs() {
 }
 const sessionTranscriptPaths = /* @__PURE__ */ new Map();
 const sessionIdToAgentId = /* @__PURE__ */ new Map();
+const subagentParentSessionIds = /* @__PURE__ */ new Map();
+const registeredSubagentSessions = /* @__PURE__ */ new Set();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
 const SESSION_INDEX_POLL_MS = 1e3;
 let sessionIndexWatcherStarted = false;
@@ -218,6 +220,59 @@ function isSameSessionTranscriptRollover(priorCount, currentCount, priorSize, cu
   const rowTruncated = priorCount > 0 && currentCount >= 0 && currentCount < priorCount;
   const sizeTruncated = priorSize > 0 && currentSize >= 0 && currentSize < priorSize;
   return rowTruncated || sizeTruncated;
+}
+function isSubagentSessionKeyLike(sessionKey) {
+  const raw = String(sessionKey || "").trim().toLowerCase();
+  return raw.startsWith("subagent:") || raw.includes(":subagent:");
+}
+function resolveSubagentParentSessionId(spawnedBy, sessionsData, sessionKeyLastSeen) {
+  const parentKey = String(spawnedBy || "").trim();
+  if (!parentKey) {
+    return "";
+  }
+  const direct = String(sessionsData?.[parentKey]?.sessionId || "").trim();
+  if (direct) {
+    return direct;
+  }
+  return String(sessionKeyLastSeen.get(parentKey) || "").trim();
+}
+function runSubagentHookCommand(command, payload, agentLabel) {
+  const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+  try {
+    const result = spawnSync(quaidBin, [command], {
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      timeout: 3e4,
+      env: buildPythonEnv({ QUAID_INSTANCE: getInstanceId(agentLabel) })
+    });
+    if (result.error || result.status !== 0) {
+      writeHookTrace("subagent.hook_command_error", {
+        command,
+        payload,
+        agent_label: agentLabel,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || "")
+      });
+      return false;
+    }
+    writeHookTrace("subagent.hook_command_done", {
+      command,
+      payload,
+      agent_label: agentLabel,
+      stdout: String(result.stdout || "").trim().slice(0, 500),
+      stderr: String(result.stderr || "").trim().slice(0, 500)
+    });
+    return true;
+  } catch (err) {
+    writeHookTrace("subagent.hook_command_error", {
+      command,
+      payload,
+      agent_label: agentLabel,
+      error: String(err?.message || err)
+    });
+    return false;
+  }
 }
 function resolveLifecycleTranscriptPath(action, event, ctx) {
   const candidates = [];
@@ -2085,11 +2140,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               key,
               sessionId,
               sessionFile: getOpenClawSessionFile(sessionId),
-              updatedAt: Number(row.updatedAt || 0)
+              updatedAt: Number(row.updatedAt || 0),
+              agentLabel,
+              spawnedBy: String(row.spawnedBy || "").trim()
             });
           }
+          const currentKeys = new Set(recognizedEntries.map((entry) => entry.key));
           for (const entry of recognizedEntries) {
-            const { key, sessionId, sessionFile, updatedAt } = entry;
+            const { key, sessionId, sessionFile, updatedAt, agentLabel, spawnedBy } = entry;
             const prevSessionId = sessionKeyLastSeen.get(key);
             if (prevSessionId && prevSessionId !== sessionId) {
               writeHookTrace("session_index.key_transition", {
@@ -2134,6 +2192,22 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               }
               if (isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })) {
                 pendingOrphanChecks.set(prevSessionId, Date.now());
+              }
+              if (isSubagentSessionKeyLike(key)) {
+                const parentSessionId = String(subagentParentSessionIds.get(prevSessionId) || "").trim();
+                if (parentSessionId) {
+                  runSubagentHookCommand(
+                    "hook-subagent-stop",
+                    {
+                      session_id: parentSessionId,
+                      agent_id: prevSessionId,
+                      agent_transcript_path: sessionTranscriptPaths.get(prevSessionId) || getOpenClawSessionFile(prevSessionId)
+                    },
+                    agentLabel
+                  );
+                }
+                registeredSubagentSessions.delete(prevSessionId);
+                subagentParentSessionIds.delete(prevSessionId);
               }
               sessionIndexMessageCounts.delete(prevSessionId);
             } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
@@ -2197,6 +2271,26 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             }
             sessionKeyLastSeen.set(key, sessionId);
             sessionTranscriptPaths.set(sessionId, sessionFile);
+            if (isSubagentSessionKeyLike(key)) {
+              const parentSessionId = resolveSubagentParentSessionId(spawnedBy, data, sessionKeyLastSeen);
+              if (parentSessionId) {
+                subagentParentSessionIds.set(sessionId, parentSessionId);
+                if (!registeredSubagentSessions.has(sessionId)) {
+                  const registered = runSubagentHookCommand(
+                    "hook-subagent-start",
+                    {
+                      session_id: parentSessionId,
+                      agent_id: sessionId,
+                      agent_type: agentLabel
+                    },
+                    agentLabel
+                  );
+                  if (registered) {
+                    registeredSubagentSessions.add(sessionId);
+                  }
+                }
+              }
+            }
             const rows = parseSessionMessagesJsonl(sessionFile);
             const priorCount = sessionIndexMessageCounts.get(sessionId) || 0;
             let currentSize = -1;
@@ -2310,6 +2404,29 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 session_key: key
               });
             }
+          }
+          for (const [priorKey, priorSid] of Array.from(sessionKeyLastSeen.entries())) {
+            if (currentKeys.has(priorKey) || /^agent:[^:]+:hook:/.test(priorKey)) {
+              continue;
+            }
+            if (isSubagentSessionKeyLike(priorKey)) {
+              const parentSessionId = String(subagentParentSessionIds.get(priorSid) || "").trim();
+              const agentLabel = String(sessionIdToAgentId.get(priorSid) || "main").trim() || "main";
+              if (parentSessionId) {
+                runSubagentHookCommand(
+                  "hook-subagent-stop",
+                  {
+                    session_id: parentSessionId,
+                    agent_id: priorSid,
+                    agent_transcript_path: sessionTranscriptPaths.get(priorSid) || getOpenClawSessionFile(priorSid)
+                  },
+                  agentLabel
+                );
+              }
+              registeredSubagentSessions.delete(priorSid);
+              subagentParentSessionIds.delete(priorSid);
+            }
+            sessionKeyLastSeen.delete(priorKey);
           }
           const active = pickActiveInteractiveSession(data);
           if (active) {

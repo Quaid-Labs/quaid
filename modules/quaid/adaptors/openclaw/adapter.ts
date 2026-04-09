@@ -308,6 +308,8 @@ const sessionTranscriptPaths = new Map<string, string>();
 // Maps sessionId → agentId for multi-agent daemon signal routing.
 // Populated by the session index watcher as sessions are discovered.
 const sessionIdToAgentId = new Map<string, string>();
+const subagentParentSessionIds = new Map<string, string>();
+const registeredSubagentSessions = new Set<string>();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
 const SESSION_INDEX_POLL_MS = 1000;
 let sessionIndexWatcherStarted = false;
@@ -332,6 +334,70 @@ function isSameSessionTranscriptRollover(
   const rowTruncated = priorCount > 0 && currentCount >= 0 && currentCount < priorCount;
   const sizeTruncated = priorSize > 0 && currentSize >= 0 && currentSize < priorSize;
   return rowTruncated || sizeTruncated;
+}
+
+function isSubagentSessionKeyLike(sessionKey: string | undefined | null): boolean {
+  const raw = String(sessionKey || "").trim().toLowerCase();
+  return raw.startsWith("subagent:") || raw.includes(":subagent:");
+}
+
+function resolveSubagentParentSessionId(
+  spawnedBy: string,
+  sessionsData: Record<string, any>,
+  sessionKeyLastSeen: Map<string, string>,
+): string {
+  const parentKey = String(spawnedBy || "").trim();
+  if (!parentKey) {
+    return "";
+  }
+  const direct = String((sessionsData?.[parentKey] as any)?.sessionId || "").trim();
+  if (direct) {
+    return direct;
+  }
+  return String(sessionKeyLastSeen.get(parentKey) || "").trim();
+}
+
+function runSubagentHookCommand(
+  command: "hook-subagent-start" | "hook-subagent-stop",
+  payload: Record<string, unknown>,
+  agentLabel: string,
+): boolean {
+  const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+  try {
+    const result = spawnSync(quaidBin, [command], {
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      timeout: 30_000,
+      env: buildPythonEnv({ QUAID_INSTANCE: getInstanceId(agentLabel) }) as NodeJS.ProcessEnv,
+    });
+    if (result.error || result.status !== 0) {
+      writeHookTrace("subagent.hook_command_error", {
+        command,
+        payload,
+        agent_label: agentLabel,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || ""),
+      });
+      return false;
+    }
+    writeHookTrace("subagent.hook_command_done", {
+      command,
+      payload,
+      agent_label: agentLabel,
+      stdout: String(result.stdout || "").trim().slice(0, 500),
+      stderr: String(result.stderr || "").trim().slice(0, 500),
+    });
+    return true;
+  } catch (err: unknown) {
+    writeHookTrace("subagent.hook_command_error", {
+      command,
+      payload,
+      agent_label: agentLabel,
+      error: String((err as Error)?.message || err),
+    });
+    return false;
+  }
 }
 
 function resolveLifecycleTranscriptPath(
@@ -2734,6 +2800,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             sessionId: string;
             sessionFile: string;
             updatedAt: number;
+            agentLabel: string;
+            spawnedBy: string;
           }> = [];
           for (const [key, row] of Object.entries(data || {})) {
             if (
@@ -2757,13 +2825,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               sessionId,
               sessionFile: getOpenClawSessionFile(sessionId),
               updatedAt: Number((row as any).updatedAt || 0),
+              agentLabel,
+              spawnedBy: String((row as any).spawnedBy || "").trim(),
             });
           }
 
           // For each recognized key: detect transitions (key moved to new sessionId)
           // and watch the current session's transcript for slash commands.
+          const currentKeys = new Set(recognizedEntries.map((entry) => entry.key));
           for (const entry of recognizedEntries) {
-            const { key, sessionId, sessionFile, updatedAt } = entry;
+            const { key, sessionId, sessionFile, updatedAt, agentLabel, spawnedBy } = entry;
             const prevSessionId = sessionKeyLastSeen.get(key);
 
             if (prevSessionId && prevSessionId !== sessionId) {
@@ -2816,6 +2887,22 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               // once the backup appears, or gives up after 60s.
               if (isSystemEnabled("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })) {
                 pendingOrphanChecks.set(prevSessionId, Date.now());
+              }
+              if (isSubagentSessionKeyLike(key)) {
+                const parentSessionId = String(subagentParentSessionIds.get(prevSessionId) || "").trim();
+                if (parentSessionId) {
+                  runSubagentHookCommand(
+                    "hook-subagent-stop",
+                    {
+                      session_id: parentSessionId,
+                      agent_id: prevSessionId,
+                      agent_transcript_path: sessionTranscriptPaths.get(prevSessionId) || getOpenClawSessionFile(prevSessionId),
+                    },
+                    agentLabel,
+                  );
+                }
+                registeredSubagentSessions.delete(prevSessionId);
+                subagentParentSessionIds.delete(prevSessionId);
               }
               // Clean up message count for the ended session.
               sessionIndexMessageCounts.delete(prevSessionId);
@@ -2902,6 +2989,26 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
             sessionKeyLastSeen.set(key, sessionId);
             sessionTranscriptPaths.set(sessionId, sessionFile);
+            if (isSubagentSessionKeyLike(key)) {
+              const parentSessionId = resolveSubagentParentSessionId(spawnedBy, data as Record<string, any>, sessionKeyLastSeen);
+              if (parentSessionId) {
+                subagentParentSessionIds.set(sessionId, parentSessionId);
+                if (!registeredSubagentSessions.has(sessionId)) {
+                  const registered = runSubagentHookCommand(
+                    "hook-subagent-start",
+                    {
+                      session_id: parentSessionId,
+                      agent_id: sessionId,
+                      agent_type: agentLabel,
+                    },
+                    agentLabel,
+                  );
+                  if (registered) {
+                    registeredSubagentSessions.add(sessionId);
+                  }
+                }
+              }
+            }
 
             // Watch this session's transcript for slash commands.
             const rows = parseSessionMessagesJsonl(sessionFile);
@@ -3025,6 +3132,30 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 session_key: key,
               });
             }
+          }
+
+          for (const [priorKey, priorSid] of Array.from(sessionKeyLastSeen.entries())) {
+            if (currentKeys.has(priorKey) || /^agent:[^:]+:hook:/.test(priorKey)) {
+              continue;
+            }
+            if (isSubagentSessionKeyLike(priorKey)) {
+              const parentSessionId = String(subagentParentSessionIds.get(priorSid) || "").trim();
+              const agentLabel = String(sessionIdToAgentId.get(priorSid) || "main").trim() || "main";
+              if (parentSessionId) {
+                runSubagentHookCommand(
+                  "hook-subagent-stop",
+                  {
+                    session_id: parentSessionId,
+                    agent_id: priorSid,
+                    agent_transcript_path: sessionTranscriptPaths.get(priorSid) || getOpenClawSessionFile(priorSid),
+                  },
+                  agentLabel,
+                );
+              }
+              registeredSubagentSessions.delete(priorSid);
+              subagentParentSessionIds.delete(priorSid);
+            }
+            sessionKeyLastSeen.delete(priorKey);
           }
 
           // Keep currentInteractiveSession updated for timeout tracking — pick the
