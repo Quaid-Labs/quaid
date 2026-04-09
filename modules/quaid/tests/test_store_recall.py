@@ -41,6 +41,14 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
+def test_print_recall_results_emits_empty_message(capsys):
+    from datastore.memorydb.memory_graph import _print_recall_results
+
+    _print_recall_results([])
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "No memories found"
+
+
 # ---------------------------------------------------------------------------
 # store() input validation
 # ---------------------------------------------------------------------------

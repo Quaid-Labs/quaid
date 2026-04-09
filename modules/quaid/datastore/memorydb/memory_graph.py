@@ -5816,6 +5816,9 @@ def _attach_recall_meta(results: List[Dict[str, Any]], meta: Dict[str, Any]) -> 
 
 def _print_recall_results(results: List[Dict[str, Any]]) -> None:
     """Render recall results in the legacy plain-text CLI format."""
+    if not results:
+        print("No memories found")
+        return
     for r in results:
         flags = []
         if r.get('verified'):
@@ -10693,24 +10696,7 @@ if __name__ == "__main__":
                         json_payload = _build_recall_json_payload(results, meta=meta, docs=docs_bundle)
                     else:
                         text_memory_results = results
-                        for r in text_memory_results:
-                            flags = []
-                            if r.get('verified'): flags.append('V')
-                            if r.get('pinned'): flags.append('P')
-                            if r.get('valid_until'): flags.append('superseded')
-                            flag_str = f"[{''.join(flags)}]" if flags else ""
-                            conf = r.get('extraction_confidence', 0.5)
-                            created = r.get('created_at', '')
-                            date_str = f"({created.split('T')[0]})" if created else ""
-                            privacy = r.get('privacy', 'shared')
-                            owner_id = r.get('owner_id', '')
-                            valid_from = r.get('valid_from', '')
-                            valid_until = r.get('valid_until', '')
-                            source_type = r.get('source_type', '') or ''
-                            print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r.get('id', '')}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner_id}|ST:{source_type}")
-                            if r.get('_debug'):
-                                d = r['_debug']
-                                print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+                        _print_recall_results(text_memory_results)
                         if docs_bundle:
                             _print_docs_bundle(docs_bundle)
                     want_docs = False
@@ -10744,24 +10730,7 @@ if __name__ == "__main__":
                     else:
                         text_memory_results = recall(query, **recall_kwargs)
                     if not use_json and text_memory_results is not None:
-                        for r in text_memory_results:
-                            flags = []
-                            if r.get('verified'): flags.append('V')
-                            if r.get('pinned'): flags.append('P')
-                            if r.get('valid_until'): flags.append('superseded')
-                            flag_str = f"[{''.join(flags)}]" if flags else ""
-                            conf = r.get('extraction_confidence', 0.5)
-                            created = r.get('created_at', '')
-                            date_str = f"({created.split('T')[0]})" if created else ""
-                            privacy = r.get('privacy', 'shared')
-                            owner_id = r.get('owner_id', '')
-                            valid_from = r.get('valid_from', '')
-                            valid_until = r.get('valid_until', '')
-                            source_type = r.get('source_type', '') or ''
-                            print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner_id}|ST:{source_type}")
-                            if r.get('_debug'):
-                                d = r['_debug']
-                                print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+                        _print_recall_results(text_memory_results)
 
             # docs store
             if want_docs:
