@@ -310,6 +310,14 @@ class QuaidAdapter(abc.ABC):
             return ""
         return self._OFFLINE_EXTRACTION_PROMPT_RE.sub("", value).strip()
 
+    @staticmethod
+    def _transcript_label(role: str, source_type: str = "") -> str:
+        role_label = "User" if role == "user" else "Assistant"
+        source_label = str(source_type or "").strip().lower()
+        if source_label == "subagent":
+            return f"Subagent/{role_label}"
+        return role_label
+
     def build_transcript(self, messages: List[Dict]) -> str:
         """Format role/content messages into a normalized transcript."""
         parts: List[str] = []
@@ -362,10 +370,25 @@ class QuaidAdapter(abc.ABC):
             if not text or self.should_filter_transcript_message(text):
                 continue
 
-            label = "User" if role == "user" else "Assistant"
+            label = self._transcript_label(role, str(msg.get("source_type") or ""))
             parts.append(f"{label}: {text}")
 
         return "\n\n".join(parts)
+
+    def parse_subagent_session_jsonl(self, path: Path) -> str:
+        """Parse a child transcript into a compact subagent-attributed transcript."""
+        transcript = self.parse_session_jsonl(path)
+        if not transcript.strip():
+            return ""
+        parts: List[str] = []
+        for block in transcript.split("\n\n"):
+            if block.startswith("User: "):
+                parts.append(f"Subagent/User: {block[6:]}")
+            elif block.startswith("Assistant: "):
+                parts.append(f"Subagent/Assistant: {block[11:]}")
+            else:
+                parts.append(block)
+        return "\n\n".join(parts).strip()
 
     def parse_session_jsonl(self, path: Path) -> str:
         """Parse platform session JSONL into a normalized transcript."""

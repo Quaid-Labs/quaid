@@ -24,6 +24,7 @@ import json
 import os
 import re
 import select
+import shutil
 import subprocess
 import sys
 import time
@@ -1334,6 +1335,31 @@ def hook_subagent_stop(args):
     # Expand ~ in transcript path
     if transcript_path:
         transcript_path = os.path.expanduser(transcript_path)
+
+    def _preserve_subagent_transcript(child_session_id: str, source_path: str) -> str:
+        if not child_session_id or not source_path:
+            return source_path
+        src = Path(source_path).expanduser()
+        if not src.is_file():
+            deleted_matches = sorted(src.parent.glob(f"{src.name}.deleted.*"))
+            if deleted_matches:
+                src = deleted_matches[-1]
+            else:
+                return source_path
+        try:
+            from lib.adapter import get_adapter
+            logs_dir = get_adapter().logs_dir() / "quaid" / "sessions"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            suffix = "".join(src.suffixes) or ".jsonl"
+            dest = logs_dir / f"{child_session_id}{suffix}"
+            shutil.copyfile(src, dest)
+            return str(dest)
+        except Exception as e:
+            print(f"[quaid][subagent-stop] preserve warning: {e}", file=sys.stderr)
+            return source_path
+
+    if transcript_path:
+        transcript_path = _preserve_subagent_transcript(child_id, transcript_path)
 
     try:
         from core.subagent_registry import mark_complete

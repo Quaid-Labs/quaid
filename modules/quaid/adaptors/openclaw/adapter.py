@@ -465,6 +465,7 @@ class OpenClawAdapter(QuaidAdapter):
     def parse_session_jsonl(self, path: Path) -> str:
         """Parse OC session JSONL with envelope compatibility."""
         messages = []
+        session_source_type = ""
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -488,8 +489,17 @@ class OpenClawAdapter(QuaidAdapter):
                         if payload_type in ("user_message", "agent_message"):
                             role = "user" if payload_type == "user_message" else "assistant"
                             text = str(payload.get("message", "")).strip()
+                            if "[Subagent Context]" in text or "You are running as a subagent" in text:
+                                session_source_type = "subagent"
+                                text = re.sub(
+                                    r"^\[[^\]]+\]\s*\[Subagent Context\].*?(?:\n\n|\Z)",
+                                    "",
+                                    text,
+                                    flags=re.DOTALL,
+                                ).strip()
+                                text = re.sub(r"^\[Subagent Task\]:\s*", "", text, flags=re.MULTILINE).strip()
                             if text:
-                                messages.append({"role": role, "content": text})
+                                messages.append({"role": role, "content": text, "source_type": session_source_type})
                             continue
                         record = payload
 
@@ -507,7 +517,19 @@ class OpenClawAdapter(QuaidAdapter):
                 if not isinstance(content, str) or not content.strip():
                     continue
 
-                messages.append({"role": role, "content": content.strip()})
+                stripped = content.strip()
+                if "[Subagent Context]" in stripped or "You are running as a subagent" in stripped:
+                    session_source_type = "subagent"
+                    stripped = re.sub(
+                        r"^\[[^\]]+\]\s*\[Subagent Context\].*?(?:\n\n|\Z)",
+                        "",
+                        stripped,
+                        flags=re.DOTALL,
+                    ).strip()
+                    stripped = re.sub(r"^\[Subagent Task\]:\s*", "", stripped, flags=re.MULTILINE).strip()
+                    if not stripped:
+                        continue
+                messages.append({"role": role, "content": stripped, "source_type": session_source_type})
 
         return self.build_transcript(messages)
 

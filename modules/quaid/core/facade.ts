@@ -2856,7 +2856,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (source === "both") return 3;
     if (source === "user" || speaker === "user") return 2;
     if (source === "assistant" || source === "agent" || speaker === "agent" || speaker === "assistant") return 1;
-    return 0;
+    if (source === "subagent") return 0;
+    return -1;
   }
 
   function applySourceAwareClaimConflictPolicy(memories: MemoryResult[]): MemoryResult[] {

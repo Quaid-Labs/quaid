@@ -56,7 +56,7 @@ def store(
         pinned: Pinned memories never decay.
         source: Where this fact came from (e.g. "chat", "manual").
         knowledge_type: "fact", "belief", "preference", or "experience".
-        source_type: Who stated it — "user", "assistant", "tool", or "import".
+        source_type: Who stated it — "user", "assistant", "subagent", "tool", or "import".
         domains: Optional domain tags (e.g. ["technical", "research"]).
 
     Returns:

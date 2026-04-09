@@ -254,6 +254,8 @@ def _normalize_fact_provenance(fact: Dict[str, Any], *, label: str, fact_index: 
     speaker_label = "agent" if raw_speaker in {"agent", "assistant"} else "user"
     if raw_source in {"agent", "assistant"}:
         source_type = "assistant"
+    elif raw_source == "subagent":
+        source_type = "subagent"
     elif raw_source == "both":
         source_type = "both"
     elif raw_source == "tool":

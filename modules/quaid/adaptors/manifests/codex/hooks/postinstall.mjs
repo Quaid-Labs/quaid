@@ -142,6 +142,8 @@ const managedCommands = [
   "hook-session-init",
   "hook-inject",
   "hook-codex-stop",
+  "hook-subagent-start",
+  "hook-subagent-stop",
 ];
 
 const desiredHooks = {
@@ -174,6 +176,26 @@ const desiredHooks = {
           type: "command",
           command: `${envPrefix} ${quaidCommand} hook-codex-stop`,
           timeout: 120,
+        },
+      ],
+    },
+  ],
+  SubagentStart: [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: `${envPrefix} ${quaidCommand} hook-subagent-start`,
+        },
+      ],
+    },
+  ],
+  SubagentStop: [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: `${envPrefix} ${quaidCommand} hook-subagent-stop`,
         },
       ],
     },

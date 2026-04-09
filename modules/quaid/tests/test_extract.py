@@ -1973,6 +1973,22 @@ class TestNormalizeFactProvenance:
         assert speaker == "user"
         assert source_type == "tool"
 
+        speaker, source_type = _normalize_fact_provenance(
+            {"speaker": "user", "source": "subagent"},
+            label="unit",
+            fact_index=7,
+        )
+        assert speaker == "user"
+        assert source_type == "subagent"
+
+        speaker, source_type = _normalize_fact_provenance(
+            {"speaker": "agent", "source": "subagent"},
+            label="unit",
+            fact_index=8,
+        )
+        assert speaker == "agent"
+        assert source_type == "subagent"
+
 
 class TestChunkCarryContext:
     def test_prefers_recent_tail_and_caps_size(self):

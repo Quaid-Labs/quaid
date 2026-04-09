@@ -438,6 +438,7 @@ class CodexAdapter(QuaidAdapter):
     def parse_session_jsonl(self, path: Path) -> str:
         messages = []
         fallback_messages = []
+        session_source_type = ""
         with open(path, "r", encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
@@ -448,6 +449,13 @@ class CodexAdapter(QuaidAdapter):
                 except json.JSONDecodeError:
                     continue
                 record_type = str(obj.get("type") or "").strip()
+                if record_type == "session_meta":
+                    payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+                    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+                    subagent = source.get("subagent") if isinstance(source, dict) else {}
+                    if isinstance(subagent, dict) and isinstance(subagent.get("thread_spawn"), dict):
+                        session_source_type = "subagent"
+                    continue
                 payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
 
                 if record_type == "event_msg":
@@ -455,11 +463,11 @@ class CodexAdapter(QuaidAdapter):
                     if payload_type == "user_message":
                         text = str(payload.get("message") or "").strip()
                         if text:
-                            messages.append({"role": "user", "content": text})
+                            messages.append({"role": "user", "content": text, "source_type": session_source_type})
                     elif payload_type == "agent_message":
                         text = str(payload.get("message") or "").strip()
                         if text:
-                            messages.append({"role": "assistant", "content": text})
+                            messages.append({"role": "assistant", "content": text, "source_type": session_source_type})
                     continue
 
                 if record_type == "response_item" and str(payload.get("type") or "").strip() == "message":
@@ -479,7 +487,7 @@ class CodexAdapter(QuaidAdapter):
                         text_parts.append(content.strip())
                     text = "\n".join(text_parts).strip()
                     if text:
-                        fallback_messages.append({"role": role, "content": text})
+                        fallback_messages.append({"role": role, "content": text, "source_type": session_source_type})
 
         selected = messages if messages else fallback_messages
         deduped = []

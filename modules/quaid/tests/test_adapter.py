@@ -421,6 +421,49 @@ class TestOpenClawAdapter:
         assert "Assistant: First assistant event" in transcript
         assert adapter.filter_system_messages("What about HEARTBEAT mechanisms?") is False
 
+    def test_parse_session_jsonl_marks_subagent_turns_and_strips_oc_wrapper(self, tmp_path):
+        session_file = tmp_path / "oc-subagent.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "message",
+                            "message": {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": (
+                                            "[Thu 2026-04-09 17:19 UTC] [Subagent Context] "
+                                            "You are running as a subagent (depth 1/1). Results auto-announce.\n\n"
+                                            "[Subagent Task]: my uncle owns a vineyard in Mendoza that produces Malbec."
+                                        ),
+                                    }
+                                ],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "message",
+                            "message": {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "Noted: your uncle owns a vineyard in Mendoza."}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "Subagent/User: my uncle owns a vineyard in Mendoza that produces Malbec." in transcript
+        assert "Subagent/Assistant: Noted: your uncle owns a vineyard in Mendoza." in transcript
+        assert "[Subagent Context]" not in transcript
+        assert "You are running as a subagent" not in transcript
+
     def test_get_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-key")
         adapter = OpenClawAdapter()
@@ -748,6 +791,42 @@ class TestClaudeCodeAdapter:
         assert "/clear" not in transcript
         assert "Can you remind me where Priya works?" in transcript
 
+    def test_parse_session_jsonl_marks_sidechain_turns_as_subagent(self, tmp_path):
+        path = tmp_path / "claude-subagent.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "isSidechain": True,
+                            "agentId": "child-123",
+                            "message": {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "My sister is Diana."}],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "assistant",
+                            "isSidechain": True,
+                            "agentId": "child-123",
+                            "message": {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "Understood."}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "Subagent/User: My sister is Diana." in transcript
+        assert "Subagent/Assistant: Understood." in transcript
+
 class TestCodexAdapter:
     def test_installer_provider_surface_is_openai_models(self):
         adapter = CodexAdapter()
@@ -820,6 +899,38 @@ class TestCodexAdapter:
         assert "Assistant: First answer" in transcript
         assert transcript.count("Assistant: First answer") == 1
         assert "fallback answer" not in transcript
+
+    def test_parse_session_jsonl_marks_thread_spawn_children_as_subagent(self, tmp_path):
+        path = tmp_path / "rollout-subagent.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "session_meta",
+                            "payload": {
+                                "source": {
+                                    "subagent": {
+                                        "thread_spawn": {
+                                            "parent_thread_id": "parent-1",
+                                            "depth": 1,
+                                            "agent_nickname": "Hegel",
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "My uncle owns a vineyard in Mendoza."}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "Noted."}}),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "Subagent/User: My uncle owns a vineyard in Mendoza." in transcript
+        assert "Subagent/Assistant: Noted." in transcript
 
     def test_parse_session_jsonl_ignores_machine_context_fallback_rows(self, tmp_path):
         path = tmp_path / "rollout-machine-context.jsonl"

@@ -901,6 +901,13 @@ describe("QuaidFacade", () => {
         similarity: 0.88,
         sourceType: "assistant",
       },
+      {
+        text: "Alice is my niece",
+        category: "fact",
+        similarity: 1.0,
+        sourceType: "subagent",
+        speaker: "user",
+      },
     ]);
     const duplicateHits = (out.match(/Alice is my niece/g) || []).length;
     expect(duplicateHits).toBe(1);

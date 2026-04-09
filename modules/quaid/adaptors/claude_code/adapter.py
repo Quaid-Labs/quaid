@@ -445,7 +445,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 if not content:
                     continue
 
-                messages.append({"role": role, "content": content})
+                source_type = ""
+                if bool(obj.get("isSidechain")) or str(obj.get("agentId", "")).strip():
+                    source_type = "subagent"
+
+                messages.append({"role": role, "content": content, "source_type": source_type})
 
         return self.build_transcript(messages)
 

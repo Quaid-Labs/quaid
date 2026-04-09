@@ -12,6 +12,7 @@ import io
 import json
 import os
 import sys
+import types
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -71,6 +72,17 @@ def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
 
     content = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else None
     return captured_out.getvalue(), captured_err.getvalue(), content
+
+
+def _run_hook_subagent_stop(hook_input: dict, *, monkeypatch):
+    """Drive hook_subagent_stop with fake stdin and captured stderr."""
+    from core.interface import hooks
+
+    captured_err = io.StringIO()
+    with patch("core.interface.hooks._read_stdin_json", return_value=hook_input), \
+         patch("core.interface.hooks.sys.stderr", captured_err):
+        hooks.hook_subagent_stop(MagicMock())
+    return captured_err.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -720,3 +732,41 @@ class TestHookSessionInitRegistryAugmentation:
 
         assert content is None, "No rules file should be written when no docs found"
         assert "no project docs" in err
+
+
+class TestSubagentHooks:
+    def test_hook_subagent_stop_preserves_transcript_into_quaid_logs(self, tmp_path, monkeypatch):
+        source = tmp_path / "child.jsonl"
+        source.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        logs_dir = tmp_path / "instances" / "pytest-runner" / "logs"
+        adapter = MagicMock()
+        adapter.logs_dir.return_value = logs_dir
+        monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+        recorded = {}
+
+        def fake_mark_complete(parent_session_id, child_id, transcript_path=None):
+            recorded["parent_session_id"] = parent_session_id
+            recorded["child_id"] = child_id
+            recorded["transcript_path"] = transcript_path
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.mark_complete = fake_mark_complete
+        monkeypatch.setitem(sys.modules, "core.subagent_registry", fake_registry)
+
+        err = _run_hook_subagent_stop(
+            {
+                "session_id": "parent-1",
+                "agent_id": "child-1",
+                "agent_transcript_path": str(source),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+        preserved = logs_dir / "quaid" / "sessions" / "child-1.jsonl"
+        assert preserved.is_file()
+        assert preserved.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+        assert recorded["parent_session_id"] == "parent-1"
+        assert recorded["child_id"] == "child-1"
+        assert recorded["transcript_path"] == str(preserved)
+        assert "completed child-1 under parent-1" in err

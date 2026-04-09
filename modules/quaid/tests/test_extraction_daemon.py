@@ -1,6 +1,8 @@
 import json
 import os
 import pathlib
+import types
+from pathlib import Path
 
 import pytest
 
@@ -218,6 +220,89 @@ def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypat
     extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
     assert captured == []
+
+
+def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypatch, tmp_path):
+    parent_path = tmp_path / "parent.jsonl"
+    child_path = tmp_path / "child.jsonl"
+    parent_path.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    child_path.write_text('{"role":"user","content":"child"}\n', encoding="utf-8")
+
+    captured = {}
+
+    class _FakeAdapter:
+        def instance_root(self):
+            return tmp_path / "instances" / "pytest-runner"
+
+        def parse_session_jsonl(self, path):
+            assert Path(path).name in {"tmp", Path(path).name} or True
+            return "User: Parent message with enough content to exceed the extraction minimum length."
+
+        def parse_subagent_session_jsonl(self, path):
+            assert Path(path) == child_path
+            return "Subagent/User: Child fact from subagent.\n\nSubagent/Assistant: Child reply."
+
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.get_harvestable = lambda sid: [{"child_id": "child-1", "transcript_path": str(child_path), "child_type": "default"}]
+    fake_registry.mark_harvested = lambda sid, cid: captured.setdefault("harvested", []).append((sid, cid))
+    fake_registry.is_registered_subagent = lambda sid: False
+
+    import sys as _sys
+    real_registry = _sys.modules.get("core.subagent_registry")
+    _sys.modules["core.subagent_registry"] = fake_registry
+    from lib.adapter import set_adapter, reset_adapter
+    set_adapter(_FakeAdapter())
+
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "read_cursor", lambda sid: {"line_offset": 0, "transcript_path": str(parent_path)})
+    monkeypatch.setattr(extraction_daemon, "count_transcript_lines", lambda p: 1)
+    monkeypatch.setattr(extraction_daemon, "read_transcript_slice", lambda path, from_line: ['{"role":"user","content":"hello"}\n'])
+    monkeypatch.setattr(extraction_daemon, "_tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *args, **kwargs: None)
+
+    from ingest import extract as extract_mod
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *args, **kwargs: {"facts_stored": 0, "facts_skipped": 0, "facts": []},
+    )
+
+    try:
+        extraction_daemon.process_signal(
+            {
+                "session_id": "parent-1",
+                "type": "session_end",
+                "transcript_path": str(parent_path),
+                "signal_path": str(tmp_path / "sig.json"),
+            }
+        )
+    finally:
+        if real_registry is not None:
+            _sys.modules["core.subagent_registry"] = real_registry
+        else:
+            _sys.modules.pop("core.subagent_registry", None)
+        reset_adapter()
+
+    assert "Subagent/User: Child fact from subagent." in captured["transcript"]
+    assert "Subagent/Assistant: Child reply." in captured["transcript"]
+    assert captured["harvested"] == [("parent-1", "child-1")]
 
 
 def test_effective_idle_timeout_uses_configured_timeout_within_bounds():

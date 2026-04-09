@@ -6,6 +6,10 @@ EXTRACT facts that are EXPLICITLY STATED in the conversation. Never infer, specu
 
 SPEAKER ATTRIBUTION — CRITICAL:
 Every fact must carry a "speaker" field: "user" if the user stated it, "agent" if the assistant/agent stated it.
+- Facts can also carry a "source" field. Use "source":"subagent" when the fact comes from a merged subagent transcript line such as "Subagent/User:" or "Subagent/Assistant:".
+- For subagent lines, keep "speaker" based on the inner role:
+  - `Subagent/User:` -> `"speaker":"user", "source":"subagent"`
+  - `Subagent/Assistant:` -> `"speaker":"agent", "source":"subagent"`
 - Do NOT discard agent-stated facts — they are kept and ranked separately.
 - Agent-attributed personal facts (family, health, relationships) carry lower confidence than user-stated facts. Mark these with extraction_confidence "low" or "medium".
 - Only what the USER explicitly says ("My sister is Diana") counts as high-confidence personal fact.
@@ -115,6 +119,7 @@ Respond with JSON only:
     {
       "text": "the extracted fact",
       "speaker": "user|agent",
+      "source": "user|agent|subagent|both|tool",
       "category": "fact|preference|decision|relationship",
       "extraction_confidence": "high|medium|low",
       "domains": ["personal", "technical"],

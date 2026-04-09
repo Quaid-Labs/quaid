@@ -6005,7 +6005,7 @@ def _row_matches_requirement(row: Dict[str, Any], requirement: str) -> bool:
     source_type = str((row or {}).get("source_type") or "").lower()
 
     if requirement == "assistant_source":
-        return source_type in {"assistant", "both", "tool"} or bool(
+        return source_type in {"assistant", "subagent", "both", "tool"} or bool(
             re.search(r"\b(the assistant|assistant|ai|suggested|recommended|implemented|built|recalled)\b", lower)
         )
     if requirement == "identity":
@@ -8562,7 +8562,7 @@ def store(
     status: Optional[str] = None,  # Override default status (pending for auto, approved for manual)
     knowledge_type: str = "fact",  # fact, belief, preference, experience
     keywords: Optional[str] = None,  # Space-separated derived search terms
-    source_type: Optional[str] = None,  # user, assistant, tool, import
+    source_type: Optional[str] = None,  # user, assistant, subagent, tool, import
     target_datastore: Optional[str] = None,  # reserved routing seam (no-op in memorydb)
     domains: Optional[List[str]] = None,  # optional domain tags
     project: Optional[str] = None,  # project label for project-state facts
@@ -8651,7 +8651,7 @@ def store(
         source_type = str(source_type).strip().lower()
         if source_type == "agent":
             source_type = "assistant"
-        if source_type not in {"user", "assistant", "both", "tool", "import"}:
+        if source_type not in {"user", "assistant", "subagent", "both", "tool", "import"}:
             source_type = None
     project = _normalize_project_tag(project)
     domains = _normalize_domains(domains)
@@ -9090,6 +9090,8 @@ def store(
     adjusted_confidence = confidence
     if source_type == "assistant":
         adjusted_confidence = round(confidence * 0.9, 3)
+    elif source_type == "subagent":
+        adjusted_confidence = round(confidence * 0.85, 3)
 
     # No duplicate found, create new node
     node = Node.create(

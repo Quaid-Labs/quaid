@@ -2027,7 +2027,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                             deferred_subagents.append(child)
                             continue
                         try:
-                            child_text = adapter.parse_session_jsonl(Path(child_path))
+                            child_text = adapter.parse_subagent_session_jsonl(Path(child_path))
                             if child_text.strip():
                                 if len(child_text) > MAX_CHILD_CHARS:
                                     logger.warning(
@@ -2035,10 +2035,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                                         "extraction chunker will handle splitting",
                                         label, session_id, child_id, len(child_text),
                                     )
-                                transcript_text += (
-                                    f"\n\n--- Subagent ({child.get('child_type', 'unknown')}) ---\n"
-                                    + child_text
-                                )
+                                transcript_text += f"\n\n{child_text}"
                                 merged_chars += len(child_text)
                                 logger.info(
                                     "[%s] session %s: merged subagent %s transcript (%d chars)",

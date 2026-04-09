@@ -58,15 +58,29 @@ describe("codex postinstall hook registration", () => {
     const sessionStartCommands = flattenCommands("SessionStart");
     const promptCommands = flattenCommands("UserPromptSubmit");
     const stopCommands = flattenCommands("Stop");
-    const allManaged = [...sessionStartCommands, ...promptCommands, ...stopCommands].filter((cmd) =>
-      cmd.includes("hook-session-init") || cmd.includes("hook-inject") || cmd.includes("hook-codex-stop"),
+    const subagentStartCommands = flattenCommands("SubagentStart");
+    const subagentStopCommands = flattenCommands("SubagentStop");
+    const allManaged = [
+      ...sessionStartCommands,
+      ...promptCommands,
+      ...stopCommands,
+      ...subagentStartCommands,
+      ...subagentStopCommands,
+    ].filter((cmd) =>
+      cmd.includes("hook-session-init")
+      || cmd.includes("hook-inject")
+      || cmd.includes("hook-codex-stop")
+      || cmd.includes("hook-subagent-start")
+      || cmd.includes("hook-subagent-stop"),
     );
 
     expect(promptCommands).toContain("echo keep-me");
     expect(sessionStartCommands.some((cmd) => cmd.includes("hook-session-init"))).toBe(true);
     expect(promptCommands.some((cmd) => cmd.includes("hook-inject"))).toBe(true);
     expect(stopCommands.some((cmd) => cmd.includes("hook-codex-stop"))).toBe(true);
-    expect(allManaged).toHaveLength(3);
+    expect(subagentStartCommands.some((cmd) => cmd.includes("hook-subagent-start"))).toBe(true);
+    expect(subagentStopCommands.some((cmd) => cmd.includes("hook-subagent-stop"))).toBe(true);
+    expect(allManaged).toHaveLength(5);
     expect(allManaged.every((cmd) => cmd.includes('codex-livetest'))).toBe(true);
     expect(configToml).toContain('model = "gpt-5.2"');
     expect(configToml).toContain("[features]");
