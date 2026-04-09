@@ -201,12 +201,12 @@ class TestAgentInstanceRoot:
     def test_cc_instance_root(self, tmp_path):
         adapter = _make_cc_adapter(tmp_path)
         root = adapter.agent_instance_root("claude-code-myapp")
-        assert root == tmp_path / "claude-code-myapp"
+        assert root == tmp_path / "instances" / "claude-code-myapp"
 
     def test_oc_instance_root(self, tmp_path):
         adapter = _make_oc_adapter(tmp_path)
         root = adapter.agent_instance_root("openclaw-coding")
-        assert root == tmp_path / "openclaw-coding"
+        assert root == tmp_path / "instances" / "openclaw-coding"
 
 
 # ---------------------------------------------------------------------------

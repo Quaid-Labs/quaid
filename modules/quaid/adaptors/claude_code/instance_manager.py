@@ -139,7 +139,7 @@ class ClaudeCodeInstanceManager(InstanceManager):
             (instance_id, was_new): instance ID and whether the silo was just created.
         """
         instance_id = self.resolve_instance_id(name)
-        silo_root = self.adapter.quaid_home() / instance_id
+        silo_root = self.adapter.quaid_home() / "instances" / instance_id
         # Use config dir existence as the "silo is initialized" signal
         was_new = not (silo_root / "config").exists()
 

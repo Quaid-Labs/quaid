@@ -252,33 +252,33 @@ class TestConfigPathResolution:
     def test_config_paths_include_platform_and_global_shared_layers_for_claude_code(self):
         import config
 
-        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/claude-code-main")), \
+        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/instances/claude-code-main")), \
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/claude-code-main/config/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/claude-code-main/config/memory.json")
         assert paths[1] == Path("/tmp/quaid/shared/config/claude-code/memory.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
 
     def test_config_paths_include_platform_and_global_shared_layers_for_codex(self):
         import config
 
-        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/codex-main")), \
+        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/instances/codex-main")), \
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/codex-main/config/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/codex-main/config/memory.json")
         assert paths[1] == Path("/tmp/quaid/shared/config/codex/memory.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
 
     def test_config_paths_include_platform_and_global_shared_layers_for_openclaw(self):
         import config
 
-        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/openclaw-livetest")), \
+        with patch.object(config, "_workspace_root", lambda: Path("/tmp/quaid/instances/openclaw-livetest")), \
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/openclaw-livetest/config/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/openclaw-livetest/config/memory.json")
         assert paths[1] == Path("/tmp/quaid/shared/config/openclaw/memory.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
 
@@ -287,7 +287,7 @@ class TestConfigPathResolution:
 
         global_cfg = tmp_path / "shared" / "config" / "global" / "memory.json"
         platform_cfg = tmp_path / "shared" / "config" / "claude-code" / "memory.json"
-        instance_cfg = tmp_path / "claude-code-main" / "config" / "memory.json"
+        instance_cfg = tmp_path / "instances" / "claude-code-main" / "config" / "memory.json"
         global_cfg.parent.mkdir(parents=True, exist_ok=True)
         platform_cfg.parent.mkdir(parents=True, exist_ok=True)
         instance_cfg.parent.mkdir(parents=True, exist_ok=True)

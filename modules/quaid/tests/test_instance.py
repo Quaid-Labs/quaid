@@ -101,7 +101,7 @@ class TestInstanceRoot:
     def test_resolves(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "openclaw")
-        assert instance_root() == tmp_path / "openclaw"
+        assert instance_root() == tmp_path / "instances" / "openclaw"
 
 
 class TestSharedPaths:
@@ -121,8 +121,8 @@ class TestSharedPaths:
 class TestInstanceExists:
     def test_exists(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        (tmp_path / "openclaw" / "config").mkdir(parents=True)
-        (tmp_path / "openclaw" / "config" / "memory.json").write_text("{}")
+        (tmp_path / "instances" / "openclaw" / "config").mkdir(parents=True)
+        (tmp_path / "instances" / "openclaw" / "config" / "memory.json").write_text("{}")
         assert instance_exists("openclaw") is True
 
     def test_not_exists(self, monkeypatch, tmp_path):
@@ -138,12 +138,12 @@ class TestListInstances:
     def test_lists_instances(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         for name in ["openclaw", "claude-code"]:
-            (tmp_path / name / "config").mkdir(parents=True)
-            (tmp_path / name / "config" / "memory.json").write_text("{}")
-        # Create a reserved dir (should be ignored)
-        (tmp_path / "shared").mkdir()
+            (tmp_path / "instances" / name / "config").mkdir(parents=True)
+            (tmp_path / "instances" / name / "config" / "memory.json").write_text("{}")
+        # Create a hidden dir (should be ignored)
+        (tmp_path / "instances" / ".hidden").mkdir(parents=True)
         # Create a dir without config (should be ignored)
-        (tmp_path / "incomplete").mkdir()
+        (tmp_path / "instances" / "incomplete").mkdir(parents=True)
 
         result = list_instances()
         assert result == ["claude-code", "openclaw"]
@@ -157,20 +157,20 @@ class TestRequireInstanceExists:
     def test_exists(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "openclaw")
-        (tmp_path / "openclaw" / "config").mkdir(parents=True)
-        (tmp_path / "openclaw" / "config" / "memory.json").write_text("{}")
+        (tmp_path / "instances" / "openclaw" / "config").mkdir(parents=True)
+        (tmp_path / "instances" / "openclaw" / "config" / "memory.json").write_text("{}")
         assert require_instance_exists() == "openclaw"
 
     def test_not_exists_shows_existing(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "missing")
-        (tmp_path / "openclaw" / "config").mkdir(parents=True)
-        (tmp_path / "openclaw" / "config" / "memory.json").write_text("{}")
+        (tmp_path / "instances" / "openclaw" / "config").mkdir(parents=True)
+        (tmp_path / "instances" / "openclaw" / "config" / "memory.json").write_text("{}")
         with pytest.raises(InstanceError, match="openclaw"):
             require_instance_exists()
 
     def test_explicit_name(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        (tmp_path / "work" / "config").mkdir(parents=True)
-        (tmp_path / "work" / "config" / "memory.json").write_text("{}")
+        (tmp_path / "instances" / "work" / "config").mkdir(parents=True)
+        (tmp_path / "instances" / "work" / "config" / "memory.json").write_text("{}")
         assert require_instance_exists("work") == "work"

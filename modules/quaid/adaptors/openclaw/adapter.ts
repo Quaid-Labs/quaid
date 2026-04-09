@@ -202,7 +202,7 @@ const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 // of the active instance silo.
 const _instanceForDbPath = _resolveQuaidInstance();
 const DB_PATH = _instanceForDbPath
-  ? path.join(WORKSPACE, _instanceForDbPath, "data", "memory.db")
+  ? path.join(WORKSPACE, "instances", _instanceForDbPath, "data", "memory.db")
   : path.join(WORKSPACE, "data", "memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
@@ -255,14 +255,14 @@ function getInstanceId(agentLabel: string = "main"): string {
 function getDaemonSignalDir(agentId: string = "main"): string {
   const instanceId = getInstanceId(agentId);
   return instanceId
-    ? path.join(WORKSPACE, instanceId, "data", "extraction-signals")
+    ? path.join(WORKSPACE, "instances", instanceId, "data", "extraction-signals")
     : path.join(WORKSPACE, "data", "extraction-signals");
 }
 
 // Primary instance signal dir — use _QUAID_INSTANCE directly so non-main
 // instance labels (e.g. "openclaw-livetest") resolve to their own silo.
 const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE
-  ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "extraction-signals")
+  ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, "data", "extraction-signals")
   : path.join(WORKSPACE, "data", "extraction-signals");
 
 // In-process dedup for reset signals: prevents multiple gateway processes (or
@@ -281,7 +281,7 @@ const _recentResetSignalsWritten = new Map<string, number>(); // session_id → 
 function readInstalledAtMs(): number {
   try {
     const p = _QUAID_INSTANCE
-      ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "installed-at.json")
+      ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, "data", "installed-at.json")
       : path.join(WORKSPACE, "data", "installed-at.json");
     const raw = JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, unknown>;
     const ts = String(raw.installedAt || "").trim();
@@ -1112,7 +1112,7 @@ function createAdapterMemoryConfigResolver(): AdapterMemoryConfigResolver {
     // Instance-specific config wins: QUAID_HOME/QUAID_INSTANCE/config/memory.json
     const instance = String(process.env.QUAID_INSTANCE || "").trim();
     if (instance) {
-      candidates.push(path.join(WORKSPACE, instance, "config", "memory.json"));
+      candidates.push(path.join(WORKSPACE, "instances", instance, "config", "memory.json"));
     }
     // Shared config as fallback (embeddings + cross-instance settings)
     candidates.push(
@@ -1793,7 +1793,7 @@ function shouldSkipTranscriptText(roleOrText: "user" | "assistant" | string, may
 
 const facade = createQuaidFacade({
   workspace: WORKSPACE,
-  instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE) : undefined,
+  instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : undefined,
   pluginRoot: PYTHON_PLUGIN_ROOT,
   dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
   eventSource: "openclaw_adapter",
@@ -2152,7 +2152,7 @@ notify_user(${JSON.stringify(message)})
       // the prompt.
       if (_QUAID_INSTANCE) {
         try {
-          const _noticeFile = path.join(WORKSPACE, _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json");
+          const _noticeFile = path.join(WORKSPACE, "instances", _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json");
           const _noticeData = JSON.parse(fs.readFileSync(_noticeFile, "utf-8"));
           const _pending: any[] = (Array.isArray(_noticeData?.requests) ? _noticeData.requests : [])
             .filter((r: any) => r?.status === "pending");
@@ -2491,7 +2491,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             // Cursor must go in the instance silo, not WORKSPACE root.
             // Mirror the Python daemon: instance_root = QUAID_HOME / QUAID_INSTANCE.
             const instanceRoot = _QUAID_INSTANCE
-              ? path.join(WORKSPACE, _QUAID_INSTANCE)
+              ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE)
               : WORKSPACE;
             const cursorDir = path.join(instanceRoot, "data", "session-cursors");
             const cursorPath = path.join(cursorDir, `${sessionId}.json`);
@@ -2973,7 +2973,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 // Skip orphan reset if daemon already holds the processing lock for this session.
                 // Writing a signal while the lock is held causes unbounded signal pile-up.
                 const _orphanLockPath = _QUAID_INSTANCE
-                  ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "session-processing", `${sid}.lock`)
+                  ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, "data", "session-processing", `${sid}.lock`)
                   : path.join(WORKSPACE, "data", "session-processing", `${sid}.lock`);
                 if (fs.existsSync(_orphanLockPath)) {
                   writeHookTrace("session_index.orphan_reset_skipped_locked", { session_id: sid });

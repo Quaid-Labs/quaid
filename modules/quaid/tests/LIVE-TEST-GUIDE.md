@@ -320,7 +320,7 @@ After each platform's M0 passes, verify the filesystem (see
 
 1. **No `~/quaid` directory** — only `~/.quaid` should exist.
 2. **`~/.quaid` has correct structure**: `modules/quaid/`, `shared/config/`,
-   `INSTANCE/config/`, `INSTANCE/data/`.
+   `instances/INSTANCE/config/`, `instances/INSTANCE/data/`.
 3. **Instance config has models and capture sections.**
 4. **Shared platform config exists** at `~/.quaid/shared/config/PLATFORM/`.
 5. **Platform hooks registered** (CC: settings.json, CDX: hooks.json, OC:
@@ -332,7 +332,7 @@ After each platform's M0 passes, verify the filesystem (see
 **Overwrite deep lane with fast lane** (all silos — HARD RULE):
 ```bash
 ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/INSTANCE/config/memory.json'
+import json; p = 'WORKSPACE/instances/INSTANCE/config/memory.json'
 with open(p) as f: d = json.load(f)
 d['models']['deepReasoning'] = d['models']['fastReasoning']
 with open(p, 'w') as f: json.dump(d, f, indent=2)
@@ -343,7 +343,7 @@ print('deep set to', d['models']['fastReasoning'])
 **Set live-test chunk_tokens** (all silos — lowers rolling threshold for short tests):
 ```bash
 ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/INSTANCE/config/memory.json'
+import json; p = 'WORKSPACE/instances/INSTANCE/config/memory.json'
 with open(p) as f: d = json.load(f)
 d.setdefault('capture', {})['chunk_tokens'] = 1500
 with open(p, 'w') as f: json.dump(d, f, indent=2)
@@ -404,18 +404,18 @@ task is running; wait for idle.
 
 **DB check:**
 ```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/INSTANCE/data/memory.db \
+ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
   "SELECT rowid, name FROM nodes_fts WHERE nodes_fts MATCH '\''KEYWORD'\'' LIMIT 3;"'
 ```
 
 **Daemon log:**
 ```bash
-ssh REMOTE_HOST 'tail -20 WORKSPACE/INSTANCE/logs/daemon/extraction-daemon.log'
+ssh REMOTE_HOST 'tail -20 WORKSPACE/instances/INSTANCE/logs/daemon/extraction-daemon.log'
 ```
 
 **Rolling extraction log:**
 ```bash
-ssh REMOTE_HOST 'cat WORKSPACE/INSTANCE/logs/daemon/rolling-extraction.jsonl | tail -5'
+ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl | tail -5'
 ```
 
 **CLI recall:**
@@ -488,7 +488,7 @@ ResetSignal — no follow-up needed.
 
 **Verification:**
 ```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/INSTANCE/data/memory.db \
+ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
   "SELECT rowid, name FROM nodes_fts WHERE nodes_fts MATCH '\''chili OR brisket'\'' LIMIT 3;"'
 ```
 
@@ -520,13 +520,13 @@ everything in a wood-burning kiln she built herself."
 
 **Before `/compact`** — verify rolling fired:
 ```bash
-ssh REMOTE_HOST 'cat WORKSPACE/INSTANCE/logs/daemon/rolling-extraction.jsonl | tail -5'
+ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl | tail -5'
 ```
 Expected: at least one `rolling_stage` event.
 
 **After `/compact`** — verify flush:
 ```bash
-ssh REMOTE_HOST 'cat WORKSPACE/INSTANCE/logs/daemon/rolling-extraction.jsonl | \
+ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl | \
   python3 -c "import sys,json; lines=[json.loads(l) for l in sys.stdin if l.strip()]; \
   print(f\"stages: {sum(1 for l in lines if l.get(\"event\")==\"rolling_stage\")}, \
   flushes: {sum(1 for l in lines if l.get(\"event\")==\"rolling_flush\")}\")"'
@@ -594,7 +594,7 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI store "D
 
 Verify edges:
 ```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/INSTANCE/data/memory.db \
+ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
   "SELECT s.name, e.relation, t.name FROM edges e \
    JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id \
    WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") \
@@ -664,7 +664,7 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI janitor 
 
 Verify condensation:
 ```bash
-ssh REMOTE_HOST 'cat WORKSPACE/INSTANCE/logs/janitor-stats.json | python3 -c \
+ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/janitor-stats.json | python3 -c \
   "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); \
   print(\"success:\", d[\"success\"]); \
   [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k]"'
@@ -693,7 +693,7 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI recall "
 
 **Session CLI test:**
 ```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/INSTANCE/data/memory.db \
+ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
   "SELECT session_id, updated_at, substr(topic_hint,1,80) FROM session_logs ORDER BY updated_at DESC LIMIT 3;"'
 ```
 
@@ -716,9 +716,9 @@ Then `/clear` (CDX: `/new`).
 
 **Verify:**
 ```bash
-ssh REMOTE_HOST 'cat WORKSPACE/INSTANCE/USER.snippets.md 2>/dev/null || echo "(absent)"'
-ssh REMOTE_HOST 'cat WORKSPACE/INSTANCE/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
-ssh REMOTE_HOST 'ls WORKSPACE/INSTANCE/journal/ 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/USER.snippets.md 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'ls WORKSPACE/instances/INSTANCE/journal/ 2>/dev/null || echo "(absent)"'
 ssh REMOTE_HOST 'tail -20 WORKSPACE/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
 ```
 

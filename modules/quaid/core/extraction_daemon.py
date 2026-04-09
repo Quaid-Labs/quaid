@@ -91,8 +91,8 @@ def _instance_id() -> str:
 
 
 def _instance_root() -> Path:
-    """Resolved instance root: QUAID_HOME / QUAID_INSTANCE."""
-    return _quaid_home() / _instance_id()
+    """Resolved instance root: QUAID_HOME/instances/QUAID_INSTANCE."""
+    return _quaid_home() / "instances" / _instance_id()
 
 
 def _get_quaid_version() -> str:

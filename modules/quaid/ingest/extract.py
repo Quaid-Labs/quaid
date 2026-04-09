@@ -148,7 +148,7 @@ def _publish_trace_path() -> Optional[Path]:
     if not workspace_raw:
         return None
     workspace = Path(workspace_raw)
-    path = workspace / instance / "logs" / "daemon" / "publish-trace.jsonl"
+    path = workspace / "instances" / instance / "logs" / "daemon" / "publish-trace.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

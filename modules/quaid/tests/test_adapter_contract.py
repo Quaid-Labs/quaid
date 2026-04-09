@@ -56,7 +56,7 @@ def test_standalone_adapter_instance_id_uses_env(tmp_path, monkeypatch):
 def test_standalone_adapter_instance_root_is_home_slash_instance(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_INSTANCE", "inst-abc")
     adapter = StandaloneAdapter(home=tmp_path)
-    assert adapter.instance_root() == tmp_path / "inst-abc"
+    assert adapter.instance_root() == tmp_path / "instances" / "inst-abc"
 
 
 def test_standalone_adapter_get_sessions_dir_returns_none(tmp_path):
@@ -94,7 +94,7 @@ def test_test_adapter_creates_config_directory(tmp_path, monkeypatch):
     from lib.adapter import TestAdapter
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     TestAdapter(tmp_path)
-    assert (tmp_path / "pytest-runner" / "config" / "memory.json").exists()
+    assert (tmp_path / "instances" / "pytest-runner" / "config" / "memory.json").exists()
 
 
 def test_test_adapter_llm_calls_initially_empty(tmp_path):

@@ -84,7 +84,7 @@ class InstanceManager:
         instance_id = self.resolve_instance_id(label)
         validate_instance_id(instance_id)
 
-        silo_root = self.adapter.quaid_home() / instance_id
+        silo_root = self.adapter.quaid_home() / "instances" / instance_id
 
         if instance_exists(instance_id):
             raise ValueError(

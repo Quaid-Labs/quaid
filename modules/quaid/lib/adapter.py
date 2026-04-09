@@ -81,14 +81,14 @@ class QuaidAdapter(abc.ABC):
         """Instance identifier for this adapter's silo.
 
         Reads from QUAID_INSTANCE env var. Each instance has its own
-        config, data, DB, daemon, and identity under QUAID_HOME/<instance_id>/.
+        config, data, DB, daemon, and identity under QUAID_HOME/instances/<instance_id>/.
         """
         from lib.instance import instance_id as _instance_id
         return _instance_id()
 
     def instance_root(self) -> Path:
-        """Resolved instance root: QUAID_HOME / INSTANCE_ID."""
-        return self.quaid_home() / self.instance_id()
+        """Resolved instance root: QUAID_HOME/instances/INSTANCE_ID."""
+        return self.quaid_home() / "instances" / self.instance_id()
 
     def data_dir(self) -> Path:
         return self.instance_root() / "data"
@@ -501,7 +501,7 @@ class QuaidAdapter(abc.ABC):
 
     def agent_instance_root(self, agent_instance_id: str) -> Path:
         """Resolve the instance root directory for a given agent instance ID."""
-        return self.quaid_home() / agent_instance_id
+        return self.quaid_home() / "instances" / agent_instance_id
 
     # ---- Adapter CLI registration ----
 
@@ -581,8 +581,9 @@ class QuaidAdapter(abc.ABC):
         adapter_id = str(cls.installer_adapter_id() or "").strip().lower()
 
         try:
-            if root.exists():
-                for child in root.iterdir():
+            instances_dir = root / "instances"
+            if instances_dir.exists():
+                for child in instances_dir.iterdir():
                     if not child.is_dir():
                         continue
                     name = child.name.strip().lower()
@@ -1061,7 +1062,7 @@ class TestAdapter(StandaloneAdapter):
 
         # Create instance directory structure
         iid = self.instance_id()
-        iroot = home / iid
+        iroot = home / "instances" / iid
         (iroot / "config").mkdir(parents=True, exist_ok=True)
         (iroot / "data").mkdir(parents=True, exist_ok=True)
         cfg = iroot / "config" / "memory.json"
@@ -1232,7 +1233,7 @@ def _adapter_config_paths() -> List[Path]:
 
     # Primary: instance-specific config
     if home and instance:
-        paths.append(Path(home) / instance / "config" / "memory.json")
+        paths.append(Path(home) / "instances" / instance / "config" / "memory.json")
 
     # Secondary: CLAUDE_PROJECT_DIR-derived instance path when QUAID_INSTANCE is not
     # yet set.  Instance derivation normally happens after config is found (in
@@ -1247,14 +1248,14 @@ def _adapter_config_paths() -> List[Path]:
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(_cpd)
             paths.append(
-                Path(home) / f"claude-code-{_slug}" / "config" / "memory.json"
+                Path(home) / "instances" / f"claude-code-{_slug}" / "config" / "memory.json"
             )
         _codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
         if _codex_project_dir:
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(_codex_project_dir)
             paths.append(
-                Path(home) / f"codex-{_slug}" / "config" / "memory.json"
+                Path(home) / "instances" / f"codex-{_slug}" / "config" / "memory.json"
             )
 
     # Legacy: flat QUAID_HOME/config/memory.json
@@ -1378,7 +1379,7 @@ def _auto_provision_from_env_if_needed() -> None:
 
     if not home or not instance:
         return
-    silo_root = Path(home) / instance
+    silo_root = Path(home) / "instances" / instance
     if (silo_root / "config" / "memory.json").exists():
         return  # Already initialised — nothing to do
 

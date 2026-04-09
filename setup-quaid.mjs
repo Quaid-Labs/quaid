@@ -754,13 +754,13 @@ function runAdapterInstallHook(adapterId, hookName) {
 /**
  * Returns the instance-level projects directory.
  * Must be called after syncInstallerInstanceEnv() has run.
- * For non-standalone adapters: WORKSPACE/<instanceId>/projects
+ * For non-standalone adapters: WORKSPACE/instances/<instanceId>/projects
  * For standalone: WORKSPACE/projects (same as PROJECTS_DIR)
  */
 function instanceProjectsDir() {
   const instanceId = resolvedInstallerInstanceId();
   if (instanceId && instanceId !== "standalone") {
-    return path.join(WORKSPACE, instanceId, "projects");
+    return path.join(WORKSPACE, "instances", instanceId, "projects");
   }
   return PROJECTS_DIR;
 }
@@ -817,22 +817,17 @@ function syncInstallerInstanceEnv(adapterType = "") {
 }
 
 /**
- * List existing Quaid instance names by scanning WORKSPACE for directories
- * that contain config/memory.json.
+ * List existing Quaid instance names by scanning WORKSPACE/instances for
+ * directories that contain config/memory.json.
  */
 function listExistingInstances() {
-  const reserved = new Set([
-    "shared", "projects", "config", "data", "logs", "temp", "tmp",
-    "quaid", "plugins", "lib", "core", "docs", "assets", "release",
-    "scripts", "test", "tests", "benchmark", "node_modules",
-  ]);
   try {
-    if (!fs.existsSync(WORKSPACE)) return [];
-    return fs.readdirSync(WORKSPACE)
+    const instancesDir = path.join(WORKSPACE, "instances");
+    if (!fs.existsSync(instancesDir)) return [];
+    return fs.readdirSync(instancesDir)
       .filter(name => {
         if (name.startsWith(".")) return false;
-        if (reserved.has(name.toLowerCase())) return false;
-        const cfgPath = path.join(WORKSPACE, name, "config", "memory.json");
+        const cfgPath = path.join(instancesDir, name, "config", "memory.json");
         return fs.existsSync(cfgPath);
       })
       .sort();
@@ -867,7 +862,7 @@ function resolveExistingOwnerIdentity() {
   const candidates = [];
   const instances = listExistingInstances();
   for (const instanceId of instances) {
-    candidates.push(path.join(WORKSPACE, instanceId, "config", "memory.json"));
+    candidates.push(path.join(WORKSPACE, "instances", instanceId, "config", "memory.json"));
   }
   candidates.push(path.join(CONFIG_DIR, "memory.json"));
   for (const cfgPath of candidates) {
@@ -3642,7 +3637,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Create directories
   s.start("Creating directories...");
-  for (const dir of [CONFIG_DIR, DATA_DIR, JOURNAL_DIR, LOGS_DIR, path.join(JOURNAL_DIR, "archive")]) {
+  for (const dir of [path.join(WORKSPACE, "instances"), CONFIG_DIR, DATA_DIR, JOURNAL_DIR, LOGS_DIR, path.join(JOURNAL_DIR, "archive")]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   s.stop(C.green("Directories created"));
@@ -3698,7 +3693,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Use the resolved QUAID_INSTANCE so the directory matches the actual silo path.
   const resolvedInstanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
   if (resolvedInstanceId && resolvedInstanceId !== "standalone") {
-    const identityDir = path.join(WORKSPACE, resolvedInstanceId, "identity");
+    const identityDir = path.join(WORKSPACE, "instances", resolvedInstanceId, "identity");
     if (!fs.existsSync(identityDir)) {
       fs.mkdirSync(identityDir, { recursive: true });
       log.info(`Created identity directory: ${identityDir}`);
@@ -3712,7 +3707,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
     // Create per-instance journal directory. Runtime expects instance_root/journal
     // (adapter.journal_dir returns instance_root/journal), not workspace/journal.
-    const instanceJournalDir = path.join(WORKSPACE, resolvedInstanceId, "journal");
+    const instanceJournalDir = path.join(WORKSPACE, "instances", resolvedInstanceId, "journal");
     if (!fs.existsSync(instanceJournalDir)) {
       fs.mkdirSync(instanceJournalDir, { recursive: true });
       log.info(`Created journal directory: ${instanceJournalDir}`);
@@ -4196,7 +4191,7 @@ c.close()
 
   const _valInstanceId = (process.env.QUAID_INSTANCE || "").trim();
   const _configCheckPath = _valInstanceId
-    ? path.join(WORKSPACE, _valInstanceId, "config", "memory.json")
+    ? path.join(WORKSPACE, "instances", _valInstanceId, "config", "memory.json")
     : path.join(CONFIG_DIR, "memory.json");
   if (fs.existsSync(_configCheckPath)) {
     checks.push(`${C.green("■")} Config       ${C.dim("—")} OK`);
@@ -4901,13 +4896,13 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     log.info(`Created blank shared platform config: ${sharedPlatformConfigPath}`);
   }
 
-  // Write config to the instance root (QUAID_HOME/<instance>/config/memory.json).
+  // Write config to the instance root (QUAID_HOME/instances/<instance>/config/memory.json).
   // This is the authoritative instance config path; the old flat QUAID_HOME/config/
   // path is no longer written.
   const instanceId = (process.env.QUAID_INSTANCE || "").trim();
   if (instanceId) {
     // Explicit instance: write directly to instance config path.
-    const instanceConfigDir = path.join(WORKSPACE, instanceId, "config");
+    const instanceConfigDir = path.join(WORKSPACE, "instances", instanceId, "config");
     fs.mkdirSync(instanceConfigDir, { recursive: true });
     const configJson = JSON.stringify(config, null, 2) + "\n";
     fs.writeFileSync(path.join(instanceConfigDir, "memory.json"), configJson);
@@ -5338,7 +5333,7 @@ function notifyInstallWarmupNotice() {
  * Comparing a dry-run plan (interactive mode) against a real agent-mode
  * install plan is the recommended way to verify parity between modes:
  *   node setup-quaid.mjs --dry-run > /tmp/plan-interactive.json
- *   cat WORKSPACE/INSTANCE/last-install-plan.json
+ *   cat WORKSPACE/instances/INSTANCE/last-install-plan.json
  * Any key divergence (e.g. an option enabled by agent mode that interactive
  * would not have offered) indicates a parity bug to investigate.
  */
@@ -5540,7 +5535,7 @@ async function main() {
     // have offered), that is a parity bug to investigate.
     try {
       const instanceId = resolvedInstallerInstanceId(resolvedInstallerPlatform());
-      const planPath = path.join(WORKSPACE, instanceId, "last-install-plan.json");
+      const planPath = path.join(WORKSPACE, "instances", instanceId, "last-install-plan.json");
       const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
       fs.mkdirSync(path.dirname(planPath), { recursive: true });
       fs.writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { encoding: "utf8", mode: 0o644 });

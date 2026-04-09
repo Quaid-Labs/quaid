@@ -89,8 +89,8 @@ def instance_id() -> str:
 
 
 def instance_root() -> Path:
-    """Resolved instance root directory: QUAID_HOME / INSTANCE_ID."""
-    return quaid_home() / instance_id()
+    """Resolved instance root directory: QUAID_HOME/instances/INSTANCE_ID."""
+    return quaid_home() / "instances" / instance_id()
 
 
 def shared_dir() -> Path:
@@ -141,27 +141,25 @@ def instance_exists(name: str) -> bool:
         validated = validate_instance_id(name)
     except InstanceError:
         return False
-    config_path = quaid_home() / validated / "config" / "memory.json"
+    config_path = quaid_home() / "instances" / validated / "config" / "memory.json"
     return config_path.is_file()
 
 
 def list_instances() -> List[str]:
-    """List all registered instance names under QUAID_HOME.
+    """List all registered instance names under QUAID_HOME/instances/.
 
-    An instance is a directory that is not a reserved name and contains
+    An instance is a directory under instances/ that contains
     config/memory.json.
     """
-    home = quaid_home()
-    if not home.is_dir():
+    instances_dir = quaid_home() / "instances"
+    if not instances_dir.is_dir():
         return []
     instances = []
-    for entry in sorted(home.iterdir()):
+    for entry in sorted(instances_dir.iterdir()):
         if not entry.is_dir():
             continue
         name = entry.name
         if name.startswith("."):
-            continue
-        if name.lower() in RESERVED_INSTANCE_NAMES:
             continue
         if (entry / "config" / "memory.json").is_file():
             instances.append(name)

@@ -52,7 +52,7 @@ class TestInstanceManagerBase:
              patch("lib.instance.validate_instance_id"):
             silo = mgr.create("myapp", dry_run=True)
 
-        assert silo == tmp_path / "claude-code-myapp"
+        assert silo == tmp_path / "instances" / "claude-code-myapp"
         assert not silo.exists()
 
     def test_create_makes_silo(self, tmp_path):

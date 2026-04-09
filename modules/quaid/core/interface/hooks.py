@@ -153,7 +153,7 @@ def _hook_trace_path() -> Path:
     instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
     root = Path(workspace).expanduser()
     if instance:
-        root = root / instance
+        root = root / "instances" / instance
     return root / "logs" / "quaid-hook-trace.jsonl"
 
 

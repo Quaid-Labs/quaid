@@ -154,7 +154,7 @@ const PYTHON_BIN = _resolvePythonBin();
 const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 const _instanceForDbPath = _resolveQuaidInstance();
-const DB_PATH = _instanceForDbPath ? path.join(WORKSPACE, _instanceForDbPath, "data", "memory.db") : path.join(WORKSPACE, "data", "memory.db");
+const DB_PATH = _instanceForDbPath ? path.join(WORKSPACE, "instances", _instanceForDbPath, "data", "memory.db") : path.join(WORKSPACE, "data", "memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
 const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");
@@ -183,13 +183,13 @@ function getInstanceId(agentLabel = "main") {
 }
 function getDaemonSignalDir(agentId = "main") {
   const instanceId = getInstanceId(agentId);
-  return instanceId ? path.join(WORKSPACE, instanceId, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
+  return instanceId ? path.join(WORKSPACE, "instances", instanceId, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
 }
-const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
+const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
 const _recentResetSignalsWritten = /* @__PURE__ */ new Map();
 function readInstalledAtMs() {
   try {
-    const p = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "installed-at.json") : path.join(WORKSPACE, "data", "installed-at.json");
+    const p = _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, "data", "installed-at.json") : path.join(WORKSPACE, "data", "installed-at.json");
     const raw = JSON.parse(fs.readFileSync(p, "utf8"));
     const ts = String(raw.installedAt || "").trim();
     if (ts) return new Date(ts).getTime();
@@ -815,7 +815,7 @@ function createAdapterMemoryConfigResolver() {
     const candidates = [];
     const instance = String(process.env.QUAID_INSTANCE || "").trim();
     if (instance) {
-      candidates.push(path.join(WORKSPACE, instance, "config", "memory.json"));
+      candidates.push(path.join(WORKSPACE, "instances", instance, "config", "memory.json"));
     }
     candidates.push(
       path.join(WORKSPACE, "shared", "config", "memory.json"),
@@ -1357,7 +1357,7 @@ function shouldSkipTranscriptText(roleOrText, maybeText) {
 }
 const facade = createQuaidFacade({
   workspace: WORKSPACE,
-  instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE) : void 0,
+  instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : void 0,
   pluginRoot: PYTHON_PLUGIN_ROOT,
   dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
   eventSource: "openclaw_adapter",
@@ -1651,7 +1651,7 @@ notify_user(${JSON.stringify(message)})
       }
       if (_QUAID_INSTANCE) {
         try {
-          const _noticeFile = path.join(WORKSPACE, _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json");
+          const _noticeFile = path.join(WORKSPACE, "instances", _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json");
           const _noticeData = JSON.parse(fs.readFileSync(_noticeFile, "utf-8"));
           const _pending = (Array.isArray(_noticeData?.requests) ? _noticeData.requests : []).filter((r) => r?.status === "pending");
           if (_pending.length > 0) {
@@ -1890,7 +1890,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const timeoutActivitySessionId = sessionId;
           if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
           if (sessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })) {
-            const instanceRoot = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE) : WORKSPACE;
+            const instanceRoot = _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : WORKSPACE;
             const cursorDir = path.join(instanceRoot, "data", "session-cursors");
             const cursorPath = path.join(cursorDir, `${sessionId}.json`);
             if (!fs.existsSync(cursorPath)) {
@@ -2265,7 +2265,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   continue;
                 }
                 pendingOrphanChecks.delete(sid);
-                const _orphanLockPath = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "session-processing", `${sid}.lock`) : path.join(WORKSPACE, "data", "session-processing", `${sid}.lock`);
+                const _orphanLockPath = _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, "data", "session-processing", `${sid}.lock`) : path.join(WORKSPACE, "data", "session-processing", `${sid}.lock`);
                 if (fs.existsSync(_orphanLockPath)) {
                   writeHookTrace("session_index.orphan_reset_skipped_locked", { session_id: sid });
                   console.log(`[quaid][signal] orphan reset skipped \u2014 session=${sid} already locked`);

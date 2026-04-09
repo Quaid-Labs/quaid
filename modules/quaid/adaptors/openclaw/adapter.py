@@ -967,10 +967,10 @@ class OpenClawAdapter(QuaidAdapter):
             except (json.JSONDecodeError, IOError, KeyError):
                 pass
 
-        # Source 2: silo directories under quaid_home()
+        # Source 2: silo directories under quaid_home()/instances
         silo_prefix = f"{prefix}-"
         try:
-            home = self.quaid_home()
+            home = self.quaid_home() / "instances"
             for entry in home.iterdir():
                 if entry.is_dir() and entry.name.startswith(silo_prefix):
                     label = entry.name[len(silo_prefix):]

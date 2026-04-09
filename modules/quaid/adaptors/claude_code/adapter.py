@@ -212,7 +212,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         prefix = self.agent_id_prefix() + "-"  # "claude-code-"
         current = self.instance_id()
         try:
-            home = self.quaid_home()
+            home = self.quaid_home() / "instances"
             found = sorted(
                 d.name for d in home.iterdir()
                 if d.is_dir() and d.name.startswith(prefix)
@@ -268,7 +268,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         _fast = fast_model or mgr.DEFAULT_FAST_MODEL
 
         if dry_run:
-            print(f"[dry-run] Would create silo: {mgr.adapter.quaid_home() / instance_id}")
+            print(f"[dry-run] Would create silo: {mgr.adapter.quaid_home() / 'instances' / instance_id}")
             print(f"[dry-run] Would write QUAID_INSTANCE={instance_id} to {project_path}/.claude/settings.json")
             print(f"[dry-run] Would write models: deep={_deep} fast={_fast}")
             if token:

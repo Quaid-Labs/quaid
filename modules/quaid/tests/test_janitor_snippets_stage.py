@@ -817,7 +817,7 @@ class TestRunSoulSnippetsReview:
                 "SOUL.md": {"purpose": "inner life", "maxLines": 80},
             }
 
-            # Workspace is adapter.instance_root() (tmp_path / "pytest-runner")
+            # Workspace is adapter.instance_root() (tmp_path / "instances" / "pytest-runner")
             ws = adapter.instance_root()
             (ws / "SOUL.snippets.md").write_text(
                 "# SOUL — Pending Snippets\n## Compaction — 2026-03-01 00:00:00\n- Test snippet\n",
@@ -871,7 +871,7 @@ class TestRunSoulSnippetsReview:
                 "SOUL.md": {"purpose": "inner life", "maxLines": 80},
             }
 
-            # Workspace is adapter.instance_root() (tmp_path / "pytest-runner")
+            # Workspace is adapter.instance_root() (tmp_path / "instances" / "pytest-runner")
             ws = adapter.instance_root()
             (ws / "SOUL.snippets.md").write_text(
                 "# SOUL — Pending Snippets\n## Compaction — 2026-03-01 00:00:00\n- Redundant snippet\n",

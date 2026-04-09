@@ -117,30 +117,30 @@ class TestStandaloneAdapter:
 
     def test_data_dir(self, standalone, tmp_path, monkeypatch):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        assert standalone.data_dir() == tmp_path / iid / "data"
+        assert standalone.data_dir() == tmp_path / "instances" / iid / "data"
 
     def test_config_dir(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        assert standalone.config_dir() == tmp_path / iid / "config"
+        assert standalone.config_dir() == tmp_path / "instances" / iid / "config"
 
     def test_logs_dir(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        assert standalone.logs_dir() == tmp_path / iid / "logs"
+        assert standalone.logs_dir() == tmp_path / "instances" / iid / "logs"
 
     def test_journal_dir(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        assert standalone.journal_dir() == tmp_path / iid / "journal"
+        assert standalone.journal_dir() == tmp_path / "instances" / iid / "journal"
 
     def test_projects_dir(self, standalone, tmp_path):
         assert standalone.projects_dir() == tmp_path / "projects"
 
     def test_core_markdown_dir(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        assert standalone.core_markdown_dir() == tmp_path / iid
+        assert standalone.core_markdown_dir() == tmp_path / "instances" / iid
 
     def test_instance_root(self, standalone, tmp_path):
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        assert standalone.instance_root() == tmp_path / iid
+        assert standalone.instance_root() == tmp_path / "instances" / iid
 
     def test_notify_stderr(self, standalone, capsys):
         result = standalone.notify("hello world")
@@ -274,7 +274,7 @@ class TestOwnerResolution:
 
         iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        cfg_dir = tmp_path / iid / "config"
+        cfg_dir = tmp_path / "instances" / iid / "config"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "memory.json").write_text(
             """
@@ -382,7 +382,7 @@ class TestOpenClawAdapter:
 
     def test_installer_install_state_reports_already_installed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda _name: None)
-        cfg = tmp_path / "openclaw-main" / "config"
+        cfg = tmp_path / "instances" / "openclaw-main" / "config"
         cfg.mkdir(parents=True)
         (cfg / "memory.json").write_text("{}", encoding="utf-8")
         state = OpenClawAdapter.installer_install_state(str(tmp_path))
@@ -584,7 +584,7 @@ class TestOpenClawAdapter:
         assert adapter.get_deep_provider_default() == "openai-codex"
         assert adapter.get_fast_provider_default() == "openai-codex"
         assert adapter.get_deep_model_default("default") == "gpt-5.4"
-        assert adapter.get_fast_model_default("default") == "gpt-5.3-codex-spark"
+        assert adapter.get_fast_model_default("default") == "gpt-5.4-mini"
 
     def test_installer_review_model_pair_flags_unknown_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
@@ -634,7 +634,7 @@ class TestOpenClawAdapter:
             def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
                 assert messages == [{"role": "user", "content": "PING"}]
                 assert max_tokens == 8
-                assert timeout == 20
+                assert timeout == 35
                 return SimpleNamespace(text="PONG", model=model_tier)
 
         with patch("adaptors.openclaw.adapter.GatewayLLMProvider", _StubProvider):

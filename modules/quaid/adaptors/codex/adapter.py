@@ -77,7 +77,7 @@ class CodexAdapter(QuaidAdapter):
         prefix = self.agent_id_prefix() + "-"
         current = self.instance_id()
         try:
-            home = self.quaid_home()
+            home = self.quaid_home() / "instances"
             found = sorted(
                 d.name for d in home.iterdir()
                 if d.is_dir() and d.name.startswith(prefix)
