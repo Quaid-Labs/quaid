@@ -489,7 +489,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 1. Agent indicates project/doc processing in background.
 2. Event staging path reflects processing state:
 ```bash
-ls -la ~/.quaid/projects/staging/
+ls -la ~/quaid/projects/staging/
 ```
 
 ---

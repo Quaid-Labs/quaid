@@ -38,7 +38,7 @@ When `notifications.extraction` is `off` (for example `quiet` preset), extractio
 
 For host systems with asynchronous/heartbeat workflows (for example OpenClaw), delayed actionable requests are written to:
 
-- `.quaid/runtime/notes/delayed-llm-requests.json`
+- `runtime/notes/delayed-llm-requests.json`
 
 Host adapters are responsible for surfacing and resolving these requests in a user-safe channel.
 

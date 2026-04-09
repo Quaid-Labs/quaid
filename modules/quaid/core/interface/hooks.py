@@ -903,7 +903,7 @@ def _get_projects_dir() -> Path:
         return adapter.projects_dir()
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
-        base = Path(home).resolve() if home else Path.home() / ".quaid"
+        base = Path(home).resolve() if home else Path.home() / "quaid"
         return base / "projects"
 
 
@@ -916,7 +916,7 @@ def _get_identity_dir() -> Path:
     except Exception:
         # Fallback: quaid_home root (backward compat with standalone)
         home = os.environ.get("QUAID_HOME", "").strip()
-        return Path(home).resolve() if home else Path.home() / ".quaid"
+        return Path(home).resolve() if home else Path.home() / "quaid"
 
 
 def hook_session_init(args):

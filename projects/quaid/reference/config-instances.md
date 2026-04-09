@@ -439,7 +439,7 @@ Projects and memories are local to each machine.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `QUAID_HOME` | Root directory containing all instances | `~/.quaid` |
+| `QUAID_HOME` | Root directory containing all instances | `~/quaid` |
 | `QUAID_INSTANCE` | Active instance identifier | (required, no default) |
 | `CLAWDBOT_WORKSPACE` | Alias for `QUAID_HOME` (backward compat) | — |
 | `PYTHONPATH` | Set automatically by the `quaid` shell script to include `SCRIPT_DIR` | — |

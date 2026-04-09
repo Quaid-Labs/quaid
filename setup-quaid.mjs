@@ -4,7 +4,7 @@
 // =============================================================================
 // Interactive installer using @clack/prompts (resolved from OpenClaw).
 // Supports two modes:
-//   - Standalone (default): Uses fixed Quaid home (~/.quaid)
+//   - Standalone (default): Uses fixed Quaid home (~/quaid)
 //   - OpenClaw: detected via OPENCLAW_WORKSPACE env or openclaw on PATH
 //
 // Author: Steadman Labs (https://github.com/quaid-labs)
@@ -213,7 +213,7 @@ function printUsageAndExit() {
   console.log(`Usage: node setup-quaid.mjs [options]
 
 Options:
-  --workspace <path>  Deprecated. Installer home is fixed to ~/.quaid
+  --workspace <path>  Deprecated. Installer home is fixed to ~/quaid
   --owner-name <name> Person name used to tag memories (recommended for --agent)
   --adapter <id>      Force adapter/platform id (e.g. standalone, claude-code, openclaw, codex)
   --source <kind>     Plugin source: local (default), github, artifact
@@ -264,7 +264,7 @@ if (SURVEY_ONLY && !INSTALL_ARGS.dryRun) {
   process.exit(2);
 }
 
-const FIXED_QUAID_HOME = path.resolve(path.join(os.homedir(), ".quaid"));
+const FIXED_QUAID_HOME = path.resolve(path.join(os.homedir(), "quaid"));
 
 function _normalizeInstallPath(raw) {
   const value = String(raw || "").trim();
@@ -416,7 +416,7 @@ const AGENT_SURVEY_CONTRACT = {
     "Do not add survey sections for internal installer steps with no user choice.",
     "Do not use test-only controls like QUAID_TEST_ANSWERS in normal AI install guidance unless explicitly running a test harness.",
     "Workspace file import is not a standalone survey field unless the installer actually prompts for it.",
-    "Installer home is fixed to ~/.quaid and is not a user-selectable field.",
+    "Installer home is fixed to ~/quaid and is not a user-selectable field.",
     "Janitor runs automatically by default and is not a survey field unless the human explicitly asks to change janitor behavior.",
   ],
 };
@@ -1685,19 +1685,12 @@ function _ensureAgentsList(cli, workspacePath) {
   try {
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw);
-    const ws =
-      workspacePath ||
-      parsed?.workspace ||
-      parsed?.agents?.defaults?.workspace ||
-      FIXED_QUAID_HOME;
     if (!parsed.agents || typeof parsed.agents !== "object") parsed.agents = {};
     parsed.agents.list = [
       {
         id: "main",
         default: true,
         name: "Default",
-        workspace: ws,
-        home: ws,
       },
     ];
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
@@ -3434,7 +3427,7 @@ function installHeartbeatSchedule(hour) {
     "",
     "## Quaid Delayed Requests",
     "",
-    "If `.quaid/runtime/notes/delayed-llm-requests.json` exists:",
+    "If `runtime/notes/delayed-llm-requests.json` exists:",
     "- Read all `pending` items when conversation timing is appropriate.",
     "- Surface the important ones to the user, resolve them together, and take action.",
     "- After resolution, mark those items `done` (or remove them).",

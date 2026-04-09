@@ -584,7 +584,7 @@ desktop.ini
 **Quaid internals (never track in shadow git):**
 
 ```gitignore
-.quaid/
+quaid/
 .git-tracking/
 *.snippets.md
 ```

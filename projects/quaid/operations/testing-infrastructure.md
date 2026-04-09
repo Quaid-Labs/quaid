@@ -181,11 +181,11 @@ Full protocol in `operations/projects-testing.md`. Run order:
 ### Quick reference
 ```bash
 # OC
-export QUAID_HOME=~/.quaid QUAID_INSTANCE=openclaw
+export QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw
 quaid project create <name> && quaid project list
 
 # CC
-export QUAID_HOME=~/.quaid QUAID_INSTANCE=claude-code
+export QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code
 quaid project create <name> && quaid project list
 
 # Global (either machine)
@@ -208,7 +208,7 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
 - Python regression tier passes.
 
 ### E2E pass criteria
-- Bootstrap to `~/.quaid/e2e-test` succeeds.
+- Bootstrap to `~/quaid/e2e-test` succeeds.
 - Integration tests in e2e workspace pass.
 - Janitor run exits successfully.
 - Janitor verification passes:
@@ -217,7 +217,7 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
   - Run status is `completed`.
   - Apply mode shows observable work (`memories_processed` or `actions_taken` or status-bucket deltas).
 - Cleanup/restore succeeds:
-  - `~/.quaid/e2e-test` removed on success (unless `--keep-on-success`).
+  - `~/quaid/e2e-test` removed on success (unless `--keep-on-success`).
   - Workspace restored to the test workspace.
   - Gateway health recovered.
 - Summary integrity guard:

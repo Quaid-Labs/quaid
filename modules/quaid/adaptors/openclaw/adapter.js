@@ -739,7 +739,7 @@ const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOU
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 3e5);
 function resolveAdapterMemoryDbPath(workspace, instanceId, legacyDbPath) {
   const normalizedInstance = String(instanceId || "").trim();
-  return normalizedInstance ? path.join(workspace, normalizedInstance, "data", "memory.db") : legacyDbPath;
+  return normalizedInstance ? path.join(workspace, "instances", normalizedInstance, "data", "memory.db") : legacyDbPath;
 }
 function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
@@ -820,7 +820,7 @@ function createAdapterMemoryConfigResolver() {
     candidates.push(
       path.join(WORKSPACE, "shared", "config", "memory.json"),
       path.join(WORKSPACE, "config", "memory.json"),
-      path.join(os.homedir(), ".quaid", "memory-config.json"),
+      path.join(os.homedir(), "quaid", "memory-config.json"),
       path.join(process.cwd(), "memory-config.json")
     );
     return candidates;

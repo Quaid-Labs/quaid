@@ -765,7 +765,7 @@ These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and 
 
 | Variable | Purpose |
 |----------|---------|
-| `QUAID_HOME` | Root directory containing all instances (default `~/.quaid/`) |
+| `QUAID_HOME` | Root directory containing all instances (default `~/quaid/`) |
 | `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, `claude_code`, or `codex` |
 | `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations (default `"default"`) |
 | `CLAWDBOT_WORKSPACE` | Root workspace hint for OpenClaw integrations |
@@ -804,7 +804,7 @@ def load_config() -> MemoryConfig:
 
 Config file merge order (lowest → highest priority):
 1. `./memory-config.json` — local cwd override (rarely used)
-2. `~/.quaid/memory-config.json` — user-level fallback
+2. `~/quaid/memory-config.json` — user-level fallback
 3. `$QUAID_HOME/shared/config/memory.json` — machine-wide shared settings (embeddings, Ollama)
 4. `$QUAID_HOME/<instance>/config/memory.json` — per-instance config (highest priority)
 

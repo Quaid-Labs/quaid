@@ -72,7 +72,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 6. Split delayed-notification pipelines
 - Previous state:
   - janitor wrote `logs/janitor/delayed-notifications.json`
-  - events queued to `.quaid/runtime/notes/delayed-llm-requests.json`
+  - events queued to `runtime/notes/delayed-llm-requests.json`
 - Resolution:
   - janitor now queues delayed messages through event bus (`events.queue_delayed_notification(...)`)
   - adapter no longer flushes `delayed-notifications.json` into request queue

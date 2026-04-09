@@ -148,8 +148,8 @@ ssh REMOTE_HOST 'pkill -f openclaw-gateway; sleep 2; \
 ```bash
 # DB (shared across OC instances)
 ssh REMOTE_HOST 'sqlite3 WORKSPACE/data/memory.db "SELECT COUNT(*) FROM nodes;"'
-# OR instance-local:
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/OC_INSTANCE/data/memory.db "SELECT COUNT(*) FROM nodes;"'
+# Instance-local:
+ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/OC_INSTANCE/data/memory.db "SELECT COUNT(*) FROM nodes;"'
 
 # CLI
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=OC_INSTANCE \

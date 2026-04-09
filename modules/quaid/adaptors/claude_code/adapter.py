@@ -56,7 +56,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env).resolve() if env else Path.home() / ".quaid"
+        return Path(env).resolve() if env else Path.home() / "quaid"
 
     @classmethod
     def installer_adapter_id(cls) -> str:

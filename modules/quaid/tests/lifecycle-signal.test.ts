@@ -181,7 +181,7 @@ describe("lifecycle signal detection", () => {
       "/tmp/quaid-home",
       "openclaw-livetest",
       "/tmp/quaid-home/data/memory.db",
-    )).toBe("/tmp/quaid-home/openclaw-livetest/data/memory.db");
+    )).toBe("/tmp/quaid-home/instances/openclaw-livetest/data/memory.db");
   });
 
   it("summarizes recall diagnostics for hook tracing", () => {

@@ -187,7 +187,7 @@ quaid project update myapp --source-root ./myapp  # add later
 
 **Rules**:
 - Quaid never creates files in the user's source directory.
-- Quaid never creates `.git`, `.quaid`, or any dotfiles in user space.
+- Quaid never creates `.git` or unrelated dotfiles in user space.
 - Shadow git metadata lives in `QUAID_HOME/.git-tracking/<project>/`.
 - The human and LLM edit files however they want — Quaid detects changes
   on the next daemon tick via shadow git diff.
@@ -197,7 +197,7 @@ quaid project update myapp --source-root ./myapp  # add later
 ## Full Directory Tree
 
 ```
-QUAID_HOME/                              # e.g. ~/.quaid/
+QUAID_HOME/                              # e.g. ~/quaid/
   config/
     memory.json                          # Main Quaid config
     adapters/

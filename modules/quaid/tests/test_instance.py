@@ -78,7 +78,7 @@ class TestQuaidHome:
 
     def test_default(self, monkeypatch):
         monkeypatch.delenv("QUAID_HOME", raising=False)
-        assert quaid_home() == Path.home() / ".quaid"
+        assert quaid_home() == Path.home() / "quaid"
 
 
 class TestInstanceId:

@@ -185,7 +185,7 @@ yourself.
 
     Check the plan output:
     - `platform` matches your platform (openclaw / claude-code / codex)
-    - `workspace` is `~/.quaid`
+    - `workspace` is `~/quaid`
     - `instanceId` matches your silo name (openclaw-livetest / claude-code-livetest / codex-livetest)
     - No fatal errors
 
@@ -202,7 +202,7 @@ yourself.
    > - Instance name: INSTANCE_NAME
    > - Owner name: OWNER_NAME
    >
-   > Quaid installs into `~/.quaid`; do not choose or pass a custom workspace path.
+   > Quaid installs into `~/quaid`; do not choose or pass a custom workspace path.
    > The guide path is inside the local canary checkout, so use that checkout directly as the install source.
    > Do not browse the web for install docs or source code during M0.
    > Do not install a release build or any non-canary branch.

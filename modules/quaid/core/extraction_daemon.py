@@ -81,7 +81,7 @@ def _quaid_home() -> Path:
     """QUAID_HOME root (contains all instances)."""
     env = os.environ.get("QUAID_HOME", "").strip()
     # B022: Always resolve to absolute path
-    return Path(env).resolve() if env else Path.home() / ".quaid"
+    return Path(env).resolve() if env else Path.home() / "quaid"
 
 
 def _instance_id() -> str:

@@ -22,12 +22,12 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 
 ## File Placement — MANDATORY RULES
 
-**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, or `~/.quaid/scratch/`.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
+**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, or `~/quaid/scratch/`.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
 
 **Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
 
 1. **Existing project owns this work** → place the file inside that project's directory.
-2. **Throwaway / one-off / scratch / quick / hello-world** → use the misc project as the owner, but do not treat `~/.quaid/` as the working directory:
+2. **Throwaway / one-off / scratch / quick / hello-world** → use the misc project as the owner, but do not treat `~/quaid/` as the working directory:
    ```bash
    # The misc project is pre-created. Confirm it exists:
    quaid project show misc--$QUAID_INSTANCE

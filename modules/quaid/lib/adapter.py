@@ -726,7 +726,7 @@ class StandaloneAdapter(QuaidAdapter):
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env).resolve() if env else Path.home() / ".quaid"
+        return Path(env).resolve() if env else Path.home() / "quaid"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
                dry_run: bool = False, force: bool = False) -> bool:
@@ -753,7 +753,7 @@ class StandaloneAdapter(QuaidAdapter):
         # 2. .env file in quaid home (noisy fallback only when failHard=false)
         print(
             f"[adapter][FALLBACK] {env_var_name} not found in env; "
-            "attempting ~/.quaid/.env lookup because failHard is disabled.",
+            "attempting ~/quaid/.env lookup because failHard is disabled.",
             file=sys.stderr,
         )
         env_file = self.quaid_home() / ".env"
@@ -1099,7 +1099,7 @@ def _normalize_adapter_id(value: str) -> str:
 
 def _registry_quaid_home() -> Path:
     env = os.environ.get("QUAID_HOME", "").strip()
-    return Path(env).resolve() if env else Path.home() / ".quaid"
+    return Path(env).resolve() if env else Path.home() / "quaid"
 
 
 def _adapter_manifest_candidates(adapter_id: str) -> List[Path]:

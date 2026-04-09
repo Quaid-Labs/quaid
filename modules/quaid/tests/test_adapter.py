@@ -104,7 +104,7 @@ class TestStandaloneAdapter:
     def test_quaid_home_default(self, tmp_path, monkeypatch):
         monkeypatch.delenv("QUAID_HOME", raising=False)
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / ".quaid"
+        assert adapter.quaid_home() == Path.home() / "quaid"
 
     def test_quaid_home_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -302,7 +302,7 @@ class TestOpenClawAdapter:
     def test_quaid_home_default(self, monkeypatch):
         monkeypatch.delenv("QUAID_HOME", raising=False)
         adapter = OpenClawAdapter()
-        assert adapter.quaid_home() == Path.home() / ".quaid"
+        assert adapter.quaid_home() == Path.home() / "quaid"
 
     def test_oc_workspace_raises_without_env(self, monkeypatch, tmp_path):
         monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
@@ -1152,12 +1152,12 @@ class TestEmptyEnvVars:
     def test_empty_quaid_home_uses_default(self, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", "")
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / ".quaid"
+        assert adapter.quaid_home() == Path.home() / "quaid"
 
     def test_whitespace_quaid_home_uses_default(self, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", "   ")
         adapter = StandaloneAdapter()
-        assert adapter.quaid_home() == Path.home() / ".quaid"
+        assert adapter.quaid_home() == Path.home() / "quaid"
 
     def test_empty_openclaw_workspace_raises(self, monkeypatch, tmp_path):
         # OPENCLAW_WORKSPACE is no longer read by the OC adapter; the error

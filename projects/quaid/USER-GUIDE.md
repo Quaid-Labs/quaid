@@ -9,14 +9,14 @@ Quaid keeps long-lived memory across sessions, then injects only relevant contex
 ## Project system basics
 
 - Your real project files usually stay where they already live.
-- Quaid tracks projects through a registry plus canonical project docs under `~/.quaid/projects/`.
+- Quaid tracks projects through a registry plus canonical project docs under `~/quaid/projects/`.
 - `projects/quaid/` in this repo is the built-in reference project for Quaid itself.
 - Register project docs or source roots so Quaid can index and inject them during recall.
 - The janitor is the normal maintenance loop: dedup, cleanup, docs refresh, and project hygiene.
 
 ## Where your Quaid files live
 
-Quaid is instance-based. By default, Quaid keeps its own runtime state under `~/.quaid/`. Each instance has its own silo:
+Quaid is instance-based. By default, Quaid keeps its own runtime state under `~/quaid/`. Each instance has its own silo:
 
 - `<QUAID_HOME>/<instance>/config/memory.json`: runtime config for that instance
 - `<QUAID_HOME>/<instance>/data/memory.db`: memory database
@@ -30,7 +30,7 @@ Important:
 - Model/provider overrides should be platform-scoped (`shared/config/<platform>/...`), not global.
 - Embeddings settings live in the global shared config and must be consistent across all instances on a machine.
 - Different platforms can have different providers and model lanes.
-- `~/.quaid/` is Quaid's home, not a general-purpose workspace. Real project files can live elsewhere and be linked into projects.
+- `~/quaid/` is Quaid's home, not a general-purpose workspace. Real project files can live elsewhere and be linked into projects.
 
 ## How most people use Quaid
 

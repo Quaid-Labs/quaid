@@ -12,7 +12,7 @@ These are read from `tests/livetest/livetest-config.json`:
 | Placeholder | Meaning |
 |-------------|---------|
 | `REMOTE_HOST` | Test VM/host (SSH target) |
-| `WORKSPACE` | Quaid home on remote (`~/.quaid`) |
+| `WORKSPACE` | Quaid home on remote (`~/quaid`) |
 | `OC_INSTANCE` | OC silo name (e.g. `openclaw-livetest`) |
 | `CC_INSTANCE` | CC silo name (e.g. `claude-code-livetest`) |
 | `CDX_INSTANCE` | CDX silo name (e.g. `codex-livetest`) |
@@ -310,7 +310,7 @@ Send to each platform:
 > - Instance name: INSTANCE_NAME
 > - Owner name: OWNER_NAME
 >
-> Quaid installs into `~/.quaid`; do not pass a custom workspace path.
+> Quaid installs into `~/quaid`; do not pass a custom workspace path.
 > Tell me when Quaid is installed and `quaid doctor` returns healthy.
 
 ### Post-Install Examination
@@ -318,14 +318,14 @@ Send to each platform:
 After each platform's M0 passes, verify the filesystem (see
 `COORDINATOR.SKILL.md` for the full subagent prompt):
 
-1. **No `~/quaid` directory** — only `~/.quaid` should exist.
-2. **`~/.quaid` has correct structure**: `modules/quaid/`, `shared/config/`,
+1. **`~/quaid` exists** — Quaid installs into the visible `~/quaid` home.
+2. **`~/quaid` has correct structure**: `modules/quaid/`, `shared/config/`,
    `instances/INSTANCE/config/`, `instances/INSTANCE/data/`.
 3. **Instance config has models and capture sections.**
-4. **Shared platform config exists** at `~/.quaid/shared/config/PLATFORM/`.
+4. **Shared platform config exists** at `~/quaid/shared/config/PLATFORM/`.
 5. **Platform hooks registered** (CC: settings.json, CDX: hooks.json, OC:
    extensions symlink).
-6. **No stale legacy paths** (`~/quaid`, `~/.quaid/config/memory.json`).
+6. **No stale legacy paths** (`~/.quaid`, `~/quaid/config/memory.json`).
 
 ### Post-Install Coordinator Steps
 
@@ -425,7 +425,7 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE \
 ```
 
 Where `QUAID_CLI` is the quaid binary path on the remote (varies by platform —
-OC: `~/.openclaw/extensions/quaid/quaid`, CC: `~/.quaid/modules/quaid/quaid`,
+OC: `~/.openclaw/extensions/quaid/quaid`, CC: `~/quaid/modules/quaid/quaid`,
 CDX: same as OC or CC depending on install).
 
 ### Hot-Deploy (mid-test fix)

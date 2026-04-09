@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def _registry_dir() -> Path:
     """Resolve registry directory from QUAID_HOME."""
     home = os.environ.get("QUAID_HOME", "").strip()
-    base = Path(home).resolve() if home else Path.home() / ".quaid"
+    base = Path(home).resolve() if home else Path.home() / "quaid"
     d = base / "data" / "subagent-registry"
     d.mkdir(parents=True, exist_ok=True)
     return d

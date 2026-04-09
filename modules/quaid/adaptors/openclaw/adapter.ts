@@ -1016,7 +1016,7 @@ function resolveAdapterMemoryDbPath(
 ): string {
   const normalizedInstance = String(instanceId || "").trim();
   return normalizedInstance
-    ? path.join(workspace, normalizedInstance, "data", "memory.db")
+    ? path.join(workspace, "instances", normalizedInstance, "data", "memory.db")
     : legacyDbPath;
 }
 
@@ -1118,7 +1118,7 @@ function createAdapterMemoryConfigResolver(): AdapterMemoryConfigResolver {
     candidates.push(
       path.join(WORKSPACE, "shared", "config", "memory.json"),
       path.join(WORKSPACE, "config", "memory.json"),
-      path.join(os.homedir(), ".quaid", "memory-config.json"),
+      path.join(os.homedir(), "quaid", "memory-config.json"),
       path.join(process.cwd(), "memory-config.json"),
     );
     return candidates;

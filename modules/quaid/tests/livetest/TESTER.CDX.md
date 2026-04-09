@@ -180,7 +180,7 @@ codex) so it picks up the empty hooks file before retrying the install prompt.
 
 ```bash
 # DB
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/CDX_INSTANCE/data/memory.db "SELECT COUNT(*) FROM nodes;"'
+ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/CDX_INSTANCE/data/memory.db "SELECT COUNT(*) FROM nodes;"'
 
 # CLI
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE \

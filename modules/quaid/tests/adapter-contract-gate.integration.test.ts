@@ -114,13 +114,13 @@ describe("adapter contract gate integration", () => {
     warn.mockRestore();
   });
 
-  it("uses fallback ~/.quaid/memory-config.json for plugins.strict", async () => {
+  it("uses fallback ~/quaid/memory-config.json for plugins.strict", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const workspace = makeWorkspace("fallback-strict", true);
     rmSync(join(workspace, "config", "memory.json"));
 
     const fakeHome = join(workspace, "fake-home");
-    writeJson(join(fakeHome, ".quaid", "memory-config.json"), {
+    writeJson(join(fakeHome, "quaid", "memory-config.json"), {
       retrieval: { failHard: false, maxLimit: 20 },
       plugins: { strict: false },
       models: {

@@ -4,18 +4,18 @@ This page explains how to add Quaid support for a new host platform (for example
 
 Quaid adapter integration has two layers:
 
-1. **Installer integration** (manifest registry under `~/.quaid/adaptors/`)
+1. **Installer integration** (manifest registry under `~/quaid/adaptors/`)
 2. **Runtime integration** (Python `QuaidAdapter` implementation + manifest runtime loader wiring)
 
 You need both for a complete platform integration.
 
 ---
 
-## 1) Installer Registry (`~/.quaid/adaptors`)
+## 1) Installer Registry (`~/quaid/adaptors`)
 
 Quaid installer discovers adapter choices from:
 
-`~/.quaid/adaptors/<adapter-id>/adapter.json`
+`~/quaid/adaptors/<adapter-id>/adapter.json`
 
 Built-in manifests are seeded by installer first, then the same directory is used for third-party adapters.
 
@@ -140,7 +140,7 @@ and return it from `get_instance_manager()`.
 Runtime adapter selection now follows the same manifest registry contract:
 
 1. `config/memory.json` → `adapter.type`
-2. Resolve `~/.quaid/adaptors/<adapter-id>/adapter.json`
+2. Resolve `~/quaid/adaptors/<adapter-id>/adapter.json`
 3. Load `runtime.python.module` + `runtime.python.class` from that manifest
 
 Built-in adapters use this exact path too. Third-party adapters can ship outside
@@ -150,7 +150,7 @@ the Quaid repo and point `runtime.python.path` at their own package root.
 
 ## 4) Minimal bring-up checklist
 
-1. Add installer manifest to `~/.quaid/adaptors/<id>/adapter.json` (or ship via built-in manifests).
+1. Add installer manifest to `~/quaid/adaptors/<id>/adapter.json` (or ship via built-in manifests).
 2. Add optional pre/post install hooks if host setup is needed.
 3. Implement Python adapter class compatible with `QuaidAdapter` methods.
 4. Set `runtime.python.module` + `runtime.python.class` in manifest.

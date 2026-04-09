@@ -277,7 +277,7 @@ Triggers `nodes_ai`, `nodes_ad`, `nodes_au` keep `nodes_fts` in sync with `nodes
 
 Each Quaid instance (adapter silo) lives in its own subdirectory under `QUAID_HOME`. Two environment variables control which silo is active:
 
-- `QUAID_HOME` — root directory (default `~/.quaid/`)
+- `QUAID_HOME` — root directory (default `~/quaid/`)
 - `QUAID_INSTANCE` — instance identifier, e.g. `openclaw`, `claude-code`, or `codex` (no default; required)
 
 ```
@@ -709,7 +709,7 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations | `"default"` |
-| `QUAID_HOME` | Root directory containing all Quaid instances | `~/.quaid/` |
+| `QUAID_HOME` | Root directory containing all Quaid instances | `~/quaid/` |
 | `QUAID_INSTANCE` | Instance identifier — selects which silo under `QUAID_HOME` is active (e.g. `openclaw`, `claude-code`, `codex`) | Required — no implicit default |
 | `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, `claude-code`, or `codex` | Required |
 | `CLAWDBOT_WORKSPACE` | OC adapter workspace root (Python adapter). Also accepted by the TS adapter as lowest-priority fallback after `QUAID_HOME` and `QUAID_WORKSPACE`. | Optional |
