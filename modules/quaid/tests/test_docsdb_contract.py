@@ -19,22 +19,28 @@ def _ctx(workspace_root: str) -> PluginHookContext:
     )
 
 
-def test_docsdb_contract_on_init_ensures_project_workspace_dirs(tmp_path):
+def test_docsdb_contract_on_init_ensures_project_workspace_dirs(tmp_path, monkeypatch):
+    visible_root = tmp_path / "visible"
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(visible_root))
     contract = DocsDbPluginContract()
     contract.on_init(_ctx(str(tmp_path)))
 
-    assert (tmp_path / "projects").is_dir()
-    assert (tmp_path / "temp").is_dir()
-    assert (tmp_path / "scratch").is_dir()
+    assert (visible_root / "projects").is_dir()
+    assert not (tmp_path / "projects").exists()
+    assert not (tmp_path / "temp").exists()
+    assert not (tmp_path / "scratch").exists()
 
 
-def test_docsdb_contract_on_config_ensures_project_workspace_dirs(tmp_path):
+def test_docsdb_contract_on_config_ensures_project_workspace_dirs(tmp_path, monkeypatch):
+    visible_root = tmp_path / "visible"
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(visible_root))
     contract = DocsDbPluginContract()
     contract.on_config(_ctx(str(tmp_path)))
 
-    assert (tmp_path / "projects").is_dir()
-    assert (tmp_path / "temp").is_dir()
-    assert (tmp_path / "scratch").is_dir()
+    assert (visible_root / "projects").is_dir()
+    assert not (tmp_path / "projects").exists()
+    assert not (tmp_path / "temp").exists()
+    assert not (tmp_path / "scratch").exists()
 
 
 def test_docsdb_contract_get_system_context_metadata(monkeypatch, tmp_path):

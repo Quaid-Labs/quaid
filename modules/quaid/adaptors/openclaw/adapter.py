@@ -288,7 +288,7 @@ class OpenClawAdapter(QuaidAdapter):
         raise RuntimeError(
             "Could not resolve OpenClaw workspace from OpenClaw config "
             "(OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json). "
-            "Set QUAID_HOME or configure adapter.type=standalone in config/memory.json."
+            "Set QUAID_HOME or configure adapter.type=standalone in config.json."
         )
 
     def notify(self, message: str, channel_override: Optional[str] = None,
@@ -538,7 +538,7 @@ class OpenClawAdapter(QuaidAdapter):
         deep_effort = str(getattr(cfg.models, "deep_reasoning_effort", "") or "").strip()
         if not deep_model or not fast_model:
             raise RuntimeError(
-                "LLM provider requires deepReasoning and fastReasoning to be set in config/memory.json. "
+                "LLM provider requires deepReasoning and fastReasoning to be set in config.json. "
                 f"Got deep={deep_model!r} fast={fast_model!r}."
             )
         return GatewayLLMProvider(

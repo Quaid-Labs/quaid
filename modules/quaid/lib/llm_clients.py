@@ -6,7 +6,7 @@ Provides unified interfaces to:
 - LLM providers (via adapter layer) for review and workspace tasks
 - JSON response parsing with markdown fence stripping
 
-Model selection is config-driven via config/memory.json — callers use
+Model selection is config-driven via config.json — callers use
 call_fast_reasoning() and call_deep_reasoning() without knowing which
 specific model or provider is behind them.
 

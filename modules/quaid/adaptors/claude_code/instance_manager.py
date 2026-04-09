@@ -106,13 +106,13 @@ class ClaudeCodeInstanceManager(InstanceManager):
             print(f"  Warning: could not write auth token: {e}")
 
     def _write_model_config(self, silo_root: Path, deep_model: str, fast_model: str) -> None:
-        """Write model IDs into the instance memory.json.
+        """Write model IDs into the instance config.json.
 
         The daemon reads models.deep_reasoning and models.fast_reasoning from
         this file.  Without explicit values the provider has no fallback and
         will raise at call time.
         """
-        config_path = silo_root / "memory.json"
+        config_path = silo_root / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         cfg = {}
@@ -140,13 +140,13 @@ class ClaudeCodeInstanceManager(InstanceManager):
         """
         instance_id = self.resolve_instance_id(name)
         silo_root = self.adapter.quaid_home() / "instances" / instance_id
-        was_new = not (silo_root / "memory.json").exists()
+        was_new = not (silo_root / "config.json").exists()
 
         if was_new:
             self.create(name)
             # Write model config inline — avoid _write_model_config() stdout
             # prints which would corrupt hook JSON output on stdout
-            config_path = silo_root / "memory.json"
+            config_path = silo_root / "config.json"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             cfg: dict = {}
             if config_path.is_file():

@@ -1380,12 +1380,12 @@ for _subdir in data logs; do
   mkdir -p "${_iroot}/${_subdir}"
 done
 # Seed instance-level adapter config from legacy flat config if it exists.
-if [[ -f "${E2E_WS}/config/memory.json" ]] && [[ ! -f "${_iroot}/memory.json" ]]; then
-  cp "${E2E_WS}/config/memory.json" "${_iroot}/memory.json"
-  echo "[e2e] Copied adapter config to instance path: ${_iroot}/memory.json"
-elif [[ ! -f "${_iroot}/memory.json" ]]; then
-  echo '{"adapter":{"type":"standalone"}}' > "${_iroot}/memory.json"
-  echo "[e2e] Created default adapter config at instance path: ${_iroot}/memory.json"
+if [[ -f "${E2E_WS}/config/config.json" ]] && [[ ! -f "${_iroot}/config.json" ]]; then
+  cp "${E2E_WS}/config/config.json" "${_iroot}/config.json"
+  echo "[e2e] Copied adapter config to instance path: ${_iroot}/config.json"
+elif [[ ! -f "${_iroot}/config.json" ]]; then
+  echo '{"adapter":{"type":"standalone"}}' > "${_iroot}/config.json"
+  echo "[e2e] Created default adapter config at instance path: ${_iroot}/config.json"
 fi
 echo "[e2e] Instance isolation: QUAID_INSTANCE=${E2E_INSTANCE}, root=${_iroot}"
 
@@ -1470,7 +1470,7 @@ echo "[e2e] Ensuring required OpenClaw hooks are enabled..."
 enable_required_openclaw_hooks
 
 # Keep timeout override opt-in; default live checks should use installer/runtime defaults.
-MEMORY_CFG="${_iroot}/memory.json"
+MEMORY_CFG="${_iroot}/config.json"
 if [[ ! -f "$MEMORY_CFG" ]]; then
   echo "[e2e] Waiting for installer memory config to appear: $MEMORY_CFG"
   if ! wait_for_path "$MEMORY_CFG" 20 1; then
@@ -2614,7 +2614,7 @@ if missing_cursor_ids:
     )
 
 project_defs = {}
-cfg_path = os.path.join(ws, "config", "memory.json")
+cfg_path = os.path.join(ws, "config", "config.json")
 try:
     cfg_obj = json.loads(open(cfg_path, "r", encoding="utf-8").read())
     project_defs = ((cfg_obj.get("projects") or {}).get("definitions") or {})
@@ -2760,7 +2760,7 @@ except Exception:
 ws = sys.argv[1]
 events_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "session-timeout-events.jsonl")
 db_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "memory.db")
-cfg_path = os.path.join(ws, "config", "memory.json")
+cfg_path = os.path.join(ws, "config", "config.json")
 memory_soft_fail = str(os.environ.get("QUAID_E2E_MEMORY_SOFT_FAIL", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 run_tag = uuid.uuid4().hex[:8]
 session_key = "agent:main:main"
@@ -3384,7 +3384,7 @@ import uuid
 
 ws = sys.argv[1]
 strict_delivery = os.environ.get("QUAID_E2E_NOTIFY_REQUIRE_DELIVERY", "").strip().lower() == "true"
-cfg_path = os.path.join(ws, "config", "memory.json")
+cfg_path = os.path.join(ws, "config", "config.json")
 events_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "session-timeout-events.jsonl")
 notify_log_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "notify-worker.log")
 pending_signal_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "extraction-signals")
@@ -4211,7 +4211,7 @@ from pathlib import Path
 
 ws = Path(__import__("sys").argv[1])
 db_path = ws / "data" / "memory.db"
-cfg_path = ws / "config" / "memory.json"
+cfg_path = ws / "config" / "config.json"
 cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
 journal_dir = ws / ((cfg.get("docs") or {}).get("journal", {}).get("journalDir") or "journal")
 staging_dir = ws / ((cfg.get("projects") or {}).get("stagingDir") or "projects/staging/")
@@ -4845,7 +4845,7 @@ try:
         "llmWorkers": None,
         "lifecyclePrepassWorkers": None,
     }
-    cfg_path = os.path.join(ws, "config", "memory.json")
+    cfg_path = os.path.join(ws, "config", "config.json")
     cfg = {}
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:

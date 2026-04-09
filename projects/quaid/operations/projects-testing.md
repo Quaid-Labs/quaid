@@ -18,7 +18,7 @@ QUAID=~/.local/bin/quaid
 ```
 
 Projects are shared at `$QUAID_VISIBLE_HOME/projects/` — both adapters read and write the same directory.
-The global registry lives at `$QUAID_VISIBLE_HOME/projects/project-registry.json` — shared by both adapters.
+The global registry lives at `$QUAID_HOME/project-registry.json` — shared by both adapters.
 
 Run order:
 1. OC CRUD
@@ -238,7 +238,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 
 ## Cross-Platform
 
-Both OC and CC share `QUAID_HOME=$QUAID_HOME`, so the global registry is truly shared — `project-registry.json` is the same file for both. These steps verify that cross-instance project ownership and doc sharing work correctly.
+Both OC and CC share `QUAID_HOME=$QUAID_HOME`, so the global registry is truly shared — `project-registry.json` is the same hidden file for both. These steps verify that cross-instance project ownership and doc sharing work correctly.
 
 ---
 

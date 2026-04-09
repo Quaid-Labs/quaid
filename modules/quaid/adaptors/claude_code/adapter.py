@@ -327,7 +327,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         )
 
     def auth_token_path(self) -> Optional[Path]:
-        return self.quaid_home() / "config" / "adapters" / "claude-code" / ".auth-token"
+        return self.quaid_home() / "adaptors" / "claude-code" / ".auth-token"
 
     def get_base_context_files(self):
         """CLAUDE.md is CC's native context file — janitor can slim it."""

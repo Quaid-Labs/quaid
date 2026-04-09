@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix="quaid-plugin-health-") as tmp:
     tmp_path = Path(tmp)
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "memory.json").write_text(
+    (cfg_dir / "config.json").write_text(
         json.dumps(
             {
                 "adapter": {"type": "standalone"},

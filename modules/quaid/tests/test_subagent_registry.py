@@ -28,7 +28,7 @@ def isolated_registry(tmp_path, monkeypatch):
 
 
 def _registry_file(tmp_path, parent_id):
-    return tmp_path / "data" / "subagent-registry" / f"{parent_id}.json"
+    return tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry" / f"{parent_id}.json"
 
 
 def _read_raw(tmp_path, parent_id):
@@ -274,7 +274,7 @@ class TestIsRegisteredSubagent:
         from core.subagent_registry import register, is_registered_subagent
         register("parent-1", "child-A")
         # Corrupt a registry file manually
-        bad = tmp_path / "data" / "subagent-registry" / "bad-parent.json"
+        bad = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry" / "bad-parent.json"
         bad.write_text("not json {{{", encoding="utf-8")
         assert is_registered_subagent("child-A") is True  # Still finds child-A
 
@@ -335,7 +335,7 @@ class TestAtomicWrite:
     def test_no_tmp_files_after_register(self, tmp_path):
         from core.subagent_registry import register
         register("parent-1", "child-A")
-        reg_dir = tmp_path / "data" / "subagent-registry"
+        reg_dir = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry"
         tmp_files = list(reg_dir.glob("*.tmp"))
         assert tmp_files == []
 
@@ -349,7 +349,7 @@ class TestAtomicWrite:
     def test_malformed_existing_file_falls_back_to_empty(self, tmp_path):
         """If the registry file is corrupted, register() recovers gracefully."""
         from core.subagent_registry import register
-        reg_dir = tmp_path / "data" / "subagent-registry"
+        reg_dir = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry"
         reg_dir.mkdir(parents=True, exist_ok=True)
         (reg_dir / "parent-1.json").write_text("}{invalid json", encoding="utf-8")
         register("parent-1", "child-A")

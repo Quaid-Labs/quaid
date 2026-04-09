@@ -398,7 +398,7 @@ class DocsRegistry:
         self._seed_projects_from_json()
 
     def _seed_projects_from_json(self):
-        """Seed project_definitions table from config/memory.json on first run.
+        """Seed project_definitions table from config/config.json on first run.
         Only seeds when the table is empty (avoids re-reading JSON on every instantiation).
         """
         with get_connection(self.db_path) as conn:
@@ -407,7 +407,7 @@ class DocsRegistry:
             if row[0] > 0:
                 return
 
-            config_path = _workspace() / "memory.json"
+            config_path = _workspace() / "config.json"
             if not config_path.exists():
                 return
 
@@ -441,7 +441,7 @@ class DocsRegistry:
                         proj_data.get("description", ""),
                     ))
                 if definitions:
-                    print(f"[docs_registry] Seeded {len(definitions)} project definitions from config/memory.json", file=sys.stderr)
+                    print(f"[docs_registry] Seeded {len(definitions)} project definitions from config/config.json", file=sys.stderr)
             except Exception as e:
                 print(f"[docs_registry] Warning: failed to seed from JSON: {e}", file=sys.stderr)
 
@@ -886,7 +886,7 @@ class DocsRegistry:
     ) -> Path:
         """Scaffold a new project directory with PROJECT.md template.
 
-        Creates directory, writes PROJECT.md, adds to config/memory.json,
+        Creates directory, writes PROJECT.md, adds to config/config.json,
         and registers PROJECT.md in the doc registry.
 
         Returns path to created PROJECT.md.
@@ -1473,8 +1473,8 @@ class DocsRegistry:
         return projects
 
     def _update_config(self, mutator_fn) -> bool:
-        """Apply a mutation to memory.json atomically. Returns True if updated."""
-        config_path = _workspace() / "memory.json"
+        """Apply a mutation to config.json atomically. Returns True if updated."""
+        config_path = _workspace() / "config.json"
         if not config_path.exists():
             return False
         try:

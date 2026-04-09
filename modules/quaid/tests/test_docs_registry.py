@@ -20,6 +20,7 @@ def setup_env(tmp_path, monkeypatch):
     """Set up isolated test environment."""
     global _tmp_db
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     iroot = adapter.instance_root()
@@ -29,8 +30,6 @@ def setup_env(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(iroot))  # kept for backward compat
 
     # Create minimal config
-    config_dir = iroot / "config"
-    config_dir.mkdir(exist_ok=True)
     shared_projects_dir = tmp_path / "projects"
     shared_projects_dir.mkdir(parents=True, exist_ok=True)
     instance_projects = iroot / "projects"
@@ -63,7 +62,7 @@ def setup_env(tmp_path, monkeypatch):
         },
         "rag": {"docsDir": "docs"},
     }
-    (config_dir / "memory.json").write_text(json.dumps(config_data))
+    (iroot / "config.json").write_text(json.dumps(config_data))
 
     # Create project directory
     (shared_projects_dir / "test-project").mkdir(parents=True, exist_ok=True)
@@ -72,7 +71,7 @@ def setup_env(tmp_path, monkeypatch):
     # Patch config paths to use test config and WORKSPACE in docs_registry
     sys.path.insert(0, str(Path(__file__).parent.parent))
     import config as config_mod
-    monkeypatch.setattr(config_mod, "_config_paths", lambda: [iroot / "config" / "memory.json"])
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [iroot / "config.json"])
     config_mod.reload_config()
 
     yield iroot
@@ -116,7 +115,7 @@ class TestEnsureTable:
 
     def test_seeded_project_definition_coerces_list_fields(self, setup_env):
         """Seed from config normalizes malformed list-like project fields."""
-        cfg_path = setup_env / "config" / "memory.json"
+        cfg_path = setup_env / "config.json"
         cfg = json.loads(cfg_path.read_text())
         cfg["projects"]["definitions"]["test-project"]["sourceRoots"] = {"bad": "type"}
         cfg["projects"]["definitions"]["test-project"]["patterns"] = "not-a-list"
@@ -609,7 +608,7 @@ class TestMoveFile:
 
 
 class TestCreateProjectConfig:
-    """Tests for create_project writing to config/memory.json."""
+    """Tests for create_project writing to config.json."""
 
     def test_creates_config_entry(self, setup_env):
         """create_project writes definition to DB (source of truth)."""
@@ -664,7 +663,7 @@ class TestCreateProjectConfig:
         content = (project_dir / "PROJECT.md").read_text(encoding="utf-8")
         assert "## Start Here By Task" in content
         assert "- Open `docs/overview.md` first." in content
-        assert str(setup_env.parent / "projects" / "new-proj") in content
+        assert str(setup_env.parents[1] / "projects" / "new-proj") in content
 
 
 class TestRegisterValidation:
@@ -978,7 +977,7 @@ class TestAtomicConfigWrite:
         """Config file should not be corrupted on write failure."""
         tmp_path = setup_env
         r = _get_registry()
-        config_path = tmp_path / "config" / "memory.json"
+        config_path = tmp_path / "config.json"
 
         original = config_path.read_text()
         # A successful update should work
@@ -993,7 +992,7 @@ class TestAtomicConfigWrite:
     def test_config_missing_returns_false(self, setup_env):
         tmp_path = setup_env
         r = _get_registry()
-        config_path = tmp_path / "config" / "memory.json"
+        config_path = tmp_path / "config.json"
         config_path.unlink()
 
         ok = r._update_config(lambda d: d.update({"x": 1}))

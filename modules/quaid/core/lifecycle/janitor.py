@@ -89,7 +89,7 @@ def _logs_dir() -> Path:
 
 _LIFECYCLE_REGISTRY = None
 
-# Thresholds - now loaded from config/memory.json
+# Thresholds - now loaded from config.json
 _cfg = get_config()
 DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold  # Lower bound for "might be duplicate"
 DUPLICATE_MAX_SIM = _cfg.janitor.dedup.high_similarity_threshold  # Upper bound (auto-reject above)
@@ -941,7 +941,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print("⚠️" * 10)
             print(f"⚠️  WARNING: LLM provider not available: {_provider_err}")
             print("⚠️  The janitor needs a working LLM provider for review, dedup, and decay tasks.")
-            print("⚠️  Check your adapter configuration (config/memory.json adapter.type, adapter status, etc.).")
+            print("⚠️  Check your adapter configuration (config.json adapter.type, adapter status, etc.).")
             print("⚠️" * 10)
             print()
 

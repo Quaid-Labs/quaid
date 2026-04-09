@@ -4,7 +4,7 @@ Adapter-agnostic registry that allows extraction to merge subagent
 transcripts with their parent session. Both Claude Code and OpenClaw
 adapters write to the same registry via lifecycle hooks.
 
-Storage: JSON files per parent session under QUAID_HOME/data/subagent-registry/
+Storage: JSON files per parent session under QUAID_INSTANCE_ROOT/data/subagent-registry/
 
 Design principles:
   - Parent session owns memory; subagents are attached work units
@@ -26,9 +26,15 @@ logger = logging.getLogger(__name__)
 
 
 def _registry_dir() -> Path:
-    """Resolve registry directory from QUAID_HOME."""
-    home = os.environ.get("QUAID_HOME", "").strip()
-    base = Path(home).resolve() if home else Path.home() / ".quaid"
+    """Resolve registry directory from the active hidden instance root."""
+    try:
+        from lib.instance import instance_root
+        base = instance_root()
+    except Exception:
+        home = os.environ.get("QUAID_HOME", "").strip()
+        instance = os.environ.get("QUAID_INSTANCE", "").strip() or "standalone"
+        hidden_root = Path(home).resolve() if home else Path.home() / ".quaid"
+        base = hidden_root / "instances" / instance
     d = base / "data" / "subagent-registry"
     d.mkdir(parents=True, exist_ok=True)
     return d

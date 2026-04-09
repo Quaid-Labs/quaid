@@ -118,7 +118,7 @@ Verify instance root, log file, and pid file all point to `CC_INSTANCE`.
 
 ## Auth Token
 
-CC requires a long-lived OAuth token at `WORKSPACE/config/adapters/claude-code/.auth-token`.
+CC requires a long-lived OAuth token at `WORKSPACE/adaptors/claude-code/.auth-token`.
 Without it the daemon falls back to `claude -p` subprocess calls and triggers
 a hook storm (many concurrent hooks.py processes). If you see this, check:
 ```bash

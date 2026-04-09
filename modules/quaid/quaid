@@ -305,8 +305,8 @@ subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
 rest = sys.argv[3:]
 
 # Instantiate the adapter directly from the namespace rather than reading
-# memory.json via get_adapter(). This allows commands like make_instance
-# to run even when the target silo doesn't have memory.json yet.
+# config.json via get_adapter(). This allows commands like make_instance
+# to run even when the target silo doesn't have config.json yet.
 if adapter_ns == "claudecode":
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
     adapter = ClaudeCodeAdapter()

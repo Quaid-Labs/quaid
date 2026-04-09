@@ -17,7 +17,7 @@ def test_parse_literal_handles_bool_number_json_and_string():
 
 
 def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tmp_path):
-    path = tmp_path / "config" / "memory.json"
+    path = tmp_path / "config" / "config.json"
     data = {
         "retrieval": {"failHard": True},
         "core": {"parallel": {"enabled": False, "llmWorkers": 4, "lifecyclePrepassWorkers": 3}},
@@ -83,7 +83,7 @@ def test_get_supports_explicit_segments_for_dotted_plugin_id():
 
 
 def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeypatch, tmp_path):
-    path = tmp_path / "config" / "memory.json"
+    path = tmp_path / "config" / "config.json"
     data = {
         "ollama": {"embeddingModel": "nomic-embed-text"},
         "capture": {"inactivity_timeout_minutes": 120},
@@ -114,7 +114,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
 
 
 def test_interactive_edit_updates_existing_snake_case_model_keys(monkeypatch, tmp_path):
-    path = tmp_path / "config" / "memory.json"
+    path = tmp_path / "config" / "config.json"
     data = {"models": {"llm_provider": "anthropic"}}
     answers = iter(["1", "openai-compatible", "13"])
 
@@ -146,7 +146,7 @@ def test_plugin_schema_edit_keeps_prior_values_on_invalid_field(monkeypatch, tmp
     answers = iter(["2", "not-an-int"])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
-    config_cli._edit_plugin_config_schema(staged, tmp_path / "memory.json", "memorydb.core", schema)
+    config_cli._edit_plugin_config_schema(staged, tmp_path / "config.json", "memorydb.core", schema)
 
     assert staged["plugins"]["config"]["memorydb.core"]["good"] == 2
     assert "bad" not in staged["plugins"]["config"]["memorydb.core"]
@@ -162,13 +162,13 @@ def test_plugin_schema_edit_enforces_enum_values(monkeypatch, tmp_path):
     answers = iter(["unsafe"])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
-    config_cli._edit_plugin_config_schema(staged, tmp_path / "memory.json", "memorydb.core", schema)
+    config_cli._edit_plugin_config_schema(staged, tmp_path / "config.json", "memorydb.core", schema)
 
     assert staged["plugins"]["config"]["memorydb.core"]["mode"] == "safe"
 
 
 def test_main_set_returns_nonzero_when_callback_reload_fails(monkeypatch, tmp_path):
-    path = tmp_path / "config" / "memory.json"
+    path = tmp_path / "config" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({}), encoding="utf-8")
 
@@ -180,7 +180,7 @@ def test_main_set_returns_nonzero_when_callback_reload_fails(monkeypatch, tmp_pa
 
 
 def test_discover_plugin_manifests_suppresses_errors_in_non_strict_mode(monkeypatch, tmp_path):
-    path = tmp_path / "config" / "memory.json"
+    path = tmp_path / "config" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {"plugins": {"paths": ["plugins"], "strict": False}}
 
@@ -194,7 +194,7 @@ def test_discover_plugin_manifests_suppresses_errors_in_non_strict_mode(monkeypa
 
 
 def test_discover_plugin_manifests_raises_errors_in_strict_mode(monkeypatch, tmp_path):
-    path = tmp_path / "config" / "memory.json"
+    path = tmp_path / "config" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {"plugins": {"paths": ["plugins"], "strict": True}}
 
@@ -212,7 +212,7 @@ def test_resolve_config_target_shared_global(monkeypatch):
     monkeypatch.setenv("QUAID_HOME", "/tmp/quaid")
     args = type("Args", (), {"shared": True, "platform_shared": None, "instance": None})()
     path, label = config_cli._resolve_config_target(args)
-    assert str(path) == "/tmp/quaid/shared/config/global/memory.json"
+    assert str(path) == "/tmp/quaid/shared/config/global/config.json"
     assert label == "shared global fallback"
 
 
@@ -221,7 +221,7 @@ def test_resolve_config_target_platform_shared_auto(monkeypatch):
     monkeypatch.setenv("QUAID_INSTANCE", "claude-code-main")
     args = type("Args", (), {"shared": False, "platform_shared": "auto", "instance": None})()
     path, label = config_cli._resolve_config_target(args)
-    assert str(path) == "/tmp/quaid/shared/config/claude-code/memory.json"
+    assert str(path) == "/tmp/quaid/shared/config/claude-code/config.json"
     assert label == "shared platform 'claude-code'"
 
 
@@ -230,5 +230,5 @@ def test_resolve_config_target_platform_shared_auto_codex(monkeypatch):
     monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
     args = type("Args", (), {"shared": False, "platform_shared": "auto", "instance": None})()
     path, label = config_cli._resolve_config_target(args)
-    assert str(path) == "/tmp/quaid/shared/config/codex/memory.json"
+    assert str(path) == "/tmp/quaid/shared/config/codex/config.json"
     assert label == "shared platform 'codex'"

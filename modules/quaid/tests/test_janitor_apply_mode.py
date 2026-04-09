@@ -14,7 +14,7 @@ os.environ.setdefault("MEMORY_DB_PATH", ":memory:")
 # Janitor loads config at import time; provide a temp standalone config.
 _tmp_home = Path(tempfile.mkdtemp(prefix="quaid-janitor-test-"))
 (_tmp_home / "config").mkdir(parents=True, exist_ok=True)
-(_tmp_home / "config" / "memory.json").write_text(
+(_tmp_home / "config" / "config.json").write_text(
     json.dumps({"adapter": {"type": "standalone"}}), encoding="utf-8"
 )
 os.environ["QUAID_HOME"] = str(_tmp_home)

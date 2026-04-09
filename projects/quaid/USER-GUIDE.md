@@ -9,7 +9,7 @@ Quaid keeps long-lived memory across sessions, then injects only relevant contex
 ## Project system basics
 
 - Your real project files usually stay where they already live.
-- Quaid tracks projects through a registry plus canonical project docs under `~/quaid/projects/`.
+- Quaid tracks projects through a hidden registry plus canonical project docs under `~/quaid/projects/`.
 - `projects/quaid/` in this repo is the built-in reference project for Quaid itself.
 - Register project docs or source roots so Quaid can index and inject them during recall.
 - The janitor is the normal maintenance loop: dedup, cleanup, docs refresh, and project hygiene.
@@ -23,16 +23,17 @@ Quaid uses a split layout:
 
 Each instance uses both:
 
-- `<QUAID_HOME>/instances/<instance>/memory.json`: runtime config for that instance
+- `<QUAID_HOME>/instances/<instance>/config.json`: runtime config for that instance
 - `<QUAID_HOME>/instances/<instance>/data/memory.db`: memory database
 - `<QUAID_HOME>/instances/<instance>/logs/`: runtime and janitor logs
+- `<QUAID_HOME>/project-registry.json`: cross-instance project registry
 - `<QUAID_VISIBLE_HOME>/instances/<instance>/SOUL.md`: Quaid-managed identity file
 - `<QUAID_VISIBLE_HOME>/instances/<instance>/USER.md`: Quaid-managed identity file
 - `<QUAID_VISIBLE_HOME>/instances/<instance>/ENVIRONMENT.md`: Quaid-managed identity file
 - `<QUAID_VISIBLE_HOME>/instances/<instance>/journal/`: journal files
-- `<QUAID_VISIBLE_HOME>/projects/`: canonical project docs, registry metadata, and Quaid-managed project state
-- `<QUAID_HOME>/shared/config/<platform>/memory.json`: platform-level shared overrides
-- `<QUAID_HOME>/shared/config/global/memory.json`: machine-wide global shared settings (embeddings, Ollama)
+- `<QUAID_VISIBLE_HOME>/projects/`: canonical project docs and Quaid-managed project state
+- `<QUAID_HOME>/shared/config/<platform>/config.json`: platform-level shared overrides
+- `<QUAID_HOME>/shared/config/global/config.json`: machine-wide global shared settings (embeddings, Ollama)
 
 Important:
 - Model/provider overrides should be platform-scoped (`shared/config/<platform>/...`), not global.
@@ -56,7 +57,7 @@ Important:
   - Move or copy both the hidden and visible instance folders:
     - `<QUAID_HOME>/instances/<instance>/`
     - `<QUAID_VISIBLE_HOME>/instances/<instance>/`
-  - Keep `memory.json`, `data/`, `logs/`, visible identity files, and `journal/` together.
+  - Keep `config.json`, `data/`, `logs/`, visible identity files, and `journal/` together.
   - After migration, ask your agent to verify the install before you rely on it.
 
 ## Safety notes

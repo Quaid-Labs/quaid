@@ -735,7 +735,14 @@ def append_project_logs(
         if not defn:
             # Filesystem fallback: project may have been deleted from the
             # registry during the session but its directory still exists.
-            candidate = get_quaid_home() / "projects" / project_name
+            try:
+                from lib.instance import visible_projects_dir
+                candidate = visible_projects_dir() / project_name
+            except Exception:
+                home = get_quaid_home()
+                if home.name.startswith(".") and len(home.name) > 1:
+                    home = home.with_name(home.name[1:])
+                candidate = home / "projects" / project_name
             if (candidate / "PROJECT.md").exists():
                 project_md = candidate / "PROJECT.md"
                 print(f"[project-log] registry miss, using filesystem fallback: {project_md}")

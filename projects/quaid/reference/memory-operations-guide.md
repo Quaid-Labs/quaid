@@ -39,7 +39,7 @@ Project documentation history:
 - Each project keeps append-only change history in `projects/<project>/PROJECT.log`.
 - `PROJECT.log` is indexed by Docs/RAG alongside Markdown docs so recent project changes are searchable without truncation.
 
-Source mappings live in instance `memory.json -> docs.sourceMapping`.
+Source mappings live in instance `config.json -> docs.sourceMapping`.
 
 ### Operate
 

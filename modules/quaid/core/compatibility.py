@@ -683,7 +683,7 @@ class JanitorScheduler:
     configurable window. If the daemon was down during the window, catches
     up on next boot if the checkpoint is stale (>24h old).
 
-    Config keys (in config/memory.json under "janitor"):
+    Config keys (in config.json under "janitor"):
     - scheduled_hour: int (0-23, default 4)
     - window_hours: int (default 2)
 

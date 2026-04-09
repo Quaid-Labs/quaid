@@ -15,7 +15,7 @@ The docs system has four tightly integrated components:
 | Component | Class / Module | Storage | Purpose |
 |-----------|---------------|---------|---------|
 | Doc registry | `DocsRegistry` | `doc_registry` (SQLite) | Tracks which files belong to which projects; maps source files to docs |
-| Project definitions | `DocsRegistry` | `project_definitions` (SQLite) | Canonical project config (seeded from instance `memory.json`, then DB is source of truth) |
+| Project definitions | `DocsRegistry` | `project_definitions` (SQLite) | Canonical project config (seeded from instance `config.json`, then DB is source of truth) |
 | RAG indexer | `DocsRAG` | `doc_chunks` + `vec_doc_chunks` (SQLite + sqlite-vec) | Chunks files, batches embeddings, serves bounded semantic search |
 | Staleness detector / updater | `updater.py` | `logs/docs-update-log.json` | Detects when source code has drifted ahead of docs, calls Opus to rewrite |
 | Project event processor | `project_updater.py` | `projects/<staging_dir>/` | Processes compact/reset event files, calls `update_doc_from_diffs`, refreshes PROJECT.md |
@@ -107,7 +107,7 @@ Indexes: project, state, asset_type, source scope, subject/state.
 | `state` | TEXT | `'active'`, `'archived'`, or `'deleted'` |
 | `created_at` / `updated_at` | TEXT | ISO datetimes |
 
-**Bootstrap:** On first instantiation (empty table), `_seed_projects_from_json()` reads instance `memory.json` and imports `projects.definitions`. After seeding, the DB is the authoritative source; JSON is ignored.
+**Bootstrap:** On first instantiation (empty table), `_seed_projects_from_json()` reads instance `config.json` and imports `projects.definitions`. After seeding, the DB is the authoritative source; JSON is ignored.
 
 ---
 
@@ -206,7 +206,7 @@ Files scanned by `scan_docs_directory()`:
   is `16` (`OLLAMA_EMBED_BATCH_SIZE` override), and timeout-like batch failures
   split into smaller batches before the provider gives up. `OLLAMA_EMBED_TIMEOUT_S`
   controls the per-batch timeout.
-- **Ollama URL:** Configured in `QUAID_HOME/shared/config/global/memory.json` under `ollama.url`. Both OC and CC adapters on the same machine share the same Ollama instance.
+- **Ollama URL:** Configured in `QUAID_HOME/shared/config/global/config.json` under `ollama.url`. Both OC and CC adapters on the same machine share the same Ollama instance.
 - **Fail policy:** If `lib/fail_policy.is_fail_hard_enabled()` is `True` and
   embedding or vec-backed recall fails during search, `search_docs()` raises
   `RuntimeError` instead of silently degrading.
@@ -434,7 +434,7 @@ quaid docs changelog                                 # Recent doc update history
 
 ---
 
-## 13. Configuration Keys (memory.json)
+## 13. Configuration Keys (config.json)
 
 | Key | Purpose |
 |-----|---------|

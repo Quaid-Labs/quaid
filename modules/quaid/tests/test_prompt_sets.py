@@ -57,7 +57,7 @@ def test_config_fails_fast_for_unknown_prompt_set(tmp_path):
     old_config = config._config
     config._config = None
     try:
-        config_file = tmp_path / "memory.json"
+        config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps({"promptSet": "unknown-set"}))
         with patch.object(config, "_config_paths", lambda: [config_file]):
             with pytest.raises(RuntimeError, match="Unknown prompt_set"):

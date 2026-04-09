@@ -179,7 +179,7 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 
 ### Config Contract
 
-Instance `memory.json`:
+Instance `config.json`:
 - `models.llmProvider`
 - `models.deepReasoning`
 - `models.fastReasoning`

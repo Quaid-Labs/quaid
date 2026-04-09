@@ -83,11 +83,11 @@ function workspaceRoot() {
  * Resolve which config file to target.
  *
  * Priority (CLI wins over env):
- *   --shared              → QUAID_HOME/shared/config/global/memory.json
- *   --platform-shared [p] → QUAID_HOME/shared/config/<platform>/memory.json
- *   --instance <id>       → QUAID_HOME/instances/<id>/memory.json
- *   QUAID_INSTANCE env    → QUAID_HOME/instances/<QUAID_INSTANCE>/memory.json
- *   (none)                → QUAID_HOME/shared/config/global/memory.json  (default)
+ *   --shared              → QUAID_HOME/shared/config/global/config.json
+ *   --platform-shared [p] → QUAID_HOME/shared/config/<platform>/config.json
+ *   --instance <id>       → QUAID_HOME/instances/<id>/config.json
+ *   QUAID_INSTANCE env    → QUAID_HOME/instances/<QUAID_INSTANCE>/config.json
+ *   (none)                → QUAID_HOME/shared/config/global/config.json  (default)
  */
 function platformFromInstanceName(instanceName) {
   const name = String(instanceName || "").trim().toLowerCase();
@@ -121,7 +121,7 @@ function resolveConfigTarget() {
     return {
       kind: "shared-platform",
       platform,
-      configPath: path.join(home, "shared", "config", platform, "memory.json"),
+      configPath: path.join(home, "shared", "config", platform, "config.json"),
       label: `shared platform '${platform}'`,
     };
   }
@@ -129,7 +129,7 @@ function resolveConfigTarget() {
   if (sharedFlag || (!instanceArg && !process.env.QUAID_INSTANCE)) {
     return {
       kind: "shared",
-      configPath: path.join(home, "shared", "config", "global", "memory.json"),
+      configPath: path.join(home, "shared", "config", "global", "config.json"),
       label: "shared global fallback",
     };
   }
@@ -138,7 +138,7 @@ function resolveConfigTarget() {
   return {
     kind: "instance",
     instanceId,
-    configPath: path.join(home, "instances", instanceId, "memory.json"),
+    configPath: path.join(home, "instances", instanceId, "config.json"),
     label: `instance '${instanceId}'`,
   };
 }

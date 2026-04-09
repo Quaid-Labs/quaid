@@ -932,7 +932,7 @@ class TestRollingExtraction:
         monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
         config_dir = tmp_path / "rolling-inst" / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "memory.json").write_text(
+        (config_dir / "config.json").write_text(
             json.dumps(
                 {
                     "adapter": {"type": "standalone"},
@@ -1204,7 +1204,7 @@ class TestRollingExtraction:
         monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
         config_dir = tmp_path / "rolling-inst" / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "memory.json").write_text(
+        (config_dir / "config.json").write_text(
             json.dumps(
                 {
                     "adapter": {"type": "standalone"},
@@ -1388,7 +1388,7 @@ class TestRollingExtraction:
         monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
         config_dir = tmp_path / "rolling-inst" / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "memory.json").write_text(
+        (config_dir / "config.json").write_text(
             json.dumps({"adapter": {"type": "standalone"}}),
             encoding="utf-8",
         )

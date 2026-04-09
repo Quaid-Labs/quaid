@@ -1,7 +1,7 @@
 """
 Configuration loader for Memory System
 
-Loads memory-specific settings from <instance_root>/memory.json
+Loads memory-specific settings from <instance_root>/config.json
 Falls back to sensible defaults if config is missing.
 """
 
@@ -83,24 +83,24 @@ def _platform_from_instance_name(instance_name: str) -> str:
 def _platform_shared_config_path() -> Path:
     root = _workspace_root()
     platform = _platform_from_instance_name(root.name)
-    return _quaid_home() / "shared" / "config" / platform / "memory.json"
+    return _quaid_home() / "shared" / "config" / platform / "config.json"
 
 
 def _global_shared_config_path() -> Path:
-    return _quaid_home() / "shared" / "config" / "global" / "memory.json"
+    return _quaid_home() / "shared" / "config" / "global" / "config.json"
 
 
 def _config_paths() -> list:
     """Config file search paths (highest priority first).
 
     Merge order (lowest → highest at load time):
-      2. QUAID_HOME/shared/config/global/memory.json           — global shared fallback
-      1. QUAID_HOME/shared/config/<platform>/memory.json       — platform shared overrides
-      0. QUAID_HOME/instances/<instance>/memory.json           — per-instance config (highest priority)
+      2. QUAID_HOME/shared/config/global/config.json           — global shared fallback
+      1. QUAID_HOME/shared/config/<platform>/config.json       — platform shared overrides
+      0. QUAID_HOME/instances/<instance>/config.json           — per-instance config (highest priority)
     """
     root = _workspace_root()
     return [
-        root / "memory.json",
+        root / "config.json",
         _platform_shared_config_path(),
         _global_shared_config_path(),
     ]

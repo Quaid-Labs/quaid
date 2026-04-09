@@ -27,14 +27,14 @@ if not os.environ.get("QUAID_VISIBLE_HOME"):
 if not os.environ.get("QUAID_INSTANCE"):
     os.environ["QUAID_INSTANCE"] = _DEFAULT_INSTANCE
 
-# Instance-aware config: QUAID_HOME/instances/<instance>/memory.json
-_instance_cfg = _DEFAULT_TEST_HOME / "instances" / _DEFAULT_INSTANCE / "memory.json"
+# Instance-aware config: QUAID_HOME/instances/<instance>/config.json
+_instance_cfg = _DEFAULT_TEST_HOME / "instances" / _DEFAULT_INSTANCE / "config.json"
 _instance_cfg.parent.mkdir(parents=True, exist_ok=True)
 if not _instance_cfg.exists():
     _instance_cfg.write_text('{"adapter":{"type":"standalone"}}', encoding="utf-8")
 
 # Legacy flat config (backward compat during transition)
-_adapter_cfg = _DEFAULT_TEST_HOME / "config" / "memory.json"
+_adapter_cfg = _DEFAULT_TEST_HOME / "config" / "config.json"
 _adapter_cfg.parent.mkdir(parents=True, exist_ok=True)
 if not _adapter_cfg.exists():
     _adapter_cfg.write_text('{"adapter":{"type":"standalone"}}', encoding="utf-8")

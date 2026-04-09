@@ -49,7 +49,7 @@ class TestRegistryIO:
 
     def test_load_corrupt_file(self, mock_adapter):
         _, tmp_path = mock_adapter
-        reg = tmp_path / "projects" / "project-registry.json"
+        reg = tmp_path / "project-registry.json"
         reg.parent.mkdir(parents=True, exist_ok=True)
         reg.write_text("not valid json{{{")
         result = _load_registry()

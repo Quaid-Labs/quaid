@@ -6797,10 +6797,16 @@ def _load_tools_md() -> Optional[str]:
         projects_dir = _Path(get_adapter().projects_dir())
     except Exception:
         import os as _os
+        visible = _os.environ.get("QUAID_VISIBLE_HOME", "").strip()
         home = _os.environ.get("QUAID_HOME", "").strip()
-        if not home:
+        if visible:
+            projects_dir = _Path(visible).expanduser()
+        elif home:
+            root = _Path(home).expanduser()
+            projects_dir = root.with_name(root.name[1:]) if root.name.startswith(".") and len(root.name) > 1 else root
+        else:
             return None
-        projects_dir = _Path(home) / "shared" / "projects"
+        projects_dir = projects_dir / "projects"
 
     candidates = [projects_dir / "quaid" / "TOOLS.md"]
     try:

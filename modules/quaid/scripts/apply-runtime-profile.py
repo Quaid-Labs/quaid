@@ -107,7 +107,7 @@ def _apply_local_dev_overrides(profile: Dict[str, Any], local_cfg: Dict[str, Any
         for agent_cfg in openclaw_cfg.get("agentList", []):
             if isinstance(agent_cfg, dict):
                 agent_cfg["workspace"] = runtime_workspace
-        profile.setdefault("quaid", {})["configPath"] = str(Path(runtime_workspace) / "config" / "memory.json")
+        profile.setdefault("quaid", {})["configPath"] = str(Path(runtime_workspace) / "config.json")
         profile.setdefault("secrets", {})["writeEnvFile"] = str(Path(runtime_workspace) / ".env")
 
     owner_id = str(identity_cfg.get("defaultOwnerId", "operator")).strip() or "operator"

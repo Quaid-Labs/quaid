@@ -256,9 +256,9 @@ class TestConfigPathResolution:
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/instances/claude-code-main/memory.json")
-        assert paths[1] == Path("/tmp/quaid/shared/config/claude-code/memory.json")
-        assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/claude-code-main/config.json")
+        assert paths[1] == Path("/tmp/quaid/shared/config/claude-code/config.json")
+        assert paths[2] == Path("/tmp/quaid/shared/config/global/config.json")
 
     def test_config_paths_include_platform_and_global_shared_layers_for_codex(self):
         import config
@@ -267,9 +267,9 @@ class TestConfigPathResolution:
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/instances/codex-main/memory.json")
-        assert paths[1] == Path("/tmp/quaid/shared/config/codex/memory.json")
-        assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/codex-main/config.json")
+        assert paths[1] == Path("/tmp/quaid/shared/config/codex/config.json")
+        assert paths[2] == Path("/tmp/quaid/shared/config/global/config.json")
 
     def test_config_paths_include_platform_and_global_shared_layers_for_openclaw(self):
         import config
@@ -278,16 +278,16 @@ class TestConfigPathResolution:
              patch.object(config, "_quaid_home", lambda: Path("/tmp/quaid")):
             paths = config._config_paths()
 
-        assert paths[0] == Path("/tmp/quaid/instances/openclaw-livetest/memory.json")
-        assert paths[1] == Path("/tmp/quaid/shared/config/openclaw/memory.json")
-        assert paths[2] == Path("/tmp/quaid/shared/config/global/memory.json")
+        assert paths[0] == Path("/tmp/quaid/instances/openclaw-livetest/config.json")
+        assert paths[1] == Path("/tmp/quaid/shared/config/openclaw/config.json")
+        assert paths[2] == Path("/tmp/quaid/shared/config/global/config.json")
 
     def test_config_inheritance_merge_order_global_then_platform_then_instance(self, tmp_path):
         import config
 
-        global_cfg = tmp_path / "shared" / "config" / "global" / "memory.json"
-        platform_cfg = tmp_path / "shared" / "config" / "claude-code" / "memory.json"
-        instance_cfg = tmp_path / "instances" / "claude-code-main" / "memory.json"
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        platform_cfg = tmp_path / "shared" / "config" / "claude-code" / "config.json"
+        instance_cfg = tmp_path / "instances" / "claude-code-main" / "config.json"
         global_cfg.parent.mkdir(parents=True, exist_ok=True)
         platform_cfg.parent.mkdir(parents=True, exist_ok=True)
         instance_cfg.parent.mkdir(parents=True, exist_ok=True)
@@ -329,7 +329,7 @@ class TestConfigPathResolution:
                 "decay": {"thresholdDays": 60},
                 "retrieval": {"defaultLimit": 10}
             }
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps(config_data))
 
             with patch.object(config, "_config_paths", lambda: [config_file]):
@@ -345,7 +345,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({"promptSet": "default"}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
@@ -358,7 +358,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({"capture": {"compactOnTimeout": False}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
@@ -379,7 +379,7 @@ class TestConfigPathResolution:
         config._config = None
         config._warned_unknown_config_keys.clear()
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "models": {"llmProvider": "default", "llmProvderTypo": "bad"},
                 "totallyUnknownSection": {"enabled": True},
@@ -400,7 +400,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "identity": {
                     "mode": "multi_user",
@@ -432,7 +432,7 @@ class TestConfigPathResolution:
             config_data = {
                 "janitor": {"tokenBudget": 12345}
             }
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps(config_data))
 
             with patch.object(config, "_config_paths", lambda: [config_file]):
@@ -446,7 +446,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({"adapter": {"type": "openclaw"}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
@@ -459,7 +459,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({"janitor": {"applyMode": "ask"}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
@@ -472,7 +472,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "capture": {
                     "chunkTokens": 8000,
@@ -572,7 +572,7 @@ class TestConfigPathResolution:
                     "supports_redaction": True,
                 },
             }))
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "plugins": {
                     "enabled": True,
@@ -606,7 +606,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({"janitor": {"runTests": True}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
@@ -658,7 +658,7 @@ class TestConfigPathResolution:
             conn.commit()
             conn.close()
 
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({}))
 
             with patch.object(config, "_config_paths", lambda: [config_file]), \
@@ -677,7 +677,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "projects": {
                     "definitions": {
@@ -710,7 +710,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({"core": {"parallel": {"enabled": True}}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
@@ -727,7 +727,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "core": {
                     "parallel": {
@@ -753,7 +753,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "models": {
                     "fastReasoningContext": "huge",
@@ -778,7 +778,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({"janitor": {"tokenBudget": "many"}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
@@ -792,7 +792,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text("not valid json {{{")
 
             with patch.object(config, "_config_paths", lambda: [config_file]):
@@ -844,7 +844,7 @@ class TestConfigPathResolution:
                 },
             }))
 
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "plugins": {
                     "enabled": True,
@@ -922,7 +922,7 @@ class TestConfigPathResolution:
                     "supports_redaction": True,
                 },
             }))
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "plugins": {
                     "enabled": True,
@@ -1018,7 +1018,7 @@ class TestConfigPathResolution:
                 },
             }))
 
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "plugins": {
                     "enabled": True,
@@ -1048,7 +1048,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "plugins": {
                     "slots": {
@@ -1067,7 +1067,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "plugins": {
                     "enabled": False,
@@ -1094,7 +1094,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "models": {
                     "llmProvider": "openai-compatible",
@@ -1159,7 +1159,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "models": {
                     "fastReasoningEffort": "turbo",
@@ -1178,7 +1178,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "users": {
                     "defaultOwner": "ownerUser",
@@ -1203,7 +1203,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "retrieval": {
                     "routerFailOpen": False
@@ -1220,7 +1220,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "retrieval": {
                     "useHyde": False
@@ -1237,7 +1237,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "retrieval": {
                     "hydeTimeoutMs": 9500,
@@ -1258,7 +1258,7 @@ class TestConfigPathResolution:
         config._config = None
         config._warned_unknown_config_keys.clear()
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "totallyUnknownSection": {"enabled": True},
             }))
@@ -1280,7 +1280,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "retrieval": {
                     "rerankerTimeoutMs": 12000
@@ -1341,7 +1341,7 @@ class TestConfigPathResolution:
         old_config = config._config
         config._config = None
         try:
-            config_file = tmp_path / "memory.json"
+            config_file = tmp_path / "config.json"
             config_file.write_text(json.dumps({
                 "plugins": {
                     "enabled": True,

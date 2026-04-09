@@ -90,7 +90,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - Previous state:
   - `core/project-catalog.ts` executed `python3 docs_registry.py ...`
 - Resolution:
-  - project catalog now reads canonical instance config (`memory.json`) directly
+  - project catalog now reads canonical instance config (`config.json`) directly
   - no process execution in core project catalog path
 
 9. Orchestrator carried adapter/datastore implementation logic for stores

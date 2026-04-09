@@ -166,16 +166,16 @@ const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_g
 const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 const _instanceForDbPath = _resolveQuaidInstance();
 const DB_PATH = _instanceForDbPath ? path.join(WORKSPACE, "instances", _instanceForDbPath, "data", "memory.db") : path.join(WORKSPACE, "data", "memory.db");
+const QUAID_INSTANCE_ROOT = _instanceForDbPath ? path.join(WORKSPACE, "instances", _instanceForDbPath) : WORKSPACE;
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
 const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");
 const QUAID_INJECTION_LOG_DIR = path.join(QUAID_RUNTIME_DIR, "injection");
 const QUAID_NOTIFY_DIR = path.join(QUAID_RUNTIME_DIR, "notify");
-const QUAID_LOGS_DIR = path.join(WORKSPACE, "logs");
+const QUAID_LOGS_DIR = path.join(QUAID_INSTANCE_ROOT, "logs");
 const QUAID_HOOK_TRACE_PATH = path.join(QUAID_LOGS_DIR, "quaid-hook-trace.jsonl");
-const QUAID_JANITOR_DIR = path.join(QUAID_LOGS_DIR, "janitor");
-const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-install-migration.json");
-const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
+const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_RUNTIME_DIR, "pending-install-migration.json");
+const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "pending-approval-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 const ADAPTER_BOOT_TIME_MS = Date.now();
@@ -512,7 +512,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     const candidates = [
       path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
       path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
-      path.join(WORKSPACE, "logs", "quaid", "sessions", `${sessionId}.jsonl`)
+      path.join(QUAID_SESSION_PRESERVE_DIR, `${sessionId}.jsonl`)
     ];
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
@@ -827,12 +827,12 @@ function createAdapterMemoryConfigResolver() {
     const candidates = [];
     const instance = String(process.env.QUAID_INSTANCE || "").trim();
     if (instance) {
-      candidates.push(path.join(WORKSPACE, "instances", instance, "memory.json"));
+      candidates.push(path.join(WORKSPACE, "instances", instance, "config.json"));
     }
     candidates.push(
-      path.join(WORKSPACE, "shared", "config", "openclaw", "memory.json"),
-      path.join(WORKSPACE, "shared", "config", "global", "memory.json"),
-      path.join(WORKSPACE, "config", "memory.json"),
+      path.join(WORKSPACE, "shared", "config", "openclaw", "config.json"),
+      path.join(WORKSPACE, "shared", "config", "global", "config.json"),
+      path.join(WORKSPACE, "config", "config.json"),
       path.join(os.homedir(), ".quaid", "memory-config.json"),
       path.join(process.cwd(), "memory-config.json")
     );
@@ -1424,7 +1424,7 @@ const facade = createQuaidFacade({
     path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
     path.join(os.homedir(), ".openclaw", "sessions"),
     // Keep runtime log transcripts as a last-resort fallback only.
-    path.join(WORKSPACE, "logs", "quaid", "sessions")
+    QUAID_SESSION_PRESERVE_DIR
   ],
   readSessionMessagesFile: (sessionFile) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,
@@ -1637,7 +1637,7 @@ notify_user(${JSON.stringify(message)})
           }
         }
         if (_QUAID_INSTANCE) {
-          const miscPath = path.join(WORKSPACE, "projects", `misc--${_QUAID_INSTANCE}`);
+          const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${_QUAID_INSTANCE}`);
           prependSystemContext = [
             `[Quaid \u2014 active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
             `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
@@ -2586,7 +2586,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10
     });
     timeoutManager = new SessionTimeoutManager({
-      workspace: WORKSPACE,
+      workspace: QUAID_INSTANCE_ROOT,
       logDir: path.join(QUAID_LOGS_DIR, "quaid"),
       timeoutMinutes: () => facade.getCaptureTimeoutMinutes(),
       failHardEnabled: () => isFailHardEnabled2(),

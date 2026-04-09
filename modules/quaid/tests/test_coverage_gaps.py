@@ -717,7 +717,7 @@ class TestDocsRegistryGc:
 
         config_dir = iroot / "config"
         config_dir.mkdir(exist_ok=True)
-        (config_dir / "memory.json").write_text(json.dumps({
+        (config_dir / "config.json").write_text(json.dumps({
             "projects": {"enabled": True, "projectsDir": "projects/",
                          "stagingDir": "projects/staging/",
                          "definitions": {}, "defaultProject": "default"},

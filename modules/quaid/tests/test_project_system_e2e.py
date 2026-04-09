@@ -30,7 +30,7 @@ def project_env(tmp_path):
     quaid_home.mkdir()
     (quaid_home / "shared" / "projects").mkdir(parents=True)
     (quaid_home / "config").mkdir()
-    (quaid_home / "config" / "memory.json").write_text("{}")
+    (quaid_home / "config" / "config.json").write_text("{}")
 
     # User's source code directory
     user_code = tmp_path / "user-project"

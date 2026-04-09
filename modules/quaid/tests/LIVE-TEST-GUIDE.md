@@ -291,9 +291,9 @@ ssh REMOTE_HOST 'openclaw config set tools.exec.host gateway && \
 
 **CC only** — write auth token before install (installer blocks until this exists):
 ```bash
-ssh REMOTE_HOST "mkdir -p WORKSPACE/config/adapters/claude-code && \
-  echo -n 'AUTH_TOKEN' > WORKSPACE/config/adapters/claude-code/.auth-token && \
-  chmod 600 WORKSPACE/config/adapters/claude-code/.auth-token"
+ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/claude-code && \
+  echo -n 'AUTH_TOKEN' > WORKSPACE/adaptors/claude-code/.auth-token && \
+  chmod 600 WORKSPACE/adaptors/claude-code/.auth-token"
 ```
 
 **CDX only** — verify no stale Quaid hooks in `~/.codex/hooks.json`.
@@ -320,20 +320,20 @@ After each platform's M0 passes, verify the filesystem (see
 
 1. **`~/.quaid` and `~/quaid` both exist** — hidden runtime state and visible markdown/projects are split across both roots.
 2. **`~/.quaid` has correct hidden structure**: `modules/quaid/`, `shared/config/`,
-   `instances/INSTANCE/memory.json`, `instances/INSTANCE/data/`, `instances/INSTANCE/logs/`.
+   `instances/INSTANCE/config.json`, `instances/INSTANCE/data/`, `instances/INSTANCE/logs/`.
 3. **`~/quaid` has correct visible structure**: `instances/INSTANCE/`, `instances/INSTANCE/journal/`, `projects/`.
 4. **Instance config has models and capture sections.**
 5. **Shared platform config exists** at `~/.quaid/shared/config/PLATFORM/`.
 6. **Platform hooks registered** (CC: settings.json, CDX: hooks.json, OC:
    extensions symlink).
-7. **No stale flat or misplaced paths** (`~/.quaid/config/memory.json`, `~/quaid/shared/config/`, `~/quaid/modules/`).
+7. **No stale flat or misplaced paths** (`~/.quaid/config/config.json`, `~/quaid/shared/config/`, `~/quaid/modules/`).
 
 ### Post-Install Coordinator Steps
 
 **Overwrite deep lane with fast lane** (all silos — HARD RULE):
 ```bash
 ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/INSTANCE/memory.json'
+import json; p = 'WORKSPACE/instances/INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
 d['models']['deepReasoning'] = d['models']['fastReasoning']
 with open(p, 'w') as f: json.dump(d, f, indent=2)
@@ -344,7 +344,7 @@ print('deep set to', d['models']['fastReasoning'])
 **Set live-test chunk_tokens** (all silos — lowers rolling threshold for short tests):
 ```bash
 ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/INSTANCE/memory.json'
+import json; p = 'WORKSPACE/instances/INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
 d.setdefault('capture', {})['chunk_tokens'] = 1500
 with open(p, 'w') as f: json.dump(d, f, indent=2)
@@ -739,8 +739,8 @@ transactional content).
 ### M13 — CC Multi-Instance Verification (CC only)
 
 1. Run `quaid claudecode make_instance /path/to/project m13test`.
-2. Verify hidden silo created with `memory.json`, `data/`, `logs/` and visible silo created with flat identity files plus `journal/`.
-3. Verify `memory.json` has `adapter.type == "claude-code"`.
+2. Verify hidden silo created with `config.json`, `data/`, `logs/` and visible silo created with flat identity files plus `journal/`.
+3. Verify `config.json` has `adapter.type == "claude-code"`.
 4. Verify `.claude/settings.json` in the project dir has correct `QUAID_INSTANCE`.
 5. Verify `quaid instances list` includes the new instance.
 6. Verify dry-run (`--dry-run`) creates no silo.

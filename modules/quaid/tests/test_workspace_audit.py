@@ -169,7 +169,7 @@ class TestGetMonitoredFiles:
         hidden_root = tmp_path / ".quaid"
         visible_root = tmp_path / "quaid"
         (hidden_root / "instances" / "pytest-runner").mkdir(parents=True)
-        (hidden_root / "instances" / "pytest-runner" / "memory.json").write_text("{}")
+        (hidden_root / "instances" / "pytest-runner" / "config.json").write_text("{}")
         tools_path = visible_root / "projects" / "demo" / "TOOLS.md"
         tools_path.parent.mkdir(parents=True, exist_ok=True)
         tools_path.write_text("# Demo Tools\n", encoding="utf-8")

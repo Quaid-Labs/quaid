@@ -72,7 +72,7 @@ After the first M0 clears, inject test-specific config overrides:
 ```bash
 ssh admin@$VM_IP 'mkdir -p ~/.quaid/shared/config/global && \
   echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":1500}}" \
-  > ~/.quaid/shared/config/global/memory.json'
+  > ~/.quaid/shared/config/global/config.json'
 ```
 This sets: extraction buffer logging (for sanitizer audits) and chunk_tokens=1500
 (triggers rolling extraction in normal test sessions; production default is 8000).
@@ -457,7 +457,7 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
    - ~/.quaid/shared/config/               (shared config)
    - ~/.quaid/instances/INSTANCE/data/     (database)
    - ~/.quaid/instances/INSTANCE/logs/     (logs)
-   - ~/.quaid/instances/INSTANCE/memory.json (instance config)
+   - ~/.quaid/instances/INSTANCE/config.json (instance config)
 
 3. Verify ~/quaid has the expected visible structure:
    ssh REMOTE_HOST 'find ~/quaid -maxdepth 4 | sort'
@@ -470,12 +470,12 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
    - ~/quaid/instances/INSTANCE/ENVIRONMENT.md
 
 4. Verify instance config landed in the right place:
-   ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/memory.json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"models:\", d.get(\"models\",{})); print(\"capture:\", d.get(\"capture\",{}))"'
+   ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/config.json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"models:\", d.get(\"models\",{})); print(\"capture:\", d.get(\"capture\",{}))"'
    Expected: models.fastReasoning and capture section present.
 
 5. Verify shared platform config exists:
    ssh REMOTE_HOST 'ls -la ~/.quaid/shared/config/PLATFORM/ 2>&1'
-   Expected: memory.json exists.
+   Expected: config.json exists.
 
 6. Platform-specific checks:
    - OC: verify ~/.openclaw/extensions/quaid/ is a symlink or copy pointing to ~/.quaid/modules/quaid/
@@ -483,7 +483,7 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
    - CDX: verify ~/.codex/hooks.json has Quaid hooks registered
 
 7. Verify NO stale flat or misplaced paths:
-   ssh REMOTE_HOST 'ls -la ~/.quaid/config/memory.json 2>&1; ls -la ~/quaid/shared/config 2>&1; ls -la ~/quaid/modules 2>&1'
+   ssh REMOTE_HOST 'ls -la ~/.quaid/config/config.json 2>&1; ls -la ~/quaid/shared/config 2>&1; ls -la ~/quaid/modules 2>&1'
    All three should be "No such file or directory". If any exist, the installer
    is writing to a stale path.
 
@@ -498,14 +498,14 @@ be fixed before proceeding to M1.
 **Write CC auth token** (required for daemon LLM calls):
 ```bash
 TOKEN=$(cat CC_AUTH_TOKEN_FILE | tr -d '[:space:]')
-ssh REMOTE_HOST "mkdir -p WORKSPACE/config/adapters/claude-code && echo -n '$TOKEN' > WORKSPACE/config/adapters/claude-code/.auth-token && chmod 600 WORKSPACE/config/adapters/claude-code/.auth-token && echo 'Auth token written'"
+ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/claude-code && echo -n '$TOKEN' > WORKSPACE/adaptors/claude-code/.auth-token && chmod 600 WORKSPACE/adaptors/claude-code/.auth-token && echo 'Auth token written'"
 ```
 
 **Overwrite deep lane with fast lane** on each silo (HARD RULE — see CLAUDE.md):
 ```bash
 for INSTANCE in OC_INSTANCE CC_INSTANCE; do
   ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/$INSTANCE/memory.json'
+import json; p = 'WORKSPACE/instances/$INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
 fast = d['models']['fastReasoning']
 d['models']['deepReasoning'] = fast
@@ -519,7 +519,7 @@ done
 ```bash
 for INSTANCE in OC_INSTANCE CC_INSTANCE CDX_INSTANCE; do
   ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/$INSTANCE/memory.json'
+import json; p = 'WORKSPACE/instances/$INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
 d.setdefault('capture', {})['chunk_tokens'] = 1500
 with open(p, 'w') as f: json.dump(d, f, indent=2)

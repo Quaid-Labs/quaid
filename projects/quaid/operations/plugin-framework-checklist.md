@@ -9,7 +9,7 @@ Purpose: convert the plugin framework notes into an execution plan with clear pr
   - discovery by configured paths,
   - conflict-safe registry/singleton activation,
   - config-boot initialization with slot/type validation and runtime diagnostics.
-- Config already seeds plugin controls in instance `memory.json` via `config.py`:
+- Config already seeds plugin controls in instance `config.json` via `config.py`:
   - `plugins.enabled`, `plugins.strict`, `plugins.apiVersion`,
   - `plugins.paths`, `plugins.allowList`, `plugins.slots`.
 - Datastore manifests are already enforced to declare:

@@ -527,7 +527,7 @@ class TestRerankerConfig:
                 }
             }
         }
-        config_file = tmp_path / "memory.json"
+        config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps(config_data))
 
         try:

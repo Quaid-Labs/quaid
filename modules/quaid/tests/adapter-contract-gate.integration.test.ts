@@ -45,7 +45,7 @@ function makeWorkspace(caseName: string, strictContracts: unknown): string {
     },
   };
 
-  writeJson(join(workspace, "config", "memory.json"), memoryConfig);
+  writeJson(join(workspace, "config", "config.json"), memoryConfig);
   writeJson(join(workspace, "data", "memory.db"), {});
   writeJson(join(workspace, "modules", "quaid", "adaptors", "openclaw", "plugin.json"), adapterManifest);
   writeFile(
@@ -117,7 +117,7 @@ describe("adapter contract gate integration", () => {
   it("uses fallback ~/.quaid/memory-config.json for plugins.strict", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const workspace = makeWorkspace("fallback-strict", true);
-    rmSync(join(workspace, "config", "memory.json"));
+    rmSync(join(workspace, "config", "config.json"));
 
     const fakeHome = join(workspace, "fake-home");
     writeJson(join(fakeHome, ".quaid", "memory-config.json"), {

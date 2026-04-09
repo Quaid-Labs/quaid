@@ -125,7 +125,7 @@ def _refresh_token(refresh_token: str) -> Optional[dict]:
 def _read_token_file() -> Optional[str]:
     """Read a long-lived token from the adapter's auth token path.
 
-    The CC adapter stores its token at QUAID_HOME/config/adapters/claude-code/.auth-token.
+    The CC adapter stores its token at QUAID_HOME/adaptors/claude-code/.auth-token.
     This is the recommended auth method for long-running processes like the
     extraction daemon, since it re-reads the file on every call.
     """

@@ -111,7 +111,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - Project file writes may be tracked from actual filesystem changes, but important conclusions, decisions, explanations, and outcomes should still be stated explicitly if they are worth remembering.
 
 **Fail-hard**
-- Controlled by `retrieval.fail_hard` in the active instance `memory.json`.
+- Controlled by `retrieval.fail_hard` in the active instance `config.json`.
 - When `true`: never degrade silently — surface the error.
 - When `false`: degrade with loud warnings/diagnostics.
 

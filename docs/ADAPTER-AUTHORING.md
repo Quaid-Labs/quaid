@@ -76,7 +76,7 @@ Built-in manifests are seeded by installer first, then the same directory is use
 
 Adapter/platform-scoped defaults live under:
 
-`$QUAID_HOME/shared/config/<platform>/memory.json`
+`$QUAID_HOME/shared/config/<platform>/config.json`
 
 For model/provider defaults specifically, installer/runtime treat this as
 platform-owned override state. Do not use global shared config for model lanes.
@@ -121,7 +121,7 @@ See existing implementations:
 - `get_fast_model_default(provider)` / `get_deep_model_default(provider)` for adapter-owned model defaults
 
 Model precedence in install flow:
-1. Platform-shared config (`shared/config/<platform>/memory.json`)
+1. Platform-shared config (`shared/config/<platform>/config.json`)
 2. Adapter defaults (`get_*_provider_default`, `get_*_model_default`)
 3. Global hardcoded fallback (only if adapter does not provide values)
 
@@ -139,7 +139,7 @@ and return it from `get_instance_manager()`.
 
 Runtime adapter selection now follows the same manifest registry contract:
 
-1. instance `memory.json` → `adapter.type`
+1. instance `config.json` → `adapter.type`
 2. Resolve `~/.quaid/adaptors/<adapter-id>/adapter.json`
 3. Load `runtime.python.module` + `runtime.python.class` from that manifest
 

@@ -1755,7 +1755,7 @@ class TestGatewayLLMProvider:
         """/v1/responses must send x-openclaw-model for per-request model routing (v2026.3.24+).
 
         Without this header the gateway silently routes every call to its configured
-        primary model, completely ignoring the fast/deep tier config in memory.json.
+        primary model, completely ignoring the fast/deep tier config in config.json.
         This test guards against that regression by verifying the outbound request
         contains the header with the correct anthropic/<model> value.
         """

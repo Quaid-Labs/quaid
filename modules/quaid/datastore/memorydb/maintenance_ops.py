@@ -84,7 +84,7 @@ def _get_config_value(getter, default):
     except Exception:
         return default
 
-# Thresholds - now loaded from config/memory.json
+# Thresholds - now loaded from config/config.json
 _cfg = get_config()
 DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold  # Lower bound for "might be duplicate"
 DUPLICATE_MAX_SIM = _cfg.janitor.dedup.high_similarity_threshold  # Upper bound (auto-reject above)

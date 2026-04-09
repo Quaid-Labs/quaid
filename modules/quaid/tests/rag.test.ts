@@ -14,7 +14,7 @@ const TEST_FIXTURES_DIR = '/tmp/rag-test-fixtures'
 
 // Ensure instance-aware adapter config exists
 ;(() => {
-  const instanceCfgPath = path.join(WORKSPACE, TEST_INSTANCE, "config", "memory.json")
+  const instanceCfgPath = path.join(WORKSPACE, "instances", TEST_INSTANCE, "config.json")
   try {
     if (!fs.existsSync(instanceCfgPath)) {
       fs.mkdirSync(path.dirname(instanceCfgPath), { recursive: true })

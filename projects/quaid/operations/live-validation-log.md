@@ -55,11 +55,11 @@ Changes shipped in `9240ee2a feat(installer): shared embeddings config, instance
 | Feature | Status |
 |---------|--------|
 | Instance ID prompt in installer | ✅ Shipped — shows existing instances, per-adapter sharing tips, default = adapter name if not taken |
-| Shared embeddings config (`QUAID_HOME/shared/config/memory.json`) | ✅ Shipped — first install wins; subsequent installs inherit |
+| Shared embeddings config (`QUAID_HOME/shared/config/config.json`) | ✅ Shipped — first install wins; subsequent installs inherit |
 | `detectSharedEmbeddings()` provider-agnostic check | ✅ Shipped — checks by provider block, stubbed for openai/cohere |
 | `quaid instances list` CLI | ✅ Shipped — lists all instances under QUAID_HOME, `--json` flag |
 | `quaid config edit --shared / --instance <id>` | ✅ Shipped — both `config_cli.mjs` and `config_cli.py` |
-| Legacy flat `QUAID_HOME/config/memory.json` write removed | ✅ Shipped |
+| Legacy flat `QUAID_HOME/config/config.json` write removed | ✅ Shipped |
 | Compatibility matrix populated for v0.3.0 | ✅ Shipped — OC ≥2026.3.7 compatible (tested 3.7/3.8/3.11), CC ≥1.0.0 compatible |
 
 ---
@@ -163,7 +163,7 @@ The `<oc-host>` OC instance used the operator's Claude.ai OAuth path during this
 |-----|----------|-------|
 | M1: `resolveLifecycleHookSessionId` uses `eventObj.sessionId` before sessions.json key lookup | High | OC hook events carry an internal session UUID that differs from the transcript filename. sessions.json is authoritative. Fix: try `resolveSessionIdFromSessionKey(eventSessionKey)` first, fall back to direct event sessionId. |
 | M1: TUI sessions (`agent:main:tui-*`) lose to `agent:main:main` on `updatedAt` in `pickActiveInteractiveSession` | High | OC may refresh `agent:main:main.updatedAt` for background/relay activity while the user is active in a TUI session, causing the session watcher to track the wrong (often empty) session. Fix: give TUI and telegram session keys a higher priority tier than `agent:main:main`. |
-| M1: `memoryConfigCandidates()` reads `QUAID_HOME/config/memory.json` which doesn't exist on fresh installs | Critical | Installer writes per-instance config to `QUAID_HOME/QUAID_INSTANCE/config/memory.json`; adapter was never looking there. `getMemoryConfig()` returned `buildFallbackMemoryConfig()` with no `autoInject` key → always defaulted to `true`. All config changes (autoInject, model tier) were written to the right file but silently ignored. Fix: prepend `QUAID_HOME/QUAID_INSTANCE/config/memory.json` to candidates list. |
+| M1: `memoryConfigCandidates()` reads `QUAID_HOME/config/config.json` which doesn't exist on fresh installs | Critical | Installer writes per-instance config to `QUAID_HOME/QUAID_INSTANCE/config/config.json`; adapter was never looking there. `getMemoryConfig()` returned `buildFallbackMemoryConfig()` with no `autoInject` key → always defaulted to `true`. All config changes (autoInject, model tier) were written to the right file but silently ignored. Fix: prepend `QUAID_HOME/QUAID_INSTANCE/config/config.json` to candidates list. |
 | M1/rate-limit: Repeated retry storms exhaust OAuth daily cap | Low | Same infra issue as previous run. Skip to non-LLM milestones (M9, M10) while waiting for reset. |
 
 ### Fixes Shipped (commits on canary)
@@ -173,7 +173,7 @@ The `<oc-host>` OC instance used the operator's Claude.ai OAuth path during this
 | `0139dd41` | `resolveLifecycleHookSessionId`: sessions.json key lookup before event sessionId |
 | `0139dd41` | `pickActiveInteractiveSession`: filesystem fallback when sessions.json absent |
 | `533aa056` | `pickActiveInteractiveSession`: TUI sessions outrank `agent:main:main` (tier sort) |
-| `d19645f4` | `memoryConfigCandidates`: read per-instance config first (`QUAID_HOME/INSTANCE/config/memory.json`) |
+| `d19645f4` | `memoryConfigCandidates`: read per-instance config first (`QUAID_HOME/INSTANCE/config/config.json`) |
 
 ### Results
 

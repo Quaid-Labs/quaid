@@ -40,7 +40,7 @@ from adaptors.codex.providers import CodexLLMProvider
 def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "memory.json").write_text(f'{{"adapter": {{"type": "{adapter_type}"}}}}')
+    (cfg_dir / "config.json").write_text(f'{{"adapter": {{"type": "{adapter_type}"}}}}')
 
 
 def _write_adapter_manifest(
@@ -78,8 +78,9 @@ def clean_adapter():
 
 
 @pytest.fixture
-def standalone(tmp_path):
+def standalone(tmp_path, monkeypatch):
     """Create a StandaloneAdapter with a temp home dir."""
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
     adapter = StandaloneAdapter(home=tmp_path)
     set_adapter(adapter)
     return adapter
@@ -276,7 +277,7 @@ class TestOwnerResolution:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         cfg_dir = tmp_path / "instances" / iid
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        (cfg_dir / "memory.json").write_text(
+        (cfg_dir / "config.json").write_text(
             """
             {
               "adapter": {"type": "claude-code"},
@@ -384,7 +385,7 @@ class TestOpenClawAdapter:
         monkeypatch.setattr(shutil, "which", lambda _name: None)
         cfg = tmp_path / "instances" / "openclaw-main"
         cfg.mkdir(parents=True)
-        (cfg / "memory.json").write_text("{}", encoding="utf-8")
+        (cfg / "config.json").write_text("{}", encoding="utf-8")
         state = OpenClawAdapter.installer_install_state(str(tmp_path))
         assert state["status"] == "already_installed"
 
@@ -1181,7 +1182,7 @@ class TestAdapterSelectionEdgeCases:
     @pytest.mark.adapter_openclaw
     def test_case_insensitive_openclaw(self, monkeypatch, tmp_path):
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "config" / "memory.json").write_text('{"adapter":"OpenClaw"}')
+        (tmp_path / "config" / "config.json").write_text('{"adapter":"OpenClaw"}')
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         adapter = get_adapter()
@@ -1189,7 +1190,7 @@ class TestAdapterSelectionEdgeCases:
 
     def test_case_insensitive_standalone(self, monkeypatch, tmp_path):
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "config" / "memory.json").write_text('{"adapter":"STANDALONE"}')
+        (tmp_path / "config" / "config.json").write_text('{"adapter":"STANDALONE"}')
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = get_adapter()
         assert isinstance(adapter, StandaloneAdapter)
@@ -1197,7 +1198,7 @@ class TestAdapterSelectionEdgeCases:
     def test_invalid_adapter_raises(self, monkeypatch, tmp_path):
         """Invalid adapter config value should raise."""
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "config" / "memory.json").write_text('{"adapter":"invalid"}')
+        (tmp_path / "config" / "config.json").write_text('{"adapter":"invalid"}')
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         with pytest.raises(RuntimeError, match="Unsupported adapter type"):
             get_adapter()
@@ -1774,7 +1775,7 @@ class TestAdapterIntegration:
         """config.py should search for config in adapter-relative paths."""
         from config import _config_paths, reload_config
         paths = _config_paths()
-        assert paths[0] == standalone.config_dir() / "memory.json"
+        assert paths[0] == standalone.config_dir() / "config.json"
 
     def test_notify_delegates_through_adapter(self, standalone, capsys):
         """notify.py should route through adapter.notify()."""

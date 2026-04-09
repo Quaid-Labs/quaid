@@ -26,7 +26,7 @@ const PYTHON_MODULE_ROOT = path.resolve(path.dirname(PYTHON_SCRIPT), "../..")
 function ensureAdapterConfig(): void {
   const payload = JSON.stringify({ adapter: { type: "standalone" } }, null, 2)
   // Instance-aware config path
-  const instanceCfgPath = path.join(WORKSPACE, "instances", TEST_INSTANCE, "memory.json")
+  const instanceCfgPath = path.join(WORKSPACE, "instances", TEST_INSTANCE, "config.json")
   try {
     if (!fs.existsSync(instanceCfgPath)) {
       fs.mkdirSync(path.dirname(instanceCfgPath), { recursive: true })
@@ -36,7 +36,7 @@ function ensureAdapterConfig(): void {
     // Best effort
   }
   // Legacy flat config (backward compat)
-  const cfgPath = path.join(WORKSPACE, "config", "memory.json")
+  const cfgPath = path.join(WORKSPACE, "config", "config.json")
   try {
     if (!fs.existsSync(cfgPath)) {
       fs.mkdirSync(path.dirname(cfgPath), { recursive: true })

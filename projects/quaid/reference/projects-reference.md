@@ -62,7 +62,7 @@ data in different places. Confusing them is a common source of bugs.
 
 **Purpose:** Tracks project metadata — identity, instances, source roots, timestamps.
 
-**Authoritative store:** `QUAID_VISIBLE_HOME/projects/project-registry.json` (JSON file, shared across instances)
+**Authoritative store:** `QUAID_HOME/project-registry.json` (JSON file, shared across instances)
 
 **Mirror:** SQLite `project_definitions` table in `memory.db` (seeded from JSON on first
 `DocsRegistry` instantiation; kept in sync by `DocsRegistry.save_project_definition()`)
@@ -132,23 +132,34 @@ They are linked by project name only. There is no foreign key enforcement —
 
 ```
 QUAID_HOME/
-  project-registry.json          # Authoritative project metadata (shared across instances)
+  project-registry.json          # Authoritative project metadata (hidden, shared across instances)
   project-registry.tmp           # Ephemeral — atomic write staging file
-  <instance>/
-    data/
-      memory.db                  # doc_registry + project_definitions tables (per-instance)
-    projects/
-      <name>/
-        PROJECT.md               # Project home file (auto-maintained)
-        PROJECT.log              # Append-only history
-        log/
-          YYYY-MM.log            # Monthly archive files
-        docs/                    # Project documentation
-    tracking/
-      <name>/                    # Shadow git bare repo (git_dir)
-    projects/staging/
-      *.json                     # Queued updater events
-      failed/                    # Events that could not be processed
+  instances/
+    <instance>/
+      config.json                # Instance config
+      data/
+        memory.db                # doc_registry + project_definitions tables (per-instance)
+      logs/                      # Runtime and janitor logs
+      tracking/
+        <name>/                  # Shadow git bare repo (git_dir)
+      projects/staging/
+        *.json                   # Queued updater events
+        failed/                  # Events that could not be processed
+```
+
+```
+QUAID_VISIBLE_HOME/
+  projects/
+    <name>/
+      PROJECT.md                 # Project home file (auto-maintained)
+      PROJECT.log                # Append-only history
+      log/
+        YYYY-MM.log              # Monthly archive files
+      docs/                      # Project documentation
+  instances/
+    <instance>/
+      SOUL.md / USER.md / ENVIRONMENT.md
+      journal/
 ```
 
 ### 2.3 Instances List
@@ -220,7 +231,7 @@ Returns the entry dict.
 `datastore/docsdb/registry.py` has its own `create_project()` method used by
 `quaid registry create-project` (legacy path). It scaffolds the directory, writes a
 richer `PROJECT.md` template, saves to `project_definitions` SQLite table, and
-optionally patches instance `memory.json`. The two code paths differ slightly in template
+optionally patches instance `config.json`. The two code paths differ slightly in template
 format and JSON config patching. `quaid project create` (the canonical interface) uses
 `core/project_registry.py`.
 
@@ -798,7 +809,7 @@ quaid project list --json
 quaid project create <name> [--description "Display Name"] [--source-root /path]
 ```
 Creates `QUAID_VISIBLE_HOME/projects/<name>/` with `PROJECT.md` and `docs/` subdir.
-Registers the project in `QUAID_VISIBLE_HOME/projects/project-registry.json` and the SQLite
+Registers the project in `QUAID_HOME/project-registry.json` and the SQLite
 `project_definitions` table.
 
 Note: The older `quaid registry create-project <name> --label "..."` command still
@@ -914,7 +925,7 @@ quaid global-registry remove <name> # --force overrides multi-instance guard
 quaid global-registry rename <name> <new>
 ```
 
-Reads `QUAID_VISIBLE_HOME/projects/project-registry.json`. When multiple adapters (e.g. OC, CC, Codex) run on the same machine and
+Reads `QUAID_HOME/project-registry.json`. When multiple adapters (e.g. OC, CC, Codex) run on the same machine and
 share a `QUAID_HOME`, this shows the complete cross-adapter project list.
 
 **`quaid global-registry list`** calls `lib/project_registry.list_all()`:
@@ -1022,7 +1033,7 @@ the wrong function was called.
 **`project_definitions` table seeding:** `DocsRegistry.ensure_table()` calls
 `_seed_projects_from_json()` on every instantiation, but it is guarded by a
 `COUNT(*) > 0` check — only runs when the table is empty. On established instances
-the SQLite table is the source of truth, not instance `memory.json`.
+the SQLite table is the source of truth, not instance `config.json`.
 
 **`delete_project` SQLite scope:** Only the calling instance's `memory.db` is
 cleaned up. If OC and CC both have docs registered for the same project and OC

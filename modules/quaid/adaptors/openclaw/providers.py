@@ -81,7 +81,7 @@ class GatewayLLMProvider(LLMProvider):
         if not model:
             msg = (
                 f"No model configured for tier '{tier}'. "
-                "Set fastReasoning/deepReasoning in config/memory.json."
+                "Set fastReasoning/deepReasoning in config.json."
             )
             _try_notify(msg, severity="error", source="llm_config",
                         dedupe_key=f"gateway-no-model:{tier}")
@@ -165,7 +165,7 @@ class GatewayLLMProvider(LLMProvider):
         except urllib.error.HTTPError as exc:
             msg = (
                 f"Quaid {model_tier} LLM call failed: HTTP {exc.code} from gateway "
-                f"(model={oc_model}). Check fastReasoning/deepReasoning in config/memory.json."
+                f"(model={oc_model}). Check fastReasoning/deepReasoning in config.json."
             )
             _try_notify(msg, severity="error", source="llm_config",
                         dedupe_key=f"gateway-http-error:{model_tier}:{exc.code}")

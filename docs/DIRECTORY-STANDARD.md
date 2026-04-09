@@ -200,11 +200,11 @@ quaid project update myapp --source-root ./myapp  # add later
 QUAID_HOME/                              # e.g. ~/.quaid/
   shared/
     config/
-      global/memory.json                 # Hidden machine-wide shared config
-      <platform>/memory.json             # Hidden platform-shared config
+      global/config.json                 # Hidden machine-wide shared config
+      <platform>/config.json             # Hidden platform-shared config
   instances/
     <instance>/
-      memory.json                        # Hidden per-instance config
+      config.json                        # Hidden per-instance config
       data/                              # Hidden DB + daemon state
       logs/                              # Hidden logs
   runtime/                               # Hidden shared runtime state

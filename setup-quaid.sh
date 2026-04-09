@@ -456,9 +456,9 @@ _resolve_ollama_url() {
         return
     fi
     # 2. Existing config file
-    if [[ -f "${CONFIG_DIR}/memory.json" ]]; then
+    if [[ -f "${CONFIG_DIR}/config.json" ]]; then
         local cfg_url
-        cfg_url=$(python3 -c "import json; print(json.load(open('${CONFIG_DIR}/memory.json')).get('ollama',{}).get('url',''))" 2>/dev/null || true)
+        cfg_url=$(python3 -c "import json; print(json.load(open('${CONFIG_DIR}/config.json')).get('ollama',{}).get('url',''))" 2>/dev/null || true)
         if [[ -n "$cfg_url" ]] && [[ "$cfg_url" != "null" ]]; then
             echo "$cfg_url"
             return
@@ -678,17 +678,17 @@ _init_agent_silo() {
     local agent_id="$1"
     local silo_root="$2"
 
-    if [[ -d "${silo_root}/config" && -f "${silo_root}/config/memory.json" ]]; then
+    if [[ -f "${silo_root}/config.json" ]]; then
         info "Agent silo already exists for '${agent_id}': ${silo_root}"
         return 0
     fi
 
     info "Creating Quaid silo for agent '${agent_id}' at ${silo_root}..."
-    mkdir -p "${silo_root}/config" "${silo_root}/data" "${silo_root}/identity" \
+    mkdir -p "${silo_root}/data" "${silo_root}/identity" \
              "${silo_root}/journal" "${silo_root}/logs"
 
     # Minimal config — openclaw adapter, defaults inherited from gateway
-    cat > "${silo_root}/config/memory.json" << AGENTCFG
+    cat > "${silo_root}/config.json" << AGENTCFG
 {
   "adapter": { "type": "openclaw" },
   "retrieval": { "failHard": false, "autoInject": true }
@@ -1216,7 +1216,7 @@ conn.close()
     for f in SOUL.md USER.md MEMORY.md TOOLS.md AGENTS.md; do
         [[ -f "${WORKSPACE_ROOT}/${f}" ]] && has_existing=true && break
     done
-    [[ -f "${CONFIG_DIR}/memory.json" ]] && has_existing=true
+    [[ -f "${CONFIG_DIR}/config.json" ]] && has_existing=true
     [[ -f "${DATA_DIR}/memory.db" ]] && has_existing=true
 
     if $has_existing; then
@@ -1236,7 +1236,7 @@ conn.close()
                     backed=$((backed + 1))
                 fi
             done
-            [[ -f "${CONFIG_DIR}/memory.json" ]] && cp "${CONFIG_DIR}/memory.json" "$backup_dir/" && backed=$((backed + 1))
+            [[ -f "${CONFIG_DIR}/config.json" ]] && cp "${CONFIG_DIR}/config.json" "$backup_dir/" && backed=$((backed + 1))
             [[ -f "${DATA_DIR}/memory.db" ]] && cp "${DATA_DIR}/memory.db" "$backup_dir/" && backed=$((backed + 1))
             info "Backed up ${backed} files to ${backup_dir}/"
         fi
@@ -1519,7 +1519,7 @@ step4_embeddings() {
             info "Ollama is running (${OLLAMA_RESOLVED_URL})"
         else
             info "Using existing Ollama at ${OLLAMA_RESOLVED_URL}"
-            echo -e "  ${DIM}(Detected from ${OLLAMA_URL:+OLLAMA_URL env}${OLLAMA_URL:-config/memory.json})${RESET}"
+            echo -e "  ${DIM}(Detected from ${OLLAMA_URL:+OLLAMA_URL env}${OLLAMA_URL:-config.json})${RESET}"
         fi
     elif [[ "$OLLAMA_RESOLVED_URL" != "http://localhost:11434" ]]; then
         # Non-localhost URL was configured but isn't reachable — try localhost too
@@ -1837,7 +1837,7 @@ print('[+] Database initialized')
     fi
     chmod 600 "${DATA_DIR}/memory.db"
 
-    # Write config/memory.json
+    # Write config.json
     info "Writing configuration..."
     _write_config
 
@@ -2099,7 +2099,7 @@ _write_config() {
     owner_name_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "${OWNER_NAME}")"
     owner_display_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "${OWNER_DISPLAY}")"
 
-    cat > "${CONFIG_DIR}/memory.json" <<JSONEOF
+    cat > "${CONFIG_DIR}/config.json" <<JSONEOF
 {
   "adapter": {
     "type": "${adapter_type}"
@@ -2299,7 +2299,7 @@ _write_config() {
 }
 JSONEOF
 
-    info "Config written to ${CONFIG_DIR}/memory.json"
+    info "Config written to ${CONFIG_DIR}/config.json"
 }
 
 # Check for existing markdown files and offer migration
@@ -2448,8 +2448,8 @@ conn.close()
     echo -e "  ${GREEN}✓${RESET} LLM (fast)   — ${LOW_MODEL} via ${PROVIDER}"
 
     # Check config
-    if [[ -f "${CONFIG_DIR}/memory.json" ]]; then
-        echo -e "  ${GREEN}✓${RESET} Config       — OK (${CONFIG_DIR}/memory.json)"
+    if [[ -f "${CONFIG_DIR}/config.json" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Config       — OK (${CONFIG_DIR}/config.json)"
     else
         echo -e "  ${RED}✗${RESET} Config       — MISSING"
         all_ok=false

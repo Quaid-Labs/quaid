@@ -23,7 +23,7 @@ The knowledge layer is a graph-based personal knowledge base using SQLite + Olla
 - Hybrid search: semantic similarity + full-text keyword search with proper noun boosting
 - Privacy-aware: per-fact privacy tiers (private/shared/public) with owner-based filtering
 - Nightly maintenance: automated janitor pipeline for dedup, decay, docs/project upkeep
-- Config-driven: all model IDs, paths, and settings in instance `memory.json`
+- Config-driven: all model IDs, paths, and settings in instance `config.json`
 
 ### Three-Layer Architecture
 
@@ -157,7 +157,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - [x] Plugin skeleton with Clawdbot hooks
 - [x] Hybrid search replaces LanceDB vector-only
 - [x] Privacy tier filtering (per-fact classification)
-- [x] User identity mapping via instance `memory.json`
+- [x] User identity mapping via instance `config.json`
 - [x] Haiku reranker for recall relevance
 - [x] Session dedup + compaction time-gate
 - [x] LanceDB plugin disabled
@@ -205,7 +205,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - **Mock embeddings**: `MOCK_EMBEDDINGS=1` env var for testing without Ollama
 - **1400+ tests in default gate**: 1224 selected pytest + 222 vitest, all passing
 - **Journal system**: Diary-style entries written to `journal/*.journal.md`, distilled into core markdown themes by janitor, archived monthly to `journal/archive/`. Two modes: `distilled` (default, token-efficient) and `full` (richer self-awareness)
-- **Config-driven models**: All model IDs read from instance `memory.json`
+- **Config-driven models**: All model IDs read from instance `config.json`
 - **Fail-fast pipeline**: `memory_pipeline_ok` flag — if any memory task fails, graduation blocked
 - **Temporal resolution**: Regex-based date resolver (Task 2a)
 - **Edge normalization**: Inverse flipping, synonym resolution, symmetric alphabetical ordering
@@ -216,7 +216,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 
 - Telegram has ~52 char width limit for code blocks — avoid wide ASCII diagrams
 - LLM credentials resolved by adapter/gateway provider auth (OAuth/API key), not by core modules
-- All paths, models, and settings are centralized in instance `memory.json` plus shared hidden config — see `config.py` for dataclass definitions
+- All paths, models, and settings are centralized in instance `config.json` plus shared hidden config — see `config.py` for dataclass definitions
 - Database path: `config.database.path` (default: `data/memory.db`, SQLite + WAL)
 - Archive DB: `config.database.archivePath` (default: `data/memory_archive.db`)
 - Embeddings: `config.ollama.url` (default: `http://localhost:11434`) with `config.ollama.embeddingModel` (default: `nomic-embed-text`, 768-dim)
@@ -372,7 +372,7 @@ Each result dict from `recall()` includes:
 **LLM/Embeddings provider architecture:**
 - Core Quaid code is provider-agnostic. Only the adapter/provider layer and config are provider-aware.
 - LLM calls route through the OpenClaw gateway adapter (`/plugins/quaid/llm`) and are resolved by model tier (`deep_reasoning`/`fast_reasoning`), not by hardcoded provider branches in core logic.
-- Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.fastReasoningModelClasses` / `models.deepReasoningModelClasses` in instance `memory.json`.
+- Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.fastReasoningModelClasses` / `models.deepReasoningModelClasses` in instance `config.json`.
 
 **Unused / dead code:**
 - `datastore/memorydb/semantic_clustering.py` — groups Fact nodes into semantic buckets (people, places, preferences, technology, events) to reduce O(n²) contradiction checking. Has no production callers: no production module imports it. It is tested by `tests/test_semantic_clustering.py` but never invoked from `maintenance_ops.py` or any other runtime path. If contradiction checking at scale is needed in the future, this module provides a ready scaffold.
@@ -428,7 +428,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 **On load:**
 - Creates `data/` dir if needed
 - Initializes database/tables and runtime state if no database exists
-- Loads user identity config from instance `memory.json`
+- Loads user identity config from instance `config.json`
 - Logs stats
 - **Gateway restart recovery:** Detects unextracted sessions from before the restart and auto-recovers missed memories. Checks for sessions with messages but no corresponding extraction event, then triggers extraction for each.
 
@@ -454,7 +454,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 - Falls back to MD5 hash of first message timestamp for backward compat
 
 **User ID Resolution:**
-- Loads instance `memory.json` with user identity mappings
+- Loads instance `config.json` with user identity mappings
 - `resolveOwner(speaker, channel)` — matches speaker name or channel to configured user IDs
 - Falls back to `defaultOwner` from config
 - `personNodeName` field maps user to their Person node in the graph
@@ -561,8 +561,8 @@ Centralized modules extracted from duplicated code across `datastore/memorydb/me
 
 | Module | Purpose |
 |--------|---------|
-| `lib/adapter.py` | Platform adapter layer — `QuaidAdapter` ABC with hidden `QUAID_HOME` (`~/.quaid`) and visible `QUAID_VISIBLE_HOME` (`~/quaid`). All modules route through `get_adapter()` for paths, notifications, credentials, sessions. Adapter selection is config-driven via instance `memory.json` (`adapter.type`). `QUAID_HOME`/`CLAWDBOT_WORKSPACE` are path hints for locating hidden config. Tests use `set_adapter()`/`reset_adapter()` for isolation. **Includes sanitization hooks** for scrubbing personal data during release preparation. |
-| `lib/config.py` | DB paths, Ollama URL, embedding params — reads from instance `memory.json` via `config.py`. Env var overrides: `MEMORY_DB_PATH`, `MEMORY_ARCHIVE_DB_PATH`, `OLLAMA_URL`. Path resolution delegated to `lib/adapter.py`. |
+| `lib/adapter.py` | Platform adapter layer — `QuaidAdapter` ABC with hidden `QUAID_HOME` (`~/.quaid`) and visible `QUAID_VISIBLE_HOME` (`~/quaid`). All modules route through `get_adapter()` for paths, notifications, credentials, sessions. Adapter selection is config-driven via instance `config.json` (`adapter.type`). `QUAID_HOME`/`CLAWDBOT_WORKSPACE` are path hints for locating hidden config. Tests use `set_adapter()`/`reset_adapter()` for isolation. **Includes sanitization hooks** for scrubbing personal data during release preparation. |
+| `lib/config.py` | DB paths, Ollama URL, embedding params — reads from instance `config.json` via `config.py`. Env var overrides: `MEMORY_DB_PATH`, `MEMORY_ARCHIVE_DB_PATH`, `OLLAMA_URL`. Path resolution delegated to `lib/adapter.py`. |
 | `lib/database.py` | `get_connection(db_path)` — SQLite factory with Row + FK enforcement |
 | `lib/embeddings.py` | `get_embedding(text)`, `pack_embedding()`, `unpack_embedding()` — embedding calls routed through configured provider (Ollama by default) |
 | `lib/similarity.py` | `cosine_similarity(a, b)` — vector comparison |
@@ -655,7 +655,7 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 - `core/contracts/plugin_contract.py` — `PluginContractBase` ABC with seven executable surfaces: `on_init`, `on_config`, `on_status`, `on_dashboard`, `on_maintenance`, `on_tool_runtime`, `on_health`.
 - `core/contracts/memory.py` — `MemoryServicePort` Protocol (structural typing) defining the store/recall/search/create_edge/forget/stats/domain API that all memory service implementations must satisfy.
 - `core/plugins/memorydb_contract.py` — MemoryDB contract. Notable: domain lifecycle (schema/table sync and TOOLS domain block sync) is datastore-owned and implemented here, invoked by core plugin contract execution. Uses `lib/domain_runtime.publish_domains_to_runtime_config` and `lib/tools_domain_sync.sync_tools_domain_block`. The synced `TOOLS.md` block remains useful for docs/CLI visibility, but live domains and graph relation types are injected separately through runtime metadata at context-build time.
-- `core/plugins/docsdb_contract.py` — DocsDB contract; handles docs workspace init (`projects/`, `temp/`, `scratch/` directory initialization).
+- `core/plugins/docsdb_contract.py` — DocsDB contract; handles visible project workspace init and misc project bootstrap.
 - `core/plugins/notedb_contract.py` — NoteDB contract; minimal stub (all hooks return `ready: True`; dashboard disabled).
 - `core/services/memory_service.py` — `DatastoreMemoryService` class implementing `MemoryServicePort`; core-side composition point wrapping `datastore.facade` behind identity enforcement (`identity_runtime` assertion, privacy policy, write contract).
 
@@ -1242,7 +1242,7 @@ CREATE TABLE IF NOT EXISTS project_definitions (
 );
 ```
 
-Seeded from instance `memory.json → projects.definitions` on first run (if table is empty). After seeding, the DB is the source of truth — JSON is ignored. `config.py` loads definitions from this table with a JSON fallback for fresh installs.
+Seeded from instance `config.json → projects.definitions` on first run (if table is empty). After seeding, the DB is the source of truth — JSON is ignored. `config.py` loads definitions from this table with a JSON fallback for fresh installs.
 
 ### 3.19 Doc Update Log — Documentation Update Audit Trail
 
@@ -1332,9 +1332,9 @@ Config is loaded by `_load_config_inner()` in `config.py`. `_config_paths()` ret
 
 | Priority | Path | Purpose |
 |----------|------|---------|
-| **0 (highest)** | `QUAID_HOME/instances/<instance>/memory.json` | Per-instance overrides (identity, capture timeouts, domain preferences) |
-| **1** | `QUAID_HOME/shared/config/<platform>/memory.json` | Platform-specific shared settings |
-| **2 (lowest)** | `QUAID_HOME/shared/config/global/memory.json` | Machine-wide global shared settings (embeddings model, Ollama URL) |
+| **0 (highest)** | `QUAID_HOME/instances/<instance>/config.json` | Per-instance overrides (identity, capture timeouts, domain preferences) |
+| **1** | `QUAID_HOME/shared/config/<platform>/config.json` | Platform-specific shared settings |
+| **2 (lowest)** | `QUAID_HOME/shared/config/global/config.json` | Machine-wide global shared settings (embeddings model, Ollama URL) |
 
 Rules:
 - The global shared config is written by the first installer; subsequent instances on the same machine inherit it automatically.
@@ -1359,7 +1359,7 @@ quaid config set <dotted.key> <value> --shared   # Set a key in shared config
 
 ### 4.3 Config Sections
 
-**Config file:** instance `memory.json` — effective config with sections:
+**Config file:** instance `config.json` — effective config with sections:
 
 | Section | Controls |
 |---------|----------|
@@ -1415,7 +1415,7 @@ Dry-run disables locking entirely.
 
 ### 4.5 Embedding Model Config (Machine-Wide / Shared)
 
-Embeddings config lives in `QUAID_HOME/shared/config/global/memory.json` — written once on first install and inherited by all instances on the machine. All instances must use the same model so embeddings are cross-instance comparable.
+Embeddings config lives in `QUAID_HOME/shared/config/global/config.json` — written once on first install and inherited by all instances on the machine. All instances must use the same model so embeddings are cross-instance comparable.
 
 ```json
 {
@@ -1567,20 +1567,18 @@ Quaid supports multiple isolated memory instances on the same machine (e.g. one 
 ```
 QUAID_HOME/
 ├── <instance>/           # One directory per instance
-│   ├── config/
-│   │   └── memory.json   # Instance-specific config overrides
+│   ├── config.json       # Instance-specific config overrides
 │   ├── data/
 │   │   └── memory.db     # Instance SQLite database
 │   └── logs/             # Instance logs
 ├── shared/
 │   ├── config/
-│   │   └── memory.json   # Machine-wide shared config (embeddings, Ollama)
-│   └── projects/         # Shared project files
-└── project-registry.json # Cross-instance project registry
+│   │   └── config.json   # Machine-wide shared config (embeddings, Ollama)
+├── project-registry.json # Cross-instance project registry
 ```
 
 **Key rules:**
-- Multiple instances share `QUAID_HOME/shared/` and `QUAID_VISIBLE_HOME/projects/project-registry.json`.
+- Multiple instances share `QUAID_HOME/shared/`, the hidden `QUAID_HOME/project-registry.json`, and the visible `QUAID_VISIBLE_HOME/projects/`.
 - The shared config is written by the first installer; subsequent instances inherit it without overwriting.
 - Instance names must be alphanumeric (may include `.`, `_`, `-`), max 64 chars, and cannot use reserved names (`shared`, `projects`, `config`, `data`, etc.).
 

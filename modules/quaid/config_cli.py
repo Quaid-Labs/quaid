@@ -38,10 +38,10 @@ def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path
     """Resolve which config file to target based on flags and environment.
 
     Priority (first match wins):
-      --shared flag          → QUAID_HOME/shared/config/global/memory.json
-      --instance <id> flag   → QUAID_HOME/instances/<id>/memory.json
-      QUAID_INSTANCE env     → QUAID_HOME/instances/<QUAID_INSTANCE>/memory.json
-      (none)                 → QUAID_HOME/shared/config/global/memory.json  (default)
+      --shared flag          → QUAID_HOME/shared/config/global/config.json
+      --instance <id> flag   → QUAID_HOME/instances/<id>/config.json
+      QUAID_INSTANCE env     → QUAID_HOME/instances/<QUAID_INSTANCE>/config.json
+      (none)                 → QUAID_HOME/shared/config/global/config.json  (default)
 
     Returns (config_path, label).
     """
@@ -57,13 +57,13 @@ def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path
             platform = _platform_from_instance_name(
                 instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
             )
-        return home / "shared" / "config" / platform / "memory.json", f"shared platform '{platform}'"
+        return home / "shared" / "config" / platform / "config.json", f"shared platform '{platform}'"
 
     if shared_flag or (not instance_arg and not os.getenv("QUAID_INSTANCE", "").strip()):
-        return home / "shared" / "config" / "global" / "memory.json", "shared global fallback"
+        return home / "shared" / "config" / "global" / "config.json", "shared global fallback"
 
     instance_id = instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
-    return home / "instances" / instance_id / "memory.json", f"instance '{instance_id}'"
+    return home / "instances" / instance_id / "config.json", f"instance '{instance_id}'"
 
 
 def _config_path(args: argparse.Namespace | None = None) -> Path:
@@ -455,9 +455,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Quaid config helper",
         epilog=(
-            "Target flags (mutually exclusive): --shared targets QUAID_HOME/shared/config/global/memory.json; "
-            "--platform-shared [platform] targets QUAID_HOME/shared/config/<platform>/memory.json; "
-            "--instance <id> targets QUAID_HOME/instances/<id>/memory.json. "
+            "Target flags (mutually exclusive): --shared targets QUAID_HOME/shared/config/global/config.json; "
+            "--platform-shared [platform] targets QUAID_HOME/shared/config/<platform>/config.json; "
+            "--instance <id> targets QUAID_HOME/instances/<id>/config.json. "
             "When neither is given, QUAID_INSTANCE env is used, else shared is the default."
         ),
     )

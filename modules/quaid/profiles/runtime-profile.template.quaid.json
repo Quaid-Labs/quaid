@@ -80,8 +80,8 @@
   },
   "quaid": {
     "enabled": true,
-    "configPath": "../test/config/memory.json",
-    "templatePath": "modules/quaid/config/memory.json",
+    "configPath": "../test/config.json",
+    "templatePath": "modules/quaid/config/config.json",
     "adapterType": "openclaw",
     "models": {
       "llmProvider": "default",

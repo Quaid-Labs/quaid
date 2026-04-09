@@ -37,7 +37,6 @@ def workspace_dir(tmp_path):
 
     # Create required directories
     (iroot / "journal").mkdir(exist_ok=True)
-    (iroot / "config").mkdir(exist_ok=True)
 
     # Create minimal config
     config = {
@@ -53,7 +52,7 @@ def workspace_dir(tmp_path):
             }
         },
     }
-    (iroot / "config" / "memory.json").write_text(json.dumps(config))
+    (iroot / "config.json").write_text(json.dumps(config))
 
     yield iroot
 

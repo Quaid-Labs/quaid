@@ -1,6 +1,6 @@
 """Project registry — single source of truth for all Quaid projects.
 
-Manages project-registry.json in QUAID_VISIBLE_HOME/projects. Tracks project metadata,
+Manages project-registry.json in hidden QUAID_HOME. Tracks project metadata,
 source roots, and adapter instances.
 
 See docs/PROJECT-SYSTEM-SPEC.md#project-registry.
@@ -64,16 +64,11 @@ def _registry_path() -> Path:
     """Path to the project registry file."""
     try:
         from lib.adapter import get_adapter
-        return get_adapter().projects_dir() / "project-registry.json"
+        return get_adapter().quaid_home() / "project-registry.json"
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
-        explicit_visible = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
-        if explicit_visible:
-            return Path(explicit_visible).resolve() / "projects" / "project-registry.json"
         root = Path(home).resolve() if home else Path.home() / ".quaid"
-        if root.name.startswith(".") and len(root.name) > 1:
-            return root.with_name(root.name[1:]) / "projects" / "project-registry.json"
-        return root / "projects" / "project-registry.json"
+        return root / "project-registry.json"
 
 
 def _load_registry() -> Dict[str, Any]:

@@ -656,7 +656,7 @@ class CodexLLMProvider(LLMProvider):
             if not model:
                 msg = (
                     f"CodexLLMProvider: no model configured for tier '{tier}'. "
-                    "Set fastReasoning/deepReasoning in config/memory.json."
+                    "Set fastReasoning/deepReasoning in config.json."
                 )
                 _try_notify(msg, severity="error", source="llm_config",
                             dedupe_key=f"codex-no-model:{tier}")

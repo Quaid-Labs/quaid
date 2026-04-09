@@ -79,7 +79,7 @@ Pre-survey scope is intentionally narrow:
 - Do not browse:
   - adapter source files
   - repo docs unrelated to install
-  - `memory.json`
+  - `config.json`
   - project files
 - Do not run exploratory commands like:
   - `find`
@@ -120,7 +120,7 @@ For the thin prompt path, do not:
 - run `pwd`
 - re-read `AI-INSTALL.md` repeatedly
 - browse adapter implementation files
-- inspect `memory.json`
+- inspect `config.json`
 - read unrelated repo docs
 - run `find`
 - run Python snippets for exploratory inspection
@@ -288,16 +288,16 @@ To override the default instance ID, set `QUAID_INSTANCE` before running install
 On first install the installer writes the shared embeddings block to:
 
 ```
-<QUAID_HOME>/shared/config/global/memory.json
+<QUAID_HOME>/shared/config/global/config.json
 ```
 
 It also creates a blank per-platform shared config at:
 
 ```
-<QUAID_HOME>/shared/config/<platform>/memory.json
+<QUAID_HOME>/shared/config/<platform>/config.json
 ```
 
-The global file records the Ollama URL, embedding model, and embedding dimension so all instances on the same machine can share the same default model. The rule is **first-install-wins** for the global fallback: if `shared/config/global/memory.json` already has an `ollama` block, subsequent installs inherit it instead of overwriting it.
+The global file records the Ollama URL, embedding model, and embedding dimension so all instances on the same machine can share the same default model. The rule is **first-install-wins** for the global fallback: if `shared/config/global/config.json` already has an `ollama` block, subsequent installs inherit it instead of overwriting it.
 
 At runtime, Quaid checks the platform-shared file first and falls back to the global file.
 If the human wants to change embedding defaults later, tell them it is best to use their agents for Quaid config changes.

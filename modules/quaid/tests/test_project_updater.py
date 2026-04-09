@@ -20,6 +20,7 @@ def setup_env(tmp_path, monkeypatch):
     global _tmp_db
     _tmp_db = tmp_path / "test_registry.db"
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_db))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
@@ -27,7 +28,6 @@ def setup_env(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(iroot))  # kept for backward compat
 
     # Create directories
-    (iroot / "config").mkdir(exist_ok=True)
     shared_projects_dir = tmp_path / "projects"
     shared_projects_dir.mkdir(parents=True, exist_ok=True)
     instance_projects = iroot / "projects"
@@ -65,7 +65,7 @@ def setup_env(tmp_path, monkeypatch):
         },
         "rag": {"docsDir": "docs"},
     }
-    (iroot / "config" / "memory.json").write_text(json.dumps(config_data))
+    (iroot / "config.json").write_text(json.dumps(config_data))
 
     # Create PROJECT.md
     project_md = render_project_md_template(
@@ -79,7 +79,7 @@ def setup_env(tmp_path, monkeypatch):
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     import config as config_mod
-    monkeypatch.setattr(config_mod, "_config_paths", lambda: [iroot / "config" / "memory.json"])
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [iroot / "config.json"])
     config_mod.reload_config()
 
     yield iroot

@@ -73,14 +73,14 @@ class TestInstanceManagerBase:
 
         assert (silo / "data").is_dir()
         assert (silo / "logs").is_dir()
-        assert (silo / "memory.json").is_file()
+        assert (silo / "config.json").is_file()
         visible = tmp_path / "visible" / "instances" / "claude-code-proj"
         assert visible.is_dir()
         assert (visible / "journal").is_dir()
         assert (visible / "SOUL.md").is_file()
         assert (visible / "USER.md").is_file()
         assert (visible / "ENVIRONMENT.md").is_file()
-        config = json.loads((silo / "memory.json").read_text())
+        config = json.loads((silo / "config.json").read_text())
         assert config["adapter"]["type"] == adapter.adapter_id()
 
     def test_create_raises_if_exists(self, tmp_path):

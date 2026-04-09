@@ -107,7 +107,7 @@ class InstanceManager:
 
         # Config — fold defaults into existing config (fill missing keys without
         # clobbering values that were written by the installer or a prior run).
-        config_path = silo_root / "memory.json"
+        config_path = silo_root / "config.json"
         existing: dict = {}
         if config_path.exists():
             try:

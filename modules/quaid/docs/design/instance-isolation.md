@@ -21,7 +21,7 @@ QUAID_HOME/
 │           ├── TOOLS.md
 │           └── AGENTS.md
 ├── <INSTANCE_ID>/                  # Per-instance silo
-│   ├── config/memory.json          # Instance config (no adapter.type toggle)
+│   ├── config/config.json          # Instance config (no adapter.type toggle)
 │   ├── data/
 │   │   ├── memory.db               # Own database
 │   │   ├── extraction-signals/
@@ -67,7 +67,7 @@ Instance root = `$QUAID_HOME/$QUAID_INSTANCE`
 - Signal dir: `<instance_root>/data/extraction-signals/`
 
 ### Config
-- Per-instance: `<instance_root>/config/memory.json`
+- Per-instance: `<instance_root>/config/config.json`
 - No `adapter.type` toggle — the instance IS the adapter
 - Adapter type derived from instance config or inferred from INSTANCE_ID
 
@@ -121,7 +121,7 @@ INSTANCE_ID is entered by the user during installation:
 6. Sets `QUAID_INSTANCE=<INSTANCE_ID>` in the adapter's env config
 
 Detection of existing instances:
-- List dirs in `$QUAID_HOME/` that are not reserved names and contain `config/memory.json`
+- List dirs in `$QUAID_HOME/` that are not reserved names and contain `config/config.json`
 - Each discovered instance shows its adapter type (from config)
 
 ## CLI
@@ -138,7 +138,7 @@ Examples:
 - `quaid openclaw memory_store "some text"`
 - `quaid claude-code hook-inject`
 
-The instance must exist (`$QUAID_HOME/<instance>/config/memory.json` present)
+The instance must exist (`$QUAID_HOME/<instance>/config/config.json` present)
 or the CLI throws an error. No implicit defaults — instance is always explicit.
 
 For hooks, `QUAID_INSTANCE` env var is also accepted (set by adapter at boot):

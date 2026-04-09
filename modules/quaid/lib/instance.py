@@ -135,18 +135,18 @@ def visible_projects_dir() -> Path:
 
 
 def shared_registry_path() -> Path:
-    """Global project registry: QUAID_VISIBLE_HOME/projects/project-registry.json."""
-    return visible_projects_dir() / "project-registry.json"
+    """Global project registry stored in hidden QUAID_HOME."""
+    return quaid_home() / "project-registry.json"
 
 
 def shared_config_path() -> Path:
-    """Shared global config file: QUAID_HOME/shared/config/global/memory.json.
+    """Shared global config file: QUAID_HOME/shared/config/global/config.json.
 
     Contains machine-wide settings (embeddings model, Ollama URL) that all
     instances on this machine inherit.  Instance configs can override individual
     keys; shared config is the fallback layer below instance config.
     """
-    return shared_dir() / "config" / "global" / "memory.json"
+    return shared_dir() / "config" / "global" / "config.json"
 
 
 def misc_project_name(name: Optional[str] = None) -> str:
@@ -172,13 +172,13 @@ def instance_exists(name: str) -> bool:
         validated = validate_instance_id(name)
     except InstanceError:
         return False
-    return (quaid_home() / "instances" / validated / "memory.json").is_file()
+    return (quaid_home() / "instances" / validated / "config.json").is_file()
 
 
 def list_instances() -> List[str]:
     """List all registered instance names under QUAID_HOME/instances/.
 
-    An instance is a directory under instances/ that contains memory.json.
+    An instance is a directory under instances/ that contains config.json.
     """
     instances_dir = quaid_home() / "instances"
     if not instances_dir.is_dir():
@@ -190,7 +190,7 @@ def list_instances() -> List[str]:
         name = entry.name
         if name.startswith("."):
             continue
-        if (entry / "memory.json").is_file():
+        if (entry / "config.json").is_file():
             instances.append(name)
     return instances
 
@@ -207,7 +207,7 @@ def require_instance_exists(name: Optional[str] = None) -> str:
         name = validate_instance_id(name)
     if not instance_exists(name):
         existing = list_instances()
-        msg = f"Instance '{name}' does not exist (no memory.json found)."
+        msg = f"Instance '{name}' does not exist (no config.json found)."
         if existing:
             msg += f" Existing instances: {', '.join(existing)}"
         raise InstanceError(msg)

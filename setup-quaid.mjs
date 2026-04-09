@@ -454,11 +454,9 @@ const PLUGIN_DIR = fs.existsSync(path.join(MODULES_PLUGIN_DIR, "package.json"))
   ? MODULES_PLUGIN_DIR
   : LEGACY_PLUGIN_DIR;
 const LEGACY_CONFIG_DIR = path.join(WORKSPACE, "config");
-const DATA_DIR = path.join(WORKSPACE, "data");
-const LOGS_DIR = path.join(WORKSPACE, "logs");
+const RUNTIME_DIR = path.join(WORKSPACE, "runtime");
+const RUNTIME_NOTES_DIR = path.join(RUNTIME_DIR, "notes");
 const PROJECTS_DIR = path.join(VISIBLE_HOME, "projects");
-const TEMP_DIR = path.join(WORKSPACE, "temp");
-const SCRATCH_DIR = path.join(WORKSPACE, "scratch");
 const ADAPTER_REGISTRY_DIR = path.join(WORKSPACE, "adaptors");
 const HIDDEN_INSTANCES_DIR = path.join(WORKSPACE, "instances");
 const VISIBLE_INSTANCES_DIR = path.join(VISIBLE_HOME, "instances");
@@ -476,7 +474,27 @@ function visibleInstanceDir(instanceId = resolvedInstallerInstanceId()) {
 }
 
 function instanceConfigPath(instanceId = resolvedInstallerInstanceId()) {
-  return path.join(hiddenInstanceDir(instanceId), "memory.json");
+  return path.join(hiddenInstanceDir(instanceId), "config.json");
+}
+
+function hiddenInstanceDataDir(instanceId = resolvedInstallerInstanceId()) {
+  return path.join(hiddenInstanceDir(instanceId), "data");
+}
+
+function hiddenInstanceLogsDir(instanceId = resolvedInstallerInstanceId()) {
+  return path.join(hiddenInstanceDir(instanceId), "logs");
+}
+
+function hiddenInstanceDbPath(instanceId = resolvedInstallerInstanceId()) {
+  return path.join(hiddenInstanceDataDir(instanceId), "memory.db");
+}
+
+function hiddenInstanceInstallStatePath(instanceId = resolvedInstallerInstanceId()) {
+  return path.join(hiddenInstanceDataDir(instanceId), "installed-at.json");
+}
+
+function runtimePendingInstallMigrationPath() {
+  return path.join(RUNTIME_DIR, "pending-install-migration.json");
 }
 
 let _adapterManifests = [];
@@ -713,7 +731,7 @@ function _sharedModelOverride(adapterId) {
   // Model/provider defaults are platform-specific by design.
   // Do not read model lanes from shared/config/global.
   const candidates = [
-    path.join(WORKSPACE, "shared", "config", platformKey, "memory.json"),
+    path.join(WORKSPACE, "shared", "config", platformKey, "config.json"),
   ];
   for (const cfgPath of candidates) {
     if (!fs.existsSync(cfgPath)) continue;
@@ -834,7 +852,7 @@ function syncInstallerInstanceEnv(adapterType = "") {
 
 /**
  * List existing Quaid instance names by scanning WORKSPACE/instances for
- * directories that contain memory.json.
+ * directories that contain config.json.
  */
 function listExistingInstances() {
   try {
@@ -843,7 +861,7 @@ function listExistingInstances() {
     return fs.readdirSync(instancesDir)
       .filter(name => {
         if (name.startsWith(".")) return false;
-        const cfgPath = path.join(instancesDir, name, "memory.json");
+        const cfgPath = path.join(instancesDir, name, "config.json");
         return fs.existsSync(cfgPath);
       })
       .sort();
@@ -852,22 +870,24 @@ function listExistingInstances() {
 
 function detectExistingInstallState() {
   const instances = listExistingInstances();
-  const sharedGlobalConfig = path.join(WORKSPACE, "shared", "config", "global", "memory.json");
+  const sharedGlobalConfig = path.join(WORKSPACE, "shared", "config", "global", "config.json");
   const sharedPlatformConfig = path.join(
     WORKSPACE,
     "shared",
     "config",
     String(resolvedInstallerPlatform() || "").trim().toLowerCase(),
-    "memory.json"
+    "config.json"
   );
-  const legacyConfig = path.join(LEGACY_CONFIG_DIR, "memory.json");
-  const legacyDb = path.join(DATA_DIR, "memory.db");
+  const legacyConfig = path.join(LEGACY_CONFIG_DIR, "config.json");
+  const activeDb = hiddenInstanceDbPath();
+  const legacyDb = path.join(WORKSPACE, "data", "memory.db");
   const pluginMarker = fs.existsSync(path.join(PLUGIN_DIR, "package.json"));
   const hasInstall = (
     instances.length > 0
     || fs.existsSync(sharedGlobalConfig)
     || fs.existsSync(sharedPlatformConfig)
     || fs.existsSync(legacyConfig)
+    || fs.existsSync(activeDb)
     || fs.existsSync(legacyDb)
     || pluginMarker
   );
@@ -882,10 +902,10 @@ function resolveExistingOwnerIdentity() {
   }
   const platformKey = String(resolvedInstallerPlatform() || "").trim().toLowerCase();
   if (platformKey) {
-    candidates.push(path.join(WORKSPACE, "shared", "config", platformKey, "memory.json"));
+    candidates.push(path.join(WORKSPACE, "shared", "config", platformKey, "config.json"));
   }
-  candidates.push(path.join(WORKSPACE, "shared", "config", "global", "memory.json"));
-  candidates.push(path.join(LEGACY_CONFIG_DIR, "memory.json"));
+  candidates.push(path.join(WORKSPACE, "shared", "config", "global", "config.json"));
+  candidates.push(path.join(LEGACY_CONFIG_DIR, "config.json"));
   for (const cfgPath of candidates) {
     if (!fs.existsSync(cfgPath)) continue;
     try {
@@ -2341,8 +2361,8 @@ async function step1_preflight() {
     "TODO.md",
   ]
     .filter(f => fs.existsSync(path.join(VISIBLE_HOME, f)));
-  const _hasConfig = fs.existsSync(path.join(LEGACY_CONFIG_DIR, "memory.json"));
-  const _hasDb = fs.existsSync(path.join(DATA_DIR, "memory.db"));
+  const _hasConfig = fs.existsSync(path.join(LEGACY_CONFIG_DIR, "config.json"));
+  const _hasDb = fs.existsSync(hiddenInstanceDbPath());
 
   const s = spinner();
 
@@ -2405,7 +2425,7 @@ async function step1_preflight() {
     }
     // Check and store OAuth token — Quaid uses its own token file so it is not
     // dependent on credentials.json, which can be stale or scoped incorrectly.
-    const authTokenPath = path.join(WORKSPACE, "config", "adapters", "claude-code", ".auth-token");
+    const authTokenPath = path.join(WORKSPACE, "adaptors", "claude-code", ".auth-token");
     const existingFileToken = (() => {
       try { return fs.existsSync(authTokenPath) ? fs.readFileSync(authTokenPath, "utf8").trim() : ""; }
       catch { return ""; }
@@ -2727,8 +2747,8 @@ async function step1_preflight() {
         const src = path.join(VISIBLE_HOME, f);
         if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(backupDir, f)); count++; }
       }
-      if (_hasConfig) { fs.copyFileSync(path.join(LEGACY_CONFIG_DIR, "memory.json"), path.join(backupDir, "memory.json")); count++; }
-      if (_hasDb) { fs.copyFileSync(path.join(DATA_DIR, "memory.db"), path.join(backupDir, "memory.db")); count++; }
+      if (_hasConfig) { fs.copyFileSync(path.join(LEGACY_CONFIG_DIR, "config.json"), path.join(backupDir, "config.json")); count++; }
+      if (_hasDb) { fs.copyFileSync(hiddenInstanceDbPath(), path.join(backupDir, "memory.db")); count++; }
       backupSpinner.stop(C.green("Backup created"));
 
       note(
@@ -3171,8 +3191,8 @@ async function step4_embeddings() {
   // Check platform-shared first, then global shared fallback.
   const platformKey = resolvedInstallerPlatform();
   const sharedSearchPaths = [
-    path.join(WORKSPACE, "shared", "config", platformKey, "memory.json"),
-    path.join(WORKSPACE, "shared", "config", "global", "memory.json"),
+    path.join(WORKSPACE, "shared", "config", platformKey, "config.json"),
+    path.join(WORKSPACE, "shared", "config", "global", "config.json"),
   ];
   for (const sharedConfigPath of sharedSearchPaths) {
     if (!fs.existsSync(sharedConfigPath)) continue;
@@ -3493,11 +3513,12 @@ function installLaunchdSchedule(hour) {
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
   const label = "com.quaid.janitor";
   const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
-  const logPath = path.join(LOGS_DIR, "janitor", "launchd.log");
-  const errPath = path.join(LOGS_DIR, "janitor", "launchd-err.log");
+  const janitorLogDir = path.join(hiddenInstanceLogsDir(), "janitor");
+  const logPath = path.join(janitorLogDir, "launchd.log");
+  const errPath = path.join(janitorLogDir, "launchd-err.log");
 
   // Ensure log directory exists
-  fs.mkdirSync(path.join(LOGS_DIR, "janitor"), { recursive: true });
+  fs.mkdirSync(janitorLogDir, { recursive: true });
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -3569,9 +3590,10 @@ function installWindowsScheduledTask(hour) {
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
   const taskName = "QuaidJanitor";
-  const logPath = path.join(LOGS_DIR, "janitor", "schtasks.log");
+  const janitorLogDir = path.join(hiddenInstanceLogsDir(), "janitor");
+  const logPath = path.join(janitorLogDir, "schtasks.log");
 
-  fs.mkdirSync(path.join(LOGS_DIR, "janitor"), { recursive: true });
+  fs.mkdirSync(janitorLogDir, { recursive: true });
 
   // Build a wrapper script that sets env vars and runs janitor
   const batchPath = path.join(PLUGIN_DIR, "janitor-scheduled.bat");
@@ -3609,9 +3631,10 @@ function installCrontabSchedule(hour) {
   // Linux/other: crontab entry for nightly janitor.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  const logPath = path.join(LOGS_DIR, "janitor", "cron.log");
+  const janitorLogDir = path.join(hiddenInstanceLogsDir(), "janitor");
+  const logPath = path.join(janitorLogDir, "cron.log");
 
-  fs.mkdirSync(path.join(LOGS_DIR, "janitor"), { recursive: true });
+  fs.mkdirSync(janitorLogDir, { recursive: true });
 
   const envVars = `QUAID_HOME='${WORKSPACE}' PYTHONPATH='${PLUGIN_DIR}'`;
   const cronLine = `30 ${hour} * * * ${envVars} ${quaidCmd} janitor --task all --apply --time-budget 3600 >> ${logPath} 2>&1`;
@@ -3658,12 +3681,10 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   for (const dir of [
     HIDDEN_INSTANCES_DIR,
     VISIBLE_INSTANCES_DIR,
-    DATA_DIR,
-    LOGS_DIR,
-    TEMP_DIR,
-    SCRATCH_DIR,
     PROJECTS_DIR,
     ADAPTER_REGISTRY_DIR,
+    RUNTIME_DIR,
+    RUNTIME_NOTES_DIR,
     path.join(WORKSPACE, "shared", "config"),
   ]) {
     fs.mkdirSync(dir, { recursive: true });
@@ -3758,7 +3779,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Initialize database
   s.start("Initializing database...");
-  const dbPath = path.join(DATA_DIR, "memory.db");
+  const dbPath = hiddenInstanceDbPath(resolvedInstanceId);
   const schemaPath = path.join(PLUGIN_DIR, "datastore/memorydb/schema.sql");
   if (!fs.existsSync(schemaPath)) {
     s.stop(C.red("Database initialization failed"));
@@ -3828,7 +3849,7 @@ print('[+] Datastore init hooks complete')
   // misc is a tracked project in projects/misc--{instanceId}/
   const miscBucketId = resolvedInstanceId || resolvedInstallerInstanceId();
   const instanceMiscDir = path.join(PROJECTS_DIR, `misc--${miscBucketId}`);
-  const contractOwnedDirs = Array.from(new Set([PROJECTS_DIR, instanceProjectsDir(), TEMP_DIR, instanceMiscDir]));
+  const contractOwnedDirs = Array.from(new Set([PROJECTS_DIR, instanceProjectsDir(), instanceMiscDir]));
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   s.start("Reconciling workspace structure...");
   if (missingContractOwnedDirs.length > 0) {
@@ -3841,9 +3862,8 @@ print('[+] Datastore init hooks complete')
     );
   }
 
-  // Scratch is intentionally workspace-visible and can hold ad-hoc drafts.
-  // The directory is contract-owned (docsdb init); installer only bootstraps
-  // local history after contract init has run.
+  // The misc project is the only installer-owned bucket for ad-hoc drafts.
+  // The installer only bootstraps local history after datastore init has run.
   if (fs.existsSync(instanceMiscDir) && !fs.existsSync(path.join(instanceMiscDir, ".git"))) {
     const miscGitInit = spawnSync("git", ["init"], {
       cwd: instanceMiscDir,
@@ -4022,7 +4042,7 @@ print(total_docs)
 
     // Install Quaid project reference docs and constitutional guidance.
     // Canonical projects/ lives at QUAID_HOME level, shared across all instances.
-    const quaidProjDir = path.join(WORKSPACE, "projects", "quaid");
+    const quaidProjDir = path.join(PROJECTS_DIR, "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
     if (fs.existsSync(quaidProjSrc)) {
@@ -4120,18 +4140,17 @@ except ValueError:
   // sessions that predate this install (prevents orphan extraction fan-out
   // after a clean reinstall/wipe).
   try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(hiddenInstanceDataDir(resolvedInstanceId), { recursive: true });
     fs.writeFileSync(
-      path.join(DATA_DIR, "installed-at.json"),
+      hiddenInstanceInstallStatePath(resolvedInstanceId),
       JSON.stringify({ installedAt: new Date().toISOString() }),
       { mode: 0o600 },
     );
   } catch {}
   log.message("");
   try {
-    const markerDir = path.join(LOGS_DIR, "janitor");
-    const markerPath = path.join(markerDir, "pending-install-migration.json");
-    fs.mkdirSync(markerDir, { recursive: true });
+    const markerPath = runtimePendingInstallMigrationPath();
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     if (migrationCompleted || mdFiles.length === 0) {
       try { fs.rmSync(markerPath, { force: true }); } catch {}
     } else {
@@ -4161,7 +4180,7 @@ async function step8_validate(owner, models, embeddings, systems) {
   const checks = [];
 
   // Database
-  const dbPath = path.join(DATA_DIR, "memory.db");
+  const dbPath = hiddenInstanceDbPath();
   if (fs.existsSync(dbPath)) {
     const tableProbe = `
 import sqlite3
@@ -4195,8 +4214,8 @@ c.close()
   const _configCheckPath = _valInstanceId
     ? instanceConfigPath(_valInstanceId)
     : (_platformKey
-        ? path.join(WORKSPACE, "shared", "config", _platformKey, "memory.json")
-        : path.join(WORKSPACE, "shared", "config", "global", "memory.json"));
+        ? path.join(WORKSPACE, "shared", "config", _platformKey, "config.json")
+        : path.join(WORKSPACE, "shared", "config", "global", "config.json"));
   if (fs.existsSync(_configCheckPath)) {
     checks.push(`${C.green("■")} Config       ${C.dim("—")} OK`);
   } else {
@@ -4878,9 +4897,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   // always create a blank per-platform shared config file.
   const platformKey = resolvedInstallerPlatform();
   const sharedGlobalConfigDir = path.join(WORKSPACE, "shared", "config", "global");
-  const sharedGlobalConfigPath = path.join(sharedGlobalConfigDir, "memory.json");
+  const sharedGlobalConfigPath = path.join(sharedGlobalConfigDir, "config.json");
   const sharedPlatformConfigDir = path.join(WORKSPACE, "shared", "config", platformKey);
-  const sharedPlatformConfigPath = path.join(sharedPlatformConfigDir, "memory.json");
+  const sharedPlatformConfigPath = path.join(sharedPlatformConfigDir, "config.json");
   const ollamaBlock = {
     url: (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/v1\/?$/, "").replace(/\/+$/, ""),
     embeddingModel: embeddings.embedModel,
@@ -4904,7 +4923,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     log.info(`Created blank shared platform config: ${sharedPlatformConfigPath}`);
   }
 
-  // Write config to the hidden instance root (QUAID_HOME/instances/<instance>/memory.json).
+  // Write config to the hidden instance root (QUAID_HOME/instances/<instance>/config.json).
   // This is the authoritative instance config path; the old flat QUAID_HOME/config/
   // path is no longer written.
   const instanceId = (process.env.QUAID_INSTANCE || "").trim();
@@ -4913,8 +4932,8 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     const instanceConfigDir = hiddenInstanceDir(instanceId);
     fs.mkdirSync(instanceConfigDir, { recursive: true });
     const configJson = JSON.stringify(config, null, 2) + "\n";
-    fs.writeFileSync(path.join(instanceConfigDir, "memory.json"), configJson);
-    log.info(`Wrote instance config: ${instanceConfigDir}/memory.json`);
+    fs.writeFileSync(path.join(instanceConfigDir, "config.json"), configJson);
+    log.info(`Wrote instance config: ${instanceConfigDir}/config.json`);
   }
   // All platforms: write config to shared platform config so all instances
   // inherit models, users, capture settings. Instance silos are created at
@@ -4996,8 +5015,9 @@ function _parseMessageTimestampMs(msg) {
 }
 
 function _stabilizePostInstallExtractionState() {
-  const dataDir = path.join(WORKSPACE, "data");
-  const sessionMessagesDir = path.join(LOGS_DIR, "session-messages");
+  const instanceId = resolvedInstallerInstanceId();
+  const dataDir = hiddenInstanceDataDir(instanceId);
+  const sessionMessagesDir = path.join(hiddenInstanceLogsDir(instanceId), "quaid", "sessions");
   const cursorDir = path.join(dataDir, "session-cursors");
   const pendingSignalsDir = path.join(dataDir, "pending-extraction-signals");
   const timeoutBuffersDir = path.join(dataDir, "timeout-buffers");
@@ -5345,7 +5365,7 @@ function notifyInstallWarmupNotice() {
 function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule) {
   const platform = resolvedInstallerPlatform();
   const instanceId = resolvedInstallerInstanceId(platform);
-  const authTokenPath = path.join(WORKSPACE, "config", "adapters", "claude-code", ".auth-token");
+  const authTokenPath = path.join(WORKSPACE, "adaptors", "claude-code", ".auth-token");
   const authTokenPresent = (() => {
     try { return !!fs.readFileSync(authTokenPath, "utf8").trim(); } catch { return false; }
   })();
@@ -5448,12 +5468,12 @@ function formatPreInstallSurvey(plan) {
 async function main() {
   // --- Installer lock: prevent concurrent runs against the same workspace ---
   // Dry-run writes nothing, so it does not need exclusive access.
-  const LOCK_FILE = path.join(DATA_DIR, ".installer.lock");
+  const LOCK_FILE = path.join(RUNTIME_DIR, ".installer.lock");
   let _lockAcquired = false;
   if (DRY_RUN) {
     // Skip lock in dry-run mode — no writes, no need to block concurrent installs.
   } else try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(RUNTIME_DIR, { recursive: true });
     fs.writeFileSync(LOCK_FILE, new Date().toISOString(), { flag: "wx" }); // exclusive create
     _lockAcquired = true;
   } catch (lockErr) {

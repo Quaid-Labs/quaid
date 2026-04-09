@@ -76,7 +76,7 @@ The TypeScript layer sits between adapters and Python backend. Two key modules o
 
 Store execution is sequential (not parallel). Graph store receives accumulated vector results as a `candidatePool` to seed traversal. Results are deduped by `id` (preferred) or `via::text` key, source-type-boosted by intent, then sorted by similarity and sliced to `limit`.
 
-**Project catalog cap.** `routeRecallPlan` calls `getProjectCatalog()` but hard-caps the list at 40 entries (`.slice(0, 40)`) before embedding the names into the router prompt. Projects beyond the 40th position are invisible to the router's project-scoping logic. The router also validates any returned project name against the capped list — an LLM-suggested project that ranked 41st or higher will be silently dropped (no project scoping applied). This is a known limitation; if your instance has many projects, sort the most important ones first in instance `memory.json`.
+**Project catalog cap.** `routeRecallPlan` calls `getProjectCatalog()` but hard-caps the list at 40 entries (`.slice(0, 40)`) before embedding the names into the router prompt. Projects beyond the 40th position are invisible to the router's project-scoping logic. The router also validates any returned project name against the capped list — an LLM-suggested project that ranked 41st or higher will be silently dropped (no project scoping applied). This is a known limitation; if your instance has many projects, sort the most important ones first in instance `config.json`.
 
 **`core/session-timeout.ts` — Idle-session extraction.** `SessionTimeoutManager` is instantiated by the OpenClaw adapter and provides a secondary extraction path for sessions that never fire a `/compact` or `/reset`. It buffers messages via `onAgentEnd` and sets a debounced timer (`timeoutMinutes`, default from `capture.inactivityTimeoutMinutes`). If the timer fires before `onAgentStart` clears it, `queueExtractionFromSession` is called. For OC, this writes a daemon signal (compaction type) rather than running extraction in-process. A stale-sweep mechanism (`recoverStaleBuffers`) runs at startup to catch sessions that timed out while the process was not running; it uses a windowed scan between the last sweep timestamp and now, capped at `maxStaleRecoverPerTick` (default 3) per invocation with exponential backoff on failures. Replay prevention uses per-session cursor files in `data/session-cursors/`.
 
@@ -716,7 +716,7 @@ Projects are auto-discovered during RAG reindexing (janitor task 7).
 
 ### Central Config File
 
-All configuration lives in instance `memory.json` plus shared hidden config files and is loaded into a hierarchy of Python dataclasses.
+All configuration lives in instance `config.json` plus shared hidden config files and is loaded into a hierarchy of Python dataclasses.
 
 ### Dataclass Hierarchy
 
@@ -767,7 +767,7 @@ These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and 
 |----------|---------|
 | `QUAID_HOME` | Hidden root directory containing runtime state and all instances (default `~/.quaid/`) |
 | `QUAID_VISIBLE_HOME` | Visible root directory containing projects and instance markdown (default `~/quaid/`) |
-| `adapter.type` (in instance `memory.json`) | Select adapter: `standalone`, `openclaw`, `claude_code`, or `codex` |
+| `adapter.type` (in instance `config.json`) | Select adapter: `standalone`, `openclaw`, `claude_code`, or `codex` |
 | `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations (default `"default"`) |
 | `CLAWDBOT_WORKSPACE` | Root workspace hint for OpenClaw integrations |
 | `MEMORY_DB_PATH` | Override database path |
@@ -805,9 +805,9 @@ def load_config() -> MemoryConfig:
 
 Config file merge order (lowest → highest priority):
 1. `./memory-config.json` — local cwd override (rarely used)
-2. `$QUAID_HOME/shared/config/global/memory.json` — machine-wide shared settings (embeddings, Ollama)
-3. `$QUAID_HOME/shared/config/<platform>/memory.json` — platform-shared settings
-4. `$QUAID_HOME/instances/<instance>/memory.json` — per-instance config (highest priority)
+2. `$QUAID_HOME/shared/config/global/config.json` — machine-wide shared settings (embeddings, Ollama)
+3. `$QUAID_HOME/shared/config/<platform>/config.json` — platform-shared settings
+4. `$QUAID_HOME/instances/<instance>/config.json` — per-instance config (highest priority)
 
 ### Known Gotcha
 
@@ -878,7 +878,7 @@ Every LLM call accumulates into per-run counters (`_usage_input_tokens`, `_usage
 
 ### Notifications
 
-Quaid includes a notification system (`modules/quaid/core/runtime/notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit the active instance `memory.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
+Quaid includes a notification system (`modules/quaid/core/runtime/notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit the active instance `config.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
 
 ## Appendix: File Reference
 

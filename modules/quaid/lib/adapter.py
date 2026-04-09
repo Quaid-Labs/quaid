@@ -15,7 +15,7 @@ Built-in adapters currently include:
   - CodexAdapter: for Codex CLI/app sessions (hooks + app-server sidecar)
 
 Adapter selection (get_adapter()):
-1. memory.json adapter type  (required)
+1. config.json adapter type  (required)
 
 Tests use set_adapter() / reset_adapter() for isolation.
 """
@@ -601,7 +601,7 @@ class QuaidAdapter(abc.ABC):
                     if not child.is_dir():
                         continue
                     name = child.name.strip().lower()
-                    cfg_path = child / "memory.json"
+                    cfg_path = child / "config.json"
                     if not cfg_path.exists():
                         continue
                     if name == adapter_id or (prefix and name.startswith(prefix)):
@@ -819,7 +819,7 @@ class StandaloneAdapter(QuaidAdapter):
         if not provider_id or provider_id == "default":
             if is_fail_hard_enabled():
                 raise RuntimeError(
-                    "models.llmProvider must be explicitly set in config/memory.json. "
+                    "models.llmProvider must be explicitly set in config.json. "
                     "Valid values: 'claude-code', 'anthropic', 'openai-compatible'. "
                     "No default fallback while failHard is enabled."
                 )
@@ -844,7 +844,7 @@ class StandaloneAdapter(QuaidAdapter):
                 )
             raise RuntimeError(
                 "models.llmProvider is unset/default and fallback chain found no usable provider. "
-                "Set models.llmProvider explicitly in config/memory.json."
+                "Set models.llmProvider explicitly in config.json."
             )
 
         if provider_id == "openai-compatible":
@@ -1087,7 +1087,7 @@ class TestAdapter(StandaloneAdapter):
         iroot = home / "instances" / iid
         iroot.mkdir(parents=True, exist_ok=True)
         (iroot / "data").mkdir(parents=True, exist_ok=True)
-        cfg = iroot / "memory.json"
+        cfg = iroot / "config.json"
         if not cfg.exists():
             cfg.write_text('{"adapter":{"type":"standalone"}}', encoding="utf-8")
 
@@ -1245,7 +1245,7 @@ def _load_adapter_class_from_manifest(adapter_id: str):
 def _adapter_config_paths() -> List[Path]:
     """Candidate config files for adapter selection (priority order).
 
-    Instance-aware: checks QUAID_HOME/instances/QUAID_INSTANCE/memory.json first.
+    Instance-aware: checks QUAID_HOME/instances/QUAID_INSTANCE/config.json first.
     Falls back to legacy flat paths for backward compat during transition.
     """
     paths: List[Path] = []
@@ -1255,7 +1255,7 @@ def _adapter_config_paths() -> List[Path]:
 
     # Primary: instance-specific config
     if home and instance:
-        paths.append(Path(home) / "instances" / instance / "memory.json")
+        paths.append(Path(home) / "instances" / instance / "config.json")
 
     # Secondary: CLAUDE_PROJECT_DIR-derived instance path when QUAID_INSTANCE is not
     # yet set.  Instance derivation normally happens after config is found (in
@@ -1270,29 +1270,29 @@ def _adapter_config_paths() -> List[Path]:
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(_cpd)
             paths.append(
-                Path(home) / "instances" / f"claude-code-{_slug}" / "memory.json"
+                Path(home) / "instances" / f"claude-code-{_slug}" / "config.json"
             )
         _codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
         if _codex_project_dir:
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(_codex_project_dir)
             paths.append(
-                Path(home) / "instances" / f"codex-{_slug}" / "memory.json"
+                Path(home) / "instances" / f"codex-{_slug}" / "config.json"
             )
 
-    # Legacy: flat QUAID_HOME/config/memory.json
+    # Legacy: flat QUAID_HOME/config/config.json
     if home:
-        paths.append(Path(home) / "config" / "memory.json")
+        paths.append(Path(home) / "config" / "config.json")
 
     workspace_root = (
         os.environ.get("QUAID_WORKSPACE", "").strip()
         or os.environ.get("OPENCLAW_WORKSPACE", "").strip()
     )
     if workspace_root:
-        paths.append(Path(workspace_root) / "config" / "memory.json")
+        paths.append(Path(workspace_root) / "config" / "config.json")
 
     cwd = Path.cwd()
-    paths.append(cwd / "config" / "memory.json")
+    paths.append(cwd / "config" / "config.json")
     paths.append(cwd / "memory-config.json")
 
     # De-duplicate while preserving order
@@ -1344,7 +1344,7 @@ def _read_adapter_type_from_config() -> str:
     searched = ", ".join(str(p) for p in _adapter_config_paths())
     if last_existing is None:
         raise RuntimeError(
-            "No config file found for adapter selection. Create memory.json "
+            "No config file found for adapter selection. Create config.json "
             "with {\"adapter\": {\"type\": \"<adapter-id>\"}}. "
             f"Searched: {searched}"
         )
@@ -1402,7 +1402,7 @@ def _auto_provision_from_env_if_needed() -> None:
     if not home or not instance:
         return
     silo_root = Path(home) / "instances" / instance
-    if (silo_root / "memory.json").exists():
+    if (silo_root / "config.json").exists():
         return  # Already initialised — nothing to do
 
     adapter_type = _infer_adapter_type_from_instance(instance)
@@ -1447,7 +1447,7 @@ def _auto_provision_from_env_if_needed() -> None:
 def get_adapter() -> QuaidAdapter:
     """Get the current adapter (resolved on first call).
 
-    Selection: memory.json adapter.type under QUAID_HOME.
+    Selection: config.json adapter.type under QUAID_HOME.
     Each QUAID_HOME silo has its own config that declares which adapter owns it.
 
     On first resolution, also bootstraps QUAID_INSTANCE from

@@ -94,7 +94,7 @@ def test_test_adapter_creates_config_directory(tmp_path, monkeypatch):
     from lib.adapter import TestAdapter
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     TestAdapter(tmp_path)
-    assert (tmp_path / "instances" / "pytest-runner" / "config" / "memory.json").exists()
+    assert (tmp_path / "instances" / "pytest-runner" / "config.json").exists()
 
 
 def test_test_adapter_llm_calls_initially_empty(tmp_path):
