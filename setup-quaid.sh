@@ -1765,7 +1765,24 @@ step6_install() {
         info "Installing plugin source..."
         mkdir -p "${PLUGIN_DIR}"
         if [[ -d "${SCRIPT_DIR}/modules/quaid" ]]; then
-            cp -R "${SCRIPT_DIR}/modules/quaid/"* "${PLUGIN_DIR}/"
+            python3 - "${SCRIPT_DIR}/modules/quaid" "${PLUGIN_DIR}" <<'PY'
+import os, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+skip = {"node_modules", ".git", "__pycache__", ".pytest_cache", ".tmp", "tests", "scripts"}
+for name in os.listdir(src):
+    if name in skip or name.endswith(".pyc"):
+        continue
+    src_path = os.path.join(src, name)
+    dst_path = os.path.join(dst, name)
+    if os.path.isdir(src_path) and not os.path.islink(src_path):
+        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+    else:
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+        shutil.copy2(src_path, dst_path, follow_symlinks=True)
+PY
+            if [[ -f "${SCRIPT_DIR}/modules/quaid/update-quaid.mjs" ]]; then
+                cp "${SCRIPT_DIR}/modules/quaid/update-quaid.mjs" "${PLUGIN_DIR}/update-quaid.mjs"
+            fi
             find "${PLUGIN_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
             find "${PLUGIN_DIR}" -type f -name "*.pyc" -delete 2>/dev/null || true
         else
@@ -1775,6 +1792,8 @@ step6_install() {
     else
         info "Plugin source already in place"
     fi
+    rm -rf "${PLUGIN_DIR}/tests" "${PLUGIN_DIR}/scripts" 2>/dev/null || true
+    rm -f "${PLUGIN_DIR}/adaptors/openclaw/clawdbot.plugin.json" 2>/dev/null || true
 
     # Install Node dependencies (typebox etc.)
     if [[ -f "${PLUGIN_DIR}/package.json" ]] && [[ ! -d "${PLUGIN_DIR}/node_modules" ]]; then
@@ -2033,7 +2052,9 @@ print(f'[+] Quaid project registered ({len(found)} docs)')
             cd "$PLUGIN_DIR"
             export QUAID_HOME="${WORKSPACE_ROOT}"
             export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
-            python3 scripts/sync-tools-domain-block.py --workspace "${WORKSPACE_ROOT}" 2>/dev/null || true
+            if [[ -f "${SCRIPT_DIR}/modules/quaid/scripts/sync-tools-domain-block.py" ]]; then
+                python3 "${SCRIPT_DIR}/modules/quaid/scripts/sync-tools-domain-block.py" --workspace "${WORKSPACE_ROOT}" 2>/dev/null || true
+            fi
         ) || true
     fi
 

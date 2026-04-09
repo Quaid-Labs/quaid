@@ -3071,9 +3071,13 @@ async function step3_models() {
   // API key — the bot passes its key to Quaid at runtime.
   // No need to check env here.
   const keyEnv = keyEnvFor(provider);
-  const llmProviderSetting = hostManagedLlmDefault
-    ? "default"
-    : (provider === "anthropic" ? "anthropic" : "openai-compatible");
+  const llmProviderSetting = deriveInstallerLlmProviderSetting(
+    adapterType,
+    provider,
+    highModel,
+    lowModel,
+    hostManagedLlmDefault,
+  );
 
   // Notifications
   let notifLevel = "normal";
@@ -3707,6 +3711,19 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     copyDirSync(pluginSrc, PLUGIN_DIR);
     s.stop(C.green(pluginDirEmpty ? "Plugin installed" : "Plugin synced"));
   }
+  const runtimeUpdateSrc = path.join(pluginSrc, "update-quaid.mjs");
+  if (fs.existsSync(runtimeUpdateSrc)) {
+    fs.copyFileSync(runtimeUpdateSrc, path.join(PLUGIN_DIR, "update-quaid.mjs"));
+  }
+  for (const stalePath of [
+    path.join(PLUGIN_DIR, "tests"),
+    path.join(PLUGIN_DIR, "scripts"),
+    path.join(PLUGIN_DIR, "adaptors", "openclaw", "clawdbot.plugin.json"),
+  ]) {
+    try {
+      fs.rmSync(stalePath, { recursive: true, force: true });
+    } catch {}
+  }
   const skipBinShim = String(process.env.QUAID_INSTALL_SKIP_BIN_SHIM || "").trim() === "1";
   if (skipBinShim) {
     log.info("Skipping quaid CLI shim update (QUAID_INSTALL_SKIP_BIN_SHIM=1).");
@@ -4115,11 +4132,14 @@ except ValueError:
     }
 
     // Keep projects/quaid/TOOLS.md domain block aligned after install.
-    spawnSync("python3", ["scripts/sync-tools-domain-block.py", "--workspace", WORKSPACE], {
-      cwd: PLUGIN_DIR,
-      stdio: "pipe",
-      env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME, OPENCLAW_WORKSPACE: WORKSPACE },
-    });
+    const syncToolsScript = path.join(pluginSrc, "scripts", "sync-tools-domain-block.py");
+    if (fs.existsSync(syncToolsScript)) {
+      spawnSync("python3", [syncToolsScript, "--workspace", WORKSPACE], {
+        cwd: __dirname,
+        stdio: "pipe",
+        env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME, OPENCLAW_WORKSPACE: WORKSPACE },
+      });
+    }
     s.stop(C.green("Bundled project docs registered"));
   }
 
@@ -4353,6 +4373,22 @@ function keyEnvFor(provider) {
     ollama: "",
   };
   return map[provider] || "ANTHROPIC_API_KEY";
+}
+
+function deriveInstallerLlmProviderSetting(adapterType, provider, deepModel, fastModel, hostManagedLlmDefault) {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (!hostManagedLlmDefault) {
+    return normalizedProvider === "anthropic" ? "anthropic" : "openai-compatible";
+  }
+  if (normalizedProvider && normalizedProvider !== "default") {
+    return normalizedProvider;
+  }
+  const modelHints = `${String(deepModel || "")} ${String(fastModel || "")}`.trim().toLowerCase();
+  if (modelHints.includes("claude")) return "anthropic";
+  if (modelHints.includes("gpt-")) {
+    return adapterType === "openclaw" ? "openai-codex" : "openai-compatible";
+  }
+  return adapterType === "openclaw" ? "anthropic" : "openai-compatible";
 }
 
 function baseUrlFor(provider) {
@@ -4945,7 +4981,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   }
 }
 
-function copyDirSync(src, dest) {
+function copyDirSync(src, dest, rel = "") {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     if (
@@ -4954,12 +4990,15 @@ function copyDirSync(src, dest) {
       || entry.name === "__pycache__"
       || entry.name === ".pytest_cache"
       || entry.name === ".tmp"
+      || (rel === "" && entry.name === "tests")
+      || (rel === "" && entry.name === "scripts")
       || entry.name.endsWith(".pyc")
     ) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
+      const nextRel = rel ? path.join(rel, entry.name) : entry.name;
+      copyDirSync(srcPath, destPath, nextRel);
     } else if (entry.isFile() || entry.isSymbolicLink()) {
       // copyFileSync follows symlinks (dereferences to real content) — this is
       // intentional so that the dest dir contains real files, not broken links.

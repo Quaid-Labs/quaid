@@ -400,7 +400,7 @@ PYEOF
     ;;
 
   update)
-    exec node "$SCRIPT_DIR/scripts/update-quaid.mjs" "$@"
+    exec node "$SCRIPT_DIR/update-quaid.mjs" "$@"
     ;;
 
   help|--help|-h)
