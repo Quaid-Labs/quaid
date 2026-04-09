@@ -1697,6 +1697,7 @@ function _ensureAgentsList(cli, workspacePath) {
         default: true,
         name: "Default",
         workspace: ws,
+        home: ws,
       },
     ];
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
