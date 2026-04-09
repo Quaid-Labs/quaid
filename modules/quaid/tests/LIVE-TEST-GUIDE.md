@@ -789,6 +789,46 @@ transactional content).
 
 **Pass**: Error surfaced with tier and exception detail, recovery on next turn.
 
+### M16 — Subagent Memory Attribution (Exploratory)
+
+**This milestone is exploratory — not pass/fail.** Subagent memory is not
+fully supported yet. The goal is to discover where each platform puts
+subagent session text and whether it can be attributed correctly.
+
+**Research questions:**
+1. Where does each platform store subagent session transcripts?
+2. Can the subagent text be attributed to the parent agent/instance?
+3. Can it be clearly labeled as `source=subagent` vs regular conversation?
+
+**Best case outcome:** Subagent facts extracted tied to the parent instance
+with `source=subagent` provenance, and on recall those memories can be
+demoted (lower ranking weight since they're from subtask context, not
+direct user conversation).
+
+**Procedure:**
+1. Ask the agent to spawn a subagent with a task containing a distinctive
+   fact. Example: "Spawn a subagent to research this: my uncle owns a
+   vineyard in Mendoza that produces Malbec."
+   **Keywords**: `vineyard`, `Mendoza`, `Malbec`
+
+2. Wait for the subagent to complete.
+
+3. Investigate:
+   - Where is the subagent's session transcript? (same file as parent?
+     separate file? separate dir?)
+   - Is the subagent registered in `~/.quaid/data/subagent-registry/`?
+   - Does the parent session's extraction buffer include the subagent text?
+   - If extraction is triggered, do the subagent facts land in the parent DB?
+   - What `source_type` or `speaker` do they get?
+
+4. Report findings — transcript location, attribution state, and what
+   would need to change to support `source=subagent` provenance.
+
+**Platform notes**:
+- **CC**: SubagentStart/SubagentStop hooks fire; subagent registry tracks it
+- **CDX**: Subtask model; check if transcript is captured
+- **OC**: `sessions_spawn` with `runtime: "subagent"`
+
 ---
 
 ## Step 4 — Cross-Platform Project Linking Test (XP)
@@ -930,6 +970,18 @@ Only valid when ALL of the following are true:
 4. A fix would require changing the external system, not just a code patch.
 
 If you can imagine a code change that would fix it — write it.
+
+**PASS-WITH-NOTE is NOT:**
+- A way to skip work on a hard problem. If the test failed and you could
+  have fixed it or found a workaround, that is FAIL, not PWN.
+- A label for "I didn't investigate thoroughly." Investigate first, exhaust
+  options, then decide.
+- Acceptable when the issue is in OUR code. If we can change the code to
+  make it pass, it is not a PWN — it is a FAIL that needs a fix.
+- A substitute for retrying with a different approach. Try restart, try a
+  different config path, try a workaround. Only rule PWN after real effort.
+
+PWN is reviewed carefully. Lazy PWN erodes trust in the test results.
 
 ## Loop Termination Contract
 

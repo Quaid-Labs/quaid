@@ -51,22 +51,21 @@ Receive:
 
 ## Sending Messages
 
-Send all OC messages via Telegram:
+Send all OC messages via the TUI (`openclaw tui`) in the platform pane:
+
 ```bash
-~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "your message"
-~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/clear"
-~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/new"
-~/quaidcode/util/scripts/tg --config ~/quaidcode/util/scripts/.tg-livetest-config "/compact"
+tmux send-keys -t livetest:OC.1 "your message" Enter
+tmux send-keys -t livetest:OC.1 "/new" Enter
+tmux send-keys -t livetest:OC.1 "/reset" Enter
 ```
 
-Lifecycle commands (`/clear`, `/new`, `/compact`) are sent as plain Telegram messages.
+Read replies with:
+```bash
+tmux capture-pane -t livetest:OC.1 -p | tail -30
+```
 
-**Avoid apostrophes** in OC messages — use "do not" instead of "don't".
-
-Replies arrive automatically in `tg-poll` stdout tagged as:
-`[telegram:Livetest] Bertrand_clawdbot_bot: <text>`
-
-No tmux capture is needed for replies.
+OC lifecycle commands: `/new` (new session) and `/reset` (reset current session).
+OC does NOT have `/clear` or `/compact`.
 
 ---
 
@@ -74,13 +73,22 @@ No tmux capture is needed for replies.
 
 | Trigger | How | Notes |
 |---------|-----|-------|
-| New session | `/new` | Lifecycle note below |
-| Session clear | `/clear` | Extracts current session |
-| Compaction | `/compact` | Extracts + compacts |
-| Timeout | inactivity > `capture.inactivityTimeoutMinutes` | Daemon-compaction signal (source: timeout_extract) |
+| New session | `/new` | Creates new session key; adapter detects and signals old session |
+| Timeout | inactivity > `capture.inactivityTimeoutMinutes` | Daemon-timeout signal |
 | Rolling | session crosses `capture.chunk_tokens` threshold | Daemon polls automatically |
 
+**Do NOT use `/reset` for extraction.** `/reset` truncates the session
+transcript before the daemon can read it, destroying all conversation content.
+Use `/new` instead — it creates a new session without wiping the old one.
+
+After `/new`, send one follow-up message in the new session to ensure the
+session key is written to sessions.json. The adapter detects the new key and
+signals extraction for the old session.
+
 After any extraction trigger, wait **30–60 seconds** before checking the DB.
+
+**Do NOT use tg-extract or any manual signal injection.** These bypass the
+feature under test and poison reset-dedupe markers.
 
 ---
 
@@ -181,5 +189,28 @@ If sibling edge anchors to wrong entity, delete nodes and re-seed in a fresh
 session — do not retry within the same session.
 
 ### M12 — Multi-Agent Silo Verification
-OC-only milestone. Tests that each OC agent instance has its own silo with
-correct signal routing. Follow the guide exactly.
+Tests that each OC agent instance has its own silo with correct signal
+routing. Follow the guide exactly.
+
+### M13 — Multi-Instance Creation
+OC creates new instances via the native agent system, not the installer:
+
+```bash
+ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents add --help'
+# Use openclaw agents add to create a test agent (e.g. m13test)
+```
+
+When OC creates a new agent, Quaid's adapter should detect it and
+auto-create the instance silo. Verify:
+1. New silo exists at `~/.quaid/instances/openclaw-m13test/`
+2. Visible instance at `~/quaid/instances/openclaw-m13test/`
+3. Store a canary fact via the new agent, verify it does NOT appear
+   from the livetest instance
+
+After the test, clean up:
+```bash
+ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test'
+```
+
+Do NOT re-run the installer for M13 — that overwrites the gateway
+config and disrupts the active livetest instance.
