@@ -1,5 +1,6 @@
 import json
 import types
+from pathlib import Path
 
 import pytest
 
@@ -430,7 +431,15 @@ def test_validate_declared_event_contract_accepts_openclaw_native_message_events
     def _fake_collect_declared_exports(*, registry, slots, surface, strict=False):
         assert surface == "events"
         assert strict is True
-        return {"openclaw.adapter": ["message", "message_received", "message:preprocessed"]}
+        return {
+            "openclaw.adapter": [
+                "before_agent_reply",
+                "before_prompt_build",
+                "message",
+                "message_received",
+                "message:preprocessed",
+            ]
+        }
 
     monkeypatch.setattr(
         "core.runtime.plugins.collect_declared_exports",
@@ -439,6 +448,25 @@ def test_validate_declared_event_contract_accepts_openclaw_native_message_events
 
     errors = validate_declared_event_contract(
         registry=object(),
+        slots={"adapter": "openclaw.adapter", "ingest": [], "datastores": []},
+        strict=True,
+    )
+    assert errors == []
+
+
+def test_validate_declared_event_contract_accepts_openclaw_manifest_native_reply_hook():
+    from core.runtime.plugins import PluginRegistry, validate_manifest_dict
+
+    manifest_path = Path(__file__).resolve().parents[1] / "adaptors" / "openclaw" / "plugin.json"
+    manifest = validate_manifest_dict(
+        json.loads(manifest_path.read_text(encoding="utf-8")),
+        source_path=str(manifest_path),
+    )
+    registry = PluginRegistry(api_version=manifest.plugin_api_version)
+    registry.register(manifest)
+
+    errors = validate_declared_event_contract(
+        registry=registry,
         slots={"adapter": "openclaw.adapter", "ingest": [], "datastores": []},
         strict=True,
     )
