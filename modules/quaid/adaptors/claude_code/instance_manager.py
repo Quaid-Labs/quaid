@@ -30,6 +30,17 @@ class ClaudeCodeInstanceManager(InstanceManager):
     DEFAULT_DEEP_MODEL = "claude-sonnet-4-6"
     DEFAULT_FAST_MODEL = "claude-haiku-4-5"
 
+    @staticmethod
+    def _is_managed_quaid_hook_command(command: str) -> bool:
+        text = str(command or "")
+        return (
+            "hook-session-init" in text
+            or "hook-inject" in text
+            or "hook-extract" in text
+            or "hook-subagent-start" in text
+            or "hook-subagent-stop" in text
+        )
+
     def make_instance(
         self,
         project_path: str,
@@ -65,8 +76,9 @@ class ClaudeCodeInstanceManager(InstanceManager):
         instance_id = self.resolve_instance_id(name)
 
         if not dry_run:
+            project_settings_path = settings_path or (project_dir / ".claude" / "settings.json")
             self._write_settings(project_dir, instance_id)
-            self._write_hooks(instance_id, settings_path=settings_path)
+            self._write_hooks(instance_id, settings_path=project_settings_path)
             self._store_auth_token(token)
             self._write_model_config(
                 silo_root,
@@ -182,8 +194,7 @@ class ClaudeCodeInstanceManager(InstanceManager):
         visible_home = str(self.adapter.visible_home())
         env_prefix = (
             f"QUAID_HOME='{workspace}' "
-            f"QUAID_VISIBLE_HOME='{visible_home}' "
-            f"QUAID_INSTANCE='{instance_id}'"
+            f"QUAID_VISIBLE_HOME='{visible_home}'"
         )
 
         desired: dict = {
@@ -212,13 +223,24 @@ class ClaudeCodeInstanceManager(InstanceManager):
         changed = False
         for event, command in desired.items():
             entries = settings["hooks"].setdefault(event, [])
+            filtered_entries = []
+            for entry in entries:
+                hooks = list(entry.get("hooks", []))
+                kept = [h for h in hooks if not self._is_managed_quaid_hook_command(h.get("command", ""))]
+                if kept:
+                    cleaned = dict(entry)
+                    cleaned["hooks"] = kept
+                    filtered_entries.append(cleaned)
+            if filtered_entries != entries:
+                settings["hooks"][event] = filtered_entries
+                changed = True
             existing_cmds = {
                 h.get("command", "")
-                for entry in entries
+                for entry in settings["hooks"][event]
                 for h in entry.get("hooks", [])
             }
             if command not in existing_cmds:
-                entries.append({"matcher": "", "hooks": [{"type": "command", "command": command}]})
+                settings["hooks"][event].append({"matcher": "", "hooks": [{"type": "command", "command": command}]})
                 changed = True
 
         env = settings.setdefault("env", {})
@@ -227,6 +249,9 @@ class ClaudeCodeInstanceManager(InstanceManager):
             changed = True
         if env.get("QUAID_VISIBLE_HOME") != visible_home:
             env["QUAID_VISIBLE_HOME"] = visible_home
+            changed = True
+        if env.get("QUAID_INSTANCE") != instance_id:
+            env["QUAID_INSTANCE"] = instance_id
             changed = True
 
         if changed:

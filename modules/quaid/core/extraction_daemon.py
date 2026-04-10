@@ -1525,7 +1525,7 @@ def _get_capture_chunk_tokens(default: int = 8_000) -> int:
         capture = getattr(cfg, "capture", None)
         raw = getattr(capture, "chunk_tokens", default) if capture is not None else default
         tokens = int(raw)
-        return max(1_000, tokens)
+        return max(1, tokens)
     except Exception:
         return default
 

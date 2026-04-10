@@ -132,6 +132,61 @@ def _safe_agent_error(exc: Exception) -> str:
     return f"Error type: {err_type}. Check Quaid logs for details."
 
 
+def _is_provider_like_error(exc: Exception) -> bool:
+    text = str(exc or "")
+    lowered = text.lower()
+    return (
+        isinstance(exc, RuntimeError)
+        and (
+            "llm" in text
+            or "provider" in lowered
+            or "failhard" in lowered
+            or "invalid-model" in lowered
+            or "model" in lowered
+        )
+    )
+
+
+def _extract_recall_provider_notice(memories: List[Dict], recall_meta: dict | None) -> str:
+    """Promote degraded recall-provider failures into an explicit relay notice.
+
+    Fast recall can fail open and return fallback results plus a warning row.
+    That warning should not be buried inside memory context — it needs to be
+    surfaced as a direct system message so the agent tells the user.
+    """
+    warning_texts: List[str] = []
+    for mem in list(memories or []):
+        if not isinstance(mem, dict):
+            continue
+        category = str(mem.get("category") or "").strip().lower()
+        text = str(mem.get("text") or "").strip()
+        if category == "system_notice" and text.startswith("[RECALL ROUTER WARNING]"):
+            warning_texts.append(text)
+
+    meta_reason = ""
+    if isinstance(recall_meta, dict):
+        for detail in list(recall_meta.get("turn_details") or []):
+            if not isinstance(detail, dict):
+                continue
+            planner = detail.get("planner") if isinstance(detail.get("planner"), dict) else {}
+            bailout = str(planner.get("bailout_reason") or "").strip()
+            fallback_detail = str(planner.get("fallback_detail") or "").strip()
+            if bailout in {"planner_exception_fallback_off", "planner_timeout_fallback_off"}:
+                meta_reason = fallback_detail or bailout
+                break
+
+    combined = " ".join(warning_texts + ([meta_reason] if meta_reason else []))
+    lowered = combined.lower()
+    if not combined:
+        return ""
+    if not any(token in lowered for token in ("provider", "model", "invalid", "llm", "timeout", "400")):
+        return ""
+    return (
+        "[Quaid error] [provider] Quaid could not access the configured fast recall model "
+        "and used degraded fallback results. Check Quaid config or logs."
+    )
+
+
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     if doc_file != "TOOLS.md":
         return content
@@ -453,7 +508,9 @@ def hook_inject(args):
                     memories, recall_meta = mem_result
                 else:
                     memories = mem_result
-            except Exception:
+            except Exception as exc:
+                if _is_provider_like_error(exc):
+                    raise
                 memories = []
                 recall_meta = None
             try:
@@ -480,6 +537,20 @@ def hook_inject(args):
         direct_notice_context = _format_direct_agent_notices(direct_notices)
         if direct_notice_context:
             context_parts.append(direct_notice_context)
+
+        recall_provider_notice = _extract_recall_provider_notice(memories, recall_meta)
+        if recall_provider_notice:
+            context_parts.append(
+                _format_direct_agent_notices([recall_provider_notice])
+            )
+            memories = [
+                mem for mem in list(memories or [])
+                if not (
+                    isinstance(mem, dict)
+                    and str(mem.get("category") or "").strip().lower() == "system_notice"
+                    and str(mem.get("text") or "").strip().startswith("[RECALL ROUTER WARNING]")
+                )
+            ]
 
         if pending_context:
             context_parts.append(pending_context)
@@ -519,7 +590,7 @@ def hook_inject(args):
 
     except (RuntimeError, Exception) as e:
         fallback_context_parts = []
-        if isinstance(e, RuntimeError) and ("LLM" in str(e) or "provider" in str(e).lower() or "failHard" in str(e)):
+        if _is_provider_like_error(e):
             # Provider/LLM failure — surface to agent so they can inform the user
             fallback_context_parts.append(
                 f"<quaid_system_message>[Quaid error] {_safe_agent_error(e)}</quaid_system_message>"

@@ -124,25 +124,20 @@ class TestClaudeCodeInstanceManager:
 
         project_dir = tmp_path / "myproject"
         project_dir.mkdir()
-        hooks_settings_path = tmp_path / ".claude-global" / "settings.json"
 
         with patch("lib.instance.instance_exists", return_value=False), \
              patch("lib.instance.validate_instance_id"):
-            mgr.make_instance(
-                str(project_dir),
-                "myapp",
-                settings_path=hooks_settings_path,
-            )
+            mgr.make_instance(str(project_dir), "myapp")
 
         settings_path = project_dir / ".claude" / "settings.json"
         assert settings_path.is_file()
         data = json.loads(settings_path.read_text())
         assert data["env"]["QUAID_INSTANCE"] == "claude-code-myapp"
-        hooks_data = json.loads(hooks_settings_path.read_text())
-        assert "hooks" in hooks_data
-        assert "SessionStart" in hooks_data["hooks"]
-        session_start_cmd = hooks_data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        assert "QUAID_INSTANCE='claude-code-myapp'" in session_start_cmd
+        assert "hooks" in data
+        assert "SessionStart" in data["hooks"]
+        session_start_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        assert "hook-session-init" in session_start_cmd
+        assert "QUAID_INSTANCE='" not in session_start_cmd
 
     def test_make_instance_overwrites_existing_instance(self, tmp_path):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
@@ -158,24 +153,32 @@ class TestClaudeCodeInstanceManager:
         project_dir = tmp_path / "myproject"
         claude_dir = project_dir / ".claude"
         claude_dir.mkdir(parents=True)
-        existing = {"env": {"QUAID_INSTANCE": "claude-code-old", "OTHER": "value"}, "hooks": {}}
+        existing = {
+            "env": {"QUAID_INSTANCE": "claude-code-old", "OTHER": "value"},
+            "hooks": {
+                "SessionStart": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "QUAID_INSTANCE='claude-code-old' quaid hook-session-init"}]},
+                    {"matcher": "", "hooks": [{"type": "command", "command": "echo keep-me"}]},
+                ],
+            },
+        }
         (claude_dir / "settings.json").write_text(json.dumps(existing))
-        hooks_settings_path = tmp_path / ".claude-global" / "settings.json"
 
         with patch("lib.instance.instance_exists", return_value=False), \
              patch("lib.instance.validate_instance_id"):
-            mgr.make_instance(
-                str(project_dir),
-                "newapp",
-                settings_path=hooks_settings_path,
-            )
+            mgr.make_instance(str(project_dir), "newapp")
 
         data = json.loads((claude_dir / "settings.json").read_text())
         assert data["env"]["QUAID_INSTANCE"] == "claude-code-newapp"
         assert data["env"]["OTHER"] == "value"   # other env vars preserved
-        assert data["hooks"] == {}               # other settings preserved
-        hooks_data = json.loads(hooks_settings_path.read_text())
-        assert "SessionEnd" in hooks_data["hooks"]
+        session_start_cmds = [
+            h["command"]
+            for entry in data["hooks"]["SessionStart"]
+            for h in entry.get("hooks", [])
+        ]
+        assert "echo keep-me" in session_start_cmds
+        assert any("hook-session-init" in cmd for cmd in session_start_cmds)
+        assert all("QUAID_INSTANCE='claude-code-old'" not in cmd for cmd in session_start_cmds)
 
     def test_make_instance_dry_run_no_writes(self, tmp_path):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager

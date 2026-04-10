@@ -258,6 +258,54 @@ def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path
     assert err.strip() == ""
 
 
+def test_codex_hook_inject_promotes_recall_router_warning_to_provider_notice(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = MagicMock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.instance_root.return_value = tmp_path
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_get_owner_id", lambda: "test-owner")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+
+    warning = {
+        "text": "[RECALL ROUTER WARNING] Fast prepass failed and fallback recall plan was used. Reason: invalid-model-xyzzy provider failure.",
+        "similarity": 1.0,
+        "category": "system_notice",
+    }
+    fact = {"text": "Mendoza is known for Malbec", "similarity": 0.9, "category": "fact"}
+    meta = {
+        "turn_details": [
+            {
+                "planner": {
+                    "bailout_reason": "planner_exception_fallback_off",
+                    "fallback_detail": "invalid-model-xyzzy provider failure",
+                }
+            }
+        ]
+    }
+
+    with patch("core.interface.api.recall_fast", return_value=([warning, fact], meta)), \
+         patch("core.interface.api.projects_search_docs", return_value=None):
+        out, _err = _run_hook_inject(
+            {
+                "prompt": "What do you know about Mendoza?",
+                "session_id": "codex-provider-warning",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid error] [provider]" in context
+    assert "Mendoza is known for Malbec" in context
+    assert "[RECALL ROUTER WARNING]" not in context
+
+
 def test_codex_stop_writes_session_end_signal_for_new_command(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test-new.jsonl"
     transcript_path.write_text(

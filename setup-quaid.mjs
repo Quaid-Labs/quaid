@@ -4636,16 +4636,13 @@ function setupClaudeCodeHooks() {
   if (!settings.hooks) settings.hooks = {};
 
   // Resolve the quaid binary path. Use absolute paths so multiple installs
-  // can coexist — each instance's hooks point to its own quaid script.
-  // QUAID_HOME is all that's needed here: QUAID_INSTANCE is bootstrapped at
-  // runtime by get_adapter() via adapter.get_instance_name(), which reads
-  // CLAUDE_PROJECT_DIR (CC-injected) for per-project isolation.
+  // can coexist — each install's hooks point to its own quaid script.
+  // Do not hardcode QUAID_INSTANCE into the hook command itself: CC project
+  // settings own that env var so hooks stay per-project instead of leaking
+  // across every workspace on the machine.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  // Include QUAID_INSTANCE so that hooks fired outside an active session context
-  // (e.g. SessionEnd, which fires after /exit when per-project env vars are no
-  // longer injected by Claude Code) can still resolve the correct silo.
-  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_VISIBLE_HOME='${VISIBLE_HOME}' QUAID_INSTANCE='${syncInstallerInstanceEnv()}'`;
+  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_VISIBLE_HOME='${VISIBLE_HOME}'`;
 
   const desiredHooks = {
     SessionStart: [
@@ -4683,6 +4680,13 @@ function setupClaudeCodeHooks() {
       changed = true;
     } else {
       // Check if quaid hooks already exist for this event
+      const managedHookRe = /(hook-session-init|hook-inject|hook-extract|hook-subagent-start|hook-subagent-stop)/;
+      settings.hooks[event] = settings.hooks[event]
+        .map((entry) => {
+          const hooks = Array.isArray(entry.hooks) ? entry.hooks.filter((h) => !managedHookRe.test(String(h?.command || ""))) : [];
+          return { ...entry, hooks };
+        })
+        .filter((entry) => (entry.hooks || []).length > 0);
       const existingCmds = new Set();
       for (const entry of settings.hooks[event]) {
         for (const h of (entry.hooks || [])) {

@@ -62,6 +62,15 @@ class TestValidateSessionId:
         assert result.startswith("unknown-")
 
 
+class TestCaptureChunkTokens:
+    def test_respects_configured_chunk_tokens_below_one_thousand(self, monkeypatch):
+        capture = type("Capture", (), {"chunk_tokens": 500})()
+        cfg = type("Cfg", (), {"capture": capture})()
+        monkeypatch.setattr("config.get_config", lambda: cfg)
+
+        assert daemon._get_capture_chunk_tokens() == 500
+
+
 # ---------------------------------------------------------------------------
 # write_signal / read_pending_signals / mark_signal_processed
 # ---------------------------------------------------------------------------
@@ -228,5 +237,4 @@ class TestTranscriptUtils:
 # ---------------------------------------------------------------------------
 # read_carryover / write_carryover / clear_carryover
 # ---------------------------------------------------------------------------
-
 

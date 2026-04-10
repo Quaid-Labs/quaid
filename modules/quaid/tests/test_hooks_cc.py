@@ -425,6 +425,45 @@ class TestHookInjectRecallResilience:
         assert "South Austin" in context
         assert "<tool_hint>" not in context
 
+    def test_recall_router_warning_is_promoted_to_provider_notice(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        warning = {
+            "text": "[RECALL ROUTER WARNING] Fast prepass failed and fallback recall plan was used. Reason: invalid-model-xyzzy provider failure.",
+            "similarity": 1.0,
+            "category": "system_notice",
+        }
+        fact = {"text": "Maya lives in South Austin", "similarity": 0.9, "category": "fact"}
+        meta = {
+            "turn_details": [
+                {
+                    "planner": {
+                        "bailout_reason": "planner_exception_fallback_off",
+                        "fallback_detail": "invalid-model-xyzzy provider failure",
+                    }
+                }
+            ]
+        }
+
+        with patch("core.interface.api.recall_fast", return_value=([warning, fact], meta)):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Where does Maya live?",
+                    "session_id": "sess-provider-warning",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid error] [provider]" in context
+        assert "South Austin" in context
+        assert "[RECALL ROUTER WARNING]" not in context
+
     def test_project_docs_context_is_injected_when_docs_search_returns_chunks(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
