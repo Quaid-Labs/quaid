@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { __test } from "../adaptors/openclaw/adapter.js";
 
@@ -224,6 +225,25 @@ describe("lifecycle signal detection", () => {
     } finally {
       try { fs.unlinkSync(eventLogFile); } catch {}
       try { fs.unlinkSync(transcriptFile); } catch {}
+    }
+  });
+
+  it("recognizes corrupted preserved transcripts overwritten by timeout events", () => {
+    const baseDir = `/tmp/quaid-oc-preserved-${Date.now()}`;
+    const corruptedFile = path.join(baseDir, "logs", "quaid", "sessions", "sess-1.jsonl");
+    fs.mkdirSync(path.dirname(corruptedFile), { recursive: true });
+    fs.writeFileSync(
+      corruptedFile,
+      [
+        JSON.stringify({ event: "buffer_write", session_id: "sess-1", bytes: 120 }),
+        JSON.stringify({ event: "buffered", session_id: "sess-1", count: 2 }),
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      expect(__test.looksLikeQuaidEventLogTranscript(corruptedFile)).toBe(true);
+    } finally {
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
     }
   });
 

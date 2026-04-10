@@ -693,16 +693,27 @@ function looksLikeQuaidEventLogTranscript(filePath: string): boolean {
   const candidate = String(filePath || "").trim();
   if (!candidate || !fs.existsSync(candidate)) return false;
   try {
-    const lines = fs.readFileSync(candidate, "utf8").split(/\r?\n/).filter((line) => line.trim()).slice(0, 3);
+    const lines = fs.readFileSync(candidate, "utf8").split(/\r?\n/).filter((line) => line.trim()).slice(0, 5);
     if (lines.length === 0) return false;
-    return lines.every((line) => {
+    let matched = 0;
+    for (const line of lines) {
       try {
         const row = JSON.parse(line);
-        return Boolean(row && typeof row === "object" && typeof row.ts === "string" && typeof row.event === "string");
+        const event = String((row as any)?.event || "").trim().toLowerCase();
+        if (!event) continue;
+        const hasTimestamp = typeof (row as any)?.ts === "string" || typeof (row as any)?.timestamp === "string";
+        const isTimeoutEvent = event === "buffer_write"
+          || event === "buffered"
+          || event === "timer_scheduled"
+          || event === "timer_preserved";
+        if (hasTimestamp || isTimeoutEvent) {
+          matched += 1;
+        }
       } catch {
-        return false;
+        continue;
       }
-    });
+    }
+    return matched >= Math.min(2, lines.length);
   } catch {
     return false;
   }
@@ -719,7 +730,9 @@ function repairSessionCursorPathsFromQuaidEventLogs(): void {
         const payload = JSON.parse(fs.readFileSync(cursorPath, "utf8"));
         const sessionId = String(payload?.session_id || "").trim();
         const transcriptPath = String(payload?.transcript_path || "").trim();
-        if (!sessionId || !transcriptPath || !looksLikeQuaidEventLogTranscript(transcriptPath)) continue;
+        const isCorruptedPreservedTranscript = transcriptPath.startsWith(`${QUAID_SESSION_PRESERVE_DIR}${path.sep}`)
+          && looksLikeQuaidEventLogTranscript(transcriptPath);
+        if (!sessionId || !transcriptPath || (!looksLikeQuaidEventLogTranscript(transcriptPath) && !isCorruptedPreservedTranscript)) continue;
 
         const candidates = [
           getOpenClawSessionFile(sessionId),
