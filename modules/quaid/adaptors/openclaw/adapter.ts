@@ -1942,6 +1942,58 @@ type PluginConfig = {
 
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
 const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35_000;
+const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8_000);
+let promptModelConfigFingerprint = "";
+let promptModelConfigNotice = "";
+
+function currentPromptModelConfigFingerprint(): string {
+  try {
+    const models = getMemoryConfig()?.models || {};
+    return JSON.stringify({
+      llmProvider: String(models.llmProvider || ""),
+      fastReasoningProvider: String(models.fastReasoningProvider || ""),
+      deepReasoningProvider: String(models.deepReasoningProvider || ""),
+      fastReasoning: String(models.fastReasoning || ""),
+      deepReasoning: String(models.deepReasoning || ""),
+    });
+  } catch {
+    return "";
+  }
+}
+
+function markPromptModelConfigChecked(): void {
+  promptModelConfigFingerprint = currentPromptModelConfigFingerprint();
+  promptModelConfigNotice = "";
+}
+
+async function validatePromptModelConfigIfChanged(): Promise<string> {
+  const fingerprint = currentPromptModelConfigFingerprint();
+  if (!fingerprint) {
+    return "";
+  }
+  if (fingerprint === promptModelConfigFingerprint) {
+    return promptModelConfigNotice;
+  }
+
+  promptModelConfigFingerprint = fingerprint;
+  promptModelConfigNotice = "";
+  try {
+    await callConfiguredLLM(
+      "You are a Quaid model configuration health check. Reply with OK only.",
+      "OK",
+      "fast",
+      4,
+      MODEL_CONFIG_VALIDATION_TIMEOUT_MS,
+    );
+    writeHookTrace("hook.before_prompt_build.model_config_validated", {});
+  } catch (err: unknown) {
+    promptModelConfigNotice = buildImmediateProviderNotice(err, "fast");
+    writeHookTrace("hook.before_prompt_build.model_config_error", {
+      error: String((err as Error)?.message || err).slice(0, 240),
+    });
+  }
+  return promptModelConfigNotice;
+}
 
 function getOpenClawSessionsPath(): string {
   const primary = path.join(_openClawRootDir(), "agents", "main", "sessions", "sessions.json");
@@ -2176,6 +2228,7 @@ function isImmediateProviderFailure(err: unknown): boolean {
     || text.includes("check fastreasoning/deepreasoning")
     || text.includes("provider unavailable after")
     || text.includes("llm proxy error")
+    || (text.includes("[quaid][llm]") && text.includes("model="))
   );
 }
 
@@ -2546,6 +2599,7 @@ const quaidPlugin = {
 
     // Fail fast on model/provider/config mismatches so runtime doesn't degrade silently.
     runStartupSelfCheck();
+    markPromptModelConfigChecked();
     const strictContracts = facade.isPluginStrictMode();
     const contractDecl = loadAdapterContractDeclarations(strictContracts);
     if (contractDecl.enabled) {
@@ -2923,6 +2977,13 @@ notify_user(${JSON.stringify(message)})
         let allMemories: any[];
         let recallDiagnostics: Record<string, unknown> | null = null;
         try {
+          const modelConfigNotice = await validatePromptModelConfigIfChanged();
+          if (modelConfigNotice) {
+            prependContextParts.push(modelConfigNotice);
+            appendSystemContext = appendSystemContext
+              ? `${appendSystemContext}\n\n${modelConfigNotice}`
+              : modelConfigNotice;
+          }
           let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
           const deadline = new Promise<[any[]]>(resolve => {
             deadlineTimer = setTimeout(() => {

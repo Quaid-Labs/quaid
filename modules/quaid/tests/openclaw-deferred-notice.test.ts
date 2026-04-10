@@ -381,4 +381,107 @@ describe("openclaw deferred notices", () => {
     error.mockRestore();
     fs.rmSync(home, { recursive: true, force: true });
   });
+
+  it("surfaces changed invalid model config as same-turn provider context", async () => {
+    const home = makeTempDir("quaid-oc-provider-drift-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+    const configPath = path.join(hiddenHome, "instances", "openclaw-livetest", "config.json");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+
+    const validConfig = {
+      adapter: { type: "openclaw" },
+      systems: { memory: true, projects: false },
+      retrieval: { failHard: false, autoInject: true, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      plugins: { strict: false },
+    };
+    writeJson(configPath, validConfig);
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-livetest",
+        },
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: any, init: any) => {
+      expect(String(init?.headers?.["x-openclaw-model"] || "")).toContain("invalid-model-xyzzy");
+      return {
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: { message: "model not found" } }),
+      } as any;
+    });
+
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-livetest");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    writeJson(configPath, {
+      ...validConfig,
+      models: {
+        ...validConfig.models,
+        deepReasoning: "invalid-model-xyzzy",
+        fastReasoning: "invalid-model-xyzzy",
+      },
+    });
+    const changedAt = new Date(Date.now() + 10_000);
+    fs.utimesSync(configPath, changedAt, changedAt);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const result = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "What do you remember about my family?",
+        messages: [{ role: "user", content: "What do you remember about my family?" }],
+        sessionId: "session-provider-drift",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-provider-drift",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(String(result?.prependContext || "")).toContain("[Quaid error] [provider]");
+    expect(String(result?.appendSystemContext || "")).toContain("[Quaid error] [provider]");
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
 });

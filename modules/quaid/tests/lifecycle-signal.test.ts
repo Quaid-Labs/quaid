@@ -433,6 +433,9 @@ describe("lifecycle signal detection", () => {
     expect(__test.isImmediateProviderFailure(
       new Error("Python error: Quaid could not access its fast language model provider (openai-codex, model=invalid-model-xyzzy). Error: HTTP 400")
     )).toBe(true);
+    expect(__test.isImmediateProviderFailure(
+      new Error("[quaid][llm] tier=fast provider=openai-codex model=invalid-model-xyzzy status=400 error=model not found")
+    )).toBe(true);
     expect(__test.isImmediateProviderFailure(new Error("ordinary recall miss"))).toBe(false);
   });
 
