@@ -644,11 +644,11 @@ class OpenClawAdapter(QuaidAdapter):
 
     def get_fast_provider_default(self) -> str:
         detected = self._detect_gateway_primary_provider()
-        return detected or "anthropic"
+        return detected or "openai-codex"
 
     def get_deep_provider_default(self) -> str:
         detected = self._detect_gateway_primary_provider()
-        return detected or "anthropic"
+        return detected or "openai-codex"
 
     def get_fast_model_default(self, provider: str) -> Optional[str]:
         p = str(provider or "").strip().lower()

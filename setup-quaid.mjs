@@ -23,6 +23,12 @@ import {
   syncBuiltinAdapterManifests,
 } from "./modules/quaid/lib/adapter-manifests.mjs";
 import { shouldStartExtractionDaemonAfterInstall } from "./lib/install-daemon-policy.mjs";
+import {
+  deriveInstallerLlmProviderSetting,
+  installerDefaultProvider,
+  installerFallbackModelDefaults,
+  installerFallbackProviders,
+} from "./lib/install-model-defaults.mjs";
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 
@@ -2916,7 +2922,7 @@ async function step3_models() {
   const _modelSpinner = spinner();
   _modelSpinner.start("Reading adapter/provider defaults...");
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
-  let provider = "anthropic";
+  let provider = installerDefaultProvider(adapterType);
   if (DEBUG_SETUP) {
     log.info(C.dim(`[step3_models] begin adapter=${adapterType} agentMode=${AGENT_MODE ? "1" : "0"} workspace=${WORKSPACE}`));
   }
@@ -2937,7 +2943,7 @@ async function step3_models() {
 
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
-    : ["anthropic", "openai", "openrouter", "together", "ollama"];
+    : installerFallbackProviders(adapterType);
   if (DEBUG_SETUP) {
     log.info(C.dim(`[step3_models] provider surface for ${adapterType}: ${supportedProviders.join(",")}`));
   }
@@ -3001,9 +3007,11 @@ async function step3_models() {
   let modelsExplicitlyProvided = false;
   let envDeepModel = "";
   let envFastModel = "";
-  const adapterDefaults = (adapterCaps.modelDefaults && typeof adapterCaps.modelDefaults === "object")
-    ? adapterCaps.modelDefaults[String(provider || "").trim().toLowerCase()]
-    : null;
+  const adapterDefaults = (
+    adapterCaps.modelDefaults && typeof adapterCaps.modelDefaults === "object"
+      ? adapterCaps.modelDefaults[String(provider || "").trim().toLowerCase()]
+      : null
+  ) || installerFallbackModelDefaults(adapterType, provider);
   envDeepModel = String(process.env.QUAID_INSTALL_DEEP_MODEL || "").trim();
   envFastModel = String(process.env.QUAID_INSTALL_FAST_MODEL || "").trim();
   if (sharedOverride?.deep && sharedOverride?.fast && (!sharedOverride.provider || sharedOverride.provider === provider)) {
@@ -4488,22 +4496,6 @@ function keyEnvFor(provider) {
     ollama: "",
   };
   return map[provider] || "ANTHROPIC_API_KEY";
-}
-
-function deriveInstallerLlmProviderSetting(adapterType, provider, deepModel, fastModel, hostManagedLlmDefault) {
-  const normalizedProvider = String(provider || "").trim().toLowerCase();
-  if (!hostManagedLlmDefault) {
-    return normalizedProvider === "anthropic" ? "anthropic" : "openai-compatible";
-  }
-  if (normalizedProvider && normalizedProvider !== "default") {
-    return normalizedProvider;
-  }
-  const modelHints = `${String(deepModel || "")} ${String(fastModel || "")}`.trim().toLowerCase();
-  if (modelHints.includes("claude")) return "anthropic";
-  if (modelHints.includes("gpt-")) {
-    return adapterType === "openclaw" ? "openai-codex" : "openai-compatible";
-  }
-  return adapterType === "openclaw" ? "anthropic" : "openai-compatible";
 }
 
 function baseUrlFor(provider) {

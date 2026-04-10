@@ -612,8 +612,8 @@ class TestOpenClawAdapter:
         assert codex_defaults.get("fast")
         assert codex_defaults.get("deepEffort") == "medium"
         assert codex_defaults.get("fastEffort") == "medium"
-        assert adapter.get_deep_provider_default() == "anthropic"
-        assert adapter.get_fast_provider_default() == "anthropic"
+        assert adapter.get_deep_provider_default() == "openai-codex"
+        assert adapter.get_fast_provider_default() == "openai-codex"
 
     def test_installer_default_models_does_not_probe_gateway_for_codex_defaults(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
