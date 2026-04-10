@@ -333,6 +333,14 @@ type NewKeyFanoutCandidate = {
   lastActivityMs: number;
 };
 
+type PendingNewKeyFallback = {
+  sessionId: string;
+  sessionKey: string;
+  newSessionId: string;
+  newKey: string;
+  dueAtMs: number;
+};
+
 function isSameSessionTranscriptRollover(
   priorCount: number,
   currentCount: number,
@@ -895,6 +903,8 @@ function selectNewKeyFanoutTarget(
       return String(a.sessionId).localeCompare(String(b.sessionId));
     })[0] || null;
 }
+
+const NEW_KEY_FALLBACK_DELAY_MS = 1500;
 
 function latestResetBackup(sessionId: string): string | null {
   const prefix = `${sessionId}.jsonl.reset.`;
@@ -3040,6 +3050,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       // may not have been created yet. Value is the time the watch was armed (ms).
       // Checked each tick; times out after 60s. Empty most of the time.
       const pendingOrphanChecks = new Map<string, number>();
+      const pendingNewKeyFallbacks = new Map<string, PendingNewKeyFallback>();
       const ORPHAN_CHECK_DEADLINE_MS = 60_000;
       // Stale-sweep fallback: runs recoverStaleBuffers() every 30s to catch idle
       // sessions that were not caught by onSessionTranscriptUpdate (e.g. when the
@@ -3115,6 +3126,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             }
 
             if (prevSessionId && prevSessionId !== sessionId) {
+              pendingNewKeyFallbacks.delete(prevSessionId);
               // This key just transitioned to a new session — the old session ended.
               writeHookTrace("session_index.key_transition", {
                 key,
@@ -3249,30 +3261,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 currentInteractiveSessionId: String(currentInteractiveSession?.sessionId || ""),
               });
               if (selectedPrior) {
-                if (facade.shouldProcessLifecycleSignal(selectedPrior.sessionId, {
-                  label: "ResetSignal",
-                  source: "session_index",
-                  signature: `session_index:new_key:${key}`,
-                })) {
-                  let selectedSize = -1;
-                  try {
-                    selectedSize = fs.statSync(getOpenClawSessionFile(selectedPrior.sessionId)).size;
-                  } catch {}
-                  facade.markLifecycleSignalFromHook(selectedPrior.sessionId, "ResetSignal");
-                  sessionLastFanoutSizeMap.set(selectedPrior.sessionId, selectedSize);
-                  writeDaemonSignal(selectedPrior.sessionId, "reset", {
-                    source: "session_index_new_key",
-                    new_key: key,
-                    new_session_id: sessionId,
-                  });
-                  writeHookTrace("session_index.signal_queued", {
-                    signal: "reset",
-                    source: "new-key",
-                    session_id: selectedPrior.sessionId,
-                    session_key: selectedPrior.key,
-                    new_key: key,
-                  });
-                }
+                pendingNewKeyFallbacks.set(selectedPrior.sessionId, {
+                  sessionId: selectedPrior.sessionId,
+                  sessionKey: selectedPrior.key,
+                  newSessionId: sessionId,
+                  newKey: key,
+                  dueAtMs: Date.now() + NEW_KEY_FALLBACK_DELAY_MS,
+                });
+                writeHookTrace("session_index.new_key_armed", {
+                  session_id: selectedPrior.sessionId,
+                  session_key: selectedPrior.key,
+                  new_session_id: sessionId,
+                  new_key: key,
+                  delay_ms: NEW_KEY_FALLBACK_DELAY_MS,
+                });
               } else {
                 writeHookTrace("session_index.new_key_skip", {
                   reason: "no_recent_prior_session",
@@ -3326,6 +3328,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 source: "session_index",
                 signature: `session_index:same_session_rollover:${key}:${priorCount}:${priorSize}`,
               })) {
+                pendingNewKeyFallbacks.delete(sessionId);
                 facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
                 writeDaemonSignal(sessionId, "reset", {
                   source: "session_index_same_session_rollover",
@@ -3409,6 +3412,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 });
                 continue;
               }
+              pendingNewKeyFallbacks.delete(sessionId);
               facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
               writeDaemonSignal(sessionId, daemonType, {
                 source: `session_index_command_${commandName}`,
@@ -3501,6 +3505,49 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 writeHookTrace("session_index.orphan_reset_detected", { session_id: sid });
                 console.log(`[quaid][signal] orphan reset detected session=${sid}`);
               } catch {}
+            }
+          }
+
+          if (pendingNewKeyFallbacks.size > 0) {
+            const nowMs = Date.now();
+            for (const [pendingSessionId, pending] of pendingNewKeyFallbacks) {
+              if (nowMs < pending.dueAtMs) {
+                continue;
+              }
+              pendingNewKeyFallbacks.delete(pendingSessionId);
+              if (!facade.shouldProcessLifecycleSignal(pending.sessionId, {
+                label: "ResetSignal",
+                source: "session_index",
+                signature: `session_index:new_key:${pending.newKey}`,
+              })) {
+                writeHookTrace("session_index.new_key_skip", {
+                  reason: "superseded_by_stronger_signal",
+                  session_id: pending.sessionId,
+                  session_key: pending.sessionKey,
+                  new_session_id: pending.newSessionId,
+                  new_key: pending.newKey,
+                });
+                continue;
+              }
+              let selectedSize = -1;
+              try {
+                selectedSize = fs.statSync(getOpenClawSessionFile(pending.sessionId)).size;
+              } catch {}
+              facade.markLifecycleSignalFromHook(pending.sessionId, "ResetSignal");
+              sessionLastFanoutSizeMap.set(pending.sessionId, selectedSize);
+              writeDaemonSignal(pending.sessionId, "reset", {
+                source: "session_index_new_key",
+                new_key: pending.newKey,
+                new_session_id: pending.newSessionId,
+              });
+              writeHookTrace("session_index.signal_queued", {
+                signal: "reset",
+                source: "new-key-delayed",
+                session_id: pending.sessionId,
+                session_key: pending.sessionKey,
+                new_key: pending.newKey,
+                new_session_id: pending.newSessionId,
+              });
             }
           }
         } catch (err: unknown) {
@@ -4849,4 +4896,5 @@ export const __test = {
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
   selectNewKeyFanoutTarget,
+  NEW_KEY_FALLBACK_DELAY_MS,
 };

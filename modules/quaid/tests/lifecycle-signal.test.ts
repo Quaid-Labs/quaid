@@ -400,4 +400,8 @@ describe("lifecycle signal detection", () => {
     );
     expect(selected?.sessionId).toBe("old-a");
   });
+
+  it("exports a delayed new-key fallback window so stronger signals can win first", () => {
+    expect(__test.NEW_KEY_FALLBACK_DELAY_MS).toBeGreaterThan(0);
+  });
 });

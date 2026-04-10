@@ -662,6 +662,7 @@ function selectNewKeyFanoutTarget(candidates, opts) {
     return String(a.sessionId).localeCompare(String(b.sessionId));
   })[0] || null;
 }
+const NEW_KEY_FALLBACK_DELAY_MS = 1500;
 function latestResetBackup(sessionId) {
   const prefix = `${sessionId}.jsonl.reset.`;
   try {
@@ -2341,6 +2342,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const watcherStartMs = Date.now();
       let initialSnapshotDone = false;
       const pendingOrphanChecks = /* @__PURE__ */ new Map();
+      const pendingNewKeyFallbacks = /* @__PURE__ */ new Map();
       const ORPHAN_CHECK_DEADLINE_MS = 6e4;
       const STALE_SWEEP_INTERVAL_MS = 3e4;
       let lastStaleRecoverMs = 0;
@@ -2392,6 +2394,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               continue;
             }
             if (prevSessionId && prevSessionId !== sessionId) {
+              pendingNewKeyFallbacks.delete(prevSessionId);
               writeHookTrace("session_index.key_transition", {
                 key,
                 from_session_id: prevSessionId,
@@ -2501,31 +2504,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 currentInteractiveSessionId: String(currentInteractiveSession?.sessionId || "")
               });
               if (selectedPrior) {
-                if (facade.shouldProcessLifecycleSignal(selectedPrior.sessionId, {
-                  label: "ResetSignal",
-                  source: "session_index",
-                  signature: `session_index:new_key:${key}`
-                })) {
-                  let selectedSize = -1;
-                  try {
-                    selectedSize = fs.statSync(getOpenClawSessionFile(selectedPrior.sessionId)).size;
-                  } catch {
-                  }
-                  facade.markLifecycleSignalFromHook(selectedPrior.sessionId, "ResetSignal");
-                  sessionLastFanoutSizeMap.set(selectedPrior.sessionId, selectedSize);
-                  writeDaemonSignal(selectedPrior.sessionId, "reset", {
-                    source: "session_index_new_key",
-                    new_key: key,
-                    new_session_id: sessionId
-                  });
-                  writeHookTrace("session_index.signal_queued", {
-                    signal: "reset",
-                    source: "new-key",
-                    session_id: selectedPrior.sessionId,
-                    session_key: selectedPrior.key,
-                    new_key: key
-                  });
-                }
+                pendingNewKeyFallbacks.set(selectedPrior.sessionId, {
+                  sessionId: selectedPrior.sessionId,
+                  sessionKey: selectedPrior.key,
+                  newSessionId: sessionId,
+                  newKey: key,
+                  dueAtMs: Date.now() + NEW_KEY_FALLBACK_DELAY_MS
+                });
+                writeHookTrace("session_index.new_key_armed", {
+                  session_id: selectedPrior.sessionId,
+                  session_key: selectedPrior.key,
+                  new_session_id: sessionId,
+                  new_key: key,
+                  delay_ms: NEW_KEY_FALLBACK_DELAY_MS
+                });
               } else {
                 writeHookTrace("session_index.new_key_skip", {
                   reason: "no_recent_prior_session",
@@ -2572,6 +2564,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 source: "session_index",
                 signature: `session_index:same_session_rollover:${key}:${priorCount}:${priorSize}`
               })) {
+                pendingNewKeyFallbacks.delete(sessionId);
                 facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
                 writeDaemonSignal(sessionId, "reset", {
                   source: "session_index_same_session_rollover",
@@ -2650,6 +2643,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 });
                 continue;
               }
+              pendingNewKeyFallbacks.delete(sessionId);
               facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
               writeDaemonSignal(sessionId, daemonType, {
                 source: `session_index_command_${commandName}`,
@@ -2732,6 +2726,49 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 console.log(`[quaid][signal] orphan reset detected session=${sid}`);
               } catch {
               }
+            }
+          }
+          if (pendingNewKeyFallbacks.size > 0) {
+            const nowMs = Date.now();
+            for (const [pendingSessionId, pending] of pendingNewKeyFallbacks) {
+              if (nowMs < pending.dueAtMs) {
+                continue;
+              }
+              pendingNewKeyFallbacks.delete(pendingSessionId);
+              if (!facade.shouldProcessLifecycleSignal(pending.sessionId, {
+                label: "ResetSignal",
+                source: "session_index",
+                signature: `session_index:new_key:${pending.newKey}`
+              })) {
+                writeHookTrace("session_index.new_key_skip", {
+                  reason: "superseded_by_stronger_signal",
+                  session_id: pending.sessionId,
+                  session_key: pending.sessionKey,
+                  new_session_id: pending.newSessionId,
+                  new_key: pending.newKey
+                });
+                continue;
+              }
+              let selectedSize = -1;
+              try {
+                selectedSize = fs.statSync(getOpenClawSessionFile(pending.sessionId)).size;
+              } catch {
+              }
+              facade.markLifecycleSignalFromHook(pending.sessionId, "ResetSignal");
+              sessionLastFanoutSizeMap.set(pending.sessionId, selectedSize);
+              writeDaemonSignal(pending.sessionId, "reset", {
+                source: "session_index_new_key",
+                new_key: pending.newKey,
+                new_session_id: pending.newSessionId
+              });
+              writeHookTrace("session_index.signal_queued", {
+                signal: "reset",
+                source: "new-key-delayed",
+                session_id: pending.sessionId,
+                session_key: pending.sessionKey,
+                new_key: pending.newKey,
+                new_session_id: pending.newSessionId
+              });
             }
           }
         } catch (err) {
@@ -3885,7 +3922,8 @@ const __test = {
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
-  selectNewKeyFanoutTarget
+  selectNewKeyFanoutTarget,
+  NEW_KEY_FALLBACK_DELAY_MS
 };
 export {
   __test,
