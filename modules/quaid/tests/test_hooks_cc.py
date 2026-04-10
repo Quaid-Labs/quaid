@@ -553,6 +553,36 @@ class TestHookInjectRecallResilience:
 
         assert out.strip() == "", f"Expected no stdout, got: {out!r}"
 
+    def test_recall_fast_provider_exception_surfaces_quaid_error_notice(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        with patch(
+            "core.interface.api.recall_fast",
+            side_effect=RuntimeError(
+                "Quaid could not access its fast language model provider: claude-code-oauth HTTP 404 model=invalid-model-xyzzy"
+            ),
+        ):
+            out, err = _run_hook_inject(
+                {
+                    "prompt": "What do you know about Maya?",
+                    "session_id": "sess-provider",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid error]" in context
+        assert "[provider]" in context
+        assert "Error type: RuntimeError" in context
+        assert "invalid-model-xyzzy" not in context
+        assert "hook-inject" in err
+
     def test_deferred_notice_hint_is_injected_without_draining(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

@@ -132,21 +132,6 @@ def _safe_agent_error(exc: Exception) -> str:
     return f"Error type: {err_type}. Check Quaid logs for details."
 
 
-def _is_provider_like_error(exc: Exception) -> bool:
-    text = str(exc or "")
-    lowered = text.lower()
-    return (
-        isinstance(exc, RuntimeError)
-        and (
-            "llm" in text
-            or "provider" in lowered
-            or "failhard" in lowered
-            or "invalid-model" in lowered
-            or "model" in lowered
-        )
-    )
-
-
 def _extract_recall_provider_notice(memories: List[Dict], recall_meta: dict | None) -> str:
     """Promote degraded recall-provider failures into an explicit relay notice.
 
@@ -184,6 +169,19 @@ def _extract_recall_provider_notice(memories: List[Dict], recall_meta: dict | No
     return (
         "[Quaid error] [provider] Quaid could not access the configured fast recall model "
         "and used degraded fallback results. Check Quaid config or logs."
+    )
+
+
+def _is_provider_failure(exc: Exception) -> bool:
+    text = str(exc or "")
+    lowered = text.lower()
+    return isinstance(exc, RuntimeError) and (
+        "llm" in text
+        or "provider" in lowered
+        or "failhard" in lowered
+        or "language model" in lowered
+        or "invalid-model" in lowered
+        or "model" in lowered
     )
 
 
@@ -508,8 +506,8 @@ def hook_inject(args):
                     memories, recall_meta = mem_result
                 else:
                     memories = mem_result
-            except Exception as exc:
-                if _is_provider_like_error(exc):
+            except Exception as mem_exc:
+                if _is_provider_failure(mem_exc):
                     raise
                 memories = []
                 recall_meta = None
@@ -590,10 +588,10 @@ def hook_inject(args):
 
     except (RuntimeError, Exception) as e:
         fallback_context_parts = []
-        if _is_provider_like_error(e):
+        if _is_provider_failure(e):
             # Provider/LLM failure — surface to agent so they can inform the user
             fallback_context_parts.append(
-                f"<quaid_system_message>[Quaid error] {_safe_agent_error(e)}</quaid_system_message>"
+                f"<quaid_system_message>[Quaid error] [provider] {_safe_agent_error(e)}</quaid_system_message>"
             )
         if pending_context:
             fallback_context_parts.append(pending_context)
