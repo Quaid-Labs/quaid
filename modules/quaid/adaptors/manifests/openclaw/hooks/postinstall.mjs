@@ -14,7 +14,6 @@ function resolveCli() {
 function ensureExecApprovalsAllowQuaid() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "exec-approvals.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
-  const targetAgent = "*";
   const quaidHome = String(process.env.QUAID_HOME || "").trim() || path.join(os.homedir(), ".quaid");
   const patterns = Array.from(new Set([
     path.join(os.homedir(), ".openclaw", "extensions", "quaid", "quaid"),
@@ -53,37 +52,50 @@ function ensureExecApprovalsAllowQuaid() {
     if (!parsed.agents || typeof parsed.agents !== "object" || Array.isArray(parsed.agents)) {
       parsed.agents = {};
     }
-    const agent = parsed.agents[targetAgent] && typeof parsed.agents[targetAgent] === "object"
-      ? parsed.agents[targetAgent]
-      : {};
-    const existingAllowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
-    const normalizedAllowlist = [];
-    const seen = new Set();
-    for (const rawEntry of existingAllowlist) {
-      const entry = normalizeEntry(rawEntry);
-      if (!entry) continue;
-      if (seen.has(entry.pattern)) continue;
-      seen.add(entry.pattern);
-      normalizedAllowlist.push(entry);
+    const targetAgents = new Set(["*"]);
+    for (const [agentId, agentCfg] of Object.entries(parsed.agents)) {
+      if (agentCfg && typeof agentCfg === "object" && !Array.isArray(agentCfg)) {
+        targetAgents.add(agentId);
+      }
     }
 
-    let changed = normalizedAllowlist.length !== existingAllowlist.length;
-    for (const pattern of patterns) {
-      if (seen.has(pattern)) continue;
-      normalizedAllowlist.push({
-        id: `quaid-${normalizedAllowlist.length}`,
-        pattern,
-        lastUsedAt: Date.now(),
-      });
-      seen.add(pattern);
+    let changed = false;
+    for (const targetAgent of targetAgents) {
+      const agent = parsed.agents[targetAgent] && typeof parsed.agents[targetAgent] === "object"
+        ? parsed.agents[targetAgent]
+        : {};
+      const existingAllowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+      const normalizedAllowlist = [];
+      const seen = new Set();
+      for (const rawEntry of existingAllowlist) {
+        const entry = normalizeEntry(rawEntry);
+        if (!entry) continue;
+        if (seen.has(entry.pattern)) continue;
+        seen.add(entry.pattern);
+        normalizedAllowlist.push(entry);
+      }
+
+      let agentChanged = normalizedAllowlist.length !== existingAllowlist.length;
+      for (const pattern of patterns) {
+        if (seen.has(pattern)) continue;
+        normalizedAllowlist.push({
+          id: `quaid-${normalizedAllowlist.length}`,
+          pattern,
+          lastUsedAt: Date.now(),
+        });
+        seen.add(pattern);
+        agentChanged = true;
+      }
+
+      if (!agentChanged) continue;
+      parsed.agents[targetAgent] = {
+        ...agent,
+        allowlist: normalizedAllowlist,
+      };
       changed = true;
     }
 
     if (!changed) return false;
-    parsed.agents[targetAgent] = {
-      ...agent,
-      allowlist: normalizedAllowlist,
-    };
     fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
     fs.renameSync(tmpPath, cfgPath);

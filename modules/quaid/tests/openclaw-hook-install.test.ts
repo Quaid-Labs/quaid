@@ -23,6 +23,9 @@ describe("openclaw postinstall hook", () => {
           "*": {
             allowlist: [{ pattern: "/keep/me" }],
           },
+          main: {
+            allowlist: [],
+          },
         },
       }, null, 2) + "\n",
       "utf8",
@@ -40,6 +43,7 @@ describe("openclaw postinstall hook", () => {
 
     const cfg = JSON.parse(fs.readFileSync(path.join(home, ".openclaw", "exec-approvals.json"), "utf8"));
     const allowlist = (cfg.agents?.["*"]?.allowlist || []).map((entry: any) => String(entry.pattern || ""));
+    const mainAllowlist = (cfg.agents?.main?.allowlist || []).map((entry: any) => String(entry.pattern || ""));
 
     expect(allowlist).toContain("/keep/me");
     expect(allowlist).toContain(path.join(home, ".openclaw", "extensions", "quaid", "quaid"));
@@ -48,5 +52,7 @@ describe("openclaw postinstall hook", () => {
     expect(allowlist).toContain(path.join(home, ".local", "bin", "quaid"));
     expect(allowlist).toContain("/usr/local/bin/quaid");
     expect(allowlist).toContain("/opt/homebrew/bin/quaid");
+    expect(mainAllowlist).toContain(path.join(home, ".openclaw", "extensions", "quaid", "quaid"));
+    expect(mainAllowlist).toContain(path.join(hiddenHome, "modules", "quaid", "quaid"));
   });
 });
