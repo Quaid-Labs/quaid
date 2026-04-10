@@ -449,6 +449,30 @@ describe("lifecycle signal detection", () => {
     expect(block).toContain("fast language model provider");
   });
 
+  it("overrides OpenClaw heartbeat prompts attached to exec completion events", () => {
+    const override = __test.buildExecCompletedHeartbeatOverride({
+      prompt: [
+        "System (untrusted): [2026-04-10 20:32:18 UTC] Exec completed (salty-ba, code 0) ::",
+        "[fact] Solomon's sister is Lisa.",
+        "",
+        "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        "When reading HEARTBEAT.md, use workspace file /Users/admin/.openclaw/workspace/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.",
+      ].join("\n"),
+      messages: [],
+    });
+    expect(override).toContain("OpenClaw Exec Completion Handling");
+    expect(override).toContain("Ignore any HEARTBEAT.md instruction");
+    expect(override).toContain("do not reply HEARTBEAT_OK");
+  });
+
+  it("does not override ordinary heartbeat prompts", () => {
+    const override = __test.buildExecCompletedHeartbeatOverride({
+      prompt: "Read HEARTBEAT.md if it exists. If nothing needs attention, reply HEARTBEAT_OK.",
+      messages: [],
+    });
+    expect(override).toBeUndefined();
+  });
+
   it("collects all recent reset backup sessions for burst /new recovery", () => {
     const baseDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-reset-backups-"));
     const oldA = path.join(baseDir, "old-a.jsonl.reset.2026-04-10T10-00-00Z");

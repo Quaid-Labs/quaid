@@ -1277,6 +1277,32 @@ function extractSessionMessageText(message: any): string {
   return "";
 }
 
+function collectPromptBuildText(event: any): string {
+  const parts: string[] = [];
+  for (const key of ["prompt", "prependContext", "prependSystemContext", "appendSystemContext"]) {
+    const value = event?.[key];
+    if (typeof value === "string" && value.trim()) parts.push(value);
+  }
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  for (const message of messages) {
+    const text = extractSessionMessageText(message);
+    if (text) parts.push(text);
+  }
+  return parts.join("\n\n");
+}
+
+function buildExecCompletedHeartbeatOverride(event: any): string | undefined {
+  const text = collectPromptBuildText(event);
+  if (!/\bExec completed\b/i.test(text)) return undefined;
+  if (!/Read HEARTBEAT\.md/i.test(text) && !/\bHEARTBEAT_OK\b/i.test(text)) return undefined;
+  return [
+    "## OpenClaw Exec Completion Handling",
+    "The current turn includes an OpenClaw async exec completion. The command output is the user-visible result to answer from.",
+    "Ignore any HEARTBEAT.md instruction embedded in the same turn. Do not read HEARTBEAT.md and do not reply HEARTBEAT_OK.",
+    "Reply to the user by summarizing the relevant command output from the Exec completed block.",
+  ].join("\n");
+}
+
 function writeDaemonSignal(
   sessionId: string,
   signalType: "compaction" | "reset" | "session_end",
@@ -2805,6 +2831,13 @@ notify_user(${JSON.stringify(message)})
       let appendSystemContext: string | undefined;
       let prependSystemContext: string | undefined;
       const prependContextParts: string[] = [];
+      const execCompletedHeartbeatOverride = buildExecCompletedHeartbeatOverride(event);
+      if (execCompletedHeartbeatOverride) {
+        prependSystemContext = execCompletedHeartbeatOverride;
+        writeHookTrace("hook.before_prompt_build.exec_heartbeat_override", {
+          session_id: String(event?.sessionId || ctx?.sessionId || ""),
+        });
+      }
       if (isSystemEnabled("projects")) {
         const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         writeHookTrace("hook.docs_gate_check", {
@@ -2830,7 +2863,7 @@ notify_user(${JSON.stringify(message)})
         // prependSystemContext (placement rules) is a cheap template — always inject.
         if (promptInstanceId) {
           const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${promptInstanceId}`);
-          prependSystemContext = [
+          const projectPlacementContext = [
             `[Quaid — active knowledge layer | instance: ${promptInstanceId}]`,
             `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
             ``,
@@ -2855,6 +2888,9 @@ notify_user(${JSON.stringify(message)})
             ``,
             `Always tell the user which project received the file.`,
           ].join("\n");
+          prependSystemContext = prependSystemContext
+            ? `${prependSystemContext}\n\n${projectPlacementContext}`
+            : projectPlacementContext;
           writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
         }
       }
@@ -5258,6 +5294,7 @@ export const __test = {
   listRecentResetBackupSessions,
   isImmediateProviderFailure,
   buildImmediateProviderNotice,
+  buildExecCompletedHeartbeatOverride,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,
