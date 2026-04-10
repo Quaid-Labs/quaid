@@ -837,6 +837,62 @@ class TestExtractFromTranscript:
         assert call["source_type"] == "subagent"
         assert call["speaker"] == "user"
 
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_prefers_subagent_provenance_when_duplicates_collapse(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-subagent", "status": "created", "dedup_telemetry": {}}
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "The user's uncle owns a vineyard in Mendoza.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "source": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+                {
+                    "text": "The user's uncle owns a vineyard in Mendoza.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "source": "subagent",
+                    "_source_label": "daemon-session_end-subagent-extraction",
+                    "_source_id": "child-session-1",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="daemon-session_end",
+            session_id="parent-session",
+            dry_run=False,
+        )
+
+        assert applied["payload_duplicate_facts_collapsed"] == 1
+        assert applied["facts_stored"] == 1
+        call = mock_store.call_args.kwargs
+        assert call["source"] == "daemon-session_end-subagent-extraction"
+        assert call["source_id"] == "child-session-1"
+        assert call["source_type"] == "subagent"
+
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     def test_skips_short_facts(self, mock_store, mock_llm):

@@ -671,17 +671,36 @@ def _merge_fact_keywords(existing: Any, incoming: Any) -> Optional[str]:
     return " ".join(tokens) if tokens else None
 
 
+def _fact_provenance_specificity(fact: Dict[str, Any]) -> int:
+    score = 0
+    raw_source = str((fact or {}).get("source", "") or "").strip().lower()
+    if raw_source == "subagent":
+        score += 100
+    elif raw_source in {"assistant", "agent", "tool", "both", "user"}:
+        score += 10
+    if str((fact or {}).get("_source_label", "") or "").strip():
+        score += 5
+    if str((fact or {}).get("_source_id", "") or "").strip():
+        score += 5
+    return score
+
+
 def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(primary)
-    primary_rank = _confidence_rank(primary.get("extraction_confidence"))
-    duplicate_rank = _confidence_rank(duplicate.get("extraction_confidence"))
-    if duplicate_rank > primary_rank:
+    primary_provenance = _fact_provenance_specificity(primary)
+    duplicate_provenance = _fact_provenance_specificity(duplicate)
+    if duplicate_provenance > primary_provenance:
         merged = dict(duplicate)
-    elif duplicate_rank == primary_rank:
-        primary_text = str(primary.get("text", "") or "")
-        duplicate_text = str(duplicate.get("text", "") or "")
-        if len(duplicate_text) > len(primary_text):
+    elif duplicate_provenance == primary_provenance:
+        primary_rank = _confidence_rank(primary.get("extraction_confidence"))
+        duplicate_rank = _confidence_rank(duplicate.get("extraction_confidence"))
+        if duplicate_rank > primary_rank:
             merged = dict(duplicate)
+        elif duplicate_rank == primary_rank:
+            primary_text = str(primary.get("text", "") or "")
+            duplicate_text = str(duplicate.get("text", "") or "")
+            if len(duplicate_text) > len(primary_text):
+                merged = dict(duplicate)
 
     other = duplicate if merged is primary else primary
 
@@ -707,9 +726,18 @@ def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, 
     if keywords:
         merged["keywords"] = keywords
 
-    for key in ("category", "speaker", "project", "privacy", "source"):
+    for key in ("category", "speaker", "project", "privacy"):
         if not merged.get(key) and other.get(key):
             merged[key] = other.get(key)
+
+    if _fact_provenance_specificity(other) > _fact_provenance_specificity(merged):
+        for key in ("source", "_source_label", "_source_id"):
+            if other.get(key):
+                merged[key] = other.get(key)
+    else:
+        for key in ("source", "_source_label", "_source_id"):
+            if not merged.get(key) and other.get(key):
+                merged[key] = other.get(key)
 
     if _confidence_rank(other.get("extraction_confidence")) > _confidence_rank(merged.get("extraction_confidence")):
         merged["extraction_confidence"] = other.get("extraction_confidence")
