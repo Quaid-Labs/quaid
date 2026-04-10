@@ -465,6 +465,26 @@ describe("lifecycle signal detection", () => {
     expect(override).toContain("do not reply HEARTBEAT_OK");
   });
 
+  it("strips heartbeat instructions from visible exec completion relay text", () => {
+    const reply = __test.buildExecCompletedHeartbeatVisibleReply({
+      cleanedBody: [
+        "System (untrusted): [2026-04-10 20:32:18 UTC] Exec completed (salty-ba, code 0) ::",
+        "[fact] Solomon's sister is Lisa.",
+        "[fact] Solomon likes canal towpath walks.",
+        "",
+        "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        "When reading HEARTBEAT.md, use workspace file /Users/admin/.openclaw/workspace/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.",
+        "Current time: Friday, April 10th, 2026 - 8:32 PM (UTC) / 2026-04-10 20:32 UTC",
+      ].join("\n"),
+    });
+    expect(reply).toContain("Exec completed");
+    expect(reply).toContain("Solomon's sister is Lisa");
+    expect(reply).toContain("canal towpath");
+    expect(reply).not.toContain("Read HEARTBEAT.md");
+    expect(reply).not.toContain("HEARTBEAT_OK");
+    expect(reply).not.toContain("Current time:");
+  });
+
   it("does not override ordinary heartbeat prompts", () => {
     const override = __test.buildExecCompletedHeartbeatOverride({
       prompt: "Read HEARTBEAT.md if it exists. If nothing needs attention, reply HEARTBEAT_OK.",

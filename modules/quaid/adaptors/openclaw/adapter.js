@@ -1037,6 +1037,27 @@ function buildExecCompletedHeartbeatOverride(event) {
     "Reply to the user by summarizing the relevant command output from the Exec completed block."
   ].join("\n");
 }
+function stripExecCompletedHeartbeatInstructions(text) {
+  const raw = String(text || "").trim();
+  if (!/\bExec completed\b/i.test(raw)) return raw;
+  if (!/Read HEARTBEAT\.md/i.test(raw) && !/\bHEARTBEAT_OK\b/i.test(raw)) return raw;
+  return raw.replace(/\n{0,2}Read HEARTBEAT\.md if it exists[\s\S]*?(?:\nCurrent time:[^\n]*(?:\n|$)|$)/i, "\n").replace(/\n{0,2}When reading HEARTBEAT\.md,[^\n]*(?:\n|$)/gi, "\n").replace(/\n{0,2}Current time:[^\n]*(?:\n|$)/gi, "\n").replace(/^\s*System \(untrusted\):\s*/i, "").trim();
+}
+function buildExecCompletedHeartbeatVisibleReply(event) {
+  const candidates = [
+    typeof event?.cleanedBody === "string" ? event.cleanedBody : "",
+    typeof event?.body === "string" ? event.body : "",
+    typeof event?.content === "string" ? event.content : "",
+    collectPromptBuildText(event)
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const cleaned = stripExecCompletedHeartbeatInstructions(candidate);
+    if (cleaned && cleaned !== String(candidate || "").trim()) {
+      return cleaned;
+    }
+  }
+  return void 0;
+}
 function writeDaemonSignal(sessionId, signalType, meta) {
   if (!sessionId) return null;
   const transcriptPath = sessionTranscriptPaths.get(sessionId) || "";
@@ -2519,6 +2540,23 @@ ${notice}` : notice;
     onChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
       priority: 10
+    });
+    onChecked("before_agent_reply", async (event, ctx) => {
+      if (isInternalSessionContext(event, ctx)) return;
+      if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
+      const replyText = buildExecCompletedHeartbeatVisibleReply(event);
+      if (!replyText) return;
+      writeHookTrace("hook.before_agent_reply.exec_heartbeat_visible_reply", {
+        session_id: String(ctx?.sessionId || event?.sessionId || "")
+      });
+      return {
+        handled: true,
+        reason: "quaid_exec_completed_heartbeat_relay",
+        reply: { text: replyText }
+      };
+    }, {
+      name: "exec-completion-heartbeat-relay",
+      priority: 120
     });
     onChecked("before_agent_reply", async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
@@ -4317,6 +4355,8 @@ const __test = {
   isImmediateProviderFailure,
   buildImmediateProviderNotice,
   buildExecCompletedHeartbeatOverride,
+  buildExecCompletedHeartbeatVisibleReply,
+  stripExecCompletedHeartbeatInstructions,
   formatDeferredNoticeVisibleReply,
   isInternalSessionContext,
   isInternalTranscriptMessages,
