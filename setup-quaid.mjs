@@ -4424,7 +4424,8 @@ except Exception as e:
 
   // Start the extraction daemon for platforms that rely on background
   // session/lifecycle processing so the first real session is ready immediately.
-  if (shouldStartExtractionDaemonAfterInstall(adapterType)) {
+  const validationAdapterType = models?.adapterType || resolvedInstallerPlatform();
+  if (shouldStartExtractionDaemonAfterInstall(validationAdapterType)) {
     s.start("Starting extraction daemon...");
     const daemonScript = `
 import os, sys
