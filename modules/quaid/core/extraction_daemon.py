@@ -397,18 +397,19 @@ def read_cursor(session_id: str) -> Dict[str, Any]:
     session_id = _validate_session_id(session_id)
     cursor_file = _cursor_dir() / f"{session_id}.json"
     if not cursor_file.is_file():
-        return {"line_offset": 0, "transcript_path": ""}
+        return {"line_offset": 0, "transcript_path": "", "internal": False}
     try:
         data = json.loads(cursor_file.read_text(encoding="utf-8"))
         return {
             "line_offset": int(data.get("line_offset", 0)),
             "transcript_path": data.get("transcript_path", ""),
+            "internal": bool(data.get("internal", False)),
         }
     except (json.JSONDecodeError, ValueError, OSError):
-        return {"line_offset": 0, "transcript_path": ""}
+        return {"line_offset": 0, "transcript_path": "", "internal": False}
 
 
-def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> None:
+def write_cursor(session_id: str, line_offset: int, transcript_path: str, *, internal: bool = False) -> None:
     """Write extraction cursor after processing."""
     session_id = _validate_session_id(session_id)
     cursor_file = _cursor_dir() / f"{session_id}.json"
@@ -416,6 +417,7 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> Non
         "session_id": session_id,
         "line_offset": line_offset,
         "transcript_path": transcript_path,
+        "internal": bool(internal),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     try:
@@ -1684,7 +1686,7 @@ def _advance_internal_session_cursor_to_end(session_id: str, transcript_path: st
             total_lines = count_transcript_lines(transcript_path)
     except OSError:
         total_lines = 0
-    write_cursor(session_id, total_lines, transcript_path)
+    write_cursor(session_id, total_lines, transcript_path, internal=True)
     clear_rolling_state(session_id)
     _cursor_end_timeout_fired.add(session_id)
 
@@ -1757,6 +1759,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         adapter = get_adapter()
     except Exception:
         adapter = None
+
+    cursor_data = read_cursor(session_id)
+    if bool(cursor_data.get("internal", False)):
+        logger.info("[%s] session %s: cursor marked internal, skipping signal", label, session_id)
+        mark_signal_processed(signal_data)
+        _release_session_processing_lock(session_id, lock_fd)
+        return
 
     try:
         if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
@@ -1843,7 +1852,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _release_session_processing_lock(session_id, lock_fd)
             return
 
-    cursor_data = read_cursor(session_id)
     cursor_offset = int(cursor_data["line_offset"] or 0)
     cursor_transcript = cursor_data["transcript_path"]
 
@@ -2718,6 +2726,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
+        if bool(data.get("internal", False)):
+            continue
         if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
             logger.info("session %s is internal maintenance-only during idle scan, advancing cursor to EOF", session_id)
             _advance_internal_session_cursor_to_end(session_id, transcript_path)
@@ -2871,6 +2881,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if bool(data.get("internal", False)):
             continue
         if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
             logger.info("session %s is internal maintenance-only during rolling scan, advancing cursor to EOF", session_id)

@@ -266,6 +266,7 @@ def test_check_idle_sessions_advances_internal_session_cursor_to_eof(monkeypatch
     assert captured == []
     assert cursor["line_offset"] == 1
     assert cursor["transcript_path"] == str(transcript_path)
+    assert cursor["internal"] is True
 
 
 def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypatch, tmp_path):
@@ -429,6 +430,95 @@ def test_process_signal_advances_internal_session_cursor_to_eof(monkeypatch, tmp
     assert not signal_path.exists()
     assert cursor["line_offset"] == 1
     assert cursor["transcript_path"] == str(transcript_path)
+    assert cursor["internal"] is True
+
+
+def test_check_chunk_ready_sessions_skips_cursor_marked_internal(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "internal-growing.jsonl"
+    transcript_path.write_text('{"role":"user","content":"internal maintenance"}\n', encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-internal-skip", 1, str(transcript_path), internal=True)
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FailIfParsedAdapter:
+        def parse_session_jsonl(self, path):
+            raise AssertionError(f"internal-marked session should not be reparsed: {path}")
+
+    fake_adapter_mod.get_adapter = lambda: _FailIfParsedAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    try:
+        extraction_daemon.check_chunk_ready_sessions()
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    assert captured == []
+
+
+def test_process_signal_skips_cursor_marked_internal_without_reparse(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "internal-growing.jsonl"
+    transcript_path.write_text('{"role":"user","content":"internal maintenance"}\n', encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-internal-locked", 1, str(transcript_path), internal=True)
+    signal_path = extraction_daemon.write_signal(
+        signal_type="rolling",
+        session_id="sess-internal-locked",
+        transcript_path=str(transcript_path),
+    )
+
+    real_registry = sys.modules.get("core.subagent_registry")
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.is_registered_subagent = lambda sid: False
+    sys.modules["core.subagent_registry"] = fake_registry
+
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FailIfParsedAdapter:
+        def parse_session_jsonl(self, path):
+            raise AssertionError(f"internal-marked session should not be reparsed: {path}")
+
+    fake_adapter_mod.get_adapter = lambda: _FailIfParsedAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    try:
+        signals = extraction_daemon.read_pending_signals()
+        assert len(signals) == 1
+        extraction_daemon.process_signal(signals[0])
+    finally:
+        if real_registry is not None:
+            sys.modules["core.subagent_registry"] = real_registry
+        else:
+            sys.modules.pop("core.subagent_registry", None)
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    assert not signal_path.exists()
 
 
 def test_effective_idle_timeout_uses_configured_timeout_within_bounds():
@@ -809,6 +899,7 @@ class TestCursorRoundTrip:
 
         assert result["line_offset"] == 17
         assert result["transcript_path"] == "/path/to/transcript.jsonl"
+        assert result["internal"] is False
 
     def test_read_cursor_returns_zero_offset_for_unknown_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -818,6 +909,7 @@ class TestCursorRoundTrip:
 
         assert result["line_offset"] == 0
         assert result["transcript_path"] == ""
+        assert result["internal"] is False
 
     def test_read_cursor_returns_zero_on_corrupt_json(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -829,6 +921,7 @@ class TestCursorRoundTrip:
         result = extraction_daemon.read_cursor("bad-sess")
 
         assert result["line_offset"] == 0
+        assert result["internal"] is False
 
     def test_write_cursor_advances_offset(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
