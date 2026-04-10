@@ -2394,7 +2394,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               continue;
             }
             if (prevSessionId && prevSessionId !== sessionId) {
-              pendingNewKeyFallbacks.delete(prevSessionId);
               writeHookTrace("session_index.key_transition", {
                 key,
                 from_session_id: prevSessionId,
@@ -2412,6 +2411,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   prevMtime = prevSt.mtimeMs;
                 } catch {
                 }
+                let handledByDirectTransition = false;
+                let clearedAsAlreadyHandled = false;
                 if (prevSize <= 0) {
                   writeHookTrace("session_index.key_transition_skip", { reason: "empty", session_id: prevSessionId, key });
                 } else if (prevMtime <= mtimeFloorMs) {
@@ -2427,12 +2428,23 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                     session_key: key,
                     next_session_id: sessionId
                   });
+                  handledByDirectTransition = true;
                   writeHookTrace("session_index.signal_queued", {
                     signal: "reset",
                     source: "key-transition",
                     session_id: prevSessionId,
                     session_key: key
                   });
+                } else {
+                  clearedAsAlreadyHandled = true;
+                  writeHookTrace("session_index.key_transition_skip", {
+                    reason: "duplicate",
+                    session_id: prevSessionId,
+                    key
+                  });
+                }
+                if (handledByDirectTransition || clearedAsAlreadyHandled) {
+                  pendingNewKeyFallbacks.delete(prevSessionId);
                 }
               }
               if (isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })) {
