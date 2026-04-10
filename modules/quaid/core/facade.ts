@@ -409,6 +409,7 @@ const MAX_EXTRACTION_LOG_ENTRIES = 800;
 const MAX_INJECTION_LOG_FILES = 400;
 const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
 const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
+const DELAYED_REQUESTS_LOCK_STALE_MS = 5_000;
 const COMPACTION_NOTIFY_BATCH_MS = 10_000;
 const COMPACTION_NOTIFY_BATCH_MAX_MS = 45_000;
 const TOOLS_DOMAIN_BLOCK_RE = /<!-- AUTO-GENERATED:DOMAIN-LIST:START -->[\s\S]*?<!-- AUTO-GENERATED:DOMAIN-LIST:END -->\n*/g;
@@ -960,6 +961,20 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   function withDelayedRequestsLock<T>(requestsPath: string, fn: () => T): T {
     const lockPath = `${requestsPath}.lock`;
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const tryRecoverStaleLock = (): boolean => {
+      try {
+        const stat = fs.statSync(lockPath);
+        const ageMs = Date.now() - Number(stat.mtimeMs || 0);
+        if (!(ageMs >= DELAYED_REQUESTS_LOCK_STALE_MS)) {
+          return false;
+        }
+        fs.unlinkSync(lockPath);
+        console.warn(`[quaid][facade] delayed requests recovered stale lock path=${lockPath} age_ms=${Math.round(ageMs)}`);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     let fd: number | undefined;
     let lastErr: unknown;
     for (let attempt = 0; attempt < DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS; attempt += 1) {
@@ -970,6 +985,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         const code = (err as NodeJS.ErrnoException)?.code;
         if (code !== "EEXIST") throw err;
         lastErr = err;
+        if (tryRecoverStaleLock()) {
+          continue;
+        }
         _sleepMs(DELAYED_REQUESTS_LOCK_SLEEP_MS);
       }
     }

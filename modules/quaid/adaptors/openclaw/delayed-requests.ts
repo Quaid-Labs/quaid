@@ -1,5 +1,9 @@
 import * as fs from "node:fs";
 
+const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
+const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
+const DELAYED_REQUESTS_LOCK_STALE_MS = 5_000;
+
 type RequestItem = {
   id: string;
   created_at: string;
@@ -42,11 +46,26 @@ function _sleepMs(ms: number): void {
   Atomics.wait(i32, 0, 0, Math.max(1, Math.floor(ms)));
 }
 
+function tryRecoverStaleRequestsLock(lockPath: string): boolean {
+  try {
+    const stat = fs.statSync(lockPath);
+    const ageMs = Date.now() - Number(stat.mtimeMs || 0);
+    if (!(ageMs >= DELAYED_REQUESTS_LOCK_STALE_MS)) {
+      return false;
+    }
+    fs.unlinkSync(lockPath);
+    warnDelayed(`[quaid] delayed requests recovered stale lock path=${lockPath} age_ms=${Math.round(ageMs)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function withRequestsLock<T>(requestsPath: string, fn: () => T): T {
   const lockPath = `${requestsPath}.lock`;
   let fd: number | undefined;
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS; attempt++) {
     try {
       fd = fs.openSync(lockPath, "wx", 0o600);
       break;
@@ -54,7 +73,10 @@ function withRequestsLock<T>(requestsPath: string, fn: () => T): T {
       const code = (err as NodeJS.ErrnoException)?.code;
       if (code !== "EEXIST") throw err;
       lastErr = err;
-      _sleepMs(10);
+      if (tryRecoverStaleRequestsLock(lockPath)) {
+        continue;
+      }
+      _sleepMs(DELAYED_REQUESTS_LOCK_SLEEP_MS);
     }
   }
   if (fd === undefined) {

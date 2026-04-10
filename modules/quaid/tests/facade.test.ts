@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
 import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -1646,6 +1646,31 @@ describe("QuaidFacade", () => {
       status: "pending",
       message: "janitor needs follow-up",
     });
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("queueDelayedRequest recovers a stale delayed-requests lock", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-delayed-req-stale-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const delayedPath = path.join(workspace, ".runtime", "notes", "delayed-llm-requests.json");
+    const lockPath = `${delayedPath}.lock`;
+    mkdirSync(path.dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, "stale", "utf8");
+    const staleAt = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, staleAt, staleAt);
+
+    const queued = facade.queueDelayedRequest({
+      message: "stale lock janitor follow-up",
+      kind: "janitor_health",
+      priority: "high",
+      source: "test",
+    });
+
+    expect(queued).toBe(true);
+    const payload = JSON.parse(await readFile(delayedPath, "utf8"));
+    expect(payload.requests).toHaveLength(1);
+    expect(payload.requests[0].message).toBe("stale lock janitor follow-up");
+    await expect(readFile(lockPath, "utf8")).rejects.toThrow();
     await rm(workspace, { recursive: true, force: true });
   });
 

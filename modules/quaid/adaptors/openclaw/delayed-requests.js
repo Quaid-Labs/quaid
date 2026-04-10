@@ -1,4 +1,7 @@
 import * as fs from "node:fs";
+const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
+const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
+const DELAYED_REQUESTS_LOCK_STALE_MS = 5e3;
 function warnDelayed(message) {
   try {
     console.warn(message);
@@ -23,11 +26,25 @@ function _sleepMs(ms) {
   const i32 = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(i32, 0, 0, Math.max(1, Math.floor(ms)));
 }
+function tryRecoverStaleRequestsLock(lockPath) {
+  try {
+    const stat = fs.statSync(lockPath);
+    const ageMs = Date.now() - Number(stat.mtimeMs || 0);
+    if (!(ageMs >= DELAYED_REQUESTS_LOCK_STALE_MS)) {
+      return false;
+    }
+    fs.unlinkSync(lockPath);
+    warnDelayed(`[quaid] delayed requests recovered stale lock path=${lockPath} age_ms=${Math.round(ageMs)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function withRequestsLock(requestsPath, fn) {
   const lockPath = `${requestsPath}.lock`;
   let fd;
   let lastErr;
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS; attempt++) {
     try {
       fd = fs.openSync(lockPath, "wx", 384);
       break;
@@ -35,7 +52,10 @@ function withRequestsLock(requestsPath, fn) {
       const code = err?.code;
       if (code !== "EEXIST") throw err;
       lastErr = err;
-      _sleepMs(10);
+      if (tryRecoverStaleRequestsLock(lockPath)) {
+        continue;
+      }
+      _sleepMs(DELAYED_REQUESTS_LOCK_SLEEP_MS);
     }
   }
   if (fd === void 0) {

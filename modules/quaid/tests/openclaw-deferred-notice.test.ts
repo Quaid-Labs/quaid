@@ -265,4 +265,116 @@ describe("openclaw deferred notices", () => {
     error.mockRestore();
     fs.rmSync(home, { recursive: true, force: true });
   });
+
+  it("recovers a stale delayed-requests lock before draining", async () => {
+    vi.useFakeTimers();
+    const home = makeTempDir("quaid-oc-deferred-stale-lock-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+
+    writeJson(path.join(hiddenHome, "instances", "openclaw-livetest", "config.json"), {
+      adapter: { type: "openclaw" },
+      retrieval: { failHard: false, autoInject: false, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      plugins: { strict: false },
+    });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-livetest",
+        },
+      },
+    });
+
+    const noticeFile = path.join(
+      hiddenHome,
+      "instances",
+      "openclaw-livetest",
+      ".runtime",
+      "notes",
+      "delayed-llm-requests.json",
+    );
+    writeJson(noticeFile, {
+      version: 1,
+      requests: [
+        {
+          id: "janitor-stale-lock",
+          created_at: "2026-04-10T12:00:00Z",
+          source: "janitor",
+          kind: "janitor_summary",
+          priority: "normal",
+          status: "pending",
+          message: "[Quaid] Janitor summary: stale lock recovery.",
+        },
+      ],
+    });
+    const lockPath = `${noticeFile}.lock`;
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, "stale", "utf8");
+    const staleAt = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, staleAt, staleAt);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-livetest");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const result = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "Hey, what is up?",
+        sessionId: "session-main-stale-lock",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-main-stale-lock",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+
+    expect(String(result?.appendSystemContext || "")).toContain("stale lock recovery");
+    expect(fs.existsSync(lockPath)).toBe(false);
+
+    const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    const pending = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    expect(pending).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
 });
