@@ -45,6 +45,21 @@ class ProviderUnavailableError(Exception):
     """
 
 
+def _is_provider_config_error(exc: Optional[Exception]) -> bool:
+    if exc is None:
+        return False
+    if isinstance(exc, urllib.error.HTTPError):
+        return 400 <= exc.code < 500
+    text = str(exc or "").strip().lower()
+    return (
+        "check fastreasoning/deepreasoning in config.json" in text
+        or "no model configured for tier" in text
+        or "unsupported provider" in text
+        or "reasoningmodelclasses" in text
+        or "language model provider" in text
+    )
+
+
 def _short_error_text(exc: Optional[Exception], *, max_len: int = 240) -> str:
     if exc is None:
         text = "unknown error"
@@ -708,24 +723,11 @@ def call_llm(system_prompt: str, user_message: str,
             f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
             f"error_type={err_type}, error={last_error})."
         ) from last_error
-    # Surface config/model errors to the agent even when failHard is off.
-    # 4xx errors indicate a bad model name or invalid config — the user needs
-    # to know, since extraction will silently fail until the config is fixed.
-    _http_code = getattr(last_error, "code", None)
-    if _http_code is not None and 400 <= _http_code < 500:
-        notify_agent(
-            (
-                f"Quaid {resolved_tier} LLM call failed: "
-                f"HTTP {_http_code} from {provider_name} (model={model}). "
-                f"Check your model config — this tier will not extract until fixed."
-            ),
-            severity="error",
-            source="llm_config",
-            dedupe_key=(
-                f"llm-config-error:{provider_name}:{resolved_tier}:{model}:{_http_code}"
-            ),
-            ttl_seconds=900,
-        )
+    if _is_provider_config_error(last_error):
+        raise RuntimeError(
+            f"Quaid could not access its {resolved_tier} language model provider "
+            f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
+        ) from last_error
     logger.warning(
         "[llm_clients][FALLBACK] Returning None after LLM failure because failHard is disabled."
     )

@@ -1696,6 +1696,10 @@ Consider running: docs staleness updater (update-stale --apply)`;
     }
     return { results, meta };
   }
+  function shouldSurfaceBridgeRecallError(err) {
+    const text = String(err?.message || err || "").toLowerCase();
+    return text.includes("language model provider") || text.includes("check fastreasoning/deepreasoning") || text.includes("provider unavailable after") || text.includes("llm proxy error");
+  }
   async function recallMemoryFromBridgeDetailed(query, limit, opts) {
     const rawStores = opts.stores || ["vector"];
     const expandGraph = rawStores.includes("graph");
@@ -1734,6 +1738,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
       });
       return { results, meta: payload.meta };
     } catch (err) {
+      if (shouldSurfaceBridgeRecallError(err)) throw err;
       if (deps.isFailHardEnabled()) throw err;
       console.error("[quaid][facade] recall error:", err.message);
       return { results: [], meta: null };

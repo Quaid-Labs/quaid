@@ -404,4 +404,21 @@ describe("lifecycle signal detection", () => {
   it("exports a delayed new-key fallback window so stronger signals can win first", () => {
     expect(__test.NEW_KEY_FALLBACK_DELAY_MS).toBeGreaterThan(0);
   });
+
+  it("detects immediate provider failures for auto-inject surfacing", () => {
+    expect(__test.isImmediateProviderFailure(
+      new Error("Python error: Quaid could not access its fast language model provider (openai-codex, model=invalid-model-xyzzy). Error: HTTP 400")
+    )).toBe(true);
+    expect(__test.isImmediateProviderFailure(new Error("ordinary recall miss"))).toBe(false);
+  });
+
+  it("builds a same-turn provider notice block for auto-inject failures", () => {
+    const block = __test.buildImmediateProviderNotice(
+      new Error("Quaid could not access its fast language model provider (openai-codex, model=invalid-model-xyzzy). Error: HTTP 400"),
+      "fast",
+    );
+    expect(block).toContain("<quaid_system_message>");
+    expect(block).toContain("[Quaid error] [provider]");
+    expect(block).toContain("fast language model provider");
+  });
 });

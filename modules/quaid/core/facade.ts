@@ -2346,6 +2346,16 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return { results, meta };
   }
 
+  function shouldSurfaceBridgeRecallError(err: unknown): boolean {
+    const text = String((err as Error)?.message || err || "").toLowerCase();
+    return (
+      text.includes("language model provider")
+      || text.includes("check fastreasoning/deepreasoning")
+      || text.includes("provider unavailable after")
+      || text.includes("llm proxy error")
+    );
+  }
+
   async function recallMemoryFromBridgeDetailed(
     query: string,
     limit: number,
@@ -2397,6 +2407,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         });
       return { results, meta: payload.meta };
     } catch (err: unknown) {
+      if (shouldSurfaceBridgeRecallError(err)) throw err;
       if (deps.isFailHardEnabled()) throw err;
       console.error("[quaid][facade] recall error:", (err as Error).message);
       return { results: [], meta: null };

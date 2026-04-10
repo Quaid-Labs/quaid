@@ -1637,6 +1637,17 @@ function _getGatewayToken() {
   }
   return void 0;
 }
+function isImmediateProviderFailure(err) {
+  const text = String(err?.message || err || "").toLowerCase();
+  return text.includes("language model provider") || text.includes("check fastreasoning/deepreasoning") || text.includes("provider unavailable after") || text.includes("llm proxy error");
+}
+function buildImmediateProviderNotice(err, tier = "fast") {
+  const raw = String(err?.message || err || "").replace(/\s+/g, " ").trim();
+  const detail = raw.length > 280 ? `${raw.slice(0, 277).trim()}...` : raw;
+  return `<quaid_system_message>
+\u2022 [Quaid error] [provider] Quaid could not access its ${tier} language model provider. ${detail}
+</quaid_system_message>`;
+}
 async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 6e5) {
   const resolved = facade.resolveTierModel(modelTier);
   const provider = String(resolved.provider || "").trim().toLowerCase();
@@ -2287,6 +2298,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
+        if (isImmediateProviderFailure(error)) {
+          const notice = buildImmediateProviderNotice(error, "fast");
+          appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${notice}` : notice;
+          writeHookTrace("hook.before_prompt_build.provider_error", {
+            error: String(error?.message || error).slice(0, 240)
+          });
+        }
       }
       return {
         prependContext: event.prependContext || void 0,
@@ -4059,6 +4079,8 @@ const __test = {
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,
+  isImmediateProviderFailure,
+  buildImmediateProviderNotice,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,

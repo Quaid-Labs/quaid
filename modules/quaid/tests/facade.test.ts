@@ -682,6 +682,26 @@ describe("QuaidFacade", () => {
     expect(results.find((r) => r.text === "Alice --niece_of--> Bob")?.via).toBe("graph");
   });
 
+  it("recallWithDiagnostics rethrows provider errors from bridge recall", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        throw new Error(
+          "Python error (exit=1): stderr: RuntimeError: Quaid could not access its fast language model provider "
+          + "(openai-codex, model=invalid-model-xyzzy). Error: HTTP 400 from gateway",
+        );
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    await expect(facade.recallWithDiagnostics({
+      query: "my family",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+    })).rejects.toThrow(/language model provider/i);
+  });
+
   it("recallWithToolRetry returns primary results when retry heuristics do not trigger", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command !== "recall") return "{}";
