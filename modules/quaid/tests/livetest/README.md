@@ -189,7 +189,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
 | `tmux-msg.sh` | Direct pane message delivery. Use for urgent interrupts, self-tests, and one-off nudges. |
-| `tmux-mailbox.sh` | Queue-backed mailbox for routine STATUS/ISSUE traffic. Testers post into the coordinator mailbox; the coordinator drains items one at a time. Mailbox data lives in `tests/livetest/scripts/.tmux-mailbox/` and is gitignored. |
+| `tmux-mailbox.sh` | Queue-backed mailbox for routine STATUS/ISSUE traffic. The first unread item is delivered inline when a queue goes from empty to non-empty; the coordinator then uses `reply` or `done` to acknowledge the current item and pull the next one. Mailbox data lives in `tests/livetest/scripts/.tmux-mailbox/` and is gitignored. |
 | `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. The active coordinator starts and owns one per tester at run start. Do not route these through window `5` / `claude-looper`. |
 | `autonomous_mode.sh` | General-purpose nudge loop for any pane (`main:N.0` preferred). Writes structured telemetry to `/tmp/autonomous_mode_<target>.status.json`. |
 

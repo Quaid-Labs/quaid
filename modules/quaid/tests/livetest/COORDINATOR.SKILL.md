@@ -144,12 +144,13 @@ setup until the self-test passes.
 Quick mailbox self-check:
 
 ```bash
-TMUX_MSG_SENDER=coordinator \
+POST_OUT=$(TMUX_MSG_SENDER=coordinator \
   tests/livetest/scripts/tmux-mailbox.sh post --kind STATUS "$COORDINATOR_PANE" \
-  "coordinator mailbox self-test"
-tests/livetest/scripts/tmux-mailbox.sh next "$COORDINATOR_PANE"
-# copy the ID from the output, then ack it:
-tests/livetest/scripts/tmux-mailbox.sh ack "$COORDINATOR_PANE" <message-id>
+  "coordinator mailbox self-test")
+echo "$POST_OUT"
+# The first unread item is delivered inline to your pane. Copy the ID from POST_OUT,
+# then mark it done:
+tests/livetest/scripts/tmux-mailbox.sh done "$COORDINATOR_PANE" <message-id>
 ```
 
 ---
@@ -568,9 +569,11 @@ If the latter — stop. Wrong responses to failures:
 ### Coordinator responsibilities during the run
 
 - Monitor the mailbox, not just the pane scrollback. Handle one pending item at a time:
-  `tests/livetest/scripts/tmux-mailbox.sh next "$COORDINATOR_PANE"`
-- After you have handled an item, acknowledge it:
-  `tests/livetest/scripts/tmux-mailbox.sh ack "$COORDINATOR_PANE" <message-id>`
+  the first unread item lands inline when the queue goes from empty to non-empty.
+- After you have handled an item, use one command to advance the queue:
+  `tests/livetest/scripts/tmux-mailbox.sh reply "$COORDINATOR_PANE" <message-id> "retry now"`
+- If no response is needed, mark it handled and pull the next item in one step:
+  `tests/livetest/scripts/tmux-mailbox.sh done "$COORDINATOR_PANE" <message-id>`
 - When an issue arrives: investigate → fix → commit → build runtime → deploy → tell
   tester to retry. Do not ask for a retry before the fix is deployed.
 - Log every fix commit to `unreviewed-commits.md` immediately (do not batch).

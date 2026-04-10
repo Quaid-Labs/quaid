@@ -6,6 +6,8 @@
 #   tmux-mailbox.sh count <target>
 #   tmux-mailbox.sh list [--limit N] <target>
 #   tmux-mailbox.sh next <target>
+#   tmux-mailbox.sh done <target> <message-id>
+#   tmux-mailbox.sh reply <target> <message-id> <response>
 #   tmux-mailbox.sh ack <target> <message-id>
 #   tmux-mailbox.sh targets
 #
@@ -17,6 +19,8 @@
 #   - Mailbox data is stored under tests/livetest/scripts/.tmux-mailbox/ by default.
 #   - Routine STATUS/ISSUE traffic should use the mailbox.
 #   - Direct tmux messages remain appropriate for URGENT / INTERRUPT-level traffic.
+#   - When a queue goes from empty to non-empty, the first mailbox item is delivered inline.
+#   - `reply` and `done` both acknowledge the current item and immediately return the next one.
 
 set -euo pipefail
 
@@ -27,7 +31,7 @@ TMUX_MSG_SCRIPT="${TMUX_MAILBOX_TMUX_MSG_SCRIPT:-$SCRIPT_DIR/tmux-msg.sh}"
 COMMAND="${1:-}"
 
 if [[ -z "$COMMAND" ]]; then
-    echo "Usage: tmux-mailbox.sh <post|count|list|next|ack|targets> ..." >&2
+    echo "Usage: tmux-mailbox.sh <post|count|list|next|done|reply|ack|targets> ..." >&2
     exit 1
 fi
 
@@ -95,19 +99,169 @@ usage_post() {
     echo "Usage: tmux-mailbox.sh post [--kind KIND] [--lane LANE] [--notify 0|1] <target> <message>" >&2
 }
 
+usage_done() {
+    echo "Usage: tmux-mailbox.sh done <target> <message-id>" >&2
+}
+
+usage_reply() {
+    echo "Usage: tmux-mailbox.sh reply <target> <message-id> <response>" >&2
+}
+
+sanitize_inline_message() {
+    python3 - "$1" <<'PY'
+import sys
+text = sys.argv[1].replace("\n", " ")
+text = " ".join(text.split())
+cap = 220
+if len(text) > cap:
+    text = text[: cap - 3] + "..."
+print(text)
+PY
+}
+
 format_notify_message() {
-    local target="$1"
+    local message_id="$1"
     local kind="$2"
     local lane="$3"
-    local pending="$4"
-    local sender="$5"
-    local target_hint="${target:-self}"
+    local sender="$4"
+    local message="$5"
+    local preview
     local lane_prefix=""
+    preview="$(sanitize_inline_message "$message")"
     if [[ -n "$lane" ]]; then
         lane_prefix=" lane=${lane}"
     fi
-    printf 'MAILBOX: %s pending item(s)%s. Latest kind=%s from %s. Run tests/livetest/scripts/tmux-mailbox.sh next %s' \
-        "$pending" "$lane_prefix" "$kind" "$sender" "$target_hint"
+    printf 'MAILBOX id=%s kind=%s%s from=%s: %s' \
+        "$message_id" "$kind" "$lane_prefix" "$sender" "$preview"
+}
+
+lookup_pending_message() {
+    local target="$1"
+    local message_id="$2"
+    mailbox_python "$target" lookup "$message_id" <<'PY'
+import fcntl
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+op = sys.argv[3]
+message_id = sys.argv[4]
+lock_path = root / "mailbox.lock"
+messages_path = root / "messages.jsonl"
+acks_path = root / "acks.jsonl"
+root.mkdir(parents=True, exist_ok=True)
+lock_path.touch(exist_ok=True)
+
+def load_jsonl(path):
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as handle:
+        return [json.loads(raw) for raw in handle if raw.strip()]
+
+with lock_path.open("r+", encoding="utf-8") as lock_handle:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    messages = load_jsonl(messages_path)
+    acked = {(row.get("target"), row.get("id")) for row in load_jsonl(acks_path)}
+    for row in messages:
+        if row.get("target") != target:
+            continue
+        if row.get("id") != message_id:
+            continue
+        if (target, message_id) in acked:
+            print("Message already acknowledged", file=sys.stderr)
+            raise SystemExit(4)
+        print(json.dumps(row, ensure_ascii=True))
+        raise SystemExit(0)
+    print(f"Pending message {message_id} not found for {target}", file=sys.stderr)
+    raise SystemExit(3)
+PY
+}
+
+ack_and_render_next() {
+    local target="$1"
+    local message_id="$2"
+    local actor="${SENDER:-unknown}"
+    local actor_source="${SENDER_PANE:-unknown}"
+    mailbox_python "$target" done "$message_id" "$actor" "$actor_source" <<'PY'
+import fcntl
+import json
+import pathlib
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+op = sys.argv[3]
+message_id = sys.argv[4]
+sender = sys.argv[5]
+source = sys.argv[6]
+lock_path = root / "mailbox.lock"
+messages_path = root / "messages.jsonl"
+acks_path = root / "acks.jsonl"
+root.mkdir(parents=True, exist_ok=True)
+lock_path.touch(exist_ok=True)
+
+def load_jsonl(path):
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as handle:
+        return [json.loads(raw) for raw in handle if raw.strip()]
+
+def render(row):
+    lane = row.get("lane") or "-"
+    return "\n".join([
+        f"ID: {row['id']}",
+        f"When: {row.get('posted_at', '-')}",
+        f"From: {row.get('sender', '-')} @ {row.get('source', '-')}",
+        f"Kind: {row.get('kind', '-')}",
+        f"Lane: {lane}",
+        "Message:",
+        str(row.get("message", "")),
+    ])
+
+with lock_path.open("r+", encoding="utf-8") as lock_handle:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    messages = load_jsonl(messages_path)
+    acked_rows = load_jsonl(acks_path)
+    acked = {(row.get("target"), row.get("id")) for row in acked_rows}
+
+    current = None
+    for row in messages:
+        if row.get("target") == target and row.get("id") == message_id:
+            current = row
+            break
+
+    if current is None:
+        print(f"Pending message {message_id} not found for {target}", file=sys.stderr)
+        raise SystemExit(3)
+    if (target, message_id) in acked:
+        print("Already acknowledged")
+        raise SystemExit(0)
+
+    record = {
+        "id": message_id,
+        "target": target,
+        "acked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "acked_by": sender,
+        "acked_source": source,
+    }
+    with acks_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+
+    acked.add((target, message_id))
+    pending = [
+        row for row in messages
+        if row.get("target") == target and (target, row.get("id")) not in acked
+    ]
+
+    print(f"Acknowledged {message_id} for {target}")
+    if not pending:
+        raise SystemExit(0)
+    print("")
+    print(render(pending[0]))
+PY
 }
 
 case "$COMMAND" in
@@ -228,9 +382,13 @@ PY
         MESSAGE_ID="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"]["id"])' <<<"$RESULT")"
         PENDING_BEFORE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["pending_before"])' <<<"$RESULT")"
         PENDING_AFTER="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["pending_after"])' <<<"$RESULT")"
+        FIRST_KIND="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("kind", ""))' <<<"$RESULT")"
+        FIRST_LANE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("lane", ""))' <<<"$RESULT")"
+        FIRST_SENDER="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("sender", ""))' <<<"$RESULT")"
+        FIRST_MESSAGE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("message", ""))' <<<"$RESULT")"
 
         if [[ "$NOTIFY" != "0" ]] && [[ "$PENDING_BEFORE" == "0" ]] && [[ -x "$TMUX_MSG_SCRIPT" ]]; then
-            NOTIFY_TEXT="$(format_notify_message "$TARGET" "$KIND" "$LANE" "$PENDING_AFTER" "$SENDER")"
+            NOTIFY_TEXT="$(format_notify_message "$MESSAGE_ID" "$FIRST_KIND" "$FIRST_LANE" "$FIRST_SENDER" "$FIRST_MESSAGE")"
             TMUX_MSG_SENDER="$SENDER" TMUX_MSG_SOURCE="$SENDER_PANE" "$TMUX_MSG_SCRIPT" "$TARGET" "$NOTIFY_TEXT" >/dev/null 2>&1 || true
         fi
 
@@ -326,7 +484,7 @@ def render(row):
     return "\n".join([
         f"ID: {row['id']}",
         f"When: {row.get('posted_at', '-')}",
-        f"From: {row.get('sender', '-') } @ {row.get('source', '-')}",
+        f"From: {row.get('sender', '-')} @ {row.get('source', '-')}",
         f"Kind: {row.get('kind', '-')}",
         f"Lane: {lane}",
         "Message:",
@@ -376,6 +534,18 @@ def load_jsonl(path):
     with path.open("r", encoding="utf-8") as handle:
         return [json.loads(raw) for raw in handle if raw.strip()]
 
+def render(row):
+    lane = row.get("lane") or "-"
+    return "\n".join([
+        f"ID: {row['id']}",
+        f"When: {row.get('posted_at', '-')}",
+        f"From: {row.get('sender', '-')} @ {row.get('source', '-')}",
+        f"Kind: {row.get('kind', '-')}",
+        f"Lane: {lane}",
+        "Message:",
+        str(row.get("message", "")),
+    ])
+
 with lock_path.open("r+", encoding="utf-8") as lock_handle:
     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
     messages = load_jsonl(messages_path)
@@ -384,69 +554,45 @@ with lock_path.open("r+", encoding="utf-8") as lock_handle:
     if not pending:
         print(f"No pending mailbox items for {target}")
         raise SystemExit(3)
-    row = pending[0]
-    lane = row.get("lane") or "-"
-    print("\n".join([
-        f"ID: {row['id']}",
-        f"When: {row.get('posted_at', '-')}",
-        f"From: {row.get('sender', '-') } @ {row.get('source', '-')}",
-        f"Kind: {row.get('kind', '-')}",
-        f"Lane: {lane}",
-        "Message:",
-        str(row.get("message", "")),
-    ]))
+    print(render(pending[0]))
 PY
         ;;
 
-    ack)
+    done|ack)
         if [[ $# -ne 2 ]]; then
-            echo "Usage: tmux-mailbox.sh ack <target> <message-id>" >&2
+            usage_done
             exit 1
         fi
         TARGET="$(resolve_target "$1")"
         MESSAGE_ID="$2"
-        mailbox_python "$TARGET" ack "$MESSAGE_ID" "$SENDER" "$SENDER_PANE" <<'PY'
-import fcntl
-import json
-import pathlib
-import sys
-import time
+        ack_and_render_next "$TARGET" "$MESSAGE_ID"
+        ;;
 
-root = pathlib.Path(sys.argv[1])
-target = sys.argv[2]
-op = sys.argv[3]
-message_id = sys.argv[4]
-sender = sys.argv[5]
-source = sys.argv[6]
-lock_path = root / "mailbox.lock"
-acks_path = root / "acks.jsonl"
-root.mkdir(parents=True, exist_ok=True)
-lock_path.touch(exist_ok=True)
-
-def load_jsonl(path):
-    if not path.exists():
-        return []
-    with path.open("r", encoding="utf-8") as handle:
-        return [json.loads(raw) for raw in handle if raw.strip()]
-
-with lock_path.open("r+", encoding="utf-8") as lock_handle:
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-    acked = load_jsonl(acks_path)
-    for row in acked:
-        if row.get("target") == target and row.get("id") == message_id:
-            print("Already acknowledged")
-            raise SystemExit(0)
-    record = {
-        "id": message_id,
-        "target": target,
-        "acked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "acked_by": sender,
-        "acked_source": source,
-    }
-    with acks_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=True) + "\n")
-    print(f"Acknowledged {message_id} for {target}")
-PY
+    reply)
+        if [[ -z "$SENDER" ]]; then
+            echo "Error: TMUX_MSG_SENDER is required for mailbox replies" >&2
+            exit 1
+        fi
+        if [[ $# -lt 3 ]]; then
+            usage_reply
+            exit 1
+        fi
+        TARGET="$(resolve_target "$1")"
+        MESSAGE_ID="$2"
+        shift 2
+        RESPONSE="$*"
+        CURRENT_ROW="$(lookup_pending_message "$TARGET" "$MESSAGE_ID")"
+        REPLY_TARGET="$(python3 -c 'import json,sys; row=json.loads(sys.stdin.read()); print(row.get("source", ""))' <<<"$CURRENT_ROW")"
+        if [[ -z "$REPLY_TARGET" || "$REPLY_TARGET" == "unknown" ]]; then
+            echo "Error: mailbox item $MESSAGE_ID has no valid reply target" >&2
+            exit 1
+        fi
+        if [[ ! -x "$TMUX_MSG_SCRIPT" ]]; then
+            echo "Error: tmux message script not found at $TMUX_MSG_SCRIPT" >&2
+            exit 1
+        fi
+        TMUX_MSG_SENDER="$SENDER" TMUX_MSG_SOURCE="$SENDER_PANE" "$TMUX_MSG_SCRIPT" "$REPLY_TARGET" "MAILBOX REPLY id=$MESSAGE_ID: $RESPONSE"
+        ack_and_render_next "$TARGET" "$MESSAGE_ID"
         ;;
 
     targets)
@@ -490,7 +636,7 @@ PY
 
     *)
         echo "Error: unknown command '$COMMAND'" >&2
-        echo "Usage: tmux-mailbox.sh <post|count|list|next|ack|targets> ..." >&2
+        echo "Usage: tmux-mailbox.sh <post|count|list|next|done|reply|ack|targets> ..." >&2
         exit 1
         ;;
 esac
