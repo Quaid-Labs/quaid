@@ -1071,6 +1071,41 @@ function latestResetBackup(sessionId: string): string | null {
   }
 }
 
+function listRecentResetBackupSessions(
+  baseDir: string,
+  nowMs: number,
+  windowMs: number,
+  newSessionId: string,
+): Array<{ sessionId: string; mtimeMs: number; detectionMethod: "self_reset" | "reset_signature" }> {
+  const found = new Map<string, { sessionId: string; mtimeMs: number; detectionMethod: "self_reset" | "reset_signature" }>();
+  try {
+    const allFiles = fs.readdirSync(baseDir);
+    for (const fname of allFiles) {
+      const dotIdx = fname.indexOf(".jsonl.reset.");
+      if (dotIdx < 0) continue;
+      const sid = fname.slice(0, dotIdx);
+      if (!sid) continue;
+      try {
+        const backupStat = fs.statSync(path.join(baseDir, fname));
+        const age = nowMs - backupStat.mtimeMs;
+        if (age < 0 || age >= windowMs) {
+          continue;
+        }
+        const next = {
+          sessionId: sid,
+          mtimeMs: backupStat.mtimeMs,
+          detectionMethod: (sid === newSessionId ? "self_reset" : "reset_signature") as const,
+        };
+        const prior = found.get(sid);
+        if (!prior || next.mtimeMs > prior.mtimeMs) {
+          found.set(sid, next);
+        }
+      } catch {}
+    }
+  } catch {}
+  return Array.from(found.values()).sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
 // When OC reuses a conversation file across resets, the backup is named after
 // the physical file (e.g. a34175cc.jsonl.reset.*), not the session ID.
 // Use the physical file path to find the correct backup.
@@ -4158,37 +4193,21 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         const nowMs = Date.now();
         let bestPriorSessionId: string | null = null;
         let detectionMethod = "mtime";
+        const recentResetCandidates = listRecentResetBackupSessions(
+          getOpenClawSessionsBaseDir(),
+          nowMs,
+          RECENT_RESET_WINDOW_MS,
+          newSessionId,
+        );
 
         // Pass 1: look for the definitive just-reset signature by scanning the
         // sessions base dir directly for .reset.* backup files modified within
         // the window. This is filesystem-only and survives gateway restarts
         // (e.g., OC restarts the gateway process on /reset, wiping sessionKeyLastSeen).
-        try {
-          const baseDir = getOpenClawSessionsBaseDir();
-          const allFiles = fs.readdirSync(baseDir);
-          let bestResetMtimeMs = 0;
-          for (const fname of allFiles) {
-            const dotIdx = fname.indexOf(".jsonl.reset.");
-            if (dotIdx < 0) continue;
-            const sid = fname.slice(0, dotIdx);
-            if (!sid) continue;
-            // Do NOT skip sid === newSessionId. OC TUI /reset keeps the same session
-            // UUID — it empties the JSONL in place and creates a .reset.* backup, then
-            // restarts the gateway. The new gateway fires before_agent_start for the
-            // same UUID as if it were a fresh session. We need to detect that the
-            // "new" session is actually itself a just-reset session and extract from
-            // its own backup.
-            try {
-              const backupStat = fs.statSync(path.join(baseDir, fname));
-              const age = nowMs - backupStat.mtimeMs;
-              if (age >= 0 && age < RECENT_RESET_WINDOW_MS && backupStat.mtimeMs > bestResetMtimeMs) {
-                bestResetMtimeMs = backupStat.mtimeMs;
-                bestPriorSessionId = sid;
-                detectionMethod = sid === newSessionId ? "self_reset" : "reset_signature";
-              }
-            } catch {}
-          }
-        } catch {}
+        if (recentResetCandidates.length > 0) {
+          bestPriorSessionId = recentResetCandidates[0].sessionId;
+          detectionMethod = recentResetCandidates[0].detectionMethod;
+        }
 
         // Pass 2: fall back to JSONL mtime if no reset-signature session found.
         if (!bestPriorSessionId) {
@@ -4206,7 +4225,37 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           }
         }
 
-        if (bestPriorSessionId) {
+        if (recentResetCandidates.length > 0) {
+          for (const candidate of recentResetCandidates) {
+            const priorKey = Array.from(sessionKeyLastSeen.entries())
+              .find(([k, v]) => v === candidate.sessionId && !/^agent:[^:]+:hook:/.test(k))?.[0]
+              || "agent:main:tui-unknown";
+            writeHookTrace("hook.before_agent_start.fallback_transition", {
+              new_session_id: newSessionId,
+              prior_session_id: candidate.sessionId,
+              prior_key: priorKey,
+              detection_method: candidate.detectionMethod,
+            });
+            if (
+              !isInternalSessionContext({ sessionKey: priorKey }, { sessionId: candidate.sessionId })
+              && facade.shouldProcessLifecycleSignal(candidate.sessionId, {
+                label: "ResetSignal",
+                source: "hook",
+                signature: `before_agent_start:fallback:${candidate.sessionId}`,
+              })
+            ) {
+              facade.markLifecycleSignalFromHook(candidate.sessionId, "ResetSignal");
+              writeDaemonSignal(candidate.sessionId, "reset", {
+                source: "before_agent_start_fallback",
+                prior_session_id: candidate.sessionId,
+                new_session_id: newSessionId,
+              });
+              console.log(
+                `[quaid][signal] daemon signal reset session=${candidate.sessionId} source=before_agent_start_fallback`,
+              );
+            }
+          }
+        } else if (bestPriorSessionId) {
           const priorKey = Array.from(sessionKeyLastSeen.entries())
             .find(([k, v]) => v === bestPriorSessionId && !/^agent:[^:]+:hook:/.test(k))?.[0]
             || "agent:main:tui-unknown";
@@ -5074,6 +5123,7 @@ export const __test = {
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,
+  listRecentResetBackupSessions,
   isImmediateProviderFailure,
   buildImmediateProviderNotice,
   isInternalSessionContext,

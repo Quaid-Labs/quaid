@@ -421,4 +421,18 @@ describe("lifecycle signal detection", () => {
     expect(block).toContain("[Quaid error] [provider]");
     expect(block).toContain("fast language model provider");
   });
+
+  it("collects all recent reset backup sessions for burst /new recovery", () => {
+    const baseDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-reset-backups-"));
+    const oldA = path.join(baseDir, "old-a.jsonl.reset.2026-04-10T10-00-00Z");
+    const oldB = path.join(baseDir, "old-b.jsonl.reset.2026-04-10T10-00-01Z");
+    fs.writeFileSync(oldA, "a");
+    fs.writeFileSync(oldB, "b");
+    const nowMs = Date.now();
+    fs.utimesSync(oldA, new Date(nowMs - 1_000), new Date(nowMs - 1_000));
+    fs.utimesSync(oldB, new Date(nowMs - 500), new Date(nowMs - 500));
+
+    const sessions = __test.listRecentResetBackupSessions(baseDir, nowMs, 120_000, "new-sess");
+    expect(sessions.map((entry: any) => entry.sessionId)).toEqual(["old-b", "old-a"]);
+  });
 });

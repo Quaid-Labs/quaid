@@ -817,6 +817,37 @@ function latestResetBackup(sessionId) {
     return null;
   }
 }
+function listRecentResetBackupSessions(baseDir, nowMs, windowMs, newSessionId) {
+  const found = /* @__PURE__ */ new Map();
+  try {
+    const allFiles = fs.readdirSync(baseDir);
+    for (const fname of allFiles) {
+      const dotIdx = fname.indexOf(".jsonl.reset.");
+      if (dotIdx < 0) continue;
+      const sid = fname.slice(0, dotIdx);
+      if (!sid) continue;
+      try {
+        const backupStat = fs.statSync(path.join(baseDir, fname));
+        const age = nowMs - backupStat.mtimeMs;
+        if (age < 0 || age >= windowMs) {
+          continue;
+        }
+        const next = {
+          sessionId: sid,
+          mtimeMs: backupStat.mtimeMs,
+          detectionMethod: sid === newSessionId ? "self_reset" : "reset_signature"
+        };
+        const prior = found.get(sid);
+        if (!prior || next.mtimeMs > prior.mtimeMs) {
+          found.set(sid, next);
+        }
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return Array.from(found.values()).sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
 function findLatestOCSessionFile() {
   try {
     const dir = getOpenClawSessionsBaseDir();
@@ -3273,27 +3304,15 @@ ${notice}` : notice;
         const nowMs = Date.now();
         let bestPriorSessionId = null;
         let detectionMethod = "mtime";
-        try {
-          const baseDir = getOpenClawSessionsBaseDir();
-          const allFiles = fs.readdirSync(baseDir);
-          let bestResetMtimeMs = 0;
-          for (const fname of allFiles) {
-            const dotIdx = fname.indexOf(".jsonl.reset.");
-            if (dotIdx < 0) continue;
-            const sid = fname.slice(0, dotIdx);
-            if (!sid) continue;
-            try {
-              const backupStat = fs.statSync(path.join(baseDir, fname));
-              const age = nowMs - backupStat.mtimeMs;
-              if (age >= 0 && age < RECENT_RESET_WINDOW_MS && backupStat.mtimeMs > bestResetMtimeMs) {
-                bestResetMtimeMs = backupStat.mtimeMs;
-                bestPriorSessionId = sid;
-                detectionMethod = sid === newSessionId ? "self_reset" : "reset_signature";
-              }
-            } catch {
-            }
-          }
-        } catch {
+        const recentResetCandidates = listRecentResetBackupSessions(
+          getOpenClawSessionsBaseDir(),
+          nowMs,
+          RECENT_RESET_WINDOW_MS,
+          newSessionId
+        );
+        if (recentResetCandidates.length > 0) {
+          bestPriorSessionId = recentResetCandidates[0].sessionId;
+          detectionMethod = recentResetCandidates[0].detectionMethod;
         }
         if (!bestPriorSessionId) {
           let bestMtimeMs = 0;
@@ -3310,7 +3329,32 @@ ${notice}` : notice;
             }
           }
         }
-        if (bestPriorSessionId) {
+        if (recentResetCandidates.length > 0) {
+          for (const candidate of recentResetCandidates) {
+            const priorKey = Array.from(sessionKeyLastSeen.entries()).find(([k, v]) => v === candidate.sessionId && !/^agent:[^:]+:hook:/.test(k))?.[0] || "agent:main:tui-unknown";
+            writeHookTrace("hook.before_agent_start.fallback_transition", {
+              new_session_id: newSessionId,
+              prior_session_id: candidate.sessionId,
+              prior_key: priorKey,
+              detection_method: candidate.detectionMethod
+            });
+            if (!isInternalSessionContext({ sessionKey: priorKey }, { sessionId: candidate.sessionId }) && facade.shouldProcessLifecycleSignal(candidate.sessionId, {
+              label: "ResetSignal",
+              source: "hook",
+              signature: `before_agent_start:fallback:${candidate.sessionId}`
+            })) {
+              facade.markLifecycleSignalFromHook(candidate.sessionId, "ResetSignal");
+              writeDaemonSignal(candidate.sessionId, "reset", {
+                source: "before_agent_start_fallback",
+                prior_session_id: candidate.sessionId,
+                new_session_id: newSessionId
+              });
+              console.log(
+                `[quaid][signal] daemon signal reset session=${candidate.sessionId} source=before_agent_start_fallback`
+              );
+            }
+          }
+        } else if (bestPriorSessionId) {
           const priorKey = Array.from(sessionKeyLastSeen.entries()).find(([k, v]) => v === bestPriorSessionId && !/^agent:[^:]+:hook:/.test(k))?.[0] || "agent:main:tui-unknown";
           writeHookTrace("hook.before_agent_start.fallback_transition", {
             new_session_id: newSessionId,
@@ -4079,6 +4123,7 @@ const __test = {
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,
+  listRecentResetBackupSessions,
   isImmediateProviderFailure,
   buildImmediateProviderNotice,
   isInternalSessionContext,
