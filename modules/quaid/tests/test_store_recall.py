@@ -1431,6 +1431,19 @@ class TestRecallTelemetry:
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector", "graph"]
 
+    def test_plan_fanout_queries_preserves_kinship_queries_with_graph_defaults(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                "Who is my niece?",
+                return_meta=True,
+            )
+
+        assert queries == ["Who is my niece?"]
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "graph"]
+
     def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_defaults(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -2671,6 +2684,21 @@ class TestRecallFastHookInjectContract:
              patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
             stores, _ = mg._infer_recall_store_defaults(
                 "What do you know about my family?",
+            )
+
+        assert stores == ["vector", "graph"]
+
+    def test_infer_recall_store_defaults_routes_graph_for_composite_kinship_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, _ = mg._infer_recall_store_defaults(
+                "Who is my niece?",
             )
 
         assert stores == ["vector", "graph"]
