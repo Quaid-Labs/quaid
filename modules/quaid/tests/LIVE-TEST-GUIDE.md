@@ -696,8 +696,10 @@ ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/janitor-stats.json | pyth
   [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k]"'
 ```
 
-**Pass**: Janitor completes, `janitor-stats.json` success, `snippets_folded +
-snippets_rewritten + snippets_discarded > 0`.
+**Pass**: Janitor completes and `janitor-stats.json` reports `success: true`.
+Snippet operation counts may be zero on a fresh or very small test pool; that is
+not a failure unless the stats report snippet errors or the run expected specific
+pending snippets to be condensed.
 
 ### M10 — Docs, Health, and Session CLI
 
