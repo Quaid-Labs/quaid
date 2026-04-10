@@ -2909,11 +2909,24 @@ def graph_aware_recall(
                 else:
                     graph_path = f"{source_name} --{relation}--> {node.name}"
 
+                row_text = graph_path
+                row_similarity = round(max(0.55, 0.92 - (0.08 * max(depth - 1, 0))), 3)
+                kinship_label, kinship_evidence, kinship_opposite = _kinship_evidence_for_target(
+                    query,
+                    node.name,
+                    direct,
+                )
+                if kinship_label and kinship_evidence:
+                    row_text = f"{node.name} is likely your {kinship_label} (evidence: {kinship_evidence}; graph path: {graph_path})"
+                    row_similarity = max(row_similarity, 0.91)
+                elif kinship_opposite:
+                    row_similarity = min(row_similarity, 0.62)
+
                 results["graph_results"].append({
                     "id": node.id,
-                    "text": graph_path,
+                    "text": row_text,
                     "category": "graph",
-                    "similarity": round(max(0.55, 0.92 - (0.08 * max(depth - 1, 0))), 3),
+                    "similarity": row_similarity,
                     "name": node.name,
                     "type": node.type,
                     "relation": relation,
@@ -6516,6 +6529,47 @@ def _kinship_query_fit_terms(query: str) -> Tuple[List[str], List[str]]:
         return out
 
     return _dedupe(positive), _dedupe(negative)
+
+
+def _kinship_query_label(query: str) -> Optional[str]:
+    lowered = str(query or "").lower()
+    for cue in ("niece", "nephew", "aunt", "uncle", "grandmother", "grandfather"):
+        if re.search(rf"\b{re.escape(cue)}\b", lowered):
+            return cue
+    return None
+
+
+def _kinship_evidence_for_target(
+    query: str,
+    target_name: str,
+    evidence_rows: List[Dict[str, Any]],
+) -> Tuple[Optional[str], Optional[str], bool]:
+    label = _kinship_query_label(query)
+    if not label:
+        return None, None, False
+    positive_terms, negative_terms = _kinship_query_fit_terms(query)
+    if not positive_terms and not negative_terms:
+        return label, None, False
+
+    target = " ".join(str(target_name or "").split()).strip()
+    if not target:
+        return label, None, False
+    target_pattern = re.compile(rf"\b{re.escape(target.lower())}\b")
+
+    matched_opposite = False
+    for row in evidence_rows or []:
+        text = " ".join(str((row or {}).get("text") or "").split()).strip()
+        lower_text = text.lower()
+        if not text or not target_pattern.search(lower_text):
+            continue
+        has_positive = any(re.search(rf"\b{re.escape(term)}\b", lower_text) for term in positive_terms)
+        has_negative = any(re.search(rf"\b{re.escape(term)}\b", lower_text) for term in negative_terms)
+        if has_positive and not has_negative:
+            return label, text, False
+        if has_negative and not has_positive:
+            matched_opposite = True
+
+    return label, None, matched_opposite
 
 
 def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str = "full") -> Dict[str, Any]:

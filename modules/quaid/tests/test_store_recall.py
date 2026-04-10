@@ -3677,6 +3677,58 @@ class TestRecallLimitEdgeCases:
         assert any("Alice" in row.get("text", "") for row in graph_rows)
         assert payload["meta"]["base_recall_meta"] == {"mode": "deliberate"}
 
+    def test_graph_aware_recall_synthesizes_answer_bearing_kinship_rows(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node(id="owner", type="Person", name="solomon-steadman")
+        diana = mg.Node(id="diana", type="Person", name="Diana")
+        alice = mg.Node(id="alice", type="Person", name="Alice")
+        david = mg.Node(id="david", type="Person", name="David")
+        oliver = mg.Node(id="oliver", type="Person", name="Oliver")
+        direct = [
+            {
+                "id": "fact-alice",
+                "text": "Diana has a daughter named Alice.",
+                "category": "fact",
+                "similarity": 0.82,
+            },
+            {
+                "id": "fact-oliver",
+                "text": "David has a son named Oliver.",
+                "category": "fact",
+                "similarity": 0.82,
+            },
+        ]
+
+        def _fake_related(node_id, relations=None, depth=1):
+            return [
+                (diana, "sibling_of", "out", 1, [("solomon-steadman", "sibling_of")]),
+                (david, "sibling_of", "out", 1, [("solomon-steadman", "sibling_of")]),
+                (alice, "parent_of", "out", 2, [("solomon-steadman", "sibling_of"), ("Diana", "parent_of")]),
+                (oliver, "parent_of", "out", 2, [("solomon-steadman", "sibling_of"), ("David", "parent_of")]),
+            ]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "recall", return_value=(direct, {"mode": "deliberate"})), \
+             patch.object(mg, "resolve_owner_person", return_value=owner), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(graph, "get_edges", return_value=[]), \
+             patch.object(graph, "get_related_bidirectional", side_effect=_fake_related):
+            payload = mg.graph_aware_recall(
+                "Who is my niece?",
+                owner_id="solomon-steadman",
+                limit=8,
+                graph_depth=1,
+            )
+
+        graph_rows = payload.get("graph_results") or []
+        alice_row = next(row for row in graph_rows if row.get("id") == "alice")
+        oliver_row = next(row for row in graph_rows if row.get("id") == "oliver")
+        assert "Alice is likely your niece" in alice_row["text"]
+        assert "Diana has a daughter named Alice" in alice_row["text"]
+        assert float(alice_row["similarity"]) > float(oliver_row["similarity"])
+
     def test_resolve_recall_store_request_defaults_to_vector_only(self):
         from datastore.memorydb.memory_graph import _resolve_recall_store_request
 
