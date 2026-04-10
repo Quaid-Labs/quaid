@@ -211,6 +211,7 @@ function readInstalledAtMs() {
 }
 const sessionTranscriptPaths = /* @__PURE__ */ new Map();
 const sessionIdToAgentId = /* @__PURE__ */ new Map();
+const provisionedAgentInstances = /* @__PURE__ */ new Set();
 const subagentParentSessionIds = /* @__PURE__ */ new Map();
 const registeredSubagentSessions = /* @__PURE__ */ new Set();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
@@ -236,6 +237,103 @@ function resolveSubagentParentSessionId(spawnedBy, sessionsData, sessionKeyLastS
     return direct;
   }
   return String(sessionKeyLastSeen.get(parentKey) || "").trim();
+}
+function resolveAgentLabelFromSessionKey(sessionKey) {
+  const key = String(sessionKey || "").trim();
+  if (!key) {
+    return "";
+  }
+  const parts = key.split(":");
+  if (parts[0] !== "agent" || parts.length < 3) {
+    return "";
+  }
+  return String(parts[1] || "").trim().toLowerCase();
+}
+function resolveHookAgentLabel(event, ctx) {
+  const explicitCandidates = [
+    ctx?.agentId,
+    event?.agentId,
+    ctx?.agent?.id,
+    event?.agent?.id
+  ];
+  for (const candidate of explicitCandidates) {
+    const label = String(candidate || "").trim().toLowerCase();
+    if (label) {
+      return label;
+    }
+  }
+  const keyCandidates = [
+    ctx?.sessionKey,
+    ctx?.targetSessionKey,
+    event?.sessionKey,
+    event?.targetSessionKey
+  ];
+  for (const candidate of keyCandidates) {
+    const label = resolveAgentLabelFromSessionKey(candidate);
+    if (label) {
+      return label;
+    }
+  }
+  const sessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
+  if (sessionId) {
+    const label = resolveAgentLabelFromSessionKey(resolveSessionKeyForSessionId(sessionId));
+    if (label) {
+      return label;
+    }
+  }
+  return "main";
+}
+function ensureAgentInstanceProvisioned(agentLabel, reason) {
+  const label = String(agentLabel || "").trim().toLowerCase() || "main";
+  const instanceId = getInstanceId(label);
+  if (!instanceId) {
+    return false;
+  }
+  const configPath = path.join(WORKSPACE, "instances", instanceId, "config.json");
+  if (fs.existsSync(configPath)) {
+    provisionedAgentInstances.add(instanceId);
+    return true;
+  }
+  if (provisionedAgentInstances.has(instanceId)) {
+    return true;
+  }
+  try {
+    const result = spawnSync(
+      PYTHON_BIN,
+      ["-c", "from lib.adapter import _auto_provision_from_env_if_needed as _p; _p()"],
+      {
+        encoding: "utf8",
+        timeout: 3e4,
+        env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
+      }
+    );
+    if (result.error || result.status !== 0 || !fs.existsSync(configPath)) {
+      writeHookTrace("instance.auto_provision_error", {
+        instance_id: instanceId,
+        agent_label: label,
+        reason,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || "")
+      });
+      return false;
+    }
+    provisionedAgentInstances.add(instanceId);
+    writeHookTrace("instance.auto_provisioned", {
+      instance_id: instanceId,
+      agent_label: label,
+      reason
+    });
+    return true;
+  } catch (err) {
+    writeHookTrace("instance.auto_provision_error", {
+      instance_id: instanceId,
+      agent_label: label,
+      reason,
+      error: String(err?.message || err)
+    });
+    return false;
+  }
 }
 function runSubagentHookCommand(command, payload, agentLabel) {
   const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
@@ -1868,6 +1966,7 @@ const quaidPlugin = {
       if (isInternalSessionContext(event, ctx)) {
         return;
       }
+      ensureAgentInstanceProvisioned(resolveHookAgentLabel(event, ctx), "before_agent_start");
       try {
         const messages = facade.collectJanitorNudges({
           statePath: JANITOR_NUDGE_STATE_PATH,
@@ -1911,6 +2010,7 @@ notify_user(${JSON.stringify(message)})
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
+      ensureAgentInstanceProvisioned(resolveHookAgentLabel(event, ctx), "before_prompt_build");
       const nowMs = Date.now();
       pingDaemonAliveIfNeeded(nowMs);
       let appendSystemContext;
