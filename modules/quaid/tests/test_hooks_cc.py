@@ -507,6 +507,62 @@ def test_hook_extract_precompact_resolves_cc_transcript_and_flushes_staged_paylo
     assert not extraction_daemon._rolling_state_path(session_id).exists()
 
 
+def test_hook_extract_precompact_sweeps_older_staged_payloads(
+    tmp_path, mock_adapter, monkeypatch
+):
+    from core import extraction_daemon
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+    instance_root = tmp_path / "instances" / "claude-code-test"
+    instance_root.mkdir(parents=True, exist_ok=True)
+
+    current_session = "current-precompact"
+    old_session = "old-staged"
+    current_transcript = tmp_path / "current.jsonl"
+    old_transcript = tmp_path / "old.jsonl"
+    current_transcript.write_text('{"role":"user","content":"compact now"}\n', encoding="utf-8")
+    old_transcript.write_text('{"role":"user","content":"older staged content"}\n', encoding="utf-8")
+
+    mock_adapter.get_session_path.return_value = None
+    mock_adapter.store_auth_token.return_value = instance_root / ".auth-token"
+
+    extraction_daemon.write_rolling_state(
+        old_session,
+        {
+            "session_id": old_session,
+            "transcript_path": str(old_transcript),
+            "processed_line_offset": 1,
+            "buffered_line_offset": 1,
+            "semantic_buffer": "",
+            "semantic_buffer_tokens": 0,
+            "raw_facts": [{"text": "Older staged fact", "category": "fact"}],
+            "carry_facts": [{"text": "Older staged fact", "category": "fact"}],
+        },
+    )
+
+    monkeypatch.setattr("core.interface.hooks.subprocess.Popen", lambda *a, **kw: None)
+
+    out, err = _run_hook_extract(
+        {
+            "session_id": current_session,
+            "transcript_path": str(current_transcript),
+        },
+        monkeypatch=monkeypatch,
+        precompact=True,
+    )
+
+    signals = extraction_daemon.read_pending_signals()
+    by_session = {signal["session_id"]: signal for signal in signals}
+    assert out == ""
+    assert "staged payload sweep queued 1 additional flush signal" in err
+    assert by_session[current_session]["type"] == "compaction"
+    assert by_session[current_session]["transcript_path"] == str(current_transcript)
+    assert by_session[old_session]["type"] == "session_end"
+    assert by_session[old_session]["transcript_path"] == str(old_transcript)
+    assert by_session[old_session]["meta"]["reason"] == "precompact_sweep"
+
+
 # ===========================================================================
 # hook_inject — recall resilience
 # ===========================================================================

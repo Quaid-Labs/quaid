@@ -24,6 +24,13 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+_PLACEHOLDER_CHILD_IDS = {
+    "default",
+    "general-purpose",
+    "subagent",
+    "unknown",
+}
+
 
 def _registry_dir() -> Path:
     """Resolve registry directory from the active hidden instance root."""
@@ -91,6 +98,31 @@ def _write_registry(parent_session_id: str, data: Dict[str, Any]) -> None:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _is_placeholder_running_child(child_id: str, entry: Dict[str, Any]) -> bool:
+    """Return True for CC-style placeholder rows that cannot be harvested."""
+    if not isinstance(entry, dict):
+        return False
+    if str(entry.get("status") or "").strip() != "running":
+        return False
+    if str(entry.get("transcript_path") or "").strip():
+        return False
+    normalized_id = str(child_id or "").strip().lower()
+    child_type = str(entry.get("child_type") or "").strip().lower()
+    return normalized_id in _PLACEHOLDER_CHILD_IDS or child_type in _PLACEHOLDER_CHILD_IDS
+
+
+def _prune_placeholder_running_children(children: Dict[str, Any], completed_child_id: str) -> List[str]:
+    """Remove stale start-hook placeholders after a real completed child arrives."""
+    removed: List[str] = []
+    for child_id, entry in list(children.items()):
+        if child_id == completed_child_id:
+            continue
+        if _is_placeholder_running_child(child_id, entry):
+            children.pop(child_id, None)
+            removed.append(child_id)
+    return removed
 
 
 def register(
@@ -169,11 +201,21 @@ def mark_complete(
         if transcript_path:
             child["transcript_path"] = transcript_path
         children[child_id] = child
+        removed_placeholders = []
+        if str(child.get("transcript_path") or "").strip():
+            removed_placeholders = _prune_placeholder_running_children(children, child_id)
         _write_registry(parent_session_id, data)
     logger.info(
         "[subagent-registry] completed child=%s parent=%s",
         child_id, parent_session_id,
     )
+    if removed_placeholders:
+        logger.info(
+            "[subagent-registry] pruned stale placeholder child rows parent=%s completed=%s placeholders=%s",
+            parent_session_id,
+            child_id,
+            ",".join(removed_placeholders),
+        )
 
 
 def get_harvestable(parent_session_id: str) -> List[Dict[str, Any]]:

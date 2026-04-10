@@ -824,7 +824,7 @@ def hook_extract(args):
         return
 
     try:
-        from core.extraction_daemon import write_signal
+        from core.extraction_daemon import write_signal, write_staged_payload_flush_signals
 
         # Capture session-scoped OAuth token for the daemon.
         # Stop/PreCompact hooks run after CC's auth is established, so
@@ -859,6 +859,17 @@ def hook_extract(args):
             supports_compaction_control=supports_compaction,
         )
         print(f"[quaid][{label}] signal written: {sig_path.name}", file=sys.stderr)
+        if is_precompact:
+            swept = write_staged_payload_flush_signals(
+                adapter=adapter_name,
+                reason="precompact_sweep",
+                exclude_session_ids={session_id},
+            )
+            if swept:
+                print(
+                    f"[quaid][{label}] staged payload sweep queued {len(swept)} additional flush signal(s)",
+                    file=sys.stderr,
+                )
 
         # Signal write is complete (the critical part). Now ensure the daemon
         # is alive to process it. Run in a detached subprocess so host hook

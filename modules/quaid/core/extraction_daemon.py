@@ -997,6 +997,75 @@ def staged_state_has_payload(state: Dict[str, Any]) -> bool:
     )
 
 
+def _session_has_harvestable_subagents(session_id: str, adapter=None) -> bool:
+    """Return True when a parent has completed child transcripts waiting."""
+    try:
+        import importlib
+        subagent_registry = importlib.import_module("core.subagent_registry")
+        if subagent_registry.get_harvestable(session_id):
+            return True
+    except Exception:
+        pass
+    try:
+        discover_children_fn = getattr(adapter, "discover_subagent_children", None) if adapter is not None else None
+        if not callable(discover_children_fn):
+            return False
+        for child in discover_children_fn(session_id):
+            if str(child.get("child_id") or "").strip() and str(child.get("transcript_path") or "").strip():
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def write_staged_payload_flush_signals(
+    *,
+    adapter: str = "",
+    reason: str = "staged_payload_sweep",
+    exclude_session_ids: Optional[set] = None,
+) -> List[Path]:
+    """Queue flush signals for every session with durable staged payload.
+
+    Lifecycle hooks can move the host into a fresh session before an async
+    rolling extraction finishes. This sweep gives PreCompact a deterministic
+    way to drain older staged payloads instead of waiting for idle heuristics.
+    """
+    excluded = set(exclude_session_ids or set())
+    written: List[Path] = []
+    try:
+        state_files = sorted(_rolling_state_dir().glob("*.json"))
+    except OSError:
+        return written
+
+    for state_file in state_files:
+        session_id = state_file.stem
+        if session_id in excluded or not _SESSION_ID_RE.match(session_id):
+            continue
+        try:
+            state = read_rolling_state(session_id)
+        except Exception as e:
+            logger.warning("failed reading rolling state for staged flush sweep %s: %s", session_id, e)
+            continue
+        if not staged_state_has_payload(state):
+            continue
+        transcript_path = str(state.get("transcript_path") or "").strip()
+        if not transcript_path:
+            transcript_path = str(read_cursor(session_id).get("transcript_path") or "").strip()
+        if not transcript_path:
+            logger.warning("staged payload for %s has no transcript_path; cannot queue flush", session_id)
+            continue
+        written.append(
+            write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=transcript_path,
+                adapter=adapter,
+                meta={"reason": reason, "staged_payload_sweep": True},
+            )
+        )
+    return written
+
+
 def build_flush_payload(state: Dict[str, Any], tail_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Combine staged rolling payloads with the final tail extraction payload."""
     combined = {
@@ -2093,6 +2162,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
         )
     read_start_offset = cursor_offset if rolling_mode else buffered_line_offset
+    pending_subagent_harvest = False
     new_lines = (
         read_transcript_token_window(
             transcript_path,
@@ -2107,7 +2177,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     if not new_lines:
         logger.info("[%s] session %s: no new content past cursor (offset=%d)", label, session_id, cursor_offset)
-        if not rolling_mode and (staged_state_has_payload(staged_state) or _semantic_buffer_has_content(staged_state)):
+        pending_subagent_harvest = not rolling_mode and _session_has_harvestable_subagents(session_id, adapter=adapter)
+        if not rolling_mode and (
+            staged_state_has_payload(staged_state)
+            or _semantic_buffer_has_content(staged_state)
+            or pending_subagent_harvest
+        ):
             new_lines = []
         else:
             if signal_type == "session_end":
@@ -2199,6 +2274,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     "[%s] session %s: empty transcript after parsing; flushing staged payload only",
                     label, session_id,
                 )
+            elif pending_subagent_harvest:
+                logger.info(
+                    "[%s] session %s: empty transcript after parsing; harvesting completed subagents only",
+                    label, session_id,
+                )
             else:
                 logger.info("[%s] session %s: empty transcript after parsing", label, session_id)
                 write_cursor(session_id, total_lines, transcript_path)
@@ -2233,7 +2313,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         harvestable_payloads: List[Dict[str, str]] = []
         snapshots = []
         mark_harvested_fn = None
-        if transcript_text.strip() and not rolling_mode:
+        if not rolling_mode:
             MAX_CHILD_CHARS = 50_000
             MAX_MERGED_CHARS = 200_000
             merged_chars = 0

@@ -380,6 +380,105 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
     assert captured["harvested"] == [("parent-1", "child-1")]
 
 
+def test_process_signal_harvests_subagent_when_parent_cursor_at_eof(monkeypatch, tmp_path):
+    parent_path = tmp_path / "parent.jsonl"
+    child_path = tmp_path / "child.jsonl"
+    parent_path.write_text('{"role":"user","content":"already consumed"}\n', encoding="utf-8")
+    child_path.write_text('{"role":"user","content":"child"}\n', encoding="utf-8")
+
+    captured = {}
+
+    class _FakeAdapter:
+        def instance_root(self):
+            return tmp_path / "instances" / "pytest-runner"
+
+        def parse_session_jsonl(self, path):
+            return "User: Parent transcript was already consumed before the child completed."
+
+        def parse_subagent_session_jsonl(self, path):
+            assert Path(path) == child_path
+            return "Subagent/User: Child-only Mendoza Malbec fact."
+
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.get_harvestable = lambda sid: [
+        {"child_id": "child-1", "transcript_path": str(child_path), "child_type": "default"}
+    ]
+    fake_registry.mark_harvested = lambda sid, cid: captured.setdefault("harvested", []).append((sid, cid))
+    fake_registry.is_registered_subagent = lambda sid: False
+
+    import sys as _sys
+    real_registry = _sys.modules.get("core.subagent_registry")
+    _sys.modules["core.subagent_registry"] = fake_registry
+    from lib.adapter import set_adapter, reset_adapter
+    set_adapter(_FakeAdapter())
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "read_cursor", lambda sid: {"line_offset": 1, "transcript_path": str(parent_path)})
+    monkeypatch.setattr(extraction_daemon, "count_transcript_lines", lambda p: 1)
+    monkeypatch.setattr(extraction_daemon, "read_transcript_slice", lambda path, from_line: [])
+    monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+
+    from ingest import extract as extract_mod
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured.setdefault("transcripts", []).append(transcript)
+        assert transcript.startswith("Subagent/User:")
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [
+                {
+                    "text": "The subagent found a Mendoza Malbec fact.",
+                    "speaker": "user",
+                    "category": "fact",
+                    "extraction_confidence": "high",
+                }
+            ],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda payload, *args, **kwargs: captured.setdefault("flush_payload", payload) or {"facts_stored": 0, "facts_skipped": 0, "facts": []},
+    )
+
+    try:
+        extraction_daemon.process_signal(
+            {
+                "session_id": "parent-1",
+                "type": "session_end",
+                "transcript_path": str(parent_path),
+                "_signal_path": str(tmp_path / "sig.json"),
+            }
+        )
+    finally:
+        if real_registry is not None:
+            _sys.modules["core.subagent_registry"] = real_registry
+        else:
+            _sys.modules.pop("core.subagent_registry", None)
+        reset_adapter()
+
+    assert captured["transcripts"] == ["Subagent/User: Child-only Mendoza Malbec fact."]
+    stamped = captured["flush_payload"]["raw_facts"][0]
+    assert stamped["source"] == "subagent"
+    assert stamped["_source_label"].endswith("-subagent-extraction")
+    assert stamped["_source_id"] == "child-1"
+    assert captured["harvested"] == [("parent-1", "child-1")]
+
+
 def test_process_signal_persists_adapter_discovered_subagent_before_harvest(monkeypatch, tmp_path):
     import sys as _sys
 

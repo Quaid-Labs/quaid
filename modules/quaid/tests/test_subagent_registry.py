@@ -368,3 +368,14 @@ class TestAtomicWrite:
         assert entry["status"] == "complete"
         assert entry["transcript_path"] == "/logs/child-A.jsonl"
         assert entry["completed_at"] is not None
+
+    def test_completion_prunes_stale_placeholder_running_child(self, tmp_path):
+        from core.subagent_registry import register, mark_complete, get_harvestable
+
+        register("parent-1", "general-purpose", child_type="general-purpose")
+        mark_complete("parent-1", "child-real", transcript_path="/logs/child-real.jsonl")
+
+        children = _read_raw(tmp_path, "parent-1")["children"]
+        assert "general-purpose" not in children
+        assert children["child-real"]["status"] == "complete"
+        assert get_harvestable("parent-1")[0]["child_id"] == "child-real"
