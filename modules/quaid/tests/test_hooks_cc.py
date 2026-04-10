@@ -74,6 +74,22 @@ def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
     return captured_out.getvalue(), captured_err.getvalue(), content
 
 
+def _run_hook_extract(hook_input: dict, *, monkeypatch, precompact: bool = False):
+    """Drive hook_extract with fake stdin and captured stdout/stderr."""
+    from core.interface import hooks
+
+    captured_out = io.StringIO()
+    captured_err = io.StringIO()
+    args = types.SimpleNamespace(precompact=precompact)
+
+    with patch("core.interface.hooks._read_stdin_json", return_value=hook_input), \
+         patch("core.interface.hooks.sys.stdout", captured_out), \
+         patch("core.interface.hooks.sys.stderr", captured_err):
+        hooks.hook_extract(args)
+
+    return captured_out.getvalue(), captured_err.getvalue()
+
+
 def _run_hook_subagent_stop(hook_input: dict, *, monkeypatch):
     """Drive hook_subagent_stop with fake stdin and captured stderr."""
     from core.interface import hooks
@@ -327,6 +343,168 @@ class TestHookInjectCursorSeeding:
             "offset": 0,
             "path": str(expected_path),
         }
+
+
+def test_hook_extract_precompact_resolves_cc_transcript_and_flushes_staged_payload(
+    tmp_path, sessions_dir, mock_adapter, monkeypatch
+):
+    from core import extraction_daemon
+
+    session_id = "sess-precompact-flush"
+    cwd = "/tmp/private-cc-project"
+    transcript = sessions_dir / cwd.replace("/", "-") / f"{session_id}.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text(
+        '{"role":"user","content":"My sister is Diana"}\n'
+        '{"role":"assistant","content":"Her daughter is Alice"}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+    instance_root = tmp_path / "instances" / "claude-code-test"
+    instance_root.mkdir(parents=True, exist_ok=True)
+    (instance_root / "config.json").write_text(
+        json.dumps({"adapter": {"type": "claude-code"}}),
+        encoding="utf-8",
+    )
+
+    mock_adapter.adapter_id.return_value = "claude-code"
+    mock_adapter.get_session_path.return_value = None
+    mock_adapter.get_sessions_dir.return_value = str(sessions_dir)
+    mock_adapter.parse_session_jsonl.return_value = "User: My sister is Diana"
+    mock_adapter.is_subagent_session.return_value = False
+    mock_adapter.store_auth_token.return_value = instance_root / ".auth-token"
+
+    extraction_daemon.write_cursor(session_id, 2, str(transcript))
+    extraction_daemon.write_rolling_state(
+        session_id,
+        {
+            "session_id": session_id,
+            "transcript_path": str(transcript),
+            "processed_line_offset": 2,
+            "buffered_line_offset": 2,
+            "semantic_buffer": "",
+            "semantic_buffer_tokens": 0,
+            "carry_facts": [],
+            "raw_facts": [{"text": "Owner has a sister named Diana", "category": "fact"}],
+        },
+    )
+
+    monkeypatch.setattr("core.interface.hooks.subprocess.Popen", lambda *a, **kw: None)
+
+    out, err = _run_hook_extract(
+        {
+            "session_id": session_id,
+            "cwd": cwd,
+        },
+        monkeypatch=monkeypatch,
+        precompact=True,
+    )
+
+    signals = extraction_daemon.read_pending_signals()
+    assert out == ""
+    assert "signal written" in err
+    assert len(signals) == 1
+    assert signals[0]["type"] == "compaction"
+    assert signals[0]["transcript_path"] == str(transcript)
+
+    real_registry = sys.modules.get("core.subagent_registry")
+    real_extract = sys.modules.get("ingest.extract")
+    real_notify = sys.modules.get("core.runtime.notify")
+    real_ingest_runtime = sys.modules.get("core.ingest_runtime")
+    real_project_registry = sys.modules.get("core.project_registry")
+    real_docs_updater = sys.modules.get("core.docs_updater_hook")
+
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.is_registered_subagent = lambda sid: False
+    fake_registry.get_harvestable = lambda sid: []
+    fake_registry.mark_harvested = lambda sid, cid: None
+    sys.modules["core.subagent_registry"] = fake_registry
+
+    captured_payloads = []
+    fake_extract = types.ModuleType("ingest.extract")
+    fake_extract.extract_from_transcript = lambda **kwargs: pytest.fail("payload-only precompact flush should not re-extract transcript tail")
+    fake_extract.apply_extracted_payloads = lambda payload, **kwargs: captured_payloads.append((payload, kwargs)) or {
+        **payload,
+        "facts_stored": len(payload.get("raw_facts", [])),
+        "facts_skipped": 0,
+        "edges_created": 0,
+        "facts": [],
+        "snippets": {},
+        "journal": {},
+        "project_logs": {},
+        "project_log_metrics": {},
+    }
+    fake_extract.collapse_duplicate_payload_facts = lambda facts: (list(facts), 0)
+    sys.modules["ingest.extract"] = fake_extract
+
+    fake_notify = types.ModuleType("core.runtime.notify")
+    fake_notify.notify_memory_extraction = lambda **kwargs: None
+    sys.modules["core.runtime.notify"] = fake_notify
+
+    fake_ingest_runtime = types.ModuleType("core.ingest_runtime")
+    fake_ingest_runtime.run_session_logs_ingest = lambda **kwargs: {"status": "indexed"}
+    sys.modules["core.ingest_runtime"] = fake_ingest_runtime
+
+    fake_project_registry = types.ModuleType("core.project_registry")
+    fake_project_registry.snapshot_all_projects = lambda: []
+    sys.modules["core.project_registry"] = fake_project_registry
+
+    fake_docs_updater = types.ModuleType("core.docs_updater_hook")
+    fake_docs_updater.update_project_docs = lambda snapshots, extraction_result: {"docs_updated": 0}
+    sys.modules["core.docs_updater_hook"] = fake_docs_updater
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_read_usage_totals",
+        lambda: {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "fast_calls": 0,
+            "fast_input_tokens": 0,
+            "fast_output_tokens": 0,
+            "deep_calls": 0,
+            "deep_input_tokens": 0,
+            "deep_output_tokens": 0,
+        },
+    )
+
+    try:
+        extraction_daemon.process_signal(signals[0])
+    finally:
+        if real_registry is not None:
+            sys.modules["core.subagent_registry"] = real_registry
+        else:
+            sys.modules.pop("core.subagent_registry", None)
+        if real_extract is not None:
+            sys.modules["ingest.extract"] = real_extract
+        else:
+            sys.modules.pop("ingest.extract", None)
+        if real_notify is not None:
+            sys.modules["core.runtime.notify"] = real_notify
+        else:
+            sys.modules.pop("core.runtime.notify", None)
+        if real_ingest_runtime is not None:
+            sys.modules["core.ingest_runtime"] = real_ingest_runtime
+        else:
+            sys.modules.pop("core.ingest_runtime", None)
+        if real_project_registry is not None:
+            sys.modules["core.project_registry"] = real_project_registry
+        else:
+            sys.modules.pop("core.project_registry", None)
+        if real_docs_updater is not None:
+            sys.modules["core.docs_updater_hook"] = real_docs_updater
+        else:
+            sys.modules.pop("core.docs_updater_hook", None)
+
+    assert extraction_daemon.read_pending_signals() == []
+    assert len(captured_payloads) == 1
+    payload, kwargs = captured_payloads[0]
+    assert kwargs["session_id"] == session_id
+    assert payload["raw_facts"] == [{"text": "Owner has a sister named Diana", "category": "fact"}]
+    assert not extraction_daemon._rolling_state_path(session_id).exists()
 
 
 # ===========================================================================

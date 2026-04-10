@@ -762,8 +762,12 @@ def hook_extract(args):
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
-    transcript_path = hook_input.get("transcript_path", "")
     session_id = hook_input.get("session_id", "") or f"unknown-{int(time.time())}-{os.getpid()}"
+    transcript_path = _resolve_hook_transcript_path(
+        session_id=session_id,
+        hook_cwd=str(hook_input.get("cwd") or "").strip(),
+        transcript_path=str(hook_input.get("transcript_path") or "").strip(),
+    )
     is_precompact = args.precompact if hasattr(args, "precompact") else False
     signal_type = "compaction" if is_precompact else "session_end"
     label = f"hook-{signal_type}"
