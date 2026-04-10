@@ -521,6 +521,227 @@ def test_process_signal_skips_cursor_marked_internal_without_reparse(monkeypatch
     assert not signal_path.exists()
 
 
+def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arrives_after_session_start_noise(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "session-start.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"assistant","content":"[quaid][session-init] Loading project context"}\n'
+            '{"role":"assistant","content":"Warning: plugin exports are noisy but non-fatal"}\n'
+            '{"role":"assistant","content":"Loading ~/.claude/settings.json"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    session_id = "sess-sessionstart-noise"
+    initial_lines = extraction_daemon.count_transcript_lines(str(transcript_path))
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor(session_id, initial_lines, str(transcript_path), internal=True)
+
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"role":"user","content":"My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend."}\n'
+        )
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter:
+        def parse_session_jsonl(self, path):
+            text = Path(path).read_text(encoding="utf-8")
+            if "alpacas" in text and "kiln studio" in text:
+                return "User: My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend."
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: {})
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_buffer_transcript_tail",
+        lambda path, from_line, state, adapter=None: (
+            {
+                "buffered_line_offset": initial_lines + 1,
+                "semantic_buffer": "User: My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend.",
+                "semantic_buffer_tokens": 12,
+            },
+            {
+                "raw_lines_added": 1,
+                "semantic_chars_added": 36,
+                "semantic_tokens_added": 12,
+                "buffered_line_offset": initial_lines + 1,
+            },
+        ),
+    )
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+            {
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+                "meta": kwargs.get("meta", {}),
+            }
+        ),
+    )
+
+    try:
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor(session_id)
+    assert cursor["line_offset"] == initial_lines
+    assert cursor["internal"] is False
+    assert captured == [
+        {
+            "signal_type": "rolling",
+            "session_id": session_id,
+            "transcript_path": str(transcript_path),
+            "meta": {
+                "reason": "semantic_chunk_budget",
+                "chunk_tokens": 10,
+                "semantic_buffer_tokens": 12,
+                "buffered_line_offset": initial_lines + 1,
+            },
+        }
+    ]
+
+
+def test_process_signal_unfreezes_internal_cursor_when_real_turn_arrives_after_session_start_noise(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "session-start-signal.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"assistant","content":"[quaid][session-init] Loading project context"}\n'
+            '{"role":"assistant","content":"Warning: empty exports are non-fatal"}\n'
+            '{"role":"assistant","content":"Loading ~/.claude/settings.json"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    session_id = "sess-sessionstart-signal"
+    initial_lines = extraction_daemon.count_transcript_lines(str(transcript_path))
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor(session_id, initial_lines, str(transcript_path), internal=True)
+
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"role":"user","content":"My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend."}\n'
+        )
+
+    signal_path = extraction_daemon.write_signal(
+        signal_type="session_end",
+        session_id=session_id,
+        transcript_path=str(transcript_path),
+    )
+
+    real_registry = sys.modules.get("core.subagent_registry")
+    real_adapter = sys.modules.get("lib.adapter")
+    real_extract = sys.modules.get("ingest.extract")
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.is_registered_subagent = lambda sid: False
+    fake_registry.get_harvestable = lambda sid: []
+    fake_registry.mark_harvested = lambda sid, child_id: None
+    sys.modules["core.subagent_registry"] = fake_registry
+
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter:
+        def parse_session_jsonl(self, path):
+            text = Path(path).read_text(encoding="utf-8")
+            if "alpacas" in text and "kiln studio" in text:
+                return "User: My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend."
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    fake_extract_mod = types.ModuleType("ingest.extract")
+    fake_extract_mod.extract_from_transcript = lambda transcript, **kwargs: captured.append(transcript) or {
+        "chunks_processed": 1,
+        "chunks_total": 1,
+        "unclassified_empty_payloads": 0,
+        "raw_facts": [],
+        "facts": [],
+        "soul_snippets": {},
+        "journal_entries": {},
+        "project_logs": {},
+        "raw_snippets": {},
+        "raw_journal": {},
+        "raw_project_logs": {},
+    }
+    fake_extract_mod.apply_extracted_payloads = lambda payload, **kwargs: {
+        "facts_stored": 0,
+        "facts_skipped": 0,
+        "edges_created": 0,
+        "snippets": {},
+        "journal": {},
+        "project_log_metrics": {},
+    }
+    fake_extract_mod.collapse_duplicate_payload_facts = lambda facts: (list(facts), 0)
+    sys.modules["ingest.extract"] = fake_extract_mod
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_transcript_slice",
+        lambda path, from_line: [
+            '{"role":"user","content":"My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend."}\n'
+        ],
+    )
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *_args, **_kwargs: None)
+
+    try:
+        signals = extraction_daemon.read_pending_signals()
+        assert len(signals) == 1
+        extraction_daemon.process_signal(signals[0])
+    finally:
+        if real_registry is not None:
+            sys.modules["core.subagent_registry"] = real_registry
+        else:
+            sys.modules.pop("core.subagent_registry", None)
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+        if real_extract is not None:
+            sys.modules["ingest.extract"] = real_extract
+        else:
+            sys.modules.pop("ingest.extract", None)
+
+    cursor = extraction_daemon.read_cursor(session_id)
+    assert not signal_path.exists()
+    assert cursor["internal"] is False
+    assert captured == [
+        "User: My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend."
+    ]
+
+
 def test_effective_idle_timeout_uses_configured_timeout_within_bounds():
     assert extraction_daemon._effective_idle_timeout_minutes(60) == 60
     assert extraction_daemon._effective_idle_timeout_minutes(90) == 90

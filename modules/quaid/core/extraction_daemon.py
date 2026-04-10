@@ -1691,6 +1691,46 @@ def _advance_internal_session_cursor_to_end(session_id: str, transcript_path: st
     _cursor_end_timeout_fired.add(session_id)
 
 
+def _reconcile_internal_cursor_state(
+    session_id: str,
+    transcript_path: str,
+    *,
+    cursor_data: Optional[Dict[str, Any]] = None,
+    adapter=None,
+) -> str:
+    """Return internal-session handling state for the current transcript.
+
+    States:
+    - "frozen": cursor is marked internal and no new transcript lines arrived.
+    - "advanced": transcript is still internal-only; cursor was advanced to EOF.
+    - "unfrozen": transcript gained non-internal content past a frozen cursor.
+    - "not_internal": transcript is not internal and cursor was not frozen.
+    """
+    state = cursor_data or read_cursor(session_id)
+    cursor_offset = int(state.get("line_offset", 0) or 0)
+    cursor_internal = bool(state.get("internal", False))
+
+    total_lines = 0
+    try:
+        if transcript_path and os.path.isfile(transcript_path):
+            total_lines = count_transcript_lines(transcript_path)
+    except OSError:
+        total_lines = 0
+
+    if cursor_internal and total_lines <= cursor_offset:
+        return "frozen"
+
+    if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+        _advance_internal_session_cursor_to_end(session_id, transcript_path)
+        return "advanced"
+
+    if cursor_internal:
+        write_cursor(session_id, cursor_offset, transcript_path, internal=False)
+        return "unfrozen"
+
+    return "not_internal"
+
+
 # ---------------------------------------------------------------------------
 # Core extraction processing
 # ---------------------------------------------------------------------------
@@ -1761,19 +1801,31 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         adapter = None
 
     cursor_data = read_cursor(session_id)
-    if bool(cursor_data.get("internal", False)):
-        logger.info("[%s] session %s: cursor marked internal, skipping signal", label, session_id)
+    internal_state = _reconcile_internal_cursor_state(
+        session_id,
+        transcript_path,
+        cursor_data=cursor_data,
+        adapter=adapter,
+    )
+    if internal_state == "frozen":
+        logger.info("[%s] session %s: cursor marked internal with no new content, skipping signal", label, session_id)
         mark_signal_processed(signal_data)
         _release_session_processing_lock(session_id, lock_fd)
         return
+    if internal_state == "advanced":
+        logger.info("[%s] session %s: internal maintenance transcript, advancing cursor to EOF", label, session_id)
+        mark_signal_processed(signal_data)
+        _release_session_processing_lock(session_id, lock_fd)
+        return
+    if internal_state == "unfrozen":
+        logger.info(
+            "[%s] session %s: non-internal content arrived past frozen internal cursor, resuming extraction",
+            label,
+            session_id,
+        )
+        cursor_data = read_cursor(session_id)
 
     try:
-        if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
-            logger.info("[%s] session %s: internal maintenance transcript, advancing cursor to EOF", label, session_id)
-            _advance_internal_session_cursor_to_end(session_id, transcript_path)
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(session_id, lock_fd)
-            return
         is_subagent_session_fn = getattr(adapter, "is_subagent_session", None) if adapter is not None else None
         if callable(is_subagent_session_fn) and is_subagent_session_fn(session_id, Path(transcript_path)):
             logger.info("[%s] session %s: adapter-marked subagent, skipping standalone extraction", label, session_id)
@@ -2726,12 +2778,22 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
-        if bool(data.get("internal", False)):
+        internal_state = _reconcile_internal_cursor_state(
+            session_id,
+            transcript_path,
+            cursor_data=data,
+            adapter=adapter,
+        )
+        if internal_state == "frozen":
             continue
-        if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+        if internal_state == "advanced":
             logger.info("session %s is internal maintenance-only during idle scan, advancing cursor to EOF", session_id)
-            _advance_internal_session_cursor_to_end(session_id, transcript_path)
             continue
+        if internal_state == "unfrozen":
+            logger.info(
+                "session %s gained non-internal content past a frozen internal cursor during idle scan",
+                session_id,
+            )
 
         # Skip registered subagents — their transcripts are merged into parent extraction
         if session_id in registered_subagents:
@@ -2882,12 +2944,22 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
-        if bool(data.get("internal", False)):
+        internal_state = _reconcile_internal_cursor_state(
+            session_id,
+            transcript_path,
+            cursor_data=data,
+            adapter=adapter,
+        )
+        if internal_state == "frozen":
             continue
-        if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+        if internal_state == "advanced":
             logger.info("session %s is internal maintenance-only during rolling scan, advancing cursor to EOF", session_id)
-            _advance_internal_session_cursor_to_end(session_id, transcript_path)
             continue
+        if internal_state == "unfrozen":
+            logger.info(
+                "session %s gained non-internal content past a frozen internal cursor during rolling scan",
+                session_id,
+            )
         if session_id in pending_session_ids:
             continue
 
