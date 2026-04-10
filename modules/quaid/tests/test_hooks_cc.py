@@ -612,6 +612,42 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "deferred maintenance notice" in context
 
+    def test_claude_code_drains_deferred_notice_into_mandatory_relay(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        from lib import runtime_context
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        mock_adapter.adapter_id.return_value = "claude-code"
+        monkeypatch.setattr(
+            runtime_context,
+            "drain_deferred_notices",
+            lambda limit=50: [
+                {
+                    "message": "[Quaid] Synthetic notice: silver lantern is ready.",
+                    "kind": "janitor_summary",
+                    "status": "resolved",
+                }
+            ],
+        )
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Hey, what is up?",
+                    "session_id": "sess-deferred-drain",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "MANDATORY: Quaid just drained deferred notices" in context
+        assert "silver lantern" in context
+        assert "quaid notify --deferred-drain" not in context
+
     def test_memory_context_still_injected_without_tool_hint_round_trip(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

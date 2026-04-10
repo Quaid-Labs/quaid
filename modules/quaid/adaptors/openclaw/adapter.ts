@@ -2949,14 +2949,6 @@ notify_user(${JSON.stringify(message)})
         }
       }
 
-      const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
-      if (deferredNoticeContext) {
-        prependContextParts.push(deferredNoticeContext);
-        appendSystemContext = appendSystemContext
-          ? `${appendSystemContext}\n\n${deferredNoticeContext}`
-          : deferredNoticeContext;
-      }
-
       // Helper: carry any built docs context through all early returns.
       // The docs gate block above may have set prependSystemContext/appendSystemContext
       // and added the session to projectDocsInjectedSessions. Any early return after

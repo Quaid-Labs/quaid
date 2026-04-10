@@ -2329,13 +2329,6 @@ ${projectPlacementContext}` : projectPlacementContext;
           writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
         }
       }
-      const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
-      if (deferredNoticeContext) {
-        prependContextParts.push(deferredNoticeContext);
-        appendSystemContext = appendSystemContext ? `${appendSystemContext}
-
-${deferredNoticeContext}` : deferredNoticeContext;
-      }
       const mergePrependContext = (base) => {
         const parts = [
           ...prependContextParts,

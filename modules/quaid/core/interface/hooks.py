@@ -121,7 +121,20 @@ def _format_direct_agent_notices(messages: List[str]) -> str:
         return ""
     body = "\n".join(f"• {message}" for message in notices)
     return (
-        "The following are live system notices from Quaid — please relay them in your response:\n\n"
+        "MANDATORY: start your next response by briefly relaying these live Quaid notices to the user. "
+        "Then answer the user's current message.\n\n"
+        f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+    )
+
+
+def _format_deferred_notice_relay(messages: List[str]) -> str:
+    notices = [str(message or "").strip() for message in messages if str(message or "").strip()]
+    if not notices:
+        return ""
+    body = "\n".join(f"• {message}" for message in notices)
+    return (
+        "MANDATORY: Quaid just drained deferred notices for the human user. "
+        "Begin your next response by relaying each notice below in plain language, then answer the user's current message.\n\n"
         f"<quaid_system_message>\n{body}\n</quaid_system_message>"
     )
 
@@ -481,7 +494,8 @@ def hook_inject(args):
     # Ask the adapter for any active pending context and check whether there
     # are deferred notices waiting for an explicit agent-driven drain.
     pending_context = _get_pending_context()
-    deferred_notice_hint = _get_deferred_notice_hint()
+    deferred_notice_relay_context = _get_deferred_notice_relay_context()
+    deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
 
     try:
         from concurrent.futures import ThreadPoolExecutor
@@ -553,6 +567,9 @@ def hook_inject(args):
         if pending_context:
             context_parts.append(pending_context)
 
+        if deferred_notice_relay_context:
+            context_parts.append(deferred_notice_relay_context)
+
         if deferred_notice_hint:
             context_parts.append(deferred_notice_hint)
 
@@ -595,6 +612,8 @@ def hook_inject(args):
             )
         if pending_context:
             fallback_context_parts.append(pending_context)
+        if deferred_notice_relay_context:
+            fallback_context_parts.append(deferred_notice_relay_context)
         if deferred_notice_hint:
             fallback_context_parts.append(deferred_notice_hint)
         if fallback_context_parts:
@@ -648,6 +667,31 @@ def _get_deferred_notice_hint() -> str:
         from lib.runtime_context import format_deferred_notice_hint
 
         return format_deferred_notice_hint() or ""
+    except Exception:
+        return ""
+
+
+def _get_deferred_notice_relay_context() -> str:
+    """Drain deferred notices on CC, which has no reliable visible reply hook.
+
+    Codex already handles this well via explicit agent CLI behavior. OpenClaw
+    has a before_agent_reply hook that can emit a synthetic visible reply.
+    Claude Code only exposes UserPromptSubmit additionalContext, so the relay
+    must be made explicit on the real human turn instead of relying on a weak
+    advisory hint.
+    """
+    if _current_adapter_id() != "claude-code":
+        return ""
+    try:
+        from lib.runtime_context import drain_deferred_notices
+
+        drained = drain_deferred_notices(limit=50)
+        messages = [
+            str(item.get("message") or "").strip()
+            for item in list(drained or [])
+            if isinstance(item, dict) and str(item.get("message") or "").strip()
+        ]
+        return _format_deferred_notice_relay(messages)
     except Exception:
         return ""
 
