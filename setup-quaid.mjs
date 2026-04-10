@@ -22,6 +22,7 @@ import {
   resolveAdapterHookScript,
   syncBuiltinAdapterManifests,
 } from "./modules/quaid/lib/adapter-manifests.mjs";
+import { shouldStartExtractionDaemonAfterInstall } from "./lib/install-daemon-policy.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -4407,7 +4408,7 @@ except Exception as e:
 
   // Start the extraction daemon for platforms that rely on background
   // session/lifecycle processing so the first real session is ready immediately.
-  if (_isPlatform("claude-code") || _isPlatform("codex")) {
+  if (shouldStartExtractionDaemonAfterInstall(adapterType)) {
     s.start("Starting extraction daemon...");
     const daemonScript = `
 import os, sys
