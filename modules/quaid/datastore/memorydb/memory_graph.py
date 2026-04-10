@@ -2405,6 +2405,43 @@ def _has_generic_graph_signal(query: str) -> bool:
     ))
 
 
+_FAMILY_SUPPORT_RELATIONS = {
+    "parent_of",
+    "child_of",
+    "sibling_of",
+    "spouse_of",
+    "partner_of",
+    "aunt_of",
+    "uncle_of",
+    "cousin_of",
+    "grandparent_of",
+    "family_of",
+    "related_to",
+}
+
+
+def _kinship_support_relations_for_query(
+    query: str,
+    matched_relations: Optional[List[str]] = None,
+) -> Tuple[Optional[List[str]], int]:
+    """Expand family queries to the support relations needed for multi-hop answers.
+
+    Surface kinship prompts like "my niece" or "my aunt" often require a short
+    chain over stored base relations (for example sibling_of + parent_of) rather
+    than a single direct aunt/niece edge. Keep the scope narrow to family
+    relations and request depth 2 only when the query shape implies composition.
+    """
+    lowered = str(query or "").lower()
+    matched = {str(rel or "").strip() for rel in (matched_relations or []) if str(rel or "").strip()}
+    support = set(matched)
+    composite_kinship = bool(re.search(r"\b(niece|nephew|aunt|uncle|cousin|grandparent|grandmother|grandfather)\b", lowered))
+    broad_family = bool(re.search(r"\b(family|relative|kin|kinship)\b", lowered))
+    if composite_kinship or broad_family or (matched & _FAMILY_SUPPORT_RELATIONS):
+        support |= _FAMILY_SUPPORT_RELATIONS
+        return sorted(support), 2
+    return (sorted(support) if support else None), 1
+
+
 def store_edge_keywords(relation: str, keywords: List[str], description: str = "") -> bool:
     """Store keywords for an edge relation type.
 
@@ -2760,9 +2797,10 @@ def graph_aware_recall(
 
     # Determine which relations to expand based on currently active graph relations
     matched_relations = _relation_matches_for_query(query)
-    expand_relations = matched_relations or None
+    expand_relations, kinship_depth = _kinship_support_relations_for_query(query, matched_relations)
     if _has_generic_graph_signal(query):
         graph_depth = max(graph_depth, 2)
+    graph_depth = max(graph_depth, kinship_depth)
 
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
