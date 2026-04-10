@@ -181,6 +181,30 @@ describe("lifecycle signal detection", () => {
     ])).toBe(true);
   });
 
+  it("does not treat mixed internal prompts plus a real user tail as maintenance-only", () => {
+    expect(__test.isInternalTranscriptMessages([
+      {
+        role: "user",
+        content:
+          "Compare Statement A against each candidate statement below.\n\nStatement A (new): \"A\"\n\nCandidates:\n1. \"B\"\n\nRespond with JSON only as an array of objects:\n[{\"pair\":1,\"is_same\":true}]\n\n[Fri 10 Apr 12:00 UTC] Hey, what is up?",
+      },
+    ])).toBe(false);
+  });
+
+  it("does not treat a session with later real user turns as maintenance-only", () => {
+    expect(__test.isInternalTranscriptMessages([
+      {
+        role: "user",
+        content:
+          "You are reviewing 50 dedup rejections in a personal knowledge base.\n\nWhen in doubt, CONFIRM.\n1. Log ID: abc\n   New text: \"A\"\n   Existing text: \"B\"",
+      },
+      {
+        role: "user",
+        content: "[Fri 10 Apr 12:00 UTC] Hey, what is up?",
+      },
+    ])).toBe(false);
+  });
+
   it("parses event_msg payloads before internal transcript detection", () => {
     const tmpFile = `/tmp/quaid-oc-internal-${Date.now()}.jsonl`;
     fs.writeFileSync(

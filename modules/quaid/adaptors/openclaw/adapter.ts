@@ -769,23 +769,64 @@ function isInternalSessionContext(event: any, ctx: any): boolean {
   return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:"));
 }
 
+function _scrubTranscriptMessageText(message: any): string {
+  const text = String(facade.getMessageText(message) || "").trim();
+  if (!text) return "";
+  return text.replace(/<quaid_system_message>[\s\S]*?<\/quaid_system_message>/gi, "").trim();
+}
+
+function _isInternalMaintenanceMessageText(text: string): boolean {
+  const scrubbed = String(text || "").trim();
+  if (!scrubbed) return false;
+  if (/^Extract memorable facts and journal entries from this conversation chunk:/i.test(scrubbed)) {
+    return true;
+  }
+  if (scrubbed.startsWith("You are performing offline memory extraction on a transcript archive.")) {
+    return true;
+  }
+  return facade.isInternalMaintenancePrompt(scrubbed);
+}
+
+function _messageHasExternalUserTail(message: any, scrubbedText: string): boolean {
+  const role = String(message?.role || "").trim().toLowerCase();
+  if (role !== "user") return false;
+  const rawLines = String(scrubbedText || "")
+    .split(/\r?\n/)
+    .map((line) => String(line || ""))
+    .filter((line) => line.trim());
+  if (!rawLines.length) return false;
+  const lastRawLine = String(rawLines[rawLines.length - 1] || "");
+  const hasTimestampPrefix = /^\[.*?\]\s*/.test(lastRawLine);
+  if (!hasTimestampPrefix) return false;
+  const lines = rawLines
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return false;
+  const lastLine = String(lines[lines.length - 1] || "").replace(/^\[.*?\]\s*/, "").trim();
+  if (!lastLine) return false;
+  return !_isInternalMaintenanceMessageText(lastLine);
+}
+
 function isInternalTranscriptMessages(messages: any[]): boolean {
+  let sawInternal = false;
+  let sawExternal = false;
   for (const msg of Array.isArray(messages) ? messages : []) {
-    const text = String(facade.getMessageText(msg) || "").trim();
-    if (!text) continue;
-    const scrubbed = text.replace(/<quaid_system_message>[\s\S]*?<\/quaid_system_message>/gi, "").trim();
+    const scrubbed = _scrubTranscriptMessageText(msg);
     if (!scrubbed) continue;
-    if (/^Extract memorable facts and journal entries from this conversation chunk:/i.test(scrubbed)) {
-      return true;
+    if (_messageHasExternalUserTail(msg, scrubbed)) {
+      sawExternal = true;
+      continue;
     }
-    if (scrubbed.startsWith("You are performing offline memory extraction on a transcript archive.")) {
-      return true;
+    if (_isInternalMaintenanceMessageText(scrubbed)) {
+      sawInternal = true;
+      continue;
     }
-    if (facade.isInternalMaintenancePrompt(scrubbed)) {
-      return true;
+    const role = String(msg?.role || "").trim().toLowerCase();
+    if (role === "user") {
+      sawExternal = true;
     }
   }
-  return false;
+  return sawInternal && !sawExternal;
 }
 
 function sessionCursorPath(sessionId: string): string {
