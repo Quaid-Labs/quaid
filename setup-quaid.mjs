@@ -23,6 +23,7 @@ import {
   syncBuiltinAdapterManifests,
 } from "./modules/quaid/lib/adapter-manifests.mjs";
 import { shouldStartExtractionDaemonAfterInstall } from "./lib/install-daemon-policy.mjs";
+import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2197,6 +2198,13 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     });
   } catch (err) {
     return { ok: false, reason: `failed to copy plugin to extension dir: ${String(err)}` };
+  }
+  const depsResult = ensureOpenClawExtensionDependencies({
+    extensionDir,
+    pluginDir: stagedPluginPath,
+  });
+  if (!depsResult.ok) {
+    return { ok: false, reason: `failed to provision extension dependencies: ${depsResult.reason}` };
   }
   {
     // sourcePath must be in the macOS secure temp dir (/var/folders/) for the OC
