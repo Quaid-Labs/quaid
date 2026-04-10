@@ -26,12 +26,19 @@ function makeFakeApi() {
   };
 }
 
-async function loadAdapterWithHomes(hiddenHome: string, visibleHome: string, openClawConfigPath: string): Promise<AdapterPlugin> {
+async function loadAdapterWithHomes(
+  hiddenHome: string,
+  visibleHome: string,
+  openClawConfigPath: string,
+  quaidInstance?: string,
+): Promise<AdapterPlugin> {
   vi.stubEnv("HOME", path.dirname(hiddenHome));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
   vi.stubEnv("QUAID_HOME", hiddenHome);
   vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
-  vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+  if (typeof quaidInstance === "string") {
+    vi.stubEnv("QUAID_INSTANCE", quaidInstance);
+  }
   vi.resetModules();
   const module = await import("../adaptors/openclaw/adapter.js");
   return module.default as AdapterPlugin;
@@ -114,7 +121,7 @@ describe("openclaw deferred notices", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-main");
     const api = makeFakeApi();
     plugin.register(api as any);
 
@@ -145,6 +152,113 @@ describe("openclaw deferred notices", () => {
       ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
       : [];
     expect(pending).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it("uses the install-bound main instance for deferred notice drain paths", async () => {
+    vi.useFakeTimers();
+    const home = makeTempDir("quaid-oc-deferred-bound-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+
+    writeJson(path.join(hiddenHome, "instances", "openclaw-livetest", "config.json"), {
+      adapter: { type: "openclaw" },
+      retrieval: { failHard: false, autoInject: false, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      plugins: { strict: false },
+    });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-livetest",
+        },
+      },
+    });
+
+    const noticeFile = path.join(
+      hiddenHome,
+      "instances",
+      "openclaw-livetest",
+      ".runtime",
+      "notes",
+      "delayed-llm-requests.json",
+    );
+    writeJson(noticeFile, {
+      version: 1,
+      requests: [
+        {
+          id: "janitor-livetest",
+          created_at: "2026-04-10T12:00:00Z",
+          source: "janitor",
+          kind: "janitor_summary",
+          priority: "normal",
+          status: "pending",
+          message: "[Quaid] Janitor summary: livetest main queue.",
+        },
+      ],
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-livetest");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const result = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "Hey, what is up?",
+        sessionId: "session-main-bound",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-main-bound",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+
+    expect(String(result?.appendSystemContext || "")).toContain("livetest main queue");
+
+    const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    const pending = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    expect(pending).toHaveLength(0);
+    expect(fs.existsSync(path.join(hiddenHome, "instances", "openclaw-main", ".runtime", "notes", "delayed-llm-requests.json"))).toBe(false);
 
     warn.mockRestore();
     log.mockRestore();

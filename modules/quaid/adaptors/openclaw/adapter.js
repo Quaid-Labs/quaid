@@ -192,6 +192,17 @@ const _QUAID_PREFIX = (() => {
 })();
 function getInstanceId(agentLabel = "main") {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+  if (_QUAID_INSTANCE) {
+    if (label === "main") {
+      return _QUAID_INSTANCE;
+    }
+    if (_QUAID_PREFIX && (label === _QUAID_PREFIX || label === _QUAID_INSTANCE.toLowerCase())) {
+      return _QUAID_INSTANCE;
+    }
+    if (_QUAID_PREFIX && label.startsWith(`${_QUAID_PREFIX}-`)) {
+      return label;
+    }
+  }
   return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 function getDaemonSignalDir(agentId = "main") {
