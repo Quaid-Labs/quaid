@@ -8,6 +8,29 @@ type AdapterPlugin = {
   register: (api: any) => void;
 };
 
+const childProcessState = vi.hoisted(() => ({
+  daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: ((file: string, args?: readonly string[] | null, options?: any) => {
+      const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+      if (normalizedArgs[0] === "daemon" && normalizedArgs[1] === "start") {
+        childProcessState.daemonStartCalls.push({
+          file,
+          args: normalizedArgs,
+          env: (options?.env || {}) as Record<string, string | undefined>,
+        });
+        return "";
+      }
+      return actual.execFileSync(file, args as any, options);
+    }) as typeof actual.execFileSync,
+  };
+});
+
 function writeJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -38,6 +61,7 @@ async function loadAdapterWithHomes(hiddenHome: string, visibleHome: string, ope
 }
 
 afterEach(() => {
+  childProcessState.daemonStartCalls = [];
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -121,6 +145,11 @@ describe("openclaw auto-provision", () => {
     expect(fs.existsSync(targetConfigPath)).toBe(true);
     expect(fs.existsSync(targetSoulPath)).toBe(true);
     expect(fs.existsSync(path.join(visibleHome, "instances", "openclaw-m13test", "journal"))).toBe(true);
+    expect(
+      childProcessState.daemonStartCalls.some(
+        (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
+      ),
+    ).toBe(true);
 
     warn.mockRestore();
     log.mockRestore();

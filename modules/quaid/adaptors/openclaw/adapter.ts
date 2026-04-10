@@ -433,9 +433,11 @@ function ensureAgentInstanceProvisioned(agentLabel: string, reason: string): boo
   const configPath = path.join(WORKSPACE, "instances", instanceId, "config.json");
   if (fs.existsSync(configPath)) {
     provisionedAgentInstances.add(instanceId);
+    pingDaemonAliveIfNeeded(instanceId);
     return true;
   }
   if (provisionedAgentInstances.has(instanceId)) {
+    pingDaemonAliveIfNeeded(instanceId);
     return true;
   }
   try {
@@ -460,6 +462,7 @@ function ensureAgentInstanceProvisioned(agentLabel: string, reason: string): boo
       return false;
     }
     provisionedAgentInstances.add(instanceId);
+    ensureDaemonAlive(instanceId);
     writeHookTrace("instance.auto_provisioned", {
       instance_id: instanceId,
       agent_label: label,
@@ -1380,7 +1383,7 @@ function writeDaemonSignal(
     fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
     // Signal writers must also act as daemon wakeup points so extraction
     // resumes even when no normal prompt path fires after a crash.
-    pingDaemonAliveIfNeeded();
+    pingDaemonAliveIfNeeded(agentLabel ? getInstanceId(agentLabel) : _QUAID_INSTANCE);
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
     return sigPath;
   } catch (err: unknown) {
@@ -1389,25 +1392,28 @@ function writeDaemonSignal(
   }
 }
 
-function ensureDaemonAlive(): void {
+function ensureDaemonAlive(instanceId: string = _QUAID_INSTANCE): void {
   try {
     const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
     execFileSync(quaidBin, ["daemon", "start"], {
       encoding: "utf-8",
       timeout: 10_000,
-      env: buildPythonEnv(),
+      env: buildPythonEnv({ QUAID_INSTANCE: String(instanceId || "").trim() || undefined }),
     });
   } catch (err: unknown) {
-    console.warn(`[quaid][daemon] ensure_alive failed: ${String((err as Error)?.message || err)}`);
+    const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
+    console.warn(`[quaid][daemon] ensure_alive failed for ${target}: ${String((err as Error)?.message || err)}`);
   }
 }
 
-function pingDaemonAliveIfNeeded(nowMs: number = Date.now()): void {
-  if (nowMs - _lastDaemonAliveCheckMs <= _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
+function pingDaemonAliveIfNeeded(instanceId: string = _QUAID_INSTANCE, nowMs: number = Date.now()): void {
+  const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
+  const lastCheckMs = _lastDaemonAliveCheckMsByInstance.get(target) || 0;
+  if (nowMs - lastCheckMs <= _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
     return;
   }
-  _lastDaemonAliveCheckMs = nowMs;
-  ensureDaemonAlive();
+  _lastDaemonAliveCheckMsByInstance.set(target, nowMs);
+  ensureDaemonAlive(target);
 }
 
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
@@ -2057,7 +2063,7 @@ let _beforePromptBuildInFlight = false;
 // Rate-limit for daemon liveness pings from before_prompt_build.
 // ensureDaemonAlive() is cheap (just checks PID), but the subprocess call adds
 // latency on every turn.  Ping at most once per minute.
-let _lastDaemonAliveCheckMs = 0;
+const _lastDaemonAliveCheckMsByInstance = new Map<string, number>();
 const _DAEMON_ALIVE_CHECK_INTERVAL_MS = 60_000;
 
 function _getGatewayCredential(providers: string[]): string | undefined {
@@ -2680,7 +2686,7 @@ notify_user(${JSON.stringify(message)})
       // is killed mid-session, rolling extraction silently stops.  Rate-limited to
       // once per minute so the subprocess cost is negligible.
       const nowMs = Date.now();
-      pingDaemonAliveIfNeeded(nowMs);
+      pingDaemonAliveIfNeeded(getInstanceId(promptAgentLabel), nowMs);
 
       // Inject project docs once per session on the first message.
       // - appendSystemContext: full TOOLS.md + AGENTS.md docs (appended after OC base prompt)
