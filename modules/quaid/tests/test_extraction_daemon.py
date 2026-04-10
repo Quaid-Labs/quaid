@@ -1303,6 +1303,65 @@ class TestRollingExtraction:
             }
         ]
 
+    def test_check_chunk_ready_sessions_persists_transcript_path_across_restart(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"assistant","content":"warmup"}\n'
+            '{"role":"user","content":"My cat Luna sleeps on the windowsill every afternoon."}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-roll-restart", 0, str(transcript_path))
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                return "User: My cat Luna sleeps on the windowsill every afternoon."
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 999)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            state = extraction_daemon.read_rolling_state("sess-roll-restart")
+            assert state["transcript_path"] == str(transcript_path)
+
+            # Simulate daemon restart: state is reloaded from disk and persisted again.
+            extraction_daemon.write_rolling_state("sess-roll-restart", state)
+            restarted = extraction_daemon.read_rolling_state("sess-roll-restart")
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert restarted["transcript_path"] == str(transcript_path)
+        assert restarted["semantic_buffer_tokens"] > 0
+        assert captured == []
+
     def test_check_chunk_ready_sessions_uses_semantic_buffer_not_raw_json_size(self, monkeypatch, tmp_path):
         import sys
         import types

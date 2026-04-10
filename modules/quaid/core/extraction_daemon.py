@@ -546,6 +546,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
     if not state_path.is_file():
         return {
             "session_id": session_id,
+            "transcript_path": "",
             "carry_facts": [],
             "raw_facts": [],
             "raw_snippets": {},
@@ -571,6 +572,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
         logger.warning("rolling state read failed for %s; resetting staged state", session_id)
         return {
             "session_id": session_id,
+            "transcript_path": "",
             "carry_facts": [],
             "raw_facts": [],
             "raw_snippets": {},
@@ -593,6 +595,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         return {
             "session_id": session_id,
+            "transcript_path": "",
             "carry_facts": [],
             "raw_facts": [],
             "raw_snippets": {},
@@ -613,6 +616,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
             **semantic_defaults,
         }
     data.setdefault("session_id", session_id)
+    data.setdefault("transcript_path", "")
     data.setdefault("carry_facts", [])
     data.setdefault("raw_facts", [])
     data.setdefault("raw_snippets", {})
@@ -638,6 +642,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
 def write_rolling_state(session_id: str, state: Dict[str, Any]) -> None:
     payload = dict(state or {})
     payload["session_id"] = _validate_session_id(session_id)
+    payload["transcript_path"] = str(payload.get("transcript_path", "") or "")
     payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     _atomic_write(_rolling_state_path(session_id), json.dumps(payload))
 
@@ -1352,6 +1357,7 @@ def _buffer_transcript_tail(
     before_tokens = int((state or {}).get("semantic_buffer_tokens", 0) or 0)
     parsed_text = _parse_transcript_lines(lines, adapter=adapter)
     merged = _append_semantic_buffer(state, parsed_text, start_line + len(lines))
+    merged["transcript_path"] = str(transcript_path or merged.get("transcript_path", "") or "")
     metrics["semantic_chars_added"] = len(str(parsed_text or "").strip())
     metrics["semantic_tokens_added"] = max(
         0,
