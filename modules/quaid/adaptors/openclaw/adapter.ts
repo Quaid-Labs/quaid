@@ -370,6 +370,10 @@ function isSubagentSessionKeyLike(sessionKey: string | undefined | null): boolea
   return raw.startsWith("subagent:") || raw.includes(":subagent:");
 }
 
+function isSubagentSessionEntry(sessionKey: string | undefined | null, spawnedBy: string | undefined | null): boolean {
+  return isSubagentSessionKeyLike(sessionKey) || Boolean(String(spawnedBy || "").trim());
+}
+
 function resolveSubagentParentSessionId(
   spawnedBy: string,
   sessionsData: Record<string, any>,
@@ -3530,11 +3534,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             spawnedBy: string;
           }> = [];
           for (const [key, row] of Object.entries(data || {})) {
+            const spawnedBy = String((row as any)?.spawnedBy || "").trim();
             if (
               !row
               || typeof row !== "object"
               || typeof (row as any)?.sessionId !== "string"
-              || !key.startsWith("agent:")
+              || (!key.startsWith("agent:") && !isSubagentSessionEntry(key, spawnedBy))
             ) {
               continue;
             }
@@ -3544,7 +3549,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             // Extract raw agent label from "agent:<label>:<channel>" and map for signal routing.
             // getInstanceId(label) builds the full instance ID (e.g. "openclaw-main").
             const keyParts = key.split(":");
-            const agentLabel = keyParts.length >= 3 ? (keyParts[1].trim() || "main") : "main";
+            const spawnedByLabel = resolveAgentLabelFromSessionKey(spawnedBy);
+            const entryIsSubagent = isSubagentSessionEntry(key, spawnedBy);
+            const agentLabel = entryIsSubagent && spawnedByLabel
+              ? spawnedByLabel
+              : keyParts.length >= 3 && keyParts[0] === "agent"
+              ? (keyParts[1].trim() || "main")
+              : (spawnedByLabel || "main");
             sessionIdToAgentId.set(sessionId, agentLabel);
             recognizedEntries.push({
               key,
@@ -3552,7 +3563,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               sessionFile: getOpenClawSessionFile(sessionId),
               updatedAt: Number((row as any).updatedAt || 0),
               agentLabel,
-              spawnedBy: String((row as any).spawnedBy || "").trim(),
+              spawnedBy,
             });
           }
 
@@ -3648,7 +3659,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               if (isSystemEnabled("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })) {
                 pendingOrphanChecks.set(prevSessionId, Date.now());
               }
-              if (isSubagentSessionKeyLike(key)) {
+              if (subagentParentSessionIds.has(prevSessionId) || isSubagentSessionEntry(key, spawnedBy)) {
                 const parentSessionId = String(subagentParentSessionIds.get(prevSessionId) || "").trim();
                 if (parentSessionId) {
                   runSubagentHookCommand(
@@ -3757,7 +3768,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
             sessionKeyLastSeen.set(key, sessionId);
             sessionTranscriptPaths.set(sessionId, sessionFile);
-            if (isSubagentSessionKeyLike(key)) {
+            if (isSubagentSessionEntry(key, spawnedBy)) {
               const parentSessionId = resolveSubagentParentSessionId(spawnedBy, data as Record<string, any>, sessionKeyLastSeen);
               if (parentSessionId) {
                 subagentParentSessionIds.set(sessionId, parentSessionId);
@@ -3903,7 +3914,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             if (currentKeys.has(priorKey) || /^agent:[^:]+:hook:/.test(priorKey)) {
               continue;
             }
-            if (isSubagentSessionKeyLike(priorKey)) {
+            if (subagentParentSessionIds.has(priorSid) || isSubagentSessionKeyLike(priorKey)) {
               const parentSessionId = String(subagentParentSessionIds.get(priorSid) || "").trim();
               const agentLabel = String(sessionIdToAgentId.get(priorSid) || "main").trim() || "main";
               if (parentSessionId) {
@@ -5376,6 +5387,8 @@ export const __test = {
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,
+  isSubagentSessionEntry,
+  isSubagentSessionKeyLike,
   listRecentResetBackupSessions,
   isImmediateProviderFailure,
   buildImmediateProviderNotice,

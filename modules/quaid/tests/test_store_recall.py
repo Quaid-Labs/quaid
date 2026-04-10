@@ -499,6 +499,35 @@ class TestStoreBasic:
             assert attrs.get("source_type") == "assistant"
             assert node.speaker == "Assistant"
 
+    def test_dedup_update_upgrades_subagent_provenance(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(
+                "The user's uncle recommended Mendoza Malbec.",
+                owner_id="quaid",
+                source="daemon-session_end-extraction",
+                source_id="parent-session",
+                source_type="user",
+                skip_dedup=True,
+            )
+            second = store(
+                "The user's uncle recommended Mendoza Malbec.",
+                owner_id="quaid",
+                source="daemon-session_end-subagent-extraction",
+                source_id="child-session",
+                source_type="subagent",
+                skip_dedup=False,
+            )
+
+            assert second["status"] in ("duplicate", "updated")
+            node = graph.get_node(first["id"])
+            attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
+            assert attrs.get("source_type") == "subagent"
+            assert node.source == "daemon-session_end-subagent-extraction"
+            assert node.source_id == "child-session"
+
     def test_dedup_update_sets_speaker_when_missing(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)

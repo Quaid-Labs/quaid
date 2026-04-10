@@ -8956,8 +8956,28 @@ def store(
         merged_session_id = _merge_session_id(existing.session_id, session_id)
         if merged_session_id != existing.session_id:
             existing.session_id = merged_session_id
-        if source_type and not attrs.get("source_type"):
+        source_type_rank = {
+            "import": 0,
+            "user": 1,
+            "assistant": 2,
+            "tool": 2,
+            "both": 2,
+            "subagent": 3,
+        }
+        existing_source_type = str(attrs.get("source_type") or "").strip().lower()
+        source_type_upgrade = bool(
+            source_type
+            and (
+                not existing_source_type
+                or source_type_rank.get(str(source_type), 0) > source_type_rank.get(existing_source_type, 0)
+            )
+        )
+        if source_type_upgrade:
             attrs["source_type"] = source_type
+        if source and (source_type_upgrade or not existing.source):
+            existing.source = source
+        if source_id and (source_type_upgrade or not existing.source_id):
+            existing.source_id = source_id
         if target_datastore and not attrs.get("target_datastore"):
             attrs["target_datastore"] = target_datastore
         if speaker and not existing.speaker:

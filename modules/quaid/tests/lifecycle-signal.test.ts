@@ -318,6 +318,12 @@ describe("lifecycle signal detection", () => {
     expect(__test.isSameSessionTranscriptRollover(3, 5, 128, 1024)).toBe(false);
   });
 
+  it("treats spawnedBy metadata as subagent evidence even on normal-looking OC keys", () => {
+    expect(__test.isSubagentSessionEntry("agent:main:tui-child", "agent:main:tui-parent")).toBe(true);
+    expect(__test.isSubagentSessionEntry("agent:main:tui-child", "")).toBe(false);
+    expect(__test.isSubagentSessionEntry("agent:main:subagent:child", "")).toBe(true);
+  });
+
   it("prefers previousSessionEntry.sessionFile for reset/new lifecycle extraction", () => {
     expect(
       __test.resolveLifecycleTranscriptPath("reset", {

@@ -380,6 +380,128 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
     assert captured["harvested"] == [("parent-1", "child-1")]
 
 
+def test_process_signal_persists_adapter_discovered_subagent_before_harvest(monkeypatch, tmp_path):
+    import sys as _sys
+
+    parent_path = tmp_path / "parent.jsonl"
+    child_path = tmp_path / "child.jsonl"
+    parent_path.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    child_path.write_text('{"role":"user","content":"child"}\n', encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+
+    captured = {}
+
+    class _FakeAdapter:
+        def instance_root(self):
+            return tmp_path / "instances" / "pytest-runner"
+
+        def parse_session_jsonl(self, path):
+            return "User: Parent message with enough content to exceed the extraction minimum length."
+
+        def parse_subagent_session_jsonl(self, path):
+            assert Path(path) == child_path
+            return "Subagent/User: Child-reported fact about Mendoza Malbec."
+
+        def discover_subagent_children(self, parent_session_id):
+            assert parent_session_id == "parent-1"
+            return [
+                {
+                    "child_id": "child-1",
+                    "transcript_path": str(child_path),
+                    "child_type": "codex-subagent",
+                }
+            ]
+
+    real_registry = _sys.modules.pop("core.subagent_registry", None)
+    from lib.adapter import set_adapter, reset_adapter
+    set_adapter(_FakeAdapter())
+
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "read_cursor", lambda sid: {"line_offset": 0, "transcript_path": str(parent_path)})
+    monkeypatch.setattr(extraction_daemon, "count_transcript_lines", lambda p: 1)
+    monkeypatch.setattr(extraction_daemon, "read_transcript_slice", lambda path, from_line: ['{"role":"user","content":"hello"}\n'])
+    monkeypatch.setattr(extraction_daemon, "_tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *args, **kwargs: None)
+
+    from ingest import extract as extract_mod
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        if transcript.startswith("Subagent/User:"):
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [
+                    {
+                        "text": "The user's uncle recommended Mendoza Malbec.",
+                        "speaker": "user",
+                        "category": "fact",
+                        "extraction_confidence": "high",
+                    }
+                ],
+                "facts": [],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda payload, *args, **kwargs: captured.setdefault("flush_payload", payload) or {"facts_stored": 0, "facts_skipped": 0, "facts": []},
+    )
+
+    try:
+        extraction_daemon.process_signal(
+            {
+                "session_id": "parent-1",
+                "type": "session_end",
+                "transcript_path": str(parent_path),
+                "signal_path": str(tmp_path / "sig.json"),
+            }
+        )
+    finally:
+        if real_registry is not None:
+            _sys.modules["core.subagent_registry"] = real_registry
+        else:
+            _sys.modules.pop("core.subagent_registry", None)
+        reset_adapter()
+
+    registry_path = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry" / "parent-1.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    child_entry = registry["children"]["child-1"]
+    assert child_entry["status"] == "complete"
+    assert child_entry["transcript_path"] == str(child_path)
+    assert child_entry["harvested"] is True
+
+    stamped = captured["flush_payload"]["raw_facts"][0]
+    assert stamped["source"] == "subagent"
+    assert stamped["_source_label"].endswith("-subagent-extraction")
+    assert stamped["_source_id"] == "child-1"
+
+
 def test_process_signal_advances_internal_session_cursor_to_eof(monkeypatch, tmp_path):
     import sys
     import types

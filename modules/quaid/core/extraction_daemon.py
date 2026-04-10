@@ -2239,9 +2239,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             merged_chars = 0
             deferred_subagents: List[Dict[str, Any]] = []
             try:
-                from core.subagent_registry import get_harvestable, mark_harvested
-                harvestable = get_harvestable(session_id)
-                mark_harvested_fn = mark_harvested
+                import importlib
+                subagent_registry = importlib.import_module("core.subagent_registry")
+                harvestable = subagent_registry.get_harvestable(session_id)
+                mark_harvested_fn = getattr(subagent_registry, "mark_harvested", None)
+                register_fn = getattr(subagent_registry, "register", None)
+                mark_complete_fn = getattr(subagent_registry, "mark_complete", None)
                 discover_children_fn = getattr(adapter, "discover_subagent_children", None) if adapter is not None else None
                 if callable(discover_children_fn):
                     for child in discover_children_fn(session_id):
@@ -2250,6 +2253,24 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                             continue
                         if any(str(existing.get("child_id") or "").strip() == child_id for existing in harvestable):
                             continue
+                        child_path = str(child.get("transcript_path") or "").strip()
+                        child_type = str(child.get("child_type") or "").strip() or "adapter-discovered"
+                        try:
+                            if callable(register_fn):
+                                register_fn(
+                                    session_id,
+                                    child_id,
+                                    child_transcript_path=child_path,
+                                    child_type=child_type,
+                                    metadata={"source": "adapter_discovery"},
+                                )
+                            if callable(mark_complete_fn):
+                                mark_complete_fn(session_id, child_id, transcript_path=child_path)
+                        except Exception as e:
+                            logger.warning(
+                                "[%s] session %s: failed to persist discovered subagent %s registry entry: %s",
+                                label, session_id, child_id, e,
+                            )
                         harvestable.append(child)
                 for child in harvestable:
                     child_path = child.get("transcript_path", "")

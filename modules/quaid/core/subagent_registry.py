@@ -107,18 +107,25 @@ def register(
     with _lock_registry(parent_session_id):
         data = _read_registry(parent_session_id)
         children = data.setdefault("children", {})
+        existing = children.get(child_id, {})
+        if not isinstance(existing, dict):
+            existing = {}
         # B001: Apply metadata first so authoritative fields can't be overwritten
-        entry = {**(metadata or {})}
+        entry = {**existing, **(metadata or {})}
+        existing_transcript = str(existing.get("transcript_path") or "").strip()
+        existing_status = str(existing.get("status") or "").strip()
+        existing_completed_at = existing.get("completed_at")
+        existing_registered_at = existing.get("registered_at")
         entry.update({
             "child_id": child_id,
             "parent_session_id": parent_session_id,
-            "child_type": child_type or "unknown",
-            "transcript_path": child_transcript_path or "",
-            "status": "running",
-            "harvested": False,
-            "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "completed_at": None,
-            "harvested_at": None,
+            "child_type": child_type or existing.get("child_type") or "unknown",
+            "transcript_path": child_transcript_path or existing_transcript,
+            "status": existing_status if existing_status == "complete" else "running",
+            "harvested": bool(existing.get("harvested", False)),
+            "registered_at": existing_registered_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "completed_at": existing_completed_at if existing_status == "complete" else None,
+            "harvested_at": existing.get("harvested_at"),
         })
         children[child_id] = entry
         _write_registry(parent_session_id, data)

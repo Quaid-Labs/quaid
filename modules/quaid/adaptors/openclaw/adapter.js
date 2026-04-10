@@ -239,6 +239,9 @@ function isSubagentSessionKeyLike(sessionKey) {
   const raw = String(sessionKey || "").trim().toLowerCase();
   return raw.startsWith("subagent:") || raw.includes(":subagent:");
 }
+function isSubagentSessionEntry(sessionKey, spawnedBy) {
+  return isSubagentSessionKeyLike(sessionKey) || Boolean(String(spawnedBy || "").trim());
+}
 function resolveSubagentParentSessionId(spawnedBy, sessionsData, sessionKeyLastSeen) {
   const parentKey = String(spawnedBy || "").trim();
   if (!parentKey) {
@@ -2752,13 +2755,16 @@ ${notice}` : notice;
           const data = readSessionsIndex();
           const recognizedEntries = [];
           for (const [key, row] of Object.entries(data || {})) {
-            if (!row || typeof row !== "object" || typeof row?.sessionId !== "string" || !key.startsWith("agent:")) {
+            const spawnedBy = String(row?.spawnedBy || "").trim();
+            if (!row || typeof row !== "object" || typeof row?.sessionId !== "string" || !key.startsWith("agent:") && !isSubagentSessionEntry(key, spawnedBy)) {
               continue;
             }
             const sessionId = String(row.sessionId || "").trim();
             if (!sessionId) continue;
             const keyParts = key.split(":");
-            const agentLabel = keyParts.length >= 3 ? keyParts[1].trim() || "main" : "main";
+            const spawnedByLabel = resolveAgentLabelFromSessionKey(spawnedBy);
+            const entryIsSubagent = isSubagentSessionEntry(key, spawnedBy);
+            const agentLabel = entryIsSubagent && spawnedByLabel ? spawnedByLabel : keyParts.length >= 3 && keyParts[0] === "agent" ? keyParts[1].trim() || "main" : spawnedByLabel || "main";
             sessionIdToAgentId.set(sessionId, agentLabel);
             recognizedEntries.push({
               key,
@@ -2766,7 +2772,7 @@ ${notice}` : notice;
               sessionFile: getOpenClawSessionFile(sessionId),
               updatedAt: Number(row.updatedAt || 0),
               agentLabel,
-              spawnedBy: String(row.spawnedBy || "").trim()
+              spawnedBy
             });
           }
           const currentKeys = new Set(recognizedEntries.map((entry) => entry.key));
@@ -2851,7 +2857,7 @@ ${notice}` : notice;
               if (isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })) {
                 pendingOrphanChecks.set(prevSessionId, Date.now());
               }
-              if (isSubagentSessionKeyLike(key)) {
+              if (subagentParentSessionIds.has(prevSessionId) || isSubagentSessionEntry(key, spawnedBy)) {
                 const parentSessionId = String(subagentParentSessionIds.get(prevSessionId) || "").trim();
                 if (parentSessionId) {
                   runSubagentHookCommand(
@@ -2941,7 +2947,7 @@ ${notice}` : notice;
             }
             sessionKeyLastSeen.set(key, sessionId);
             sessionTranscriptPaths.set(sessionId, sessionFile);
-            if (isSubagentSessionKeyLike(key)) {
+            if (isSubagentSessionEntry(key, spawnedBy)) {
               const parentSessionId = resolveSubagentParentSessionId(spawnedBy, data, sessionKeyLastSeen);
               if (parentSessionId) {
                 subagentParentSessionIds.set(sessionId, parentSessionId);
@@ -3075,7 +3081,7 @@ ${notice}` : notice;
             if (currentKeys.has(priorKey) || /^agent:[^:]+:hook:/.test(priorKey)) {
               continue;
             }
-            if (isSubagentSessionKeyLike(priorKey)) {
+            if (subagentParentSessionIds.has(priorSid) || isSubagentSessionKeyLike(priorKey)) {
               const parentSessionId = String(subagentParentSessionIds.get(priorSid) || "").trim();
               const agentLabel = String(sessionIdToAgentId.get(priorSid) || "main").trim() || "main";
               if (parentSessionId) {
@@ -4344,6 +4350,8 @@ const __test = {
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,
+  isSubagentSessionEntry,
+  isSubagentSessionKeyLike,
   listRecentResetBackupSessions,
   isImmediateProviderFailure,
   buildImmediateProviderNotice,

@@ -355,3 +355,16 @@ class TestAtomicWrite:
         register("parent-1", "child-A")
         data = _read_raw(tmp_path, "parent-1")
         assert "child-A" in data["children"]
+
+    def test_duplicate_register_does_not_downgrade_completed_child(self, tmp_path):
+        from core.subagent_registry import register, mark_complete
+
+        register("parent-1", "child-A", child_transcript_path="/logs/child-A.jsonl", child_type="general")
+        mark_complete("parent-1", "child-A", transcript_path="/logs/child-A.jsonl")
+
+        register("parent-1", "child-A", child_type="general")
+
+        entry = _read_raw(tmp_path, "parent-1")["children"]["child-A"]
+        assert entry["status"] == "complete"
+        assert entry["transcript_path"] == "/logs/child-A.jsonl"
+        assert entry["completed_at"] is not None
