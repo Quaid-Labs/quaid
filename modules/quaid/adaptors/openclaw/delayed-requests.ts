@@ -72,6 +72,21 @@ function makeRequestId(kind: string, message: string): string {
   return `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
 }
 
+function priorityRank(priority: string): number {
+  const token = String(priority || "").trim().toLowerCase();
+  if (token === "high") return 2;
+  if (token === "low") return 0;
+  return 1;
+}
+
+function sortPendingRequests(items: RequestItem[]): RequestItem[] {
+  return items.slice().sort((a, b) => {
+    const rankDelta = priorityRank(String(b?.priority || "")) - priorityRank(String(a?.priority || ""));
+    if (rankDelta !== 0) return rankDelta;
+    return String(a?.created_at || "").localeCompare(String(b?.created_at || ""));
+  });
+}
+
 export function queueDelayedRequest(
   requestsPath: string,
   message: string,
@@ -161,5 +176,57 @@ export function clearResolvedRequests(requestsPath: string): number {
     payload.requests = kept;
     writeJson(requestsPath, payload);
     return Math.max(0, before - kept.length);
+  });
+}
+
+export function drainPendingRequests(
+  requestsPath: string,
+  limit: number = 50,
+  resolutionNote: string = "drained by openclaw prompt hook",
+): RequestItem[] {
+  const maxItems = Math.max(1, Math.min(Number(limit) || 50, 500));
+  return withRequestsLock(requestsPath, () => {
+    const loaded = readJson(requestsPath);
+    const payload = (loaded && typeof loaded === "object" && !Array.isArray(loaded)
+      ? loaded
+      : { version: 1, requests: [] }) as RequestsPayload;
+    const requests = Array.isArray(payload.requests) ? payload.requests : [];
+    const pending = sortPendingRequests(
+      requests.filter((item): item is RequestItem =>
+        Boolean(item) && String(item.status || "pending").trim().toLowerCase() === "pending"
+      ),
+    );
+    if (!pending.length) {
+      return [];
+    }
+    const selectedIds = new Set(
+      pending
+        .slice(0, maxItems)
+        .map((item) => String(item.id || "").trim())
+        .filter(Boolean),
+    );
+    if (!selectedIds.size) {
+      return [];
+    }
+
+    const drainedAt = new Date().toISOString();
+    const drained: RequestItem[] = [];
+    for (const item of requests) {
+      if (!item || String(item.status || "pending").trim().toLowerCase() !== "pending") {
+        continue;
+      }
+      const itemId = String(item.id || "").trim();
+      if (!selectedIds.has(itemId)) {
+        continue;
+      }
+      item.status = "resolved";
+      item.resolved_at = drainedAt;
+      item.resolution_note = resolutionNote;
+      drained.push({ ...item });
+    }
+    payload.version = 1;
+    payload.requests = requests;
+    writeJson(requestsPath, payload);
+    return sortPendingRequests(drained);
   });
 }

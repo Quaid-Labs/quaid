@@ -57,6 +57,19 @@ function withRequestsLock(requestsPath, fn) {
 function makeRequestId(kind, message) {
   return `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
 }
+function priorityRank(priority) {
+  const token = String(priority || "").trim().toLowerCase();
+  if (token === "high") return 2;
+  if (token === "low") return 0;
+  return 1;
+}
+function sortPendingRequests(items) {
+  return items.slice().sort((a, b) => {
+    const rankDelta = priorityRank(String(b?.priority || "")) - priorityRank(String(a?.priority || ""));
+    if (rankDelta !== 0) return rankDelta;
+    return String(a?.created_at || "").localeCompare(String(b?.created_at || ""));
+  });
+}
 function queueDelayedRequest(requestsPath, message, kind = "janitor", priority = "normal", source = "quaid_adapter", failHard = false) {
   try {
     return withRequestsLock(requestsPath, () => {
@@ -129,8 +142,50 @@ function clearResolvedRequests(requestsPath) {
     return Math.max(0, before - kept.length);
   });
 }
+function drainPendingRequests(requestsPath, limit = 50, resolutionNote = "drained by openclaw prompt hook") {
+  const maxItems = Math.max(1, Math.min(Number(limit) || 50, 500));
+  return withRequestsLock(requestsPath, () => {
+    const loaded = readJson(requestsPath);
+    const payload = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? loaded : { version: 1, requests: [] };
+    const requests = Array.isArray(payload.requests) ? payload.requests : [];
+    const pending = sortPendingRequests(
+      requests.filter(
+        (item) => Boolean(item) && String(item.status || "pending").trim().toLowerCase() === "pending"
+      )
+    );
+    if (!pending.length) {
+      return [];
+    }
+    const selectedIds = new Set(
+      pending.slice(0, maxItems).map((item) => String(item.id || "").trim()).filter(Boolean)
+    );
+    if (!selectedIds.size) {
+      return [];
+    }
+    const drainedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const drained = [];
+    for (const item of requests) {
+      if (!item || String(item.status || "pending").trim().toLowerCase() !== "pending") {
+        continue;
+      }
+      const itemId = String(item.id || "").trim();
+      if (!selectedIds.has(itemId)) {
+        continue;
+      }
+      item.status = "resolved";
+      item.resolved_at = drainedAt;
+      item.resolution_note = resolutionNote;
+      drained.push({ ...item });
+    }
+    payload.version = 1;
+    payload.requests = requests;
+    writeJson(requestsPath, payload);
+    return sortPendingRequests(drained);
+  });
+}
 export {
   clearResolvedRequests,
+  drainPendingRequests,
   queueDelayedRequest,
   resolveDelayedRequests
 };

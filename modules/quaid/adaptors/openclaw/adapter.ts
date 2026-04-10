@@ -26,6 +26,7 @@ import {
 import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
 import { spawnDetachedScript } from "../../core/spawn-detached-script.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
+import { drainPendingRequests } from "./delayed-requests.js";
 import {
   assertDeclaredRegistration,
   normalizeDeclaredExports,
@@ -473,6 +474,55 @@ function ensureAgentInstanceProvisioned(agentLabel: string, reason: string): boo
       error: String((err as Error)?.message || err),
     });
     return false;
+  }
+}
+
+function delayedRequestsPathForInstance(instanceId: string): string {
+  const normalized = String(instanceId || "").trim();
+  return normalized
+    ? path.join(WORKSPACE, "instances", normalized, ".runtime", "notes", "delayed-llm-requests.json")
+    : path.join(WORKSPACE, ".runtime", "notes", "delayed-llm-requests.json");
+}
+
+function formatDeferredNoticeRelayContext(drained: Array<{ message?: string }>): string {
+  const messages = drained
+    .map((item) => String(item?.message || "").trim())
+    .filter(Boolean);
+  if (!messages.length) {
+    return "";
+  }
+  const body = messages.map((message) => `• ${message}`).join("\n");
+  return [
+    "The following are pending notifications for the user — please relay them in your response:",
+    "",
+    `<quaid_system_message>\n${body}\n</quaid_system_message>`,
+  ].join("\n");
+}
+
+function drainDeferredNoticeRelayContext(agentLabel: string, reason: string): string {
+  const instanceId = getInstanceId(agentLabel);
+  const requestsPath = delayedRequestsPathForInstance(instanceId);
+  try {
+    const drained = drainPendingRequests(requestsPath, 50, `drained by ${reason}`);
+    if (!drained.length) {
+      return "";
+    }
+    writeHookTrace("deferred_notice.drained", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      count: drained.length,
+      kinds: drained.map((item) => String((item as any)?.kind || "general")).slice(0, 8),
+    });
+    return formatDeferredNoticeRelayContext(drained as Array<{ message?: string }>);
+  } catch (err: unknown) {
+    writeHookTrace("deferred_notice.error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      error: String((err as Error)?.message || err),
+    });
+    return "";
   }
 }
 
@@ -2566,7 +2616,8 @@ notify_user(${JSON.stringify(message)})
 
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
-      ensureAgentInstanceProvisioned(resolveHookAgentLabel(event, ctx), "before_prompt_build");
+      const promptAgentLabel = resolveHookAgentLabel(event, ctx);
+      ensureAgentInstanceProvisioned(promptAgentLabel, "before_prompt_build");
 
       // Keep the extraction daemon alive across long OC sessions.
       // ensureDaemonAlive() is only called once at boot — if the daemon crashes or
@@ -2635,26 +2686,11 @@ notify_user(${JSON.stringify(message)})
         }
       }
 
-      // Deferred notice hint — injected on every user turn by reading the pending
-      // notice file directly. Piggybacks on prompt build rather than using a
-      // separate notification channel. Non-fatal: a read failure must never block
-      // the prompt.
-      if (_QUAID_INSTANCE) {
-        try {
-          const _noticeFile = path.join(WORKSPACE, "instances", _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json");
-          const _noticeData = JSON.parse(fs.readFileSync(_noticeFile, "utf-8"));
-          const _pending: any[] = (Array.isArray(_noticeData?.requests) ? _noticeData.requests : [])
-            .filter((r: any) => r?.status === "pending");
-          if (_pending.length > 0) {
-            const _kinds: Record<string, number> = {};
-            for (const r of _pending) { const k = String(r?.kind || "general"); _kinds[k] = (_kinds[k] || 0) + 1; }
-            const _kindSummary = Object.entries(_kinds).sort((a, b) => b[1] - a[1]).slice(0, 3)
-              .map(([k, c]) => `${k}=${c}`).join(", ") || "unknown";
-            const _word = _pending.length === 1 ? "notice" : "notices";
-            const _hint = `<quaid_system_message>\nQuaid has ${_pending.length} deferred maintenance ${_word} waiting (${_kindSummary}). These are buffered system notices. Do not retrieve or relay them unless you are confident a human user is active and can see the reply. If appropriate, inspect with \`quaid notify --deferred-status\` or fetch with \`quaid notify --deferred-drain\`, then summarize the results.\n</quaid_system_message>`;
-            appendSystemContext = appendSystemContext ? `${appendSystemContext}\n\n${_hint}` : _hint;
-          }
-        } catch { /* non-fatal */ }
+      const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
+      if (deferredNoticeContext) {
+        appendSystemContext = appendSystemContext
+          ? `${appendSystemContext}\n\n${deferredNoticeContext}`
+          : deferredNoticeContext;
       }
 
       // Helper: carry any built docs context through all early returns.
