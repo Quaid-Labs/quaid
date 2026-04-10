@@ -202,6 +202,31 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("distinguishes Quaid event logs from preserved conversation transcripts", () => {
+    const eventLogFile = `/tmp/quaid-oc-event-log-${Date.now()}.jsonl`;
+    const transcriptFile = `/tmp/quaid-oc-transcript-${Date.now()}.jsonl`;
+    fs.writeFileSync(
+      eventLogFile,
+      [
+        JSON.stringify({ ts: "2026-04-10T04:05:53Z", event: "buffer_write", session_id: "sess-1" }),
+        JSON.stringify({ ts: "2026-04-10T04:05:54Z", event: "timer_scheduled", session_id: "sess-1" }),
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      transcriptFile,
+      `${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "hello kiln" }] } })}\n`,
+      "utf8",
+    );
+    try {
+      expect(__test.looksLikeQuaidEventLogTranscript(eventLogFile)).toBe(true);
+      expect(__test.looksLikeQuaidEventLogTranscript(transcriptFile)).toBe(false);
+    } finally {
+      try { fs.unlinkSync(eventLogFile); } catch {}
+      try { fs.unlinkSync(transcriptFile); } catch {}
+    }
+  });
+
   it("extracts auto-inject query from direct event text when prompt/messages are empty", () => {
     const selected = __test.selectAutoInjectQuery(
       {

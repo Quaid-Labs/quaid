@@ -225,6 +225,7 @@ const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");
 const QUAID_INJECTION_LOG_DIR = path.join(QUAID_RUNTIME_DIR, "injection");
 const QUAID_NOTIFY_DIR = path.join(QUAID_RUNTIME_DIR, "notify");
 const QUAID_LOGS_DIR = path.join(QUAID_INSTANCE_ROOT, "logs");
+const QUAID_TIMEOUT_LOG_DIR = path.join(QUAID_LOGS_DIR, "session-timeout");
 const QUAID_HOOK_TRACE_PATH = path.join(QUAID_LOGS_DIR, "quaid-hook-trace.jsonl");
 const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_RUNTIME_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "pending-approval-requests.json");
@@ -685,6 +686,58 @@ function purgeInternalSessionArtifacts(): void {
 
   if (updatedSessions) {
     console.log(`[quaid][cleanup] advanced ${updatedSessions} internal session cursor(s) to EOF`);
+  }
+}
+
+function looksLikeQuaidEventLogTranscript(filePath: string): boolean {
+  const candidate = String(filePath || "").trim();
+  if (!candidate || !fs.existsSync(candidate)) return false;
+  try {
+    const lines = fs.readFileSync(candidate, "utf8").split(/\r?\n/).filter((line) => line.trim()).slice(0, 3);
+    if (lines.length === 0) return false;
+    return lines.every((line) => {
+      try {
+        const row = JSON.parse(line);
+        return Boolean(row && typeof row === "object" && typeof row.ts === "string" && typeof row.event === "string");
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+function repairSessionCursorPathsFromQuaidEventLogs(): void {
+  const cursorDir = path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors");
+  let repaired = 0;
+  try {
+    const cursorNames = fs.readdirSync(cursorDir).filter((name) => name.endsWith(".json"));
+    for (const name of cursorNames) {
+      const cursorPath = path.join(cursorDir, name);
+      try {
+        const payload = JSON.parse(fs.readFileSync(cursorPath, "utf8"));
+        const sessionId = String(payload?.session_id || "").trim();
+        const transcriptPath = String(payload?.transcript_path || "").trim();
+        if (!sessionId || !transcriptPath || !looksLikeQuaidEventLogTranscript(transcriptPath)) continue;
+
+        const candidates = [
+          getOpenClawSessionFile(sessionId),
+          latestResetBackup(sessionId),
+        ].filter((value): value is string => Boolean(value && fs.existsSync(value)));
+        const resolved = candidates.find((value) => !looksLikeQuaidEventLogTranscript(value));
+        if (!resolved) continue;
+
+        payload.transcript_path = resolved;
+        payload.updated_at = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+        fs.writeFileSync(cursorPath, JSON.stringify(payload), "utf8");
+        sessionTranscriptPaths.set(sessionId, resolved);
+        repaired += 1;
+      } catch {}
+    }
+  } catch {}
+  if (repaired) {
+    console.log(`[quaid][cleanup] repaired ${repaired} cursor(s) that pointed at Quaid event logs`);
   }
 }
 
@@ -3698,7 +3751,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // Extraction promise gate is facade-owned so adapters remain swappable.
     timeoutManager = new SessionTimeoutManager({
       workspace: QUAID_INSTANCE_ROOT,
-      logDir: path.join(QUAID_LOGS_DIR, "quaid"),
+      logDir: QUAID_TIMEOUT_LOG_DIR,
       timeoutMinutes: () => facade.getCaptureTimeoutMinutes(),
       failHardEnabled: () => isFailHardEnabled(),
       isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
@@ -3734,6 +3787,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // Start the shared extraction daemon
     ensureDaemonAlive();
     console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
+    repairSessionCursorPathsFromQuaidEventLogs();
     purgeInternalSessionArtifacts();
     startSessionIndexWatcher();
 
@@ -4705,4 +4759,5 @@ export const __test = {
   isInternalSessionContext,
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,
+  looksLikeQuaidEventLogTranscript,
 };
