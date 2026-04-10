@@ -222,6 +222,52 @@ def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypat
     assert captured == []
 
 
+def test_check_idle_sessions_advances_internal_session_cursor_to_eof(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"internal maintenance"}\n', encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-internal", 0, str(transcript_path))
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter:
+        def parse_session_jsonl(self, path):
+            assert path == transcript_path
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: 0.0)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    try:
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor("sess-internal")
+    assert captured == []
+    assert cursor["line_offset"] == 1
+    assert cursor["transcript_path"] == str(transcript_path)
+
+
 def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypatch, tmp_path):
     parent_path = tmp_path / "parent.jsonl"
     child_path = tmp_path / "child.jsonl"
@@ -331,6 +377,58 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
     assert stamped["_source_label"].endswith("-subagent-extraction")
     assert stamped["_source_id"] == "child-1"
     assert captured["harvested"] == [("parent-1", "child-1")]
+
+
+def test_process_signal_advances_internal_session_cursor_to_eof(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "internal.jsonl"
+    transcript_path.write_text('{"role":"user","content":"internal maintenance"}\n', encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-internal", 0, str(transcript_path))
+    signal_path = extraction_daemon.write_signal(
+        signal_type="session_end",
+        session_id="sess-internal",
+        transcript_path=str(transcript_path),
+    )
+
+    real_registry = sys.modules.get("core.subagent_registry")
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.is_registered_subagent = lambda sid: False
+    sys.modules["core.subagent_registry"] = fake_registry
+
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter:
+        def parse_session_jsonl(self, path):
+            assert path == transcript_path
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    try:
+        signals = extraction_daemon.read_pending_signals()
+        assert len(signals) == 1
+        extraction_daemon.process_signal(signals[0])
+    finally:
+        if real_registry is not None:
+            sys.modules["core.subagent_registry"] = real_registry
+        else:
+            sys.modules.pop("core.subagent_registry", None)
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor("sess-internal")
+    assert not signal_path.exists()
+    assert cursor["line_offset"] == 1
+    assert cursor["transcript_path"] == str(transcript_path)
 
 
 def test_effective_idle_timeout_uses_configured_timeout_within_bounds():

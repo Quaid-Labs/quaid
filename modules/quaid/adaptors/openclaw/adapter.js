@@ -423,49 +423,55 @@ function isInternalTranscriptMessages(messages) {
 function sessionCursorPath(sessionId) {
   return path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors", `${String(sessionId || "").trim()}.json`);
 }
-function removeSessionCursor(sessionId) {
-  const sid = String(sessionId || "").trim();
-  if (!sid) return;
+function _countTranscriptLines(transcriptPath) {
   try {
-    fs.unlinkSync(sessionCursorPath(sid));
+    const content = fs.readFileSync(transcriptPath, "utf8");
+    const parts = content.split(/\r?\n/);
+    if (parts.length > 0 && parts[parts.length - 1] === "") {
+      parts.pop();
+    }
+    return parts.length;
   } catch {
+    return 0;
   }
 }
-function removeQueuedSignalsForSession(sessionId) {
+function writeSessionCursorToEnd(sessionId, transcriptPath) {
   const sid = String(sessionId || "").trim();
-  if (!sid) return;
-  const signalDir = path.join(QUAID_INSTANCE_ROOT, "data", "extraction-signals");
+  const resolvedPath = String(transcriptPath || "").trim();
+  if (!sid || !resolvedPath) return;
   try {
-    const names = fs.readdirSync(signalDir).filter((name) => name.endsWith(".json"));
-    for (const name of names) {
-      const signalPath = path.join(signalDir, name);
-      try {
-        const payload = JSON.parse(fs.readFileSync(signalPath, "utf8"));
-        if (String(payload?.session_id || "").trim() === sid) {
-          fs.unlinkSync(signalPath);
-        }
-      } catch {
-      }
-    }
+    const cursorPath = sessionCursorPath(sid);
+    fs.mkdirSync(path.dirname(cursorPath), { recursive: true });
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d+Z$/, "Z");
+    fs.writeFileSync(cursorPath, JSON.stringify({
+      session_id: sid,
+      line_offset: _countTranscriptLines(resolvedPath),
+      transcript_path: resolvedPath,
+      updated_at: nowIso
+    }, null, 2), "utf8");
   } catch {
   }
 }
 function purgeInternalSessionArtifacts() {
   const cursorDir = path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors");
   const signalDir = path.join(QUAID_INSTANCE_ROOT, "data", "extraction-signals");
-  let removedCursors = 0;
-  let removedSignals = 0;
+  let updatedSessions = 0;
+  const seen = /* @__PURE__ */ new Set();
   try {
     const cursorNames = fs.readdirSync(cursorDir).filter((name) => name.endsWith(".json"));
     for (const name of cursorNames) {
       const cursorPath = path.join(cursorDir, name);
       try {
         const payload = JSON.parse(fs.readFileSync(cursorPath, "utf8"));
+        const sessionId = String(payload?.session_id || "").trim();
         const transcriptPath = String(payload?.transcript_path || "").trim();
         if (!transcriptPath || !fs.existsSync(transcriptPath)) continue;
         if (!isInternalTranscriptMessages(parseSessionMessagesJsonl(transcriptPath))) continue;
-        fs.unlinkSync(cursorPath);
-        removedCursors += 1;
+        writeSessionCursorToEnd(sessionId, transcriptPath);
+        if (sessionId && !seen.has(sessionId)) {
+          seen.add(sessionId);
+          updatedSessions += 1;
+        }
       } catch {
       }
     }
@@ -477,18 +483,22 @@ function purgeInternalSessionArtifacts() {
       const signalPath = path.join(signalDir, name);
       try {
         const payload = JSON.parse(fs.readFileSync(signalPath, "utf8"));
+        const sessionId = String(payload?.session_id || "").trim();
         const transcriptPath = String(payload?.transcript_path || "").trim();
         if (!transcriptPath || !fs.existsSync(transcriptPath)) continue;
         if (!isInternalTranscriptMessages(parseSessionMessagesJsonl(transcriptPath))) continue;
-        fs.unlinkSync(signalPath);
-        removedSignals += 1;
+        writeSessionCursorToEnd(sessionId, transcriptPath);
+        if (sessionId && !seen.has(sessionId)) {
+          seen.add(sessionId);
+          updatedSessions += 1;
+        }
       } catch {
       }
     }
   } catch {
   }
-  if (removedCursors || removedSignals) {
-    console.log(`[quaid][cleanup] removed ${removedCursors} internal cursor(s) and ${removedSignals} internal signal(s)`);
+  if (updatedSessions) {
+    console.log(`[quaid][cleanup] advanced ${updatedSessions} internal session cursor(s) to EOF`);
   }
 }
 function pickActiveInteractiveSession(data) {
@@ -2105,8 +2115,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const hasInternalTranscript = isInternalTranscriptMessages(messages);
           if (hasInternalTranscript) {
             if (sessionId) {
-              removeSessionCursor(sessionId);
-              removeQueuedSignalsForSession(sessionId);
+              writeSessionCursorToEnd(sessionId, sessionFile);
             }
             writeHookTrace("hook.transcript_update.skipped", {
               reason: "internal_maintenance_transcript",
@@ -2271,6 +2280,27 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           for (const entry of recognizedEntries) {
             const { key, sessionId, sessionFile, updatedAt, agentLabel, spawnedBy } = entry;
             const prevSessionId = sessionKeyLastSeen.get(key);
+            const rows = parseSessionMessagesJsonl(sessionFile);
+            let currentSize = -1;
+            try {
+              currentSize = fs.statSync(sessionFile).size;
+            } catch {
+            }
+            if (isInternalTranscriptMessages(rows)) {
+              writeSessionCursorToEnd(sessionId, sessionFile);
+              sessionKeyLastSeen.set(key, sessionId);
+              sessionTranscriptPaths.set(sessionId, sessionFile);
+              sessionIndexMessageCounts.set(sessionId, rows.length);
+              sessionIndexTranscriptSizes.set(sessionId, currentSize);
+              writeHookTrace("session_index.skipped", {
+                reason: "internal_maintenance_transcript",
+                session_id: sessionId,
+                session_key: key,
+                session_file: sessionFile,
+                message_count: rows.length
+              });
+              continue;
+            }
             if (prevSessionId && prevSessionId !== sessionId) {
               writeHookTrace("session_index.key_transition", {
                 key,
@@ -2413,13 +2443,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 }
               }
             }
-            const rows = parseSessionMessagesJsonl(sessionFile);
             const priorCount = sessionIndexMessageCounts.get(sessionId) || 0;
-            let currentSize = -1;
-            try {
-              currentSize = fs.statSync(sessionFile).size;
-            } catch {
-            }
             const priorSize = sessionIndexTranscriptSizes.get(sessionId) ?? -1;
             if (isSameSessionTranscriptRollover(priorCount, rows.length, priorSize, currentSize) && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
               writeHookTrace("session_index.same_session_rollover_detected", {

@@ -1676,30 +1676,17 @@ def _is_internal_transcript_session(
         return False
 
 
-def _purge_internal_session_artifacts(session_id: str) -> None:
-    """Delete cursor, rolling state, and queued signals for an internal session."""
+def _advance_internal_session_cursor_to_end(session_id: str, transcript_path: str) -> None:
+    """Mark an internal session fully consumed by advancing its cursor to EOF."""
+    total_lines = 0
     try:
-        (_cursor_dir() / f"{_validate_session_id(session_id)}.json").unlink()
+        if transcript_path and os.path.isfile(transcript_path):
+            total_lines = count_transcript_lines(transcript_path)
     except OSError:
-        pass
+        total_lines = 0
+    write_cursor(session_id, total_lines, transcript_path)
     clear_rolling_state(session_id)
-    _cursor_end_timeout_fired.discard(session_id)
-    try:
-        for f in _signal_dir().iterdir():
-            if not f.name.endswith(".json"):
-                continue
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            if _validate_session_id(data.get("session_id", "")) != session_id:
-                continue
-            try:
-                f.unlink()
-            except OSError:
-                pass
-    except OSError:
-        pass
+    _cursor_end_timeout_fired.add(session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1773,8 +1760,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     try:
         if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
-            logger.info("[%s] session %s: internal maintenance transcript, purging stale artifacts", label, session_id)
-            _purge_internal_session_artifacts(session_id)
+            logger.info("[%s] session %s: internal maintenance transcript, advancing cursor to EOF", label, session_id)
+            _advance_internal_session_cursor_to_end(session_id, transcript_path)
             mark_signal_processed(signal_data)
             _release_session_processing_lock(session_id, lock_fd)
             return
@@ -2732,8 +2719,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
         if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
-            logger.info("session %s is internal maintenance-only during idle scan, purging stale artifacts", session_id)
-            _purge_internal_session_artifacts(session_id)
+            logger.info("session %s is internal maintenance-only during idle scan, advancing cursor to EOF", session_id)
+            _advance_internal_session_cursor_to_end(session_id, transcript_path)
             continue
 
         # Skip registered subagents — their transcripts are merged into parent extraction
@@ -2886,8 +2873,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
         if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
-            logger.info("session %s is internal maintenance-only during rolling scan, purging stale artifacts", session_id)
-            _purge_internal_session_artifacts(session_id)
+            logger.info("session %s is internal maintenance-only during rolling scan, advancing cursor to EOF", session_id)
+            _advance_internal_session_cursor_to_end(session_id, transcript_path)
             continue
         if session_id in pending_session_ids:
             continue
