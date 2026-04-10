@@ -464,6 +464,7 @@ const IS_OPENCLAW = !IS_CLAUDE_CODE && !!(process.env.OPENCLAW_WORKSPACE || whic
 const WORKSPACE = FIXED_QUAID_HOME;
 const VISIBLE_HOME = FIXED_VISIBLE_HOME;
 const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1" || !process.stdin.isTTY;
+const DEBUG_SETUP = AGENT_MODE || process.env.QUAID_INSTALL_DEBUG === "1" || process.env.DEBUG_SETUP === "1";
 const DRY_RUN = !!(INSTALL_ARGS.dryRun || process.env.QUAID_INSTALL_DRY_RUN === "1");
 const MODULES_PLUGIN_DIR = path.join(WORKSPACE, "modules", "quaid");
 const LEGACY_PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
@@ -660,6 +661,9 @@ function _readAdapterInstallerCapabilities(adapterId) {
     "    out['modelDefaults'][resolved_default_provider] = {'deep': deep, 'fast': fast}",
     "print(json.dumps(out))",
   ].join("\n");
+  if (DEBUG_SETUP) {
+    log.info(C.dim(`[step3_models] reading adapter installer capabilities: adapter=${normalized} instance=${instanceId}`));
+  }
   const res = spawnSync("python3", ["-c", py], {
     encoding: "utf8",
     env: {
@@ -672,13 +676,37 @@ function _readAdapterInstallerCapabilities(adapterId) {
       QUAID_INSTANCE: instanceId,
     },
     stdio: ["pipe", "pipe", "pipe"],
+    timeout: 15000,
   });
-  if (res.status !== 0) return null;
+  if (res.error) {
+    if (DEBUG_SETUP) {
+      log.warn(`[step3_models] capability probe error for ${normalized}: ${String(res.error.message || res.error)}`);
+    }
+    return null;
+  }
+  if (res.status !== 0) {
+    if (DEBUG_SETUP) {
+      const stderr = String(res.stderr || "").trim();
+      const stdout = String(res.stdout || "").trim();
+      log.warn(
+        `[step3_models] capability probe failed for ${normalized}: `
+        + `${stderr || stdout || `exit ${String(res.status)}`}`
+      );
+    }
+    return null;
+  }
   try {
     const parsed = JSON.parse(String(res.stdout || "{}"));
     if (!parsed || typeof parsed !== "object") return null;
+    if (DEBUG_SETUP) {
+      const providers = Array.isArray(parsed.providers) ? parsed.providers.join(",") : "";
+      log.info(C.dim(`[step3_models] capability probe complete: adapter=${normalized} providers=${providers || "(none)"}`));
+    }
     return parsed;
   } catch {
+    if (DEBUG_SETUP) {
+      log.warn(`[step3_models] capability probe returned invalid JSON for ${normalized}`);
+    }
     return null;
   }
 }
@@ -2880,19 +2908,34 @@ async function step3_models() {
   _modelSpinner.start("Reading adapter/provider defaults...");
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
+  if (DEBUG_SETUP) {
+    log.info(C.dim(`[step3_models] begin adapter=${adapterType} agentMode=${AGENT_MODE ? "1" : "0"} workspace=${WORKSPACE}`));
+  }
   syncInstallerInstanceEnv(adapterType);
   // Instance IDs are runtime-owned and provision automatically on first use.
   // Installer keeps the deterministic default (<platform>-main) unless the
   // operator sets QUAID_INSTANCE explicitly before running setup.
 
   const adapterCaps = _readAdapterInstallerCapabilities(adapterType) || {};
+  if (DEBUG_SETUP) {
+    log.info(C.dim(`[step3_models] adapter capabilities loaded for ${adapterType}`));
+  }
   const supportsTimeoutCompaction = _platformSupportsTimeoutCompaction(adapterType);
+  if (DEBUG_SETUP) {
+    log.info(C.dim(`[step3_models] timeout compaction support for ${adapterType}: ${supportsTimeoutCompaction ? "yes" : "no"}`));
+  }
   const autoCompactionOnTimeout = supportsTimeoutCompaction; // Auto-enable if supported
 
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
     : ["anthropic", "openai", "openrouter", "together", "ollama"];
+  if (DEBUG_SETUP) {
+    log.info(C.dim(`[step3_models] provider surface for ${adapterType}: ${supportedProviders.join(",")}`));
+  }
   const hostManagedLlmDefault = _platformUsesHostManagedLlmByDefault(adapterType) ;
+  if (DEBUG_SETUP) {
+    log.info(C.dim(`[step3_models] host-managed llm default for ${adapterType}: ${hostManagedLlmDefault ? "yes" : "no"}`));
+  }
   const adapterDefaultProvider = String(
     adapterCaps.defaultDeepProvider || adapterCaps.defaultFastProvider || ""
   ).trim().toLowerCase();
@@ -2924,6 +2967,9 @@ async function step3_models() {
     log.info(C.dim(`Using ${adapterType} host-managed LLM defaults. Configure alternate providers later in settings.`));
   } else {
     sharedOverride = _sharedModelOverride(adapterType);
+    if (DEBUG_SETUP) {
+      log.info(C.dim(`[step3_models] shared model override ${sharedOverride ? `found at ${sharedOverride.source}` : "not found"}`));
+    }
     if (sharedOverride?.provider && supportedProviders.includes(sharedOverride.provider)) {
       provider = sharedOverride.provider;
       log.info(C.dim(`Provider override from shared config: ${provider} (${sharedOverride.source})`));
@@ -2978,6 +3024,10 @@ async function step3_models() {
     // Codex gateway lanes degrade extraction quality when effort is omitted.
     deepReasoningEffort = "medium";
     fastReasoningEffort = "medium";
+  }
+
+  if (DEBUG_SETUP) {
+    log.info(C.dim(`[step3_models] resolved defaults provider=${provider} deep=${highModel || "(unset)"} fast=${lowModel || "(unset)"}`));
   }
 
   if (false) {

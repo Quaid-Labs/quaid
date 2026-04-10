@@ -615,6 +615,24 @@ class TestOpenClawAdapter:
         assert adapter.get_deep_provider_default() == "anthropic"
         assert adapter.get_fast_provider_default() == "anthropic"
 
+    def test_installer_default_models_does_not_probe_gateway_for_codex_defaults(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(
+            adapter,
+            "_probe_openai_codex_fast_model",
+            lambda: (_ for _ in ()).throw(AssertionError("STEP 3 defaults must not live-probe gateway")),
+        )
+
+        defaults = adapter.installer_default_models("openai-codex")
+
+        assert defaults == {
+            "deep": "gpt-5.4",
+            "fast": "gpt-5.4-mini",
+            "deepEffort": "medium",
+            "fastEffort": "medium",
+        }
+
     def test_installer_provider_surface_detects_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
         cfg_dir = home / ".openclaw"

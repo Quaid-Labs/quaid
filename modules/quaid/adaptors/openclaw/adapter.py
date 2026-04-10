@@ -601,20 +601,6 @@ class OpenClawAdapter(QuaidAdapter):
             self._INSTALLER_MODEL_DEFAULTS.get(self._normalize_installer_provider(raw))
         if not model_pair:
             return None
-        # For openai-codex, probe candidates via gateway to discover the fastest
-        # model the account supports.  Falls back to static defaults if the
-        # gateway is unavailable or all probes fail.
-        if raw == "openai-codex":
-            probed = self._probe_openai_codex_fast_model()
-            if probed:
-                out = {"deep": str(model_pair["deep"]), "fast": probed}
-                deep_effort = str(model_pair.get("deepEffort", "")).strip()
-                fast_effort = str(model_pair.get("fastEffort", "")).strip()
-                if deep_effort:
-                    out["deepEffort"] = deep_effort
-                if fast_effort:
-                    out["fastEffort"] = fast_effort
-                return out
         out = {"deep": str(model_pair["deep"]), "fast": str(model_pair["fast"])}
         deep_effort = str(model_pair.get("deepEffort", "")).strip()
         fast_effort = str(model_pair.get("fastEffort", "")).strip()
