@@ -786,6 +786,89 @@ class TestRecallBasic:
         assert rows
         assert rows[0]["text"] == "Baxter is a golden retriever who loves tennis balls"
 
+    def test_recall_fast_adds_raw_fts_anchor_rescue_when_vector_candidates_miss_named_entity(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        fake_cfg = SimpleNamespace(
+            retrieval=SimpleNamespace(
+                boost_recent=True,
+                boost_frequent=True,
+                composite_relevance_weight=0.60,
+                composite_recency_weight=0.20,
+                composite_frequency_weight=0.15,
+                recency_decay_days=90,
+                reranker_enabled=False,
+                multi_pass_gate=0.70,
+                use_hyde=False,
+            )
+        )
+        query = "What do you know about my dog Baxter?"
+        planner_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": None,
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "fast",
+            "planned_stores": ["vector"],
+            "planned_project": None,
+        }
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+             patch("config.get_config", return_value=fake_cfg):
+            baxter = mg.store(
+                "Baxter is a golden retriever who loves tennis balls",
+                owner_id="quaid",
+                skip_dedup=True,
+                source_type="user",
+                visibility_scope="private_subject",
+            )
+            owner = mg.store(
+                "Solomon Steadman is the owner of this knowledge base",
+                owner_id=None,
+                skip_dedup=True,
+                source_type="import",
+                speaker="assistant",
+                visibility_scope="global_shared",
+            )
+            telegram = mg.store(
+                "Telegram is the notification channel for this VM",
+                owner_id=None,
+                skip_dedup=True,
+                source_type="import",
+                speaker="assistant",
+                visibility_scope="global_shared",
+            )
+
+            baxter_node = graph.get_node(baxter["id"])
+            owner_node = graph.get_node(owner["id"])
+            telegram_node = graph.get_node(telegram["id"])
+            assert baxter_node is not None
+            assert owner_node is not None
+            assert telegram_node is not None
+
+            with patch.object(graph, "search_hybrid", return_value=[
+                (owner_node, 0.93),
+                (telegram_node, 0.91),
+            ]), \
+                 patch.object(graph, "search_fts", return_value=[(baxter_node, 1)]), \
+                 patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
+                rows, _meta = mg.recall_fast(
+                    query,
+                    owner_id="quaid",
+                    return_meta=True,
+                    planner_profile="fast",
+                    domain={"all": True},
+                )
+
+        assert rows
+        assert rows[0]["text"] == "Baxter is a golden retriever who loves tennis balls"
+
 # ---------------------------------------------------------------------------
 # store() dedup behavior
 # ---------------------------------------------------------------------------
