@@ -1579,6 +1579,7 @@ function shouldSkipTranscriptText(roleOrText, maybeText) {
 const facade = createQuaidFacade({
   workspace: WORKSPACE,
   instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : void 0,
+  delayedRequestsPath: _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json") : path.join(WORKSPACE, ".runtime", "notes", "delayed-llm-requests.json"),
   pluginRoot: PYTHON_PLUGIN_ROOT,
   dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
   eventSource: "openclaw_adapter",

@@ -1685,5 +1685,24 @@ describe("QuaidFacade", () => {
     expect(typeof state.lastJanitorHealthIssue).toBe("string");
     expect(Number(state.lastJanitorHealthAlertAt)).toBe(1_700_000_000_000);
     await rm(workspace, { recursive: true, force: true });
+    });
   });
-});
+
+  it("queueDelayedRequest respects deps.delayedRequestsPath when provided", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-delayed-req-inst-"));
+    const delayedPath = path.join(workspace, "instances", "oc-main", ".runtime", "notes", "delayed-llm-requests.json");
+    const facade = createQuaidFacade(makeMockDeps({ workspace, delayedRequestsPath: delayedPath }));
+
+    const queued = facade.queueDelayedRequest({
+      message: "instance-scoped deferred notice",
+      kind: "janitor_health",
+      priority: "high",
+      source: "test",
+    });
+
+    expect(queued).toBe(true);
+    const payload = JSON.parse(await readFile(delayedPath, "utf8"));
+    expect(Array.isArray(payload.requests)).toBe(true);
+    expect(payload.requests).toHaveLength(1);
+    expect(payload.requests[0].message).toBe("instance-scoped deferred notice");
+  });

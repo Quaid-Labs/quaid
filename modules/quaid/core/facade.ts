@@ -42,6 +42,7 @@ export type QuaidFacadeDeps = {
   workspace: string;
   /** Instance root: QUAID_HOME/QUAID_INSTANCE. Used for identity file injection. */
   instanceRoot?: string;
+  delayedRequestsPath?: string;
   pluginRoot: string;
   dbPath: string;
   eventSource?: string;
@@ -989,7 +990,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function queueDelayedRequest(request: DelayedRequestInput): boolean {
     const requestsPath = String(
-      request?.requestsPath || path.join(deps.workspace, ".runtime", "notes", "delayed-llm-requests.json"),
+      request?.requestsPath
+        || deps.delayedRequestsPath
+        || path.join(deps.workspace, ".runtime", "notes", "delayed-llm-requests.json"),
     );
     const message = String(request?.message || "").trim();
     const kind = String(request?.kind || "janitor");
