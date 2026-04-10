@@ -1165,6 +1165,69 @@ class TestCodexAdapter:
         assert "Maya lives in South Austin" not in transcript
         assert "Nice! February is great for aurora season." in transcript
 
+    def test_parse_session_jsonl_strips_assistant_quaid_notice_bullet_block(self, tmp_path):
+        path = tmp_path / "rollout-quaid-notice-bullets.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "Hello.\n\n"
+                                    "Quaid notices:\n"
+                                    "- `Quaid fast LLM call failed`: timed out waiting for Codex turn `abc`.\n"
+                                    "- `Janitor has never completed successfully.`\n\n"
+                                    "What do you want to work on in this repo?"
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "Quaid notices:" not in transcript
+        assert "fast LLM call failed" not in transcript
+        assert "Janitor has never completed successfully" not in transcript
+        assert "What do you want to work on in this repo?" in transcript
+
+    def test_parse_session_jsonl_strips_assistant_pending_notice_commentary(self, tmp_path):
+        path = tmp_path / "rollout-quaid-notice-commentary.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": "You started a new interaction. I’m checking the pending Quaid notice first, then I’ll reply directly.",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "Tell me about Baxter.",
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "pending Quaid notice" not in transcript
+        assert "Tell me about Baxter." in transcript
+
     def test_resolve_stop_hook_signal_returns_none_for_regular_turn(self, tmp_path):
         path = tmp_path / "rollout-regular-turn.jsonl"
         path.write_text(

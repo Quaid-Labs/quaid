@@ -42,6 +42,18 @@ class CodexAdapter(QuaidAdapter):
         r"<quaid_notification>.*?</quaid_notification>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _QUAID_NOTICE_COMMENTARY_RE = re.compile(
+        r"^\s*Assistant:\s*(?:You started a new interaction\..*?pending Quaid notice.*?|I(?:'|’)m checking .*?Quaid.*?notice.*?)(?=\n\n(?:User|Assistant|Subagent/)|\Z)",
+        flags=re.DOTALL | re.IGNORECASE | re.MULTILINE,
+    )
+    _QUAID_NOTICE_BULLET_BLOCK_RE = re.compile(
+        r"\n\nQuaid notices?:\n(?:- .*(?:\n|$))+",
+        flags=re.IGNORECASE,
+    )
+    _QUAID_NOTICE_INLINE_RE = re.compile(
+        r"\n\nQuaid notice:\s*.*?(?=\n\n(?:[A-Z][a-z]+:|Subagent/)|\Z)",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     _ROLLOUT_SESSION_ID_RE = re.compile(
         r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$",
         flags=re.IGNORECASE,
@@ -353,7 +365,14 @@ class CodexAdapter(QuaidAdapter):
             if not self._HOOK_STATUS_LINE_RE.match(line)
             and not self._HOOK_CONTEXT_LINE_RE.match(line)
         ]
-        return "\n".join(cleaned).strip()
+        value = "\n".join(cleaned).strip()
+        if not value:
+            return ""
+        value = self._QUAID_NOTICE_COMMENTARY_RE.sub("", value)
+        value = self._QUAID_NOTICE_BULLET_BLOCK_RE.sub("", value)
+        value = self._QUAID_NOTICE_INLINE_RE.sub("", value)
+        value = re.sub(r"\n{3,}", "\n\n", value).strip()
+        return value
 
     @staticmethod
     def _extract_lifecycle_command(text: str) -> str:
