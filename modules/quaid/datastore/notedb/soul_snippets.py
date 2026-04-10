@@ -255,6 +255,31 @@ def _refresh_generated_projection_hygiene() -> None:
     _refresh_generated_memory_projection()
     _refresh_generated_user_snippets_projection()
 
+
+def _strip_generated_user_snippet_block(content: str) -> str:
+    """Remove the managed USER snippet projection block from visible content."""
+    if not content:
+        return ""
+    block_pattern = re.compile(
+        rf"\n?{re.escape(_GENERATED_USER_SNIPPETS_START)}[\s\S]*?{re.escape(_GENERATED_USER_SNIPPETS_END)}\n?",
+        re.MULTILINE,
+    )
+    return block_pattern.sub("\n\n", content)
+
+
+def _user_identity_has_meaningful_content(content: str) -> bool:
+    """Whether USER.md contains authored content beyond the stub/projection block."""
+    stripped = _strip_generated_user_snippet_block(str(content or ""))
+    lines = []
+    for raw in stripped.splitlines():
+        line = raw.strip()
+        if not line or line == "# USER":
+            continue
+        if line.startswith("<!--") and line.endswith("-->"):
+            continue
+        lines.append(line)
+    return bool(lines)
+
 # Voice guidance for distillation prompts per target file
 _FILE_VOICE_GUIDANCE = {
     "SOUL.md": (
@@ -1626,7 +1651,14 @@ def apply_decisions(
     dry_run: bool = True
 ) -> Dict[str, Any]:
     """Apply Deep Reasoning decisions to parent files."""
-    stats = {"folded": 0, "rewritten": 0, "discarded": 0, "skipped_at_limit": 0, "errors": []}
+    stats = {
+        "folded": 0,
+        "rewritten": 0,
+        "discarded": 0,
+        "skipped_at_limit": 0,
+        "preserved_pending": 0,
+        "errors": [],
+    }
     processed_snippets: Dict[str, List[str]] = {}
     valid_actions = {"FOLD", "REWRITE", "DISCARD"}
 
@@ -1645,6 +1677,32 @@ def apply_decisions(
             continue
         if raw_index == 0 and filename in all_snippets:
             zero_based_files.add(filename)
+
+    preserve_pending_files = set()
+    if not dry_run:
+        decisions_by_file: Dict[str, List[str]] = {}
+        for decision in decisions:
+            filename = decision.get("file", "")
+            if filename not in all_snippets and single_target is not None:
+                filename = single_target
+            if filename not in all_snippets:
+                continue
+            action = str(decision.get("action", "DISCARD") or "DISCARD").upper()
+            decisions_by_file.setdefault(filename, []).append(action)
+        for filename, actions in decisions_by_file.items():
+            if filename != "USER.md":
+                continue
+            if not actions or any(action != "DISCARD" for action in actions):
+                continue
+            parent_content = str((all_snippets.get(filename, {}) or {}).get("parent_content", "") or "")
+            if _user_identity_has_meaningful_content(parent_content):
+                continue
+            preserve_pending_files.add(filename)
+            logger.info(
+                "Preserving pending USER snippets for %s because USER.md is still a stub "
+                "and review chose DISCARD for every snippet",
+                filename,
+            )
 
     for decision in decisions:
         filename = decision.get("file", "")
@@ -1685,6 +1743,15 @@ def apply_decisions(
         original_text = snippets[snippet_idx]
 
         if action == "DISCARD":
+            if filename in preserve_pending_files:
+                stats["preserved_pending"] += 1
+                logger.info(
+                    "PRESERVE_PENDING %s[%s]: keeping snippet pending because USER.md "
+                    "has no authored content yet",
+                    filename,
+                    snippet_idx + 1,
+                )
+                continue
             stats["discarded"] += 1
             processed_snippets.setdefault(filename, []).append(original_text)
             logger.info(f"DISCARD {filename}[{snippet_idx+1}]: {original_text[:60]}...")
