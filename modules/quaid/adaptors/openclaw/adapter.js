@@ -361,11 +361,12 @@ function formatDeferredNoticeRelayContext(drained) {
   }
   const body = messages.map((message) => `\u2022 ${message}`).join("\n");
   return [
-    "The following are pending notifications for the user \u2014 please relay them in your response:",
+    "<quaid_system_message>",
+    "[Quaid Notice Relay Required]",
+    "The following notices were queued for the human user and have just been drained. Begin your next reply by briefly relaying each notice below, then answer the user's current message.",
     "",
-    `<quaid_system_message>
-${body}
-</quaid_system_message>`
+    body,
+    "</quaid_system_message>"
   ].join("\n");
 }
 function drainDeferredNoticeRelayContext(agentLabel, reason) {
@@ -2154,6 +2155,7 @@ notify_user(${JSON.stringify(message)})
       pingDaemonAliveIfNeeded(promptInstanceId, nowMs);
       let appendSystemContext;
       let prependSystemContext;
+      const prependContextParts = [];
       if (isSystemEnabled2("projects")) {
         const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         writeHookTrace("hook.docs_gate_check", {
@@ -2206,15 +2208,27 @@ notify_user(${JSON.stringify(message)})
       }
       const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
       if (deferredNoticeContext) {
+        prependContextParts.push(deferredNoticeContext);
         appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${deferredNoticeContext}` : deferredNoticeContext;
       }
-      const withDocs = (base) => ({
-        ...base,
-        ...prependSystemContext ? { prependSystemContext } : {},
-        ...appendSystemContext ? { appendSystemContext } : {}
-      });
+      const mergePrependContext = (base) => {
+        const parts = [
+          ...prependContextParts,
+          String(base || "").trim()
+        ].filter(Boolean);
+        return parts.length ? parts.join("\n\n") : void 0;
+      };
+      const withDocs = (base) => {
+        const mergedPrependContext = mergePrependContext(base.prependContext);
+        return {
+          ...base,
+          ...mergedPrependContext ? { prependContext: mergedPrependContext } : {},
+          ...prependSystemContext ? { prependSystemContext } : {},
+          ...appendSystemContext ? { appendSystemContext } : {}
+        };
+      };
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
       try {
@@ -2390,11 +2404,7 @@ ${notice}` : notice;
           });
         }
       }
-      return {
-        prependContext: event.prependContext || void 0,
-        ...prependSystemContext ? { prependSystemContext } : {},
-        ...appendSystemContext ? { appendSystemContext } : {}
-      };
+      return withDocs({ prependContext: event.prependContext || void 0 });
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
     onChecked("before_agent_start", beforeAgentStartHandler, {

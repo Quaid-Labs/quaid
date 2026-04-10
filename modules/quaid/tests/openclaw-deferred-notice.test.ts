@@ -144,8 +144,10 @@ describe("openclaw deferred notices", () => {
       },
     );
 
-    expect(String(result?.appendSystemContext || "")).toContain("pending notifications for the user");
+    expect(String(result?.appendSystemContext || "")).toContain("Quaid Notice Relay Required");
     expect(String(result?.appendSystemContext || "")).toContain("Janitor summary");
+    expect(String(result?.prependContext || "")).toContain("Quaid Notice Relay Required");
+    expect(String(result?.prependContext || "")).toContain("Janitor summary");
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -252,6 +254,7 @@ describe("openclaw deferred notices", () => {
     );
 
     expect(String(result?.appendSystemContext || "")).toContain("livetest main queue");
+    expect(String(result?.prependContext || "")).toContain("livetest main queue");
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -364,6 +367,7 @@ describe("openclaw deferred notices", () => {
     );
 
     expect(String(result?.appendSystemContext || "")).toContain("stale lock recovery");
+    expect(String(result?.prependContext || "")).toContain("stale lock recovery");
     expect(fs.existsSync(lockPath)).toBe(false);
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));

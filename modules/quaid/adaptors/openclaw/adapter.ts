@@ -507,9 +507,12 @@ function formatDeferredNoticeRelayContext(drained: Array<{ message?: string }>):
   }
   const body = messages.map((message) => `• ${message}`).join("\n");
   return [
-    "The following are pending notifications for the user — please relay them in your response:",
+    "<quaid_system_message>",
+    "[Quaid Notice Relay Required]",
+    "The following notices were queued for the human user and have just been drained. Begin your next reply by briefly relaying each notice below, then answer the user's current message.",
     "",
-    `<quaid_system_message>\n${body}\n</quaid_system_message>`,
+    body,
+    "</quaid_system_message>",
   ].join("\n");
 }
 
@@ -2747,6 +2750,7 @@ notify_user(${JSON.stringify(message)})
       //   prompt so the model sees them at maximum priority)
       let appendSystemContext: string | undefined;
       let prependSystemContext: string | undefined;
+      const prependContextParts: string[] = [];
       if (isSystemEnabled("projects")) {
         const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         writeHookTrace("hook.docs_gate_check", {
@@ -2803,6 +2807,7 @@ notify_user(${JSON.stringify(message)})
 
       const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
       if (deferredNoticeContext) {
+        prependContextParts.push(deferredNoticeContext);
         appendSystemContext = appendSystemContext
           ? `${appendSystemContext}\n\n${deferredNoticeContext}`
           : deferredNoticeContext;
@@ -2815,11 +2820,22 @@ notify_user(${JSON.stringify(message)})
       // "docs delivered" but the model never received them (e.g. rawPrompt < 5 during
       // a mass-reset fan-out triggers before_prompt_build before the user's message,
       // marks the session injected, and on the real message the docs are skipped).
-      const withDocs = (base: { prependContext?: string }) => ({
-        ...base,
-        ...(prependSystemContext ? { prependSystemContext } : {}),
-        ...(appendSystemContext ? { appendSystemContext } : {}),
-      });
+      const mergePrependContext = (base?: string): string | undefined => {
+        const parts = [
+          ...prependContextParts,
+          String(base || "").trim(),
+        ].filter(Boolean);
+        return parts.length ? parts.join("\n\n") : undefined;
+      };
+      const withDocs = (base: { prependContext?: string }) => {
+        const mergedPrependContext = mergePrependContext(base.prependContext);
+        return {
+          ...base,
+          ...(mergedPrependContext ? { prependContext: mergedPrependContext } : {}),
+          ...(prependSystemContext ? { prependSystemContext } : {}),
+          ...(appendSystemContext ? { appendSystemContext } : {}),
+        };
+      };
 
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
@@ -3043,11 +3059,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
       }
 
-      return {
-        prependContext: event.prependContext || undefined,
-        ...(prependSystemContext ? { prependSystemContext } : {}),
-        ...(appendSystemContext ? { appendSystemContext } : {}),
-      };
+      return withDocs({ prependContext: event.prependContext || undefined });
     };
 
     // Register lifecycle hooks via registerHook (api.on is for event bus signals).
