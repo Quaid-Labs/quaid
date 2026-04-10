@@ -2148,9 +2148,10 @@ notify_user(${JSON.stringify(message)})
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
+      const promptInstanceId = getInstanceId(promptAgentLabel);
       ensureAgentInstanceProvisioned(promptAgentLabel, "before_prompt_build");
       const nowMs = Date.now();
-      pingDaemonAliveIfNeeded(getInstanceId(promptAgentLabel), nowMs);
+      pingDaemonAliveIfNeeded(promptInstanceId, nowMs);
       let appendSystemContext;
       let prependSystemContext;
       if (isSystemEnabled2("projects")) {
@@ -2173,10 +2174,10 @@ notify_user(${JSON.stringify(message)})
             console.warn(`[quaid] Project docs injection failed: ${err?.message || String(err)}`);
           }
         }
-        if (_QUAID_INSTANCE) {
-          const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${_QUAID_INSTANCE}`);
+        if (promptInstanceId) {
+          const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${promptInstanceId}`);
           prependSystemContext = [
-            `[Quaid \u2014 active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
+            `[Quaid \u2014 active knowledge layer | instance: ${promptInstanceId}]`,
             `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
             ``,
             `[PROJECT CREATION \u2014 MANDATORY BEFORE ANY WORK BEGINS]`,
@@ -2192,8 +2193,8 @@ notify_user(${JSON.stringify(message)})
             `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
             `  Misc project path: ${miscPath}/`,
             `  The misc project directory already exists \u2014 write files there directly.`,
-            `  If quaid commands say "project not found" for misc--${_QUAID_INSTANCE}, create it first:`,
-            `    quaid project create misc--${_QUAID_INSTANCE} --source-root ${miscPath}/`,
+            `  If quaid commands say "project not found" for misc--${promptInstanceId}, create it first:`,
+            `    quaid project create misc--${promptInstanceId} --source-root ${miscPath}/`,
             `  (If registration says "already exists", that is fine \u2014 proceed to write.)`,
             `For durable new work: run Step 1 above to create a named project first.`,
             `For work that belongs to an existing project: write there directly.`,

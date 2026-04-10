@@ -151,6 +151,24 @@ describe("openclaw auto-provision", () => {
       ),
     ).toBe(true);
 
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const promptResult = await beforePromptBuildHandler(
+      { prompt: "ok", messages: [], prependContext: "" },
+      {
+        sessionId: "da6cb06a-08b0-4443-bad7-f709df233545",
+        sessionKey: "agent:m13test:tui-da6cb06a",
+      },
+    );
+
+    expect(String(promptResult?.prependSystemContext || "")).toContain("instance: openclaw-m13test");
+    expect(String(promptResult?.prependSystemContext || "")).toContain("misc--openclaw-m13test");
+    expect(String(promptResult?.prependSystemContext || "")).not.toContain("openclaw-main");
+
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();

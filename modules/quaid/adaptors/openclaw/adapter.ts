@@ -2731,6 +2731,7 @@ notify_user(${JSON.stringify(message)})
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
+      const promptInstanceId = getInstanceId(promptAgentLabel);
       ensureAgentInstanceProvisioned(promptAgentLabel, "before_prompt_build");
 
       // Keep the extraction daemon alive across long OC sessions.
@@ -2738,7 +2739,7 @@ notify_user(${JSON.stringify(message)})
       // is killed mid-session, rolling extraction silently stops.  Rate-limited to
       // once per minute so the subprocess cost is negligible.
       const nowMs = Date.now();
-      pingDaemonAliveIfNeeded(getInstanceId(promptAgentLabel), nowMs);
+      pingDaemonAliveIfNeeded(promptInstanceId, nowMs);
 
       // Inject project docs once per session on the first message.
       // - appendSystemContext: full TOOLS.md + AGENTS.md docs (appended after OC base prompt)
@@ -2769,10 +2770,10 @@ notify_user(${JSON.stringify(message)})
         // Prepend mandatory file-placement rules on EVERY turn (not just first).
         // appendSystemContext (project docs) is gated once per session — expensive.
         // prependSystemContext (placement rules) is a cheap template — always inject.
-        if (_QUAID_INSTANCE) {
-          const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${_QUAID_INSTANCE}`);
+        if (promptInstanceId) {
+          const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${promptInstanceId}`);
           prependSystemContext = [
-            `[Quaid — active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
+            `[Quaid — active knowledge layer | instance: ${promptInstanceId}]`,
             `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
             ``,
             `[PROJECT CREATION — MANDATORY BEFORE ANY WORK BEGINS]`,
@@ -2788,8 +2789,8 @@ notify_user(${JSON.stringify(message)})
             `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
             `  Misc project path: ${miscPath}/`,
             `  The misc project directory already exists — write files there directly.`,
-            `  If quaid commands say "project not found" for misc--${_QUAID_INSTANCE}, create it first:`,
-            `    quaid project create misc--${_QUAID_INSTANCE} --source-root ${miscPath}/`,
+            `  If quaid commands say "project not found" for misc--${promptInstanceId}, create it first:`,
+            `    quaid project create misc--${promptInstanceId} --source-root ${miscPath}/`,
             `  (If registration says "already exists", that is fine — proceed to write.)`,
             `For durable new work: run Step 1 above to create a named project first.`,
             `For work that belongs to an existing project: write there directly.`,
