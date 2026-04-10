@@ -516,13 +516,31 @@ function formatDeferredNoticeRelayContext(drained: Array<{ message?: string }>):
   ].join("\n");
 }
 
-function drainDeferredNoticeRelayContext(agentLabel: string, reason: string): string {
+function formatDeferredNoticeVisibleReply(drained: Array<{ message?: string }>): string {
+  const messages = drained
+    .map((item) => String(item?.message || "").trim())
+    .filter(Boolean);
+  if (!messages.length) {
+    return "";
+  }
+  const body = messages.map((message) => `- ${message}`).join("\n");
+  const heading = messages.length === 1
+    ? "Quaid had 1 deferred notice waiting for you:"
+    : `Quaid had ${messages.length} deferred notices waiting for you:`;
+  return [
+    heading,
+    "",
+    body,
+  ].join("\n");
+}
+
+function drainDeferredNoticeItems(agentLabel: string, reason: string): Array<{ message?: string }> {
   const instanceId = getInstanceId(agentLabel);
   const requestsPath = delayedRequestsPathForInstance(instanceId);
   try {
     const drained = drainPendingRequests(requestsPath, 50, `drained by ${reason}`);
     if (!drained.length) {
-      return "";
+      return [];
     }
     writeHookTrace("deferred_notice.drained", {
       instance_id: instanceId,
@@ -531,7 +549,7 @@ function drainDeferredNoticeRelayContext(agentLabel: string, reason: string): st
       count: drained.length,
       kinds: drained.map((item) => String((item as any)?.kind || "general")).slice(0, 8),
     });
-    return formatDeferredNoticeRelayContext(drained as Array<{ message?: string }>);
+    return drained as Array<{ message?: string }>;
   } catch (err: unknown) {
     writeHookTrace("deferred_notice.error", {
       instance_id: instanceId,
@@ -539,8 +557,16 @@ function drainDeferredNoticeRelayContext(agentLabel: string, reason: string): st
       reason,
       error: String((err as Error)?.message || err),
     });
-    return "";
+    return [];
   }
+}
+
+function drainDeferredNoticeRelayContext(agentLabel: string, reason: string): string {
+  return formatDeferredNoticeRelayContext(drainDeferredNoticeItems(agentLabel, reason));
+}
+
+function drainDeferredNoticeVisibleReply(agentLabel: string, reason: string): string {
+  return formatDeferredNoticeVisibleReply(drainDeferredNoticeItems(agentLabel, reason));
 }
 
 function runSubagentHookCommand(
@@ -3166,6 +3192,27 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10
     });
 
+    onChecked("before_agent_reply", async (event: any, ctx: any) => {
+      if (isInternalSessionContext(event, ctx)) return;
+      if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
+      const agentLabel = resolveHookAgentLabel(event, ctx);
+      ensureAgentInstanceProvisioned(agentLabel, "before_agent_reply");
+      const replyText = drainDeferredNoticeVisibleReply(agentLabel, "before_agent_reply");
+      if (!replyText) return;
+      writeHookTrace("deferred_notice.visible_reply", {
+        agent_label: agentLabel,
+        session_id: String(ctx?.sessionId || event?.sessionId || ""),
+      });
+      return {
+        handled: true,
+        reason: "quaid_deferred_notice_relay",
+        reply: { text: replyText },
+      };
+    }, {
+      name: "deferred-notice-visible-relay",
+      priority: 100,
+    });
+
     // before_prompt_build fires per-message with the actual user prompt,
     // unlike before_agent_start which fires once per subagent session
     // (often without the prompt). This is where recall-based injection lives.
@@ -5295,6 +5342,7 @@ export const __test = {
   isImmediateProviderFailure,
   buildImmediateProviderNotice,
   buildExecCompletedHeartbeatOverride,
+  formatDeferredNoticeVisibleReply,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,

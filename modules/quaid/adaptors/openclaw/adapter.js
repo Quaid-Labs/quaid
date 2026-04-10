@@ -369,13 +369,26 @@ function formatDeferredNoticeRelayContext(drained) {
     "</quaid_system_message>"
   ].join("\n");
 }
-function drainDeferredNoticeRelayContext(agentLabel, reason) {
+function formatDeferredNoticeVisibleReply(drained) {
+  const messages = drained.map((item) => String(item?.message || "").trim()).filter(Boolean);
+  if (!messages.length) {
+    return "";
+  }
+  const body = messages.map((message) => `- ${message}`).join("\n");
+  const heading = messages.length === 1 ? "Quaid had 1 deferred notice waiting for you:" : `Quaid had ${messages.length} deferred notices waiting for you:`;
+  return [
+    heading,
+    "",
+    body
+  ].join("\n");
+}
+function drainDeferredNoticeItems(agentLabel, reason) {
   const instanceId = getInstanceId(agentLabel);
   const requestsPath = delayedRequestsPathForInstance(instanceId);
   try {
     const drained = drainPendingRequests(requestsPath, 50, `drained by ${reason}`);
     if (!drained.length) {
-      return "";
+      return [];
     }
     writeHookTrace("deferred_notice.drained", {
       instance_id: instanceId,
@@ -384,7 +397,7 @@ function drainDeferredNoticeRelayContext(agentLabel, reason) {
       count: drained.length,
       kinds: drained.map((item) => String(item?.kind || "general")).slice(0, 8)
     });
-    return formatDeferredNoticeRelayContext(drained);
+    return drained;
   } catch (err) {
     writeHookTrace("deferred_notice.error", {
       instance_id: instanceId,
@@ -392,8 +405,14 @@ function drainDeferredNoticeRelayContext(agentLabel, reason) {
       reason,
       error: String(err?.message || err)
     });
-    return "";
+    return [];
   }
+}
+function drainDeferredNoticeRelayContext(agentLabel, reason) {
+  return formatDeferredNoticeRelayContext(drainDeferredNoticeItems(agentLabel, reason));
+}
+function drainDeferredNoticeVisibleReply(agentLabel, reason) {
+  return formatDeferredNoticeVisibleReply(drainDeferredNoticeItems(agentLabel, reason));
 }
 function runSubagentHookCommand(command, payload, agentLabel) {
   const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
@@ -2501,6 +2520,26 @@ ${notice}` : notice;
       name: "memory-injection",
       priority: 10
     });
+    onChecked("before_agent_reply", async (event, ctx) => {
+      if (isInternalSessionContext(event, ctx)) return;
+      if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
+      const agentLabel = resolveHookAgentLabel(event, ctx);
+      ensureAgentInstanceProvisioned(agentLabel, "before_agent_reply");
+      const replyText = drainDeferredNoticeVisibleReply(agentLabel, "before_agent_reply");
+      if (!replyText) return;
+      writeHookTrace("deferred_notice.visible_reply", {
+        agent_label: agentLabel,
+        session_id: String(ctx?.sessionId || event?.sessionId || "")
+      });
+      return {
+        handled: true,
+        reason: "quaid_deferred_notice_relay",
+        reply: { text: replyText }
+      };
+    }, {
+      name: "deferred-notice-visible-relay",
+      priority: 100
+    });
     onChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build",
       priority: 10
@@ -4278,6 +4317,7 @@ const __test = {
   isImmediateProviderFailure,
   buildImmediateProviderNotice,
   buildExecCompletedHeartbeatOverride,
+  formatDeferredNoticeVisibleReply,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,

@@ -50,6 +50,7 @@
         "mode": "declared",
         "exports": [
           "before_agent_start",
+          "before_agent_reply",
           "before_prompt_build",
           "agent_end",
           "before_compaction",

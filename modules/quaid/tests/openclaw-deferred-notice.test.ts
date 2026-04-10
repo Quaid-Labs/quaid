@@ -44,6 +44,62 @@ async function loadAdapterWithHomes(
   return module.default as AdapterPlugin;
 }
 
+function seedDeferredNoticeFixture(prefix: string, instanceId: string, message: string) {
+  const home = makeTempDir(prefix);
+  const hiddenHome = path.join(home, ".quaid");
+  const visibleHome = path.join(home, "quaid");
+  const openClawRoot = path.join(home, ".openclaw");
+  const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+  const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+
+  fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+  fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+  writeJson(path.join(hiddenHome, "instances", instanceId, "config.json"), {
+    adapter: { type: "openclaw" },
+    retrieval: { failHard: false, autoInject: false, maxLimit: 20 },
+    models: {
+      llmProvider: "openai-codex",
+      deepReasoningProvider: "openai-codex",
+      fastReasoningProvider: "openai-codex",
+      deepReasoning: "gpt-5.1-codex",
+      fastReasoning: "gpt-5.1-codex",
+    },
+    plugins: { strict: false },
+  });
+  fs.mkdirSync(path.join(hiddenHome, "instances", instanceId, "data"), { recursive: true });
+  fs.mkdirSync(path.join(hiddenHome, "instances", instanceId, "logs"), { recursive: true });
+  fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+  fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+  fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+  fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+  writeJson(openClawConfigPath, {
+    agents: { list: [{ id: "main", default: true }] },
+    env: { vars: { QUAID_INSTANCE: instanceId } },
+  });
+  const noticeFile = path.join(
+    hiddenHome,
+    "instances",
+    instanceId,
+    ".runtime",
+    "notes",
+    "delayed-llm-requests.json",
+  );
+  writeJson(noticeFile, {
+    version: 1,
+    requests: [{
+      id: "notice-test",
+      created_at: "2026-04-10T12:00:00Z",
+      source: "pytest",
+      kind: "janitor_summary",
+      priority: "normal",
+      status: "pending",
+      message,
+    }],
+  });
+  return { home, hiddenHome, visibleHome, openClawConfigPath, noticeFile };
+}
+
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
@@ -52,6 +108,53 @@ afterEach(() => {
 });
 
 describe("openclaw deferred notices", () => {
+  it("returns a visible reply when deferred notices are waiting before an agent reply", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-visible-reply-home-",
+      "openclaw-main",
+      "[Quaid] Synthetic notice: silver lantern is ready.",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforeAgentReplyCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-visible-relay"
+    );
+    expect(beforeAgentReplyCall).toBeTruthy();
+
+    const result = await beforeAgentReplyCall?.[1](
+      { cleanedBody: "Hey, what is up?", sessionId: "session-main-visible", sessionKey: "agent:main:tui-main" },
+      { sessionId: "session-main-visible", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(String(result?.reply?.text || "")).toContain("silver lantern");
+    expect(String(result?.reply?.text || "")).not.toContain("<quaid_system_message>");
+
+    const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    const pending = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    expect(pending).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  });
+
   it("drains deferred notices into prompt-build relay context", async () => {
     vi.useFakeTimers();
     const home = makeTempDir("quaid-oc-deferred-home-");
