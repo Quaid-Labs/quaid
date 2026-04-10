@@ -633,6 +633,35 @@ function pickActiveInteractiveSession(data) {
     return null;
   }
 }
+function selectNewKeyFanoutTarget(candidates, opts) {
+  const nowMs = Number(opts.nowMs || Date.now());
+  const recentCutoffMs = nowMs - 5 * 6e4;
+  const sameLane = candidates.filter((candidate) => {
+    if (!candidate || !candidate.sessionId || candidate.sessionId === opts.newSessionId) {
+      return false;
+    }
+    if (String(candidate.agentLabel || "").trim() !== String(opts.agentLabel || "").trim()) {
+      return false;
+    }
+    return Number(candidate.lastActivityMs || 0) >= recentCutoffMs;
+  });
+  if (!sameLane.length) {
+    return null;
+  }
+  const hinted = sameLane.find((candidate) => candidate.sessionId === opts.lastTranscriptSessionId);
+  if (hinted) {
+    return hinted;
+  }
+  const interactive = sameLane.find((candidate) => candidate.sessionId === opts.currentInteractiveSessionId);
+  if (interactive) {
+    return interactive;
+  }
+  return sameLane.slice().sort((a, b) => {
+    const activityDelta = Number(b.lastActivityMs || 0) - Number(a.lastActivityMs || 0);
+    if (activityDelta !== 0) return activityDelta;
+    return String(a.sessionId).localeCompare(String(b.sessionId));
+  })[0] || null;
+}
 function latestResetBackup(sessionId) {
   const prefix = `${sessionId}.jsonl.reset.`;
   try {
@@ -2426,6 +2455,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId, watcher_start_ms: watcherStartMs });
               const currentSids = new Set(recognizedEntries.map((e) => e.sessionId));
+              const fanoutCandidates = [];
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
                 if (!currentSids.has(priorSid)) {
                   writeHookTrace("session_index.new_key_skip", { reason: "not_in_current_sessions", prior_sid: priorSid, prior_key: priorKey });
@@ -2456,23 +2486,50 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "no_new_content", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize2, last_fanout_size: lastFanoutSize });
                   continue;
                 }
-                if (!facade.shouldProcessLifecycleSignal(priorSid, {
+                fanoutCandidates.push({
+                  sessionId: priorSid,
+                  key: priorKey,
+                  agentLabel: String(sessionIdToAgentId.get(priorSid) || "main").trim() || "main",
+                  lastActivityMs: Number(sessionLastActivityMs.get(priorSid) || 0)
+                });
+              }
+              const selectedPrior = selectNewKeyFanoutTarget(fanoutCandidates, {
+                newSessionId: sessionId,
+                agentLabel,
+                nowMs: Date.now(),
+                lastTranscriptSessionId: String(lastTranscriptSessionHint?.sessionId || ""),
+                currentInteractiveSessionId: String(currentInteractiveSession?.sessionId || "")
+              });
+              if (selectedPrior) {
+                if (facade.shouldProcessLifecycleSignal(selectedPrior.sessionId, {
                   label: "ResetSignal",
                   source: "session_index",
                   signature: `session_index:new_key:${key}`
-                })) continue;
-                facade.markLifecycleSignalFromHook(priorSid, "ResetSignal");
-                sessionLastFanoutSizeMap.set(priorSid, priorSize2);
-                writeDaemonSignal(priorSid, "reset", {
-                  source: "session_index_new_key",
-                  new_key: key,
-                  new_session_id: sessionId
-                });
-                writeHookTrace("session_index.signal_queued", {
-                  signal: "reset",
-                  source: "new-key",
-                  session_id: priorSid,
-                  session_key: priorKey,
+                })) {
+                  let selectedSize = -1;
+                  try {
+                    selectedSize = fs.statSync(getOpenClawSessionFile(selectedPrior.sessionId)).size;
+                  } catch {
+                  }
+                  facade.markLifecycleSignalFromHook(selectedPrior.sessionId, "ResetSignal");
+                  sessionLastFanoutSizeMap.set(selectedPrior.sessionId, selectedSize);
+                  writeDaemonSignal(selectedPrior.sessionId, "reset", {
+                    source: "session_index_new_key",
+                    new_key: key,
+                    new_session_id: sessionId
+                  });
+                  writeHookTrace("session_index.signal_queued", {
+                    signal: "reset",
+                    source: "new-key",
+                    session_id: selectedPrior.sessionId,
+                    session_key: selectedPrior.key,
+                    new_key: key
+                  });
+                }
+              } else {
+                writeHookTrace("session_index.new_key_skip", {
+                  reason: "no_recent_prior_session",
+                  new_session_id: sessionId,
                   new_key: key
                 });
               }
@@ -3827,7 +3884,8 @@ const __test = {
   isInternalSessionContext,
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,
-  looksLikeQuaidEventLogTranscript
+  looksLikeQuaidEventLogTranscript,
+  selectNewKeyFanoutTarget
 };
 export {
   __test,

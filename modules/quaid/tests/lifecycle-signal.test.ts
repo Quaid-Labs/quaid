@@ -366,4 +366,38 @@ describe("lifecycle signal detection", () => {
       },
     });
   });
+
+  it("new-key fallback selects only the most likely recent prior session", () => {
+    const now = Date.now();
+    const selected = __test.selectNewKeyFanoutTarget(
+      [
+        { sessionId: "old-a", key: "agent:main:webchat:1", agentLabel: "main", lastActivityMs: now - 60_000 },
+        { sessionId: "old-b", key: "agent:main:webchat:2", agentLabel: "main", lastActivityMs: now - 5_000 },
+        { sessionId: "other-agent", key: "agent:worker:webchat:1", agentLabel: "worker", lastActivityMs: now - 1_000 },
+      ],
+      {
+        newSessionId: "new-sess",
+        agentLabel: "main",
+        nowMs: now,
+      },
+    );
+    expect(selected?.sessionId).toBe("old-b");
+  });
+
+  it("new-key fallback prefers the transcript hint over other recent sessions", () => {
+    const now = Date.now();
+    const selected = __test.selectNewKeyFanoutTarget(
+      [
+        { sessionId: "old-a", key: "agent:main:webchat:1", agentLabel: "main", lastActivityMs: now - 60_000 },
+        { sessionId: "old-b", key: "agent:main:webchat:2", agentLabel: "main", lastActivityMs: now - 5_000 },
+      ],
+      {
+        newSessionId: "new-sess",
+        agentLabel: "main",
+        nowMs: now,
+        lastTranscriptSessionId: "old-a",
+      },
+    );
+    expect(selected?.sessionId).toBe("old-a");
+  });
 });

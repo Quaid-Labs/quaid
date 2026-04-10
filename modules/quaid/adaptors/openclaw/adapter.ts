@@ -326,6 +326,13 @@ type ActiveInteractiveSession = {
   lastTo: string;
 };
 
+type NewKeyFanoutCandidate = {
+  sessionId: string;
+  key: string;
+  agentLabel: string;
+  lastActivityMs: number;
+};
+
 function isSameSessionTranscriptRollover(
   priorCount: number,
   currentCount: number,
@@ -846,6 +853,47 @@ function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteract
   } catch {
     return null;
   }
+}
+
+function selectNewKeyFanoutTarget(
+  candidates: NewKeyFanoutCandidate[],
+  opts: {
+    newSessionId: string;
+    agentLabel: string;
+    nowMs?: number;
+    lastTranscriptSessionId?: string;
+    currentInteractiveSessionId?: string;
+  },
+): NewKeyFanoutCandidate | null {
+  const nowMs = Number(opts.nowMs || Date.now());
+  const recentCutoffMs = nowMs - (5 * 60_000);
+  const sameLane = candidates.filter((candidate) => {
+    if (!candidate || !candidate.sessionId || candidate.sessionId === opts.newSessionId) {
+      return false;
+    }
+    if (String(candidate.agentLabel || "").trim() !== String(opts.agentLabel || "").trim()) {
+      return false;
+    }
+    return Number(candidate.lastActivityMs || 0) >= recentCutoffMs;
+  });
+  if (!sameLane.length) {
+    return null;
+  }
+  const hinted = sameLane.find((candidate) => candidate.sessionId === opts.lastTranscriptSessionId);
+  if (hinted) {
+    return hinted;
+  }
+  const interactive = sameLane.find((candidate) => candidate.sessionId === opts.currentInteractiveSessionId);
+  if (interactive) {
+    return interactive;
+  }
+  return sameLane
+    .slice()
+    .sort((a, b) => {
+      const activityDelta = Number(b.lastActivityMs || 0) - Number(a.lastActivityMs || 0);
+      if (activityDelta !== 0) return activityDelta;
+      return String(a.sessionId).localeCompare(String(b.sessionId));
+    })[0] || null;
 }
 
 function latestResetBackup(sessionId: string): string | null {
@@ -3137,9 +3185,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               sessionIndexMessageCounts.delete(prevSessionId);
             } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
               // Brand new key in sessions.json — OC TUI /new adds a NEW key rather
-              // than updating an existing key's session ID. Signal any sessions that
-              // were recently active so their content is extracted before the user
-              // moves on. Gated on initialSnapshotDone to avoid treating all
+              // than updating an existing key's session ID. Treat this as a
+              // single-session rollover fallback, not a broadcast. Gated on
+              // initialSnapshotDone to avoid treating all
               // existing keys as new on the first tick (when sessionKeyLastSeen is
               // empty, every key has prevSessionId=undefined).
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId, watcher_start_ms: watcherStartMs });
@@ -3149,6 +3197,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               // lifetime. Without this guard the mtime check alone can't exclude them
               // (their transcripts were modified during this gateway lifetime).
               const currentSids = new Set(recognizedEntries.map((e) => e.sessionId));
+              const fanoutCandidates: NewKeyFanoutCandidate[] = [];
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
                 if (!currentSids.has(priorSid)) {
                   writeHookTrace("session_index.new_key_skip", { reason: "not_in_current_sessions", prior_sid: priorSid, prior_key: priorKey });
@@ -3185,23 +3234,49 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "no_new_content", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize, last_fanout_size: lastFanoutSize });
                   continue;
                 }
-                if (!facade.shouldProcessLifecycleSignal(priorSid, {
+                fanoutCandidates.push({
+                  sessionId: priorSid,
+                  key: priorKey,
+                  agentLabel: String(sessionIdToAgentId.get(priorSid) || "main").trim() || "main",
+                  lastActivityMs: Number(sessionLastActivityMs.get(priorSid) || 0),
+                });
+              }
+              const selectedPrior = selectNewKeyFanoutTarget(fanoutCandidates, {
+                newSessionId: sessionId,
+                agentLabel,
+                nowMs: Date.now(),
+                lastTranscriptSessionId: String(lastTranscriptSessionHint?.sessionId || ""),
+                currentInteractiveSessionId: String(currentInteractiveSession?.sessionId || ""),
+              });
+              if (selectedPrior) {
+                if (facade.shouldProcessLifecycleSignal(selectedPrior.sessionId, {
                   label: "ResetSignal",
                   source: "session_index",
                   signature: `session_index:new_key:${key}`,
-                })) continue;
-                facade.markLifecycleSignalFromHook(priorSid, "ResetSignal");
-                sessionLastFanoutSizeMap.set(priorSid, priorSize);
-                writeDaemonSignal(priorSid, "reset", {
-                  source: "session_index_new_key",
-                  new_key: key,
+                })) {
+                  let selectedSize = -1;
+                  try {
+                    selectedSize = fs.statSync(getOpenClawSessionFile(selectedPrior.sessionId)).size;
+                  } catch {}
+                  facade.markLifecycleSignalFromHook(selectedPrior.sessionId, "ResetSignal");
+                  sessionLastFanoutSizeMap.set(selectedPrior.sessionId, selectedSize);
+                  writeDaemonSignal(selectedPrior.sessionId, "reset", {
+                    source: "session_index_new_key",
+                    new_key: key,
+                    new_session_id: sessionId,
+                  });
+                  writeHookTrace("session_index.signal_queued", {
+                    signal: "reset",
+                    source: "new-key",
+                    session_id: selectedPrior.sessionId,
+                    session_key: selectedPrior.key,
+                    new_key: key,
+                  });
+                }
+              } else {
+                writeHookTrace("session_index.new_key_skip", {
+                  reason: "no_recent_prior_session",
                   new_session_id: sessionId,
-                });
-                writeHookTrace("session_index.signal_queued", {
-                  signal: "reset",
-                  source: "new-key",
-                  session_id: priorSid,
-                  session_key: priorKey,
                   new_key: key,
                 });
               }
@@ -4773,4 +4848,5 @@ export const __test = {
   isInternalTranscriptMessages,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
+  selectNewKeyFanoutTarget,
 };
