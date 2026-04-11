@@ -668,8 +668,14 @@ function isAutoInjectEnabled(config: Record<string, any> = getMemoryConfig()): b
 
 type LastUserMessageQuery = { text: string; seenAtMs: number } | null;
 
+const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
+
+function stripOpenClawInternalContext(raw: string): string {
+  return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
+}
+
 function scrubAutoInjectQuery(raw: string): string {
-  return String(raw || "")
+  return stripOpenClawInternalContext(raw)
     // Strip our own prior injections that OC persists back into future turns
     .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
     .replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "")
@@ -2554,7 +2560,7 @@ function spawnNotifyScript(scriptBody: string): boolean {
 // ============================================================================
 
 function preprocessTranscriptText(text: string): string {
-  return String(text || "")
+  return stripOpenClawInternalContext(text)
     .replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "")
     .replace(/\n?\[message_id:\s*\d+\]/gi, "")
     .trim();
@@ -2963,7 +2969,7 @@ notify_user(${JSON.stringify(message)})
       const mergePrependContext = (base?: string): string | undefined => {
         const parts = [
           ...prependContextParts,
-          String(base || "").trim(),
+          stripOpenClawInternalContext(base || ""),
         ].filter(Boolean);
         return parts.length ? parts.join("\n\n") : undefined;
       };

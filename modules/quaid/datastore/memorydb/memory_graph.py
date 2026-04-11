@@ -5820,6 +5820,13 @@ def _print_recall_results(results: List[Dict[str, Any]]) -> None:
         print("No memories found")
         return
     for r in results:
+        source = str(r.get("source") or "").strip()
+        chunk_index = r.get("chunk_index")
+        fallback_id = f"{source}:{chunk_index}" if source and chunk_index is not None else ""
+        result_id = str(r.get("id") or fallback_id)
+        text = str(r.get("text") or r.get("content") or "")
+        category = str(r.get("category") or ("docs" if source else "memory"))
+        similarity = float(r.get("similarity", r.get("score", 0.0)) or 0.0)
         flags = []
         if r.get('verified'):
             flags.append('V')
@@ -5830,7 +5837,7 @@ def _print_recall_results(results: List[Dict[str, Any]]) -> None:
         created = r.get('created_at', '')
         privacy = r.get('privacy', 'shared')
         owner = r.get('owner_id', '')
-        print(f"[{r['similarity']:.2f}] [{r['category']}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner}")
+        print(f"[{similarity:.2f}] [{category}]{flag_str}[C:{conf:.1f}] {text} |ID:{result_id}|T:{created}|P:{privacy}|O:{owner}")
         if r.get('_debug'):
             d = r['_debug']
             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")

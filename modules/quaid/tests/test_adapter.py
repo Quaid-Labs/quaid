@@ -464,6 +464,39 @@ class TestOpenClawAdapter:
         assert "[Subagent Context]" not in transcript
         assert "You are running as a subagent" not in transcript
 
+    def test_parse_session_jsonl_strips_openclaw_internal_context_block(self, tmp_path):
+        session_file = tmp_path / "oc-internal-context.jsonl"
+        session_file.write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n"
+                                    "session_key=agent:main:tui-123\n"
+                                    "source=subagent\n"
+                                    "action: do not show this raw template\n"
+                                    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n\n"
+                                    "My kiln controller is named Oriole."
+                                ),
+                            }
+                        ],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "User: My kiln controller is named Oriole." in transcript
+        assert "BEGIN_OPENCLAW_INTERNAL_CONTEXT" not in transcript
+        assert "session_key=agent:main" not in transcript
+        assert "source=subagent" not in transcript
+
     def test_get_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-key")
         adapter = OpenClawAdapter()

@@ -493,8 +493,12 @@ function isAutoInjectEnabled(config = getMemoryConfig()) {
   const configured = config?.retrieval?.autoInject;
   return configured !== false;
 }
+const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
+function stripOpenClawInternalContext(raw) {
+  return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
+}
 function scrubAutoInjectQuery(raw) {
-  return String(raw || "").replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
+  return stripOpenClawInternalContext(raw).replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
 }
 function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now()) {
   const rawPrompt = String(event?.prompt || "").trim();
@@ -2006,7 +2010,7 @@ sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})
   });
 }
 function preprocessTranscriptText(text) {
-  return String(text || "").replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "").replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
+  return stripOpenClawInternalContext(text).replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "").replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
 }
 function shouldSkipTranscriptText(roleOrText, maybeText) {
   const text = typeof maybeText === "string" ? maybeText : String(roleOrText || "");
@@ -2335,7 +2339,7 @@ ${projectPlacementContext}` : projectPlacementContext;
       const mergePrependContext = (base) => {
         const parts = [
           ...prependContextParts,
-          String(base || "").trim()
+          stripOpenClawInternalContext(base || "")
         ].filter(Boolean);
         return parts.length ? parts.join("\n\n") : void 0;
       };

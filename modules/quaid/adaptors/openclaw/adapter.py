@@ -433,11 +433,16 @@ class OpenClawAdapter(QuaidAdapter):
         r"<quaid_notification>.*?</quaid_notification>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _OC_INTERNAL_CONTEXT_RE = re.compile(
+        r"<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
 
     def sanitize_transcript_text(self, text: str) -> str:
         value = super().sanitize_transcript_text(text)
         if not value:
             return ""
+        value = self._OC_INTERNAL_CONTEXT_RE.sub("", value)
         value = self._OC_UNTRUSTED_METADATA_RE.sub("", value)
         value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
         value = self._QUAID_NOTIFICATION_RE.sub("", value)

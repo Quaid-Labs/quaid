@@ -49,6 +49,26 @@ def test_print_recall_results_emits_empty_message(capsys):
     assert captured.out.strip() == "No memories found"
 
 
+def test_print_recall_results_handles_docs_rows_without_id(capsys):
+    from datastore.memorydb.memory_graph import _print_recall_results
+
+    _print_recall_results([
+        {
+            "source": "/tmp/m10-test-doc.md",
+            "chunk_index": 3,
+            "similarity": 0.951,
+            "content": "The carillon procedure lives in the test doc.",
+            "section_header": "Runbook",
+            "project": "quaid",
+        }
+    ])
+
+    captured = capsys.readouterr()
+    assert "[0.95] [docs]" in captured.out
+    assert "The carillon procedure lives in the test doc." in captured.out
+    assert "|ID:/tmp/m10-test-doc.md:3|" in captured.out
+
+
 # ---------------------------------------------------------------------------
 # store() input validation
 # ---------------------------------------------------------------------------
