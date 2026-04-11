@@ -1330,7 +1330,7 @@ class TestRecallTelemetry:
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector", "graph"]
         assert "only classify stores/project" in captured["prompt"]
-        assert captured["timeout"] == 2.0
+        assert captured["timeout"] == 60.0
 
     def test_recall_full_planner_keeps_deliberate_timeout_window(self):
         import datastore.memorydb.memory_graph as mg

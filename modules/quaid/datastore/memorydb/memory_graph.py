@@ -100,7 +100,6 @@ _INJECTION_PATTERNS = [
 _LOW_INFO_ENTITY_CATEGORIES = {"person", "place", "entity", "concept", "event", "organization", "pet"}
 _LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?")
 _RECALL_PLANNER_TIMEOUT_CAP_S = 60.0
-_RECALL_STORE_PLAN_TIMEOUT_CAP_S = 2.0
 
 # Optional imports for LLM-verified dedup (graceful degradation if unavailable)
 try:
@@ -6689,9 +6688,6 @@ def _plan_fanout_queries(
 
     try:
         from lib.llm_clients import call_fast_reasoning
-        if store_plan_only:
-            timeout_s = min(timeout_s, _RECALL_STORE_PLAN_TIMEOUT_CAP_S)
-            meta["timeout_ms"] = round(timeout_s * 1000)
         meta["used_llm"] = True
         result, _ = call_fast_reasoning(
             prompt=prompt,
@@ -6759,9 +6755,8 @@ def _recall_planner_timeout_s(
 ) -> float:
     """Bound recall planner latency independently of full recall work.
 
-    Deliberate shell recall should remain thorough, so its normal fanout planner
-    keeps the larger window. The store-classification-only path is separately
-    capped in _plan_fanout_queries because it is just a routing hint.
+    Deliberate shell recall should remain thorough, so its planner keeps the
+    larger window. Short caps are only for explicit fast recall lanes.
     """
     default_cap = 2.0 if fast_mode else _RECALL_PLANNER_TIMEOUT_CAP_S
     if timeout_ms is None:
