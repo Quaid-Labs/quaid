@@ -99,6 +99,8 @@ _INJECTION_PATTERNS = [
 
 _LOW_INFO_ENTITY_CATEGORIES = {"person", "place", "entity", "concept", "event", "organization", "pet"}
 _LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?")
+_RECALL_PLANNER_TIMEOUT_CAP_S = 5.0
+_RECALL_STORE_PLAN_TIMEOUT_CAP_S = 2.0
 
 # Optional imports for LLM-verified dedup (graceful degradation if unavailable)
 try:
@@ -6499,6 +6501,10 @@ def _plan_fanout_queries(
     """
     import time as _time
     started = _time.monotonic()
+    try:
+        timeout_s = max(0.1, float(timeout_s))
+    except Exception:
+        timeout_s = _RECALL_PLANNER_TIMEOUT_CAP_S
     meta = {
         "query": query,
         "timeout_ms": round(timeout_s * 1000),
@@ -6683,6 +6689,9 @@ def _plan_fanout_queries(
 
     try:
         from lib.llm_clients import call_fast_reasoning
+        if store_plan_only:
+            timeout_s = min(timeout_s, _RECALL_STORE_PLAN_TIMEOUT_CAP_S)
+            meta["timeout_ms"] = round(timeout_s * 1000)
         meta["used_llm"] = True
         result, _ = call_fast_reasoning(
             prompt=prompt,
@@ -6741,6 +6750,27 @@ def _plan_fanout_queries(
             str(exc) or exc.__class__.__name__,
             exc=exc,
         )
+
+
+def _recall_planner_timeout_s(
+    timeout_ms: Optional[int],
+    *,
+    fast_mode: bool = False,
+) -> float:
+    """Bound recall planner latency independently of full recall work.
+
+    The planner is a routing/query-shaping helper, not the retrieval operation
+    itself. Keep it short so deliberate CLI recalls cannot appear to hang while
+    still allowing the downstream recall path to do thorough store work.
+    """
+    default_cap = 2.0 if fast_mode else _RECALL_PLANNER_TIMEOUT_CAP_S
+    if timeout_ms is None:
+        return default_cap
+    try:
+        budget_s = max(0.1, float(timeout_ms) / 1000.0)
+    except Exception:
+        return default_cap
+    return max(0.1, min(default_cap, budget_s * 0.5))
 
 
 def _normalize_planned_stores(value: Any) -> List[str]:
@@ -7017,9 +7047,7 @@ def recall_fast(
         return ([], meta) if return_meta else []
 
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
-    planner_timeout_s = 2.0
-    if timeout_ms is not None:
-        planner_timeout_s = min(2.0, max(1.0, timeout_ms / 1000.0 * 0.5))
+    planner_timeout_s = _recall_planner_timeout_s(timeout_ms, fast_mode=True)
     planner_started = _time.monotonic()
     try:
         planned = _plan_fanout_queries(
@@ -7629,11 +7657,9 @@ def recall(
         fanout_meta.setdefault("planned_stores", ["vector"])
         fanout_meta.setdefault("planned_project", None)
     elif use_routing:
-        planner_timeout_s = (
-            min(60.0, max(1.5, (deadline - _time.monotonic()) * 0.5))
-            if deadline is not None
-            else 60.0
-        )
+        planner_timeout_s = _recall_planner_timeout_s(overall_timeout_ms, fast_mode=False)
+        if deadline is not None:
+            planner_timeout_s = min(planner_timeout_s, max(0.1, (deadline - _time.monotonic()) * 0.5))
         planned = _plan_fanout_queries(
             query,
             max_queries=5,
@@ -7645,15 +7671,15 @@ def recall(
             fanout_queries, fanout_meta = planned
         else:
             fanout_queries = planned if isinstance(planned, list) else []
-        fanout_meta = {
-            "query": query,
-            "timeout_ms": 0,
-            "used_llm": False,
-            "bailout_reason": None,
-            "queries_count": len(fanout_queries),
-            "elapsed_ms": 0,
-            "planner_profile": planner_profile,
-        }
+            fanout_meta = {
+                "query": query,
+                "timeout_ms": 0,
+                "used_llm": False,
+                "bailout_reason": None,
+                "queries_count": len(fanout_queries),
+                "elapsed_ms": 0,
+                "planner_profile": planner_profile,
+            }
     else:
         fanout_queries = [query]
         fanout_meta = {
@@ -10624,6 +10650,7 @@ if __name__ == "__main__":
             archive         = cfg.get("archive", False)
             candidate_pool  = cfg.get("candidate_pool")
             planner_profile = cfg.get("planner_profile", "full")
+            timeout_ms      = cfg.get("timeout_ms")
             planned_queries = None
             planned_meta = None
 
@@ -10631,7 +10658,7 @@ if __name__ == "__main__":
                 planned = _plan_fanout_queries(
                     query,
                     max_queries=5,
-                    timeout_s=60.0,
+                    timeout_s=_recall_planner_timeout_s(timeout_ms, fast_mode=bool(use_fast)),
                     return_meta=True,
                     planner_profile="fast" if use_fast else planner_profile,
                 )
@@ -10720,6 +10747,7 @@ if __name__ == "__main__":
                     domain=domain_filter,
                     domain_boost=domain_boost,
                     project=project,
+                    timeout_ms=timeout_ms,
                     candidate_pool=candidate_pool,
                 )
                 if use_fast or len(store_names) > 1 or "graph" in store_names:
@@ -10758,6 +10786,7 @@ if __name__ == "__main__":
                         domain=domain_filter,
                         domain_boost=domain_boost,
                         project=project,
+                        timeout_ms=timeout_ms,
                     )
                     if use_fast:
                         recall_kwargs['use_multi_pass'] = False

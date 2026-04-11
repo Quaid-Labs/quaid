@@ -1310,6 +1310,7 @@ class TestRecallTelemetry:
 
         def _fake_call_fast_reasoning(*, prompt, **kwargs):
             captured["prompt"] = prompt
+            captured["timeout"] = kwargs.get("timeout")
             return ('{"stores":["graph"],"queries":["Maya relationship graph"]}', {})
 
         with patch.object(
@@ -1319,6 +1320,7 @@ class TestRecallTelemetry:
         ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
             queries, meta = mg._plan_fanout_queries(
                 "Who is Linda in relation to Maya?",
+                timeout_s=60.0,
                 return_meta=True,
                 planner_profile="full",
             )
@@ -1328,6 +1330,41 @@ class TestRecallTelemetry:
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector", "graph"]
         assert "only classify stores/project" in captured["prompt"]
+        assert captured["timeout"] == 2.0
+
+    def test_recall_full_planner_uses_bounded_default_timeout(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_plan(query, *, max_queries, timeout_s, return_meta, planner_profile):
+            captured["timeout_s"] = timeout_s
+            return [query], {
+                "query": query,
+                "timeout_ms": round(timeout_s * 1000),
+                "used_llm": False,
+                "bailout_reason": "planner_disabled",
+                "queries_count": 1,
+                "elapsed_ms": 0,
+                "planner_profile": planner_profile,
+                "planned_stores": ["vector"],
+                "planned_project": None,
+            }
+
+        with patch.object(mg, "_plan_fanout_queries", side_effect=_fake_plan), \
+             patch.object(mg, "run_callables", return_value=[]), \
+             patch.object(mg, "_evaluate_quality_gate_readiness", return_value={"ready": True, "top_similarity": 0.0, "signals": []}):
+            mg.recall(
+                "exercise habits recent plans",
+                owner_id="quaid",
+                use_routing=True,
+                use_multi_pass=False,
+                use_reranker=False,
+                max_turns=1,
+                return_meta=True,
+            )
+
+        assert captured["timeout_s"] == 5.0
 
     def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_defaults(self):
         import datastore.memorydb.memory_graph as mg
