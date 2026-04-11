@@ -33,4 +33,14 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedAdapterType)");
     expect(setupText).toContain("hydratePlatformInstanceConfigs");
   });
+
+  it("interactive installer can chain into another installable platform", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("async function promptNextPlatformInstall(installedPlatform)");
+    expect(setupText).toContain("_remainingInstallableAdapterOptions(installed)");
+    expect(setupText).toContain("Other supported platforms were detected. Install another?");
+    expect(setupText).toContain("!ALLOW_EXISTING_INSTALL && !_chainedPlatformInstall");
+  });
 });

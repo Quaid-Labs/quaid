@@ -532,6 +532,7 @@ function runtimePendingInstallMigrationPath() {
 
 let _adapterManifests = [];
 let _existingInstallDetected = false;
+let _chainedPlatformInstall = false;
 
 function _refreshAdapterManifests() {
   try {
@@ -555,6 +556,55 @@ function _adapterOptionsForSelect() {
     { value: "openclaw", label: "OpenClaw", hint: "gateway-integrated runtime" },
     { value: "codex", label: "Codex", hint: "hooks + app-server sidecar runtime" },
   ];
+}
+
+function _remainingInstallableAdapterOptions(excludeAdapterId = "") {
+  _refreshAdapterManifests();
+  const excluded = String(excludeAdapterId || "").trim().toLowerCase();
+  return _adapterOptionsForSelect()
+    .map((opt) => {
+      const installState = _readAdapterInstallState(opt.value);
+      return { ...opt, installState };
+    })
+    .filter((opt) => String(opt.value || "").trim().toLowerCase() !== excluded)
+    .filter((opt) => opt.installState.status === "can_install");
+}
+
+async function promptNextPlatformInstall(installedPlatform) {
+  if (AGENT_MODE || DRY_RUN || SURVEY_ONLY || _testAnswers || FORCED_ADAPTER_TYPE) {
+    return false;
+  }
+  const installed = String(installedPlatform || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  const remaining = _remainingInstallableAdapterOptions(installed);
+  if (remaining.length === 0) return false;
+
+  const answer = handleCancel(await select({
+    message: `You've installed Quaid on ${_installerPlatformLabel()}. Other supported platforms were detected. Install another?`,
+    initialValue: "exit",
+    options: [
+      ...remaining.map((opt) => ({
+        value: opt.value,
+        label: opt.label,
+        hint: opt.hint,
+      })),
+      { value: "exit", label: "Exit", hint: "Finish installation" },
+    ],
+  }));
+  if (answer === "exit") return false;
+
+  _platformOverride = answer;
+  _instanceIdOverride = "";
+  delete process.env.QUAID_INSTANCE;
+  syncInstallerInstanceEnv(answer);
+  _chainedPlatformInstall = true;
+
+  const warnings = _adapterCompatibilityWarnings(answer);
+  if (warnings.length > 0) {
+    for (const msg of warnings) {
+      log.warn(`  ${msg}`);
+    }
+  }
+  return true;
 }
 
 function _adapterCompatibilityWarnings(adapterId) {
@@ -2507,7 +2557,7 @@ async function step1_preflight() {
   const installState = detectExistingInstallState();
   _existingInstallDetected = !!installState.hasInstall;
   if (_existingInstallDetected) {
-    if (!ALLOW_EXISTING_INSTALL) {
+    if (!ALLOW_EXISTING_INSTALL && !_chainedPlatformInstall) {
       bail(_existingInstallGuardMessage(installState));
     }
     const details = installState.instances.length > 0
@@ -2516,6 +2566,8 @@ async function step1_preflight() {
     log.info(C.dim(`Existing Quaid install detected${details}. First-install-only setup will be skipped.`));
     if (ADD_INSTANCE_MODE) {
       log.info(C.dim("Add-instance mode enabled: installer will provision the new silo without rewriting the OpenClaw fallback instance."));
+    } else if (_chainedPlatformInstall) {
+      log.info(C.dim("Additional-platform install enabled: reusing the existing Quaid home while adding another host integration."));
     } else if (FORCE_INSTALL) {
       log.warn("Force mode enabled: installer is allowed to re-run against an existing host install.");
     }
@@ -5676,95 +5728,99 @@ async function main() {
   // --- End installer lock ---
 
   try {
-    syncInstallerInstanceEnv();
-    if (AGENT_MODE) {
-      log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
-      log.info(`Quaid home: ${WORKSPACE}`);
-    }
-    notifyInstallCheckpoint(0, TOTAL_INSTALL_STEPS, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
-    const pluginSrc = await step1_preflight();
-    notifyInstallCheckpoint(1, TOTAL_INSTALL_STEPS, "preflight", "Dependencies checked and plugin source resolved.", "All systems nominal.");
-    const owner = await step2_owner();
-    notifyInstallCheckpoint(2, TOTAL_INSTALL_STEPS, "identity", `Owner tagged as ${owner.display}.`, "Memory now has a name.");
-    const models = await step3_models();
-    notifyInstallCheckpoint(3, TOTAL_INSTALL_STEPS, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
-    const embeddings = await step4_embeddings();
-    notifyInstallCheckpoint(4, TOTAL_INSTALL_STEPS, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
-    const systems = { memory: true, journal: true, projects: true, workspace: true };
-    let schedule = null;
-    if (!_existingInstallDetected) {
-      schedule = await step6_schedule(embeddings, false, models.janitorAskFirst);
-      notifyInstallCheckpoint(
-        5, TOTAL_INSTALL_STEPS, "janitor",
-        "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
-        "Night shift assigned. Warmup can take a minute or two."
-      );
-    } else {
-      notifyInstallCheckpoint(
-        5, TOTAL_INSTALL_STEPS, "janitor",
-        "Existing install detected — skipping first-install janitor scheduling step.",
-        "Reusing existing janitor policy/schedule."
-      );
-    }
-    notifyInstallWarmupNotice();
-    if (_isPlatform("openclaw")) {
-      log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
-    }
-
-    // --- Dry-run exit point ---
-    // Steps 1-6 (prompts + detection) have run. No writes have occurred.
-    // Emit the install plan and exit instead of proceeding to step7.
-    if (DRY_RUN) {
-      const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
-      if (plan.parityWarnings.length > 0) {
-        log.warn("Parity warnings detected:");
-        plan.parityWarnings.forEach(w => log.warn("  ! " + w));
+    let continueInstalling = true;
+    while (continueInstalling) {
+      syncInstallerInstanceEnv();
+      if (AGENT_MODE) {
+        log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
+        log.info(`Quaid home: ${WORKSPACE}`);
       }
-      if (SURVEY_ONLY) {
-        console.log(formatPreInstallSurvey(plan));
+      notifyInstallCheckpoint(0, TOTAL_INSTALL_STEPS, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
+      const pluginSrc = await step1_preflight();
+      notifyInstallCheckpoint(1, TOTAL_INSTALL_STEPS, "preflight", "Dependencies checked and plugin source resolved.", "All systems nominal.");
+      const owner = await step2_owner();
+      notifyInstallCheckpoint(2, TOTAL_INSTALL_STEPS, "identity", `Owner tagged as ${owner.display}.`, "Memory now has a name.");
+      const models = await step3_models();
+      notifyInstallCheckpoint(3, TOTAL_INSTALL_STEPS, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
+      const embeddings = await step4_embeddings();
+      notifyInstallCheckpoint(4, TOTAL_INSTALL_STEPS, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
+      const systems = { memory: true, journal: true, projects: true, workspace: true };
+      let schedule = null;
+      if (!_existingInstallDetected) {
+        schedule = await step6_schedule(embeddings, false, models.janitorAskFirst);
+        notifyInstallCheckpoint(
+          5, TOTAL_INSTALL_STEPS, "janitor",
+          "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
+          "Night shift assigned. Warmup can take a minute or two."
+        );
+      } else {
+        notifyInstallCheckpoint(
+          5, TOTAL_INSTALL_STEPS, "janitor",
+          "Existing install detected — skipping first-install janitor scheduling step.",
+          "Reusing existing janitor policy/schedule."
+        );
+      }
+      notifyInstallWarmupNotice();
+      if (_isPlatform("openclaw")) {
+        log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
+      }
+
+      // --- Dry-run exit point ---
+      // Steps 1-6 (prompts + detection) have run. No writes have occurred.
+      // Emit the install plan and exit instead of proceeding to step7.
+      if (DRY_RUN) {
+        const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
+        if (plan.parityWarnings.length > 0) {
+          log.warn("Parity warnings detected:");
+          plan.parityWarnings.forEach(w => log.warn("  ! " + w));
+        }
+        if (SURVEY_ONLY) {
+          console.log(formatPreInstallSurvey(plan));
+          process.exit(0);
+        }
+        note(JSON.stringify(plan, null, 2), "Install Plan (dry run — no changes made)");
+        outro(C.green("Dry run complete.") + C.dim(" Re-run without --dry-run to install."));
         process.exit(0);
       }
-      note(JSON.stringify(plan, null, 2), "Install Plan (dry run — no changes made)");
-      outro(C.green("Dry run complete.") + C.dim(" Re-run without --dry-run to install."));
-      process.exit(0);
-    }
 
-    await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
-    notifyInstallCheckpoint(6, TOTAL_INSTALL_STEPS, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
-    await step8_validate(owner, models, embeddings, systems);
-    notifyInstallCheckpoint(7, TOTAL_INSTALL_STEPS, "validation", "Smoke checks passed.", "No richters spotted.");
+      await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
+      notifyInstallCheckpoint(6, TOTAL_INSTALL_STEPS, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
+      await step8_validate(owner, models, embeddings, systems);
+      notifyInstallCheckpoint(7, TOTAL_INSTALL_STEPS, "validation", "Smoke checks passed.", "No richters spotted.");
 
-    // Write the install plan so it can be compared against a dry-run plan.
-    // If they diverge (e.g. agent mode enabled an option interactive wouldn't
-    // have offered), that is a parity bug to investigate.
-    try {
-      const instanceId = resolvedInstallerInstanceId(resolvedInstallerPlatform());
-      const planPath = path.join(WORKSPACE, "instances", instanceId, "last-install-plan.json");
-      const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
-      fs.mkdirSync(path.dirname(planPath), { recursive: true });
-      fs.writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { encoding: "utf8", mode: 0o644 });
-      if (plan.parityWarnings.length > 0) {
-        log.warn("Install plan parity warnings (check last-install-plan.json):");
-        plan.parityWarnings.forEach(w => log.warn("  ! " + w));
+      // Write the install plan so it can be compared against a dry-run plan.
+      // If they diverge (e.g. agent mode enabled an option interactive wouldn't
+      // have offered), that is a parity bug to investigate.
+      try {
+        const instanceId = resolvedInstallerInstanceId(resolvedInstallerPlatform());
+        const planPath = path.join(WORKSPACE, "instances", instanceId, "last-install-plan.json");
+        const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
+        fs.mkdirSync(path.dirname(planPath), { recursive: true });
+        fs.writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { encoding: "utf8", mode: 0o644 });
+        if (plan.parityWarnings.length > 0) {
+          log.warn("Install plan parity warnings (check last-install-plan.json):");
+          plan.parityWarnings.forEach(w => log.warn("  ! " + w));
+        }
+      } catch (e) {
+        log.warn("Could not write last-install-plan.json: " + e.message);
       }
-    } catch (e) {
-      log.warn("Could not write last-install-plan.json: " + e.message);
-    }
 
-    notifyInstallCompletion(owner, models, embeddings, systems);
+      notifyInstallCompletion(owner, models, embeddings, systems);
 
-    // In test mode, write results for the test runner to verify
-    if (_testAnswers && process.env.QUAID_TEST_RESULTS) {
-      fs.writeFileSync(process.env.QUAID_TEST_RESULTS, JSON.stringify({
-        success: true,
-        owner,
-        models: { provider: models.provider, highModel: models.highModel, lowModel: models.lowModel },
-        embeddings,
-        systems,
-        schedule,
-        workspace: WORKSPACE,
-        answersUsed: _testIdx,
-      }, null, 2));
+      // In test mode, write results for the test runner to verify
+      if (_testAnswers && process.env.QUAID_TEST_RESULTS) {
+        fs.writeFileSync(process.env.QUAID_TEST_RESULTS, JSON.stringify({
+          success: true,
+          owner,
+          models: { provider: models.provider, highModel: models.highModel, lowModel: models.lowModel },
+          embeddings,
+          systems,
+          schedule,
+          workspace: WORKSPACE,
+          answersUsed: _testIdx,
+        }, null, 2));
+      }
+      continueInstalling = await promptNextPlatformInstall(resolvedInstallerPlatform());
     }
   } catch (err) {
     if (err.message === "Setup cancelled.") process.exit(0);
