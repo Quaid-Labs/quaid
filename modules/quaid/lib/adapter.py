@@ -1482,7 +1482,10 @@ def _auto_provision_from_env_if_needed() -> None:
         mgr = InstanceManager(_BootstrapAdapter())  # type: ignore[arg-type]
         prefix = mgr.adapter.agent_id_prefix()
         label = instance[len(prefix) + 1:] if instance.startswith(f"{prefix}-") else instance
-        mgr._init_silo(silo_root, instance)
+        # Do not touch project_registry while _adapter_lock is held.
+        # project_registry resolves its path via get_adapter(), which would
+        # re-enter this bootstrap path and self-deadlock on _adapter_lock.
+        mgr._init_silo(silo_root, instance, register_misc_project=False)
         import logging as _logging
         _logging.getLogger(__name__).info(
             "Auto-provisioned instance silo: %s (adapter=%s)", instance, adapter_type

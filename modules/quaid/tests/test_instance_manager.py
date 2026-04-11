@@ -136,6 +136,27 @@ class TestInstanceManagerBase:
             with pytest.raises(ValueError, match="already exists"):
                 mgr.create("existing")
 
+    def test_create_can_skip_misc_project_registration(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.adapter_id.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
+        mgr = InstanceManager(adapter)
+
+        with patch("lib.instance.instance_exists", return_value=False), \
+             patch("lib.instance.validate_instance_id"), \
+             patch("core.project_registry.get_project") as mock_get_project, \
+             patch("core.project_registry.create_project") as mock_create_project:
+            silo = mgr.create("proj", register_misc_project=False)
+
+        assert (silo / "config.json").is_file()
+        assert (silo / "data" / "memory.db").is_file()
+        mock_get_project.assert_not_called()
+        mock_create_project.assert_not_called()
+
 
 # ---- CC InstanceManager ----
 
@@ -285,3 +306,38 @@ class TestAdapterCLIRegistration:
         assert adapter.get_cli_commands() == {}
         assert adapter.get_cli_tools_snippet() == ""
         assert adapter.get_instance_manager() is None
+
+
+def test_adapter_bootstrap_silo_init_skips_misc_project_registration_under_adapter_lock(tmp_path, monkeypatch):
+    from lib import adapter as adapter_mod
+    from lib.instance_manager import InstanceManager
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-bootstrap")
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+
+    adapter_mod.reset_adapter()
+
+    seen = {"skip_misc": False}
+    original_init = InstanceManager._init_silo
+
+    def recording_init(self, silo_root, instance_id, *, register_misc_project=True):
+        seen["skip_misc"] = (register_misc_project is False)
+        return original_init(
+            self,
+            silo_root,
+            instance_id,
+            register_misc_project=register_misc_project,
+        )
+
+    monkeypatch.setattr(InstanceManager, "_init_silo", recording_init)
+
+    config_path = tmp_path / "instances" / "claude-code-bootstrap" / "config.json"
+    with patch("core.project_registry.get_project", side_effect=AssertionError("project registry should not run during adapter bootstrap")), \
+         patch("core.project_registry.create_project", side_effect=AssertionError("project registry should not run during adapter bootstrap")):
+        adapter_mod._auto_provision_from_env_if_needed()
+
+    assert seen["skip_misc"] is True
+    assert config_path.is_file()
+    assert (config_path.parent / "data" / "memory.db").is_file()

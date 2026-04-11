@@ -82,7 +82,13 @@ class InstanceManager:
 
     # ---- Create ----
 
-    def create(self, label: str, *, dry_run: bool = False) -> Path:
+    def create(
+        self,
+        label: str,
+        *,
+        dry_run: bool = False,
+        register_misc_project: bool = True,
+    ) -> Path:
         """Create a new instance silo for the given short label.
 
         Returns the silo root path. Raises if the silo already exists.
@@ -101,10 +107,20 @@ class InstanceManager:
             )
 
         if not dry_run:
-            self._init_silo(silo_root, instance_id)
+            self._init_silo(
+                silo_root,
+                instance_id,
+                register_misc_project=register_misc_project,
+            )
         return silo_root
 
-    def _init_silo(self, silo_root: Path, instance_id: str) -> None:
+    def _init_silo(
+        self,
+        silo_root: Path,
+        instance_id: str,
+        *,
+        register_misc_project: bool = True,
+    ) -> None:
         """Initialize hidden and visible instance directories."""
         visible_root = self.adapter.visible_home() / "instances" / instance_id
         silo_root.mkdir(parents=True, exist_ok=True)
@@ -157,14 +173,15 @@ class InstanceManager:
 
         # Misc project — per-instance scratch pad registered at silo creation so
         # agents can find it immediately without a manual project-create step.
-        try:
-            misc_name = f"misc--{instance_id}"
-            misc_desc = "Scratch pad for ephemeral and temporary files."
-            from core.project_registry import create_project as _cp, get_project as _gp
-            if not _gp(misc_name):
-                _cp(misc_name, description=misc_desc, initial_instance=instance_id)
-        except Exception as _e:
-            logger.warning("misc project registration skipped at silo init: %s", _e)
+        if register_misc_project:
+            try:
+                misc_name = f"misc--{instance_id}"
+                misc_desc = "Scratch pad for ephemeral and temporary files."
+                from core.project_registry import create_project as _cp, get_project as _gp
+                if not _gp(misc_name):
+                    _cp(misc_name, description=misc_desc, initial_instance=instance_id)
+            except Exception as _e:
+                logger.warning("misc project registration skipped at silo init: %s", _e)
 
     def _default_config(self) -> dict:
         """Return a complete default config skeleton.
