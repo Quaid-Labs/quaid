@@ -1225,6 +1225,56 @@ class TestSignalRoundTrip:
         signals = extraction_daemon.read_pending_signals()
         assert "timestamp" in signals[0]
 
+    def test_read_pending_signals_prioritizes_reset_before_compaction_backlog(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "MAX_SIGNALS_PER_POLL", 3)
+
+        sig_dir = extraction_daemon._signal_dir()
+        for idx in range(5):
+            (sig_dir / f"100{idx}_compaction.json").write_text(
+                json.dumps({
+                    "type": "compaction",
+                    "session_id": f"compaction-{idx}",
+                    "transcript_path": f"/tmp/compaction-{idx}.jsonl",
+                }),
+                encoding="utf-8",
+            )
+        (sig_dir / "2000_reset.json").write_text(
+            json.dumps({
+                "type": "reset",
+                "session_id": "reset-session",
+                "transcript_path": "/tmp/reset.jsonl",
+            }),
+            encoding="utf-8",
+        )
+
+        signals = extraction_daemon.read_pending_signals()
+
+        assert len(signals) == 3
+        assert signals[0]["type"] == "reset"
+        assert signals[0]["session_id"] == "reset-session"
+
+    def test_read_pending_signals_normalizes_signal_type_field(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        sig_dir = extraction_daemon._signal_dir()
+        (sig_dir / "1000_manual_reset.json").write_text(
+            json.dumps({
+                "signal_type": "reset",
+                "session_id": "manual-reset",
+                "transcript_path": "/tmp/manual-reset.jsonl",
+            }),
+            encoding="utf-8",
+        )
+
+        signals = extraction_daemon.read_pending_signals()
+
+        assert len(signals) == 1
+        assert signals[0]["type"] == "reset"
+        assert signals[0]["signal_type"] == "reset"
+
     def test_write_signal_coalesces_duplicate_pending_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

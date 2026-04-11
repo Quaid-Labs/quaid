@@ -57,6 +57,13 @@ _SIGNAL_PRIORITY = {
     "reset": 3,
     "compaction": 4,
 }
+_SIGNAL_POLL_PRIORITY = {
+    "reset": 0,
+    "session_end": 1,
+    "rolling": 2,
+    "compaction": 3,
+    "timeout": 4,
+}
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -427,8 +434,14 @@ def write_signal(
     return sig_path
 
 
+def _pending_signal_sort_key(signal_data: Dict[str, Any]) -> Tuple[int, str]:
+    signal_type = str(signal_data.get("type") or signal_data.get("signal_type") or "")
+    signal_path = str(signal_data.get("_signal_path") or "")
+    return (_SIGNAL_POLL_PRIORITY.get(signal_type, 99), signal_path)
+
+
 def read_pending_signals() -> List[Dict[str, Any]]:
-    """Read pending signal files, sorted by timestamp, capped at MAX_SIGNALS_PER_POLL."""
+    """Read pending signal files, prioritizing lifecycle flushes before noisy fallback work."""
     sig_dir = _signal_dir()
     if not sig_dir.is_dir():
         return []
@@ -439,6 +452,8 @@ def read_pending_signals() -> List[Dict[str, Any]]:
             continue
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
+            if "type" not in data and "signal_type" in data:
+                data["type"] = data.get("signal_type")
             data["_signal_path"] = str(f)
             signals.append(data)
         except (json.JSONDecodeError, OSError):
@@ -447,9 +462,8 @@ def read_pending_signals() -> List[Dict[str, Any]]:
                 f.unlink()
             except OSError:
                 pass
-        if len(signals) >= MAX_SIGNALS_PER_POLL:
-            break
-    return signals
+    signals.sort(key=_pending_signal_sort_key)
+    return signals[:MAX_SIGNALS_PER_POLL]
 
 
 def mark_signal_processed(signal_data: Dict[str, Any]) -> None:
