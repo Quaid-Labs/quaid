@@ -6884,12 +6884,7 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
         lowered,
     ))
-    matched_relations = _relation_matches_for_query(text)
-    kinship_support_relations, _kinship_depth = _kinship_support_relations_for_query(
-        text,
-        matched_relations,
-    )
-    graph_like = bool(matched_relations) or _has_generic_graph_signal(text) or bool(kinship_support_relations)
+    graph_like = bool(_relation_matches_for_query(text)) or _has_generic_graph_signal(text)
     mixed_memory_docs = docs_like and bool(_re.search(
         r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",
         lowered,
