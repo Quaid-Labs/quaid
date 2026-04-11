@@ -52,4 +52,14 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('bail("OpenClaw gateway must be running before installing Quaid.");');
     expect(setupText).not.toContain("OpenClaw status/probe unavailable in agent mode; continuing with install.");
   });
+
+  it("OpenClaw add-instance still writes gateway runtime env", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("const runtimeEnvChanged = _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);");
+    expect(setupText).toContain("responsesEndpointChanged || agentModelChanged || runtimeEnvChanged");
+    expect(setupText).toContain("parsed.env.OPENCLAW_WORKSPACE = WORKSPACE;");
+    expect(setupText).not.toContain("leaving fallback QUAID_INSTANCE unchanged in add-instance mode");
+  });
 });

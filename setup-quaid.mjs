@@ -248,8 +248,8 @@ Options:
   --agent             Non-interactive agent mode (accepts sane defaults)
   --claude-code       Install for Claude Code (hooks + OAuth provider)
   --add-instance      Allow install on a host that already has Quaid and
-                      provision a new silo without rewriting the OpenClaw
-                      fallback QUAID_INSTANCE.
+                      provision a new silo. For OpenClaw, also bind gateway
+                      env to the requested instance.
   --force             Allow a full reinstall on a host that already has Quaid.
   --dry-run           Run all prompts and checks but skip writes — outputs the
                       install plan and exits. Useful for validating interactive
@@ -1015,7 +1015,7 @@ function _existingInstallGuardMessage(installState) {
     : "Requested instance: (default installer instance)";
   const platform = String(resolvedInstallerPlatform() || "").trim().toLowerCase();
   const modeHint = platform === "openclaw"
-    ? "Re-run with --add-instance to create another silo without changing the OpenClaw fallback instance, or use --force to intentionally re-run the full install."
+    ? "Re-run with --add-instance to create another silo and bind the OpenClaw gateway env to it, or use --force to intentionally re-run the full install."
     : "Re-run with --add-instance to provision another silo, or use --force to intentionally re-run the full install."
   return [
     "Quaid is already installed on this host.",
@@ -1973,12 +1973,14 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
     const currentWorkspace = String(parsed.env.vars.OPENCLAW_WORKSPACE || "").trim();
     const currentInstanceTop = String(parsed.env.QUAID_INSTANCE || "").trim();
     const currentHomeTop = String(parsed.env.QUAID_HOME || "").trim();
+    const currentWorkspaceTop = String(parsed.env.OPENCLAW_WORKSPACE || "").trim();
     if (
       currentInstance === nextInstance &&
       currentHome === WORKSPACE &&
       currentWorkspace === WORKSPACE &&
       currentInstanceTop === nextInstance &&
-      currentHomeTop === WORKSPACE
+      currentHomeTop === WORKSPACE &&
+      currentWorkspaceTop === WORKSPACE
     ) {
       return false;
     }
@@ -1989,6 +1991,7 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
     // Also write to top-level env keys (read by OC gateway for plugin startup env)
     parsed.env.QUAID_INSTANCE = nextInstance;
     parsed.env.QUAID_HOME = WORKSPACE;
+    parsed.env.OPENCLAW_WORKSPACE = WORKSPACE;
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
     fs.renameSync(tmpPath, cfgPath);
     return true;
@@ -2732,14 +2735,10 @@ async function step1_preflight() {
     _sanitizeOpenClawQuaidPluginEntry();
     _removeOpenClawPluginsAllowQuaid();
     const _ocRuntimeInstance = resolvedInstallerInstanceId();
-    if (!(_existingInstallDetected && ADD_INSTANCE_MODE)) {
-      _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);
-    } else {
-      log.info(C.dim("Existing OpenClaw install detected — leaving fallback QUAID_INSTANCE unchanged in add-instance mode."));
-    }
+    const runtimeEnvChanged = _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);
     const agentModelChanged = _ensureOpenClawDefaultAgentModel();
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
-    if (responsesEndpointChanged || agentModelChanged) {
+    if (responsesEndpointChanged || agentModelChanged || runtimeEnvChanged) {
       s.message("Restarting OpenClaw gateway...");
       const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
