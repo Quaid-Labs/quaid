@@ -1154,6 +1154,43 @@ def _merge_parsed_payloads(
                 all_project_logs.setdefault(str(project_name), []).extend(cleaned)
 
 
+def _synthesize_user_snippets_from_facts(
+    facts: List[Dict[str, Any]],
+    *,
+    limit: int = 3,
+) -> List[str]:
+    """Fallback USER.md snippets when extraction returned user facts but no USER snippets.
+
+    This is intentionally narrow. It only lifts user-stated personal facts into
+    USER.md snippets when the model omitted snippet routing entirely.
+    """
+    snippets: List[str] = []
+    seen: set[str] = set()
+    for fact in facts or []:
+        if not isinstance(fact, dict):
+            continue
+        if str(fact.get("speaker", "") or "").strip().lower() != "user":
+            continue
+        domains = fact.get("domains") or []
+        if isinstance(domains, str):
+            domains = [domains]
+        norm_domains = {str(d or "").strip().lower() for d in domains if str(d or "").strip()}
+        category = str(fact.get("category", "") or "").strip().lower()
+        if "personal" not in norm_domains and category not in {"preference", "relationship", "decision"}:
+            continue
+        text = str(fact.get("text", "") or "").strip()
+        if not text:
+            continue
+        key = " ".join(text.lower().split())
+        if key in seen:
+            continue
+        seen.add(key)
+        snippets.append(text)
+        if len(snippets) >= max(1, int(limit or 0)):
+            break
+    return snippets
+
+
 def _extract_chunk_payloads(
     *,
     chunk: str,
@@ -1925,6 +1962,11 @@ def apply_extracted_payloads(
             valid = [s.strip() for s in items if isinstance(s, str) and s.strip()]
             if valid:
                 result["snippets"][filename] = valid
+
+    if not result["snippets"].get("USER.md"):
+        fallback_user_snippets = _synthesize_user_snippets_from_facts(facts)
+        if fallback_user_snippets:
+            result["snippets"]["USER.md"] = fallback_user_snippets
 
     if write_snippets and result["snippets"] and not dry_run:
         trigger = "Compaction" if "compaction" in label.lower() else (

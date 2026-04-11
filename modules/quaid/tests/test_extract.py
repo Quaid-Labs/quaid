@@ -1605,6 +1605,56 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
+    def test_synthesizes_user_snippets_when_personal_facts_exist_but_user_snippets_missing(
+        self, mock_store, mock_llm, visible_workspace_dir
+    ):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (
+            json.dumps(
+                {
+                    "chunk_assessment": "usable",
+                    "facts": [
+                        {
+                            "text": "Test user prefers methodical debugging",
+                            "category": "preference",
+                            "speaker": "user",
+                            "domains": ["personal"],
+                            "extraction_confidence": "high",
+                            "keywords": "debugging methodical preference",
+                            "privacy": "shared",
+                            "confidence_reason": "Explicitly stated",
+                            "edges": [],
+                        }
+                    ],
+                    "soul_snippets": {
+                        "SOUL.md": [],
+                        "USER.md": [],
+                        "ENVIRONMENT.md": [],
+                    },
+                    "journal_entries": {
+                        "SOUL.md": "",
+                        "USER.md": "",
+                        "ENVIRONMENT.md": "",
+                    },
+                }
+            ),
+            1.0,
+        )
+        mock_store.return_value = {"id": "n1", "status": "created"}
+
+        result = extract_from_transcript(
+            transcript="User: I prefer methodical debugging.\n\nAssistant: Noted.",
+            owner_id="test",
+            write_snippets=True,
+        )
+
+        assert result["snippets"]["USER.md"] == ["Test user prefers methodical debugging"]
+        snippet_file = visible_workspace_dir / "USER.snippets.md"
+        assert snippet_file.exists()
+
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
     def test_journal_written(self, mock_store, mock_llm, mock_opus_response, visible_workspace_dir):
         from ingest.extract import extract_from_transcript
 
