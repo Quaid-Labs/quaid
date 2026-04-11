@@ -79,6 +79,46 @@ def test_daemon_loop_skips_stale_doc_indexing_when_signals_are_pending(monkeypat
     assert indexed == []
 
 
+def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tmp_path):
+    cfg_path = tmp_path / "instances" / "pytest-runner" / "config.json"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text('{"capture":{"chunk_tokens":8000}}\n', encoding="utf-8")
+
+    reloads = []
+    monkeypatch.setattr(extraction_daemon, "_config_file_paths", lambda: [cfg_path])
+    monkeypatch.setattr(extraction_daemon, "_force_reload_config", lambda: reloads.append(True))
+    monkeypatch.setattr(extraction_daemon.logger, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_config_file_signature", None)
+
+    extraction_daemon._prime_config_reload_watcher()
+    assert extraction_daemon._reload_config_if_changed("test no change") is False
+
+    cfg_path.write_text('{"capture":{"chunk_tokens":500}}\n', encoding="utf-8")
+
+    assert extraction_daemon._reload_config_if_changed("test signal") is True
+    assert reloads == [True]
+    assert extraction_daemon._reload_config_if_changed("test stable") is False
+
+
+def test_process_signal_reloads_config_before_signal_handling(monkeypatch):
+    reloads = []
+    old_sig = (("/tmp/config.json", 1, 1),)
+    new_sig = (("/tmp/config.json", 2, 1),)
+    context = ("/tmp/quaid", "pytest-runner")
+
+    monkeypatch.setattr(extraction_daemon, "_config_file_signature", old_sig)
+    monkeypatch.setattr(extraction_daemon, "_config_file_signature_context", context)
+    monkeypatch.setattr(extraction_daemon, "_config_reload_context", lambda: context)
+    monkeypatch.setattr(extraction_daemon, "_active_config_file_signature", lambda: new_sig)
+    monkeypatch.setattr(extraction_daemon, "_force_reload_config", lambda: reloads.append(True))
+    monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: {})
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda _sig: None)
+
+    extraction_daemon.process_signal({"session_id": "sess-1", "type": "unknown"})
+
+    assert reloads == [True]
+
+
 def test_start_daemon_returns_negative_one_when_pid_file_never_appears(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     read_pid_calls = 0

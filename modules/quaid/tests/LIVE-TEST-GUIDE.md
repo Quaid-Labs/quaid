@@ -787,12 +787,19 @@ transactional content).
 
 1. Record current model values.
 2. Set `fastReasoning` and `deepReasoning` to `invalid-model-xyzzy`.
-3. Send a turn requiring a fast LLM call (e.g. "What do you remember about my family?").
-4. Agent must surface: `[Quaid error] [provider] Quaid could not access its fast language model provider`.
-5. Restore correct model values.
-6. Verify next turn works normally (no restart needed).
+3. Send a first natural turn requiring a fast LLM call (e.g. "What do you remember about my family?").
+4. Expected first-turn behavior: the agent may answer normally. The provider
+   failure creates a deferred error notice; it is not required to surface in
+   that same turn.
+5. Send a second natural turn. Do NOT explicitly ask the agent to check,
+   inspect, drain, or surface Quaid errors.
+6. Agent must auto-surface the deferred provider notice in its reply, including
+   `[Quaid error] [provider]` and tier/exception detail.
+7. Restore correct model values.
+8. Verify next turn works normally (no restart needed).
 
-**Pass**: Error surfaced with tier and exception detail, recovery on next turn.
+**Pass**: Deferred provider error surfaces automatically on the second turn,
+without tester prompting for it, and recovery works after restoring config.
 
 ### M16 — Subagent Memory Attribution (Exploratory)
 

@@ -2705,23 +2705,20 @@ async function step1_preflight() {
       }
       if (statusOut) break;
     }
-    if (!statusOut && _gatewayHttpCode("/health", "GET", null) === 200) {
+    const gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
+    if (!statusOut && gatewayHealthCode === 200) {
       statusOut = "gateway /health=200";
     }
-    if (!statusOut) {
+    if (gatewayHealthCode !== 200) {
       s.stop(C.red("Gateway offline"), 2);
       note(
-        "Quaid needs the gateway running to read your config\n" +
-        "and hook into conversation events.\n\n" +
+        "OpenClaw gateway must be running before installing Quaid.\n\n" +
         "Start it with:\n" +
-        "  openclaw gateway start\n\n" +
-        "Then re-run this installer.",
+        "  openclaw gateway\n\n" +
+        "Or start it via launchd, then retry the Quaid installer.",
         "Gateway offline"
       );
-      if (!AGENT_MODE) {
-        bail("OpenClaw gateway is not running.");
-      }
-      log.warn("OpenClaw status/probe unavailable in agent mode; continuing with install.");
+      bail("OpenClaw gateway must be running before installing Quaid.");
     }
 
     // --- Onboarding / agents list ---

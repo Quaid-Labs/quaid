@@ -67,6 +67,12 @@ _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 # Cleared per-session when the cursor advances past the previously-seen end.
 _cursor_end_timeout_fired: set = set()
 
+# Daemon workers are long-lived and config.get_config() is intentionally cached.
+# Track active config file mtimes so live-test/operator edits take effect
+# without a manual daemon restart.
+_config_file_signature: Optional[Tuple[Tuple[str, Optional[int], Optional[int]], ...]] = None
+_config_file_signature_context: Optional[Tuple[str, str]] = None
+
 # Max lines to read from a transcript per extraction (B033)
 MAX_TRANSCRIPT_LINES = 50_000
 
@@ -93,6 +99,83 @@ def _instance_id() -> str:
 def _instance_root() -> Path:
     """Resolved instance root: QUAID_HOME/instances/QUAID_INSTANCE."""
     return _quaid_home() / "instances" / _instance_id()
+
+
+def _config_file_paths() -> List[Path]:
+    """Return config files that affect this instance, highest priority first."""
+    instance = _instance_id()
+    platform = instance.split("-", 1)[0] if "-" in instance else instance
+    if instance.startswith("claude-code-") or instance == "claude-code":
+        platform = "claude-code"
+    elif instance.startswith("openclaw-") or instance == "openclaw":
+        platform = "openclaw"
+    elif instance.startswith("codex-") or instance == "codex":
+        platform = "codex"
+    elif instance.startswith("standalone-") or instance == "standalone":
+        platform = "standalone"
+    home = _quaid_home()
+    return [
+        _instance_root() / "config.json",
+        home / "shared" / "config" / platform / "config.json",
+        home / "shared" / "config" / "global" / "config.json",
+    ]
+
+
+def _active_config_file_signature() -> Tuple[Tuple[str, Optional[int], Optional[int]], ...]:
+    """Return a stable signature for config files that affect this daemon."""
+    paths = _config_file_paths()
+
+    signature: List[Tuple[str, Optional[int], Optional[int]]] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        try:
+            st = path.stat()
+            signature.append((str(path), int(st.st_mtime_ns), int(st.st_size)))
+        except FileNotFoundError:
+            signature.append((str(path), None, None))
+        except OSError as exc:
+            logger.debug("config signature stat failed for %s: %s", path, exc)
+            signature.append((str(path), None, None))
+    return tuple(signature)
+
+
+def _config_reload_context() -> Tuple[str, str]:
+    return (str(_quaid_home()), _instance_id())
+
+
+def _prime_config_reload_watcher() -> None:
+    """Remember current config file mtimes as the daemon baseline."""
+    global _config_file_signature, _config_file_signature_context
+    _config_file_signature_context = _config_reload_context()
+    _config_file_signature = _active_config_file_signature()
+
+
+def _force_reload_config() -> None:
+    from config import reload_config
+    reload_config()
+
+
+def _reload_config_if_changed(reason: str = "daemon poll") -> bool:
+    """Reload cached config when any active config file changed on disk."""
+    global _config_file_signature, _config_file_signature_context
+    context = _config_reload_context()
+    current = _active_config_file_signature()
+    if _config_file_signature is None or _config_file_signature_context != context:
+        _config_file_signature_context = context
+        _config_file_signature = current
+        return False
+    if current == _config_file_signature:
+        return False
+
+    try:
+        _force_reload_config()
+    except Exception as exc:
+        logger.warning("config changed but reload failed before %s: %s", reason, exc)
+        return False
+
+    _config_file_signature = _active_config_file_signature()
+    logger.info("config changed on disk; reloaded before %s", reason)
+    return True
 
 
 def _get_quaid_version() -> str:
@@ -1816,6 +1899,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     Reads transcript from cursor, passes to extract_from_transcript()
     which handles chunking and storage internally.
     """
+    _reload_config_if_changed("signal processing")
     signal_type = signal_data.get("type", "unknown")
     session_id = _validate_session_id(signal_data.get("session_id", "unknown"))
     transcript_path = signal_data.get("transcript_path", "")
@@ -2848,6 +2932,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     Cursor tracking prevents double extraction, so this is safe regardless
     of whether the adapter supports compaction control.
     """
+    _reload_config_if_changed("idle session check")
     cursor_dir = _cursor_dir()
     if not cursor_dir.is_dir():
         return
@@ -3032,6 +3117,7 @@ def _effective_idle_timeout_minutes(
 
 def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     """Queue rolling extraction for sessions whose unprocessed tail crossed chunk budget."""
+    _reload_config_if_changed("rolling chunk check")
     cursor_dir = _cursor_dir()
     if not cursor_dir.is_dir():
         return
@@ -3270,6 +3356,7 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 
     logger.info("extraction daemon started (pid=%d, home=%s, instance=%s)", os.getpid(), _quaid_home(), _instance_id())
     write_pid(os.getpid())
+    _prime_config_reload_watcher()
 
     shutdown_requested = False
 
@@ -3299,6 +3386,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 
     try:
         while not shutdown_requested:
+            _reload_config_if_changed("daemon poll")
+
             # Version watcher tick — cheap mtime check on every iteration
             try:
                 version_watcher.tick()

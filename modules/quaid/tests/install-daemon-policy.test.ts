@@ -43,4 +43,13 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("Other supported platforms were detected. Install another?");
     expect(setupText).toContain("!ALLOW_EXISTING_INSTALL && !_chainedPlatformInstall");
   });
+
+  it("OpenClaw install hard-stops when the gateway is unreachable", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("OpenClaw gateway must be running before installing Quaid.");
+    expect(setupText).toContain('bail("OpenClaw gateway must be running before installing Quaid.");');
+    expect(setupText).not.toContain("OpenClaw status/probe unavailable in agent mode; continuing with install.");
+  });
 });
