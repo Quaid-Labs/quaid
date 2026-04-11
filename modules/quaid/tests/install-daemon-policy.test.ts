@@ -63,13 +63,13 @@ describe("install daemon policy", () => {
     expect(setupText).not.toContain("leaving fallback QUAID_INSTANCE unchanged in add-instance mode");
   });
 
-  it("OpenClaw installer symlinks the extension dir to the canonical plugin tree", () => {
+  it("OpenClaw installer refreshes the extension dir from the canonical plugin tree", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain("extensionDir: pluginPath");
-    expect(setupText).toContain("fs.symlinkSync(pluginPath, extensionDir, \"dir\")");
-    expect(setupText).toContain("failed to symlink plugin into extension dir");
-    expect(setupText).not.toContain("failed to copy plugin to extension dir");
+    expect(setupText).toContain("fs.cpSync(pluginPath, extensionDir, {");
+    expect(setupText).toContain("failed to copy canonical plugin into extension dir");
+    expect(setupText).not.toContain("fs.symlinkSync(pluginPath, extensionDir, \"dir\")");
   });
 });
