@@ -4763,16 +4763,9 @@ def _recall_once(
             _fts_fallback_used = True
         _phase_ms["fts_fallback_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
-    explicit_anchor_terms = _extract_explicit_query_anchor_terms(clean_query)
-    should_run_raw_fts_rescue = bool(use_routing and search_query != clean_query)
-    if explicit_anchor_terms and not _rows_match_explicit_anchor_terms(results, explicit_anchor_terms):
-        # Even in fast/no-routing mode, preserve exact named-entity anchors with
-        # a cheap lexical rescue so scoring sees the right candidate pool.
-        should_run_raw_fts_rescue = True
-
     # Also run FTS on the raw query (before routing) to catch proper nouns
-    # that route_query may have dropped or transformed.
-    if should_run_raw_fts_rescue:
+    # that route_query may have dropped or transformed
+    elif use_routing and search_query != clean_query:
         _phase_t0 = _time.monotonic()
         raw_fts = graph.search_fts(clean_query, limit=limit, owner_id=owner_id)
         result_ids = {node.id for node, _ in results}
@@ -5959,22 +5952,6 @@ def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[
         if len(out) >= limit:
             break
     return out
-
-
-def _rows_match_explicit_anchor_terms(
-    rows: List[Tuple["Node", float]],
-    anchor_terms: List[str],
-) -> bool:
-    """Return True when any candidate row already mentions an explicit anchor."""
-    if not rows or not anchor_terms:
-        return False
-    for node, _score in rows:
-        attrs = node.attributes if isinstance(node.attributes, dict) else {}
-        haystack = f"{node.name} {' '.join(str(v) for v in attrs.values() if isinstance(v, (str, int, float)))}".lower()
-        for term in anchor_terms:
-            if re.search(rf"\b{re.escape(term)}\b", haystack):
-                return True
-    return False
 
 
 def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str, Any]:
