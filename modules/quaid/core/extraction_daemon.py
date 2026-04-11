@@ -3254,6 +3254,11 @@ def _index_one_stale_doc() -> bool:
 
     registry = DocsRegistry()
     rag = DocsRAG()
+    try:
+        from config import _workspace_root
+        runtime_workspace = _workspace_root()
+    except Exception:
+        runtime_workspace = Path.cwd()
 
     # Get all registered docs, sorted by registered_at DESC so newly registered
     # docs are indexed first.
@@ -3268,9 +3273,12 @@ def _index_one_stale_doc() -> bool:
         file_path = entry.get("file_path") or entry.get("path", "")
         if not file_path:
             continue
-        if not Path(file_path).exists():
+        resolved_path = Path(file_path)
+        if not resolved_path.is_absolute():
+            resolved_path = runtime_workspace / resolved_path
+        if not resolved_path.exists():
             continue
-        candidate_paths.append(file_path)
+        candidate_paths.append(str(resolved_path))
 
     if not candidate_paths:
         return False

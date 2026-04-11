@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import sys
 import types
 from pathlib import Path
 
@@ -1125,6 +1126,40 @@ def test_check_idle_sessions_treats_file_growth_past_eof_cursor_as_new_content(m
         }
     ]
     assert "sess-grown" not in extraction_daemon._cursor_end_timeout_fired
+
+
+def test_index_one_stale_doc_resolves_relative_registry_paths_from_workspace(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    doc_path = workspace / "docs" / "fresh.md"
+    doc_path.parent.mkdir(parents=True, exist_ok=True)
+    doc_path.write_text("# Fresh\n", encoding="utf-8")
+
+    indexed = []
+
+    class _RegistryStub:
+        def list_docs(self):
+            return [{"file_path": "docs/fresh.md", "registered_at": "2026-04-12T00:00:00Z"}]
+
+    class _RagStub:
+        def needs_reindex_many(self, paths):
+            return {str(doc_path): True}
+
+        def index_document(self, file_path):
+            indexed.append(file_path)
+            return 1
+
+    monkeypatch.setattr("config._workspace_root", lambda: workspace)
+    monkeypatch.setitem(sys.modules, "datastore.docsdb.registry", types.SimpleNamespace(DocsRegistry=lambda: _RegistryStub()))
+    monkeypatch.setitem(sys.modules, "datastore.docsdb.rag", types.SimpleNamespace(DocsRAG=lambda: _RagStub()))
+
+    try:
+        assert extraction_daemon._index_one_stale_doc() is True
+    finally:
+        sys.modules.pop("datastore.docsdb.registry", None)
+        sys.modules.pop("datastore.docsdb.rag", None)
+
+    assert indexed == [str(doc_path)]
 
 
 # ---------------------------------------------------------------------------
