@@ -2922,39 +2922,6 @@ class TestRecallFastHookInjectContract:
         assert expanded[0]["anchor_text"] == "Mike"
         assert expanded[0]["text"] == "David → sibling_of → Mike"
 
-    def test_query_fit_multiplier_prefers_matching_kinship_evidence(self):
-        import datastore.memorydb.memory_graph as mg
-
-        niece_row = mg.Node(
-            id="n-niece",
-            type="Fact",
-            name="Diana has a daughter named Alice.",
-            attributes={},
-        )
-        nephew_row = mg.Node(
-            id="n-nephew",
-            type="Fact",
-            name="David has a son named Oliver.",
-            attributes={},
-        )
-
-        niece_mult = mg._compute_query_fit_multiplier(
-            "Who is my niece?",
-            niece_row,
-            niece_row.attributes,
-            intent="WHO",
-        )
-        nephew_mult = mg._compute_query_fit_multiplier(
-            "Who is my niece?",
-            nephew_row,
-            nephew_row.attributes,
-            intent="WHO",
-        )
-
-        assert niece_mult > nephew_mult
-        assert niece_mult >= 1.2
-        assert nephew_mult < 1.0
-
     def test_select_final_recall_rows_reserves_anchor_expansions_within_limit(self):
         import datastore.memorydb.memory_graph as mg
 

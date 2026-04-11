@@ -6474,48 +6474,7 @@ def _compute_query_fit_multiplier(
             if visibility_scope in {"global_shared", "system"}:
                 multiplier *= 0.88
 
-    kinship_positive_terms, kinship_negative_terms = _kinship_query_fit_terms(query)
-    if kinship_positive_terms or kinship_negative_terms:
-        lower_text = text.lower()
-        if any(re.search(rf"\b{re.escape(term)}\b", lower_text) for term in kinship_positive_terms):
-            multiplier *= 1.24
-        if any(re.search(rf"\b{re.escape(term)}\b", lower_text) for term in kinship_negative_terms):
-            multiplier *= 0.78
-
     return max(0.35, min(1.45, multiplier))
-
-
-def _kinship_query_fit_terms(query: str) -> Tuple[List[str], List[str]]:
-    lowered = str(query or "").lower()
-    if not lowered.strip():
-        return [], []
-
-    rules = {
-        "niece": (["niece", "daughter", "girl", "female"], ["nephew", "son", "boy", "male"]),
-        "nephew": (["nephew", "son", "boy", "male"], ["niece", "daughter", "girl", "female"]),
-        "aunt": (["aunt", "sister", "woman", "female"], ["uncle", "brother", "man", "male"]),
-        "uncle": (["uncle", "brother", "man", "male"], ["aunt", "sister", "woman", "female"]),
-        "grandmother": (["grandmother", "grandma"], ["grandfather", "grandpa"]),
-        "grandfather": (["grandfather", "grandpa"], ["grandmother", "grandma"]),
-    }
-
-    positive: List[str] = []
-    negative: List[str] = []
-    for cue, (good, bad) in rules.items():
-        if re.search(rf"\b{re.escape(cue)}\b", lowered):
-            positive.extend(good)
-            negative.extend(bad)
-
-    def _dedupe(items: List[str]) -> List[str]:
-        seen: set[str] = set()
-        out: List[str] = []
-        for item in items:
-            if item not in seen:
-                seen.add(item)
-                out.append(item)
-        return out
-
-    return _dedupe(positive), _dedupe(negative)
 
 
 def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str = "full") -> Dict[str, Any]:
