@@ -526,24 +526,6 @@ function formatDeferredNoticeRelayContext(drained: Array<{ message?: string }>):
   ].join("\n");
 }
 
-function formatDeferredNoticeVisibleReply(drained: Array<{ message?: string }>): string {
-  const messages = drained
-    .map((item) => String(item?.message || "").trim())
-    .filter(Boolean);
-  if (!messages.length) {
-    return "";
-  }
-  const body = messages.map((message) => `- ${message}`).join("\n");
-  const heading = messages.length === 1
-    ? "Quaid had 1 deferred notice waiting for you:"
-    : `Quaid had ${messages.length} deferred notices waiting for you:`;
-  return [
-    heading,
-    "",
-    body,
-  ].join("\n");
-}
-
 function drainDeferredNoticeItems(agentLabel: string, reason: string): Array<{ message?: string }> {
   const instanceId = getInstanceId(agentLabel);
   const requestsPath = delayedRequestsPathForInstance(instanceId);
@@ -573,10 +555,6 @@ function drainDeferredNoticeItems(agentLabel: string, reason: string): Array<{ m
 
 function drainDeferredNoticeRelayContext(agentLabel: string, reason: string): string {
   return formatDeferredNoticeRelayContext(drainDeferredNoticeItems(agentLabel, reason));
-}
-
-function drainDeferredNoticeVisibleReply(agentLabel: string, reason: string): string {
-  return formatDeferredNoticeVisibleReply(drainDeferredNoticeItems(agentLabel, reason));
 }
 
 function runSubagentHookCommand(
@@ -675,6 +653,7 @@ function isAutoInjectEnabled(config: Record<string, any> = getMemoryConfig()): b
 type LastUserMessageQuery = { text: string; seenAtMs: number } | null;
 
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
+const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 
 function stripOpenClawInternalContext(raw: string): string {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
@@ -774,6 +753,15 @@ function selectAutoInjectQuery(
     source: rawPrompt ? "rawPrompt_raw" : "empty",
     rawPrompt,
   };
+}
+
+function shouldDrainDeferredNoticeForPrompt(query: string): boolean {
+  const normalized = String(query || "").trim();
+  if (normalized.length < 3) return false;
+  if (PROMPT_RELAY_SKIP_RE.test(normalized)) return false;
+  if (normalized.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
+  if (facade.isInternalMaintenancePrompt(normalized)) return false;
+  return true;
 }
 
 function readSessionsIndex(): Record<string, any> {
@@ -3174,6 +3162,28 @@ notify_user(${JSON.stringify(message)})
           session_id: String(event?.sessionId || ctx?.sessionId || ""),
         });
       }
+      try {
+        const relayProbe = selectAutoInjectQuery(event, lastUserMessageQuery);
+        if (shouldDrainDeferredNoticeForPrompt(relayProbe.query)) {
+          const relayContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
+          if (relayContext) {
+            prependSystemContext = prependSystemContext
+              ? `${prependSystemContext}\n\n${relayContext}`
+              : relayContext;
+            writeHookTrace("deferred_notice.prompt_relay", {
+              agent_label: promptAgentLabel,
+              session_id: String(event?.sessionId || ctx?.sessionId || ""),
+              query_source: relayProbe.source,
+            });
+          }
+        }
+      } catch (err: unknown) {
+        writeHookTrace("deferred_notice.prompt_relay_error", {
+          agent_label: promptAgentLabel,
+          session_id: String(event?.sessionId || ctx?.sessionId || ""),
+          error: String((err as Error)?.message || err),
+        });
+      }
       if (isSystemEnabled("projects")) {
         const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         writeHookTrace("hook.docs_gate_check", {
@@ -3285,13 +3295,12 @@ notify_user(${JSON.stringify(message)})
         // oc_prompt_json is the primary source (always current); this fallback handles
         // non-JSON-wrapped prompts where oc_prompt_json returned empty and event.messages
         // fell back to a stale slash command or startup message.
-        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
-        if (STARTUP_SKIP_RE.test(query)) {
+        if (PROMPT_RELAY_SKIP_RE.test(query)) {
           // Try to recover from rawPrompt directly (handles "[Tue ...] <user msg>" format
           // where scrubQuery strips the leading timestamp bracket).
           const rawRecovered = scrubAutoInjectQuery(rawPrompt);
           const recoveredSource = "rawPrompt_recovered";
-          if (rawRecovered.length >= 3 && !STARTUP_SKIP_RE.test(rawRecovered) &&
+          if (rawRecovered.length >= 3 && !PROMPT_RELAY_SKIP_RE.test(rawRecovered) &&
               !rawRecovered.startsWith("Extract memorable facts") &&
               !facade.isInternalMaintenancePrompt(rawRecovered)) {
             query = rawRecovered;
@@ -3510,27 +3519,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     }, {
       name: "exec-completion-heartbeat-relay",
       priority: 120,
-    });
-
-    onChecked("before_agent_reply", async (event: any, ctx: any) => {
-      if (isInternalSessionContext(event, ctx)) return;
-      if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
-      const agentLabel = resolveHookAgentLabel(event, ctx);
-      ensureAgentInstanceProvisioned(agentLabel, "before_agent_reply");
-      const replyText = drainDeferredNoticeVisibleReply(agentLabel, "before_agent_reply");
-      if (!replyText) return;
-      writeHookTrace("deferred_notice.visible_reply", {
-        agent_label: agentLabel,
-        session_id: String(ctx?.sessionId || event?.sessionId || ""),
-      });
-      return {
-        handled: true,
-        reason: "quaid_deferred_notice_relay",
-        reply: { text: replyText },
-      };
-    }, {
-      name: "deferred-notice-visible-relay",
-      priority: 100,
     });
 
     // before_prompt_build fires per-message with the actual user prompt,
@@ -5872,7 +5860,8 @@ export const __test = {
   buildExecCompletedHeartbeatOverride,
   buildExecCompletedHeartbeatVisibleReply,
   stripExecCompletedHeartbeatInstructions,
-  formatDeferredNoticeVisibleReply,
+  formatDeferredNoticeRelayContext,
+  shouldDrainDeferredNoticeForPrompt,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,

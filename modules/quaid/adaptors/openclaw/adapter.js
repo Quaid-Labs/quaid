@@ -372,19 +372,6 @@ function formatDeferredNoticeRelayContext(drained) {
     "</quaid_system_message>"
   ].join("\n");
 }
-function formatDeferredNoticeVisibleReply(drained) {
-  const messages = drained.map((item) => String(item?.message || "").trim()).filter(Boolean);
-  if (!messages.length) {
-    return "";
-  }
-  const body = messages.map((message) => `- ${message}`).join("\n");
-  const heading = messages.length === 1 ? "Quaid had 1 deferred notice waiting for you:" : `Quaid had ${messages.length} deferred notices waiting for you:`;
-  return [
-    heading,
-    "",
-    body
-  ].join("\n");
-}
 function drainDeferredNoticeItems(agentLabel, reason) {
   const instanceId = getInstanceId(agentLabel);
   const requestsPath = delayedRequestsPathForInstance(instanceId);
@@ -413,9 +400,6 @@ function drainDeferredNoticeItems(agentLabel, reason) {
 }
 function drainDeferredNoticeRelayContext(agentLabel, reason) {
   return formatDeferredNoticeRelayContext(drainDeferredNoticeItems(agentLabel, reason));
-}
-function drainDeferredNoticeVisibleReply(agentLabel, reason) {
-  return formatDeferredNoticeVisibleReply(drainDeferredNoticeItems(agentLabel, reason));
 }
 function runSubagentHookCommand(command, payload, agentLabel) {
   const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
@@ -494,6 +478,7 @@ function isAutoInjectEnabled(config = getMemoryConfig()) {
   return configured !== false;
 }
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
+const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 function stripOpenClawInternalContext(raw) {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
 }
@@ -554,6 +539,14 @@ function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now()) 
     source: rawPrompt ? "rawPrompt_raw" : "empty",
     rawPrompt
   };
+}
+function shouldDrainDeferredNoticeForPrompt(query) {
+  const normalized = String(query || "").trim();
+  if (normalized.length < 3) return false;
+  if (PROMPT_RELAY_SKIP_RE.test(normalized)) return false;
+  if (normalized.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
+  if (facade.isInternalMaintenancePrompt(normalized)) return false;
+  return true;
 }
 function readSessionsIndex() {
   try {
@@ -2522,6 +2515,28 @@ notify_user(${JSON.stringify(message)})
           session_id: String(event?.sessionId || ctx?.sessionId || "")
         });
       }
+      try {
+        const relayProbe = selectAutoInjectQuery(event, lastUserMessageQuery);
+        if (shouldDrainDeferredNoticeForPrompt(relayProbe.query)) {
+          const relayContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
+          if (relayContext) {
+            prependSystemContext = prependSystemContext ? `${prependSystemContext}
+
+${relayContext}` : relayContext;
+            writeHookTrace("deferred_notice.prompt_relay", {
+              agent_label: promptAgentLabel,
+              session_id: String(event?.sessionId || ctx?.sessionId || ""),
+              query_source: relayProbe.source
+            });
+          }
+        }
+      } catch (err) {
+        writeHookTrace("deferred_notice.prompt_relay_error", {
+          agent_label: promptAgentLabel,
+          session_id: String(event?.sessionId || ctx?.sessionId || ""),
+          error: String(err?.message || err)
+        });
+      }
       if (isSystemEnabled2("projects")) {
         const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         writeHookTrace("hook.docs_gate_check", {
@@ -2613,11 +2628,10 @@ ${projectPlacementContext}` : projectPlacementContext;
           });
           return withDocs({ prependContext: event.prependContext });
         }
-        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
-        if (STARTUP_SKIP_RE.test(query)) {
+        if (PROMPT_RELAY_SKIP_RE.test(query)) {
           const rawRecovered = scrubAutoInjectQuery(rawPrompt);
           const recoveredSource = "rawPrompt_recovered";
-          if (rawRecovered.length >= 3 && !STARTUP_SKIP_RE.test(rawRecovered) && !rawRecovered.startsWith("Extract memorable facts") && !facade.isInternalMaintenancePrompt(rawRecovered)) {
+          if (rawRecovered.length >= 3 && !PROMPT_RELAY_SKIP_RE.test(rawRecovered) && !rawRecovered.startsWith("Extract memorable facts") && !facade.isInternalMaintenancePrompt(rawRecovered)) {
             query = rawRecovered;
             querySource = recoveredSource;
             writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80), source: recoveredSource });
@@ -2796,26 +2810,6 @@ ${notice}` : notice;
     }, {
       name: "exec-completion-heartbeat-relay",
       priority: 120
-    });
-    onChecked("before_agent_reply", async (event, ctx) => {
-      if (isInternalSessionContext(event, ctx)) return;
-      if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
-      const agentLabel = resolveHookAgentLabel(event, ctx);
-      ensureAgentInstanceProvisioned(agentLabel, "before_agent_reply");
-      const replyText = drainDeferredNoticeVisibleReply(agentLabel, "before_agent_reply");
-      if (!replyText) return;
-      writeHookTrace("deferred_notice.visible_reply", {
-        agent_label: agentLabel,
-        session_id: String(ctx?.sessionId || event?.sessionId || "")
-      });
-      return {
-        handled: true,
-        reason: "quaid_deferred_notice_relay",
-        reply: { text: replyText }
-      };
-    }, {
-      name: "deferred-notice-visible-relay",
-      priority: 100
     });
     onChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build",
@@ -4758,7 +4752,8 @@ const __test = {
   buildExecCompletedHeartbeatOverride,
   buildExecCompletedHeartbeatVisibleReply,
   stripExecCompletedHeartbeatInstructions,
-  formatDeferredNoticeVisibleReply,
+  formatDeferredNoticeRelayContext,
+  shouldDrainDeferredNoticeForPrompt,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,

@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 describe("openclaw deferred notices", () => {
-  it("returns a visible reply when deferred notices are waiting before an agent reply", async () => {
+  it("injects deferred notices into prompt context without claiming the inbound reply", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-deferred-visible-reply-home-",
@@ -129,19 +129,24 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const beforeAgentReplyCall = api.on.mock.calls.find((call: any[]) =>
+    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-visible-relay"
     );
-    expect(beforeAgentReplyCall).toBeTruthy();
+    expect(deferredReplyCall).toBeFalsy();
 
-    const result = await beforeAgentReplyCall?.[1](
-      { cleanedBody: "Hey, what is up?", sessionId: "session-main-visible", sessionKey: "agent:main:tui-main" },
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const result = await beforePromptBuildCall?.[1](
+      { prompt: "Hey, what is up?", sessionId: "session-main-visible", sessionKey: "agent:main:tui-main" },
       { sessionId: "session-main-visible", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
     );
 
-    expect(result?.handled).toBe(true);
-    expect(String(result?.reply?.text || "")).toContain("silver lantern");
-    expect(String(result?.reply?.text || "")).not.toContain("<quaid_system_message>");
+    expect(String(result?.prependSystemContext || "")).toContain("silver lantern");
+    expect(String(result?.prependSystemContext || "")).toContain("[Quaid Notice Relay Required]");
+    expect(String(result?.prependSystemContext || "")).toContain("<quaid_system_message>");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -155,7 +160,7 @@ describe("openclaw deferred notices", () => {
     fs.rmSync(fixture.home, { recursive: true, force: true });
   });
 
-  it("keeps deferred notices pending through prompt-build so visible reply can relay them", async () => {
+  it("drains deferred notices during prompt-build even when auto-inject is disabled", async () => {
     vi.useFakeTimers();
     const home = makeTempDir("quaid-oc-deferred-home-");
     const hiddenHome = path.join(home, ".quaid");
@@ -247,27 +252,13 @@ describe("openclaw deferred notices", () => {
       },
     );
 
-    expect(String(result?.appendSystemContext || "")).not.toContain("Janitor summary");
-    expect(String(result?.prependContext || "")).not.toContain("Janitor summary");
+    expect(String(result?.prependSystemContext || "")).toContain("Janitor summary");
+    expect(String(result?.prependSystemContext || "")).toContain("[Quaid Notice Relay Required]");
 
-    const stillQueued = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
-    const pendingBeforeReply = Array.isArray(stillQueued?.requests)
-      ? stillQueued.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
-      : [];
-    expect(pendingBeforeReply).toHaveLength(1);
-
-    const beforeAgentReplyCall = api.on.mock.calls.find((call: any[]) =>
+    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-visible-relay"
     );
-    expect(beforeAgentReplyCall).toBeTruthy();
-
-    const replyResult = await beforeAgentReplyCall?.[1](
-      { cleanedBody: "Hey, what is up?", sessionId: "session-main-1", sessionKey: "agent:main:tui-main" },
-      { sessionId: "session-main-1", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
-    );
-
-    expect(replyResult?.handled).toBe(true);
-    expect(String(replyResult?.reply?.text || "")).toContain("Janitor summary");
+    expect(deferredReplyCall).toBeFalsy();
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -354,18 +345,17 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const beforeAgentReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-visible-relay"
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
-    expect(beforeAgentReplyCall).toBeTruthy();
+    expect(beforePromptBuildCall).toBeTruthy();
 
-    const result = await beforeAgentReplyCall?.[1](
-      { cleanedBody: "Hey, what is up?", sessionId: "session-main-bound", sessionKey: "agent:main:tui-main" },
+    const result = await beforePromptBuildCall?.[1](
+      { prompt: "Hey, what is up?", sessionId: "session-main-bound", sessionKey: "agent:main:tui-main" },
       { sessionId: "session-main-bound", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
     );
 
-    expect(result?.handled).toBe(true);
-    expect(String(result?.reply?.text || "")).toContain("livetest main queue");
+    expect(String(result?.prependSystemContext || "")).toContain("livetest main queue");
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -458,18 +448,17 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const beforeAgentReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-visible-relay"
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
-    expect(beforeAgentReplyCall).toBeTruthy();
+    expect(beforePromptBuildCall).toBeTruthy();
 
-    const result = await beforeAgentReplyCall?.[1](
-      { cleanedBody: "Hey, what is up?", sessionId: "session-main-stale-lock", sessionKey: "agent:main:tui-main" },
+    const result = await beforePromptBuildCall?.[1](
+      { prompt: "Hey, what is up?", sessionId: "session-main-stale-lock", sessionKey: "agent:main:tui-main" },
       { sessionId: "session-main-stale-lock", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
     );
 
-    expect(result?.handled).toBe(true);
-    expect(String(result?.reply?.text || "")).toContain("stale lock recovery");
+    expect(String(result?.prependSystemContext || "")).toContain("stale lock recovery");
     expect(fs.existsSync(lockPath)).toBe(false);
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));

@@ -675,7 +675,7 @@ def _get_deferred_notice_relay_context() -> str:
     """Drain deferred notices on CC, which has no reliable visible reply hook.
 
     Codex already handles this well via explicit agent CLI behavior. OpenClaw
-    has a before_agent_reply hook that can emit a synthetic visible reply.
+    drains these in before_prompt_build so the normal platform turn is preserved.
     Claude Code only exposes UserPromptSubmit additionalContext, so the relay
     must be made explicit on the real human turn instead of relying on a weak
     advisory hint.
