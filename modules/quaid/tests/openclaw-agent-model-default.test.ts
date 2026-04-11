@@ -25,7 +25,7 @@ describe("OpenClaw agent model defaults", () => {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
 
     expect(result.changed).toBe(true);
-    expect(cfg.agents.defaults.modelPrimary).toBe(OPENCLAW_DEFAULT_AGENT_MODEL_PRIMARY);
+    expect(cfg.agents.defaults.modelPrimary).toBeUndefined();
     expect(cfg.agents.defaults.model.primary).toBe(OPENCLAW_DEFAULT_AGENT_MODEL_PRIMARY);
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -36,7 +36,6 @@ describe("OpenClaw agent model defaults", () => {
     writeJson(cfgPath, {
       agents: {
         defaults: {
-          modelPrimary: OPENCLAW_DEFAULT_AGENT_MODEL_PRIMARY,
           model: { primary: OPENCLAW_DEFAULT_AGENT_MODEL_PRIMARY },
         },
       },
@@ -46,7 +45,28 @@ describe("OpenClaw agent model defaults", () => {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
 
     expect(result.changed).toBe(false);
-    expect(cfg.agents.defaults.modelPrimary).toBe(OPENCLAW_DEFAULT_AGENT_MODEL_PRIMARY);
+    expect(cfg.agents.defaults.modelPrimary).toBeUndefined();
+    expect(cfg.agents.defaults.model.primary).toBe(OPENCLAW_DEFAULT_AGENT_MODEL_PRIMARY);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("removes the rejected flat modelPrimary key when present", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-agent-model-"));
+    const cfgPath = path.join(root, "openclaw.json");
+    writeJson(cfgPath, {
+      agents: {
+        defaults: {
+          modelPrimary: "openai-codex/gpt-5.4-mini",
+          model: { primary: "openai-codex/gpt-5.4-mini" },
+        },
+      },
+    });
+
+    const result = ensureOpenClawAgentModelDefault(cfgPath);
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+
+    expect(result.changed).toBe(true);
+    expect(cfg.agents.defaults.modelPrimary).toBeUndefined();
     expect(cfg.agents.defaults.model.primary).toBe(OPENCLAW_DEFAULT_AGENT_MODEL_PRIMARY);
     fs.rmSync(root, { recursive: true, force: true });
   });
