@@ -1269,18 +1269,45 @@ class TestRecallTelemetry:
         assert fast_meta["fanout_budget"] == 5
         assert aggressive_meta["fanout_budget"] == 5
 
-    def test_plan_fanout_queries_preserves_short_exact_queries(self):
+    def test_plan_fanout_queries_fast_profiles_preserve_short_exact_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 
         with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
             queries, meta = mg._plan_fanout_queries(
                 "Who is Linda in relation to Maya?",
                 return_meta=True,
+                planner_profile="fast",
             )
 
         assert queries == ["Who is Linda in relation to Maya?"]
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector", "graph"]
+
+    def test_plan_fanout_queries_full_uses_llm_to_classify_short_exact_stores(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return ('{"stores":["graph"],"queries":["Maya relationship graph"]}', {})
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={"stores": ["graph"], "queries": ["Maya relationship graph"]},
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "Who is Linda in relation to Maya?",
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries == ["Who is Linda in relation to Maya?"]
+        assert meta["used_llm"] is True
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "graph"]
+        assert "only classify stores/project" in captured["prompt"]
 
     def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_defaults(self):
         import datastore.memorydb.memory_graph as mg

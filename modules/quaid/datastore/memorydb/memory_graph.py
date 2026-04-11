@@ -6330,6 +6330,11 @@ def _compute_query_fit_multiplier(
     *,
     intent: str = "GENERAL",
 ) -> float:
+    # Recall shaping policy: keep this deterministic scorer language-agnostic.
+    # Do not add English semantic mappings here (for example family, org-chart,
+    # location, or device relationship rules). Semantic interpretation belongs
+    # in the fast LLM planner/reranker or the final calling model so multilingual
+    # queries are handled by the model instead of hand-written lexical guards.
     analysis = _derive_query_requirements(query, intent=intent)
     query_terms = list(analysis["query_terms"])
     text = f"{node.name} {' '.join(str(v) for v in (attrs or {}).values() if isinstance(v, (str, int, float)))}"
@@ -6580,12 +6585,13 @@ def _plan_fanout_queries(
     if planner_profile == "off":
         return _finish([clean], "planner_disabled")
     planned_default_stores = list(_planner_store_plan(default_stores))
-    if (
+    short_broad_exact_query = (
         profile["shape"] == "broad"
         and int(profile["token_count"]) <= 5
         and "multi_clause" not in set(profile["signals"])
         and default_project is None
-    ):
+    )
+    if short_broad_exact_query:
         return _finish([clean], "preserve_short_exact_query")
     short_causal_lookup = (
         int(profile["token_count"]) <= 12
@@ -6620,7 +6626,10 @@ def _plan_fanout_queries(
             or profile["shape"] in {"narrow", "focused"}
         )
     )
-    if preserve_exact_query:
+    store_plan_only = planner_profile == "full" and preserve_exact_query
+    if preserve_exact_query and not store_plan_only:
+        return _finish([clean], "preserve_short_exact_query")
+    if store_plan_only and not _HAS_LLM_CLIENTS:
         return _finish([clean], "preserve_short_exact_query")
     if not _HAS_LLM_CLIENTS:
         return _planner_fallback_or_raise(
@@ -6654,6 +6663,7 @@ def _plan_fanout_queries(
         "- Preserve subject/object roles and possession exactly; never rewrite into the opposite ownership or relation direction.\n"
         "- Do not guess a relationship subtype unless the user explicitly stated it.\n"
         "- For short focused factual questions, returning only the original query is often best.\n"
+        "- For short exact queries, preserve the exact user message and only classify stores/project.\n"
         "- Only add queries if they would genuinely find different memories.\n"
         "- Fewer good queries beats more weak ones.\n"
         "- Default to stores=['vector'] for ordinary recall.\n"
@@ -6689,6 +6699,8 @@ def _plan_fanout_queries(
             planned_project = default_project
         meta["planned_stores"] = planned_stores
         meta["planned_project"] = planned_project
+        if store_plan_only:
+            return _finish([clean], "preserve_short_exact_query")
         if not isinstance(queries, list):
             return _planner_fallback_or_raise(
                 "planner_exception_fallback",
