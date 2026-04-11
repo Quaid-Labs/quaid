@@ -36,6 +36,7 @@ import {
   writeJsonObject,
 } from "./lib/install-config-hydration.mjs";
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
+import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2135,6 +2136,15 @@ function _ensureOpenClawCompactionModeDefault() {
   }
 }
 
+function _ensureOpenClawDefaultAgentModel() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    return !!ensureOpenClawAgentModelDefault(cfgPath).changed;
+  } catch {
+    return false;
+  }
+}
+
 function _registerOpenClawQuaidPlugin(pluginPath) {
   const cli = canRun("openclaw") ? "openclaw" : "";
   if (!cli) return { ok: false, reason: "OpenClaw CLI not found" };
@@ -2678,8 +2688,9 @@ async function step1_preflight() {
     } else {
       log.info(C.dim("Existing OpenClaw install detected — leaving fallback QUAID_INSTANCE unchanged in add-instance mode."));
     }
+    const agentModelChanged = _ensureOpenClawDefaultAgentModel();
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
-    if (responsesEndpointChanged) {
+    if (responsesEndpointChanged || agentModelChanged) {
       s.message("Restarting OpenClaw gateway...");
       const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
