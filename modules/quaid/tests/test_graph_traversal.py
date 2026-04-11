@@ -294,6 +294,27 @@ class TestVecUpsertFailures:
         assert "vec_nodes retry failed" in caplog.text
         assert "vec_nodes sync was skipped" in caplog.text
 
+    def test_update_node_skips_vec_sync_when_embedding_unchanged(self, graph, caplog):
+        node = Node.create(type="Person", name="VecSameEmbedding", owner_id="quaid", status="approved")
+        node.embedding = [0.1, 0.2, 0.3]
+        with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=False):
+            graph.add_node(node, embed=False)
+
+        node.confirmation_count = 1
+        node.storage_strength = 0.03
+
+        with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch.object(MemoryGraph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            caplog.set_level("WARNING")
+            updated = graph.update_node(node, embed=False)
+
+        assert updated is True
+        assert "vec_nodes retry failed" not in caplog.text
+        refreshed = graph.get_node(node.id)
+        assert refreshed.confirmation_count == 1
+        assert refreshed.storage_strength == pytest.approx(0.03, abs=0.001)
+
 
 class TestEntitySummaryJsonHardening:
     def test_summarize_all_entities_tolerates_malformed_attributes(self, graph, caplog):

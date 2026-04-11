@@ -63,6 +63,9 @@ QUALITY RULES:
 - Add "domains" as an array of domain tags from the available domain list
 - Use only domains explicitly supported by the system prompt's domain registry block
 - Extract personal facts comprehensively — the nightly janitor handles noise, but missed facts are gone forever
+- When a message mixes meta-language about memory or conversation handling ("do not store manually", "remember that", "just making conversation", similar phrasing) with concrete facts, treat the meta-language as secondary context rather than the primary extractable content.
+- In those mixed messages, extract the embedded factual propositions as separate facts and relationships.
+- Always prefer concrete entities and relationships over paraphrasing the whole sentence as one preference or instruction.
 
 KEYWORDS (per fact):
 For each fact, provide 3-5 searchable keywords — terms a user might use when
@@ -86,6 +89,11 @@ IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensi
 For RELATIONSHIP facts, also extract edges that connect entities. An edge represents a directed relationship between two named entities.
 
 IMPORTANT: Extract ALL relationships from a fact. A single fact may contain multiple relationships — for example, "David is married to Lisa and they have a son named Oliver" has TWO edges: spouse_of AND parent_of. Extract every relationship you see, do not stop at the first one.
+
+META-LANGUAGE WITH FACTS:
+- If a sentence says something like "do not store this manually — my brother David works at Google" or "remember that David is married to Lisa", do NOT collapse the whole sentence into one preference or memory-policy fact.
+- Instead, extract the factual content as normal entity/relationship facts and edges.
+- Examples of embedded facts that should still be extracted: Person names, Place names, Organization names, and relationships like works_at, spouse_of, parent_of, sibling_of.
 
 EDGE DIRECTION RULES (critical):
 - parent_of: PARENT is subject. "Carol is User's mom" → Carol --parent_of--> User

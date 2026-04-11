@@ -35,6 +35,9 @@ def test_default_extraction_prompt_contains_expected_sections():
     assert '"facts"' in text
     assert "speaker attribution" in text.lower()
     assert "Extract personal facts comprehensively" in text
+    assert "do not store manually" in text
+    assert "remember that" in text
+    assert "works_at, spouse_of, parent_of, sibling_of" in text
 
 
 def test_custom_prompt_set_can_override_selected_keys():

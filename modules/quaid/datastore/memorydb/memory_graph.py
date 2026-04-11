@@ -956,6 +956,17 @@ class MemoryGraph:
 
         conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
         with conn_cm as active_conn:
+            existing_embedding_blob = None
+            if node.embedding and _lib_has_vec():
+                try:
+                    row = active_conn.execute(
+                        "SELECT embedding FROM nodes WHERE id = ?",
+                        (node.id,),
+                    ).fetchone()
+                    if row is not None:
+                        existing_embedding_blob = row[0]
+                except Exception:
+                    existing_embedding_blob = None
             result = active_conn.execute("""
                 UPDATE nodes SET
                     type = ?, name = ?, attributes = ?, embedding = ?,
@@ -1010,6 +1021,9 @@ class MemoryGraph:
             # Maintain vec index
             if node.embedding and _lib_has_vec() and result.rowcount > 0:
                 packed = self._pack_embedding(node.embedding)
+                if existing_embedding_blob == packed:
+                    self._sync_node_domains(active_conn, node.id, self._extract_domains_from_attrs(node.attributes))
+                    return result.rowcount > 0
                 try:
                     self._ensure_vec_table(active_conn, node.embedding)
                     active_conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
