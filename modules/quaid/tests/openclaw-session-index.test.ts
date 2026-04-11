@@ -29,6 +29,11 @@ function writeTranscript(filePath: string, messages: string[]): void {
   writeFile(filePath, `${lines.join("\n")}\n`);
 }
 
+function writeAssistantTranscript(filePath: string, messages: string[]): void {
+  const lines = messages.map((text) => JSON.stringify({ role: "assistant", content: text }));
+  writeFile(filePath, `${lines.join("\n")}\n`);
+}
+
 function makeHarness(caseName: string): Harness {
   const root = join(tmpdir(), `quaid-oc-session-index-${caseName}-${Date.now()}`);
   const quaidHome = join(root, ".quaid");
@@ -124,6 +129,62 @@ afterEach(() => {
 });
 
 describe("openclaw session_index watcher", () => {
+  it("routes visual /new fallback to the last user-active session instead of a notice-only lane", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness("visual-new-active-session");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const seedSessionId = "049e8f87-1111-4111-8111-111111111111";
+    const noticeSessionId = "1e50152d-2222-4222-8222-222222222222";
+    const newSessionId = "77777777-7777-4777-8777-777777777777";
+    const seedTranscript = join(harness.sessionsDir, `${seedSessionId}.jsonl`);
+    const noticeTranscript = join(harness.sessionsDir, `${noticeSessionId}.jsonl`);
+    const now = Date.now();
+
+    writeTranscript(seedTranscript, ["David works at Google, is married to Lisa, and has a son Oliver."]);
+    writeAssistantTranscript(noticeTranscript, ["Quaid has 1 deferred maintenance notice waiting provider=1."]);
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      "agent:main:tui-seed": { sessionId: seedSessionId, updatedAt: now },
+      "agent:main:tui-notice": { sessionId: noticeSessionId, updatedAt: now + 1_000 },
+    });
+    utimesSync(seedTranscript, new Date(now - 2_000), new Date(now - 2_000));
+    utimesSync(noticeTranscript, new Date(now - 1_000), new Date(now - 1_000));
+
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+
+    const beforeAgentStart = api.on.mock.calls.find((call: any[]) =>
+      call[0] === "before_agent_start" && call[2]?.name === "before-agent-start-session-transition"
+    )?.[1];
+    expect(typeof beforeAgentStart).toBe("function");
+
+    await beforeAgentStart(
+      { sessionId: newSessionId, sessionKey: "agent:main:tui-new" },
+      { sessionId: newSessionId, sessionKey: "agent:main:tui-new" },
+    );
+
+    const payloads = readSignalPayloads(harness.signalDir);
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        session_id: seedSessionId,
+        type: "reset",
+        meta: expect.objectContaining({
+          source: "before_agent_start_fallback",
+          prior_session_id: seedSessionId,
+          new_session_id: newSessionId,
+        }),
+      }),
+    ]);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("keeps an armed new-key fallback when a later key transition cannot queue directly", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("rapid-new");

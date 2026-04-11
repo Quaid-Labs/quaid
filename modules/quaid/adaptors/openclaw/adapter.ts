@@ -2579,6 +2579,24 @@ function shouldSkipTranscriptText(roleOrText: "user" | "assistant" | string, may
   return false;
 }
 
+function isMeaningfulUserTranscriptActivity(messages: any[]): boolean {
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const role = String(message?.role || "").trim().toLowerCase();
+    if (role !== "user") continue;
+    const text = preprocessTranscriptText(extractSessionMessageText(message)).trim();
+    if (!text) continue;
+    const rawLines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const lastLine = String(rawLines[rawLines.length - 1] || text).replace(/^\[.*?\]\s*/, "").trim();
+    if (!lastLine) continue;
+    if (lastLine.startsWith("/")) continue;
+    if (shouldSkipTranscriptText("user", lastLine)) continue;
+    if (_isInternalMaintenanceMessageText(lastLine)) continue;
+    if (/^quaid (?:notice|notices|has \d+ deferred|deferred maintenance notice)/i.test(lastLine)) continue;
+    return true;
+  }
+  return false;
+}
+
 // ============================================================================
 // Adapter-facing Facade
 // ============================================================================
@@ -3287,6 +3305,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // which fires before before_prompt_build with the actual user query. Used as query
     // fallback when event.prompt is the OC metadata wrapper (empty after scrubbing).
     let lastUserMessageQuery: { text: string; seenAtMs: number } | null = null;
+    const sessionLastActivityMs = new Map<string, number>();
     const runtimeEvents = (api as any)?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update: any) => {
@@ -3408,6 +3427,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const conversationMessages = facade.filterConversationMessages(messages);
           const bootstrapOnlyConversation = facade.isResetBootstrapOnlyConversation(conversationMessages);
           const hasLifecycleUserCommand = facade.hasExplicitLifecycleUserCommand(conversationMessages);
+          if (
+            sessionId
+            && conversationMessages.length > 0
+            && !bootstrapOnlyConversation
+            && !hasLifecycleUserCommand
+            && isMeaningfulUserTranscriptActivity(conversationMessages)
+          ) {
+            lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
+            sessionLastActivityMs.set(sessionId, Date.now());
+          }
           if (!detail) {
             const tail = messages.slice(-5).map((m: any) => ({
               role: String(m?.role || ""),
@@ -3467,8 +3496,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             conversationMessages.length > 0
             && !bootstrapOnlyConversation
             && !hasLifecycleUserCommand
+            && isMeaningfulUserTranscriptActivity(conversationMessages)
           ) {
             lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
+            sessionLastActivityMs.set(sessionId, Date.now());
           }
           const daemonType = detail.label.toLowerCase().includes("reset") ? "reset" as const : "compaction" as const;
           writeDaemonSignal(sessionId, daemonType, { source: "transcript_update" });
@@ -3493,10 +3524,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // /new in any session writes a reset for that specific session (not a tracked
     // "current" that may point to the wrong one).
     const sessionKeyLastSeen = new Map<string, string>();
-    // Tracks the last time the watcher observed new messages in a session.
-    // Used by the before_agent_start fallback to identify which session was
-    // just active when OC does a visual-only /new (no sessions.json update).
-    const sessionLastActivityMs = new Map<string, number>();
+    // sessionLastActivityMs is shared with transcript_update so reset fallbacks
+    // prefer sessions with real user activity over notice-only bootstrap lanes.
     const startSessionIndexWatcher = () => {
       if (sessionIndexWatcherStarted) {
         return;
@@ -3840,7 +3869,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               continue;
             }
             const fresh = rows.slice(priorCount);
-            sessionLastActivityMs.set(sessionId, Date.now());
+            if (isMeaningfulUserTranscriptActivity(fresh)) {
+              sessionLastActivityMs.set(sessionId, Date.now());
+              lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
+            }
             for (let i = 0; i < fresh.length; i += 1) {
               const rawText = extractSessionMessageText(fresh[i]).trim();
               if (!rawText) continue;
@@ -4080,6 +4112,40 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       return direct;
     };
 
+    const resolveLifecycleCommandTargetSessionId = (
+      action: "new" | "reset" | "compact",
+      event: any,
+      ctx: any,
+    ): string => {
+      // For /new and /reset the hook payload can already be bound to the new
+      // bootstrap lane. Prefer explicit previous-session fields, then the most
+      // recent transcript that actually contained user activity.
+      if (action === "new" || action === "reset") {
+        const previousSessionId = String(
+          event?.context?.previousSessionEntry?.sessionId
+          || event?.context?.sessionEntry?.sessionId
+          || event?.context?.sessionId
+          || event?.previousSessionEntry?.sessionId
+          || event?.previousSessionId
+          || "",
+        ).trim();
+        if (previousSessionId) {
+          return previousSessionId;
+        }
+        const hint = lastTranscriptSessionHint;
+        if (hint?.sessionId) {
+          const ageMs = Date.now() - Number(hint.seenAtMs || 0);
+          if (ageMs >= 0 && ageMs <= (5 * 60_000)) {
+            return hint.sessionId;
+          }
+        }
+        if (currentInteractiveSession?.sessionId) {
+          return currentInteractiveSession.sessionId;
+        }
+      }
+      return facade.resolveLifecycleHookSessionId(event, ctx);
+    };
+
     // Direct slash-command capture: command:new/reset/compact can arrive as message events
     // before transcript files settle; bind extraction to the active user session.
     const handleSlashLifecycleFromMessage = async (event: any, ctx: any, sourceEvent: "message:received" | "message:preprocessed") => {
@@ -4111,7 +4177,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         if (!commandAction || !lifecycleSignal) return;
         const hookMessages = event?.message ? [event.message] : [];
-        const sessionId = resolveActiveUserSessionId(event, ctx, hookMessages);
+        const sessionId = commandAction === "new" || commandAction === "reset"
+          ? resolveLifecycleCommandTargetSessionId(commandAction, event, ctx)
+          : resolveActiveUserSessionId(event, ctx, hookMessages);
         writeHookTrace("hook.message.command_detected", {
           source_event: sourceEvent,
           command: commandAction,
@@ -4181,41 +4249,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
     // Primary lifecycle command path on supported OpenClaw builds.
     // Keep this explicit hook path to avoid transcript/session drift.
-    const resolveLifecycleCommandTargetSessionId = (
-      action: "new" | "reset" | "compact",
-      event: any,
-      ctx: any,
-    ): string => {
-      // For /new and /reset the hook payload can include both the old session
-      // (messages to extract) and the new session (empty/bootstrap). Prefer the
-      // previous session entry when present so extraction targets real content.
-      if (action === "new" || action === "reset") {
-        const previousSessionId = String(
-          // OC stores session data under event.context (nested), not top-level.
-          // Read both paths: context.previousSessionEntry (preferred), context.sessionEntry
-          // (fallback), context.sessionId (explicit field added by our OC patch), and
-          // legacy top-level fields for older OC versions.
-          event?.context?.previousSessionEntry?.sessionId
-          || event?.context?.sessionEntry?.sessionId
-          || event?.context?.sessionId
-          || event?.previousSessionEntry?.sessionId
-          || event?.previousSessionId
-          || "",
-        ).trim();
-        if (previousSessionId) {
-          return previousSessionId;
-        }
-        const hint = lastTranscriptSessionHint;
-        if (hint?.sessionId) {
-          const ageMs = Date.now() - Number(hint.seenAtMs || 0);
-          if (ageMs >= 0 && ageMs <= (5 * 60_000)) {
-            return hint.sessionId;
-          }
-        }
-      }
-      return facade.resolveLifecycleHookSessionId(event, ctx);
-    };
-
     const handleLifecycleCommandHook = async (
       action: "new" | "reset",
       event: any,
@@ -4447,6 +4480,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         || newSessionKey.startsWith("agent:main:tui-")
         || newSessionKey.startsWith("agent:main:telegram:");
       if (!isInteractiveKey) return;
+      const newAgentLabel = resolveAgentLabelFromSessionKey(newSessionKey) || "main";
 
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled("memory")) {
@@ -4479,7 +4513,37 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           detectionMethod = recentResetCandidates[0].detectionMethod;
         }
 
-        // Pass 2: fall back to JSONL mtime if no reset-signature session found.
+        // Pass 2: prefer sessions where the watcher saw meaningful user activity.
+        // Notice-only/bootstrap lanes can have the newest mtime after /new, but
+        // they are not the transcript whose staged rolling facts need flushing.
+        if (!bestPriorSessionId) {
+          const activeCandidates: NewKeyFanoutCandidate[] = [];
+          for (const [key, sid] of sessionKeyLastSeen.entries()) {
+            if (/^agent:[^:]+:hook:/.test(key)) continue;
+            if (sid === newSessionId) continue;
+            if (isInternalSessionContext({ sessionKey: key }, { sessionId: sid })) continue;
+            activeCandidates.push({
+              sessionId: sid,
+              key,
+              agentLabel: String(sessionIdToAgentId.get(sid) || resolveAgentLabelFromSessionKey(key) || "main").trim() || "main",
+              lastActivityMs: Number(sessionLastActivityMs.get(sid) || 0),
+            });
+          }
+          const selectedActive = selectNewKeyFanoutTarget(activeCandidates, {
+            newSessionId,
+            agentLabel: newAgentLabel,
+            nowMs,
+            lastTranscriptSessionId: String(lastTranscriptSessionHint?.sessionId || ""),
+            currentInteractiveSessionId: String(currentInteractiveSession?.sessionId || ""),
+          });
+          if (selectedActive) {
+            bestPriorSessionId = selectedActive.sessionId;
+            detectionMethod = "user_activity";
+          }
+        }
+
+        // Pass 3: fall back to JSONL mtime if no reset-signature or activity
+        // signal exists.
         if (!bestPriorSessionId) {
           let bestMtimeMs = 0;
           for (const [key, sid] of sessionKeyLastSeen.entries()) {
@@ -5404,6 +5468,7 @@ export const __test = {
   formatDeferredNoticeVisibleReply,
   isInternalSessionContext,
   isInternalTranscriptMessages,
+  isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
   selectNewKeyFanoutTarget,

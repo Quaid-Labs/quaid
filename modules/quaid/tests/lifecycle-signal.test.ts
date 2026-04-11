@@ -205,6 +205,16 @@ describe("lifecycle signal detection", () => {
     ])).toBe(false);
   });
 
+  it("tracks user transcript activity but ignores notice-only rows for OC reset routing", () => {
+    expect(__test.isMeaningfulUserTranscriptActivity([
+      { role: "assistant", content: "Quaid has 1 deferred maintenance notice waiting provider=1" },
+      { role: "user", content: "/new" },
+    ])).toBe(false);
+    expect(__test.isMeaningfulUserTranscriptActivity([
+      { role: "user", content: "[Fri 10 Apr 12:00 UTC] David works at Google and is married to Lisa." },
+    ])).toBe(true);
+  });
+
   it("parses event_msg payloads before internal transcript detection", () => {
     const tmpFile = `/tmp/quaid-oc-internal-${Date.now()}.jsonl`;
     fs.writeFileSync(
@@ -501,15 +511,19 @@ describe("lifecycle signal detection", () => {
 
   it("collects all recent reset backup sessions for burst /new recovery", () => {
     const baseDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-reset-backups-"));
-    const oldA = path.join(baseDir, "old-a.jsonl.reset.2026-04-10T10-00-00Z");
-    const oldB = path.join(baseDir, "old-b.jsonl.reset.2026-04-10T10-00-01Z");
-    fs.writeFileSync(oldA, "a");
-    fs.writeFileSync(oldB, "b");
-    const nowMs = Date.now();
-    fs.utimesSync(oldA, new Date(nowMs - 1_000), new Date(nowMs - 1_000));
-    fs.utimesSync(oldB, new Date(nowMs - 500), new Date(nowMs - 500));
+    try {
+      const oldA = path.join(baseDir, "old-a.jsonl.reset.2026-04-10T10-00-00Z");
+      const oldB = path.join(baseDir, "old-b.jsonl.reset.2026-04-10T10-00-01Z");
+      fs.writeFileSync(oldA, "a");
+      fs.writeFileSync(oldB, "b");
+      const nowMs = Date.now();
+      fs.utimesSync(oldA, new Date(nowMs - 1_000), new Date(nowMs - 1_000));
+      fs.utimesSync(oldB, new Date(nowMs - 500), new Date(nowMs - 500));
 
-    const sessions = __test.listRecentResetBackupSessions(baseDir, nowMs, 120_000, "new-sess");
-    expect(sessions.map((entry: any) => entry.sessionId)).toEqual(["old-b", "old-a"]);
+      const sessions = __test.listRecentResetBackupSessions(baseDir, nowMs, 120_000, "new-sess");
+      expect(sessions.map((entry: any) => entry.sessionId)).toEqual(["old-b", "old-a"]);
+    } finally {
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
   });
 });

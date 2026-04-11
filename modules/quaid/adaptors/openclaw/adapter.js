@@ -2021,6 +2021,23 @@ function shouldSkipTranscriptText(roleOrText, maybeText) {
   if (text.replace(/[*_<>\/b\s]/g, "").startsWith("HEARTBEAT_OK")) return true;
   return false;
 }
+function isMeaningfulUserTranscriptActivity(messages) {
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const role = String(message?.role || "").trim().toLowerCase();
+    if (role !== "user") continue;
+    const text = preprocessTranscriptText(extractSessionMessageText(message)).trim();
+    if (!text) continue;
+    const rawLines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const lastLine = String(rawLines[rawLines.length - 1] || text).replace(/^\[.*?\]\s*/, "").trim();
+    if (!lastLine) continue;
+    if (lastLine.startsWith("/")) continue;
+    if (shouldSkipTranscriptText("user", lastLine)) continue;
+    if (_isInternalMaintenanceMessageText(lastLine)) continue;
+    if (/^quaid (?:notice|notices|has \d+ deferred|deferred maintenance notice)/i.test(lastLine)) continue;
+    return true;
+  }
+  return false;
+}
 const facade = createQuaidFacade({
   workspace: WORKSPACE,
   instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : void 0,
@@ -2587,6 +2604,7 @@ ${notice}` : notice;
     let lastTranscriptSessionHint = null;
     let currentInteractiveSession = null;
     let lastUserMessageQuery = null;
+    const sessionLastActivityMs = /* @__PURE__ */ new Map();
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
@@ -2670,6 +2688,10 @@ ${notice}` : notice;
           const conversationMessages = facade.filterConversationMessages(messages);
           const bootstrapOnlyConversation = facade.isResetBootstrapOnlyConversation(conversationMessages);
           const hasLifecycleUserCommand = facade.hasExplicitLifecycleUserCommand(conversationMessages);
+          if (sessionId && conversationMessages.length > 0 && !bootstrapOnlyConversation && !hasLifecycleUserCommand && isMeaningfulUserTranscriptActivity(conversationMessages)) {
+            lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
+            sessionLastActivityMs.set(sessionId, Date.now());
+          }
           if (!detail) {
             const tail = messages.slice(-5).map((m) => ({
               role: String(m?.role || ""),
@@ -2723,8 +2745,9 @@ ${notice}` : notice;
             console.log(`[quaid][signal] suppressed duplicate ${detail.label} session=${sessionId} source=transcript_update`);
             return;
           }
-          if (conversationMessages.length > 0 && !bootstrapOnlyConversation && !hasLifecycleUserCommand) {
+          if (conversationMessages.length > 0 && !bootstrapOnlyConversation && !hasLifecycleUserCommand && isMeaningfulUserTranscriptActivity(conversationMessages)) {
             lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
+            sessionLastActivityMs.set(sessionId, Date.now());
           }
           const daemonType = detail.label.toLowerCase().includes("reset") ? "reset" : "compaction";
           writeDaemonSignal(sessionId, daemonType, { source: "transcript_update" });
@@ -2740,7 +2763,6 @@ ${notice}` : notice;
     const sessionLastFanoutSizeMap = /* @__PURE__ */ new Map();
     const seenSessionIndexCommandKeys = /* @__PURE__ */ new Set();
     const sessionKeyLastSeen = /* @__PURE__ */ new Map();
-    const sessionLastActivityMs = /* @__PURE__ */ new Map();
     const startSessionIndexWatcher = () => {
       if (sessionIndexWatcherStarted) {
         return;
@@ -3011,7 +3033,10 @@ ${notice}` : notice;
               continue;
             }
             const fresh = rows.slice(priorCount);
-            sessionLastActivityMs.set(sessionId, Date.now());
+            if (isMeaningfulUserTranscriptActivity(fresh)) {
+              sessionLastActivityMs.set(sessionId, Date.now());
+              lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
+            }
             for (let i = 0; i < fresh.length; i += 1) {
               const rawText = extractSessionMessageText(fresh[i]).trim();
               if (!rawText) continue;
@@ -3230,6 +3255,27 @@ ${notice}` : notice;
       }
       return direct;
     };
+    const resolveLifecycleCommandTargetSessionId = (action, event, ctx) => {
+      if (action === "new" || action === "reset") {
+        const previousSessionId = String(
+          event?.context?.previousSessionEntry?.sessionId || event?.context?.sessionEntry?.sessionId || event?.context?.sessionId || event?.previousSessionEntry?.sessionId || event?.previousSessionId || ""
+        ).trim();
+        if (previousSessionId) {
+          return previousSessionId;
+        }
+        const hint = lastTranscriptSessionHint;
+        if (hint?.sessionId) {
+          const ageMs = Date.now() - Number(hint.seenAtMs || 0);
+          if (ageMs >= 0 && ageMs <= 5 * 6e4) {
+            return hint.sessionId;
+          }
+        }
+        if (currentInteractiveSession?.sessionId) {
+          return currentInteractiveSession.sessionId;
+        }
+      }
+      return facade.resolveLifecycleHookSessionId(event, ctx);
+    };
     const handleSlashLifecycleFromMessage = async (event, ctx, sourceEvent) => {
       try {
         const rawText = String(
@@ -3252,7 +3298,7 @@ ${notice}` : notice;
         }
         if (!commandAction || !lifecycleSignal) return;
         const hookMessages = event?.message ? [event.message] : [];
-        const sessionId = resolveActiveUserSessionId(event, ctx, hookMessages);
+        const sessionId = commandAction === "new" || commandAction === "reset" ? resolveLifecycleCommandTargetSessionId(commandAction, event, ctx) : resolveActiveUserSessionId(event, ctx, hookMessages);
         writeHookTrace("hook.message.command_detected", {
           source_event: sourceEvent,
           command: commandAction,
@@ -3314,28 +3360,6 @@ ${notice}` : notice;
       name: "message-received-command-memory-extraction",
       priority: 10
     });
-    const resolveLifecycleCommandTargetSessionId = (action, event, ctx) => {
-      if (action === "new" || action === "reset") {
-        const previousSessionId = String(
-          // OC stores session data under event.context (nested), not top-level.
-          // Read both paths: context.previousSessionEntry (preferred), context.sessionEntry
-          // (fallback), context.sessionId (explicit field added by our OC patch), and
-          // legacy top-level fields for older OC versions.
-          event?.context?.previousSessionEntry?.sessionId || event?.context?.sessionEntry?.sessionId || event?.context?.sessionId || event?.previousSessionEntry?.sessionId || event?.previousSessionId || ""
-        ).trim();
-        if (previousSessionId) {
-          return previousSessionId;
-        }
-        const hint = lastTranscriptSessionHint;
-        if (hint?.sessionId) {
-          const ageMs = Date.now() - Number(hint.seenAtMs || 0);
-          if (ageMs >= 0 && ageMs <= 5 * 6e4) {
-            return hint.sessionId;
-          }
-        }
-      }
-      return facade.resolveLifecycleHookSessionId(event, ctx);
-    };
     const handleLifecycleCommandHook = async (action, event, ctx) => {
       try {
         const sessionId = resolveLifecycleCommandTargetSessionId(action, event, ctx);
@@ -3529,6 +3553,7 @@ ${notice}` : notice;
       ).trim().toLowerCase();
       const isInteractiveKey = !newSessionKey || newSessionKey === "agent:main:main" || newSessionKey.startsWith("agent:main:tui-") || newSessionKey.startsWith("agent:main:telegram:");
       if (!isInteractiveKey) return;
+      const newAgentLabel = resolveAgentLabelFromSessionKey(newSessionKey) || "main";
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled2("memory")) {
         const RECENT_RESET_WINDOW_MS = 12e4;
@@ -3544,6 +3569,31 @@ ${notice}` : notice;
         if (recentResetCandidates.length > 0) {
           bestPriorSessionId = recentResetCandidates[0].sessionId;
           detectionMethod = recentResetCandidates[0].detectionMethod;
+        }
+        if (!bestPriorSessionId) {
+          const activeCandidates = [];
+          for (const [key, sid] of sessionKeyLastSeen.entries()) {
+            if (/^agent:[^:]+:hook:/.test(key)) continue;
+            if (sid === newSessionId) continue;
+            if (isInternalSessionContext({ sessionKey: key }, { sessionId: sid })) continue;
+            activeCandidates.push({
+              sessionId: sid,
+              key,
+              agentLabel: String(sessionIdToAgentId.get(sid) || resolveAgentLabelFromSessionKey(key) || "main").trim() || "main",
+              lastActivityMs: Number(sessionLastActivityMs.get(sid) || 0)
+            });
+          }
+          const selectedActive = selectNewKeyFanoutTarget(activeCandidates, {
+            newSessionId,
+            agentLabel: newAgentLabel,
+            nowMs,
+            lastTranscriptSessionId: String(lastTranscriptSessionHint?.sessionId || ""),
+            currentInteractiveSessionId: String(currentInteractiveSession?.sessionId || "")
+          });
+          if (selectedActive) {
+            bestPriorSessionId = selectedActive.sessionId;
+            detectionMethod = "user_activity";
+          }
         }
         if (!bestPriorSessionId) {
           let bestMtimeMs = 0;
@@ -4365,6 +4415,7 @@ const __test = {
   formatDeferredNoticeVisibleReply,
   isInternalSessionContext,
   isInternalTranscriptMessages,
+  isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
   selectNewKeyFanoutTarget,
