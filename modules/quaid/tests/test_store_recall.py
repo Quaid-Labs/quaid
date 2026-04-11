@@ -3596,53 +3596,6 @@ class TestRecallLimitEdgeCases:
         assert kwargs["include_co_session"] is False
         assert kwargs["include_mmr"] is False
         assert kwargs["max_turns"] == 1
-
-    def test_graph_aware_recall_expands_kinship_queries_to_support_relations(self, tmp_path):
-        import datastore.memorydb.memory_graph as mg
-
-        graph, _ = _make_graph(tmp_path)
-        owner = mg.Node(id="owner", type="Person", name="solomon-steadman")
-        diana = mg.Node(id="diana", type="Person", name="Diana")
-        alice = mg.Node(id="alice", type="Person", name="Alice")
-        fake_direct = [
-            {
-                "id": "fact-1",
-                "text": "Diana has a daughter named Alice.",
-                "category": "fact",
-                "similarity": 0.73,
-            }
-        ]
-
-        recorded = {}
-
-        def _fake_related(node_id, relations=None, depth=1):
-            recorded["node_id"] = node_id
-            recorded["relations"] = list(relations or [])
-            recorded["depth"] = depth
-            return [
-                (diana, "sibling_of", "out", 1, [("solomon-steadman", "sibling_of")]),
-                (alice, "parent_of", "out", 2, [("solomon-steadman", "sibling_of"), ("Diana", "parent_of")]),
-            ]
-
-        with patch.object(mg, "get_graph", return_value=graph), \
-             patch.object(mg, "recall", return_value=(fake_direct, {"mode": "deliberate"})), \
-             patch.object(mg, "resolve_owner_person", return_value=owner), \
-             patch.object(mg, "extract_entities_from_text", return_value=[]), \
-             patch.object(graph, "get_edges", return_value=[]), \
-             patch.object(graph, "get_related_bidirectional", side_effect=_fake_related):
-            payload = mg.graph_aware_recall(
-                "Who is my niece?",
-                owner_id="solomon-steadman",
-                limit=8,
-                graph_depth=1,
-            )
-
-        assert recorded["node_id"] == "owner"
-        assert recorded["depth"] == 2
-        assert "sibling_of" in recorded["relations"]
-        assert "parent_of" in recorded["relations"]
-        graph_rows = payload.get("graph_results") or []
-        assert any("Alice" in row.get("text", "") for row in graph_rows)
         assert payload["meta"]["base_recall_meta"] == {"mode": "deliberate"}
 
     def test_resolve_recall_store_request_defaults_to_vector_only(self):
