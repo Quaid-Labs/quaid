@@ -119,6 +119,48 @@ print(text)
 PY
 }
 
+mark_notified() {
+    local target="$1"
+    local message_id="$2"
+    mailbox_python "$target" mark-notified "$message_id" <<'PY'
+import fcntl
+import json
+import pathlib
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+op = sys.argv[3]
+message_id = sys.argv[4]
+lock_path = root / "mailbox.lock"
+state_path = root / "notify-state.json"
+root.mkdir(parents=True, exist_ok=True)
+lock_path.touch(exist_ok=True)
+
+def load_state(path):
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+with lock_path.open("r+", encoding="utf-8") as lock_handle:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    state = load_state(state_path)
+    target_state = state.get(target)
+    if not isinstance(target_state, dict):
+        target_state = {}
+    target_state["needs_nudge"] = False
+    target_state["last_notified_id"] = message_id
+    target_state["last_notified_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    state[target] = target_state
+    state_path.write_text(json.dumps(state, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
 format_notify_message() {
     local message_id="$1"
     local kind="$2"
@@ -151,6 +193,7 @@ message_id = sys.argv[4]
 lock_path = root / "mailbox.lock"
 messages_path = root / "messages.jsonl"
 acks_path = root / "acks.jsonl"
+state_path = root / "notify-state.json"
 root.mkdir(parents=True, exist_ok=True)
 lock_path.touch(exist_ok=True)
 
@@ -159,6 +202,15 @@ def load_jsonl(path):
         return []
     with path.open("r", encoding="utf-8") as handle:
         return [json.loads(raw) for raw in handle if raw.strip()]
+
+def load_state(path):
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 with lock_path.open("r+", encoding="utf-8") as lock_handle:
     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
@@ -200,6 +252,7 @@ source = sys.argv[6]
 lock_path = root / "mailbox.lock"
 messages_path = root / "messages.jsonl"
 acks_path = root / "acks.jsonl"
+state_path = root / "notify-state.json"
 root.mkdir(parents=True, exist_ok=True)
 lock_path.touch(exist_ok=True)
 
@@ -208,6 +261,15 @@ def load_jsonl(path):
         return []
     with path.open("r", encoding="utf-8") as handle:
         return [json.loads(raw) for raw in handle if raw.strip()]
+
+def load_state(path):
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 def render(row):
     lane = row.get("lane") or "-"
@@ -225,6 +287,7 @@ with lock_path.open("r+", encoding="utf-8") as lock_handle:
     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
     messages = load_jsonl(messages_path)
     acked_rows = load_jsonl(acks_path)
+    state = load_state(state_path)
     acked = {(row.get("target"), row.get("id")) for row in acked_rows}
 
     current = None
@@ -255,6 +318,16 @@ with lock_path.open("r+", encoding="utf-8") as lock_handle:
         row for row in messages
         if row.get("target") == target and (target, row.get("id")) not in acked
     ]
+    target_state = state.get(target)
+    if not isinstance(target_state, dict):
+        target_state = {}
+    if pending:
+        target_state["pending_head_id"] = pending[0]["id"]
+    else:
+        target_state["needs_nudge"] = False
+        target_state["pending_head_id"] = ""
+    state[target] = target_state
+    state_path.write_text(json.dumps(state, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     print(f"Acknowledged {message_id} for {target}")
     if not pending:
@@ -336,6 +409,7 @@ lock_path = root / "mailbox.lock"
 lock_path.touch(exist_ok=True)
 messages_path = root / "messages.jsonl"
 acks_path = root / "acks.jsonl"
+state_path = root / "notify-state.json"
 
 def load_jsonl(path):
     if not path.exists():
@@ -349,10 +423,20 @@ def load_jsonl(path):
             rows.append(json.loads(raw))
     return rows
 
+def load_state(path):
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
 with lock_path.open("r+", encoding="utf-8") as lock_handle:
     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
     messages = load_jsonl(messages_path)
     acks = load_jsonl(acks_path)
+    state = load_state(state_path)
     acked_ids = {row["id"] for row in acks if row.get("target") == target}
     pending_before = [
         row for row in messages
@@ -371,10 +455,22 @@ with lock_path.open("r+", encoding="utf-8") as lock_handle:
     with messages_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=True) + "\n")
     pending_after = pending_before + [record]
+    target_state = state.get(target)
+    if not isinstance(target_state, dict):
+        target_state = {}
+    if not pending_before:
+        target_state["needs_nudge"] = True
+    else:
+        target_state["needs_nudge"] = bool(target_state.get("needs_nudge", False))
+    target_state["pending_head_id"] = pending_after[0]["id"] if pending_after else ""
+    state[target] = target_state
+    state_path.write_text(json.dumps(state, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({
         "record": record,
         "pending_before": len(pending_before),
         "pending_after": len(pending_after),
+        "should_notify": bool(target_state.get("needs_nudge", False)),
+        "notify_candidate": pending_after[0] if pending_after else record,
     }))
 PY
 )"
@@ -382,14 +478,18 @@ PY
         MESSAGE_ID="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"]["id"])' <<<"$RESULT")"
         PENDING_BEFORE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["pending_before"])' <<<"$RESULT")"
         PENDING_AFTER="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["pending_after"])' <<<"$RESULT")"
-        FIRST_KIND="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("kind", ""))' <<<"$RESULT")"
-        FIRST_LANE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("lane", ""))' <<<"$RESULT")"
-        FIRST_SENDER="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("sender", ""))' <<<"$RESULT")"
-        FIRST_MESSAGE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["record"].get("message", ""))' <<<"$RESULT")"
+        SHOULD_NOTIFY="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print("1" if data.get("should_notify") else "0")' <<<"$RESULT")"
+        NOTIFY_ID="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["notify_candidate"].get("id", ""))' <<<"$RESULT")"
+        NOTIFY_KIND="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["notify_candidate"].get("kind", ""))' <<<"$RESULT")"
+        NOTIFY_LANE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["notify_candidate"].get("lane", ""))' <<<"$RESULT")"
+        NOTIFY_SENDER="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["notify_candidate"].get("sender", ""))' <<<"$RESULT")"
+        NOTIFY_MESSAGE="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data["notify_candidate"].get("message", ""))' <<<"$RESULT")"
 
-        if [[ "$NOTIFY" != "0" ]] && [[ "$PENDING_BEFORE" == "0" ]] && [[ -x "$TMUX_MSG_SCRIPT" ]]; then
-            NOTIFY_TEXT="$(format_notify_message "$MESSAGE_ID" "$FIRST_KIND" "$FIRST_LANE" "$FIRST_SENDER" "$FIRST_MESSAGE")"
-            TMUX_MSG_SENDER="$SENDER" TMUX_MSG_SOURCE="$SENDER_PANE" "$TMUX_MSG_SCRIPT" "$TARGET" "$NOTIFY_TEXT" >/dev/null 2>&1 || true
+        if [[ "$NOTIFY" != "0" ]] && [[ "$SHOULD_NOTIFY" == "1" ]] && [[ -x "$TMUX_MSG_SCRIPT" ]]; then
+            NOTIFY_TEXT="$(format_notify_message "$NOTIFY_ID" "$NOTIFY_KIND" "$NOTIFY_LANE" "$NOTIFY_SENDER" "$NOTIFY_MESSAGE")"
+            if TMUX_MSG_SENDER="$SENDER" TMUX_MSG_SOURCE="$SENDER_PANE" "$TMUX_MSG_SCRIPT" "$TARGET" "$NOTIFY_TEXT" >/dev/null 2>&1; then
+                mark_notified "$TARGET" "$NOTIFY_ID"
+            fi
         fi
 
         echo "Queued id=$MESSAGE_ID target=$TARGET pending=$PENDING_AFTER"
