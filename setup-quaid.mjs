@@ -2220,8 +2220,7 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   // Force-refresh plugin install to avoid stale extension code lingering at ~/.openclaw/extensions/quaid.
   // Some OpenClaw builds report "already installed" and keep old files instead of replacing contents.
   try {
-    // Stage real files so the installed extension never retains dangling
-    // symlinks from the source tree.
+    // Stage real files for install metadata and dependency backfill.
     fs.cpSync(pluginPath, stagedPluginPath, { recursive: true, dereference: true });
   } catch (err) {
     return { ok: false, reason: `failed to stage plugin source: ${String(err)}` };
@@ -2259,27 +2258,22 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     if (unmanaged) removeStaleExtensionDir();
   }
 
-  // Register the plugin by writing directly to extensionDir and openclaw.json.
-  // OC's `plugins install` CLI is not used here: OC 2026.3.31+ added a security
-  // scanner that blocks any plugin using child_process (which we need for the
-  // extraction daemon), and the official bypass flag (--dangerously-force-unsafe-install)
-  // has a wiring bug in the manifest loader that prevents it from working. Direct
-  // registration achieves the same result and is more reliable across OC versions.
-  try {
-    fs.cpSync(stagedPluginPath, extensionDir, {
-      recursive: true,
-      force: true,
-      dereference: true,
-    });
-  } catch (err) {
-    return { ok: false, reason: `failed to copy plugin to extension dir: ${String(err)}` };
-  }
+  // Keep exactly one canonical OpenClaw plugin tree at ~/.quaid/plugins/quaid
+  // (or ~/.quaid/modules/quaid in dev). The gateway extension path is a symlink
+  // to that tree so hotfixes and installs never drift across two copies.
   const depsResult = ensureOpenClawExtensionDependencies({
-    extensionDir,
+    extensionDir: pluginPath,
     pluginDir: stagedPluginPath,
   });
   if (!depsResult.ok) {
-    return { ok: false, reason: `failed to provision extension dependencies: ${depsResult.reason}` };
+    return { ok: false, reason: `failed to provision plugin dependencies: ${depsResult.reason}` };
+  }
+  try {
+    fs.mkdirSync(path.dirname(extensionDir), { recursive: true });
+    fs.rmSync(extensionDir, { recursive: true, force: true });
+    fs.symlinkSync(pluginPath, extensionDir, "dir");
+  } catch (err) {
+    return { ok: false, reason: `failed to symlink plugin into extension dir: ${String(err)}` };
   }
   {
     // sourcePath must be in the macOS secure temp dir (/var/folders/) for the OC
