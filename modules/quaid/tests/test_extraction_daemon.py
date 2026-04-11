@@ -1069,6 +1069,64 @@ def test_check_idle_sessions_timeout_signal_carries_compaction_metadata(monkeypa
     ]
 
 
+def test_check_idle_sessions_treats_file_growth_past_eof_cursor_as_new_content(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+
+    extraction_daemon.write_cursor("sess-grown", 2, str(transcript_path))
+    extraction_daemon._cursor_end_timeout_fired.add("sess-grown")
+
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(' {"note":"new bytes without newline"}')
+
+    now = 1_700_000_000.0
+    old_mtime = now - (31 * 60)
+    os.utime(transcript_path, (old_mtime, old_mtime))
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "_adapter_supports_compaction_control", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_get_compact_on_timeout", lambda: True)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+            {
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+                "kwargs": kwargs,
+            }
+        ),
+    )
+
+    try:
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+    finally:
+        extraction_daemon._cursor_end_timeout_fired.discard("sess-grown")
+
+    assert captured == [
+        {
+            "signal_type": "timeout",
+            "session_id": "sess-grown",
+            "transcript_path": str(transcript_path),
+            "kwargs": {
+                "supports_compaction_control": True,
+                "meta": {"compact_on_timeout": True},
+            },
+        }
+    ]
+    assert "sess-grown" not in extraction_daemon._cursor_end_timeout_fired
+
+
 # ---------------------------------------------------------------------------
 # _signal_dir() / _cursor_dir() isolation (M3 bug regression)
 # ---------------------------------------------------------------------------
@@ -1426,12 +1484,16 @@ class TestCursorRoundTrip:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
 
-        extraction_daemon.write_cursor("sess-abc", 17, "/path/to/transcript.jsonl")
+        transcript_path = tmp_path / "transcript.jsonl"
+        transcript_path.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+        extraction_daemon.write_cursor("sess-abc", 17, str(transcript_path))
         result = extraction_daemon.read_cursor("sess-abc")
 
         assert result["line_offset"] == 17
-        assert result["transcript_path"] == "/path/to/transcript.jsonl"
+        assert result["transcript_path"] == str(transcript_path)
         assert result["internal"] is False
+        assert result["transcript_size_bytes"] == transcript_path.stat().st_size
 
     def test_read_cursor_returns_zero_offset_for_unknown_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -1442,6 +1504,7 @@ class TestCursorRoundTrip:
         assert result["line_offset"] == 0
         assert result["transcript_path"] == ""
         assert result["internal"] is False
+        assert result["transcript_size_bytes"] == 0
 
     def test_read_cursor_returns_zero_on_corrupt_json(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -1454,6 +1517,7 @@ class TestCursorRoundTrip:
 
         assert result["line_offset"] == 0
         assert result["internal"] is False
+        assert result["transcript_size_bytes"] == 0
 
     def test_write_cursor_advances_offset(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

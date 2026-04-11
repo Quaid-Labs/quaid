@@ -494,16 +494,34 @@ def read_cursor(session_id: str) -> Dict[str, Any]:
     session_id = _validate_session_id(session_id)
     cursor_file = _cursor_dir() / f"{session_id}.json"
     if not cursor_file.is_file():
-        return {"line_offset": 0, "transcript_path": "", "internal": False}
+        return {
+            "line_offset": 0,
+            "transcript_path": "",
+            "internal": False,
+            "transcript_size_bytes": 0,
+        }
     try:
         data = json.loads(cursor_file.read_text(encoding="utf-8"))
         return {
             "line_offset": int(data.get("line_offset", 0)),
             "transcript_path": data.get("transcript_path", ""),
             "internal": bool(data.get("internal", False)),
+            "transcript_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
         }
     except (json.JSONDecodeError, ValueError, OSError):
-        return {"line_offset": 0, "transcript_path": "", "internal": False}
+        return {
+            "line_offset": 0,
+            "transcript_path": "",
+            "internal": False,
+            "transcript_size_bytes": 0,
+        }
+
+
+def _transcript_size_bytes(transcript_path: str) -> int:
+    try:
+        return int(os.path.getsize(transcript_path))
+    except OSError:
+        return 0
 
 
 def write_cursor(session_id: str, line_offset: int, transcript_path: str, *, internal: bool = False) -> None:
@@ -515,6 +533,7 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str, *, int
         "line_offset": line_offset,
         "transcript_path": transcript_path,
         "internal": bool(internal),
+        "transcript_size_bytes": _transcript_size_bytes(transcript_path),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     try:
@@ -3014,6 +3033,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "session_id": session_id,
             "transcript_path": transcript_path,
             "cursor_offset": int(data.get("line_offset", 0) or 0),
+            "cursor_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
+            "current_size_bytes": _transcript_size_bytes(transcript_path),
             "mtime": mtime,
         })
 
@@ -3021,11 +3042,14 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         session_id = str(row["session_id"])
         transcript_path = str(row["transcript_path"])
         cursor_offset = int(row["cursor_offset"])
+        cursor_size_bytes = int(row.get("cursor_size_bytes", 0) or 0)
+        current_size_bytes = int(row.get("current_size_bytes", 0) or 0)
         mtime = float(row["mtime"])
 
         # Check if transcript has grown past cursor
         total_lines = count_transcript_lines(transcript_path)
-        cursor_at_end = total_lines <= cursor_offset
+        transcript_grew_past_cursor = current_size_bytes > cursor_size_bytes
+        cursor_at_end = total_lines <= cursor_offset and not transcript_grew_past_cursor
 
         # If cursor has advanced past a previously-seen end, reset the "fired" marker
         # so new content can trigger a fresh timeout signal if needed.
