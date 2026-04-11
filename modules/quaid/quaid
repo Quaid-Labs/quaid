@@ -12,6 +12,7 @@
 #   quaid registry list --project quaid
 #   quaid doctor
 #   quaid config [show|edit|path|set <key> <value>|set-auth <token>]
+#   quaid auth refresh [<token>|--file <path>]
 #   quaid help
 #
 # This is a convenience wrapper around the Python modules.
@@ -194,6 +195,10 @@ case "$CMD" in
     ;;
   hook-subagent-stop)
     exec "$PYTHON_BIN" "$SCRIPT_DIR/core/interface/hooks.py" subagent-stop "$@"
+    ;;
+
+  auth)
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/auth_cli.py" "$@"
     ;;
 
   # Extraction daemon
@@ -529,6 +534,7 @@ PYEOF
     echo "  config path          Show active config file path"
     echo "  config set k v       Set value by dotted key path"
     echo "  config set-auth tok  Store a long-lived adapter auth token"
+    echo "  auth refresh         Refresh adapter auth token from arg, file, or stdin"
     echo "  --shared             Target machine-wide shared config (embeddings, ollama)"
     echo "  --instance <id>      Target a specific instance's config"
     echo ""

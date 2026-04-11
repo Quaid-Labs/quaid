@@ -2,13 +2,8 @@
 
 Authentication layers (tried in order):
   1a. CLAUDE_CODE_OAUTH_TOKEN env var  — explicit override
-  1b. .auth-token file  — long-lived token written by install/hooks
-  2. ~/.claude/.credentials.json  — on-disk OAuth token (read-only, no refresh)
-  3. ANTHROPIC_API_KEY env var  — direct API key fallback
-
-The credentials.json tokens (layer 2) are web-scoped and cannot be used directly
-for API calls; the refresh flow is intentionally omitted to avoid interfering with
-CC's own token management.
+  1b. .auth-token file  — long-lived setup-token/API token written by install/hooks
+  2. ANTHROPIC_API_KEY env var  — direct API key fallback
 
 Fail-hard behavior:
   - failHard=true:  fail immediately at the first gate that fails, no fallback
@@ -22,104 +17,17 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Optional, Tuple
 
 from lib.fail_policy import is_fail_hard_enabled
+from lib.runtime_context import queue_deferred_notice
 from lib.providers import AnthropicLLMProvider, LLMProvider, LLMResult
 
 logger = logging.getLogger(__name__)
 
-# Claude Code OAuth constants
-_CREDS_PATH = Path.home() / ".claude" / ".credentials.json"
-_TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token"
-_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-# Refresh 5 minutes before expiry (same buffer Claude Code uses)
-_REFRESH_BUFFER_MS = 300_000
-
 # Track warnings per-process to avoid spam on every LLM call
 _warned_oauth: bool = False
 _warned_api_key: bool = False
-
-
-def _read_credentials() -> Optional[dict]:
-    """Read the claudeAiOauth block from credentials file."""
-    if not _CREDS_PATH.exists():
-        return None
-    try:
-        with open(_CREDS_PATH, "r", encoding="utf-8") as f:
-            creds = json.load(f)
-        oauth = creds.get("claudeAiOauth", {})
-        return oauth if isinstance(oauth, dict) and oauth.get("accessToken") else None
-    except (json.JSONDecodeError, IOError, OSError) as e:
-        logger.warning("[claude-code-oauth] Failed to read credentials: %s", e)
-        return None
-
-
-def _write_credentials(oauth_block: dict) -> bool:
-    """Write updated OAuth block back to credentials file."""
-    try:
-        creds = {}
-        if _CREDS_PATH.exists():
-            with open(_CREDS_PATH, "r", encoding="utf-8") as f:
-                creds = json.load(f)
-        creds["claudeAiOauth"] = oauth_block
-        _CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_CREDS_PATH, "w", encoding="utf-8") as f:
-            json.dump(creds, f, indent=2)
-        return True
-    except (IOError, OSError) as e:
-        logger.warning("[claude-code-oauth] Failed to write credentials: %s", e)
-        return False
-
-
-def _refresh_token(refresh_token: str) -> Optional[dict]:
-    """Exchange a refresh token for a new access token."""
-    endpoint = os.environ.get("CLAUDE_CODE_CUSTOM_OAUTH_URL", _TOKEN_ENDPOINT)
-    client_id = os.environ.get("CLAUDE_CODE_OAUTH_CLIENT_ID", _CLIENT_ID)
-
-    body = json.dumps({
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": client_id,
-    }).encode()
-
-    # Cloudflare blocks generic Python UAs on platform.claude.com; use
-    # the same User-Agent as the Claude Code CLI to pass the bot check.
-    cc_version = os.environ.get("CLAUDE_CODE_VERSION", "")
-    ua = f"Claude-Code/{cc_version}" if cc_version else "Claude-Code"
-    req = urllib.request.Request(
-        endpoint, data=body,
-        headers={"Content-Type": "application/json", "User-Agent": ua},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-        logger.warning("[claude-code-oauth] Token refresh failed: %s", e)
-        return None
-
-    if not isinstance(data, dict) or "access_token" not in data:
-        logger.warning("[claude-code-oauth] Refresh response missing access_token")
-        return None
-
-    expires_in_s = data.get("expires_in", 3600)
-    new_block = {
-        "accessToken": data["access_token"],
-        "refreshToken": data.get("refresh_token", refresh_token),
-        "expiresAt": int(time.time() * 1000) + (expires_in_s * 1000),
-    }
-
-    # Preserve existing metadata
-    existing = _read_credentials()
-    if existing:
-        for key in ("scopes", "subscriptionType", "rateLimitTier"):
-            if key in existing and key not in new_block:
-                new_block[key] = existing[key]
-
-    return new_block
 
 
 def _read_token_file() -> Optional[str]:
@@ -137,16 +45,33 @@ def _read_token_file() -> Optional[str]:
         return None
 
 
+def _queue_auth_refresh_notice() -> None:
+    """Queue a deferred operator notice for expired/invalid CC auth."""
+    try:
+        queue_deferred_notice(
+            "[Quaid] Your Claude Code Anthropic auth token is no longer valid. To refresh it, run:\n"
+            "claude setup-token\n"
+            "Then update Quaid with:\n"
+            "quaid auth refresh <token>\n"
+            "Or, if you keep the token in a file:\n"
+            "quaid auth refresh --file /path/to/anthtoken.md\n"
+            "Memory features are paused until the token is refreshed.",
+            kind="agent_notice",
+            priority="high",
+            source="claude_code_auth",
+            dedupe_key="claude-code-auth-refresh",
+        )
+    except Exception as exc:
+        logger.warning("[claude-code-oauth] failed queuing auth refresh notice: %s", exc)
+
+
 def _get_valid_token() -> Tuple[Optional[str], str]:
-    """Get a valid OAuth access token, refreshing if needed.
+    """Get a valid access token from explicit long-lived token sources.
 
     Returns:
         (token, status) where status is one of:
         - "ok": token is valid
-        - "refreshed": token was expired, successfully refreshed
-        - "no_credentials": no credentials file found
-        - "refresh_failed": token expired and refresh failed
-        - "no_refresh_token": token expired but no refresh token available
+        - "no_credentials": no long-lived token source found
     """
     # 1a. Check env var override (no expiry management)
     env_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
@@ -158,57 +83,22 @@ def _get_valid_token() -> Tuple[Optional[str], str]:
     if file_token:
         return file_token, "ok"
 
-    # 2. Read from credentials file
-    oauth = _read_credentials()
-    if not oauth:
-        return None, "no_credentials"
-
-    token = oauth.get("accessToken", "")
-    if not token:
-        return None, "no_credentials"
-
-    # 3. Check expiry (expiresAt is in milliseconds)
-    expires_at_ms = oauth.get("expiresAt", 0)
-    now_ms = int(time.time() * 1000)
-
-    if expires_at_ms and now_ms < (expires_at_ms - _REFRESH_BUFFER_MS):
-        # Token is still valid (with buffer)
-        return token, "ok"
-
-    # 4. Token expired or expiring soon — try refresh
-    refresh_token = oauth.get("refreshToken", "")
-    if not refresh_token:
-        logger.warning("[claude-code-oauth] Token expired and no refreshToken available")
-        return None, "no_refresh_token"
-
-    logger.info("[claude-code-oauth] Token expired or expiring soon, refreshing...")
-    new_block = _refresh_token(refresh_token)
-    if not new_block:
-        return None, "refresh_failed"
-
-    # 5. Write refreshed credentials back
-    if _write_credentials(new_block):
-        logger.info("[claude-code-oauth] Token refreshed and saved")
-    else:
-        logger.warning("[claude-code-oauth] Token refreshed but failed to persist")
-
-    return new_block["accessToken"], "refreshed"
+    return None, "no_credentials"
 
 
 def _warn_oauth_fallback(reason: str) -> None:
-    """Emit a loud, user-facing warning about OAuth failure. Once per process."""
+    """Emit a loud, user-facing warning about token failure. Once per process."""
     global _warned_oauth
     if _warned_oauth:
         return
     _warned_oauth = True
     print(
-        f"\n[quaid][WARNING] OAuth token unavailable ({reason}).\n"
-        f"  Claude Code's on-disk token (~/.claude/.credentials.json) is expired\n"
-        f"  and could not be refreshed.\n"
+        f"\n[quaid][WARNING] Claude Code token unavailable ({reason}).\n"
+        f"  Quaid could not use its provisioned Anthropic token for Claude Code.\n"
         f"\n"
         f"  Falling back to ANTHROPIC_API_KEY.\n"
-        f"  To fix: run 'claude setup-token', then 'quaid config set-auth <token>'\n"
-        f"  to store it in the adapter's auth path.\n",
+        f"  To fix: run 'claude setup-token', then 'quaid auth refresh <token>'\n"
+        f"  or 'quaid auth refresh --file /path/to/anthtoken.md'.\n",
         file=sys.stderr,
     )
 
@@ -223,7 +113,7 @@ def _warn_api_key_fallback() -> None:
         f"\n[quaid][WARNING] Using ANTHROPIC_API_KEY fallback for LLM calls.\n"
         f"  This uses your personal API quota instead of your Claude Code subscription.\n"
         f"  To use subscription: run 'claude setup-token', then\n"
-        f"  'quaid config set-auth <token>'.\n",
+        f"  'quaid auth refresh <token>'.\n",
         file=sys.stderr,
     )
 
@@ -234,10 +124,10 @@ class _OAuthUnavailable(Exception):
 
 
 class ClaudeCodeOAuthLLMProvider(LLMProvider):
-    """3-layer auth fallback for Claude Code LLM calls.
+    """Long-lived token auth fallback for Claude Code LLM calls.
 
     Layer 1: CLAUDE_CODE_OAUTH_TOKEN env var (explicit override)
-    Layer 2: On-disk OAuth from ~/.claude/.credentials.json (with refresh)
+    Layer 2: On-disk setup-token/API token from adapter auth path
     Layer 3: ANTHROPIC_API_KEY env var (direct API key, uses personal quota)
 
     Fail-hard (retrieval.failHard=true):
@@ -412,7 +302,15 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                 body = e.read().decode("utf-8", errors="replace") or "<empty>"
             except Exception:
                 pass
-            if e.code in (400, 401):
+            if e.code == 401:
+                _queue_auth_refresh_notice()
+                logger.warning(
+                    "[claude-code-oauth] HTTP 401 from API — queued refresh notice. "
+                    "model=%s body: %s",
+                    model, body[:400],
+                )
+                raise _OAuthUnavailable("http_401") from e
+            if e.code == 400:
                 # 400/401 can mean web-scoped token OR bad model name OR other
                 # request errors.  Log the actual API body prominently so
                 # failures are diagnosable, then fall through to next layer.
@@ -440,7 +338,8 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             if fail_hard:
                 raise RuntimeError(
                     f"OAuth unavailable ({e}) and failHard is enabled. "
-                    f"Ensure 'claude' is installed and authenticated."
+                    f"Ensure a valid Anthropic token is provisioned via "
+                    f"'claude setup-token' and 'quaid auth refresh'."
                 ) from e
             _warn_oauth_fallback(str(e))
         except Exception as e:
@@ -462,12 +361,11 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         raise RuntimeError(
             "All LLM auth methods failed.\n"
             "  Layer 1a: CLAUDE_CODE_OAUTH_TOKEN env var not set\n"
-            "  Layer 1b: No adapter auth token (run 'quaid config set-auth <token>')\n"
-            "  Layer 2: On-disk OAuth token not usable (web-scoped)\n"
+            "  Layer 1b: No adapter auth token (run 'quaid auth refresh <token>')\n"
             "  Layer 3: ANTHROPIC_API_KEY not set\n"
             "\n"
-            "Fix: run 'claude setup-token', then 'quaid config set-auth <token>', "
-            "or set ANTHROPIC_API_KEY."
+            "Fix: run 'claude setup-token', then 'quaid auth refresh <token>' "
+            "or 'quaid auth refresh --file /path/to/anthtoken.md', or set ANTHROPIC_API_KEY."
         )
 
     def get_profiles(self):
