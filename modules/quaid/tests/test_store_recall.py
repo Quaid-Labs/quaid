@@ -1332,7 +1332,7 @@ class TestRecallTelemetry:
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 2.0
 
-    def test_recall_full_planner_uses_bounded_default_timeout(self):
+    def test_recall_full_planner_keeps_deliberate_timeout_window(self):
         import datastore.memorydb.memory_graph as mg
 
         captured = {}
@@ -1364,7 +1364,7 @@ class TestRecallTelemetry:
                 return_meta=True,
             )
 
-        assert captured["timeout_s"] == 5.0
+        assert captured["timeout_s"] == 60.0
 
     def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_defaults(self):
         import datastore.memorydb.memory_graph as mg

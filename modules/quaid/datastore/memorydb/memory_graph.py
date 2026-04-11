@@ -99,7 +99,7 @@ _INJECTION_PATTERNS = [
 
 _LOW_INFO_ENTITY_CATEGORIES = {"person", "place", "entity", "concept", "event", "organization", "pet"}
 _LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?")
-_RECALL_PLANNER_TIMEOUT_CAP_S = 5.0
+_RECALL_PLANNER_TIMEOUT_CAP_S = 60.0
 _RECALL_STORE_PLAN_TIMEOUT_CAP_S = 2.0
 
 # Optional imports for LLM-verified dedup (graceful degradation if unavailable)
@@ -6759,9 +6759,9 @@ def _recall_planner_timeout_s(
 ) -> float:
     """Bound recall planner latency independently of full recall work.
 
-    The planner is a routing/query-shaping helper, not the retrieval operation
-    itself. Keep it short so deliberate CLI recalls cannot appear to hang while
-    still allowing the downstream recall path to do thorough store work.
+    Deliberate shell recall should remain thorough, so its normal fanout planner
+    keeps the larger window. The store-classification-only path is separately
+    capped in _plan_fanout_queries because it is just a routing hint.
     """
     default_cap = 2.0 if fast_mode else _RECALL_PLANNER_TIMEOUT_CAP_S
     if timeout_ms is None:
