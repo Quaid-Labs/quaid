@@ -276,9 +276,26 @@ class TestProcessLock:
         )
         with patch("config.get_config", return_value=cfg):
             lock_path = m._process_lock_path()
-            assert lock_path == tmp_path / "shared" / "run" / "openclaw-gateway-llm.lock"
+            assert lock_path == tmp_path / "shared" / "run" / "openclaw-gateway-llm" / "slot-0.lock"
+            assert len(m._process_lock_paths()) == 4
             with acquire_llm_slot(timeout_seconds=0.1):
                 assert lock_path.exists()
+
+    def test_process_lock_slot_count_env_override(self, monkeypatch, tmp_path):
+        import lib.llm_pool as m
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-livetest")
+        monkeypatch.setenv("QUAID_LLM_PROCESS_LOCK_SLOTS", "2")
+        cfg = SimpleNamespace(
+            core=SimpleNamespace(parallel=SimpleNamespace(llm_workers=1)),
+            adapter=SimpleNamespace(type="openclaw"),
+        )
+        with patch("config.get_config", return_value=cfg):
+            assert m._process_lock_paths() == [
+                tmp_path / "shared" / "run" / "openclaw-gateway-llm" / "slot-0.lock",
+                tmp_path / "shared" / "run" / "openclaw-gateway-llm" / "slot-1.lock",
+            ]
 
 
 # ---------------------------------------------------------------------------

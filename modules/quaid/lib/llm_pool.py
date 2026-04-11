@@ -21,6 +21,7 @@ _POOL_LOCK = threading.Lock()
 _POOL: Optional[threading.BoundedSemaphore] = None
 _POOL_SIZE = 0
 _POOL_RESIZE_WARNED = False
+_DEFAULT_PROCESS_LOCK_SLOTS = 4
 
 
 def _configured_slots() -> int:
@@ -55,11 +56,10 @@ def _ensure_pool() -> threading.BoundedSemaphore:
         return _POOL
 
 
-def _process_lock_path() -> Optional[Path]:
-    """Return the cross-process LLM lock path for providers that need one."""
+def _process_lock_enabled() -> bool:
     override = str(os.environ.get("QUAID_LLM_PROCESS_LOCK", "")).strip().lower()
     if override in {"0", "false", "no", "off"}:
-        return None
+        return False
 
     enabled = override in {"1", "true", "yes", "on"}
     if not enabled:
@@ -71,42 +71,80 @@ def _process_lock_path() -> Optional[Path]:
             adapter_type = ""
         instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip().lower()
         enabled = adapter_type == "openclaw" or instance.startswith("openclaw-")
-    if not enabled:
-        return None
+    return enabled
+
+
+def _process_lock_slot_count() -> int:
+    raw = str(os.environ.get("QUAID_LLM_PROCESS_LOCK_SLOTS", "") or "").strip()
+    if not raw:
+        return _DEFAULT_PROCESS_LOCK_SLOTS
+    try:
+        return max(1, min(64, int(raw)))
+    except Exception:
+        return _DEFAULT_PROCESS_LOCK_SLOTS
+
+
+def _process_lock_paths() -> list[Path]:
+    """Return cross-process LLM slot lock paths for providers that need them."""
+    if not _process_lock_enabled():
+        return []
 
     home_raw = str(os.environ.get("QUAID_HOME", "") or "").strip()
     home = Path(home_raw).expanduser() if home_raw else Path.home() / ".quaid"
-    return home / "shared" / "run" / "openclaw-gateway-llm.lock"
+    # Temporary launch containment for OpenClaw's shared gateway. The runtime
+    # supervisor TODO should replace this with a real platform-level lease pool.
+    lock_dir = home / "shared" / "run" / "openclaw-gateway-llm"
+    return [lock_dir / f"slot-{idx}.lock" for idx in range(_process_lock_slot_count())]
+
+
+def _process_lock_path() -> Optional[Path]:
+    """Return the first cross-process LLM slot path, kept for diagnostics/tests."""
+    paths = _process_lock_paths()
+    if not paths:
+        return None
+    return paths[0]
 
 
 @contextmanager
 def _acquire_process_lock(timeout_seconds: Optional[float]) -> Iterator[None]:
-    lock_path = _process_lock_path()
-    if lock_path is None:
+    lock_paths = _process_lock_paths()
+    if not lock_paths:
         yield
         return
 
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_paths[0].parent.mkdir(parents=True, exist_ok=True)
     deadline = None if timeout_seconds is None else time.monotonic() + max(0.0, float(timeout_seconds))
-    with open(lock_path, "a") as fd:
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    acquired_fd = None
+    try:
+        while acquired_fd is None:
+            last_blocked_error = None
+            for lock_path in lock_paths:
+                fd = open(lock_path, "a")
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired_fd = fd
+                    break
+                except OSError as exc:
+                    fd.close()
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise
+                    last_blocked_error = exc
+            if acquired_fd is not None:
                 break
-            except OSError as exc:
-                if exc.errno not in (errno.EACCES, errno.EAGAIN):
-                    raise
-                if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("Timed out waiting for cross-process LLM worker slot") from exc
-                    time.sleep(min(0.05, remaining))
-                else:
-                    time.sleep(0.05)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Timed out waiting for cross-process LLM worker slot") from last_blocked_error
+                time.sleep(min(0.05, remaining))
+            else:
+                time.sleep(0.05)
+        yield
+    finally:
+        if acquired_fd is not None:
+            try:
+                fcntl.flock(acquired_fd, fcntl.LOCK_UN)
+            finally:
+                acquired_fd.close()
 
 
 @contextmanager
