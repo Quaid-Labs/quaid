@@ -248,6 +248,39 @@ class TestPoolInit:
                 assert m._POOL_SIZE == 4
 
 
+class TestProcessLock:
+    def test_process_lock_disabled_for_non_openclaw(self, monkeypatch):
+        """Standalone/CC/CDX retain the in-process pool without a filesystem lock."""
+        import lib.llm_pool as m
+
+        monkeypatch.delenv("QUAID_LLM_PROCESS_LOCK", raising=False)
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+        cfg = SimpleNamespace(
+            core=SimpleNamespace(parallel=SimpleNamespace(llm_workers=1)),
+            adapter=SimpleNamespace(type="codex"),
+        )
+        with patch("config.get_config", return_value=cfg):
+            assert m._process_lock_path() is None
+
+    def test_process_lock_enabled_for_openclaw_instance(self, monkeypatch, tmp_path):
+        """OpenClaw uses a shared gateway, so separate Quaid processes serialize calls."""
+        import lib.llm_pool as m
+        from lib.llm_pool import acquire_llm_slot
+
+        monkeypatch.delenv("QUAID_LLM_PROCESS_LOCK", raising=False)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-livetest")
+        cfg = SimpleNamespace(
+            core=SimpleNamespace(parallel=SimpleNamespace(llm_workers=1)),
+            adapter=SimpleNamespace(type="openclaw"),
+        )
+        with patch("config.get_config", return_value=cfg):
+            lock_path = m._process_lock_path()
+            assert lock_path == tmp_path / "shared" / "run" / "openclaw-gateway-llm.lock"
+            with acquire_llm_slot(timeout_seconds=0.1):
+                assert lock_path.exists()
+
+
 # ---------------------------------------------------------------------------
 # Resize warning
 # ---------------------------------------------------------------------------

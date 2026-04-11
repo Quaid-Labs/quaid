@@ -1337,8 +1337,9 @@ class TestRecallTelemetry:
 
         captured = {}
 
-        def _fake_plan(query, *, max_queries, timeout_s, return_meta, planner_profile):
+        def _fake_plan(query, *, max_queries, timeout_s, return_meta, planner_profile, max_retries=0):
             captured["timeout_s"] = timeout_s
+            captured["max_retries"] = max_retries
             return [query], {
                 "query": query,
                 "timeout_ms": round(timeout_s * 1000),
@@ -1365,6 +1366,7 @@ class TestRecallTelemetry:
             )
 
         assert captured["timeout_s"] == 60.0
+        assert captured["max_retries"] == 1
 
     def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_defaults(self):
         import datastore.memorydb.memory_graph as mg
@@ -1387,9 +1389,10 @@ class TestRecallTelemetry:
 
         captured = {}
 
-        def _fake_plan(query, *, max_queries, timeout_s, return_meta, planner_profile):
+        def _fake_plan(query, *, max_queries, timeout_s, return_meta, planner_profile, max_retries=0):
             captured["timeout_s"] = timeout_s
             captured["planner_profile"] = planner_profile
+            captured["max_retries"] = max_retries
             return [query], {
                 "query": query,
                 "timeout_ms": round(timeout_s * 1000),
@@ -1408,6 +1411,7 @@ class TestRecallTelemetry:
 
         assert captured["timeout_s"] == 2.0
         assert captured["planner_profile"] == "fast"
+        assert captured["max_retries"] == 0
 
     def test_recall_fast_falls_back_to_off_when_planner_times_out_without_failhard(self):
         import datastore.memorydb.memory_graph as mg

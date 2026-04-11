@@ -6491,6 +6491,7 @@ def _plan_fanout_queries(
     timeout_s: float = 1.5,
     return_meta: bool = False,
     planner_profile: str = "full",
+    max_retries: int = 0,
 ):
     """Generate multiple HyDE-style search queries in a single fast LLM call.
 
@@ -6694,7 +6695,7 @@ def _plan_fanout_queries(
             max_tokens=200,
             timeout=timeout_s,
             system_prompt="You output compact JSON for memory retrieval. No prose.",
-            max_retries=0,
+            max_retries=max(0, int(max_retries or 0)),
         )
         if result is None:
             return _planner_fallback_or_raise(
@@ -7051,6 +7052,7 @@ def recall_fast(
             timeout_s=planner_timeout_s,
             return_meta=True,
             planner_profile=planner_profile,
+            max_retries=0,
         )
         planned_queries, planner_meta = planned if isinstance(planned, tuple) and len(planned) == 2 else ([query], {})
     except Exception as exc:
@@ -7296,6 +7298,7 @@ def _drill_plan_queries(
     timeout_s: float = 3.0,
     return_meta: bool = False,
     raise_on_error: bool = False,
+    max_retries: int = 0,
 ) -> Any:
     """Given current results, identify gaps and generate new search queries.
 
@@ -7404,7 +7407,7 @@ def _drill_plan_queries(
             max_tokens=200,
             timeout=timeout_s,
             system_prompt="You output compact JSON for retrieval drilling. No prose.",
-            max_retries=0,
+            max_retries=max(0, int(max_retries or 0)),
         )
         parsed = parse_json_response(result)
         if not isinstance(parsed, dict):
@@ -7661,6 +7664,7 @@ def recall(
             timeout_s=planner_timeout_s,
             return_meta=True,
             planner_profile=planner_profile,
+            max_retries=1,
         )
         if isinstance(planned, tuple) and len(planned) == 2:
             fanout_queries, fanout_meta = planned
@@ -7910,6 +7914,7 @@ def recall(
         planned_drill = _drill_plan_queries(
             query, merged, all_searched, timeout_s=drill_budget,
             return_meta=True,
+            max_retries=1,
         )
         if isinstance(planned_drill, tuple) and len(planned_drill) == 2:
             new_queries, drill_meta = planned_drill
@@ -10656,6 +10661,7 @@ if __name__ == "__main__":
                     timeout_s=_recall_planner_timeout_s(timeout_ms, fast_mode=bool(use_fast)),
                     return_meta=True,
                     planner_profile="fast" if use_fast else planner_profile,
+                    max_retries=0 if use_fast else 1,
                 )
                 if isinstance(planned, tuple) and len(planned) == 2:
                     planned_queries, planned_meta = planned
