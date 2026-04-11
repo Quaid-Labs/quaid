@@ -912,6 +912,30 @@ function sessionCursorPath(sessionId: string): string {
   return path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors", `${String(sessionId || "").trim()}.json`);
 }
 
+function instanceRootForAgentLabel(agentLabel: string = "main"): string {
+  const instanceId = getInstanceId(agentLabel);
+  return instanceId ? path.join(WORKSPACE, "instances", instanceId) : WORKSPACE;
+}
+
+function sessionCursorPathForAgent(sessionId: string, agentLabel: string = "main"): string {
+  return path.join(
+    instanceRootForAgentLabel(agentLabel),
+    "data",
+    "session-cursors",
+    `${String(sessionId || "").trim()}.json`,
+  );
+}
+
+function readSessionCursorOffset(sessionId: string, agentLabel: string = "main"): number {
+  try {
+    const payload = JSON.parse(fs.readFileSync(sessionCursorPathForAgent(sessionId, agentLabel), "utf8"));
+    const offset = Number(payload?.line_offset || 0);
+    return Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function _countTranscriptLines(transcriptPath: string): number {
   try {
     const content = fs.readFileSync(transcriptPath, "utf8");
@@ -923,6 +947,41 @@ function _countTranscriptLines(transcriptPath: string): number {
   } catch {
     return 0;
   }
+}
+
+function rollingStateHasPayload(sessionId: string, agentLabel: string = "main"): boolean {
+  try {
+    const statePath = path.join(
+      instanceRootForAgentLabel(agentLabel),
+      "data",
+      "rolling-extraction",
+      `${String(sessionId || "").trim()}.json`,
+    );
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    return Boolean(
+      (Array.isArray(state?.raw_facts) && state.raw_facts.length > 0)
+      || (Array.isArray(state?.carry_facts) && state.carry_facts.length > 0)
+      || String(state?.semantic_buffer || "").trim()
+      || Number(state?.semantic_buffer_tokens || 0) > 0,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sessionNeedsLifecycleFlush(sessionId: string, transcriptPath: string, agentLabel: string = "main"): boolean {
+  const sid = String(sessionId || "").trim();
+  const resolvedPath = String(transcriptPath || "").trim();
+  if (!sid || !resolvedPath || !fs.existsSync(resolvedPath)) return false;
+  if (rollingStateHasPayload(sid, agentLabel)) return true;
+  const totalLines = _countTranscriptLines(resolvedPath);
+  if (totalLines <= 0) return false;
+  const cursorOffset = readSessionCursorOffset(sid, agentLabel);
+  if (totalLines <= cursorOffset) return false;
+  const messages = parseSessionMessagesJsonl(resolvedPath).slice(Math.max(0, cursorOffset));
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  if (isInternalTranscriptMessages(messages)) return false;
+  return isMeaningfulUserTranscriptActivity(messages);
 }
 
 function writeSessionCursorToEnd(sessionId: string, transcriptPath: string): void {
@@ -1250,6 +1309,31 @@ function findLatestMeaningfulUserSessionFromIndex(opts: {
     return String(a.sessionId).localeCompare(String(b.sessionId));
   });
   return candidates[0] || null;
+}
+
+function findAgentMainSessionCandidate(agentLabel: string): UserActiveSessionCandidate | null {
+  const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+  const key = `agent:${label}:main`;
+  const row = (readSessionsIndex() as Record<string, any>)?.[key];
+  if (!row || typeof row !== "object") return null;
+  const sessionId = String(row?.sessionId || "").trim();
+  if (!sessionId) return null;
+  const sessionFile = resolveSessionFileFromIndexRow(row, sessionId);
+  if (!fs.existsSync(sessionFile)) return null;
+  const updatedAt = Number(row?.updatedAt || 0);
+  let mtimeMs = 0;
+  try {
+    mtimeMs = fs.statSync(sessionFile).mtimeMs;
+  } catch {}
+  return {
+    sessionId,
+    key,
+    agentLabel: label,
+    lastActivityMs: Math.max(Number.isFinite(updatedAt) ? updatedAt : 0, mtimeMs),
+    sessionFile,
+    mtimeMs,
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
+  };
 }
 
 function preferredTranscriptPathForSession(sessionId: string, preferredPath: string): string {
@@ -4444,6 +4528,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             hook_session_id: sessionId,
             reason: "duplicate",
           });
+          if (commandAction === "new" || commandAction === "reset") {
+            queueAgentMainFlushForLifecycle(commandAction, event, ctx, sessionId);
+          }
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
@@ -4460,6 +4547,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           command: commandAction,
           hook_session_id: sessionId,
         });
+        if (commandAction === "new" || commandAction === "reset") {
+          queueAgentMainFlushForLifecycle(commandAction, event, ctx, sessionId);
+        }
       } catch (err: unknown) {
         if (isFailHardEnabled()) throw err;
         console.error(`[quaid] ${sourceEvent} command detector failed:`, err);
@@ -4492,6 +4582,57 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
     // Primary lifecycle command path on supported OpenClaw builds.
     // Keep this explicit hook path to avoid transcript/session drift.
+    function queueAgentMainFlushForLifecycle(
+      action: "new" | "reset",
+      event: any,
+      ctx: any,
+      alreadySignaledSessionId: string,
+    ): void {
+      const agentLabel = resolveHookAgentLabel(event, ctx);
+      const mainCandidate = findAgentMainSessionCandidate(agentLabel);
+      if (!mainCandidate || mainCandidate.sessionId === alreadySignaledSessionId) {
+        return;
+      }
+      sessionIdToAgentId.set(mainCandidate.sessionId, agentLabel);
+      if (!sessionNeedsLifecycleFlush(mainCandidate.sessionId, mainCandidate.sessionFile, agentLabel)) {
+        writeHookTrace("hook.command.agent_main_flush_skipped", {
+          action,
+          agent_label: agentLabel,
+          session_id: mainCandidate.sessionId,
+          reason: "no_unextracted_content",
+        });
+        return;
+      }
+      rememberSessionTranscriptPath(mainCandidate.sessionId, mainCandidate.sessionFile, "agent-main-lifecycle-flush");
+      if (!facade.shouldProcessLifecycleSignal(mainCandidate.sessionId, {
+        label: "ResetSignal",
+        source: "hook",
+        signature: `hook:command_${action}:agent_main_flush`,
+      })) {
+        writeHookTrace("hook.command.agent_main_flush_suppressed", {
+          action,
+          agent_label: agentLabel,
+          session_id: mainCandidate.sessionId,
+          reason: "duplicate",
+        });
+        return;
+      }
+      facade.markLifecycleSignalFromHook(mainCandidate.sessionId, "ResetSignal");
+      writeDaemonSignal(mainCandidate.sessionId, "session_end", {
+        source: `command:${action}:agent_main_flush`,
+        command: action,
+        hook_session_id: alreadySignaledSessionId,
+        main_session_id: mainCandidate.sessionId,
+        main_session_key: mainCandidate.key,
+      });
+      writeHookTrace("hook.command.agent_main_flush_queued", {
+        action,
+        agent_label: agentLabel,
+        session_id: mainCandidate.sessionId,
+        session_key: mainCandidate.key,
+      });
+    }
+
     const handleLifecycleCommandHook = async (
       action: "new" | "reset",
       event: any,
@@ -4528,6 +4669,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             hook_session_id: sessionId,
             reason: "duplicate",
           });
+          queueAgentMainFlushForLifecycle(action, event, ctx, sessionId);
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
@@ -4542,6 +4684,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           action,
           hook_session_id: sessionId,
         });
+        queueAgentMainFlushForLifecycle(action, event, ctx, sessionId);
       } catch (err: unknown) {
         if (isFailHardEnabled()) throw err;
         console.error(`[quaid] command:${action} hook failed:`, err);

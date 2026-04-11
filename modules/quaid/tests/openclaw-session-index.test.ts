@@ -230,6 +230,94 @@ describe("openclaw session_index watcher", () => {
     rmSync(harness.root, { recursive: true, force: true });
   });
 
+  it("also flushes agent:main:main when /new resets only a TUI lifecycle session", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness("command-new-flushes-agent-main");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const mainSessionId = "0e7e1737-1111-4111-8111-111111111111";
+    const tuiSessionId = "7ffe6f8d-2222-4222-8222-222222222222";
+    const mainTranscript = join(harness.sessionsDir, `${mainSessionId}.jsonl`);
+    const tuiTranscript = join(harness.sessionsDir, `${tuiSessionId}.jsonl`);
+    const now = Date.now();
+
+    writeTranscript(mainTranscript, [
+      "This line has already been extracted.",
+      "My friend Emma lives in Seattle and owns a maple-colored bicycle.",
+    ]);
+    writeAssistantTranscript(tuiTranscript, ["TUI lifecycle shell for /new."]);
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      "agent:main:main": {
+        sessionId: mainSessionId,
+        updatedAt: now,
+        sessionFile: mainTranscript,
+      },
+      "agent:main:m7-final": {
+        sessionId: tuiSessionId,
+        updatedAt: now + 1_000,
+        sessionFile: tuiTranscript,
+      },
+    });
+    writeJson(join(harness.quaidHome, "instances", "openclaw-main", "data", "session-cursors", `${mainSessionId}.json`), {
+      session_id: mainSessionId,
+      line_offset: 1,
+      transcript_path: mainTranscript,
+    });
+
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+
+    const commandNewHook = api.registerHook.mock.calls.find((call: any[]) =>
+      call[0] === "command:new" && call[2]?.name === "command-new-memory-extraction"
+    )?.[1];
+    expect(typeof commandNewHook).toBe("function");
+
+    await commandNewHook(
+      {
+        action: "new",
+        sessionId: tuiSessionId,
+        sessionKey: "agent:main:m7-final",
+        previousSessionEntry: {
+          sessionId: tuiSessionId,
+          sessionFile: tuiTranscript,
+        },
+      },
+      {
+        sessionId: tuiSessionId,
+        sessionKey: "agent:main:m7-final",
+      },
+    );
+
+    const payloads = readSignalPayloads(harness.signalDir);
+    expect(payloads).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        session_id: tuiSessionId,
+        type: "reset",
+        meta: expect.objectContaining({
+          source: "command:new",
+        }),
+      }),
+      expect.objectContaining({
+        session_id: mainSessionId,
+        type: "session_end",
+        transcript_path: mainTranscript,
+        meta: expect.objectContaining({
+          source: "command:new:agent_main_flush",
+          main_session_key: "agent:main:main",
+        }),
+      }),
+    ]));
+    expect(payloads).toHaveLength(2);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("routes visual /new fallback to the last user-active session instead of a notice-only lane", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("visual-new-active-session");

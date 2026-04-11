@@ -672,6 +672,27 @@ function isInternalTranscriptMessages(messages) {
 function sessionCursorPath(sessionId) {
   return path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors", `${String(sessionId || "").trim()}.json`);
 }
+function instanceRootForAgentLabel(agentLabel = "main") {
+  const instanceId = getInstanceId(agentLabel);
+  return instanceId ? path.join(WORKSPACE, "instances", instanceId) : WORKSPACE;
+}
+function sessionCursorPathForAgent(sessionId, agentLabel = "main") {
+  return path.join(
+    instanceRootForAgentLabel(agentLabel),
+    "data",
+    "session-cursors",
+    `${String(sessionId || "").trim()}.json`
+  );
+}
+function readSessionCursorOffset(sessionId, agentLabel = "main") {
+  try {
+    const payload = JSON.parse(fs.readFileSync(sessionCursorPathForAgent(sessionId, agentLabel), "utf8"));
+    const offset = Number(payload?.line_offset || 0);
+    return Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+  } catch {
+    return 0;
+  }
+}
 function _countTranscriptLines(transcriptPath) {
   try {
     const content = fs.readFileSync(transcriptPath, "utf8");
@@ -683,6 +704,36 @@ function _countTranscriptLines(transcriptPath) {
   } catch {
     return 0;
   }
+}
+function rollingStateHasPayload(sessionId, agentLabel = "main") {
+  try {
+    const statePath = path.join(
+      instanceRootForAgentLabel(agentLabel),
+      "data",
+      "rolling-extraction",
+      `${String(sessionId || "").trim()}.json`
+    );
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    return Boolean(
+      Array.isArray(state?.raw_facts) && state.raw_facts.length > 0 || Array.isArray(state?.carry_facts) && state.carry_facts.length > 0 || String(state?.semantic_buffer || "").trim() || Number(state?.semantic_buffer_tokens || 0) > 0
+    );
+  } catch {
+    return false;
+  }
+}
+function sessionNeedsLifecycleFlush(sessionId, transcriptPath, agentLabel = "main") {
+  const sid = String(sessionId || "").trim();
+  const resolvedPath = String(transcriptPath || "").trim();
+  if (!sid || !resolvedPath || !fs.existsSync(resolvedPath)) return false;
+  if (rollingStateHasPayload(sid, agentLabel)) return true;
+  const totalLines = _countTranscriptLines(resolvedPath);
+  if (totalLines <= 0) return false;
+  const cursorOffset = readSessionCursorOffset(sid, agentLabel);
+  if (totalLines <= cursorOffset) return false;
+  const messages = parseSessionMessagesJsonl(resolvedPath).slice(Math.max(0, cursorOffset));
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  if (isInternalTranscriptMessages(messages)) return false;
+  return isMeaningfulUserTranscriptActivity(messages);
 }
 function writeSessionCursorToEnd(sessionId, transcriptPath) {
   const sid = String(sessionId || "").trim();
@@ -970,6 +1021,31 @@ function findLatestMeaningfulUserSessionFromIndex(opts) {
     return String(a.sessionId).localeCompare(String(b.sessionId));
   });
   return candidates[0] || null;
+}
+function findAgentMainSessionCandidate(agentLabel) {
+  const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+  const key = `agent:${label}:main`;
+  const row = readSessionsIndex()?.[key];
+  if (!row || typeof row !== "object") return null;
+  const sessionId = String(row?.sessionId || "").trim();
+  if (!sessionId) return null;
+  const sessionFile = resolveSessionFileFromIndexRow(row, sessionId);
+  if (!fs.existsSync(sessionFile)) return null;
+  const updatedAt = Number(row?.updatedAt || 0);
+  let mtimeMs = 0;
+  try {
+    mtimeMs = fs.statSync(sessionFile).mtimeMs;
+  } catch {
+  }
+  return {
+    sessionId,
+    key,
+    agentLabel: label,
+    lastActivityMs: Math.max(Number.isFinite(updatedAt) ? updatedAt : 0, mtimeMs),
+    sessionFile,
+    mtimeMs,
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0
+  };
 }
 function preferredTranscriptPathForSession(sessionId, preferredPath) {
   const sid = String(sessionId || "").trim();
@@ -3520,6 +3596,9 @@ ${notice}` : notice;
             hook_session_id: sessionId,
             reason: "duplicate"
           });
+          if (commandAction === "new" || commandAction === "reset") {
+            queueAgentMainFlushForLifecycle(commandAction, event, ctx, sessionId);
+          }
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
@@ -3536,6 +3615,9 @@ ${notice}` : notice;
           command: commandAction,
           hook_session_id: sessionId
         });
+        if (commandAction === "new" || commandAction === "reset") {
+          queueAgentMainFlushForLifecycle(commandAction, event, ctx, sessionId);
+        }
       } catch (err) {
         if (isFailHardEnabled2()) throw err;
         console.error(`[quaid] ${sourceEvent} command detector failed:`, err);
@@ -3560,6 +3642,51 @@ ${notice}` : notice;
       name: "message-received-command-memory-extraction",
       priority: 10
     });
+    function queueAgentMainFlushForLifecycle(action, event, ctx, alreadySignaledSessionId) {
+      const agentLabel = resolveHookAgentLabel(event, ctx);
+      const mainCandidate = findAgentMainSessionCandidate(agentLabel);
+      if (!mainCandidate || mainCandidate.sessionId === alreadySignaledSessionId) {
+        return;
+      }
+      sessionIdToAgentId.set(mainCandidate.sessionId, agentLabel);
+      if (!sessionNeedsLifecycleFlush(mainCandidate.sessionId, mainCandidate.sessionFile, agentLabel)) {
+        writeHookTrace("hook.command.agent_main_flush_skipped", {
+          action,
+          agent_label: agentLabel,
+          session_id: mainCandidate.sessionId,
+          reason: "no_unextracted_content"
+        });
+        return;
+      }
+      rememberSessionTranscriptPath(mainCandidate.sessionId, mainCandidate.sessionFile, "agent-main-lifecycle-flush");
+      if (!facade.shouldProcessLifecycleSignal(mainCandidate.sessionId, {
+        label: "ResetSignal",
+        source: "hook",
+        signature: `hook:command_${action}:agent_main_flush`
+      })) {
+        writeHookTrace("hook.command.agent_main_flush_suppressed", {
+          action,
+          agent_label: agentLabel,
+          session_id: mainCandidate.sessionId,
+          reason: "duplicate"
+        });
+        return;
+      }
+      facade.markLifecycleSignalFromHook(mainCandidate.sessionId, "ResetSignal");
+      writeDaemonSignal(mainCandidate.sessionId, "session_end", {
+        source: `command:${action}:agent_main_flush`,
+        command: action,
+        hook_session_id: alreadySignaledSessionId,
+        main_session_id: mainCandidate.sessionId,
+        main_session_key: mainCandidate.key
+      });
+      writeHookTrace("hook.command.agent_main_flush_queued", {
+        action,
+        agent_label: agentLabel,
+        session_id: mainCandidate.sessionId,
+        session_key: mainCandidate.key
+      });
+    }
     const handleLifecycleCommandHook = async (action, event, ctx) => {
       try {
         const sessionId = resolveLifecycleCommandTargetSessionId(action, event, ctx);
@@ -3592,6 +3719,7 @@ ${notice}` : notice;
             hook_session_id: sessionId,
             reason: "duplicate"
           });
+          queueAgentMainFlushForLifecycle(action, event, ctx, sessionId);
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
@@ -3606,6 +3734,7 @@ ${notice}` : notice;
           action,
           hook_session_id: sessionId
         });
+        queueAgentMainFlushForLifecycle(action, event, ctx, sessionId);
       } catch (err) {
         if (isFailHardEnabled2()) throw err;
         console.error(`[quaid] command:${action} hook failed:`, err);
