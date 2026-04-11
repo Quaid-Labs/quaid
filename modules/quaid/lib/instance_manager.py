@@ -39,6 +39,14 @@ def _deep_merge_defaults(defaults: dict, existing: dict) -> dict:
     return result
 
 
+def _read_json_object(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 class InstanceManager:
     """Base class for adapter-specific instance lifecycle management.
 
@@ -185,10 +193,26 @@ class InstanceManager:
             }
         retrieval_defaults["fail_hard"] = False
         retrieval_defaults["auto_inject"] = True
-        return {
+        defaults = {
             "adapter": {"type": self.adapter.adapter_id()},
             "retrieval": retrieval_defaults,
         }
+        try:
+            home = self.adapter.quaid_home()
+            adapter_id = str(self.adapter.adapter_id() or "").strip()
+            shared_defaults = [
+                home / "shared" / "config" / "global" / "config.json",
+                home / "shared" / "config" / adapter_id / "config.json",
+            ]
+            for cfg_path in shared_defaults:
+                cfg = _read_json_object(cfg_path)
+                if cfg:
+                    defaults = _deep_merge_defaults(defaults, cfg)
+        except Exception:
+            pass
+        defaults.setdefault("adapter", {})
+        defaults["adapter"]["type"] = self.adapter.adapter_id()
+        return defaults
 
     # ---- Settings / integration snippet ----
 

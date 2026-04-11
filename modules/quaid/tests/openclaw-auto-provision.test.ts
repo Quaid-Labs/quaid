@@ -94,6 +94,20 @@ describe("openclaw auto-provision", () => {
       },
       plugins: { strict: false },
     });
+    writeJson(path.join(hiddenHome, "shared", "config", "openclaw", "config.json"), {
+      adapter: { type: "openclaw" },
+      retrieval: { failHard: false, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex-mini",
+      },
+      capture: { chunk_tokens: 500 },
+      plugins: { strict: false, enabled: true },
+      notifications: { level: "normal" },
+    });
     fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-main", "data"), { recursive: true });
     fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-main", "logs"), { recursive: true });
     fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
@@ -145,6 +159,12 @@ describe("openclaw auto-provision", () => {
     expect(fs.existsSync(targetConfigPath)).toBe(true);
     expect(fs.existsSync(targetSoulPath)).toBe(true);
     expect(fs.existsSync(path.join(visibleHome, "instances", "openclaw-m13test", "journal"))).toBe(true);
+    const targetConfig = JSON.parse(fs.readFileSync(targetConfigPath, "utf8"));
+    expect(targetConfig.models.deepReasoning).toBe("gpt-5.1-codex");
+    expect(targetConfig.models.fastReasoning).toBe("gpt-5.1-codex-mini");
+    expect(targetConfig.capture.chunk_tokens).toBe(500);
+    expect(targetConfig.plugins.enabled).toBe(true);
+    expect(targetConfig.notifications.level).toBe("normal");
     expect(
       childProcessState.daemonStartCalls.some(
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",

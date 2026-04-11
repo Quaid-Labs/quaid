@@ -25,4 +25,12 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const validationAdapterType = models?.adapterType || resolvedInstallerPlatform();");
     expect(setupText).toContain("shouldStartExtractionDaemonAfterInstall(validationAdapterType)");
   });
+
+  it("installer hydrates the default resolved instance config, not only explicit env instances", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedAdapterType)");
+    expect(setupText).toContain("hydratePlatformInstanceConfigs");
+  });
 });

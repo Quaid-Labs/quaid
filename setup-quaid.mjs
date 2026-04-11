@@ -29,6 +29,12 @@ import {
   installerFallbackModelDefaults,
   installerFallbackProviders,
 } from "./lib/install-model-defaults.mjs";
+import {
+  deepMergeMissing,
+  hydratePlatformInstanceConfigs,
+  readJsonObject,
+  writeJsonObject,
+} from "./lib/install-config-hydration.mjs";
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 
@@ -5053,14 +5059,10 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     embeddingModel: embeddings.embedModel,
     embeddingDim: embeddings.embedDim,
   };
-  let sharedGlobalCfg = {};
-  if (fs.existsSync(sharedGlobalConfigPath)) {
-    try { sharedGlobalCfg = JSON.parse(fs.readFileSync(sharedGlobalConfigPath, "utf8")); } catch {}
-  }
+  let sharedGlobalCfg = readJsonObject(sharedGlobalConfigPath) || {};
   if (!sharedGlobalCfg.ollama) {
     sharedGlobalCfg.ollama = ollamaBlock;
-    fs.mkdirSync(sharedGlobalConfigDir, { recursive: true });
-    fs.writeFileSync(sharedGlobalConfigPath, JSON.stringify(sharedGlobalCfg, null, 2) + "\n");
+    writeJsonObject(sharedGlobalConfigPath, sharedGlobalCfg);
     log.info(`Wrote embeddings config to shared global fallback: ${sharedGlobalConfigPath}`);
   } else {
     log.info(C.dim(`Shared global embeddings config already exists — skipping (${sharedGlobalConfigPath})`));
@@ -5074,13 +5076,17 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   // Write config to the hidden instance root (QUAID_HOME/instances/<instance>/config.json).
   // This is the authoritative instance config path; the old flat QUAID_HOME/config/
   // path is no longer written.
-  const instanceId = (process.env.QUAID_INSTANCE || "").trim();
+  const sharedPlatformCfg = readJsonObject(sharedPlatformConfigPath) || {};
+  const instanceConfigDefaults = Object.keys(sharedPlatformCfg).length > 0
+    ? deepMergeMissing(config, sharedPlatformCfg)
+    : config;
+
+  const instanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedAdapterType)).trim();
   if (instanceId) {
     // Explicit instance: write directly to instance config path.
     const instanceConfigDir = hiddenInstanceDir(instanceId);
     fs.mkdirSync(instanceConfigDir, { recursive: true });
-    const configJson = JSON.stringify(config, null, 2) + "\n";
-    fs.writeFileSync(path.join(instanceConfigDir, "config.json"), configJson);
+    writeJsonObject(path.join(instanceConfigDir, "config.json"), instanceConfigDefaults);
     log.info(`Wrote instance config: ${instanceConfigDir}/config.json`);
   }
   // All platforms: write config to shared platform config so all instances
@@ -5090,6 +5096,17 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     const configJson = JSON.stringify(config, null, 2) + "\n";
     fs.writeFileSync(sharedPlatformConfigPath, configJson);
     log.info(`Wrote shared platform config: ${sharedPlatformConfigPath}`);
+  }
+  if (resolvedAdapterType === "openclaw") {
+    const platformDefaults = readJsonObject(sharedPlatformConfigPath) || instanceConfigDefaults;
+    const hydrated = hydratePlatformInstanceConfigs({
+      instancesDir: HIDDEN_INSTANCES_DIR,
+      platformKey: "openclaw",
+      defaults: deepMergeMissing(config, platformDefaults),
+    });
+    if (hydrated.length > 0) {
+      log.info(`Hydrated OpenClaw instance config defaults: ${hydrated.length} instance(s)`);
+    }
   }
 }
 

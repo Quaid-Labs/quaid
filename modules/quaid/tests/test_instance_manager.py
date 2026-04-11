@@ -83,6 +83,44 @@ class TestInstanceManagerBase:
         config = json.loads((silo / "config.json").read_text())
         assert config["adapter"]["type"] == adapter.adapter_id()
 
+    def test_create_folds_shared_platform_defaults_into_silo_config(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "openclaw"
+        adapter.adapter_id.return_value = "openclaw"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "openclaw-main"
+        shared_cfg = tmp_path / "shared" / "config" / "openclaw" / "config.json"
+        shared_cfg.parent.mkdir(parents=True)
+        shared_cfg.write_text(
+            json.dumps({
+                "models": {
+                    "llmProvider": "openai-codex",
+                    "deepReasoning": "gpt-5.4",
+                    "fastReasoning": "gpt-5.4-mini",
+                },
+                "capture": {"chunk_tokens": 500},
+                "plugins": {"strict": True},
+                "notifications": {"level": "normal"},
+            }),
+            encoding="utf-8",
+        )
+        mgr = InstanceManager(adapter)
+
+        with patch("lib.instance.instance_exists", return_value=False), \
+             patch("lib.instance.validate_instance_id"):
+            silo = mgr.create("m13test")
+
+        config = json.loads((silo / "config.json").read_text())
+        assert config["adapter"]["type"] == "openclaw"
+        assert config["models"]["deepReasoning"] == "gpt-5.4"
+        assert config["models"]["fastReasoning"] == "gpt-5.4-mini"
+        assert config["capture"]["chunk_tokens"] == 500
+        assert config["plugins"]["strict"] is True
+        assert config["notifications"]["level"] == "normal"
+        assert config["retrieval"]["auto_inject"] is True
+
     def test_create_raises_if_exists(self, tmp_path):
         from lib.instance_manager import InstanceManager
         adapter = MagicMock()
