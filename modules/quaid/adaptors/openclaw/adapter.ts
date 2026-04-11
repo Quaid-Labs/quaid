@@ -800,6 +800,40 @@ function resolveSessionKeyForSessionId(sessionId: string): string {
   return "";
 }
 
+function parseSessionIdFromTranscriptFilePath(filePath: string): string {
+  const candidate = String(filePath || "").trim();
+  if (!candidate) return "";
+  const parsed = facade.parseSessionIdFromTranscriptPath(candidate);
+  if (parsed) return parsed;
+  const base = path.basename(candidate);
+  const resetIdx = base.indexOf(".jsonl.reset.");
+  if (resetIdx > 0) return base.slice(0, resetIdx);
+  return base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : "";
+}
+
+function transcriptPathMatchesSession(sessionId: string, filePath: string): boolean {
+  const sid = String(sessionId || "").trim();
+  const pathSessionId = parseSessionIdFromTranscriptFilePath(filePath);
+  return Boolean(sid && (!pathSessionId || pathSessionId === sid));
+}
+
+function rememberSessionTranscriptPath(sessionId: string, filePath: string, source: string): boolean {
+  const sid = String(sessionId || "").trim();
+  const candidate = String(filePath || "").trim();
+  if (!sid || !candidate) return false;
+  if (!transcriptPathMatchesSession(sid, candidate)) {
+    writeHookTrace("session.transcript_path_mismatch_skipped", {
+      source,
+      session_id: sid,
+      file_session_id: parseSessionIdFromTranscriptFilePath(candidate),
+      session_file: candidate,
+    });
+    return false;
+  }
+  sessionTranscriptPaths.set(sid, candidate);
+  return true;
+}
+
 function isInternalSessionContext(event: any, ctx: any): boolean {
   const sessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
   if (facade.isInternalQuaidSession(sessionId)) {
@@ -1135,9 +1169,10 @@ function resolveSessionFileFromIndexRow(row: any, sessionId: string): string {
 function sessionHasMeaningfulUserActivity(sessionId: string, preferredPath?: string): boolean {
   const sid = String(sessionId || "").trim();
   if (!sid) return false;
+  const mappedPath = String(sessionTranscriptPaths.get(sid) || "").trim();
   const candidates = [
-    preferredPath,
-    sessionTranscriptPaths.get(sid),
+    transcriptPathMatchesSession(sid, String(preferredPath || "")) ? preferredPath : "",
+    transcriptPathMatchesSession(sid, mappedPath) ? mappedPath : "",
     getOpenClawSessionFile(sid),
   ].map((value) => String(value || "").trim()).filter(Boolean);
   const seen = new Set<string>();
@@ -1149,7 +1184,7 @@ function sessionHasMeaningfulUserActivity(sessionId: string, preferredPath?: str
     if (!Array.isArray(messages) || messages.length === 0) continue;
     if (isInternalTranscriptMessages(messages)) continue;
     if (isMeaningfulUserTranscriptActivity(messages)) {
-      sessionTranscriptPaths.set(sid, candidate);
+      rememberSessionTranscriptPath(sid, candidate, "meaningful-user-activity");
       return true;
     }
   }
@@ -1196,7 +1231,7 @@ function findLatestMeaningfulUserSessionFromIndex(opts: {
       Number.isFinite(updatedAt) ? updatedAt : 0,
       stat.mtimeMs,
     );
-    sessionTranscriptPaths.set(sessionId, sessionFile);
+    rememberSessionTranscriptPath(sessionId, sessionFile, "latest-meaningful-session");
     sessionIdToAgentId.set(sessionId, agentLabel);
     candidates.push({
       sessionId,
@@ -1221,9 +1256,9 @@ function preferredTranscriptPathForSession(sessionId: string, preferredPath: str
   const sid = String(sessionId || "").trim();
   if (!sid) return String(preferredPath || "").trim();
   const mapped = String(sessionTranscriptPaths.get(sid) || "").trim();
-  if (mapped) return mapped;
+  if (mapped && transcriptPathMatchesSession(sid, mapped)) return mapped;
   const preferred = String(preferredPath || "").trim();
-  if (preferred && path.basename(preferred).startsWith(sid)) {
+  if (preferred && transcriptPathMatchesSession(sid, preferred)) {
     return preferred;
   }
   const physical = getOpenClawSessionFile(sid);
@@ -1496,7 +1531,19 @@ function writeDaemonSignal(
   meta?: Record<string, any>,
 ): string | null {
   if (!sessionId) return null;
-  const transcriptPath = sessionTranscriptPaths.get(sessionId) || "";
+  const mappedTranscriptPath = String(sessionTranscriptPaths.get(sessionId) || "").trim();
+  const directPhysicalPath = getOpenClawSessionFile(sessionId);
+  const transcriptPath = transcriptPathMatchesSession(sessionId, mappedTranscriptPath) || !fs.existsSync(directPhysicalPath)
+    ? mappedTranscriptPath
+    : "";
+  if (mappedTranscriptPath && !transcriptPath) {
+    writeHookTrace("session.daemon_signal_mapped_path_ignored", {
+      session_id: sessionId,
+      signal_type: signalType,
+      mapped_path: mappedTranscriptPath,
+      mapped_session_id: parseSessionIdFromTranscriptFilePath(mappedTranscriptPath),
+    });
+  }
   if (!transcriptPath) {
     // Try to resolve from OC sessions directories (multiple locations)
     const candidates = [
@@ -1506,7 +1553,7 @@ function writeDaemonSignal(
     ];
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
-        sessionTranscriptPaths.set(sessionId, candidate);
+        rememberSessionTranscriptPath(sessionId, candidate, "daemon-signal-candidate");
         break;
       }
     }
@@ -3437,7 +3484,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
           // Track transcript path for daemon signal writing
           const trackSessionId = String(update?.sessionId || "").trim();
-          if (trackSessionId) sessionTranscriptPaths.set(trackSessionId, sessionFile);
+          if (trackSessionId) {
+            rememberSessionTranscriptPath(trackSessionId, sessionFile, "transcript-update-session-id");
+          }
           const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
           const sessionId =
@@ -3454,7 +3503,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           // Also register the path-derived sessionId so writeDaemonSignal can find
           // the transcript even when update.sessionId is missing (e.g. openresponses sessions).
           if (sessionId && sessionId !== trackSessionId) {
-            sessionTranscriptPaths.set(sessionId, sessionFile);
+            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-path-session-id");
           }
           const sessionKey = String(
             update?.sessionKey
@@ -3485,7 +3534,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const timeoutActivitySessionId = sessionId;
 
           // Track resolved sessionId → transcript file for daemon signals
-          if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
+          if (sessionId) {
+            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id");
+          }
 
           // Seed an initial extraction cursor so the daemon's rolling poller can
           // discover this session before any compaction fires.  before_agent_start
@@ -3740,7 +3791,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             if (isInternalTranscriptMessages(rows)) {
               writeSessionCursorToEnd(sessionId, sessionFile);
               sessionKeyLastSeen.set(key, sessionId);
-              sessionTranscriptPaths.set(sessionId, sessionFile);
+              rememberSessionTranscriptPath(sessionId, sessionFile, "session-index-internal");
               sessionIndexMessageCounts.set(sessionId, rows.length);
               sessionIndexTranscriptSizes.set(sessionId, currentSize);
               writeHookTrace("session_index.skipped", {
@@ -3908,6 +3959,36 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   lastActivityMs: activityMs,
                 });
               }
+              const hintedSession = lastTranscriptSessionHint;
+              if (
+                hintedSession?.sessionId
+                && hintedSession.sessionId !== sessionId
+                && !fanoutCandidates.some((candidate) => candidate.sessionId === hintedSession.sessionId)
+              ) {
+                const hintAgeMs = Date.now() - Number(hintedSession.seenAtMs || 0);
+                if (
+                  hintAgeMs >= 0
+                  && hintAgeMs <= (5 * 60_000)
+                  && sessionHasMeaningfulUserActivity(hintedSession.sessionId)
+                ) {
+                  const hintedActivityMs = Math.max(
+                    Number(sessionLastActivityMs.get(hintedSession.sessionId) || 0),
+                    Number(hintedSession.seenAtMs || 0),
+                  );
+                  fanoutCandidates.push({
+                    sessionId: hintedSession.sessionId,
+                    key: "agent:main:last-transcript-hint",
+                    agentLabel,
+                    lastActivityMs: hintedActivityMs,
+                  });
+                  sessionLastActivityMs.set(hintedSession.sessionId, hintedActivityMs);
+                  writeHookTrace("session_index.new_key_hint_candidate", {
+                    session_id: hintedSession.sessionId,
+                    new_key: key,
+                    hint_age_ms: hintAgeMs,
+                  });
+                }
+              }
               const selectedPrior = selectNewKeyFanoutTarget(fanoutCandidates, {
                 newSessionId: sessionId,
                 agentLabel,
@@ -3940,7 +4021,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             }
 
             sessionKeyLastSeen.set(key, sessionId);
-            sessionTranscriptPaths.set(sessionId, sessionFile);
+            rememberSessionTranscriptPath(sessionId, sessionFile, "session-index-entry");
             if (isSubagentSessionEntry(key, spawnedBy)) {
               const parentSessionId = resolveSubagentParentSessionId(spawnedBy, data as Record<string, any>, sessionKeyLastSeen);
               if (parentSessionId) {

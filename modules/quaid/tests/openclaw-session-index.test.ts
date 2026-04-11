@@ -138,8 +138,10 @@ describe("openclaw session_index watcher", () => {
 
     const contentSessionId = "1e50152d-1111-4111-8111-111111111111";
     const emptyNamedSessionId = "acb1723d-2222-4222-8222-222222222222";
+    const workerSessionId = "ad2d0f29-3333-4333-8333-333333333333";
     const contentTranscript = join(harness.sessionsDir, `${contentSessionId}.jsonl`);
     const emptyNamedTranscript = join(harness.sessionsDir, `${emptyNamedSessionId}.jsonl`);
+    const workerTranscript = join(harness.sessionsDir, `${workerSessionId}.jsonl`);
     const now = Date.now();
 
     writeTranscript(contentTranscript, [
@@ -148,16 +150,40 @@ describe("openclaw session_index watcher", () => {
     writeAssistantTranscript(emptyNamedTranscript, [
       "Quaid had 1 deferred notice waiting and drained it before this turn.",
     ]);
+    writeAssistantTranscript(workerTranscript, [
+      "OpenResponses worker completed background routing.",
+    ]);
     writeJson(join(harness.sessionsDir, "sessions.json"), {
       "agent:main:tui-generated": { sessionId: contentSessionId, updatedAt: now - 1_000 },
       "agent:main:m7-verify": { sessionId: emptyNamedSessionId, updatedAt: now },
     });
     utimesSync(contentTranscript, new Date(now - 1_000), new Date(now - 1_000));
     utimesSync(emptyNamedTranscript, new Date(now), new Date(now));
+    utimesSync(workerTranscript, new Date(now + 500), new Date(now + 500));
 
-    const api = makeFakeApi();
+    let transcriptUpdateHook: ((update: any) => void) | undefined;
+    const api = {
+      ...makeFakeApi(),
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn((hook: (update: any) => void) => {
+            transcriptUpdateHook = hook;
+          }),
+        },
+      },
+    };
     const plugin = await loadPlugin(harness);
     plugin.register(api as any);
+    expect(typeof transcriptUpdateHook).toBe("function");
+
+    // OC can report the TUI conversation as update.sessionId while the file being
+    // updated is an openresponses worker transcript. That must not poison the
+    // target session -> transcript path map used by command:new extraction.
+    transcriptUpdateHook?.({
+      sessionId: contentSessionId,
+      sessionKey: "agent:main:openresponses:worker",
+      sessionFile: workerTranscript,
+    });
 
     const commandNewHook = api.registerHook.mock.calls.find((call: any[]) =>
       call[0] === "command:new" && call[2]?.name === "command-new-memory-extraction"
@@ -195,6 +221,8 @@ describe("openclaw session_index watcher", () => {
         }),
       }),
     ]);
+    expect(payloads[0]?.transcript_path).not.toBe(workerTranscript);
+    expect(readFileSync(String(payloads[0]?.transcript_path || ""), "utf8")).toContain("David works at Google");
 
     warn.mockRestore();
     log.mockRestore();
@@ -251,6 +279,82 @@ describe("openclaw session_index watcher", () => {
         }),
       }),
     ]);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
+  it("uses the last transcript hint when a named --message key rebinds before watcher sees the seed", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness("new-key-rebind-transcript-hint");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const staleSessionId = "afa62a87-1111-4111-8111-111111111111";
+    const contentSessionId = "244f403b-2222-4222-8222-222222222222";
+    const newSessionId = "7ffe6f8d-3333-4333-8333-333333333333";
+    const now = Date.now();
+    const staleTranscript = join(harness.sessionsDir, `${staleSessionId}.jsonl`);
+    const contentTranscript = join(harness.sessionsDir, `${contentSessionId}.jsonl`);
+    const newTranscript = join(harness.sessionsDir, `${newSessionId}.jsonl`);
+
+    writeTranscript(staleTranscript, ["Old telegram content that should not receive the reset."]);
+    writeTranscript(contentTranscript, ["My cousin Jake lives in Portland and owns Riverview Books."]);
+    writeAssistantTranscript(newTranscript, ["New named session bootstrap."]);
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      "agent:main:telegram:group:-5221680718": { sessionId: staleSessionId, updatedAt: now },
+    });
+    utimesSync(staleTranscript, new Date(now), new Date(now));
+    utimesSync(contentTranscript, new Date(now + 1_000), new Date(now + 1_000));
+    utimesSync(newTranscript, new Date(now + 2_000), new Date(now + 2_000));
+
+    let transcriptUpdateHook: ((update: any) => void) | undefined;
+    const api = {
+      ...makeFakeApi(),
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn((hook: (update: any) => void) => {
+            transcriptUpdateHook = hook;
+          }),
+        },
+      },
+    };
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+    expect(typeof transcriptUpdateHook).toBe("function");
+
+    transcriptUpdateHook?.({
+      sessionId: contentSessionId,
+      sessionKey: "agent:main:m7-final",
+      sessionFile: contentTranscript,
+    });
+
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      "agent:main:telegram:group:-5221680718": { sessionId: staleSessionId, updatedAt: now + 2_000 },
+      "agent:main:m7-final": { sessionId: newSessionId, updatedAt: now + 3_000 },
+    });
+
+    vi.advanceTimersByTime(1_000);
+    expect(readSignalPayloads(harness.signalDir)).toHaveLength(0);
+
+    vi.advanceTimersByTime(2_000);
+
+    const payloads = readSignalPayloads(harness.signalDir);
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        session_id: contentSessionId,
+        type: "reset",
+        meta: expect.objectContaining({
+          source: "session_index_new_key",
+          new_key: "agent:main:m7-final",
+          new_session_id: newSessionId,
+        }),
+      }),
+    ]);
+    expect(readFileSync(String(payloads[0]?.transcript_path || ""), "utf8")).toContain("Riverview Books");
 
     warn.mockRestore();
     log.mockRestore();
