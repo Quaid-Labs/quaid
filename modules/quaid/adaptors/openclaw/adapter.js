@@ -850,6 +850,110 @@ function pickActiveInteractiveSession(data) {
     return null;
   }
 }
+function resolveSessionFileFromIndexRow(row, sessionId) {
+  const candidates = [
+    row?.sessionFile,
+    row?.file,
+    row?.path,
+    getOpenClawSessionFile(sessionId)
+  ];
+  for (const raw of candidates) {
+    const candidate = String(raw || "").trim();
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return getOpenClawSessionFile(sessionId);
+}
+function sessionHasMeaningfulUserActivity(sessionId, preferredPath) {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return false;
+  const candidates = [
+    preferredPath,
+    sessionTranscriptPaths.get(sid),
+    getOpenClawSessionFile(sid)
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    if (!fs.existsSync(candidate)) continue;
+    const messages = parseSessionMessagesJsonl(candidate);
+    if (!Array.isArray(messages) || messages.length === 0) continue;
+    if (isInternalTranscriptMessages(messages)) continue;
+    if (isMeaningfulUserTranscriptActivity(messages)) {
+      sessionTranscriptPaths.set(sid, candidate);
+      return true;
+    }
+  }
+  return false;
+}
+function findLatestMeaningfulUserSessionFromIndex(opts) {
+  const agentLabel = String(opts.agentLabel || "main").trim().toLowerCase() || "main";
+  const excluded = new Set((opts.excludeSessionIds || []).map((sid) => String(sid || "").trim()).filter(Boolean));
+  const installedAtMs = Number(opts.installedAtMs || readInstalledAtMs() || 0);
+  const data = readSessionsIndex();
+  const candidates = [];
+  for (const [key, row] of Object.entries(data || {})) {
+    if (!row || typeof row !== "object") continue;
+    if (!String(key || "").startsWith("agent:")) continue;
+    if (/^agent:[^:]+:(?:hook|openresponses|subagent)(?::|$)/.test(String(key || "").toLowerCase())) continue;
+    const sessionId = String(row?.sessionId || "").trim();
+    if (!sessionId || excluded.has(sessionId)) continue;
+    const entryAgentLabel = resolveAgentLabelFromSessionKey(key) || "main";
+    if (entryAgentLabel !== agentLabel) continue;
+    if (isInternalSessionContext({ sessionKey: key }, { sessionId })) continue;
+    const sessionFile = resolveSessionFileFromIndexRow(row, sessionId);
+    let stat;
+    try {
+      stat = fs.statSync(sessionFile);
+    } catch {
+      continue;
+    }
+    if (installedAtMs > 0 && stat.mtimeMs <= installedAtMs) continue;
+    const messages = parseSessionMessagesJsonl(sessionFile);
+    if (!Array.isArray(messages) || messages.length === 0) continue;
+    if (isInternalTranscriptMessages(messages)) continue;
+    if (!isMeaningfulUserTranscriptActivity(messages)) continue;
+    const updatedAt = Number(row?.updatedAt || 0);
+    const lastActivityMs = Math.max(
+      Number.isFinite(updatedAt) ? updatedAt : 0,
+      stat.mtimeMs
+    );
+    sessionTranscriptPaths.set(sessionId, sessionFile);
+    sessionIdToAgentId.set(sessionId, agentLabel);
+    candidates.push({
+      sessionId,
+      key,
+      agentLabel,
+      lastActivityMs,
+      sessionFile,
+      mtimeMs: stat.mtimeMs,
+      updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0
+    });
+  }
+  candidates.sort((a, b) => {
+    const activityDelta = Number(b.lastActivityMs || 0) - Number(a.lastActivityMs || 0);
+    if (activityDelta !== 0) return activityDelta;
+    return String(a.sessionId).localeCompare(String(b.sessionId));
+  });
+  return candidates[0] || null;
+}
+function preferredTranscriptPathForSession(sessionId, preferredPath) {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return String(preferredPath || "").trim();
+  const mapped = String(sessionTranscriptPaths.get(sid) || "").trim();
+  if (mapped) return mapped;
+  const preferred = String(preferredPath || "").trim();
+  if (preferred && path.basename(preferred).startsWith(sid)) {
+    return preferred;
+  }
+  const physical = getOpenClawSessionFile(sid);
+  if (fs.existsSync(physical)) {
+    return physical;
+  }
+  return preferred || physical;
+}
 function selectNewKeyFanoutTarget(candidates, opts) {
   const nowMs = Number(opts.nowMs || Date.now());
   const recentCutoffMs = nowMs - 5 * 6e4;
@@ -2934,11 +3038,21 @@ ${notice}` : notice;
                   writeHookTrace("session_index.new_key_skip", { reason: "no_new_content", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize2, last_fanout_size: lastFanoutSize });
                   continue;
                 }
+                let activityMs = Number(sessionLastActivityMs.get(priorSid) || 0);
+                if (activityMs <= 0) {
+                  const priorRows = parseSessionMessagesJsonl(getOpenClawSessionFile(priorSid));
+                  if (Array.isArray(priorRows) && priorRows.length > 0 && !isInternalTranscriptMessages(priorRows) && isMeaningfulUserTranscriptActivity(priorRows)) {
+                    activityMs = Math.max(priorMtime, Number(data?.[priorKey]?.updatedAt || 0));
+                    if (activityMs > 0) {
+                      sessionLastActivityMs.set(priorSid, activityMs);
+                    }
+                  }
+                }
                 fanoutCandidates.push({
                   sessionId: priorSid,
                   key: priorKey,
                   agentLabel: String(sessionIdToAgentId.get(priorSid) || "main").trim() || "main",
-                  lastActivityMs: Number(sessionLastActivityMs.get(priorSid) || 0)
+                  lastActivityMs: activityMs
                 });
               }
               const selectedPrior = selectNewKeyFanoutTarget(fanoutCandidates, {
@@ -3258,20 +3372,38 @@ ${notice}` : notice;
     const resolveLifecycleCommandTargetSessionId = (action, event, ctx) => {
       if (action === "new" || action === "reset") {
         const previousSessionId = String(
-          event?.context?.previousSessionEntry?.sessionId || event?.context?.sessionEntry?.sessionId || event?.context?.sessionId || event?.previousSessionEntry?.sessionId || event?.previousSessionId || ""
+          event?.context?.previousSessionEntry?.sessionId || event?.previousSessionEntry?.sessionId || event?.previousSessionId || ""
         ).trim();
         if (previousSessionId) {
           return previousSessionId;
         }
+        const direct = facade.resolveLifecycleHookSessionId(event, ctx);
+        const preferredTranscriptPath = resolveLifecycleTranscriptPath(action, event, ctx);
+        if (direct && sessionHasMeaningfulUserActivity(direct, preferredTranscriptPath)) {
+          return direct;
+        }
         const hint = lastTranscriptSessionHint;
-        if (hint?.sessionId) {
+        if (hint?.sessionId && hint.sessionId !== direct) {
           const ageMs = Date.now() - Number(hint.seenAtMs || 0);
-          if (ageMs >= 0 && ageMs <= 5 * 6e4) {
+          if (ageMs >= 0 && ageMs <= 5 * 6e4 && sessionHasMeaningfulUserActivity(hint.sessionId)) {
             return hint.sessionId;
           }
         }
-        if (currentInteractiveSession?.sessionId) {
+        const agentLabel = resolveHookAgentLabel(event, ctx);
+        const scanned = findLatestMeaningfulUserSessionFromIndex({
+          agentLabel,
+          excludeSessionIds: direct ? [direct] : []
+        });
+        if (scanned?.sessionId) {
+          sessionLastActivityMs.set(scanned.sessionId, scanned.lastActivityMs || Date.now());
+          lastTranscriptSessionHint = { sessionId: scanned.sessionId, seenAtMs: Date.now() };
+          return scanned.sessionId;
+        }
+        if (currentInteractiveSession?.sessionId && currentInteractiveSession.sessionId !== direct && sessionHasMeaningfulUserActivity(currentInteractiveSession.sessionId, currentInteractiveSession.sessionFile)) {
           return currentInteractiveSession.sessionId;
+        }
+        if (direct) {
+          return direct;
         }
       }
       return facade.resolveLifecycleHookSessionId(event, ctx);
@@ -3376,7 +3508,11 @@ ${notice}` : notice;
         if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
           return;
         }
-        preserveSessionTranscript(sessionId, preferredTranscriptPath, `command-${action}`);
+        preserveSessionTranscript(
+          sessionId,
+          preferredTranscriptPathForSession(sessionId, preferredTranscriptPath),
+          `command-${action}`
+        );
         const signature = `hook:command_${action}`;
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
           label: "ResetSignal",
@@ -3593,6 +3729,19 @@ ${notice}` : notice;
           if (selectedActive) {
             bestPriorSessionId = selectedActive.sessionId;
             detectionMethod = "user_activity";
+          }
+        }
+        if (!bestPriorSessionId) {
+          const scannedActive = findLatestMeaningfulUserSessionFromIndex({
+            agentLabel: newAgentLabel,
+            excludeSessionIds: [newSessionId],
+            installedAtMs: readInstalledAtMs()
+          });
+          if (scannedActive) {
+            bestPriorSessionId = scannedActive.sessionId;
+            detectionMethod = "index_user_activity";
+            sessionLastActivityMs.set(scannedActive.sessionId, scannedActive.lastActivityMs || Date.now());
+            lastTranscriptSessionHint = { sessionId: scannedActive.sessionId, seenAtMs: Date.now() };
           }
         }
         if (!bestPriorSessionId) {

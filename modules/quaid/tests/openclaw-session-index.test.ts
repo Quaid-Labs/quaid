@@ -129,6 +129,79 @@ afterEach(() => {
 });
 
 describe("openclaw session_index watcher", () => {
+  it("routes command:new from a named empty TUI lane to the generated content transcript", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness("command-new-generated-content");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const contentSessionId = "1e50152d-1111-4111-8111-111111111111";
+    const emptyNamedSessionId = "acb1723d-2222-4222-8222-222222222222";
+    const contentTranscript = join(harness.sessionsDir, `${contentSessionId}.jsonl`);
+    const emptyNamedTranscript = join(harness.sessionsDir, `${emptyNamedSessionId}.jsonl`);
+    const now = Date.now();
+
+    writeTranscript(contentTranscript, [
+      "Just making conversation, do not store this manually - my brother David works at Google. David is married to Lisa, and they have a son named Oliver.",
+    ]);
+    writeAssistantTranscript(emptyNamedTranscript, [
+      "Quaid had 1 deferred notice waiting and drained it before this turn.",
+    ]);
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      "agent:main:tui-generated": { sessionId: contentSessionId, updatedAt: now - 1_000 },
+      "agent:main:m7-verify": { sessionId: emptyNamedSessionId, updatedAt: now },
+    });
+    utimesSync(contentTranscript, new Date(now - 1_000), new Date(now - 1_000));
+    utimesSync(emptyNamedTranscript, new Date(now), new Date(now));
+
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+
+    const commandNewHook = api.registerHook.mock.calls.find((call: any[]) =>
+      call[0] === "command:new" && call[2]?.name === "command-new-memory-extraction"
+    )?.[1];
+    expect(typeof commandNewHook).toBe("function");
+
+    await commandNewHook(
+      {
+        action: "new",
+        sessionId: emptyNamedSessionId,
+        sessionKey: "agent:main:m7-verify",
+        context: {
+          sessionEntry: {
+            sessionId: emptyNamedSessionId,
+            sessionFile: emptyNamedTranscript,
+          },
+        },
+      },
+      {
+        sessionId: emptyNamedSessionId,
+        sessionKey: "agent:main:m7-verify",
+      },
+    );
+
+    const payloads = readSignalPayloads(harness.signalDir);
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        session_id: contentSessionId,
+        type: "reset",
+        meta: expect.objectContaining({
+          source: "command:new",
+          command: "new",
+          hook_session_id: contentSessionId,
+          hook_session_key: "agent:main:m7-verify",
+        }),
+      }),
+    ]);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("routes visual /new fallback to the last user-active session instead of a notice-only lane", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("visual-new-active-session");
