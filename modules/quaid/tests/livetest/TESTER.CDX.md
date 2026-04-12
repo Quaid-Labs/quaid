@@ -14,12 +14,19 @@ tmux send-keys -t livetest:CDX "ssh REMOTE_HOST" Enter
 tmux send-keys -t livetest:CDX "mkdir -p /tmp/cdx-livetest && cd /tmp/cdx-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE codex --yolo" Enter
 ```
 
+**MANDATORY — always launch Codex in a FRESH process after Quaid install.**
+The Quaid installer writes `~/.codex/hooks.json` and `~/.codex/config.toml`,
+but Codex does not hot-reload those files. If Codex was already running when
+the installer ran (e.g. the install agent was itself a Codex session), the
+pre-existing process will NOT pick up the new hooks until you start a new
+Codex process. A fresh `codex --yolo` launch after M0 finishes is the correct
+sequence. If you re-use a pre-install Codex session for M1 seeding,
+`hook-inject` will not fire, the seed will not produce a session transition
+signal, and extraction will silently skip the turn.
+
 **MANDATORY — verify model before any test messages:**
-CDX must use `gpt-5.4-mini` at Medium effort (with `reasoning_effort=none` for
-fast lane — this model accepts `effort=none`, unlike `gpt-5.1-codex-mini`).
-Both fast and deep lanes are set to this model (deep lane is overwritten with
-the fast lane value — same rule as OC/CC). Verify from config before sending
-any milestone prompts:
+CDX should use installer defaults: fast=`gpt-5.4-mini`, deep=`gpt-5.4`. Do not
+patch tiers mid-run. Verify from config before sending any milestone prompts:
 ```bash
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"WORKSPACE/instances/CDX_INSTANCE/config.json\")); \
   print(\"fast:\", d[\"models\"][\"fastReasoning\"]); print(\"deep:\", d[\"models\"][\"deepReasoning\"])"'
@@ -106,23 +113,18 @@ That means CDX gets **timeout extraction** but **not timeout compaction**
 
 ---
 
-## App-Server Architecture
+## Runtime Architecture
 
-CDX uses a **single shared app-server broker** per Quaid home — one
-`codex app-server` process serves all CDX instances:
-- Broker socket: `WORKSPACE/shared/run/codex-app-server-broker.sock`
-- Broker PID: `WORKSPACE/shared/run/codex-app-server-broker.pid`
+CDX now uses **direct provider auth** for Quaid service calls.
+There is no Quaid-managed Codex app-server or shared broker in the active path.
 
-Instance isolation is maintained per-turn via the `cwd` parameter in each
-request. Memory hooks receive `QUAID_INSTANCE` from their registered env vars,
-not from the app-server process.
+Instance isolation comes from:
+- per-instance `QUAID_INSTANCE`
+- per-project `CODEX_PROJECT_DIR`
+- per-lane auth token file at `WORKSPACE/adaptors/codex/.auth-token`
 
-If the broker is not running, CDX will start it automatically on first use.
-If turns hang, check whether the broker process is healthy:
-```bash
-ssh REMOTE_HOST 'cat WORKSPACE/shared/run/codex-app-server-broker.pid 2>/dev/null \
-  | xargs -I{} kill -0 {} 2>/dev/null && echo "broker running" || echo "broker not running"'
-```
+If CDX turns hang, investigate the configured provider/token path and the daemon,
+not a Codex app-server sidecar.
 
 ---
 

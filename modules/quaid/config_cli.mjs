@@ -652,7 +652,7 @@ async function runEdit() {
         initialValue: getPath(cfg, "adapter.type", "standalone"),
         options: [
           { value: "openclaw", label: "openclaw", hint: "recommended; gateway-integrated runtime" },
-          { value: "codex", label: "codex", hint: "Codex hooks + local app-server sidecar" },
+          { value: "codex", label: "codex", hint: "Codex hooks + direct provider auth" },
           { value: "standalone", label: "standalone", hint: "local-only mode (advanced)" },
         ],
       }));
