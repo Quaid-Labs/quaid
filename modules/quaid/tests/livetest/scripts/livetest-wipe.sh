@@ -130,7 +130,7 @@ wipe_oc() {
     run_remote "uninstall OC plugin" \
         "echo y | openclaw plugins uninstall quaid 2>/dev/null; echo 'OC plugin uninstalled (or not installed)'"
     run_remote "wipe OC silo + extensions" \
-        "rm -rf $WORKSPACE/$OC_INSTANCE && rm -rf ~/.openclaw/extensions/quaid && echo 'OC silo + extensions wiped'"
+        "rm -rf $WORKSPACE/instances/$OC_INSTANCE && rm -rf ~/.openclaw/extensions/quaid && echo 'OC silo + extensions wiped'"
     run_remote "clear OC session transcripts" \
         "rm -rf ~/.openclaw/agents/main/sessions/ && echo 'OC sessions cleared'"
 }
@@ -146,7 +146,7 @@ wipe_cc() {
             "for pid in \$(pgrep -f extraction_daemon.py 2>/dev/null); do if ps eww \$pid 2>/dev/null | grep -q 'QUAID_INSTANCE=$CC_INSTANCE'; then kill -9 \$pid 2>/dev/null; fi; done; echo 'CC-instance daemons killed'"
     fi
     run_remote "wipe CC silo" \
-        "rm -rf $WORKSPACE/$CC_INSTANCE && echo 'CC silo wiped'"
+        "rm -rf $WORKSPACE/instances/$CC_INSTANCE && echo 'CC silo wiped'"
     run_remote "clear CC hooks from settings.json" \
         "python3 -c \"
 import json; from pathlib import Path
@@ -171,7 +171,7 @@ wipe_cdx() {
     run_remote "kill CDX extraction daemons" \
         "for pid in \$(pgrep -f extraction_daemon.py 2>/dev/null); do if ps eww \$pid 2>/dev/null | grep -q 'QUAID_INSTANCE=$CDX_INSTANCE'; then kill -9 \$pid 2>/dev/null; fi; done; echo 'CDX-instance daemons killed'"
     run_remote "wipe CDX silo" \
-        "rm -rf $WORKSPACE/$CDX_INSTANCE && echo 'CDX silo wiped'"
+        "rm -rf $WORKSPACE/instances/$CDX_INSTANCE && echo 'CDX silo wiped'"
     run_remote "clear Codex Quaid hooks" \
         "python3 -c \"from pathlib import Path; p=Path.home()/'.codex'/'hooks.json'; p.unlink(missing_ok=True); print('Codex Quaid hooks cleared')\""
     run_remote "clear Codex hook feature flag" \

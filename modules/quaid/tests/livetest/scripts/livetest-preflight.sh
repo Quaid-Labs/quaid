@@ -249,12 +249,12 @@ else
         --exclude='.git/' --exclude='logs/' --exclude='.env*' --exclude='.tmp/' \
         --exclude='*MagicMock*' --exclude='<MagicMock*' --exclude='~/' \
         "$LOCAL_DEV/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
-    rsync -a --checksum \
-        --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
-        --exclude='.git/' --exclude='logs/' --exclude='.tmp/' \
-        --exclude='*MagicMock*' --exclude='<MagicMock*' --exclude='~/' \
-        "$LOCAL_DEV/modules/quaid/" "$REMOTE_HOST:~/.quaid/plugins/quaid/" 2>&1 | tail -3
-    echo "  $PASS  remote code synced (local HEAD: $LOCAL_HEAD)"
+    # Do not pre-seed ~/.quaid/plugins/quaid before M0 install.
+    # A plugin/runtime copy in place before the installer runs can cause the
+    # OpenClaw gateway to auto-provision an instance and make the installer
+    # think Quaid is already installed. Sync only the dev tree here; let M0
+    # install own the runtime/plugin deployment step.
+    echo "  $PASS  remote dev tree synced (local HEAD: $LOCAL_HEAD)"
 fi
 
 # --- Step 6: Platform services ---
