@@ -593,10 +593,19 @@ If the latter — stop. Wrong responses to failures:
 
 - Monitor the mailbox, not just the pane scrollback. Handle one pending item at a time:
   the first unread item lands inline when the queue goes from empty to non-empty.
+- Do not tail or inspect `tests/livetest/scripts/.tmux-mailbox/*` directly. Those files are
+  internal storage, not the operator interface.
+- If you think the mailbox is stalled, use the mailbox commands only:
+  `tests/livetest/scripts/tmux-mailbox.sh status "$COORDINATOR_PANE"`
+  then `tests/livetest/scripts/tmux-mailbox.sh next "$COORDINATOR_PANE"`.
 - After you have handled an item, use one command to advance the queue:
   `tests/livetest/scripts/tmux-mailbox.sh reply "$COORDINATOR_PANE" <message-id> "retry now"`
 - If no response is needed, mark it handled and pull the next item in one step:
   `tests/livetest/scripts/tmux-mailbox.sh done "$COORDINATOR_PANE" <message-id>`
+- Start the mailbox watcher at run start so stalled queues get nudged automatically:
+  `tests/livetest/scripts/tmux-mailbox.sh start-watch "$COORDINATOR_PANE"`
+- Stop it only when the run is over:
+  `tests/livetest/scripts/tmux-mailbox.sh stop-watch`
 - When an issue arrives: investigate → fix → commit → build runtime → deploy → tell
   tester to retry. Do not ask for a retry before the fix is deployed.
 - Log every fix commit to `unreviewed-commits.md` immediately (do not batch).

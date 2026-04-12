@@ -5,10 +5,14 @@
 #   tmux-mailbox.sh post [--kind KIND] [--lane LANE] [--notify 0|1] <target> <message>
 #   tmux-mailbox.sh count <target>
 #   tmux-mailbox.sh list [--limit N] <target>
+#   tmux-mailbox.sh status <target>
 #   tmux-mailbox.sh next <target>
 #   tmux-mailbox.sh done <target> <message-id>
 #   tmux-mailbox.sh reply <target> <message-id> <response>
 #   tmux-mailbox.sh ack <target> <message-id>
+#   tmux-mailbox.sh watch [--interval SEC] [--stale-seconds SEC] [target...]
+#   tmux-mailbox.sh start-watch [--interval SEC] [--stale-seconds SEC] [target...]
+#   tmux-mailbox.sh stop-watch
 #   tmux-mailbox.sh targets
 #
 # Targets use the same address forms as tmux-msg.sh:
@@ -31,13 +35,15 @@ TMUX_MSG_SCRIPT="${TMUX_MAILBOX_TMUX_MSG_SCRIPT:-$SCRIPT_DIR/tmux-msg.sh}"
 COMMAND="${1:-}"
 
 if [[ -z "$COMMAND" ]]; then
-    echo "Usage: tmux-mailbox.sh <post|count|list|next|done|reply|ack|targets> ..." >&2
+    echo "Usage: tmux-mailbox.sh <post|count|list|status|next|done|reply|ack|watch|start-watch|stop-watch|targets> ..." >&2
     exit 1
 fi
 
 shift || true
 
 mkdir -p "$MAILBOX_ROOT"
+WATCHER_PID_FILE="$MAILBOX_ROOT/watch.pid"
+WATCHER_LOG_FILE="$MAILBOX_ROOT/watch.log"
 
 _detected_pane="$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || echo "unknown")"
 SENDER="${TMUX_MSG_SENDER:-}"
@@ -107,6 +113,10 @@ usage_reply() {
     echo "Usage: tmux-mailbox.sh reply <target> <message-id> <response>" >&2
 }
 
+usage_watch() {
+    echo "Usage: tmux-mailbox.sh watch [--interval SEC] [--stale-seconds SEC] [target...]" >&2
+}
+
 sanitize_inline_message() {
     python3 - "$1" <<'PY'
 import sys
@@ -117,6 +127,16 @@ if len(text) > cap:
     text = text[: cap - 3] + "..."
 print(text)
 PY
+}
+
+format_stale_notify_message() {
+    local target="$1"
+    local message_id="$2"
+    local age_seconds="$3"
+    local pending_count="$4"
+    local age_minutes=$(( age_seconds / 60 ))
+    printf 'MAILBOX STALLED target=%s pending=%s oldest_id=%s oldest_age_min=%s. You have uncleared mailbox. Do not tail mailbox files. Use: tests/livetest/scripts/tmux-mailbox.sh next \"%s\" then tests/livetest/scripts/tmux-mailbox.sh done \"%s\" %s or tests/livetest/scripts/tmux-mailbox.sh reply \"%s\" %s \"<response>\"' \
+        "$target" "$pending_count" "$message_id" "$age_minutes" "$target" "$target" "$message_id" "$target" "$message_id"
 }
 
 mark_notified() {
@@ -337,6 +357,160 @@ with lock_path.open("r+", encoding="utf-8") as lock_handle:
 PY
 }
 
+mailbox_status() {
+    local target="$1"
+    mailbox_python "$target" status <<'PY'
+import fcntl
+import json
+import pathlib
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+lock_path = root / "mailbox.lock"
+messages_path = root / "messages.jsonl"
+acks_path = root / "acks.jsonl"
+root.mkdir(parents=True, exist_ok=True)
+lock_path.touch(exist_ok=True)
+
+def load_jsonl(path):
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as handle:
+        return [json.loads(raw) for raw in handle if raw.strip()]
+
+def parse_iso8601(ts: str) -> float:
+    if not ts:
+        return 0.0
+    try:
+        return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+    except Exception:
+        return 0.0
+
+with lock_path.open("r+", encoding="utf-8") as lock_handle:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    messages = load_jsonl(messages_path)
+    acked = {row["id"] for row in load_jsonl(acks_path) if row.get("target") == target}
+    pending = [row for row in messages if row.get("target") == target and row.get("id") not in acked]
+    if not pending:
+        print(json.dumps({"target": target, "pending": 0}))
+        raise SystemExit(0)
+    oldest = pending[0]
+    oldest_epoch = parse_iso8601(str(oldest.get("posted_at") or ""))
+    age_seconds = max(0, int(time.time() - oldest_epoch)) if oldest_epoch else 0
+    print(json.dumps({
+        "target": target,
+        "pending": len(pending),
+        "head_id": oldest.get("id", ""),
+        "head_kind": oldest.get("kind", ""),
+        "head_lane": oldest.get("lane", ""),
+        "head_posted_at": oldest.get("posted_at", ""),
+        "head_age_seconds": age_seconds,
+    }))
+PY
+}
+
+watch_mailbox_loop() {
+    local interval="${1:-60}"
+    local stale_seconds="${2:-600}"
+    shift 2 || true
+    local explicit_targets=("$@")
+    while true; do
+        local targets_output
+        if [[ ${#explicit_targets[@]} -gt 0 ]]; then
+            targets_output="$(printf '%s\n' "${explicit_targets[@]}")"
+        else
+            targets_output="$("$0" targets 2>/dev/null | awk '{print $1}')"
+        fi
+        while IFS= read -r raw_target; do
+            [[ -z "$raw_target" ]] && continue
+            local target
+            if ! target="$(resolve_target "$raw_target" 2>/dev/null)"; then
+                continue
+            fi
+            local status_json
+            if ! status_json="$(mailbox_status "$target" 2>/dev/null)"; then
+                continue
+            fi
+            local pending head_id age_seconds
+            pending="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data.get("pending", 0))' <<<"$status_json" 2>/dev/null || echo 0)"
+            if [[ "$pending" == "0" ]]; then
+                continue
+            fi
+            head_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data.get("head_id", ""))' <<<"$status_json" 2>/dev/null || true)"
+            age_seconds="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print(data.get("head_age_seconds", 0))' <<<"$status_json" 2>/dev/null || echo 0)"
+            if [[ -z "$head_id" || "$age_seconds" -lt "$stale_seconds" ]]; then
+                continue
+            fi
+            local stale_result
+            stale_result="$(mailbox_python "$target" stale-check "$head_id" "$age_seconds" <<'PY'
+import fcntl
+import json
+import pathlib
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+op = sys.argv[3]
+head_id = sys.argv[4]
+age_seconds = int(sys.argv[5])
+lock_path = root / "mailbox.lock"
+state_path = root / "notify-state.json"
+root.mkdir(parents=True, exist_ok=True)
+lock_path.touch(exist_ok=True)
+
+def load_state(path):
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+with lock_path.open("r+", encoding="utf-8") as lock_handle:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    state = load_state(state_path)
+    target_state = state.get(target)
+    if not isinstance(target_state, dict):
+        target_state = {}
+    last_stale_id = str(target_state.get("last_stale_nudge_id", "") or "")
+    last_stale_at = str(target_state.get("last_stale_nudged_at", "") or "")
+    now = time.time()
+    stale_epoch = 0.0
+    if last_stale_at:
+        try:
+            stale_epoch = time.mktime(time.strptime(last_stale_at, "%Y-%m-%dT%H:%M:%SZ"))
+        except Exception:
+            stale_epoch = 0.0
+    should_nudge = not (last_stale_id == head_id and stale_epoch and (now - stale_epoch) < age_seconds)
+    if should_nudge:
+        target_state["last_stale_nudge_id"] = head_id
+        target_state["last_stale_nudged_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        state[target] = target_state
+        state_path.write_text(json.dumps(state, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({"should_nudge": should_nudge}))
+PY
+)"
+            local should_nudge
+            should_nudge="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); print("1" if data.get("should_nudge") else "0")' <<<"$stale_result" 2>/dev/null || echo 0)"
+            if [[ "$should_nudge" != "1" ]]; then
+                continue
+            fi
+            if [[ -x "$TMUX_MSG_SCRIPT" ]]; then
+                local notice
+                notice="$(format_stale_notify_message "$target" "$head_id" "$age_seconds" "$pending")"
+                TMUX_MSG_SENDER="${TMUX_MSG_SENDER:-mailbox-watcher}" \
+                TMUX_MSG_SOURCE="${TMUX_MSG_SOURCE:-mailbox-watch}" \
+                    "$TMUX_MSG_SCRIPT" "$target" "$notice" >/dev/null 2>&1 || true
+            fi
+        done <<<"$targets_output"
+        sleep "$interval"
+    done
+}
+
 case "$COMMAND" in
     post)
         if [[ -z "$SENDER" ]]; then
@@ -527,6 +701,38 @@ with lock_path.open("r+", encoding="utf-8") as lock_handle:
     acked = {row["id"] for row in load_jsonl(acks_path) if row.get("target") == target}
     pending = [row for row in messages if row.get("target") == target and row.get("id") not in acked]
     print(len(pending))
+PY
+        ;;
+
+    status)
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: tmux-mailbox.sh status <target>" >&2
+            exit 1
+        fi
+        TARGET="$(resolve_target "$1")"
+        STATUS_JSON="$(mailbox_status "$TARGET")"
+        STATUS_JSON="$STATUS_JSON" python3 - "$TARGET" <<'PY'
+import json
+import os
+import sys
+
+target = sys.argv[1]
+data = json.loads(os.environ.get("STATUS_JSON", "{}") or "{}")
+pending = int(data.get("pending", 0) or 0)
+if pending <= 0:
+    print(f"No pending mailbox items for {target}")
+    raise SystemExit(0)
+print(f"Target: {target}")
+print(f"Pending: {pending}")
+print(f"Head ID: {data.get('head_id', '-')}")
+print(f"Head Kind: {data.get('head_kind', '-')}")
+print(f"Head Lane: {data.get('head_lane', '-') or '-'}")
+print(f"Head When: {data.get('head_posted_at', '-')}")
+print(f"Head Age Seconds: {data.get('head_age_seconds', 0)}")
+print()
+print(f"Read: tests/livetest/scripts/tmux-mailbox.sh next \"{target}\"")
+print(f"Done: tests/livetest/scripts/tmux-mailbox.sh done \"{target}\" {data.get('head_id', '<id>')}")
+print(f"Reply: tests/livetest/scripts/tmux-mailbox.sh reply \"{target}\" {data.get('head_id', '<id>')} \"<response>\"")
 PY
         ;;
 
@@ -734,9 +940,95 @@ with lock_path.open("r+", encoding="utf-8") as lock_handle:
 PY
         ;;
 
+    watch)
+        INTERVAL="60"
+        STALE_SECONDS="600"
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --interval)
+                    INTERVAL="${2:-}"
+                    shift 2
+                    ;;
+                --stale-seconds)
+                    STALE_SECONDS="${2:-}"
+                    shift 2
+                    ;;
+                --help|-h)
+                    usage_watch
+                    exit 0
+                    ;;
+                --*)
+                    echo "Error: unknown option '$1'" >&2
+                    usage_watch
+                    exit 1
+                    ;;
+                *)
+                    break
+                    ;;
+            esac
+        done
+        watch_mailbox_loop "$INTERVAL" "$STALE_SECONDS" "$@"
+        ;;
+
+    start-watch)
+        INTERVAL="60"
+        STALE_SECONDS="600"
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --interval)
+                    INTERVAL="${2:-}"
+                    shift 2
+                    ;;
+                --stale-seconds)
+                    STALE_SECONDS="${2:-}"
+                    shift 2
+                    ;;
+                --help|-h)
+                    usage_watch
+                    exit 0
+                    ;;
+                --*)
+                    echo "Error: unknown option '$1'" >&2
+                    usage_watch
+                    exit 1
+                    ;;
+                *)
+                    break
+                    ;;
+            esac
+        done
+        if [[ -f "$WATCHER_PID_FILE" ]]; then
+            EXISTING_PID="$(cat "$WATCHER_PID_FILE" 2>/dev/null || true)"
+            if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+                echo "Mailbox watcher already running: pid=$EXISTING_PID"
+                exit 0
+            fi
+            rm -f "$WATCHER_PID_FILE"
+        fi
+        nohup "$0" watch --interval "$INTERVAL" --stale-seconds "$STALE_SECONDS" "$@" >"$WATCHER_LOG_FILE" 2>&1 &
+        WATCH_PID=$!
+        printf '%s\n' "$WATCH_PID" >"$WATCHER_PID_FILE"
+        echo "Mailbox watcher started: pid=$WATCH_PID log=$WATCHER_LOG_FILE"
+        ;;
+
+    stop-watch)
+        if [[ ! -f "$WATCHER_PID_FILE" ]]; then
+            echo "Mailbox watcher not running"
+            exit 0
+        fi
+        WATCH_PID="$(cat "$WATCHER_PID_FILE" 2>/dev/null || true)"
+        if [[ -n "$WATCH_PID" ]] && kill -0 "$WATCH_PID" 2>/dev/null; then
+            kill "$WATCH_PID"
+            echo "Mailbox watcher stopped: pid=$WATCH_PID"
+        else
+            echo "Mailbox watcher pid file was stale"
+        fi
+        rm -f "$WATCHER_PID_FILE"
+        ;;
+
     *)
         echo "Error: unknown command '$COMMAND'" >&2
-        echo "Usage: tmux-mailbox.sh <post|count|list|next|done|reply|ack|targets> ..." >&2
+        echo "Usage: tmux-mailbox.sh <post|count|list|status|next|done|reply|ack|watch|start-watch|stop-watch|targets> ..." >&2
         exit 1
         ;;
 esac
