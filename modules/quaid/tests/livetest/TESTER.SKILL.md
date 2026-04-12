@@ -93,7 +93,8 @@ This applies to cases like:
 
 Required retry procedure:
 1. Increase the visible platform agent to the next stronger model in the same family.
-   Current default example: CDX `gpt-5.1-codex-mini` -> `gpt-5.1-codex`.
+   Current default example: CDX already uses `gpt-5.4`; if the agent running the test
+   is at a lower tier, escalate to `gpt-5.4`.
 2. Start a fresh session boundary (`/new` or platform equivalent).
 3. Re-run the failing prompt once in that fresh stronger-model session.
 4. Report the result clearly:
@@ -197,18 +198,18 @@ yourself.
       --dry-run --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CC tester
-    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=claude-code-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=claude-code-private-tmp-cc-livetest node setup-quaid.mjs \
       --dry-run --adapter claude-code --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CDX tester
-    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=codex-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=codex-private-tmp-cdx-livetest node setup-quaid.mjs \
       --dry-run --adapter codex --owner-name OWNER_NAME --agent 2>&1 | tail -40'
     ```
 
     Check the plan output:
     - `platform` matches your platform (openclaw / claude-code / codex)
     - hidden Quaid home is `~/.quaid` and visible Quaid files are under `~/quaid`
-    - `instanceId` matches your silo name (openclaw-livetest / claude-code-livetest / codex-livetest)
+    - `instanceId` matches your silo name (openclaw-livetest / claude-code-private-tmp-cc-livetest / codex-private-tmp-cdx-livetest)
     - No fatal errors
 
     If the plan looks wrong, **stop and post an ISSUE to the coordinator mailbox** before

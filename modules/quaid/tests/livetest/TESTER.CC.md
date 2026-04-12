@@ -70,11 +70,11 @@ supports forced compaction).
 1. Set timeout to 1 minute and restart the daemon:
    ```bash
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/modules/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/modules/quaid/quaid daemon stop 2>&1; sleep 2; \
+     ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
      QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/modules/quaid/quaid daemon start 2>&1'
+     ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
    ```
 
 2. Start a fresh CC session in `livetest:CC` from `/tmp/cc-livetest`. Tell CC
@@ -90,11 +90,11 @@ supports forced compaction).
 4. Restore and restart:
    ```bash
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/modules/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/modules/quaid/quaid daemon stop 2>&1; sleep 2; \
+     ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
      QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/modules/quaid/quaid daemon start 2>&1'
+     ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
    ```
 
 **M4 PASS criteria (CC):** Timeout fact extracted and stored. Daemon log shows
@@ -106,7 +106,7 @@ extraction verified (no compaction, expected for CC)."
 ## Daemon Management
 
 CC runs its own extraction daemon independent of OpenClaw. The `quaid` CLI
-path is `~/.quaid/modules/quaid/quaid` — the installed runtime. Do NOT use
+path is `~/.quaid/plugins/quaid/quaid` — the installed runtime. Do NOT use
 `~/.openclaw/extensions/quaid/quaid` for CC daemon management; that path
 only exists if OpenClaw is installed and would silently break on systems
 without it.
@@ -114,7 +114,7 @@ without it.
 Check status with:
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-  ~/.quaid/modules/quaid/quaid daemon status 2>&1'
+  ~/.quaid/plugins/quaid/quaid daemon status 2>&1'
 ```
 
 Verify instance root, log file, and pid file all point to `CC_INSTANCE`.
@@ -168,7 +168,7 @@ ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/CC_INSTANCE/data/memory.db "SELECT 
 
 # CLI
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-  ~/.quaid/modules/quaid/quaid recall "query" 2>&1'
+  ~/.quaid/plugins/quaid/quaid recall "query" 2>&1'
 ```
 
 ---
@@ -184,13 +184,15 @@ See dedicated section above. CC gets timeout extraction (no compaction). PASS
 with note on the no-compaction behaviour.
 
 ### M8 — Project CRUD
-For Phase 1, switch model to Sonnet or better before the work directive.
-Haiku does not reliably follow file-placement policy. Run `/model` first.
+CC is launched with `--model claude-sonnet-4-5` (see Launch section above). Do NOT
+use `/model` in-session — it writes model-switch metadata into the transcript before
+the first real user turn, which freezes the cursor and silently skips extraction.
+Sonnet is already active from launch; no model switch needed for M8.
 
 ### M12 — Multi-Agent Silo Verification
-CC uses `claude-code-livetest` as the instance ID. Silo is at
-`~/quaid/instances/claude-code-livetest/`. Follow the CC M12 procedure in
-LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
+CC uses `claude-code-private-tmp-cc-livetest` as the instance ID. Runtime silo is at
+`~/.quaid/instances/claude-code-private-tmp-cc-livetest/` (hidden). Follow the CC M12
+procedure in LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
 
 ### M13 — Multi-Instance Verification
 CC-only milestone. Verifies CC **auto-provisioning** from a new project PWD

@@ -185,8 +185,11 @@ auto-create the instance silo. Verify:
 
 After the test, clean up:
 ```bash
-ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test'
+ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test --force'
 ```
+Note: `--force` is required in non-interactive (SSH) context. If that still fails,
+manually remove `~/.openclaw/agents/m13test` and the Quaid silo at
+`~/.quaid/instances/openclaw-m13test/`.
 
 Do NOT re-run the installer for M13 — that overwrites the gateway
 config and disrupts the active livetest instance.

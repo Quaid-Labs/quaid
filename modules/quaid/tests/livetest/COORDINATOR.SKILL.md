@@ -84,7 +84,7 @@ production default is 8000). Do this once per run. Restart daemons after.
 **Also: if any instance config has its own `capture.chunk_tokens` override,
 overwrite it to 500 — instance config takes precedence over global.**
 ```bash
-for inst in openclaw-livetest claude-code-livetest codex-livetest; do
+for inst in openclaw-livetest claude-code-private-tmp-cc-livetest codex-private-tmp-cdx-livetest; do
   ssh admin@$VM_IP "python3 -c '
 import json
 p = \"/Users/admin/.quaid/instances/$inst/config.json\"
@@ -469,9 +469,9 @@ After the platform reports completion:
 
 2. **Health check passes:**
    ```bash
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=OC_INSTANCE ~/.openclaw/extensions/quaid/quaid doctor 2>&1 | tail -5'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE WORKSPACE/modules/quaid/quaid doctor 2>&1 | tail -5'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE WORKSPACE/modules/quaid/quaid doctor 2>&1 | tail -5'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=OC_INSTANCE ~/.quaid/plugins/quaid/quaid doctor 2>&1 | tail -5'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE ~/.quaid/plugins/quaid/quaid doctor 2>&1 | tail -5'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid doctor 2>&1 | tail -5'
    ```
 
 ### Post-Install Examination (after M0 PASS, before config patching)
@@ -493,7 +493,7 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
 2. Verify ~/.quaid has the expected hidden structure:
    ssh REMOTE_HOST 'find ~/.quaid -maxdepth 4 -type d | sort'
    Expected directories/files (at minimum):
-   - ~/.quaid/modules/quaid/               (runtime code)
+   - ~/.quaid/plugins/quaid/               (runtime code — fresh installs use plugins/)
    - ~/.quaid/shared/config/               (shared config)
    - ~/.quaid/instances/INSTANCE/data/     (database)
    - ~/.quaid/instances/INSTANCE/logs/     (logs)
@@ -570,10 +570,10 @@ done
 
 ---
 
-## Step 4 — Run M1–M13 (Parallel)
+## Step 4 — Run M1–M15 (Parallel)
 
 Send start signals to all three tester windows after M0 passes on all platforms.
-All three run simultaneously. The run is not complete until all three reach M13 PASS.
+All three run simultaneously. The run is not complete until all three reach M15 PASS.
 
 For full milestone definitions, see `tests/LIVE-TEST-GUIDE.md`.
 
@@ -638,7 +638,7 @@ If you can imagine a code change that would fix it — write it.
 
 ## Step 5 — XP (Cross-Platform Project Linking)
 
-Run after all three platforms reach M13 PASS. Full procedure in
+Run after all three platforms reach M15 PASS. Full procedure in
 `tests/LIVE-TEST-GUIDE.md` under "Cross-Platform Project Linking Test."
 
 XP tests that all three platforms can share a project and recall each other's docs.
@@ -688,7 +688,7 @@ Full suite passed with no code changes.
 
 ## Post-Test Examination (after all milestones, before end-of-run report)
 
-Run this after all platforms have completed their milestone suites (M1–M13 + XP).
+Run this after all platforms have completed their milestone suites (M1–M15 + XP).
 This catches system information leaking into user-visible logs and outputs.
 
 **Spawn Sonnet subagents** (one per platform, in parallel) to audit the buffered

@@ -139,8 +139,8 @@ session-timeout manager. So M4 still applies to CDX, but the expected signal is
 **CDX M4 procedure:**
 1. Set `capture.inactivityTimeoutMinutes` to `1` and restart the CDX daemon:
    ```bash
-   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
-   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
    ```
 2. Start a fresh visible CDX session, state one memorable fact, then let the
    pane idle for >1 minute without `/new`.
@@ -149,8 +149,8 @@ session-timeout manager. So M4 still applies to CDX, but the expected signal is
    - the fact is stored in DB / FTS
 4. Restore the timeout and restart the daemon again:
    ```bash
-   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
-   ssh REMOTE_HOST 'cd WORKSPACE && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
    ```
 
 **M4 PASS criteria (CDX):** Timeout fact extracted and stored with no explicit
@@ -186,7 +186,7 @@ ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/CDX_INSTANCE/data/memory.db "SELECT
 
 # CLI
 ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE \
-  WORKSPACE/modules/quaid/quaid recall "query" 2>&1'
+  ~/.quaid/plugins/quaid/quaid recall "query" 2>&1'
 ```
 
 ---
@@ -213,11 +213,11 @@ writes files without creating a project), report as ISSUE — do not rule
 PASS-WITH-NOTE.
 
 ### M12 — Multi-Agent Silo Verification
-CDX uses `codex-livetest` as the instance ID (set via `QUAID_INSTANCE`). Silo is
-at `~/quaid/instances/codex-livetest/`. Follow the CDX M12 procedure in
-LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
+CDX uses `codex-private-tmp-cdx-livetest` as the instance ID (set via `QUAID_INSTANCE`).
+Runtime silo is at `~/.quaid/instances/codex-private-tmp-cdx-livetest/` (hidden).
+Follow the CDX M12 procedure in LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
 
 ### M13 — Multi-Instance Verification
 CDX has no `make_instance` — isolation is verified by canary test between two
-`QUAID_INSTANCE` values (`codex-livetest` and `codex-m13test`). Follow the CDX
+`QUAID_INSTANCE` values (`codex-private-tmp-cdx-livetest` and `codex-m13test`). Follow the CDX
 M13 procedure in LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M13.
