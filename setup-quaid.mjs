@@ -48,6 +48,17 @@ if (os.platform() === 'win32') {
   process.exit(1);
 }
 
+// Dev machine guard — never install Quaid on the Quaid development machine.
+// The dev checkout at ~/quaidcode/dev/modules/quaid is the unambiguous signal.
+// All installs must target the livetest VM, not the box where we develop.
+const _devCheckoutMarker = path.join(os.homedir(), 'quaidcode', 'dev', 'modules', 'quaid');
+if (fs.existsSync(_devCheckoutMarker) && !process.env.QUAID_ALLOW_DEV_INSTALL) {
+  console.error('error: This looks like the Quaid dev machine (found ~/quaidcode/dev/modules/quaid/).');
+  console.error('       Never install Quaid on the dev box — install on the livetest VM instead.');
+  console.error('       To override (not recommended): QUAID_ALLOW_DEV_INSTALL=1 node setup-quaid.mjs');
+  process.exit(1);
+}
+
 function parseInstallArgs(argv) {
   const opts = {
     workspace: "",
