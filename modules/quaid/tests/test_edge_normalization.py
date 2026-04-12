@@ -9,6 +9,10 @@ from datastore.memorydb.maintenance_ops import (
     _SEED_RELATIONS,
     _canonicalize_owner_alias, _is_placeholder_entity_name,
 )
+from datastore.memorydb.memory_graph import (
+    _canonicalize_owner_alias as _graph_canonicalize_owner_alias,
+    _is_placeholder_entity_name as _graph_is_placeholder_entity_name,
+)
 
 
 class TestInverseFlipping:
@@ -281,6 +285,11 @@ class TestPlaceholderEntityFiltering:
     def test_allows_named_entities(self):
         assert not _is_placeholder_entity_name("David", "Solomon Steadman")
         assert not _is_placeholder_entity_name("Google", "Solomon Steadman")
+
+    def test_memory_graph_placeholder_helpers_match(self):
+        assert _graph_canonicalize_owner_alias("the user", "Solomon Steadman") == "Solomon Steadman"
+        assert _graph_is_placeholder_entity_name("User's sister", "Solomon Steadman")
+        assert not _graph_is_placeholder_entity_name("Diana", "Solomon Steadman")
 
 
 class TestWhitespaceAndCase:

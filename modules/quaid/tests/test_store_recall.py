@@ -2614,6 +2614,23 @@ class TestRecallFastHookInjectContract:
 
         assert stores == ["vector", "graph"]
 
+    def test_infer_recall_store_defaults_routes_docs_for_project_says_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}), \
+             patch("core.project_registry.list_projects", return_value={"cross-live-test": {"description": "xp"}}):
+            stores, project = mg._infer_recall_store_defaults(
+                "What does the cross-live-test project say about Ember Glass?",
+            )
+
+        assert stores == ["vector", "docs"]
+        assert project == "cross-live-test"
+
     def test_graph_store_recall_returns_graph_rows(self):
         import datastore.memorydb.memory_graph as mg
 

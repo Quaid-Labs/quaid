@@ -111,6 +111,37 @@ class TestHardDeleteNode:
                                  (node_a.id, node_a.id)).fetchall()
             assert len(edges) == 0
 
+
+def test_create_edge_rejects_placeholder_owner_entity_labels(tmp_path):
+    from datastore.memorydb.memory_graph import create_edge
+    graph, _ = _make_graph(tmp_path, "placeholder_edge.db")
+
+    class _Identity:
+        person_node_name = "Solomon Steadman"
+
+    fake_cfg = type("Cfg", (), {
+        "users": type("Users", (), {
+            "identities": {"quaid": _Identity()},
+        })()
+    })()
+
+    owner = _make_node(graph, name="Solomon Steadman", type="Person")
+    subject = _make_node(graph, name="Diana", type="Person")
+    _ = owner, subject
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph._get_memory_config", return_value=fake_cfg), \
+         patch("os.environ", {**os.environ, "QUAID_INSTANCE": "quaid"}):
+        result = create_edge(
+            "the user",
+            "sibling_of",
+            "User's sister",
+            owner_id="quaid",
+        )
+
+    assert result["status"] == "error"
+    assert "Placeholder entity label" in result["message"]
+
     def test_cleans_up_contradictions(self, tmp_path):
         """Contradiction entries referencing the node are deleted."""
         from datastore.memorydb.memory_graph import hard_delete_node

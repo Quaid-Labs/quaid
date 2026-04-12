@@ -455,7 +455,17 @@ function resolveLifecycleTranscriptPath(action, event, ctx) {
   pushCandidate(event?.context?.sessionFile);
   pushCandidate(ctx?.sessionFile);
   pushCandidate(event?.sessionFile);
-  return candidates[0] || "";
+  if (action === "new" || action === "reset") {
+    for (const candidate of [...candidates]) {
+      const backup = latestResetBackupFromPath(candidate);
+      if (backup) {
+        candidates.push(backup);
+      }
+    }
+  }
+  return selectBestTranscriptCandidate(candidates, {
+    preferResetBackup: action === "new" || action === "reset"
+  }) || candidates[0] || "";
 }
 function getOpenClawSessionsBaseDir() {
   return path.dirname(getOpenClawSessionsPath());
@@ -1166,6 +1176,32 @@ function latestResetBackupFromPath(filePath) {
     return null;
   }
 }
+function selectBestTranscriptCandidate(candidates, opts = {}) {
+  const preferResetBackup = Boolean(opts.preferResetBackup);
+  let bestPath = "";
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const raw of candidates) {
+    const candidate = String(raw || "").trim();
+    if (!candidate || !fs.existsSync(candidate)) continue;
+    let size = 0;
+    let mtimeMs = 0;
+    try {
+      const stat = fs.statSync(candidate);
+      size = Number(stat.size || 0);
+      mtimeMs = Number(stat.mtimeMs || 0);
+    } catch {
+    }
+    let score = size + mtimeMs / 1e12;
+    if (preferResetBackup && candidate.includes(".jsonl.reset.")) {
+      score += 1e9;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestPath = candidate;
+    }
+  }
+  return bestPath || null;
+}
 function preserveSessionTranscript(sessionId, preferredPath, reason) {
   const candidates = [];
   const preferred = String(preferredPath || "").trim();
@@ -1185,7 +1221,9 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
     }
   }
   const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
-  const sourcePath = deduped.find((candidate) => fs.existsSync(candidate));
+  const sourcePath = selectBestTranscriptCandidate(deduped, {
+    preferResetBackup: reason.includes("reset")
+  });
   if (!sourcePath) {
     writeHookTrace("session_index.transcript_preserve_missing", {
       session_id: sessionId,

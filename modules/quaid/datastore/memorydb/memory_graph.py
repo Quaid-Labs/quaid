@@ -2636,6 +2636,54 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
     return None
 
 
+_OWNER_ALIAS_EXACT = frozenset({
+    "the user",
+    "user",
+    "the owner",
+    "owner",
+    "me",
+    "myself",
+    "i",
+})
+
+_ENTITY_PLACEHOLDER_PREFIXES = (
+    "user's ",
+    "the user's ",
+    "owner's ",
+    "the owner's ",
+    "my ",
+    "our ",
+    "his ",
+    "her ",
+    "their ",
+)
+
+
+def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
+    """Normalize owner aliases to a concrete owner name when one is known."""
+    text = str(name or "").strip()
+    if not text:
+        return text
+    owner = str(owner_full or "").strip()
+    if not owner or owner.lower() == "the user":
+        return text
+    if text.lower() in _OWNER_ALIAS_EXACT:
+        return owner
+    return text
+
+
+def _is_placeholder_entity_name(name: str, owner_full: Optional[str] = None) -> bool:
+    """Return True for role-based labels that are not concrete entity names."""
+    text = str(name or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in _OWNER_ALIAS_EXACT:
+        owner = str(owner_full or "").strip()
+        return not owner or owner.lower() == "the user"
+    return any(lowered.startswith(prefix) for prefix in _ENTITY_PLACEHOLDER_PREFIXES)
+
+
 def _get_owner_names() -> set:
     """Get the owner's name variants for pronoun resolution."""
     if not _HAS_CONFIG:
@@ -6825,8 +6873,25 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
             project_name = project
             break
 
+    if not project_name:
+        try:
+            from core.project_registry import list_projects
+
+            registry_projects = list_projects() or {}
+            for name in registry_projects.keys():
+                clean = str(name or "").strip().lower()
+                if clean and clean in lowered:
+                    project_name = str(name)
+                    break
+        except Exception:
+            pass
+
     docs_like = bool(_re.search(
         r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
+        lowered,
+    ))
+    project_docs_like = bool(project_name) and bool(_re.search(
+        r"\b(what does|what do|say|says|said|mention|mentions|mentioned|document|documents|documented|spec|specs|specify|specified|describe|describes|described|note|notes|noted|call|calls|called)\b",
         lowered,
     ))
     graph_like = bool(_relation_matches_for_query(text)) or _has_generic_graph_signal(text)
@@ -6835,7 +6900,9 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         lowered,
     ))
 
-    if mixed_memory_docs:
+    if project_docs_like:
+        stores = ["vector", "docs"]
+    elif mixed_memory_docs:
         stores = ["vector", "docs"]
     elif docs_like:
         stores = ["vector", "docs"]
@@ -9327,6 +9394,20 @@ def create_edge(
         "engaged_to": "partner_of",
     }
     relation = relation_aliases.get(relation, relation)
+
+    owner_full = ""
+    try:
+        owner_node = resolve_owner_person(str(owner_id or "").strip()) if owner_id else None
+        owner_full = str(getattr(owner_node, "name", "") or "").strip()
+    except Exception:
+        owner_full = ""
+    subject_name = _canonicalize_owner_alias(subject_name, owner_full)
+    object_name = _canonicalize_owner_alias(object_name, owner_full)
+    if _is_placeholder_entity_name(subject_name, owner_full) or _is_placeholder_entity_name(object_name, owner_full):
+        return {
+            "status": "error",
+            "message": "Placeholder entity label cannot be used for edge creation",
+        }
 
     # Keep symmetric relations deterministic to avoid A->B and B->A duplicates.
     symmetric_relations = {
