@@ -3069,8 +3069,8 @@ async function step3_models() {
       try { return fs.existsSync(codexAuthTokenPath) ? fs.readFileSync(codexAuthTokenPath, "utf8").trim() : ""; }
       catch { return ""; }
     })();
-    const providerEnvVar = "OPENAI_API_KEY";
-    const envToken = String(process.env[providerEnvVar] || "").trim();
+    const providerEnvVars = ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"];
+    const envToken = String(providerEnvVars.map((name) => process.env[name] || "").find(Boolean) || "").trim();
     const hasToken = !!(existingFileToken || envToken);
 
     if (!AGENT_MODE) {
@@ -3085,7 +3085,7 @@ async function step3_models() {
         : "reset";
 
       if (tokenAction === "reset") {
-        log.info(C.dim(`Paste the OpenAI OAuth token below (stored at: ${codexAuthTokenPath})`));
+        log.info(C.dim(`Run 'codex setup-token' if needed, then paste the OpenAI OAuth token below (stored at: ${codexAuthTokenPath})`));
         const newToken = handleCancel(await text({
           message: "OpenAI OAuth token:",
           placeholder: "paste token here",
@@ -3120,6 +3120,8 @@ async function step3_models() {
             "Then re-run the installer.",
             "",
             `Token path: ${codexAuthTokenPath}`,
+            "Preferred source: token produced by 'codex setup-token'",
+            "Environment fallback: OPENAI_OAUTH_TOKEN",
           ].join("\n"),
           "Codex Auth Token Required — Action Needed"
         );
@@ -3135,13 +3137,15 @@ async function step3_models() {
       )
     );
     const openclawAuthTokenPath = path.join(WORKSPACE, "adaptors", "openclaw", ".auth-token");
-    const providerEnvVar = provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
-    const providerLabel = provider === "anthropic" ? "Anthropic API" : "OpenAI API";
+    const providerEnvVars = provider === "anthropic"
+      ? ["ANTHROPIC_API_KEY"]
+      : ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"];
+    const providerLabel = provider === "anthropic" ? "Anthropic API" : "OpenAI OAuth";
     const existingFileToken = (() => {
       try { return fs.existsSync(openclawAuthTokenPath) ? fs.readFileSync(openclawAuthTokenPath, "utf8").trim() : ""; }
       catch { return ""; }
     })();
-    const envToken = String(process.env[providerEnvVar] || "").trim();
+    const envToken = String(providerEnvVars.map((name) => process.env[name] || "").find(Boolean) || "").trim();
     const hasToken = !!(existingFileToken || envToken);
 
     if (!AGENT_MODE) {
@@ -3156,6 +3160,9 @@ async function step3_models() {
         : "reset";
 
       if (tokenAction === "reset") {
+        if (provider === "openai") {
+          log.info(C.dim("Run 'codex setup-token' if needed, then paste the OpenAI OAuth token below."));
+        }
         log.info(C.dim(`Paste the ${providerLabel} token below (stored at: ${openclawAuthTokenPath})`));
         const newToken = handleCancel(await text({
           message: `${providerLabel} token:`,
@@ -3191,7 +3198,8 @@ async function step3_models() {
             "Then re-run the installer.",
             "",
             `Token path: ${openclawAuthTokenPath}`,
-            `Environment fallback: ${providerEnvVar}`,
+            ...(provider === "openai" ? ["Preferred source: token produced by 'codex setup-token'"] : []),
+            `Environment fallback: ${providerEnvVars[0]}`,
           ].join("\n"),
           "OpenClaw Auth Token Required — Action Needed"
         );

@@ -290,11 +290,25 @@ ssh REMOTE_HOST 'openclaw config set tools.exec.host gateway && \
 
 **CC only** — clear stale Quaid hooks from `~/.claude/settings.json`.
 
-**CC only** — write auth token before install (installer blocks until this exists):
+**CC only** — write Anthropic auth token before install (installer blocks until this exists):
 ```bash
 ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/claude-code && \
   echo -n 'AUTH_TOKEN' > WORKSPACE/adaptors/claude-code/.auth-token && \
   chmod 600 WORKSPACE/adaptors/claude-code/.auth-token"
+```
+
+**OC only** — write the provider token you plan to select during install before starting M0:
+```bash
+ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/openclaw && \
+  echo -n 'AUTH_TOKEN' > WORKSPACE/adaptors/openclaw/.auth-token && \
+  chmod 600 WORKSPACE/adaptors/openclaw/.auth-token"
+```
+
+**CDX only** — write OpenAI auth token before install:
+```bash
+ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/codex && \
+  echo -n 'AUTH_TOKEN' > WORKSPACE/adaptors/codex/.auth-token && \
+  chmod 600 WORKSPACE/adaptors/codex/.auth-token"
 ```
 
 **CDX only** — verify no stale Quaid hooks in `~/.codex/hooks.json`.
@@ -326,19 +340,20 @@ After each platform's M0 passes, verify the filesystem (see
 4. **Instance config has models and capture sections.**
 5. **Shared platform config exists** at `~/.quaid/shared/config/PLATFORM/`.
 6. **Platform hooks registered** (CC: settings.json, CDX: hooks.json, OC:
-   extensions symlink).
+   extensions/quaid directory refreshed from the installed plugin tree).
 7. **No stale flat or misplaced paths** (`~/.quaid/config/config.json`, `~/quaid/shared/config/`, `~/quaid/modules/`).
 
 ### Post-Install Coordinator Steps
 
-**Overwrite deep lane with fast lane** (all silos — HARD RULE):
+**Verify installer model policy** (all silos — HARD RULE):
 ```bash
 ssh REMOTE_HOST "python3 -c \"
 import json; p = 'WORKSPACE/instances/INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
-d['models']['deepReasoning'] = d['models']['fastReasoning']
-with open(p, 'w') as f: json.dump(d, f, indent=2)
-print('deep set to', d['models']['fastReasoning'])
+models = d.get('models', {})
+print('fast=', models.get('fastReasoning'), 'deep=', models.get('deepReasoning'))
+assert models.get('fastReasoning') in ('gpt-5.4-mini', 'claude-haiku-4-5')
+assert models.get('deepReasoning') in ('gpt-5.4', 'claude-sonnet-4-5')
 \""
 ```
 
@@ -347,10 +362,18 @@ print('deep set to', d['models']['fastReasoning'])
 ssh REMOTE_HOST "python3 -c \"
 import json; p = 'WORKSPACE/instances/INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
-d.setdefault('capture', {})['chunk_tokens'] = 1500
+d.setdefault('capture', {})['chunk_tokens'] = 500
 with open(p, 'w') as f: json.dump(d, f, indent=2)
 \""
 ```
+
+**Note for rolling-stage verification:** the rolling buffer tracks
+POST-sanitization transcript content (raw user prompts + agent responses with
+Quaid system/memory/notification/context blocks stripped). Do NOT use hook
+`context_emitted` length as the token-limit signal — that's pre-sanitization
+and will always be substantially larger than what the rolling buffer actually
+records. Check `semantic_buffer_tokens` in the per-session rolling state file:
+`WORKSPACE/instances/INSTANCE/data/rolling-extraction/<session_id>.json`.
 
 **CDX only** — respawn platform pane after M0 (pre-install sessions have no
 cursor and are invisible to orphan sweep):
@@ -384,11 +407,14 @@ CC requires interactive mode for hooks to fire:
 ```bash
 ssh REMOTE_HOST "mkdir -p CC_PROJECT_DIR && cd CC_PROJECT_DIR && \
   QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-  CLAUDE_PROJECT_DIR=CC_PROJECT_DIR claude --dangerously-skip-permissions"
+  CLAUDE_PROJECT_DIR=CC_PROJECT_DIR claude --dangerously-skip-permissions --model claude-sonnet-4-5"
 ```
 
-**Set model before any interaction** — run `/model` and select the fast lane
-model. Never run CC milestones on the most expensive model tier.
+**Model policy** — launch the CC test agent with `--model claude-sonnet-4-5`
+and do not use the
+in-session `/model` picker. The `/model` command writes command wrapper blocks
+into the transcript before any real user turn and can poison session
+classification.
 
 End sessions with `/exit` — never Ctrl+C (bypasses SessionEnd hook).
 
@@ -461,12 +487,11 @@ Platform lifecycle commands:
 - **CDX**: `/new`
 - **OC**: `/new`, `/reset`
 
-**Seed fact delivery**: When telling the agent a fact for extraction testing,
-phrase it so the agent does NOT proactively store it via `quaid store`. The
-goal is for the fact to live in the conversation transcript and be extracted
-by the daemon on the next lifecycle boundary. Prefix seed facts with something
-like: "Just making conversation, don't store this — " or frame them as casual
-chat the agent would naturally respond to without tool use.
+**Seed fact delivery**: Prefix seed facts with: "This is a test of the auto
+extraction system, don't manually store this, let auto extraction pick it up."
+Then state the fact naturally. This tells the agent to let the extraction
+pipeline handle it without proactively running `quaid store`, while keeping
+the fact clearly extractable in the transcript.
 
 ### M0 — Agent-Driven Install
 
@@ -623,8 +648,8 @@ ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
    ORDER BY s.name, e.relation;"'
 ```
 
-**Note**: Edge extraction requires a stronger model (Sonnet/GPT-5.4). The
-coordinator will bump the deep model before M7 and restore after.
+**Note**: Edge extraction uses the deep lane. The installer should already set
+deep to Sonnet/GPT-5.4; do not patch model tiers mid-run.
 
 **Phase 2 — Janitor edge backfill**: Store one attribute fact via CLI, then
 run backfill to verify the janitor can create edges retroactively:
@@ -646,8 +671,8 @@ contamination).
 **Pass**: Edges exist, backfill runs, multi-hop query answered correctly. Owner
 entity in sibling edges must be the actual owner name (not "User").
 
-**CDX quirk**: Fast lane model at `effort=none` generates zero edges. Temporarily
-switch to a stronger model for M7, restore after.
+**CDX quirk**: If M7 produces zero edges, verify the installed config still has
+deep=`gpt-5.4` before investigating extraction. Do not patch tiers mid-run.
 
 ### M8 — Full Project System CRUD
 
@@ -765,14 +790,33 @@ transactional content).
 
 ### M13 — CC Multi-Instance Verification (CC only)
 
-1. Run `quaid claudecode make_instance /path/to/project m13test`.
-2. Verify hidden silo created with `config.json`, `data/`, `logs/` and visible silo created with flat identity files plus `journal/`.
-3. Verify `config.json` has `adapter.type == "claude-code"`.
-4. Verify `.claude/settings.json` in the project dir has correct `QUAID_INSTANCE`.
-5. Verify `quaid instances list` includes the new instance.
-6. Verify dry-run (`--dry-run`) creates no silo.
-7. **Cross-project spillover proof**: Store a canary fact from the new project
-   dir, verify it is NOT visible from the original livetest project dir.
+**Policy:** CC instances are **always** created by auto-provisioning from the
+project PWD at first hook use. Never call `make_instance` directly (CLI or
+programmatically) — it is hook-internal. The installer does NOT provision any
+specific instance; it only sets up the system home. First CC session in a new
+project directory triggers `SessionStart` hook → adapter derives the instance
+name from the absolute PWD and creates the silo automatically.
+
+1. Create a fresh project dir on the remote, e.g. `/tmp/cc-m13test`, that is
+   distinct from the primary livetest project dir.
+2. Launch Claude in that dir (`cd /tmp/cc-m13test && claude --dangerously-skip-permissions`).
+3. Send any user prompt. The first `SessionStart` / hook touch should
+   auto-provision a new silo at `~/.quaid/instances/<derived-name>/` where the
+   derived name follows the PWD-based rule (absolute path, leading slash
+   stripped, `/` → `-`, prefixed with `claude-code-`).
+4. Verify the hidden silo exists with `config.json`, `data/`, `logs/`.
+5. Verify the visible silo exists under `~/quaid/instances/<derived-name>/`
+   with flat identity files plus `journal/`.
+6. Verify `config.json` has `adapter.type == "claude-code"`.
+7. Verify `quaid instances list` includes the new instance.
+8. **Cross-project spillover proof**: Store a canary fact from the new project
+   dir, verify it is NOT visible from the original livetest project dir (and
+   vice versa).
+
+Note: per-project `.claude/settings.json` is NOT written by auto-provisioning.
+The instance binding is derived from PWD at every hook call, not persisted to
+a project-local settings file. Do not check for or expect `.claude/settings.json`
+in the project dir.
 
 ### M14 — Deferred Notification Surfacing
 

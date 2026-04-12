@@ -74,12 +74,35 @@ not a condition to work around with manual signals.
 After the first M0 clears, inject test-specific config overrides:
 ```bash
 ssh admin@$VM_IP 'mkdir -p ~/.quaid/shared/config/global && \
-  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":1500}}" \
+  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":500}}" \
   > ~/.quaid/shared/config/global/config.json'
 ```
-This sets: extraction buffer logging (for sanitizer audits) and chunk_tokens=1500
-(triggers rolling extraction in normal test sessions; production default is 8000).
-Do this once per run. Restart daemons after.
+This sets: extraction buffer logging (for sanitizer audits) and chunk_tokens=500
+(the livetest standard; triggers rolling extraction in normal test sessions;
+production default is 8000). Do this once per run. Restart daemons after.
+
+**Also: if any instance config has its own `capture.chunk_tokens` override,
+overwrite it to 500 — instance config takes precedence over global.**
+```bash
+for inst in openclaw-livetest claude-code-livetest codex-livetest; do
+  ssh admin@$VM_IP "python3 -c '
+import json
+p = \"/Users/admin/.quaid/instances/$inst/config.json\"
+d = json.load(open(p))
+d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 500
+json.dump(d, open(p, \"w\"), indent=2)
+'"
+done
+```
+Restart all daemons after writing.
+
+**Important for testers interpreting rolling thresholds:** the rolling buffer
+counts POST-SANITIZATION transcript content (raw user prompts + agent responses
+with Quaid system/notification/context blocks stripped). Do NOT use hook
+`context_emitted` length as the token limiter — that's pre-sanitization and
+will always be much larger than the actual buffered count. Check
+`semantic_buffer_tokens` in the per-session rolling state file:
+`~/.quaid/instances/<instance>/data/rolling-extraction/<session_id>.json`.
 
 ## CC Auth Token
 
@@ -378,7 +401,7 @@ ssh REMOTE_HOST 'pgrep -f openclaw-gateway > /dev/null 2>&1 || (nohup openclaw g
 ```bash
 ssh REMOTE_HOST 'curl -sf http://localhost:18789/v1/models | python3 -c "import json,sys; ms=[m[\"id\"] for m in json.load(sys.stdin).get(\"data\",[])]; print(\"Models:\", ms)"'
 ```
-Confirm `claude-haiku-4-5` (or equivalent fast lane model) appears in the list. If the model is missing, the installer will fail hard at model selection — add the model to the gateway config before proceeding.
+Confirm `gpt-5.4-mini` and `gpt-5.4` appear in the list. If either model is missing, the installer will fail hard at model selection — add the model to the gateway config before proceeding.
 
 **CC only** — clear any stale Quaid hooks before install:
 ```bash
@@ -518,16 +541,16 @@ TOKEN=$(cat CC_AUTH_TOKEN_FILE | tr -d '[:space:]')
 ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/claude-code && echo -n '$TOKEN' > WORKSPACE/adaptors/claude-code/.auth-token && chmod 600 WORKSPACE/adaptors/claude-code/.auth-token && echo 'Auth token written'"
 ```
 
-**Overwrite deep lane with fast lane** on each silo (HARD RULE — see CLAUDE.md):
+**Verify installer model policy** on each silo (HARD RULE — trust installer defaults):
 ```bash
 for INSTANCE in OC_INSTANCE CC_INSTANCE; do
   ssh REMOTE_HOST "python3 -c \"
 import json; p = 'WORKSPACE/instances/$INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
-fast = d['models']['fastReasoning']
-d['models']['deepReasoning'] = fast
-with open(p, 'w') as f: json.dump(d, f, indent=2)
-print('deep lane set to', fast, 'for $INSTANCE')
+models = d.get('models', {})
+print('$INSTANCE', 'fast=', models.get('fastReasoning'), 'deep=', models.get('deepReasoning'))
+assert models.get('fastReasoning') in ('gpt-5.4-mini', 'claude-haiku-4-5')
+assert models.get('deepReasoning') in ('gpt-5.4', 'claude-sonnet-4-5')
 \""
 done
 ```
@@ -538,9 +561,9 @@ for INSTANCE in OC_INSTANCE CC_INSTANCE CDX_INSTANCE; do
   ssh REMOTE_HOST "python3 -c \"
 import json; p = 'WORKSPACE/instances/$INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
-d.setdefault('capture', {})['chunk_tokens'] = 1500
+d.setdefault('capture', {})['chunk_tokens'] = 500
 with open(p, 'w') as f: json.dump(d, f, indent=2)
-print('chunk_tokens=1500 for $INSTANCE')
+print('chunk_tokens=500 for $INSTANCE')
 \""
 done
 ```
@@ -692,7 +715,7 @@ logs or extraction output. Flag any of the following:
    Examples: "You are performing offline memory extraction", "Extract personal
    facts from the following transcript".
 5. **Configuration dumps** — raw JSON config objects, model names with provider
-   prefixes (e.g. "anthropic/claude-haiku-4-5"), gateway URLs, port numbers.
+   prefixes (e.g. "anthropic/claude-sonnet-4-5"), gateway URLs, port numbers.
 6. **Other agent/system metadata** — coordinator messages, tmux pane addresses,
    tester instructions, run numbers, or any content that reveals the test harness.
 

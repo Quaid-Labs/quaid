@@ -19,11 +19,11 @@
 #
 # Default message (when -r is given):
 #   "[livetest-nudge PID=X] <run-label> in progress. Check your milestone queue for
-#    STATUS or ISSUE messages. If nothing pending, monitor and stay ready."
+#    If you just completed a milestone PASS, advance to the next milestone immediately. If you posted an ISSUE or FAIL, wait for coordinator."
 #
 # Default message (no -r):
 #   "[livetest-nudge PID=X] Livetest in progress. Check your milestone queue for
-#    STATUS or ISSUE messages. If nothing pending, monitor and stay ready."
+#    If you just completed a milestone PASS, advance to the next milestone immediately. If you posted an ISSUE or FAIL, wait for coordinator."
 #
 # Stop it:
 #   kill <PID>     (PID is printed on start and included in every message)
@@ -87,9 +87,9 @@ esac
 if [[ -n "$CUSTOM_MESSAGE" ]]; then
     MESSAGE="[livetest-nudge PID=$PID] $CUSTOM_MESSAGE"
 elif [[ -n "$RUN_LABEL" ]]; then
-    MESSAGE="[livetest-nudge PID=$PID] $RUN_LABEL in progress. Check your milestone queue for STATUS or ISSUE messages. If nothing pending, monitor and stay ready."
+    MESSAGE="[livetest-nudge PID=$PID] $RUN_LABEL in progress. If you just completed a milestone PASS, advance to the next milestone immediately. If you posted an ISSUE or FAIL, wait for coordinator. If you are idle and unsure where you left off, check your last STATUS post and resume from the next milestone."
 else
-    MESSAGE="[livetest-nudge PID=$PID] Livetest in progress. Check your milestone queue for STATUS or ISSUE messages. If nothing pending, monitor and stay ready."
+    MESSAGE="[livetest-nudge PID=$PID] Livetest in progress. If you just completed a milestone PASS, advance to the next milestone immediately. If you posted an ISSUE or FAIL, wait for coordinator. If you are idle and unsure where you left off, check your last STATUS post and resume from the next milestone."
 fi
 
 # --- PID file (one instance per target) ---

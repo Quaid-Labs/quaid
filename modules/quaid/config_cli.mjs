@@ -258,7 +258,7 @@ function resolveEffectiveTierProvider(cfg, tier) {
 function providerDisplayName(provider) {
   const p = normalizeProvider(provider);
   if (p === "openai-codex") return "openai-codex (deprecated; use openai)";
-  if (p === "openai") return "openai (OpenAI API token)";
+  if (p === "openai") return "openai (OpenAI OAuth token)";
   if (p === "anthropic") return "anthropic (Anthropic API token)";
   if (!p || p === "default") return "default";
   return p;
@@ -424,7 +424,7 @@ function providerOptions(cfg) {
       label: "default",
       hint: `uses provider set in Agent system: OpenClaw (${gwProvider})`,
     },
-    { value: "openai", label: "openai", hint: "OpenAI API token" },
+    { value: "openai", label: "openai", hint: "OpenAI OAuth token (for example from codex setup-token)" },
     { value: "anthropic", label: "anthropic", hint: "Anthropic API token" },
   ];
 }
@@ -475,7 +475,7 @@ function tierProviderOptions(cfg, tier) {
         label: "default",
         hint: `inherits LLM provider (${providerDisplayName(effectiveBase)})`,
       },
-      { value: "openai", label: "openai", hint: "OpenAI API token" },
+      { value: "openai", label: "openai", hint: "OpenAI OAuth token (for example from codex setup-token)" },
       { value: "anthropic", label: "anthropic", hint: "Anthropic API token" },
     ],
   };
