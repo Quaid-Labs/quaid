@@ -1,1085 +1,2131 @@
 # Quaid Live Test Guide
 
-Full procedure for running a 3-platform live validation of Quaid. All commands
-use placeholders defined in `livetest-config.json`. Keep private hostnames,
-auth tokens, and operator identities in an untracked companion file such as
-`LIVE-TEST-GUIDE.local.md`.
-
-## Placeholders
-
-These are read from `tests/livetest/livetest-config.json`:
-
-| Placeholder | Meaning |
-|-------------|---------|
-| `REMOTE_HOST` | Test VM/host (SSH target) |
-| `WORKSPACE` | Hidden Quaid system home on remote (`~/.quaid`) |
-| `OC_INSTANCE` | OC silo name (e.g. `openclaw-livetest`) |
-| `CC_INSTANCE` | CC silo name (e.g. `claude-code-livetest`) |
-| `CDX_INSTANCE` | CDX silo name (e.g. `codex-livetest`) |
-| `OWNER_NAME` | Owner name for install |
-| `DEV_ROOT` | Local dev tree root |
-| `CC_PROJECT_DIR` | CC project directory on remote |
-| `CDX_PROJECT_DIR` | CDX project directory on remote |
-| `TESTER_CLI` | CLI to launch tester agents |
-
-## Public Contract
-
-- Run live validation from `canary`.
-- Use real host adapters and visible interaction panes.
-- Do not mock runtime behavior or patch code during the live run.
-- Treat failures as product bugs, not as reasons to relax the milestone.
-
-## Test Integrity Rules
+Instructions for an LLM agent to run a full live validation of Quaid against a
+real OpenClaw and Claude Code setup. All interaction with the target agent
+happens through tmux message passing or a visible interactive pane. All
+verification happens from a separate tester shell using CLI commands, DB
+queries, and logs.
 
 This is black-box testing:
-- No direct function calls, no imports into runtime codepaths.
-- No mocks, no code edits during the live test.
-- All live agent interaction must happen through a visible interaction pane to
-  simulate a real user.
+- no direct function calls
+- no imports into runtime codepaths
+- no mocks
+- no code edits during the live test
+- all live agent interaction must happen through a visible tmux pane to
+  simulate a real user
 
-**No manual signal injection.** Do not manually write signal files
-(`session_end`, `rolling`, or any other extraction signal) to make a milestone
-pass. If the runtime is not writing the signal, that is the bug to fix.
+## Core Rules
 
-**No test corruption.** A failure is a signal. Fix what is broken — do not make
-the test easier to pass. Wrong responses to a failure:
-- Relaxing a criterion because it is hard to satisfy
-- Hardcoding values to force a specific identity
-- Skipping safety checks because they fail
+**MACHINE SAFETY — READ FIRST:**
+- ALL install, uninstall, and `setup-quaid.mjs` commands MUST be run via
+  `ssh alfie.local '...'`. NEVER run them directly on the local machine.
+- Before any install or uninstall command, verify you are targeting alfie:
+  `ssh alfie.local hostname` must return `alfie`.
+- If you ever find yourself running `node setup-quaid.mjs` without an
+  `ssh alfie.local` prefix, STOP immediately — you are on the wrong machine.
+
+**DO NOT CORRUPT THE TEST:**
+A failure is a signal. Fix what is broken — do not make the test easier to
+pass. These are different things. Wrong responses to a failure include:
+- Relaxing a test criterion because it is hard to satisfy
+- Hardcoding env vars or instance names to force a specific identity
+- Skipping safety checks because they fail in the test environment
+- Disabling a code path because it causes a timeout
 - Ruling PASS-WITH-NOTE to avoid doing work
 
-**Investigate before deferring.** When a failure occurs: reproduce, diagnose,
-fix. "Fix later" is only valid when fixing requires the operator. For anything
-else, fix it now — you have maximum context while the break is live.
+This test simulates real user behavior. Any change that makes the test pass
+by diverging from real behavior hides a bug instead of fixing it.
 
-**Install prompt format.** The M0 install prompt must contain ONLY: the
-AI-INSTALL.md guide path, the adapter/platform/instance/owner parameters, and a
-one-line instruction. No agentic scaffolding, no survey templates, no multi-step
-chains. The agent reads the guide and installs itself.
+- Use this document as the source of truth for the live test procedure.
+- Start from a clean install unless the user explicitly says to skip it.
+- Run the live test from the `canary` branch. Verify the checkout before
+  installing or testing.
+- Use the installer script, not ad hoc install steps.
+- Do not use hidden helper wrappers for agent interaction during the live run.
+  Use a visible tmux pane for OpenClaw and Claude Code.
+- Lower model cost before testing: try Haiku first, step up to Sonnet only if
+  quality is too degraded to run the test reliably.
+- Send ISSUE messages when something breaks or the environment is unclear.
+- Do not send routine milestone status messages.
+- After a fix, re-run the failed milestone. Do not mark it done without
+  re-verification.
+- For live testing, janitor apply is pre-approved. If a milestone or docs/RAG
+  verification needs `quaid janitor --apply --approve`, run it directly
+  instead of stopping for approval.
+- For capability tests, speak to the agent like a real user would. Do not
+  spoon-feed function names or CLI subcommands unless the milestone is
+  explicitly testing a slash command such as `/new`, `/reset`, or `/compact`.
 
-## Role Responsibilities
+## Reporting
 
-### Livetester
+When you hit a failure or blocker, send an ISSUE message to `claude-dev`
+window `4` that includes:
 
-- Follow milestone steps in order, exactly as written.
-- Post every failure and anomaly into the coordinator mailbox as an ISSUE item.
-- Proactively surface diagnostic data (logs, DB counts, daemon status, pane
-  captures) with every ISSUE.
-- Pause and wait for coordinator go-ahead before proceeding past a failure.
-- **Must not**: attempt fixes, write to DBs/signals/config (unless the milestone
-  says to), inject signals, or mark PASS-WITH-NOTE to avoid blocking.
+1. The milestone name.
+2. The exact command that failed.
+3. The first few lines of the error.
+4. What you already tried.
 
-### Coordinator
+At the end of the run, send one final summary.
 
-- Owns test infrastructure: wipe, silo init, tmux setup, daemon lifecycle, deploy.
-- Keeps livetesters running and on task. Stalled lanes are coordinator failures.
-- Enforces role boundaries — watch for unauthorized writes or test corruption.
-- Audits tester commands for local machine writes (all commands must target REMOTE_HOST).
-- Maintains a live issue queue across all lanes.
-- Pushes tests to completion. A run with commits requires a full restart from M0.
-- Performs forensics independently (SSH to host, check DB/logs/config) before
-  acting on tester reports.
+## Long-Running Test Start
 
----
-
-## Step 0 — Environment Setup
-
-### tmux Session
-
-`livetest` is the canonical local tmux session name. One window per platform,
-each split into two panes: left = local tester agent, right = SSH shell to remote.
+Before starting a long run, request nudges:
 
 ```bash
-tmux has-session -t livetest 2>/dev/null || tmux new-session -d -s livetest -n CC
-tmux list-windows -t livetest | grep -q 'CC$'  || tmux new-window -t livetest -n CC
-tmux list-windows -t livetest | grep -q 'OC$'  || tmux new-window -t livetest -n OC
-tmux list-windows -t livetest | grep -q 'CDX$' || tmux new-window -t livetest -n CDX
-
-for win in CC OC CDX; do
-  if [ "$(tmux list-panes -t livetest:$win | wc -l | tr -d ' ')" -lt 2 ]; then
-    tmux split-window -h -t livetest:$win
-  fi
-  tmux select-layout -t livetest:$win even-horizontal
-done
+TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh 5 "start nudge on window 7"
 ```
 
-**Do not run tester agents on the remote host.** If the remote crashes, the
-local tester must survive.
+## Environment
 
-### Confirm Coordinator Pane
+Main test environment:
+- Repo root: `~/quaid/dev`
+- Required branch: `canary`
+- Test guide: `~/quaid/dev/modules/quaid/tests/LIVE-TEST-GUIDE.md`
+- Reference tool guide: `~/quaid/dev/projects/quaid/TOOLS.md`
+
+Target machine:
+- Host: `alfie.local`
+- OpenClaw workspace: `~/quaid`
+
+Pane assignments:
+
+| Window | Agent | Role |
+|--------|-------|------|
+| `main:97` | codex-livetester (CC) | Drives CC milestones M0–M13 |
+| `main:98` | codex-livetester (OC) | Drives OC milestones M0–M13 |
+| `main:99` | live-test | Visible OC interaction pane (`openclaw tui`) |
+| `main:100` | CC-interact | Visible CC interaction pane (`claude`) |
+| `main:4` | claude-dev | Coordinator |
+
+Dedicated live-test silos:
+- OC instance: `openclaw-livetest`
+- CC instance: `claude-code-livetest`
+- Fixed CC project dir: `/tmp/cc-livetest`
+
+Do not reuse `*-main` silos for live validation. The live pane must point at
+throwaway test-only silos so milestone prompts and guide/example text cannot
+contaminate Solomon's normal working memory.
+
+## Start Condition
+
+Do not begin milestone testing against an existing live Quaid install.
+
+### Step 0 — Full wipe on alfie (mandatory)
+
+Before any run, completely remove Quaid and all its data from alfie. Do not do
+targeted cleanup — stale carryover files, queue events, DB nodes, and identity
+files all contaminate test results in ways that are hard to trace. A full wipe
+is faster and safer than surgical cleanup.
+
+> **Parallel runs — CC wipe scope:** When CC M0 starts while OC is already
+> active (the normal parallel case), do **not** run the full wipe below.
+> Instead, CC-only wipe:
+> ```bash
+> ssh alfie.local 'rm -rf ~/quaid/claude-code-livetest && echo "CC silo wiped"'
+> ssh alfie.local 'python3 - <<"PY"
+> import json; from pathlib import Path
+> p = Path.home() / ".claude/settings.json"
+> if p.exists():
+>     d = json.loads(p.read_text())
+>     for ev, entries in list(d.get("hooks", {}).items()):
+>         d["hooks"][ev] = [e for e in entries if "quaid" not in str(e).lower()]
+>     p.write_text(json.dumps(d, indent=2))
+> print("CC hooks cleared")
+> PY'
+> ```
+> Leave `~/quaid/openclaw-livetest`, `~/.openclaw/extensions/quaid`, and the
+> OC gateway untouched — OC is live on all of those.
+>
+> After the CC installer completes, **also apply the chunk_tokens override**
+> (same step as the full M0 post-install — do not skip it in the parallel path):
+> ```bash
+> ssh alfie.local 'python3 -c "import json; p=\"/Users/clawdbot/quaid/claude-code-livetest/config/memory.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
+> ```
+
+**Uninstall the plugin first to remove registry entries:**
 
 ```bash
-COORDINATOR_PANE=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}')
+ssh alfie.local 'openclaw plugins uninstall quaid 2>/dev/null; echo "OC uninstall done"'
 ```
 
-Pass this to every tester at boot so they can post into your mailbox.
-
-### Scripts
-
-Shipped with the livetest suite (relative to repo root):
-- `tests/livetest/scripts/livetest-preflight.sh` — safety checks, wipe, platform start
-- `tests/livetest/scripts/livetest-wipe.sh` — wipe Quaid from remote
-- `tests/livetest/scripts/livetest-platform-start.sh` — start platform services
-- `tests/livetest/scripts/tmux-msg.sh` — direct pane messaging for urgent interrupts and self-tests
-- `tests/livetest/scripts/tmux-mailbox.sh` — queue-backed mailbox for routine STATUS/ISSUE traffic
-- `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
-
-### Start Tester Agents
-
-Launch tester agents in each left pane from the tester agent workspace:
+**Then wipe the entire Quaid workspace and extension dir:**
 
 ```bash
-tmux send-keys -t livetest:CC.0  "cd /path/to/agents/codex-livetester && TESTER_CLI" Enter
-tmux send-keys -t livetest:OC.0  "cd /path/to/agents/codex-livetester && TESTER_CLI" Enter
-tmux send-keys -t livetest:CDX.0 "cd /path/to/agents/codex-livetester && TESTER_CLI" Enter
+ssh alfie.local 'rm -rf ~/quaid && rm -rf ~/.openclaw/extensions/quaid && echo "wipe done"'
 ```
 
-On first message to each tester, send the general skill file (`TESTER.SKILL.md`)
-and the platform supplement (`TESTER.OC.md`, `TESTER.CC.md`, or `TESTER.CDX.md`),
-plus the coordinator pane address.
+> **WARNING**: This runs on alfie.local only — never on the local dev machine
+> where the source repo lives.
 
-### Start Nudge Loops
+**Clear OC session transcripts** (critical — stale sessions from prior runs trigger
+extraction fan-out after reinstall, saturating the gateway and breaking `/reset` and
+other hook-dependent milestones):
 
 ```bash
-LIVETEST_DIR=tests/livetest/scripts
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:CC.0  -r "Run N" &; CC_NUDGE=$!
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:OC.0  -r "Run N" &; OC_NUDGE=$!
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:CDX.0 -r "Run N" &; CDX_NUDGE=$!
+ssh alfie.local 'rm -rf ~/.openclaw/agents/main/sessions/ && echo "OC sessions cleared"'
 ```
 
-Kill at run end: `kill $CC_NUDGE $OC_NUDGE $CDX_NUDGE 2>/dev/null`
-
-### Open Platform SSH Panes
+**Clear CC adapter artifacts:**
 
 ```bash
-tmux send-keys -t livetest:OC.1  "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CC.1  "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CDX.1 "ssh REMOTE_HOST" Enter
+ssh alfie.local 'rm -f ~/.claude/rules/quaid-projects.md && echo "CC rules cleared"'
 ```
 
----
+### Step 1 — Installer-Based Clean Install (mandatory)
 
-## Step 1 — Preflight: Wipe, Safety Check, Code Sync
+The wipe in Step 0 is not enough on its own. **Every run must reinstall Quaid
+using the installer script.** The purpose of M0 is to validate the installer
+itself — that it correctly provisions the workspace, identity files, config,
+DB, and hooks from scratch. Running milestones against a hand-crafted or
+previously installed workspace does not test the installer.
 
-Run at the start of every run.
+Do not skip the reinstall. There is no "note it and move on" option — a run
+without installer reinstall is not a live install validation run.
 
-### Record Run Start SHA
+After the wipe and before M1:
+- verify the repo checkout is on `canary`
+- build runtime artifacts and sync to alfie
+- run the installer for OC and CC (see commands below)
+- run post-install verification checks
+- confirm minimum stability before M1:
+  - install artifacts exist where expected
+  - `quaid doctor` or `quaid health` succeeds
+  - active DB and log paths are identified
+  - daemon starts cleanly
+  - one basic agent turn succeeds without hanging
+
+## Installer-Based Clean Install
+
+Use a source tree from the local test machine only. Do not involve `spark`.
+Valid install sources for a live run are:
+
+- local `~/quaid/dev` on this machine
+- GitHub `openclaw` when that is the target under test
+- Quaid `canary`
+
+When using the local dev tree, build the runtime artifacts first, then sync
+to alfie. `adapter.js` is a build artifact — rsync copies it as-is, so it
+must be built before sync or it will be stale on alfie.
+
+**Build first (required before every sync):**
 
 ```bash
-cd DEV_ROOT && git rev-parse HEAD
+cd ~/quaid/dev/modules/quaid && npm run build:runtime
 ```
 
-Save as `RUN_START_SHA`.
-
-### Run Preflight Script
-
-```bash
-tests/livetest/scripts/livetest-preflight.sh
-```
-
-The script: verifies the remote host is not the local machine (hard abort),
-verifies SSH, wipes Quaid from remote (all silos, hooks, sessions, extensions),
-starts the OC gateway, and waits for health.
-
-For a CC-only wipe when OC is already live:
-```bash
-tests/livetest/scripts/livetest-preflight.sh --wipe-platform cc --skip-platform-start
-```
-
-### Verify Remote Code Is Current
+Then sync the full tree from this machine to alfie. `setup-quaid.mjs` and
+`lib/` are at the root of `~/quaid/dev`, not inside `modules/quaid/`:
 
 ```bash
-LOCAL_SHA=$(cd DEV_ROOT && git rev-parse --short HEAD)
-ssh REMOTE_HOST 'cd ~/quaidcode/dev && git rev-parse --short HEAD'
-```
-
-If different, update and restart:
-```bash
-ssh REMOTE_HOST 'cd ~/quaidcode/dev && git pull --ff-only origin canary'
-```
-
-### Full Wipe Details
-
-The preflight script handles this, but the manual steps are:
-
-1. **Kill all extraction daemons** (stale daemons cache embedding model at
-   startup — survivors corrupt vec_nodes schema):
-   ```bash
-   ssh REMOTE_HOST 'pkill -9 -f extraction_daemon.py 2>/dev/null'
-   ```
-
-2. **Uninstall the OC plugin:**
-   ```bash
-   ssh REMOTE_HOST 'openclaw plugins uninstall quaid 2>/dev/null'
-   ```
-
-3. **Wipe workspace and extensions:**
-   ```bash
-   ssh REMOTE_HOST 'rm -rf WORKSPACE && rm -rf ~/.openclaw/extensions/quaid'
-   ```
-
-4. **Clear OC session transcripts** (stale sessions trigger extraction fan-out):
-   ```bash
-   ssh REMOTE_HOST 'rm -rf ~/.openclaw/agents/main/sessions/'
-   ```
-
-5. **Clear CC hooks and project history:**
-   ```bash
-   ssh REMOTE_HOST 'rm -f ~/.claude/rules/quaid-projects.md'
-   ssh REMOTE_HOST 'rm -rf ~/.claude/projects/-private-tmp-cc-livetest'
-   ```
-
-6. **Clear CDX hooks:**
-   ```bash
-   ssh REMOTE_HOST 'echo "{}" > ~/.codex/hooks.json'
-   ```
-
-### Platform Version Checks
-
-Before starting a run, verify platform versions are current:
-```bash
-ssh REMOTE_HOST 'echo "OC=$(openclaw --version) CC=$(claude --version | head -1) CDX=$(codex --version | head -1)"'
-```
-
-Update via the base snapshot if outdated — not the run VM.
-
-### Build and Sync Source
-
-```bash
-cd DEV_ROOT/modules/quaid && npm run build:runtime
 rsync -av --checksum \
   --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
   --exclude='.git/' --exclude='logs/' --exclude='.env*' \
-  DEV_ROOT/ REMOTE_HOST:~/quaidcode/dev/
+  ~/quaid/dev/ alfie.local:~/quaid/dev/
 ```
 
----
+Also sync the legacy plugin path — the installer (`--workspace ~/quaid`) falls
+back to `~/quaid/plugins/quaid/` when `~/quaid/modules/quaid/` is absent, so
+both locations must be up to date:
 
-## Step 2 — M0: Agent-Driven Install
-
-### Install Order
-
-Roll a random order for the three platforms each run. Complete one M0 PASS
-before starting the next platform. Fixed order masks order-dependent bugs.
-
-### Tester Dry-Run Validation
-
-Each tester runs `--dry-run` before the real install:
 ```bash
-ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=OC_INSTANCE node setup-quaid.mjs \
-  --dry-run --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
+rsync -av --checksum \
+  --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
+  --exclude='.git/' --exclude='logs/' \
+  ~/quaid/dev/modules/quaid/ alfie.local:~/quaid/plugins/quaid/
 ```
 
-Verify: `platform` matches, `workspace` is `WORKSPACE`, `instanceId` matches.
+Verify branch on the local source checkout:
 
-### Coordinator Pre-Install Prep
-
-**OC only** — ensure gateway is running and models are registered:
 ```bash
-ssh REMOTE_HOST 'curl -sf http://localhost:18789/health && echo "ok" || echo "down"'
-ssh REMOTE_HOST 'curl -sf http://localhost:18789/v1/models | python3 -c \
-  "import json,sys; print([m[\"id\"] for m in json.load(sys.stdin).get(\"data\",[])])"'
+cd ~/quaid/dev && git branch --show-current && git rev-parse --short HEAD
 ```
 
-**OC only** — disable exec approval gates for unattended install:
+Pass only if the branch is exactly `canary`.
+
+### Hot-deploy during a live run (mid-test fix)
+
+When a fix is committed during a live run and you need to deploy without a
+full reinstall, use `scp` from the **local machine** directly to the OC
+runtime path. Do NOT use `ssh alfie 'cp ...'` — it copies alfie's own
+(stale) files and silently does nothing.
+
+**OC adapter.js runtime path** — OC loads from the PLUGIN SOURCE path, not the
+extensions dir. Both copies must match or hotfixes silently miss the live runtime:
+
+```
+~/quaid/plugins/quaid/adaptors/openclaw/adapter.js   ← gateway loads THIS
+~/.openclaw/extensions/quaid/adaptors/openclaw/adapter.js   ← also update
+```
+
+Deploy adapter.js hotfix:
 ```bash
-ssh REMOTE_HOST 'openclaw config set tools.exec.host gateway && \
-  openclaw config set tools.exec.security full && \
-  openclaw config set tools.exec.ask off && openclaw gateway restart'
+# 1. Build fresh artifact on the local machine
+cd ~/quaid/dev/modules/quaid && npm run build:runtime
+
+# 2. scp to BOTH paths — missing either one leaves the gateway on stale code
+scp ~/quaid/dev/modules/quaid/adaptors/openclaw/adapter.js \
+    alfie.local:~/quaid/plugins/quaid/adaptors/openclaw/adapter.js
+scp ~/quaid/dev/modules/quaid/adaptors/openclaw/adapter.js \
+    alfie.local:~/.openclaw/extensions/quaid/adaptors/openclaw/adapter.js
+
+# 3. Verify both copies match
+ssh alfie.local 'sha256sum ~/quaid/plugins/quaid/adaptors/openclaw/adapter.js ~/.openclaw/extensions/quaid/adaptors/openclaw/adapter.js'
+
+# 4. Restart OC gateway
+ssh alfie.local 'pkill -f openclaw-gateway; sleep 2; nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &'
+
+# 5. Verify new code loaded — send a test message and check gateway.log
+# Look for the correct datastores/scrubQuery behavior in [quaid][recall] lines
 ```
 
-**CC only** — clear stale Quaid hooks from `~/.claude/settings.json`.
-
-**CC only** — write Anthropic auth token before install (installer blocks until this exists):
+Deploy Python hotfix (hooks.py or other CC modules):
 ```bash
-ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/claude-code && \
-  echo -n 'AUTH_TOKEN' > WORKSPACE/adaptors/claude-code/.auth-token && \
-  chmod 600 WORKSPACE/adaptors/claude-code/.auth-token"
+scp ~/quaid/dev/modules/quaid/core/interface/hooks.py \
+    alfie.local:~/.openclaw/extensions/quaid/core/interface/hooks.py
+# No restart needed for Python — hooks.py is imported fresh per-call
 ```
 
-**OC only** — write the provider token you plan to select during install before starting M0:
+### OpenClaw on alfie.local
+
+Preview first:
+
 ```bash
-ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/openclaw && \
-  echo -n 'AUTH_TOKEN' > WORKSPACE/adaptors/openclaw/.auth-token && \
-  chmod 600 WORKSPACE/adaptors/openclaw/.auth-token"
+ssh alfie.local 'openclaw plugins list 2>/dev/null | grep quaid || true'
+ssh alfie.local 'ls -ld ~/quaid ~/quaid/openclaw-livetest ~/quaid/projects 2>/dev/null || true'
 ```
 
-**CDX only** — write OpenAI auth token before install:
+Ensure the OpenClaw gateway is running before installing — the installer will
+bail immediately if it is not:
+
 ```bash
-ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/codex && \
-  echo -n 'AUTH_TOKEN' > WORKSPACE/adaptors/codex/.auth-token && \
-  chmod 600 WORKSPACE/adaptors/codex/.auth-token"
+ssh alfie.local 'pgrep -f openclaw-gateway > /dev/null 2>&1 || (nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &); for i in $(seq 1 30); do curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break || sleep 2; done'
 ```
 
-**CDX only** — verify no stale Quaid hooks in `~/.codex/hooks.json`.
+Install with the installer script on `alfie`, using the synced local tree.
+Use `QUAID_TEST_MOCK_MIGRATION=1` to skip LLM-based migration of existing
+workspace files (SOUL.md, USER.md, etc.) — without it the installer runs 5
+sequential deep-reasoning calls that block M0 for several minutes:
 
-### Agent-Driven Install Message
+```bash
+ssh alfie.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs --agent --workspace "/Users/clawdbot/quaid" --source local'
+```
 
-Send to each platform:
+### Claude Code on alfie.local
 
-> Please install Quaid by following the AI install guide:
-> `~/quaidcode/dev/docs/AI-INSTALL.md`
+Clear old hooks if present, then reinstall with the installer script:
+
+```bash
+ssh alfie.local 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path.home() / ".claude/settings.json"
+if p.exists():
+    data = json.loads(p.read_text())
+    hooks = data.get("hooks", {})
+    for event, entries in list(hooks.items()):
+        hooks[event] = [entry for entry in entries if "quaid" not in str(entry).lower()]
+    p.write_text(json.dumps(data, indent=2))
+print("Cleared existing Quaid Claude Code hooks if present")
+PY'
+ssh alfie.local 'mkdir -p /tmp/cc-livetest && cd /tmp/quaid-install-canary && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/clawdbot/quaid" --source local'
+```
+
+After the installer runs, write the API-scoped OAuth token to the CC instance
+auth file. This token is required for daemon LLM calls (sonnet/opus via direct
+OAuth). Without it the daemon falls back to `claude -p` subprocess calls, which
+trigger the hook storm described below.
+
+```bash
+# Read the token from the local token file and write it to alfie
+TOKEN=$(cat ~/sparkanthtoken.md | tr -d '[:space:]')
+ssh alfie.local "mkdir -p ~/quaid/config/adapters/claude-code && echo -n '$TOKEN' > ~/quaid/config/adapters/claude-code/.auth-token && chmod 600 ~/quaid/config/adapters/claude-code/.auth-token && echo 'Auth token written'"
+```
+
+Also verify model config was written by the installer:
+
+```bash
+ssh alfie.local 'python3 -c "import json; d=json.load(open(\"/Users/clawdbot/quaid/claude-code-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
+```
+
+Expected output: `{'deepReasoning': 'claude-opus-4-6', 'fastReasoning': 'claude-haiku-4-5-20251001'}`.
+If models are missing or empty, the daemon will raise `RuntimeError` at call time — re-run the
+installer or inject manually.
+
+> **QUAID_DAEMON guard — hook storm prevention:** The CC daemon and hook entry
+> point both set `QUAID_DAEMON=1` on startup. This env var tells the LLM
+> provider to skip Layer 0 (`claude -p` subprocess) and route directly to OAuth
+> (Layer 1b, `.auth-token` file). Without this guard, daemon LLM calls spawn
+> full CC sessions which trigger hooks, which call the LLM again — exponential
+> recursion producing hundreds of concurrent `hooks.py` processes and thousands
+> of synthetic session cursor files. The guard is set in `daemon_loop()` in
+> `core/extraction_daemon.py` and in `main()` in `core/interface/hooks.py`.
+> If a hook storm is observed (many concurrent `hooks.py` PIDs), verify both
+> locations set `QUAID_DAEMON=1` before any LLM call.
 >
-> Use these parameters:
-> - Adapter/platform: PLATFORM
-> - Instance name: INSTANCE_NAME
-> - Owner name: OWNER_NAME
+> **OAuth identity headers for sonnet/opus:** Direct OAuth calls to
+> `/v1/messages` require CC identity headers to access sonnet/opus tiers:
+> `anthropic-beta: claude-code-20250219,prompt-caching-2024-07-31,oauth-2025-04-20`,
+> `User-Agent: claude-cli/2.1.2 (external, cli)`, `x-app: cli`, and a first
+> system block of `"You are Claude Code, Anthropic's official CLI for Claude."`.
+> Without these, haiku works but sonnet/opus return HTTP 400. This is
+> implemented in `adaptors/claude_code/providers.py` `_api_call()`.
+
+### Post-install verification
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh alfie.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
+# Verify QUAID_HOME in global settings and QUAID_INSTANCE in per-project settings.
+# QUAID_INSTANCE is NOT in ~/.claude/settings.json — it is pinned per-project so
+# different CC project dirs can use different silos without cross-contamination.
+ssh alfie.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE (should be absent):\",e.get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
+ssh alfie.local 'cat /tmp/cc-livetest/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_INSTANCE (per-project):\",e.get(\"QUAID_INSTANCE\",\"MISSING\"))"'
+# Expected: QUAID_HOME: /Users/clawdbot/quaid   and   QUAID_INSTANCE (per-project): claude-code-livetest
+ssh alfie.local 'ls -l ~/quaid/openclaw-livetest/identity/SOUL.md ~/quaid/claude-code-livetest/identity/SOUL.md 2>/dev/null || true'
+```
+
+If either instance-local `identity/SOUL.md` is missing, the installer did not
+seed it correctly — this is a bug. Fix the installer. As a temporary unblock,
+seed from the shared project template:
+
+```bash
+ssh alfie.local 'python3 - <<\"PY\"
+from pathlib import Path
+template_dir = Path("/Users/clawdbot/quaid/projects/quaid")
+for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
+    src = template_dir / fname
+    if not src.exists():
+        print(f"WARNING: template missing: {src}")
+        continue
+    for instance in ("openclaw-livetest", "claude-code-livetest"):
+        dst = Path("/Users/clawdbot/quaid") / instance / "identity" / fname
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not dst.exists():
+            dst.write_bytes(src.read_bytes())
+            print(f"created {dst}")
+PY'
+```
+
+Seed the quaid project in both instance silos so `PROJECT.log` can be written
+by extraction. The project must be **registered** in the docs DB (not just on
+disk) for the extraction daemon to find it:
+
+```bash
+# OC instance — CLI command (works reliably for OC)
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
+
+# CC instance — inject definition directly (CLI "already exists" false-positive
+# can occur due to config singleton state; direct injection is reliable)
+ssh alfie.local 'python3 -c "
+import json
+p = \"/Users/clawdbot/quaid/claude-code-livetest/config/memory.json\"
+with open(p) as f: d = json.load(f)
+if \"quaid\" not in d[\"projects\"][\"definitions\"]:
+    d[\"projects\"][\"definitions\"][\"quaid\"] = {
+        \"label\": \"Quaid\", \"home_dir\": \"../projects/quaid/\",
+        \"source_roots\": [], \"auto_index\": True, \"patterns\": [\"*.md\"],
+        \"exclude\": [\"*.db\", \"*.log\", \"*.pyc\", \"__pycache__/\"],
+        \"description\": \"Quaid development project\", \"state\": \"active\"
+    }
+    with open(p, \"w\") as f: json.dump(d, f, indent=2)
+    print(\"Injected quaid project definition\")
+else:
+    print(\"quaid already in definitions\")
+"'
+```
+
+### Live-test config overrides
+
+> **Known test workaround — not a production setting.**
+> The rolling extraction threshold (`capture.chunk_tokens`) is lowered from the
+> production default of 8 000 tokens to 1 500 tokens for both test silos. This
+> ensures a normal test conversation (3–4 exchanges) crosses the threshold so
+> the rolling extraction pipeline can be verified without generating tens of
+> thousands of tokens. Do not apply this change outside of test silos.
+
+```bash
+# OC silo
+ssh alfie.local 'python3 -c "
+import json
+p = \"/Users/clawdbot/quaid/openclaw-livetest/config/memory.json\"
+with open(p) as f: d = json.load(f)
+d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
+with open(p, \"w\") as f: json.dump(d, f, indent=2)
+print(\"capture.chunk_tokens set to 1500 for openclaw-livetest\")
+"'
+
+# CC silo
+ssh alfie.local 'python3 -c "
+import json
+p = \"/Users/clawdbot/quaid/claude-code-livetest/config/memory.json\"
+with open(p) as f: d = json.load(f)
+d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
+with open(p, \"w\") as f: json.dump(d, f, indent=2)
+print(\"capture.chunk_tokens set to 1500 for claude-code-livetest\")
+"'
+```
+
+Verify both silos have the override:
+
+```bash
+ssh alfie.local 'python3 -c "import json; d=json.load(open(\"/Users/clawdbot/quaid/openclaw-livetest/config/memory.json\")); print(\"OC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+ssh alfie.local 'python3 -c "import json; d=json.load(open(\"/Users/clawdbot/quaid/claude-code-livetest/config/memory.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+```
+
+Expected: `OC chunk_tokens: 1500` and `CC chunk_tokens: 1500`.
+
+## Execution Model
+
+### Phase Start Reset
+
+OC and CC run in parallel — OC uses `main:99`, CC uses `main:100`. Each pane
+must be set up before its suite starts.
+
+**OC phase start** — reset `main:99`:
+```bash
+tmux respawn-pane -k -t main:99 'zsh -il'
+tmux send-keys -t main:99 "ssh alfie.local" Enter
+tmux send-keys -t main:99 "openclaw tui" Enter
+```
+
+**CC phase start** — reset `main:100` (do this once OC M0 passes):
+```bash
+tmux respawn-pane -k -t main:100 'zsh -il'
+tmux send-keys -t main:100 "ssh alfie.local" Enter
+tmux send-keys -t main:100 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
+```
+
+Respawn the relevant pane again if it becomes contaminated mid-run.
+
+### OpenClaw
+
+OC live interaction must be visible in local tmux pane `main:99`, just like
+Claude Code. Do not use `/tmp/oc-send.sh` or any hidden SSH wrapper for live
+milestones. The goal is to simulate a real user session.
+
+Pattern:
+
+```bash
+tmux respawn-pane -k -t main:99 'zsh -il'
+tmux send-keys -t main:99 "ssh alfie.local" Enter
+tmux send-keys -t main:99 "openclaw tui" Enter
+```
+
+Then send normal user messages or slash commands directly in that pane:
+
+```bash
+tmux send-keys -t main:99 "message here" Enter
+tmux send-keys -t main:99 "/new" Enter
+tmux send-keys -t main:99 "/reset" Enter
+tmux send-keys -t main:99 "/compact" Enter
+tmux capture-pane -t main:99 -p | tail -30
+```
+
+Use SSH/CLI commands only for verification, DB queries, logs, config changes,
+install, and uninstall. Do not use them to simulate the agent conversation.
+
+### Claude Code
+
+CC hooks require interactive mode. Run CC visibly in local tmux pane `main:99`,
+SSH to `alfie.local`, and launch `claude` from there.
+
+```bash
+tmux respawn-pane -k -t main:99 'zsh -il'
+tmux send-keys -t main:99 "ssh alfie.local" Enter
+tmux send-keys -t main:99 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
+```
+
+**MANDATORY — set model before any CC interaction:**
+
+Once CC is open, immediately run `/model` and select `claude-haiku-4-5` (or
+`claude-sonnet-4-6` if Haiku quality is too low). **Never run CC milestones on
+Opus** — it is the most expensive model and live tests do not require it.
+Do not send any test messages until the model is confirmed non-Opus.
+
+```
+# In the CC pane:
+/model
+# Select: claude-haiku-4-5  (preferred)
+# Fallback: claude-sonnet-4-6
+```
+
+Read replies with:
+
+```bash
+tmux capture-pane -t main:99 -p | tail -30
+```
+
+**Important:** For this live test flow, end the visible CC session with
+`/exit` in pane `99` to return cleanly to the remote shell. After each CC
+session end, explicitly verify that extraction happened by checking
+`~/quaid/claude-code-livetest/data/extraction-signals/`, the CC daemon log, or the
+shared DB at `~/quaid/data/memory.db`. If a session ends cleanly but no
+`session_end` signal appears, do not assume extraction fired.
+
+Current live-test fallback on `claude` `2.1.76`:
+
+1. Find the real CC transcript under `~/.claude/projects/-Users-clawdbot-quaid/`.
+2. Write a manual `session_end` signal against that real transcript.
+3. Verify the shared DB at `~/quaid/data/memory.db`.
+
+Example:
+
+```bash
+ssh alfie.local 'python3 - <<\"PY\"
+import sys
+sys.path.insert(0, \"/Users/clawdbot/quaid/plugins/quaid\")
+from core.extraction_daemon import write_signal
+p = write_signal(
+    signal_type=\"session_end\",
+    session_id=\"<real-cc-session-id>\",
+    transcript_path=\"/Users/clawdbot/.claude/projects/-Users-clawdbot-quaid/<real-cc-session-id>.jsonl\",
+)
+print(p)
+PY'
+```
+
+Before running CC project/recall milestones, verify that SessionStart generated
+real project guidance, not just identity projections. The current hook-session-
+init path scans `~/quaid/projects`, so the
+shared project registry/sync state must already be correct.
+
+Quick checks:
+
+```bash
+ssh alfie.local 'wc -l ~/.claude/rules/quaid-projects.md && sed -n "1,220p" ~/.claude/rules/quaid-projects.md'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
+ssh alfie.local 'find ~/quaid/projects -maxdepth 3 -type f | sort'
+ssh alfie.local 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path(\"/Users/clawdbot/quaid/projects/project-registry.json\")
+if p.exists():
+    print(json.dumps(json.loads(p.read_text()), indent=2))
+PY'
+```
+
+Pass only if `~/.claude/rules/quaid-projects.md` includes project sections like
+`--- quaid/TOOLS.md ---` and `--- quaid/AGENTS.md ---`. If it only contains
+`USER.md` / `ENVIRONMENT.md` projections, CC project CRUD is not being tested
+against a valid shared-project bootstrap state yet. Also verify the global
+registry entry for `quaid` points at `$QUAID_HOME/projects/quaid`, not
+an instance-local path such as `$QUAID_HOME/openclaw-livetest/projects/quaid`.
+
+For CC `/compact`, the extracted fact should store from the visible live run
+without this manual fallback once the per-instance signal-dir fix is deployed.
+
+## Notification Level Checks
+
+Use these config toggles between milestones:
+
+1. After M3, set `notifications.extraction.verbosity` to `debug`.
+2. After M5, set `notifications.retrieval.verbosity` to `summary`.
+3. After M7, set notifications to `off`.
+4. After M9, restore the original values.
+
+Verify by checking the next relevant extraction or retrieval event after each
+change.
+
+## OpenClaw and Claude Code Milestones
+
+OC and CC run **in parallel**, not sequentially. The execution order is:
+
+1. **OC livetester (window 98)** starts M0 alone first.
+2. Once OC M0 passes, **CC livetester (window 97)** starts CC M0.
+3. Both livetester agents run their M0–M13 suites concurrently from that point.
+4. The run is not complete until **both** OC and CC have reached M13 PASS.
+
+OC milestones play out in `main:99` (openclaw tui).
+CC milestones play out in `main:100` (claude interactive).
+
+### M1: Extraction via `/new`
+
+> **OC TUI behavior:** OC TUI `/new` adds a brand-new key to `sessions.json`
+> rather than updating an existing key's session ID. The adapter detects this
+> via a new-key arrival branch in `tickSessionIndex`: when a new key appears,
+> it signals any recently-active sessions with content immediately (within 1s).
+> No follow-up message or `.reset.*` backup needed.
 >
-> Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not pass a custom workspace path.
-> Tell me when Quaid is installed and `quaid doctor` returns healthy.
+> **OC 2026.3.13+ note:** `/new` may no longer be intercepted as a built-in TUI
+> slash command in this version — OC passes it through to the model as a user
+> message and the model responds saying it doesn't know the command. In this
+> case the `new_key_detected` path does NOT fire (no new sessions.json key), but
+> the adapter's `handleSlashLifecycleFromMessage` path DOES detect `/new` in the
+> message event and writes a ResetSignal for the pre-/new session. Extraction
+> still fires. Check for `hook.message.command_detected` (command=new) in the
+> hook trace instead of `session_index.new_key_detected`.
 
-### Post-Install Examination
-
-After each platform's M0 passes, verify the filesystem (see
-`COORDINATOR.SKILL.md` for the full subagent prompt):
-
-1. **`~/.quaid` and `~/quaid` both exist** — hidden runtime state and visible markdown/projects are split across both roots.
-2. **`~/.quaid` has correct hidden structure**: `modules/quaid/`, `shared/config/`,
-   `instances/INSTANCE/config.json`, `instances/INSTANCE/data/`, `instances/INSTANCE/logs/`.
-3. **`~/quaid` has correct visible structure**: `instances/INSTANCE/`, `instances/INSTANCE/journal/`, `projects/`.
-4. **Instance config has models and capture sections.**
-5. **Shared platform config exists** at `~/.quaid/shared/config/PLATFORM/`.
-6. **Platform hooks registered** (CC: settings.json, CDX: hooks.json, OC:
-   extensions/quaid directory refreshed from the installed plugin tree).
-7. **No stale flat or misplaced paths** (`~/.quaid/config/config.json`, `~/quaid/shared/config/`, `~/quaid/modules/`).
-
-### Post-Install Coordinator Steps
-
-**Verify installer model policy** (all silos — HARD RULE):
-```bash
-ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/INSTANCE/config.json'
-with open(p) as f: d = json.load(f)
-models = d.get('models', {})
-print('fast=', models.get('fastReasoning'), 'deep=', models.get('deepReasoning'))
-assert models.get('fastReasoning') in ('gpt-5.4-mini', 'claude-haiku-4-5')
-assert models.get('deepReasoning') in ('gpt-5.4', 'claude-sonnet-4-5')
-\""
-```
-
-**Set live-test chunk_tokens** (all silos — lowers rolling threshold for short tests):
-```bash
-ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/INSTANCE/config.json'
-with open(p) as f: d = json.load(f)
-d.setdefault('capture', {})['chunk_tokens'] = 500
-with open(p, 'w') as f: json.dump(d, f, indent=2)
-\""
-```
-
-**Note for rolling-stage verification:** the rolling buffer tracks
-POST-sanitization transcript content (raw user prompts + agent responses with
-Quaid system/memory/notification/context blocks stripped). Do NOT use hook
-`context_emitted` length as the token-limit signal — that's pre-sanitization
-and will always be substantially larger than what the rolling buffer actually
-records. Check `semantic_buffer_tokens` in the per-session rolling state file:
-`WORKSPACE/instances/INSTANCE/data/rolling-extraction/<session_id>.json`.
-
-**CDX only** — respawn platform pane after M0 (pre-install sessions have no
-cursor and are invisible to orphan sweep):
-```bash
-tmux respawn-pane -k -t livetest:CDX 'zsh -il'
-tmux send-keys -t livetest:CDX "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CDX "mkdir -p CDX_PROJECT_DIR && cd CDX_PROJECT_DIR && \
-  QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE codex --yolo" Enter
-```
-
----
-
-## Execution Model — Platform Interaction
-
-### OpenClaw (OC)
-
-OC runs headlessly or via TUI. For TUI:
-```bash
-ssh REMOTE_HOST 'openclaw tui'
-```
-
-For Telegram-based runs, send messages via the testbox bot and receive via
-`tg-poll`. See `TESTER.OC.md` for Telegram setup.
-
-Lifecycle commands (`/new`, `/clear`, `/compact`) are sent as normal messages
-(TUI or Telegram text).
-
-### Claude Code (CC)
-
-CC requires interactive mode for hooks to fire:
-```bash
-ssh REMOTE_HOST "mkdir -p CC_PROJECT_DIR && cd CC_PROJECT_DIR && \
-  QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-  CLAUDE_PROJECT_DIR=CC_PROJECT_DIR claude --dangerously-skip-permissions --model claude-sonnet-4-5"
-```
-
-**Model policy** — launch the CC test agent with `--model claude-sonnet-4-5`
-and do not use the
-in-session `/model` picker. The `/model` command writes command wrapper blocks
-into the transcript before any real user turn and can poison session
-classification.
-
-End sessions with `/exit` — never Ctrl+C (bypasses SessionEnd hook).
-
-### Codex (CDX)
+Procedure:
+1. Tell the agent something memorable in natural conversation — pick a vivid,
+   distinctive detail that would not already be in memory. For example:
+   `"My neighbour just told me she won a regional chili cook-off last weekend
+   using a smoked brisket recipe she's kept secret for twenty years."`
+   Note the distinctive keyword(s) you'll search for (e.g. `chili cook-off`).
+2. Wait for full idle.
+3. Send `/new`.
+   - **OC < 2026.3.13 (TUI intercepts):** sessions.json is NOT updated yet —
+     visual-only switch. Send one message to the new session (e.g. `Hello`)
+     to write the new key and trigger `new_key_detected`.
+   - **OC 2026.3.13+ (TUI passes to model):** model will reply "no /new
+     command". That's OK — adapter detects it via message event and fires
+     ResetSignal immediately. No follow-up message needed.
+4. Wait 30–60 seconds for extraction.
+5. Check DB for the distinctive keyword:
 
 ```bash
-ssh REMOTE_HOST "mkdir -p CDX_PROJECT_DIR && cd CDX_PROJECT_DIR && \
-  QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE codex --yolo"
+# OC
+ssh alfie.local 'sqlite3 ~/quaid/openclaw-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
+# CC
+ssh alfie.local 'sqlite3 ~/quaid/claude-code-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
 ```
 
-CDX only has `/new` — no `/clear` or `/compact`. `/new` is disabled while a
-task is running; wait for idle.
+Hook trace markers to confirm:
+- **OC < 2026.3.13:** `session_index.new_key_detected` → `session_index.signal_queued` (source=new-key)
+- **OC 2026.3.13+:** `hook.message.command_detected` (command=new) → `daemon.signal_written` (type=reset)
 
-### Verification Commands (all platforms)
+Pass:
+- the fact is stored after the lifecycle boundary
+- FTS or DB check finds the distinctive keyword
 
-**DB check:**
-```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
-  "SELECT rowid, name FROM nodes_fts WHERE nodes_fts MATCH '\''KEYWORD'\'' LIMIT 3;"'
-```
+Note: `quaid recall-fast` is vector-only and will not find nonsense keywords by exact match.
+Use FTS direct check (step 5) as the primary verification. `quaid recall "<natural query>"` (e.g. "what do I know about my neighbor") is also valid if recall is healthy.
 
-**Daemon log:**
-```bash
-ssh REMOTE_HOST 'tail -20 WORKSPACE/instances/INSTANCE/logs/daemon/extraction-daemon.log'
-```
+### M2: Extraction via `/reset`
 
-**Rolling extraction log:**
-```bash
-ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl | tail -5'
-```
+Tell the agent something memorable in natural conversation. Use two prompts:
+1. A personal fact — for example:
+   `"I just booked flights to Reykjavik for the aurora season in February."`
+2. A reflective question to guarantee snippet-worthy content for M9:
+   `"What do you think is your fundamental purpose?"`
 
-**CLI recall:**
-```bash
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE \
-  QUAID_CLI recall "query" 2>&1'
-```
+Then trigger `/reset`.
 
-Where `QUAID_CLI` is the quaid binary path on the remote (varies by platform —
-OC: `~/.openclaw/extensions/quaid/quaid`, CC: `~/.quaid/modules/quaid/quaid`,
-CDX: same as OC or CC depending on install).
+Pass:
+- the fact is stored from the pre-reset session
+- a snippet file (`USER.snippets.md` or `SOUL.snippets.md`) is written in the silo after extraction
 
-### Hot-Deploy (mid-test fix)
+### M3: Extraction via `/compact` + rolling extraction
 
-When deploying a fix during a live run, `scp` from the **local machine** to the
-remote runtime path. Do not `ssh ... cp` — that copies the remote's own stale files.
+Tell the agent something memorable in natural conversation, then build enough
+context (3–4 exchanges) to cross the rolling extraction threshold (1 500 tokens
+in test silos). Then trigger `/compact`.
+Use a different distinctive detail — for example:
+`"My sister started her ceramics studio this spring, she fires everything in a
+wood-burning kiln she built herself."`
 
-```bash
-# Build fresh
-cd DEV_ROOT/modules/quaid && npm run build:runtime
+After seeding the fact, continue with 2–3 follow-up exchanges to accumulate
+tokens (e.g. ask about kiln temperatures, her firing process, etc.). The daemon
+polls for chunk readiness every few seconds — by the time you send `/compact`,
+at least one rolling stage should have fired.
 
-# Deploy (OC adapter.js has two copies — both must match)
-scp DEV_ROOT/modules/quaid/adaptors/openclaw/adapter.js \
-    REMOTE_HOST:~/.openclaw/extensions/quaid/adaptors/openclaw/adapter.js
-
-# Python hotfixes need no restart — imported fresh per-call
-scp DEV_ROOT/modules/quaid/core/interface/hooks.py \
-    REMOTE_HOST:~/.openclaw/extensions/quaid/core/interface/hooks.py
-```
-
----
-
-## Step 3 — M0–M15 Milestones (Parallel)
-
-Three platforms (OC, CC, CDX) run M0–M15 in parallel. One platform runs M0
-alone first (lead platform, rotated each run); the other two start after the
-lead M0 passes. The run is not complete until all three platforms reach M15 PASS.
-
-Platform lifecycle commands:
-- **CC**: `/clear`
-- **CDX**: `/new`
-- **OC**: `/new`, `/reset`
-
-**Seed fact delivery**: Prefix seed facts with: "This is a test of the auto
-extraction system, don't manually store this, let auto extraction pick it up."
-Then state the fact naturally. This tells the agent to let the extraction
-pipeline handle it without proactively running `quaid store`, while keeping
-the fact clearly extractable in the transcript.
-
-### M0 — Agent-Driven Install
-
-Tests the installer itself. See Step 2 above for the full procedure.
-
-**Pass**: Platform self-installed, install messages visible in platform pane,
-`quaid doctor` healthy.
-
-**M0 sub-test (OC only, once per release)**: Unknown Provider Model
-Clarification. Install with a non-standard provider, enter a misspelled model
-name, verify the installer offers retry, re-enter correct names, verify PING
-passes. Tests the full provider onboarding path including error recovery.
-
-### M1 — Extraction via `/new`
-
-Seed a distinctive fact, send `/new`, verify the fact is stored via FTS.
-
-**Seed fact**: "My neighbour just told me she won a regional chili cook-off
-last weekend using a smoked brisket recipe she's kept secret for twenty years."
-**Keywords**: `chili`, `brisket`
-
-**CDX quirk**: After `/new`, send one follow-up message (e.g. `Hello`) to
-trigger `check_session_transition`. Extraction fires on that message, not `/new`.
-
-**OC TUI quirk (2026.3.13+)**: `/new` may pass through to the model (model
-replies "no /new command"). The adapter detects it via message event and fires
-ResetSignal — no follow-up needed.
-
-**Verification:**
-```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
-  "SELECT rowid, name FROM nodes_fts WHERE nodes_fts MATCH '\''chili OR brisket'\'' LIMIT 3;"'
-```
-
-**Pass**: Fact stored after the lifecycle boundary; FTS finds keywords.
-
-### M2 — Extraction via `/clear`
-
-Seed a fact, send `/clear` (CDX: use `/new`), verify extraction.
-
-**Seed fact**: "I just booked flights to Reykjavik for the aurora season in February."
-**Keywords**: `Reykjavik`, `aurora`
-
-**Pass**: Fact stored from the pre-clear session.
-
-### M3 — Rolling Extraction + `/compact`
-
-Seed a fact, build >1500 tokens of context (3–4 exchanges), **wait for
-`rolling_stage` to fire**, then send the lifecycle command and verify
-`rolling_flush`.
-
-**Seed fact**: "My sister started her ceramics studio this spring, she fires
-everything in a wood-burning kiln she built herself."
-**Keywords**: `ceramics`, `kiln`
-
-**Follow-up exchanges to build context:**
-1. "What temperature range is typical for a wood-burning kiln for stoneware?"
-2. "What should she watch for during reduction and cooling to avoid cracks?"
-3. "Any practical checklist for loading and venting that style of kiln?"
-
-**CRITICAL: Verify buffer tokens crossed threshold, then wait for rolling_stage.**
-
-After the follow-up exchanges, first check the buffer has crossed 1500 tokens:
-```bash
-ssh REMOTE_HOST 'for f in WORKSPACE/instances/INSTANCE/data/rolling-extraction/*.json; do \
-  python3 -c "import json; d=json.load(open(\"$f\")); \
-  print(d.get(\"session_id\",\"\")[:12], \"tokens:\", d.get(\"semantic_buffer_tokens\",0))" \
-  2>/dev/null; done'
-```
-If tokens are below 1500, send more follow-up exchanges to build context.
-
-Once tokens are >= 1500, wait **15–30 seconds** without sending any messages,
-then check for `rolling_stage`:
-```bash
-ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl | tail -5'
-```
-Expected: at least one `rolling_stage` event for this session. If it hasn't
-appeared yet, wait longer — do NOT send the lifecycle command until
-`rolling_stage` has fired. Sending it too early preempts the rolling check.
-
-**After `/compact`** — verify flush:
-```bash
-ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl | \
-  python3 -c "import sys,json; lines=[json.loads(l) for l in sys.stdin if l.strip()]; \
-  print(f\"stages: {sum(1 for l in lines if l.get(\"event\")==\"rolling_stage\")}, \
-  flushes: {sum(1 for l in lines if l.get(\"event\")==\"rolling_flush\")}\")"'
-```
-
-**Pass**: Fact stored, rolling_stage + rolling_flush events logged, rolling
-state cleared after flush.
-
-### M4 — Timeout Extraction
-
-Set `capture.inactivityTimeoutMinutes` to 1, restart daemon, seed a fact, let
-the session idle >1 minute. Verify extraction fires with no explicit lifecycle
-command. Restore timeout to 60 after.
-
-**Seed fact**: "My morning run route goes along the canal towpath — about 8km."
-**Keywords**: `canal`, `towpath`
-
-**Critical**: Seed AFTER any prior compaction/reset completes. If a lifecycle
-command fires after seeding, the fact extracts via that signal (not timeout)
-and the test is invalid.
-
-**Signal naming**:
-- OC/CC: `[daemon-compaction]` with `source: timeout_extract`
-- CDX: `daemon-timeout` / timeout-extraction path
-
-**Pass**: Timeout fact extracted. CDX: pass-with-note if extraction-only (no
-compaction artifact — expected).
-
-### M5 — Auto-Inject
-
-Store a known fact via CLI, start a fresh session, ask a natural question.
-Verify the agent answers from injected context without an explicit tool call.
+Before `/compact` — verify rolling extraction fired during the session:
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE \
-  QUAID_CLI store "Baxter is a golden retriever who loves tennis balls" 2>&1'
+# OC
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
+# CC
+ssh alfie.local 'cat ~/quaid/claude-code-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
 ```
 
-**Query**: "What do you know about my dog Baxter?"
+Expected: at least one line with `"event": "rolling_stage"`. If the log is empty
+or missing, the session has not yet crossed the threshold — add another exchange
+and wait ~10 seconds for the daemon to poll.
 
-**Pass**: Agent answers with the stored fact, no explicit tool call.
+After `/compact` and the extraction wait — verify the flush:
 
-### M6 — Deliberate Recall
-
-Ask natural questions framed so the agent uses explicit `quaid recall` via
-bash/shell tool, independent of auto-inject:
-
-- "Please run `quaid recall "my family"` via your shell tool. What have I told
-  you about my family?"
-- "Same — run `quaid recall "exercise habits recent plans"`. What do you know
-  about my exercise habits?"
-
-**Pass**: Agent runs `quaid recall` and answers from stored memory.
-
-### M7 — Graph Traversal Verification
-
-**Phase 1 — Edge extraction**: Tell the agent four David relationship facts
-in CONVERSATION (do not use `quaid store`). Use the do-not-store prefix:
-
-> "Just making conversation, do not store this manually — my brother David
-> works at Google. David is married to Lisa, and they have a son named
-> Oliver."
-
-Trigger extraction (platform lifecycle command). Wait 60s. The extraction
-pipeline should create both fact nodes AND relationship edges. Verify:
 ```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
-  "SELECT s.name, e.relation, t.name FROM edges e \
-   JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id \
-   WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") \
-   ORDER BY s.name, e.relation;"'
+# OC
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | python3 -c "import sys,json; lines=[json.loads(l) for l in sys.stdin if l.strip()]; stages=[l for l in lines if l.get(\"event\")==\"rolling_stage\"]; flushes=[l for l in lines if l.get(\"event\")==\"rolling_flush\"]; print(f\"rolling_stage count: {len(stages)}, rolling_flush count: {len(flushes)}\")"'
+# CC (same pattern with claude-code-livetest path)
 ```
 
-**Note**: Edge extraction uses the deep lane. The installer should already set
-deep to Sonnet/GPT-5.4; do not patch model tiers mid-run.
+Pass:
+- the fact is stored
+- logs or hook trace show the compaction signal
+- `rolling-extraction.jsonl` contains at least one `rolling_stage` event and one `rolling_flush` event
+- rolling state file is cleared after flush:
+  ```bash
+  ssh alfie.local 'ls ~/quaid/openclaw-livetest/data/rolling-extraction/ 2>/dev/null || echo "(empty — correct)"'
+  ```
 
-**Phase 2 — Janitor edge backfill**: Store one attribute fact via CLI, then
-run backfill to verify the janitor can create edges retroactively:
+### M4: Timeout Extraction
+
+Temporarily set `capture.inactivityTimeoutMinutes` to `1`. The change must be
+followed by a restart — both OC and CC cache config at startup:
+
+**OC** — set config then restart OpenClaw:
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI store "David is 42 years old" 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI janitor --task edges --apply 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+# Then restart OpenClaw on alfie.
 ```
 
-**Phase 3 — Multi-hop traversal**: In a fresh session, seed:
-- "My sister's name is Diana."
-- "Diana has a daughter named Alice."
+**CC** — set config then restart the CC daemon:
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+```
 
-Extract, then ask: "Who is my niece?"
+After restart, start a fresh visible CC session in main:99 from
+`/tmp/cc-livetest`, mention something
+memorable (e.g. `"My morning run route goes along the canal towpath — about 8km."`)
+then let the session idle for >1 minute without sending any further messages.
 
-**Pre-flight**: Delete any stale Diana/Alice/niece nodes from prior runs. Start
-a completely fresh session — do not retry within the same session (carry_facts
-contamination).
+After the test, restore the timeout and restart again:
 
-**Pass**: Edges exist, backfill runs, multi-hop query answered correctly. Owner
-entity in sibling edges must be the actual owner name (not "User").
+```bash
+# OC
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+# Then restart OpenClaw on alfie.
 
-**CDX quirk**: If M7 produces zero edges, verify the installed config still has
-deep=`gpt-5.4` before investigating extraction. Do not patch tiers mid-run.
+# CC
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+```
 
-### M8 — Full Project System CRUD
+Pass:
+- the timeout fact is extracted with no explicit lifecycle command
+- for Claude Code, verify `quaid daemon status` points at the correct
+  instance root before idling:
+  - `instance_root: /Users/clawdbot/quaid/claude-code-livetest`
+  - `log_file: /Users/clawdbot/quaid/claude-code-livetest/logs/daemon/extraction-daemon.log`
+  - `pid_file: /Users/clawdbot/quaid/claude-code-livetest/data/extraction-daemon.pid`
 
-Capability test — do not tell the agent exact command names.
+Verify extraction happened (use `name` column, not `text`):
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "canal towpath"'
+# OR direct DB check:
+ssh alfie.local python3 << 'EOF'
+import sqlite3
+con = sqlite3.connect("/Users/clawdbot/quaid/data/memory.db")
+rows = con.execute("SELECT name, status, created_at FROM nodes WHERE name LIKE '%canal%' OR name LIKE '%morning run%' ORDER BY created_at DESC LIMIT 5").fetchall()
+for r in rows: print(r)
+EOF
+```
+
+**Signal naming**: timeout extraction via the adapter's SessionTimeoutManager appears
+in the daemon log as `[daemon-compaction]` with `source: timeout_extract` (NOT as
+`daemon-timeout`). The daemon's own `check_idle_sessions` path (backup) would log
+`daemon-timeout` — but the primary timeout path writes a compaction signal.
+
+### M5: Auto-Inject
+
+This milestone tests that the hook automatically injects relevant memory into
+the agent's context before it even starts reasoning — no explicit recall call
+needed.
+
+Seed a known fact directly so you can test injection in isolation:
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
+```
+
+Start a fresh session and ask naturally — do NOT include meta-commentary about
+injection or memory tests, as that dilutes the embedding query and causes
+unrelated memories to rank higher than the target fact:
+
+- `What do you know about my dog Baxter?`
+
+Pass:
+- the answer includes the stored fact
+- the agent answers without making an explicit tool call to retrieve it —
+  the fact appeared in its context automatically via the inject hook
+
+Also test with a conversationally-extracted fact from M1–M4 (different topic
+from Baxter so there is no overlap):
+
+- `What do you remember about my neighbour?`
+
+Pass: the agent answers from injected context, no explicit recall tool call.
+
+### M6: Deliberate Recall
+
+This milestone tests that the agent can actively retrieve facts on demand,
+independent of what was auto-injected.
+
+Ask natural questions framed so the agent uses explicit recall rather than
+relying on whatever arrived via auto-inject:
+
+- `This is a test of memory recall. Please ignore any context that may have
+  been auto-injected this session and run: quaid recall "my family" — use the
+  quaid CLI directly via your shell/bash tool. What have I told you about my
+  family?`
+- `Same — use quaid recall CLI directly (bash tool), not auto-inject. Run:
+  quaid recall "exercise habits recent plans". What do you know about my
+  exercise habits or recent plans?`
+
+Pass:
+- the agent runs `quaid recall` via bash/shell tool OR makes an equivalent
+  explicit memory lookup (not just reading auto-injected context)
+- the answers are materially grounded in stored memory (facts from M1–M5)
+- the agent does not just repeat what was already in injected context
+
+**Note:** The quaid plugin does not currently register a native OC `memory_recall`
+tool — explicit recall requires the agent to use the `quaid recall` CLI via bash.
+If the agent says "no dedicated recall tool available", prompt it to run
+`quaid recall "query"` via its bash/shell tool instead.
+
+### M7: Graph Traversal Verification
+
+This milestone tests both extraction-time edge creation AND the janitor's
+retroactive edge backfill (`--task edges`).
+
+**Phase 1 — Edge extraction (tests that stored facts produce edges):**
+
+Store four facts — each expresses a single clear relationship so any model
+reliably creates the edge. Do NOT use compound "A and B" sentences as the
+primary pass/fail: smaller models (sonnet, haiku) miss secondary edges from
+compound facts even when the extraction prompt includes the exact example.
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa" 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David has a son named Oliver" 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
+```
+
+Check immediately:
+
+```bash
+ssh alfie.local 'DB=~/quaid/data/memory.db && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+```
+
+**Phase 2 — Janitor edge backfill (tests retroactive recovery):**
+
+Store one more fact that is unlikely to produce edges at store time (pure
+attribute, no named-entity relationship), then run backfill and confirm it
+processes facts with zero edges:
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is 42 years old" 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
+```
+
+Pass for Phase 2: backfill runs and reports `found N facts / created M edges`
+(M may be 0 for the age fact — that is acceptable; the pass is that it ran
+without error and processed the zero-edge facts).
+
+Re-check the main edges:
+
+```bash
+ssh alfie.local 'DB=~/quaid/data/memory.db && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+```
+
+Expected edges after Phase 1:
+- David → Oliver: `parent_of` or `family_of`
+- David → Lisa: `spouse_of`
+- David → User (or user's name): `sibling_of`
+- David → Google: `works_at`
+
+Known LLM edge quality issues (do NOT fail on these):
+- `has_pet` may appear for Oliver — hallucination from "have a son" → "have a pet".
+- `family_of` instead of `parent_of` is acceptable.
+- Extra edges connecting Lisa/Oliver to the user's name (Solomon) via `family_of`
+  or `knows` are acceptable — LLM infers family context from the user's brother.
+
+Pass:
+- David → Oliver edge exists after Phase 1 (any relation) = pass
+- Phase 2 backfill ran without error = pass
+- fail only if NO edges link David ↔ Oliver after both phases
+
+**Phase 3 — Multi-hop traversal (tests graph reasoning):**
+
+This phase tests that the agent can answer a question that requires chaining
+two edges: `<owner> --sibling_of--> Diana --parent_of--> Alice` → Alice is the
+user's niece. The owner name (e.g., "Solomon") must appear as the sibling entity,
+not "User" or "User's mom" — the extraction prompt now injects the owner name
+so first-person pronouns resolve correctly.
+
+**Pre-flight: clean DB and start a genuine fresh session.**
+
+This phase MUST start in a clean session with no prior Diana/Alice/Anne/niece
+history in either the DB or the session transcript. Retrying within the same
+session accumulates previous mentions in carry_facts and causes dedup/entity
+contamination even after DB deletion.
+
+Step 1 — Clear stale nodes from the DB:
+
+```bash
+ssh alfie.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" OR LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
+```
+
+Also search the content field — contamination facts about niece often land there:
+
+```bash
+ssh alfie.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(content) LIKE \"%niece%\" OR LOWER(content) LIKE \"%diana%\" OR LOWER(content) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
+```
+
+Delete each found node (replace `<id>` with actual IDs):
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid delete-node <id>'
+```
+
+Verify clean:
+
+```bash
+ssh alfie.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" OR LOWER(name) LIKE \"%niece%\" OR LOWER(content) LIKE \"%niece%\" OR LOWER(content) LIKE \"%diana%\" OR LOWER(content) LIKE \"%alice%\";"'
+# Must return 0
+```
+
+Step 2 — Restart the extraction daemon so any patched files are loaded:
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start'
+```
+
+Step 3 — Start a completely fresh OC session for seeding.
+Kill and restart pane `main:99` with a new named session so the transcript
+is empty before seeding. **Do not retry within the same session** — each
+retry appends to the transcript, which contaminate carry_facts.
+
+```bash
+# Kill current pane 99 content and start fresh session
+ssh alfie.local 'openclaw tui --session oc-m7p3-$(date +%s)'
+```
+
+In the new session, tell the agent two facts naturally — do NOT say "niece":
+
+- `My sister's name is Diana.`
+- `Diana has a daughter named Alice.`
+
+Then trigger `/reset` to extract those facts and start a new session.
+
+**Verify edges before asking the agent** — if extraction went wrong, fix it
+before wasting a session query:
+
+```bash
+ssh alfie.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"Diana\",\"Alice\") OR t.name IN (\"Diana\",\"Alice\") ORDER BY s.name, e.relation;"'
+```
+
+Expected edges (owner = "Solomon" for this install):
+- `Alice --parent_of--` or `Diana --parent_of--> Alice`
+- `Diana --sibling_of--> Solomon` (or `Solomon --sibling_of--> Diana`)
+
+If the sibling edge links to the wrong entity (e.g. "User's mom"), that is a
+first-person entity resolution failure. The fix (owner name injection in prompt)
+is in this build. Delete the wrong edges and re-seed if needed.
+
+In the new session, ask:
+
+- `Who is my niece?`
+
+The agent must traverse: sibling → that sibling's child → answer is the niece.
+
+Pass:
+- edge chain `Diana --parent_of--> Alice` exists in DB = Phase 3 extraction pass
+- sibling edge anchors to owner name (e.g. "Solomon"), not "User" or "User's mom"
+- agent correctly answers "Alice" (or "Alice, Diana's daughter")
+- if agent answers a different name (e.g. "Anne"), check for stale niece facts
+  from prior runs and delete them, then retest
+
+### M8: Full Project System CRUD
+
+This is a capability test. **Do not tell the agent the exact command names or that you want a "project".**
+The goal is that the agent proactively creates a project in response to natural work requests —
+not just when told to. Test all three trigger categories below.
+
+> **Model requirement:** M8 Phase1 requires policy-following to create a project before writing
+> any files. Haiku does not reliably comply with the file-placement rules even when they are
+> injected. **Use Sonnet or better for M8.** If currently on Haiku, run `/model` and switch
+> before starting Phase1.
+
+Prepare a source root first:
+
+```bash
+ssh alfie.local 'mkdir -p /tmp/quaid-live-src && printf "print(\"hello\")\n" > /tmp/quaid-live-src/main.py'
+```
+
+#### Phase 1: Indirect trigger — work directive (PASS requires project auto-creation)
+
+Send a natural work directive that does NOT mention "project" or "create":
+
+> `I have a Python script at /tmp/quaid-live-src/main.py. I want to build this out into a
+> proper CLI tool with argument parsing and a test suite. Can you start working on it?`
+
+**Expected:** Agent creates a project via `quaid registry create-project` BEFORE writing any files.
+It should NOT write files to /tmp directly without registering a project first.
+
+**Test runner note:** The agent may ask clarifying questions about the project name, spec, or
+scope before or after creating the project. This is expected and correct behavior — answer them
+as a normal user would. The PASS criterion is that the agent runs `create-project` before writing
+any files, not that it does so silently without any questions.
+
+If the agent writes files without creating a project first → **FAIL** (report to claude-dev).
+
+#### Phase 2: Explicit CRUD (after Phase 1 project exists or agent was nudged)
+
+If Phase 1 failed, manually note it as a gap and proceed to verify CRUD with a direct prompt:
+
+> `Can you show me what you know about the live-test project?`
+> `Can you update that project's description so it is clearly marked as a live test project?`
+> `Can you list all the projects you know about?`
+
+#### Phase 3: Delete
+
+> `Can you delete the live-test project?`
+
+Verify from shell:
+
+```bash
+# Use registry list (SQLite backend) — quaid project list reads a separate JSON file not used by the agent
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
+ssh alfie.local 'test -f /tmp/quaid-live-src/main.py && echo source_still_exists'
+```
+
+Expected: live-test project absent from registry (deleted), source file still present.
+
+#### Phase 4: Scratch dir namespacing
+
+Ask the agent to create a throwaway file:
+
+> `Can you write a quick throwaway script that prints hello world? Just put it somewhere temporary.`
+
+**Expected:** Agent writes to the misc project `misc--openclaw-livetest` at
+`~/quaid/projects/misc--openclaw-livetest/`, NOT to any ad-hoc path like `~/quaid/scratch/` or `/tmp/`.
+The agent should reference the project by name and tell the user it's in misc.
+Verify:
+
+```bash
+ssh alfie.local 'ls ~/quaid/projects/misc--openclaw-livetest/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
+# Verify misc project is in the SQLite project_definitions table (it won't appear in
+# 'quaid registry list' because that lists registered docs, not projects — misc projects
+# have no docs and are invisible to doc-list output):
+ssh alfie.local "sqlite3 ~/quaid/data/memory.db \"SELECT name, state FROM project_definitions WHERE name LIKE 'misc--%';\""
+```
+
+After project CRUD, trigger extraction to generate project logs. Tell the agent
+naturally something about the session, then do `/reset`:
+
+> "We've just tested project creation, show, list, update, and delete for the
+> live-test project via the quaid CLI. This is part of the quaid live-test
+> suite M8 run. Triggering a reset to capture project activity."
+
+Then `/reset`.
+
+Check after extraction:
+
+```bash
+ssh alfie.local 'tail -20 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists)"'
+```
+
+Pass criteria:
+- **Phase 1 (hard)**: Agent creates project via CLI before writing any files in response to work directive
+- Phase 2: show, update work correctly
+- Phase 3: delete removes the project but not the source directory
+- **Phase 4 (hard)**: Throwaway file lands in `misc--openclaw-livetest` project, not an ad-hoc path
+- `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
+
+Note: Phase 1 and Phase 4 are new hard requirements. If they fail, report to claude-dev before continuing.
+
+**Expected noise — not a failure:** The session watcher writes `[quaid][daemon-signal] reset signal` entries for stale sessions when a new session key appears (normal fanout behavior). Seeing these signals before the agent responds is expected and is NOT a fail criterion for M8. Only an unrecoverable injection loop (agent never responds) would be a failure.
+
+### M9: Janitor
+
+Before running, capture the pre-janitor artifact state:
+
+```bash
+# Record line counts so you can verify condensation happened
+ssh alfie.local 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null || echo "(absent)"'
+```
+
+Run:
+
+```bash
+# Dry-run must complete in ≤60s — hang here = regression in dry-run LLM/checkpoint bypass
+# Uses shell-based timeout (portable — macOS does not have the `timeout` binary)
+ssh alfie.local '{ cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1; } & pid=$!; (sleep 60 && kill $pid 2>/dev/null) & watcher=$!; wait $pid; ec=$?; kill $watcher 2>/dev/null; wait $watcher 2>/dev/null; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || { [ $ec -gt 128 ] && echo "FAIL: dry-run exit=$ec (killed=hang)" || echo "FAIL: dry-run exit=$ec"; }'
+# Apply — first run can take 15–30 minutes (LLM review of accumulated memories + snippets).
+# Repeated "vec_nodes upsert recovered" and "snippet remap" lines are normal — not a hang.
+# Long silent periods (up to 10 min) are LLM calls in progress.
+# If still running after 45 minutes, report to claude-dev as a potential hang.
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
+```
+
+After the run, verify condensation:
+
+```bash
+# Stats: snippets_folded + snippets_rewritten + snippets_discarded should be > 0
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
+# Post-janitor snippet and identity state
+ssh alfie.local 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null'
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null | head -40'
+```
+
+Pass:
+- janitor completes
+- `checkpoint-all.json` exists afterward with `status: completed`
+- `janitor-stats.json` reports `success: true`
+- `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0` (snippets were reviewed)
+- `SOUL.snippets.md` or `USER.snippets.md` line count decreased or file was cleared (entries processed)
+- if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
+
+Fail:
+- all three snippet counters remain 0 (snippet review task did not run or had nothing to process — M2 must have produced snippet files; if they are absent, that is an M2 failure, not an M9 pass)
+- janitor exits with non-zero status
+
+### M10: Docs, Health, and Session CLI
+
+Run health and stats:
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid stats 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
+```
+
+**New-doc indexing via `docs update --apply`** (tests 470f9741 fix — newly registered standalone docs
+must be indexed without requiring `janitor --task rag`):
+
+```bash
+# Write a throwaway doc and register it
+ssh alfie.local 'echo "# M10 test\nThe carillon clock rings at noon." > /tmp/m10-test-doc.md'
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register /tmp/m10-test-doc.md --project quaid 2>&1'
+
+# docs update must pick it up without janitor rag
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
+
+# Verify it is now searchable
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs search "carillon clock" 2>&1'
+
+# Cleanup
+ssh alfie.local 'rm -f /tmp/m10-test-doc.md'
+```
+
+Pass for new-doc test: `docs update --apply` output includes "Indexing new doc:" (not "all up-to-date"),
+and `docs search "carillon clock"` returns the doc.
+Fail: "All docs up-to-date" with no indexing = regression in new-doc detection.
+
+**Session CLI** (tests that extracted sessions are accessible via CLI):
+
+Session logs are stored by the Python extraction daemon when it processes
+compaction/reset signals. If M1–M4 ran before a daemon restart or before
+the session_end fix (be9a5e0c), the session_logs table may be empty. Trigger
+a fresh extraction first to ensure at least one session is stored.
+
+```bash
+# Step 1: Restart OC daemon so it has the latest code
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+
+# Step 2: In the OC TUI, do a quick exchange and /new to trigger extraction.
+#   Tell OC: "The session test keyword is zephyr-delta-nine."
+#   Then send /new (or /reset). Wait ~30s for daemon to process.
+
+# Step 3: Check daemon log to confirm session_logs ingest ran
+ssh alfie.local 'tail -20 ~/quaid/openclaw-livetest/logs/daemon.log 2>/dev/null || tail -20 ~/quaid/logs/daemon.log 2>/dev/null | grep -i "session_logs\|ingest\|session_end" || echo "log not found"'
+
+# Step 4: Check session list — should now include the freshly extracted session
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid session list --limit 3 2>&1'
+
+# Step 5: Load the most recent session
+SESSION_ID=$(ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid session list --limit 1 --json 2>&1' | python3 -c "import sys,json; rows=json.load(sys.stdin); print(rows[0]['id'] if rows else '')" 2>/dev/null)
+[ -n "$SESSION_ID" ] && ssh alfie.local "QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid session load --session-id $SESSION_ID 2>&1 | head -40" || echo "WARN: no session ID returned"
+```
+
+Pass:
+- health/doctor report no blocking errors
+- stats are sensible
+- docs commands run successfully
+- `docs update --apply` indexes newly registered doc without `janitor --task rag`
+- `session list` returns at least one session (after daemon restart + fresh extraction)
+- `session load` returns a readable transcript
+
+### M11: Snippet, Journal, and Project Log Generation
+
+This milestone verifies that the extraction pipeline writes soul snippets,
+user snippets, journal entries, and project logs to disk — not just facts to
+the DB. Run it after M1-M10 so multiple extractions have accumulated artifacts.
+
+**Pre-check: ensure the daemon has fresh config** (its project_definitions are
+loaded at startup; if the daemon started while M9 janitor was running the DB
+may be cached stale). Restart before triggering the trigger extraction:
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+```
+
+Then do a fresh OC session + `/reset` to trigger a full extraction cycle.
+Send **two** messages before the reset — one personal (to seed SOUL snippets)
+and one technical (to seed project logs):
+
+**Message 1 — personal/reflective** (triggers `soul_snippets` extraction):
+> "Running through the M11 milestone now. It's satisfying to see the test
+> harness catching real edge cases — this kind of rigorous validation is exactly
+> what separates reliable software from brittle software. I find myself
+> genuinely enjoying this kind of systematic test coverage work."
+
+**Message 2 — project context** (triggers `project_logs` extraction):
+> "We've been running M0-M11 of the live test suite for the quaid project on
+> alfie. Snippets, journals, and project logs are all being validated.
+> Triggering a reset to capture project activity for M11."
+
+Then `/reset` and wait for the daemon to complete (check `tail -5` of daemon log
+for `project logs seen=N written=M` — `written` should be ≥ 1).
+
+Note: `soul_snippets` are LLM-discretionary observations about the agent's
+experience. They require reflective/personal content in the conversation.
+Purely technical messages produce `project_logs` but not `soul_snippets`.
+
+**Snippets** (written per-extraction when the LLM includes `soul_snippets`):
+
+```bash
+# OC
+ssh alfie.local 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
+ssh alfie.local 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
+# CC
+ssh alfie.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
+ssh alfie.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
+```
+
+Pass: OC `USER.snippets.md` has at least one entry (hard gate). `SOUL.snippets.md`
+is soft — the extraction LLM correctly skips SOUL snippets for transactional/test
+content ("project admin + task completion report, not reflective or emotionally
+weighted"). SOUL snippets build from organic usage, not scripted test sessions.
+If USER.snippets.md has entries and SOUL.snippets.md is absent, that is a PASS.
+CC snippets may be absent on first install — they build via CC sessions.
+
+**Journal entries** (written when LLM includes `journal_entries`; discretionary):
+
+```bash
+ssh alfie.local 'echo "=== OC journals ==="; ls ~/quaid/openclaw-livetest/journal/ 2>/dev/null; for f in ~/quaid/openclaw-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh alfie.local 'echo "=== CC journals ==="; ls ~/quaid/claude-code-livetest/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+```
+
+Pass: Journal directory exists. Presence of entries is correct but not required
+— the LLM only writes journal entries when it finds genuinely new observations.
+Empty journals on early test runs are expected. Structurally malformed files are
+a failure.
+
+**Project logs** (written when extraction includes `project_logs` entries):
+
+```bash
+ssh alfie.local 'echo "=== quaid PROJECT.log ==="; tail -30 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
+```
+
+Pass: `projects/quaid/PROJECT.log` exists and has at least one timestamped
+entry from this test run — M8 includes a deliberate `/reset` to capture project
+context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
+
+Fail:
+- OC `USER.snippets.md` is absent or empty after M11 extraction
+- `projects/quaid/PROJECT.log` absent after M11's trigger step
+- Any file is structurally malformed (broken JSON, truncated entries)
+
+Not a failure:
+- `SOUL.snippets.md` absent on a scripted test run — the extraction LLM correctly
+  withholds SOUL snippets for transactional content. Absence is expected and correct.
+
+### M12: OC Multi-Agent Verification ✓ 2026-03-15
+
+This milestone verifies that OpenClaw's multi-agent silo structure is correct
+and that extraction signals route to the right agent's silo.
+
+**Step 1 — list_agent_instance_ids returns multiple IDs including openclaw-livetest:**
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+  python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from adaptors.factory import create_adapter
+a = create_adapter(\"openclaw\")
+ids = a.list_agent_instance_ids()
+print(ids)
+assert len(ids) >= 1, \"Expected at least one agent instance ID\"
+assert \"openclaw-livetest\" in ids, \"openclaw-livetest not in IDs\"
+print(\"PASS: list_agent_instance_ids =\", ids)
+"'
+```
+
+**Step 2 — each agent has its own silo with a data/ dir:**
+
+```bash
+ssh alfie.local '
+for agent_id in openclaw-livetest openclaw-coding; do
+  silo="$HOME/quaid/$agent_id"
+  if [ -d "$silo/data" ]; then
+    echo "PASS: $silo/data exists"
+  else
+    echo "SKIP/ABSENT: $silo/data (agent may not be configured)"
+  fi
+done
+'
+```
+
+**Step 3 — each silo has an extraction-signals/ dir:**
+
+```bash
+ssh alfie.local '
+for agent_id in openclaw-livetest openclaw-coding; do
+  sigdir="$HOME/quaid/$agent_id/data/extraction-signals"
+  if [ -d "$sigdir" ]; then
+    echo "PASS: $sigdir exists"
+  elif [ -d "$HOME/quaid/$agent_id" ]; then
+    echo "WARN: silo exists but extraction-signals/ absent — may not have started yet"
+  else
+    echo "SKIP: $HOME/quaid/$agent_id does not exist"
+  fi
+done
+'
+```
+
+**Step 4 — write a synthetic extraction signal and verify it lands in the correct
+per-agent silo dir:**
+
+Note: `tmux-msg.sh` is not available on alfie (`~/quaid/util/` is not synced
+there). Instead, write a synthetic signal file directly to verify routing.
+
+```bash
+ssh alfie.local '
+SIGNAL_DIR="$HOME/quaid/openclaw-livetest/data/extraction-signals"
+if [ ! -d "$SIGNAL_DIR" ]; then
+  echo "FAIL: $SIGNAL_DIR does not exist — silo not initialised"
+  exit 1
+fi
+# Write a synthetic signal to simulate what the hook would produce
+SIGNAL_FILE="$SIGNAL_DIR/$(date +%s)_test_session_end.json"
+echo "{\"signal_type\":\"session_end\",\"session_id\":\"m12-test\",\"transcript_path\":\"/dev/null\"}" > "$SIGNAL_FILE"
+echo "PASS: synthetic signal written to $SIGNAL_FILE"
+ls -lt "$SIGNAL_DIR" | head -5
+rm -f "$SIGNAL_FILE"
+'
+```
+
+Pass: signal dir exists under the per-agent silo, not a shared or flat path.
+
+**Step 5 — quaid instances list shows OC agent silos:**
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+  ~/.openclaw/extensions/quaid/quaid instances list 2>&1 || \
+  echo "(instances list not available — check quaid version)"'
+```
+
+**Step 6 — extraction-daemon.pid exists for main agent (daemon running):**
+
+```bash
+ssh alfie.local '
+pid_file="$HOME/quaid/openclaw-livetest/data/extraction-daemon.pid"
+if [ -f "$pid_file" ]; then
+  pid=$(cat "$pid_file")
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "PASS: daemon running, PID=$pid"
+  else
+    echo "WARN: pid file exists but process $pid is not running"
+  fi
+else
+  # Fallback: legacy flat instance path
+  pid_file="$HOME/quaid/openclaw-livetest/data/extraction-daemon.pid"
+  if [ -f "$pid_file" ]; then
+    pid=$(cat "$pid_file")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "PASS (legacy path): daemon running, PID=$pid"
+    else
+      echo "WARN: pid file at legacy path but process $pid is not running"
+    fi
+  else
+    echo "FAIL: no extraction-daemon.pid found under openclaw-livetest or openclaw"
+  fi
+fi
+'
+```
+
+Pass:
+- `list_agent_instance_ids()` returns at least `["openclaw-livetest"]`
+- each configured agent has its own `data/` and `extraction-signals/` silo dir
+- extraction signals land under the correct per-agent dir, not a shared path
+- `quaid instances list` reports OC agent silos
+- `extraction-daemon.pid` exists and points to a live process for main
+
+Fail:
+- `list_agent_instance_ids()` returns empty list or raises
+- signals land in a shared or flat path instead of the per-agent silo
+- daemon pid file is absent after install
+
+### M12: CC Multi-Agent Silo Verification
+
+This milestone verifies that the CC adapter's multi-agent silo structure is correct
+and that the running instance appears in `list_agent_instance_ids()`.
+
+**Step 1 — list_agent_instance_ids returns claude-code-livetest:**
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest \
+  python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from adaptors.factory import create_adapter
+a = create_adapter(\"claude_code\")
+ids = a.list_agent_instance_ids()
+print(ids)
+assert len(ids) >= 1, \"Expected at least one instance ID\"
+assert \"claude-code-livetest\" in ids, \"claude-code-livetest not in IDs\"
+print(\"PASS: list_agent_instance_ids =\", ids)
+"'
+```
+
+**Step 2 — silo has data/ dir:**
+
+```bash
+ssh alfie.local '
+silo="$HOME/quaid/instances/claude-code-livetest"
+if [ -d "$silo/data" ]; then
+  echo "PASS: $silo/data exists"
+else
+  echo "FAIL: $silo/data missing"
+fi
+'
+```
+
+**Step 3 — silo has extraction-signals/ dir:**
+
+```bash
+ssh alfie.local '
+sigdir="$HOME/quaid/instances/claude-code-livetest/data/extraction-signals"
+if [ -d "$sigdir" ]; then
+  echo "PASS: $sigdir exists"
+else
+  echo "FAIL: $sigdir missing"
+fi
+'
+```
+
+**Step 4 — write a synthetic extraction signal and verify it lands in the correct silo:**
+
+```bash
+ssh alfie.local '
+SIGNAL_DIR="$HOME/quaid/instances/claude-code-livetest/data/extraction-signals"
+if [ ! -d "$SIGNAL_DIR" ]; then
+  echo "FAIL: $SIGNAL_DIR does not exist"
+  exit 1
+fi
+SIGNAL_FILE="$SIGNAL_DIR/$(date +%s)_test_session_end.json"
+echo "{\"signal_type\":\"session_end\",\"session_id\":\"m12-cc-test\",\"transcript_path\":\"/dev/null\"}" > "$SIGNAL_FILE"
+echo "PASS: synthetic signal written to $SIGNAL_FILE"
+ls -lt "$SIGNAL_DIR" | head -5
+rm -f "$SIGNAL_FILE"
+'
+```
+
+**Step 5 — extraction-daemon.pid exists for claude-code-livetest:**
+
+```bash
+ssh alfie.local '
+pid_file="$HOME/quaid/instances/claude-code-livetest/data/extraction-daemon.pid"
+if [ -f "$pid_file" ]; then
+  pid=$(cat "$pid_file")
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "PASS: daemon running, PID=$pid"
+  else
+    echo "WARN: pid file exists but process $pid is not running"
+  fi
+else
+  echo "FAIL: no extraction-daemon.pid found for claude-code-livetest"
+fi
+'
+```
+
+Pass:
+- `list_agent_instance_ids()` returns at least `["claude-code-livetest"]`
+- `data/` and `extraction-signals/` dirs exist under the claude-code-livetest silo
+- synthetic signal write succeeds in the per-agent silo dir
+- `extraction-daemon.pid` exists and points to a live process
+
+Fail:
+- `list_agent_instance_ids()` returns empty list or raises
+- any required silo dir is absent
+- daemon pid file is absent after install
+
+### M12: CDX Multi-Agent Silo Verification
+
+This milestone verifies that the CDX adapter's multi-agent silo structure is correct
+and that the running instance appears in `list_agent_instance_ids()`.
+
+**Step 1 — list_agent_instance_ids returns codex-livetest:**
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=codex-livetest \
+  python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from adaptors.factory import create_adapter
+a = create_adapter(\"codex\")
+ids = a.list_agent_instance_ids()
+print(ids)
+assert len(ids) >= 1, \"Expected at least one instance ID\"
+assert \"codex-livetest\" in ids, \"codex-livetest not in IDs\"
+print(\"PASS: list_agent_instance_ids =\", ids)
+"'
+```
+
+**Step 2 — silo has data/ dir:**
+
+```bash
+ssh alfie.local '
+silo="$HOME/quaid/instances/codex-livetest"
+if [ -d "$silo/data" ]; then
+  echo "PASS: $silo/data exists"
+else
+  echo "FAIL: $silo/data missing"
+fi
+'
+```
+
+**Step 3 — silo has extraction-signals/ dir:**
+
+```bash
+ssh alfie.local '
+sigdir="$HOME/quaid/instances/codex-livetest/data/extraction-signals"
+if [ -d "$sigdir" ]; then
+  echo "PASS: $sigdir exists"
+else
+  echo "FAIL: $sigdir missing"
+fi
+'
+```
+
+**Step 4 — write a synthetic extraction signal and verify it lands in the correct silo:**
+
+```bash
+ssh alfie.local '
+SIGNAL_DIR="$HOME/quaid/instances/codex-livetest/data/extraction-signals"
+if [ ! -d "$SIGNAL_DIR" ]; then
+  echo "FAIL: $SIGNAL_DIR does not exist"
+  exit 1
+fi
+SIGNAL_FILE="$SIGNAL_DIR/$(date +%s)_test_session_end.json"
+echo "{\"signal_type\":\"session_end\",\"session_id\":\"m12-cdx-test\",\"transcript_path\":\"/dev/null\"}" > "$SIGNAL_FILE"
+echo "PASS: synthetic signal written to $SIGNAL_FILE"
+ls -lt "$SIGNAL_DIR" | head -5
+rm -f "$SIGNAL_FILE"
+'
+```
+
+**Step 5 — extraction-daemon.pid exists for codex-livetest:**
+
+```bash
+ssh alfie.local '
+pid_file="$HOME/quaid/instances/codex-livetest/data/extraction-daemon.pid"
+if [ -f "$pid_file" ]; then
+  pid=$(cat "$pid_file")
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "PASS: daemon running, PID=$pid"
+  else
+    echo "WARN: pid file exists but process $pid is not running"
+  fi
+else
+  echo "FAIL: no extraction-daemon.pid found for codex-livetest"
+fi
+'
+```
+
+Pass:
+- `list_agent_instance_ids()` returns at least `["codex-livetest"]`
+- `data/` and `extraction-signals/` dirs exist under the codex-livetest silo
+- synthetic signal write succeeds in the per-agent silo dir
+- `extraction-daemon.pid` exists and points to a live process
+
+Fail:
+- `list_agent_instance_ids()` returns empty list or raises
+- any required silo dir is absent
+- daemon pid file is absent after install
+
+### M13: CC Multi-Instance Verification ✓ 2026-03-15
+
+This milestone verifies CC auto-provisioning: launching CC from a new project
+directory creates a properly isolated silo derived from that directory's path.
+Do NOT use `make_instance` — provisioning must happen naturally via the hook.
+
+Instance naming: slug is `instance_slug_from_project_dir(path)` (resolves
+symlinks first, so `/tmp` → `/private/tmp` on macOS). For `/tmp/quaid-m13-test`
+the expected instance ID is `claude-code-private-tmp-quaid-m13-test`.
+
+**Step 1 — create test project dir:**
+
+```bash
+ssh alfie.local 'mkdir -p /tmp/quaid-m13-test && echo "created /tmp/quaid-m13-test"'
+```
+
+**Step 2 — confirm expected instance ID:**
+
+```bash
+ssh alfie.local 'python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from lib.instance import instance_slug_from_project_dir
+slug = instance_slug_from_project_dir(\"/tmp/quaid-m13-test\")
+print(\"Expected instance ID: claude-code-\" + slug)
+"'
+```
+
+Note the printed ID — use it in the remaining steps.
+
+**Step 3 — launch CC from test dir to trigger auto-provisioning:**
+
+```bash
+ssh alfie.local 'mkdir -p /tmp/quaid-m13-test && cd /tmp/quaid-m13-test && \
+  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  claude --dangerously-skip-permissions -p "hello" 2>&1 | tail -10'
+```
+
+The auto-provision hook creates the silo at first prompt. If CC is not available
+as a one-shot `-p` command, send a single message via tmux and then `/exit`.
+
+**Step 4 — verify silo auto-created:**
+
+```bash
+# Replace <instance-id> with the ID printed in Step 2
+ssh alfie.local '
+ID=claude-code-private-tmp-quaid-m13-test
+silo="$HOME/quaid/instances/$ID"
+if [ -d "$silo" ]; then
+  echo "PASS: silo $silo exists"
+  ls "$silo"
+else
+  echo "FAIL: silo missing — auto-provisioning did not run"
+fi
+'
+```
+
+**Step 5 — canary isolation: store in test instance:**
+
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-cc-m13-9981" 2>&1'
+```
+
+**Step 6 — canary must NOT appear in livetest instance:**
+
+```bash
+ssh alfie.local 'echo "=== livetest: must NOT see m13test canary ==="; \
+  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/cc-livetest \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cc-m13-9981" 2>&1 | tail -5'
+```
+
+Pass: no results. Fail: canary appears.
+
+**Step 7 — canary MUST appear in test instance:**
+
+```bash
+ssh alfie.local 'echo "=== m13test: MUST see its own canary ==="; \
+  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cc-m13-9981" 2>&1 | tail -5'
+```
+
+Pass: canary returned. Fail: empty or error.
+
+**Step 8 — cleanup:**
+
+```bash
+ssh alfie.local 'trash /tmp/quaid-m13-test 2>/dev/null || rm -rf /tmp/quaid-m13-test; echo "cleaned project dir"'
+ssh alfie.local 'ID=claude-code-private-tmp-quaid-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned silo"'
+```
+
+Pass:
+- CC auto-provisions a new silo when launched from a new project dir
+- silo is created at `~/quaid/instances/claude-code-<path-slug>/`
+- `CLAUDE_PROJECT_DIR` and livetest dir resolve to different instance IDs
+- canary stored in test instance NOT visible in livetest instance
+- canary IS visible in test instance
+
+Fail:
+- silo not created after CC first hook fires
+- both project dirs resolve to the same instance
+- canary appears in the livetest instance
+
+### M13: CDX Multi-Instance Verification
+
+CDX instances are based on project directory (PWD). This milestone verifies that
+running CDX from a new project dir auto-provisions a separate isolated silo, and
+that the two instances' memories do not cross-contaminate.
+
+Instance naming: `codex-` + `instance_slug_from_project_dir(path)`. On macOS
+`/tmp` resolves to `/private/tmp`, so `/tmp/cdx-m13-test` →
+`codex-private-tmp-cdx-m13-test`.
+
+**Step 1 — create test project dir:**
+
+```bash
+ssh alfie.local 'mkdir -p /tmp/cdx-m13-test && echo "created /tmp/cdx-m13-test"'
+```
+
+**Step 2 — confirm expected instance ID:**
+
+```bash
+ssh alfie.local 'python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from lib.instance import instance_slug_from_project_dir
+slug = instance_slug_from_project_dir(\"/tmp/cdx-m13-test\")
+print(\"Expected instance ID: codex-\" + slug)
+"'
+```
+
+**Step 3 — launch CDX from test dir to trigger auto-provisioning:**
+
+```bash
+ssh alfie.local 'mkdir -p /tmp/cdx-m13-test && cd /tmp/cdx-m13-test && \
+  QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
+  codex --yolo -p "hello" 2>&1 | tail -10'
+```
+
+The auto-provision path derives QUAID_INSTANCE from CODEX_PROJECT_DIR and creates
+the silo on first hook call. If one-shot mode is unavailable, start an interactive
+CDX session from that dir, send one message, then `/exit`.
+
+**Step 4 — verify silo auto-created:**
+
+```bash
+ssh alfie.local '
+ID=codex-private-tmp-cdx-m13-test
+silo="$HOME/quaid/instances/$ID"
+if [ -d "$silo" ]; then
+  echo "PASS: silo $silo exists"
+  ls "$silo"
+else
+  echo "FAIL: silo missing — auto-provisioning did not run"
+fi
+'
+```
+
+**Step 5 — canary isolation: store in test instance:**
+
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
+  ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-cdx-m13-9982" 2>&1'
+```
+
+**Step 6 — canary must NOT appear in livetest instance:**
+
+```bash
+ssh alfie.local 'echo "=== livetest: must NOT see m13test canary ==="; \
+  QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-livetest \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cdx-m13-9982" 2>&1 | tail -5'
+```
+
+Pass: no results. Fail: canary appears.
+
+**Step 7 — canary MUST appear in test instance:**
+
+```bash
+ssh alfie.local 'echo "=== m13test: MUST see its own canary ==="; \
+  QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cdx-m13-9982" 2>&1 | tail -5'
+```
+
+Pass: canary returned. Fail: empty or error.
+
+**Step 8 — cleanup:**
+
+```bash
+ssh alfie.local 'trash /tmp/cdx-m13-test 2>/dev/null || rm -rf /tmp/cdx-m13-test; echo "cleaned project dir"'
+ssh alfie.local 'ID=codex-private-tmp-cdx-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned silo"'
+```
+
+Pass:
+- CDX auto-provisions a new silo when run from a new project dir
+- silo is created at `~/quaid/instances/codex-<path-slug>/`
+- livetest dir and test dir resolve to different instance IDs
+- canary stored in test instance NOT visible in livetest instance
+- canary IS visible in test instance
+
+Fail:
+- silo not created after CDX first hook fires
+- both project dirs resolve to the same instance
+- canary appears in the livetest instance
+
+### M13: OC Multi-Instance Verification
+
+OC creates additional instances via the native `openclaw agents add` command.
+This milestone verifies that adding a new agent creates a properly isolated silo
+and that its memory is fully separate from the main agent.
+
+Do NOT re-run the installer for M13 — that overwrites the gateway config and
+disrupts the active livetest instance.
+
+**Step 1 — add m13test agent:**
+
+```bash
+ssh alfie.local 'source ~/.zprofile; \
+  openclaw agents add m13test --non-interactive --workspace ~/quaid 2>&1 | tail -5'
+```
+
+**Step 2 — verify list_agent_instance_ids includes openclaw-m13test:**
+
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+  python3 -c "
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+from adaptors.factory import create_adapter
+a = create_adapter(\"openclaw\")
+ids = a.list_agent_instance_ids()
+print(ids)
+assert any(\"m13test\" in i for i in ids), \"openclaw-m13test not in \" + str(ids)
+print(\"PASS: openclaw-m13test in list_agent_instance_ids\")
+"'
+```
+
+**Step 3 — initialise m13test silo:**
+
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m13test \
+  ~/.openclaw/extensions/quaid/quaid doctor 2>&1 | tail -5'
+```
+
+**Step 4 — verify m13test silo created:**
+
+```bash
+ssh alfie.local '
+silo="$HOME/quaid/instances/openclaw-m13test"
+if [ -d "$silo" ]; then
+  echo "PASS: $silo exists"
+  ls "$silo"
+else
+  echo "FAIL: $silo missing"
+fi
+'
+```
+
+**Step 5 — canary isolation: store in m13test instance:**
+
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m13test \
+  ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-oc-m13-9983" 2>&1'
+```
+
+**Step 6 — canary must NOT appear in openclaw-livetest:**
+
+```bash
+ssh alfie.local 'echo "=== openclaw-livetest: must NOT see m13test canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-oc-m13-9983" 2>&1 | tail -5'
+```
+
+Pass: no results. Fail: canary appears.
+
+**Step 7 — canary MUST appear in openclaw-m13test:**
+
+```bash
+ssh alfie.local 'echo "=== openclaw-m13test: MUST see its own canary ==="; \
+  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m13test \
+  ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-oc-m13-9983" 2>&1 | tail -5'
+```
+
+Pass: canary returned. Fail: empty or error.
+
+**Step 8 — cleanup: remove test agent and silo:**
+
+```bash
+ssh alfie.local 'source ~/.zprofile; openclaw agents delete m13test 2>&1 | tail -3'
+ssh alfie.local 'trash ~/quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test silo"'
+```
+
+Pass:
+- `openclaw agents add` creates m13test agent in the agents system
+- `list_agent_instance_ids()` returns m13test after add
+- silo is created at `~/quaid/instances/openclaw-m13test/`
+- canary stored in m13test NOT visible in openclaw-livetest
+- canary IS visible in openclaw-m13test
+- cleanup via `openclaw agents delete` + silo removal
+
+Fail:
+- `list_agent_instance_ids()` does not include m13test after agents add
+- silo fails to initialise
+- canary appears in openclaw-livetest (cross-instance contamination)
+
+## Cross-Platform Project Linking Test
+
+Run this only after both OpenClaw and Claude Code have passed M1-M10.
+
+This is explicitly a user-behavior test. The agent should be able to discover
+how to link and use the project without being given function names.
+
+### Phase 1: Create the project and add a doc in OpenClaw
 
 Prepare a source root:
-```bash
-ssh REMOTE_HOST 'mkdir -p ~/quaid-live-src && printf "print(\"hello\")\n" > ~/quaid-live-src/main.py'
-```
-
-**Phase 1 — Indirect trigger**: Send a work directive (do NOT mention "project"):
-> "I have a Python script at ~/quaid-live-src/main.py. I want to add argument
-> parsing and a few tests. Can you set up a project for this and make those changes?"
-
-Agent must create a project BEFORE writing files.
-
-**Phase 2 — Explicit CRUD**: "Can you show me the project?", "Update its
-description", "List all projects."
-
-**Phase 3 — Delete**: "Can you delete the project?" Source files must survive.
-
-**Phase 4 — Scratch dir**: "Save a one-line hello world somewhere temporary."
-Agent should use misc project tracking.
-
-**Pass**: Agent creates project proactively, CRUD works, delete does not remove
-source, misc tracking works.
-**OC Telegram**: PASS-WITH-NOTE (no shell tool access for CLI commands).
-
-**Model note**: Haiku does not reliably follow file-placement policy. Use Sonnet
-or better for Phase 1.
-
-### M9 — Janitor
 
 ```bash
-# Dry-run must complete in ≤60s
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI janitor --task all --dry-run 2>&1'
-# Apply — first run can take 15–30 min
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI janitor --task all --apply --approve 2>&1'
-```
-
-Verify condensation:
-```bash
-ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/logs/janitor-stats.json | python3 -c \
-  "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); \
-  print(\"success:\", d[\"success\"]); \
-  [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k]"'
-```
-
-**Pass**: Janitor completes and `janitor-stats.json` reports `success: true`.
-Snippet operation counts may be zero on a fresh or very small test pool; that is
-not a failure unless the stats report snippet errors or the run expected specific
-pending snippets to be condensed.
-
-### M10 — Docs, Health, and Session CLI
-
-```bash
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI health 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI doctor 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI stats 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI docs list 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI docs check 2>&1'
-```
-
-**New-doc indexing test:**
-```bash
-ssh REMOTE_HOST 'echo "# M10 test\nThe carillon clock rings at noon." > /tmp/m10-test-doc.md'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI registry register /tmp/m10-test-doc.md --project quaid 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI docs update --apply 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=INSTANCE QUAID_CLI recall "carillon clock" '\''{"stores":["docs"]}'\'' 2>&1'
-```
-
-**Session CLI test:**
-```bash
-ssh REMOTE_HOST 'sqlite3 WORKSPACE/instances/INSTANCE/data/memory.db \
-  "SELECT session_id, updated_at, substr(topic_hint,1,80) FROM session_logs ORDER BY updated_at DESC LIMIT 3;"'
-```
-
-**Pass**: All CLI commands succeed, new doc indexed without janitor rag,
-session logs populated.
-
-### M11 — Snippet, Journal, and Project Log Generation
-
-Restart daemon to refresh config, then send two messages and trigger extraction:
-
-**Message 1 — personal** (triggers soul_snippets):
-> "I really enjoy this kind of systematic validation work. It is satisfying when
-> tests catch real edge cases."
-
-**Message 2 — project context** (triggers project_logs):
-> "We have been running the quaid live test suite. Snippets and journals are
-> being validated now."
-
-Then `/clear` (CDX: `/new`).
-
-**Verify:**
-```bash
-ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/USER.snippets.md 2>/dev/null || echo "(absent)"'
-ssh REMOTE_HOST 'cat WORKSPACE/instances/INSTANCE/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
-ssh REMOTE_HOST 'ls WORKSPACE/instances/INSTANCE/journal/ 2>/dev/null || echo "(absent)"'
-ssh REMOTE_HOST 'tail -20 WORKSPACE/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
-```
-
-**Pass**: `USER.snippets.md` has entries (hard gate), `PROJECT.log` has
-timestamped entries. `SOUL.snippets.md` absence on scripted test runs is
-expected (not a failure — the LLM correctly withholds SOUL snippets for
-transactional content).
-
-### M12 — OC Multi-Agent Silo Verification (OC only)
-
-1. `list_agent_instance_ids()` returns at least `[OC_INSTANCE]`.
-2. Each agent has its own `data/` and `extraction-signals/` silo dir.
-3. Signals land under the correct per-agent dir, not a shared path.
-4. `quaid instances list` reports OC agent silos.
-5. `extraction-daemon.pid` exists and points to a live process.
-
-### M13 — CC Multi-Instance Verification (CC only)
-
-**Policy:** CC instances are **always** created by auto-provisioning from the
-project PWD at first hook use. Never call `make_instance` directly (CLI or
-programmatically) — it is hook-internal. The installer does NOT provision any
-specific instance; it only sets up the system home. First CC session in a new
-project directory triggers `SessionStart` hook → adapter derives the instance
-name from the absolute PWD and creates the silo automatically.
-
-1. Create a fresh project dir on the remote, e.g. `/tmp/cc-m13test`, that is
-   distinct from the primary livetest project dir.
-2. Launch Claude in that dir (`cd /tmp/cc-m13test && claude --dangerously-skip-permissions`).
-3. Send any user prompt. The first `SessionStart` / hook touch should
-   auto-provision a new silo at `~/.quaid/instances/<derived-name>/` where the
-   derived name follows the PWD-based rule (absolute path, leading slash
-   stripped, `/` → `-`, prefixed with `claude-code-`).
-4. Verify the hidden silo exists with `config.json`, `data/`, `logs/`.
-5. Verify the visible silo exists under `~/quaid/instances/<derived-name>/`
-   with flat identity files plus `journal/`.
-6. Verify `config.json` has `adapter.type == "claude-code"`.
-7. Verify `quaid instances list` includes the new instance.
-8. **Cross-project spillover proof**: Store a canary fact from the new project
-   dir, verify it is NOT visible from the original livetest project dir (and
-   vice versa).
-
-Note: per-project `.claude/settings.json` is NOT written by auto-provisioning.
-The instance binding is derived from PWD at every hook call, not persisted to
-a project-local settings file. Do not check for or expect `.claude/settings.json`
-in the project dir.
-
-### M14 — Deferred Notification Surfacing
-
-1. Write a synthetic deferred notice to `INSTANCE/.runtime/notes/delayed-llm-requests.json`.
-2. Verify `quaid notify --deferred-status` shows 1 pending.
-3. Send a natural turn (e.g. "Hey, what is up?").
-4. Agent should drain the notice and relay it.
-5. Verify 0 pending after drain.
-6. Repeat for all three platforms.
-
-### M15 — Provider Outage — Fast Notification Path
-
-1. Record current model values.
-2. Set `fastReasoning` and `deepReasoning` to `invalid-model-xyzzy`.
-3. Send a first natural turn requiring a fast LLM call (e.g. "What do you remember about my family?").
-4. Expected first-turn behavior: the agent may answer normally. The provider
-   failure creates a deferred error notice; it is not required to surface in
-   that same turn.
-5. Send a second natural turn. Do NOT explicitly ask the agent to check,
-   inspect, drain, or surface Quaid errors.
-6. Agent must auto-surface the deferred provider notice in its reply, including
-   `[Quaid error] [provider]` and tier/exception detail.
-7. Restore correct model values.
-8. Verify next turn works normally (no restart needed).
-
-**Pass**: Deferred provider error surfaces automatically on the second turn,
-without tester prompting for it, and recovery works after restoring config.
-
-### M16 — Subagent Memory Attribution (Exploratory)
-
-**This milestone is exploratory — not pass/fail.** Subagent memory is not
-fully supported yet. The goal is to discover where each platform puts
-subagent session text and whether it can be attributed correctly.
-
-**Research questions:**
-1. Where does each platform store subagent session transcripts?
-2. Can the subagent text be attributed to the parent agent/instance?
-3. Can it be clearly labeled as `source=subagent` vs regular conversation?
-
-**Best case outcome:** Subagent facts extracted tied to the parent instance
-with `source=subagent` provenance, and on recall those memories can be
-demoted (lower ranking weight since they're from subtask context, not
-direct user conversation).
-
-**Procedure:**
-1. Ask the agent to spawn a subagent with a task containing a distinctive
-   fact. Example: "Spawn a subagent to research this: my uncle owns a
-   vineyard in Mendoza that produces Malbec."
-   **Keywords**: `vineyard`, `Mendoza`, `Malbec`
-
-2. Wait for the subagent to complete.
-
-3. Investigate:
-   - Where is the subagent's session transcript? (same file as parent?
-     separate file? separate dir?)
-   - Is the subagent registered in `~/.quaid/data/subagent-registry/`?
-   - Does the parent session's extraction buffer include the subagent text?
-   - If extraction is triggered, do the subagent facts land in the parent DB?
-   - What `source_type` or `speaker` do they get?
-
-4. Report findings — transcript location, attribution state, and what
-   would need to change to support `source=subagent` provenance.
-
-**Platform notes**:
-- **CC**: SubagentStart/SubagentStop hooks fire; subagent registry tracks it
-- **CDX**: Subtask model; check if transcript is captured
-- **OC**: `sessions_spawn` with `runtime: "subagent"`
-
----
-
-## Step 4 — Cross-Platform Project Linking Test (XP)
-
-Run after all three platforms reach M13 PASS.
-
-### Phase 1: Create project in OC
-
-Prepare source root:
-```bash
-ssh REMOTE_HOST 'mkdir -p /tmp/cross-live-test-src && cat > /tmp/cross-live-test-src/main.py <<PY
+ssh alfie.local 'mkdir -p ~/quaid/projects/cross-live-test-src && cat > ~/quaid/projects/cross-live-test-src/main.py <<\"PY\"
 def harbor_status():
     return "North pier beacon is offline"
 PY'
 ```
 
 Ask OC naturally:
-- "Can you create a project named cross-live-test for /tmp/cross-live-test-src?"
-- "Add a project document: the north pier beacon is offline, maintenance window
-  starts at 02:15 UTC."
 
-### Phase 2: Link in CC, add second doc
+- `Can you create a project named cross-live-test for ~/quaid/projects/cross-live-test-src?`
+- `Do you see the existing cross-live-test project? Can we add a document to it?`
+- `Please add a project document that says the north pier beacon is offline and the maintenance window starts at 02:15 UTC.`
 
-Ask CC:
-- "Do you see the existing cross-live-test project?"
-- "Add another doc: code word Ember Glass means pager escalation level 2."
-
-### Cross-registration
-
-Each adapter maintains its own docs index. Cross-register docs between instances:
-```bash
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE QUAID_CLI registry register /tmp/cross-live-test-src/beacon-maintenance.md --project cross-live-test 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=OC_INSTANCE QUAID_CLI registry register /tmp/cross-live-test-src/codewords.md --project cross-live-test 2>&1'
-```
-
-Then `docs update --apply` on both instances.
-
-### Phase 3: Cross-recall all directions
-
-- CC: "Search the cross-live-test project docs for the north pier beacon."
-- OC: "What does the cross-live-test project say about Ember Glass?"
-- CDX: Both queries (after registering docs in CDX's registry too).
-
-**Pass**: Each platform retrieves docs added by the other two, grounded in
-Quaid project context (not raw disk browsing).
-
----
-
-## Step 5 — Post-Test Examination
-
-After all milestones complete, run log audits. See `COORDINATOR.SKILL.md` for
-the full subagent prompts.
-
-**Post-Test Log Audit**: Spawn subagents (one per platform) to read extraction
-buffer logs, daemon logs, and rolling extraction logs. Flag:
-- Leaked credentials or tokens (CRITICAL)
-- Extraction prompt leakage (HIGH)
-- Configuration dumps with provider prefixes (HIGH)
-- Internal file paths (MEDIUM)
-- Hook/system chatter that survived sanitization (MEDIUM)
-- Test harness metadata (LOW)
-
-CRITICAL findings block the run from being marked CLEAN.
-
----
-
-## Step 6 — End-of-Run Check
+Verify from shell:
 
 ```bash
-cd DEV_ROOT && git log --oneline RUN_START_SHA..HEAD
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
 ```
 
-### Case A — Zero new commits
+If the doc file exists but is not listed, register it manually:
 
-Full suite passed with no code changes.
-
-1. Push canary: `./scripts/push-canary.sh github`
-2. Deploy to remote (rsync).
-3. Print end-of-run report.
-4. Stop (unless `loop: true`).
-
-### Case B — One or more new commits
-
-1. Build runtime: `cd modules/quaid && npm run build:runtime`
-2. Push canary via the push script.
-3. Deploy to remote.
-4. Log all new commits to `unreviewed-commits.md`.
-5. Print end-of-run report.
-6. If `loop: false`: stop, recommend follow-up run.
-7. If `loop: true`: return to Step 1, new HEAD as RUN_START_SHA.
-
-### End-of-Run Report
-
-```
-=== LIVETEST RUN REPORT ===
-Run N — YYYY-MM-DD
-
-RESULT: CLEAN | REQUIRES FOLLOW-UP | FAILURES REMAIN
-
-Platform results:
-  OC:  PASS | FAIL | PASS-WITH-NOTE
-  CC:  PASS | FAIL | PASS-WITH-NOTE
-  CDX: PASS | FAIL | PASS-WITH-NOTE
-  XP:  PASS | FAIL | SKIPPED
-
-Issues fixed this run: N
-  - <sha> <short description>
-
-Commits made this run: N
-  (none) | list of sha + subject
-
-Next step:
-  Suite clean — no action needed.
-  | Follow-up run recommended to verify N fix commit(s).
-  | Failures remain — see issues above before re-running.
-===========================
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
 ```
 
----
+After the doc is registered, run `docs update --apply` to index it (new standalone docs with no
+existing chunks should be detected and indexed automatically — this is what M10 verifies):
 
-## Notification Level Checks
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
+```
 
-Toggle config between milestones to verify notification verbosity:
+Expected output includes "Indexing new doc:" for the registered file. If it says "All docs up-to-date"
+instead, that is a regression — fall back to `janitor --task rag --apply` to unblock the test and
+report to claude-dev.
 
-1. After M3: set `notifications.extraction.verbosity` to `debug`
-2. After M5: set `notifications.retrieval.verbosity` to `summary`
-3. After M7: set notifications to `off`
-4. After M9: restore original values
+Then verify recall:
 
-Verify by checking the next relevant event after each change.
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+```
 
-## PASS-WITH-NOTE — Strict Criteria
+Then ask OC:
 
-Only valid when ALL of the following are true:
-1. The failure is constrained by an external system API or data model.
-2. All other steps of the milestone pass fully.
-3. The tested function works end-to-end via a different path covered by passing
-   steps.
-4. A fix would require changing the external system, not just a code patch.
+- `What does the cross-live-test project doc say about the beacon?`
 
-If you can imagine a code change that would fix it — write it.
+Pass:
+- OC can retrieve the doc content through Quaid
 
-**PASS-WITH-NOTE is NOT:**
-- A way to skip work on a hard problem. If the test failed and you could
-  have fixed it or found a workaround, that is FAIL, not PWN.
-- A label for "I didn't investigate thoroughly." Investigate first, exhaust
-  options, then decide.
-- Acceptable when the issue is in OUR code. If we can change the code to
-  make it pass, it is not a PWN — it is a FAIL that needs a fix.
-- A substitute for retrying with a different approach. Try restart, try a
-  different config path, try a workaround. Only rule PWN after real effort.
+### Phase 2: Link the same project in Claude Code and add a second doc
 
-PWN is reviewed carefully. Lazy PWN erodes trust in the test results.
+Ask CC naturally:
 
-## Loop Termination Contract
+- `Do you see the existing cross-live-test project? Can we add a document to it?`
+- `Please add another project document that says code word Ember Glass means pager escalation level 2.`
 
-When running with `loop: true`:
-- Only exit when a full suite (OC + CC + CDX + XP) passes with zero new commits.
-- A run that passes but required commits → mandatory re-run, no exceptions.
-- Do not exit early because the suite looks stable. Run it clean.
+Verify from shell:
 
-## Compatibility Update Rule
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+```
 
-- Treat compatibility as a live-test output, not as a separate matrix promise.
-- Only update `compatibility.json` after the full current live suite is green
-  and the operator has reviewed the clear run.
-- Record host clears separately for `Quaid/OpenClaw`, `Quaid/Claude Code`, and
-  `Quaid/Codex`.
-- XP is part of release readiness, but it does not replace host compatibility rows.
-- Use `node scripts/record-compatibility-clear.mjs` to write the cleared SHA.
-- Pass `--install-verified true` only if M0 completed cleanly without manual
-  config patching.
-- Do not update compatibility entries for partial clears, failed runs, or
-  single-adapter-only validation.
+Pass:
+- CC can use the existing project rather than needing a new one
+- CC can add a doc and Quaid can recall it
 
-## Platform Behavior Notes
+### Sync docs across instances before Phase 3
 
-### Unified Search Surface
+Each adapter maintains its own docs index. After both docs are registered, run
+`docs update --apply` on both instances so each side has both docs indexed:
 
-`quaid search` and `quaid recall` are the primary search surfaces. There is no
-`quaid docs search` alias by design — the platform intentionally unifies all
-retrieval under one surface. Do not treat a missing `quaid docs search` CLI
-alias as a test failure.
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
+```
 
-### Deferred Notices
+Verify cross-instance CLI recall before asking agents conversationally:
 
-Agents may encounter a `quaid notify --deferred-status` notice during a
-milestone. A well-behaved agent drains it via `quaid notify --deferred-drain`
-and relays the content. Acknowledge as a pass when the agent drains without
-asking permission. Do not treat "asked before draining" as preferred behavior.
+```bash
+# CC must find beacon (OC-added doc)
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+# OC must find Ember Glass (CC-added doc)
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+```
 
-### QUAID_DAEMON Guard
+If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the docs sync is not working and conversational Phase 3 will also fail.
 
-The CC daemon and hook entry point both set `QUAID_DAEMON=1` on startup. This
-tells the LLM provider to skip subprocess calls and route directly to OAuth. Without
-this guard, daemon LLM calls spawn full CC sessions triggering hooks recursively
-(hook storm). If many concurrent `hooks.py` PIDs appear, verify both locations
-set `QUAID_DAEMON=1` before any LLM call.
+### Phase 3: Cross-recall both directions
+
+Ask CC (use content-specific phrasing so the model matches the doc, not just PROJECT.md):
+
+- `Can you search the cross-live-test project docs for anything about the north pier beacon?`
+
+If that still returns nothing, try the explicit fallback:
+
+- `Run: quaid docs search "north pier beacon" --project cross-live-test`
+
+Ask OC:
+
+- `What does the cross-live-test project say about Ember Glass?`
+
+Optional provenance follow-up if needed:
+
+- `How did you know that?`
+
+Note: The query framing "What did the project say about X?" semantically matches PROJECT.md
+files in the vector index, not content docs. Content-specific or explicit tool-call prompts
+reliably surface the right doc. If the agent answers correctly via explicit docs search that
+is still a PASS (grounded in Quaid, not disk browsing).
+
+Pass:
+- CC can answer from the OC-added doc
+- OC can answer from the CC-added doc
+- answers are grounded in Quaid project context, not raw disk browsing as the
+  first move
+
+Fail:
+- either side cannot see the same project
+- either side cannot retrieve the other side's doc
+- the agent only succeeds when given explicit command names
+
+## Post-Test Audit
+
+After all milestones and the cross-platform project linking test.
+
+Instances on alfie use per-instance subdirectories under `~/quaid/`:
+- OC: `~/quaid/openclaw-livetest/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest`)
+- CC: `~/quaid/claude-code-livetest/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest`)
+
+```bash
+# OC instance health
+ssh alfie.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
+ssh alfie.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
+ssh alfie.local 'ls ~/quaid/openclaw-livetest/journal/'
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null'
+ssh alfie.local 'ls -lt ~/quaid/openclaw-livetest/logs/ | head -20'
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/config/memory.json | python3 -m json.tool | head -20'
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/data/circuit-breaker.json 2>/dev/null'
+ssh alfie.local 'cat ~/quaid/openclaw-livetest/logs/janitor/checkpoint-all.json 2>/dev/null'
+
+# CC instance health
+ssh alfie.local 'sqlite3 ~/quaid/claude-code-livetest/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
+ssh alfie.local 'ls ~/quaid/claude-code-livetest/journal/ 2>/dev/null || echo "CC journal not found"'
+```
+
+Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirectory):
+
+```bash
+# OC identity
+ssh alfie.local 'for f in /Users/clawdbot/quaid/openclaw-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+# CC identity
+ssh alfie.local 'for f in /Users/clawdbot/quaid/claude-code-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+```
+
+Audit project docs and snippets/journals:
+
+```bash
+# Shared project docs
+ssh alfie.local 'find /Users/clawdbot/quaid/projects -maxdepth 3 \( -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" \) | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
+# Live-test project
+ssh alfie.local 'find /Users/clawdbot/quaid/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
+# Snippets and journals
+ssh alfie.local 'for f in /Users/clawdbot/quaid/openclaw-livetest/SOUL.snippets.md /Users/clawdbot/quaid/openclaw-livetest/USER.snippets.md /Users/clawdbot/quaid/claude-code-livetest/SOUL.snippets.md /Users/clawdbot/quaid/claude-code-livetest/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
+ssh alfie.local 'for f in /Users/clawdbot/quaid/openclaw-livetest/journal/SOUL.journal.md /Users/clawdbot/quaid/openclaw-livetest/journal/USER.journal.md /Users/clawdbot/quaid/openclaw-livetest/journal/MEMORY.journal.md /Users/clawdbot/quaid/claude-code-livetest/journal/SOUL.journal.md /Users/clawdbot/quaid/claude-code-livetest/journal/USER.journal.md /Users/clawdbot/quaid/claude-code-livetest/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+# Project logs
+ssh alfie.local 'find /Users/clawdbot/quaid/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
+```
+
+Pass criteria:
+- per-instance identity files (`identity/SOUL.md`, `identity/USER.md`, `identity/ENVIRONMENT.md`) are present for both OC and CC; not empty placeholders
+- shared quaid project docs (`projects/quaid/PROJECT.md`, `TOOLS.md`, `AGENTS.md`) exist and are readable from both OC and CC sessions
+- live-test project docs are coherent and point at correct paths
+- OC snippets (`SOUL.snippets.md`, `USER.snippets.md`) are present and building; CC snippets may be absent on first install and build naturally over time
+- journals look structurally sane and consistent with the run
+- project logs are readable and correspond to real actions taken
+
+## Final Closeout
+
+When the run is done:
+
+1. Restore any temporary config changes such as timeout or notification
+   verbosity.
+2. Restore the normal adapter config if it was switched.
+3. Send one final summary to `claude-dev`.

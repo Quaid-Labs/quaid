@@ -211,3 +211,13 @@ See dedicated section above. CDX gets timeout extraction but no timeout compacti
 CDX agents generally follow file-placement policy. If Phase 1 fails (agent
 writes files without creating a project), report as ISSUE — do not rule
 PASS-WITH-NOTE.
+
+### M12 — Multi-Agent Silo Verification
+CDX uses `codex-livetest` as the instance ID (set via `QUAID_INSTANCE`). Silo is
+at `~/quaid/instances/codex-livetest/`. Follow the CDX M12 procedure in
+LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
+
+### M13 — Multi-Instance Verification
+CDX has no `make_instance` — isolation is verified by canary test between two
+`QUAID_INSTANCE` values (`codex-livetest` and `codex-m13test`). Follow the CDX
+M13 procedure in LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M13.

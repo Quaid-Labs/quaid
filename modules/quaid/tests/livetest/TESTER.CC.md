@@ -187,6 +187,11 @@ with note on the no-compaction behaviour.
 For Phase 1, switch model to Sonnet or better before the work directive.
 Haiku does not reliably follow file-placement policy. Run `/model` first.
 
+### M12 — Multi-Agent Silo Verification
+CC uses `claude-code-livetest` as the instance ID. Silo is at
+`~/quaid/instances/claude-code-livetest/`. Follow the CC M12 procedure in
+LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
+
 ### M13 — Multi-Instance Verification
 CC-only milestone. Verifies CC **auto-provisioning** from a new project PWD
 creates a properly isolated silo at first hook use.
