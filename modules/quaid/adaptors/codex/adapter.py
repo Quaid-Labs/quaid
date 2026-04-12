@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from adaptors.codex.providers import CodexLLMProvider
 from lib.adapter import QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_id, instance_slug_from_project_dir
@@ -178,6 +177,9 @@ class CodexAdapter(QuaidAdapter):
         return None
 
     def get_api_key(self, env_var_name: str) -> Optional[str]:
+        token = self.read_auth_token()
+        if token:
+            return token
         key = os.environ.get(env_var_name, "").strip()
         if key:
             return key
@@ -200,6 +202,9 @@ class CodexAdapter(QuaidAdapter):
                 )
                 return found
         return None
+
+    def auth_token_path(self) -> Optional[Path]:
+        return self.quaid_home() / "adaptors" / "codex" / ".auth-token"
 
     def get_host_info(self):
         from core.compatibility import HostInfo
@@ -599,68 +604,65 @@ class CodexAdapter(QuaidAdapter):
         }
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
-        _ = model_tier
-        try:
-            from config import get_config
+        from config import get_config
+        from lib.providers import OpenAICompatibleLLMProvider
 
-            cfg = get_config()
-            deep_model = getattr(cfg.models, "deep_reasoning", "gpt-5.4") or "gpt-5.4"
-            fast_model = getattr(cfg.models, "fast_reasoning", "gpt-5.4") or "gpt-5.4"
-            deep_effort = getattr(cfg.models, "deep_reasoning_effort", "high") or "high"
-            fast_effort = getattr(cfg.models, "fast_reasoning_effort", "none") or "none"
-        except Exception:
-            deep_model = "gpt-5.4"
-            fast_model = "gpt-5.4"
-            deep_effort = "high"
-            fast_effort = "none"
-        return CodexLLMProvider(
-            deep_model=str(deep_model),
-            fast_model=str(fast_model),
-            deep_reasoning_effort=str(deep_effort),
-            fast_reasoning_effort=str(fast_effort),
+        cfg = get_config()
+        deep_model = getattr(cfg.models, "deep_reasoning", "gpt-5.4")
+        fast_model = getattr(cfg.models, "fast_reasoning", "gpt-5.4-mini")
+        deep_effort = getattr(cfg.models, "deep_reasoning_effort", "high")
+        fast_effort = getattr(cfg.models, "fast_reasoning_effort", "none")
+        provider_id = getattr(cfg.models, "llm_provider", "")
+        if model_tier == "fast":
+            fast_provider = getattr(cfg.models, "fast_reasoning_provider", "default")
+            if fast_provider and fast_provider != "default":
+                provider_id = fast_provider
+        elif model_tier == "deep":
+            deep_provider = getattr(cfg.models, "deep_reasoning_provider", "default")
+            if deep_provider and deep_provider != "default":
+                provider_id = deep_provider
+        provider_id = str(provider_id or "").strip().lower()
+
+        if provider_id in ("openai", "openai-compatible"):
+            api_key = self.get_api_key("OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "LLM provider is 'openai' but no Codex OpenAI token or OPENAI_API_KEY was found. "
+                    "Write an OpenAI token to QUAID_HOME/adaptors/codex/.auth-token or set OPENAI_API_KEY."
+                )
+            configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
+            env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
+            base_url = configured_base_url or env_base_url or "https://api.openai.com"
+            return OpenAICompatibleLLMProvider(
+                base_url=base_url,
+                api_key=api_key,
+                deep_model=str(deep_model or "gpt-5.4"),
+                fast_model=str(fast_model or "gpt-5.4-mini"),
+                deep_reasoning_effort=str(deep_effort or "high"),
+                fast_reasoning_effort=str(fast_effort or "none"),
+            )
+
+        raise RuntimeError(
+            f"Unknown Codex LLM provider '{provider_id}'. "
+            "Valid value: 'openai'."
         )
 
     def installer_supported_providers(self) -> list:
         return ["openai"]
 
-    # Fast-lane candidates in priority order. The installer probes each via
-    # codex app-server and uses the first that responds.
-    # Prefer gpt-5.4-mini over spark: spark quality has been unreliable in
-    # benchmark and live install runs.
-    _FAST_LANE_CANDIDATES = [
-        "gpt-5.4-mini",         # broadly available, preferred default
-        "gpt-5.3-codex-spark",  # fallback when mini is unavailable
-        "gpt-5.4",              # always available, last fallback
-    ]
-
     def installer_default_models(self, provider: str) -> Optional[dict]:
-        if str(provider or "").strip().lower() != "openai":
-            return None
-        # Probe candidates via codex app-server in priority order.
-        # Returns the first model that responds, so the installer auto-selects
-        # the fastest tier the account supports without user configuration.
-        for fast_candidate in self._FAST_LANE_CANDIDATES:
-            try:
-                p = CodexLLMProvider(
-                    deep_model="gpt-5.4",
-                    fast_model=fast_candidate,
-                    fast_reasoning_effort="medium",
-                    deep_reasoning_effort="high",
-                )
-                result = p.llm_call(
-                    [{"role": "user", "content": "PING"}],
-                    model_tier="fast",
-                    max_tokens=8,
-                    timeout=15,
-                )
-                if str(getattr(result, "text", "") or "").strip():
-                    return {"deep": "gpt-5.4", "fast": fast_candidate}
-            except Exception:
-                continue
-        return {"deep": "gpt-5.4", "fast": "gpt-5.4"}
+        normalized = str(provider or "").strip().lower()
+        if normalized == "openai":
+            return {
+                "deep": "gpt-5.4",
+                "fast": "gpt-5.4-mini",
+                "deepEffort": "high",
+                "fastEffort": "none",
+            }
+        return None
 
     def installer_supports_live_model_validation(self) -> bool:
-        return True
+        return False
 
     def installer_validate_model_pair_live(
         self,
@@ -668,34 +670,8 @@ class CodexAdapter(QuaidAdapter):
         deep_model: str,
         fast_model: str,
     ) -> dict:
-        if str(provider or "").strip().lower() != "openai":
-            return {"supported": False, "ok": True, "message": "", "results": []}
-        results = []
-        for tier, model in (("fast", fast_model), ("deep", deep_model)):
-            p = CodexLLMProvider(
-                deep_model=str(deep_model or "").strip(),
-                fast_model=str(fast_model or "").strip(),
-                fast_reasoning_effort="medium",
-                deep_reasoning_effort="high",
-            )
-            response = p.llm_call(
-                [{"role": "user", "content": "PING"}],
-                model_tier=tier,
-                max_tokens=8,
-                timeout=20,
-            )
-            text = str(getattr(response, "text", "") or "").strip()
-            if not text:
-                raise RuntimeError(
-                    f"Codex {tier} model '{model}' returned an empty response to PING"
-                )
-            results.append({"tier": tier, "model": model, "text": text[:120]})
-        return {
-            "supported": True,
-            "ok": True,
-            "message": "Codex model validation passed",
-            "results": results,
-        }
+        _ = (provider, deep_model, fast_model)
+        return {"supported": False, "ok": True, "message": "", "results": []}
 
     def get_fast_provider_default(self) -> str:
         return "openai"

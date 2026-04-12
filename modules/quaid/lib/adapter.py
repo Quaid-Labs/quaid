@@ -12,7 +12,7 @@ Built-in adapters currently include:
 - Additional host-specific adapters from `adaptors/` (for gateway/runtime integrations)
   - OpenClawAdapter: for OpenClaw gateway runtime
   - ClaudeCodeAdapter: for Claude Code sessions (hooks + CLI)
-  - CodexAdapter: for Codex CLI/app sessions (hooks + app-server sidecar)
+  - CodexAdapter: for Codex CLI/app sessions (hooks + direct provider auth)
 
 Adapter selection (get_adapter()):
 1. config.json adapter type  (required)

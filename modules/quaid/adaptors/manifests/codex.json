@@ -4,7 +4,7 @@
   "name": "Codex",
   "install": {
     "selectLabel": "Codex",
-    "selectHint": "hooks + app-server sidecar for Codex CLI/app",
+    "selectHint": "hooks + direct provider auth for Codex CLI/app",
     "compatibilityWarnings": [
       "Codex does not support timeout-based auto-compaction.",
       "IMPORTANT: Codex shows all injected Quaid context directly in the view. This is noisy, and it is recommended to turn Quaid notifications off to avoid duplicate messages."

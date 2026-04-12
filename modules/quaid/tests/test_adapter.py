@@ -34,7 +34,6 @@ from adaptors.openclaw.adapter import OpenClawAdapter
 from adaptors.openclaw.providers import GatewayLLMProvider
 from adaptors.claude_code.adapter import ClaudeCodeAdapter
 from adaptors.codex.adapter import CodexAdapter
-from adaptors.codex.providers import CodexLLMProvider
 
 
 def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
@@ -879,18 +878,19 @@ class TestClaudeCodeAdapter:
         assert "Subagent/Assistant: Understood." in transcript
 
 class TestCodexAdapter:
-    def test_installer_provider_surface_is_openai_models(self):
+    def test_installer_provider_surface_is_direct_provider_models(self):
         adapter = CodexAdapter()
         assert adapter.installer_supported_providers() == ["openai"]
-        assert adapter._FAST_LANE_CANDIDATES[0] == "gpt-5.4-mini"
-        # When codex app-server is unavailable (e.g. in CI), probe falls through
-        # all candidates to the static fallback. Accept any valid fast candidate.
         result = adapter.installer_default_models("openai")
-        assert result is not None
-        assert result["deep"] == "gpt-5.4"
-        assert result["fast"] in ("gpt-5.3-codex-spark", "gpt-5.4-mini", "gpt-5.4")
+        assert result == {
+            "deep": "gpt-5.4",
+            "fast": "gpt-5.4-mini",
+            "deepEffort": "high",
+            "fastEffort": "none",
+        }
         assert adapter.get_deep_provider_default() == "openai"
         assert adapter.get_fast_provider_default() == "openai"
+        assert adapter.installer_supports_live_model_validation() is False
 
     def test_installer_install_state_reports_missing_codex_cli(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda _name: None)
@@ -1303,10 +1303,33 @@ class TestCodexAdapter:
         assert signal["meta"]["command"] == "/clear"
         assert signal["meta"]["reason"] == "command:clear"
 
-    def test_get_llm_provider_returns_codex_provider(self):
+    def test_get_llm_provider_returns_openai_provider(self, monkeypatch, tmp_path):
         adapter = CodexAdapter()
-        provider = adapter.get_llm_provider()
-        assert isinstance(provider, CodexLLMProvider)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="openai",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-5.4",
+                fast_reasoning="gpt-5.4-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, OpenAICompatibleLLMProvider)
+        assert provider._base_url == "https://api.openai.com"
+
+    def test_get_api_key_reads_codex_auth_token_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        adapter = CodexAdapter()
+        token_path = adapter.store_auth_token("sk-codex-file-token")
+        assert token_path == tmp_path / "adaptors" / "codex" / ".auth-token"
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        assert adapter.get_api_key("OPENAI_API_KEY") == "sk-codex-file-token"
 
     def test_get_cli_tools_snippet_includes_project_metadata_update_guidance(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")

@@ -2609,7 +2609,7 @@ async function step1_preflight() {
         ? handleCancel(await select({
             message: "Quaid OAuth token:",
             options: [
-              { value: "keep",  label: "Use current token" },
+              ...(existingFileToken || envToken ? [{ value: "keep",  label: "Use current token" }] : []),
               { value: "reset", label: "Enter a new token" },
             ],
           }))
@@ -3062,7 +3062,71 @@ async function step3_models() {
     if (!supportedProviders.includes(provider)) {
       provider = supportedProviders[0] || "anthropic";
     }
-    // Use platform default provider — no prompt needed
+  }
+
+  if (adapterType === "codex") {
+    const codexAuthTokenPath = path.join(WORKSPACE, "adaptors", "codex", ".auth-token");
+    const existingFileToken = (() => {
+      try { return fs.existsSync(codexAuthTokenPath) ? fs.readFileSync(codexAuthTokenPath, "utf8").trim() : ""; }
+      catch { return ""; }
+    })();
+    const providerEnvVar = "OPENAI_API_KEY";
+    const envToken = String(process.env[providerEnvVar] || "").trim();
+    const hasToken = !!(existingFileToken || envToken);
+
+    if (!AGENT_MODE) {
+      const tokenAction = hasToken
+        ? handleCancel(await select({
+            message: "Codex OpenAI OAuth token:",
+            options: [
+              ...(existingFileToken || envToken ? [{ value: "keep", label: "Use current token" }] : []),
+              { value: "reset", label: "Enter a new token" },
+            ],
+          }))
+        : "reset";
+
+      if (tokenAction === "reset") {
+        log.info(C.dim(`Paste the OpenAI OAuth token below (stored at: ${codexAuthTokenPath})`));
+        const newToken = handleCancel(await text({
+          message: "OpenAI OAuth token:",
+          placeholder: "paste token here",
+          validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
+        }));
+        if (newToken && newToken.trim()) {
+          if (!DRY_RUN) {
+            fs.mkdirSync(path.dirname(codexAuthTokenPath), { recursive: true });
+            fs.writeFileSync(codexAuthTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
+            log.success("Token stored at " + codexAuthTokenPath);
+          } else {
+            log.info(C.dim("(dry run) Would store token at " + codexAuthTokenPath));
+          }
+        }
+      }
+    } else if (!hasToken) {
+      if (DRY_RUN) {
+        log.warn("(dry run) No Codex provider token — would print out-of-band instructions and exit in real run.");
+      } else {
+        note(
+          [
+            "Quaid needs an OpenAI OAuth token for Codex-backed background calls.",
+            "",
+            "IMPORTANT: Do NOT paste the token into this conversation.",
+            "",
+            "Ask the user to write the token in a NEW terminal window:",
+            "",
+            `  mkdir -p \"${path.dirname(codexAuthTokenPath)}\"`,
+            `  printf '%s' 'YOUR_TOKEN_HERE' > \"${codexAuthTokenPath}\"`,
+            `  chmod 600 \"${codexAuthTokenPath}\"`,
+            "",
+            "Then re-run the installer.",
+            "",
+            `Token path: ${codexAuthTokenPath}`,
+          ].join("\n"),
+          "Codex Auth Token Required — Action Needed"
+        );
+        bail("Install incomplete: Codex provider token not found. Write the token to the path above and re-run.");
+      }
+    }
   }
 
   let highModel, lowModel;
@@ -4563,6 +4627,7 @@ function keyEnvFor(provider) {
   return map[provider] || "ANTHROPIC_API_KEY";
 }
 
+
 function baseUrlFor(provider) {
   const ollamaResolved = (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/+$/, "");
   const map = {
@@ -5591,7 +5656,9 @@ function notifyInstallWarmupNotice() {
 function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule) {
   const platform = resolvedInstallerPlatform();
   const instanceId = resolvedInstallerInstanceId(platform);
-  const authTokenPath = path.join(WORKSPACE, "adaptors", "claude-code", ".auth-token");
+  const authTokenPath = platform === "codex"
+    ? path.join(WORKSPACE, "adaptors", "codex", ".auth-token")
+    : path.join(WORKSPACE, "adaptors", "claude-code", ".auth-token");
   const authTokenPresent = (() => {
     try { return !!fs.readFileSync(authTokenPath, "utf8").trim(); } catch { return false; }
   })();
@@ -5629,7 +5696,7 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
       projectsEnabled: !!(systems?.projects ?? true),
     },
     authToken: {
-      required: platform === "claude-code",
+      required: platform === "claude-code" || platform === "codex",
       present: authTokenPresent,
     },
     platformCapabilities: {
