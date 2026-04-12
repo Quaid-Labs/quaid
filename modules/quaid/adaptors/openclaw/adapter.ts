@@ -1335,6 +1335,36 @@ function findAgentMainSessionCandidate(agentLabel: string): UserActiveSessionCan
   };
 }
 
+function resolveLifecycleFlushSessionCandidate(
+  agentLabel: string,
+  excludeSessionId: string = "",
+): UserActiveSessionCandidate | null {
+  const excluded = String(excludeSessionId || "").trim();
+  const mainCandidate = findAgentMainSessionCandidate(agentLabel);
+  if (
+    mainCandidate
+    && mainCandidate.sessionId !== excluded
+    && sessionNeedsLifecycleFlush(mainCandidate.sessionId, mainCandidate.sessionFile, agentLabel)
+  ) {
+    return mainCandidate;
+  }
+
+  const fallback = findLatestMeaningfulUserSessionFromIndex({
+    agentLabel,
+    excludeSessionIds: excluded ? [excluded] : [],
+    installedAtMs: readInstalledAtMs(),
+  });
+  if (
+    fallback
+    && fallback.sessionId !== excluded
+    && sessionNeedsLifecycleFlush(fallback.sessionId, fallback.sessionFile, agentLabel)
+  ) {
+    return fallback;
+  }
+
+  return null;
+}
+
 function preferredTranscriptPathForSession(sessionId: string, preferredPath: string): string {
   const sid = String(sessionId || "").trim();
   if (!sid) return String(preferredPath || "").trim();
@@ -4780,22 +4810,22 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       alreadySignaledSessionId: string,
     ): void {
       const agentLabel = resolveHookAgentLabel(event, ctx);
-      const mainCandidate = findAgentMainSessionCandidate(agentLabel);
-      if (!mainCandidate || mainCandidate.sessionId === alreadySignaledSessionId) {
+      const flushCandidate = resolveLifecycleFlushSessionCandidate(agentLabel, alreadySignaledSessionId);
+      if (!flushCandidate) {
         return;
       }
-      sessionIdToAgentId.set(mainCandidate.sessionId, agentLabel);
-      if (!sessionNeedsLifecycleFlush(mainCandidate.sessionId, mainCandidate.sessionFile, agentLabel)) {
+      sessionIdToAgentId.set(flushCandidate.sessionId, agentLabel);
+      if (!sessionNeedsLifecycleFlush(flushCandidate.sessionId, flushCandidate.sessionFile, agentLabel)) {
         writeHookTrace("hook.command.agent_main_flush_skipped", {
           action,
           agent_label: agentLabel,
-          session_id: mainCandidate.sessionId,
+          session_id: flushCandidate.sessionId,
           reason: "no_unextracted_content",
         });
         return;
       }
-      rememberSessionTranscriptPath(mainCandidate.sessionId, mainCandidate.sessionFile, "agent-main-lifecycle-flush");
-      if (!facade.shouldProcessLifecycleSignal(mainCandidate.sessionId, {
+      rememberSessionTranscriptPath(flushCandidate.sessionId, flushCandidate.sessionFile, "agent-main-lifecycle-flush");
+      if (!facade.shouldProcessLifecycleSignal(flushCandidate.sessionId, {
         label: "ResetSignal",
         source: "hook",
         signature: `hook:command_${action}:agent_main_flush`,
@@ -4803,24 +4833,24 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         writeHookTrace("hook.command.agent_main_flush_suppressed", {
           action,
           agent_label: agentLabel,
-          session_id: mainCandidate.sessionId,
+          session_id: flushCandidate.sessionId,
           reason: "duplicate",
         });
         return;
       }
-      facade.markLifecycleSignalFromHook(mainCandidate.sessionId, "ResetSignal");
-      writeDaemonSignal(mainCandidate.sessionId, "session_end", {
+      facade.markLifecycleSignalFromHook(flushCandidate.sessionId, "ResetSignal");
+      writeDaemonSignal(flushCandidate.sessionId, "session_end", {
         source: `command:${action}:agent_main_flush`,
         command: action,
         hook_session_id: alreadySignaledSessionId,
-        main_session_id: mainCandidate.sessionId,
-        main_session_key: mainCandidate.key,
+        main_session_id: flushCandidate.sessionId,
+        main_session_key: flushCandidate.key,
       });
       writeHookTrace("hook.command.agent_main_flush_queued", {
         action,
         agent_label: agentLabel,
-        session_id: mainCandidate.sessionId,
-        session_key: mainCandidate.key,
+        session_id: flushCandidate.sessionId,
+        session_key: flushCandidate.key,
       });
     }
 
@@ -6074,5 +6104,6 @@ export const __test = {
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
   selectNewKeyFanoutTarget,
+  resolveLifecycleFlushSessionCandidate,
   NEW_KEY_FALLBACK_DELAY_MS,
 };
