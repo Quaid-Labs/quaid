@@ -133,18 +133,30 @@ starting the rerun.
 **Extraction is async.** After any lifecycle trigger (`/new`, `/clear`,
 `/reset`, `/compact`), the daemon must: detect the signal, read the
 transcript, call the LLM for extraction, process the response, and write
-facts to the DB. This takes **30–60 seconds minimum**, sometimes longer
-if the LLM is slow or the transcript is large.
+facts to the DB. This takes **30–60 seconds minimum** for short sessions,
+and **up to 3–4 minutes** for sessions with significant conversation
+history (many turns, large transcripts, or prior carry-facts).
 
 **Do NOT check FTS or DB immediately after a trigger.** Wait at least 60
-seconds, then check. If results are empty, wait another 30 seconds and
+seconds, then check. If results are empty, wait another 60 seconds and
 recheck. A 5-second check will almost always return empty — that is not
 a failure, it is checking too early.
 
+**For M2 and later milestones**, where sessions accumulate prior context,
+budget 3–4 minutes before calling a fact missing. Check the
+`rolling-extraction.jsonl` log to confirm the flush actually completed
+before declaring FAIL:
+```bash
+ssh REMOTE_HOST 'tail -3 ~/.quaid/instances/INSTANCE/logs/daemon/rolling-extraction.jsonl 2>/dev/null \
+  | python3 -c "import sys,json; [print(json.loads(l).get(\"event\"),json.loads(l).get(\"final_facts_stored\")) for l in sys.stdin]"'
+```
+If the last entry shows `rolling_flush` with a nonzero `final_facts_stored`,
+extraction is complete and the facts should be in the DB.
+
 The daemon log shows progress — if you see `daemon-reset` or
 `daemon-session_end` lines appearing for your session, extraction is
-in progress. If 90 seconds pass with no daemon activity for your session,
-then post an ISSUE.
+in progress. If 5 minutes pass with no `rolling_flush` entry for your
+session in `rolling-extraction.jsonl`, then post an ISSUE.
 
 ### Sanitized Transcript Hygiene Audit
 

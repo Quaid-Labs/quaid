@@ -128,6 +128,28 @@ ssh REMOTE_HOST 'QUAID_HOME=~/.quaid QUAID_INSTANCE=OC_INSTANCE \
 
 ## Milestone Notes
 
+### M2 — Snippets and Persona
+
+**Snippet path is in visible home, not hidden home.**
+After extraction, snippets are written to:
+```
+~/quaid/instances/openclaw-livetest/USER.snippets.md
+~/quaid/instances/openclaw-livetest/SOUL.snippets.md
+```
+Do NOT search `~/.quaid/` for snippet files — they will not be there.
+
+Verify:
+```bash
+ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-livetest/*.snippets.md 2>/dev/null && \
+  head -20 ~/quaid/instances/openclaw-livetest/USER.snippets.md'
+```
+
+**Wait for the full extraction window before checking.** Sessions with
+conversation history can take 2–3 minutes to flush. Confirm flush
+completed by checking `rolling-extraction.jsonl` for a `rolling_flush`
+entry with nonzero `final_facts_stored` (see TESTER.SKILL.md extraction
+wait section) before ruling FAIL on missing facts or snippets.
+
 ### M0 — Install
 If the installer fails at model selection with a "gateway model rejected" or
 "PING failed" error, the OC gateway does not have that model registered. Report
