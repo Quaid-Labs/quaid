@@ -19,6 +19,7 @@ from lib.providers import (
     EmbeddingsProvider,
     AnthropicLLMProvider,
     ClaudeCodeLLMProvider,
+    OpenAICodexOAuthLLMProvider,
     OpenAICompatibleLLMProvider,
     TestLLMProvider,
     OllamaEmbeddingsProvider,
@@ -1036,6 +1037,57 @@ class TestOpenAICompatibleLLMProvider:
             result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
 
         assert result.truncated is True
+
+
+class TestOpenAICodexOAuthLLMProvider:
+    def test_llm_call_uses_chatgpt_backend_api_contract(self):
+        token_payload = {
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_123",
+            }
+        }
+        import base64
+
+        token = "h." + base64.urlsafe_b64encode(json.dumps(token_payload).encode()).decode().rstrip("=") + ".s"
+        p = OpenAICodexOAuthLLMProvider(
+            api_key=token,
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        sse_body = "\n\n".join(
+            [
+                'data: {"type":"response.created"}',
+                'data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.4-mini","output":[{"type":"message","content":[{"type":"output_text","text":"Hello!"}]}],"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":2}}}}',
+            ]
+        ).encode()
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = sse_body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="fast",
+                max_tokens=100,
+            )
+
+        assert result.text == "Hello!"
+        assert result.input_tokens == 10
+        assert result.output_tokens == 5
+        assert result.cache_read_tokens == 2
+        req = mock_open.call_args[0][0]
+        assert req.full_url == "https://chatgpt.com/backend-api/codex/responses"
+        assert req.get_header("Authorization") == f"Bearer {token}"
+        assert req.get_header("Chatgpt-account-id") == "acct_123"
+        assert req.get_header("Originator") == "pi"
+        assert req.get_header("Openai-beta") == "responses=experimental"
+        body = json.loads(req.data.decode())
+        assert body["model"] == "gpt-5.4-mini"
+        assert body["instructions"] == "sys"
+        assert body["input"] == [{"role": "user", "content": "hi"}]
+        assert body["reasoning"] == {"effort": "none", "summary": "auto"}
+        assert body["stream"] is True
 
 
 class TestCodexLLMProvider:

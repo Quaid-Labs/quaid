@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import subprocess
 import time
@@ -38,6 +39,11 @@ _ANTHROPIC_OAUTH_IDENTITY_TEXT = (
 )
 _ANTHROPIC_OAUTH_USER_AGENT = "claude-cli/2.1.2 (external, cli)"
 _ANTHROPIC_OAUTH_CLAUDE_CODE_BETA = "claude-code-20250219"
+_OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
+_OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth"
+_OPENAI_CODEX_DEFAULT_INSTRUCTIONS = (
+    "You are a concise, accurate assistant. Follow the user's instructions exactly."
+)
 
 
 def _sanitize_url_for_logs(url: str) -> str:
@@ -103,6 +109,34 @@ def _summarize_error_text(text: str, max_len: int = 300) -> str:
     head = max_len // 3
     tail = max_len - head - 5
     return f"{msg[:head]} ... {msg[-tail:]}"
+
+
+def _decode_jwt_payload(token: str) -> dict:
+    parts = str(token or "").split(".")
+    if len(parts) != 3:
+        raise RuntimeError("Failed to extract accountId from token")
+    try:
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        return json.loads(__import__("base64").urlsafe_b64decode(padded.encode()).decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("Failed to extract accountId from token") from exc
+
+
+def _extract_openai_codex_account_id(token: str) -> str:
+    payload = _decode_jwt_payload(token)
+    auth = payload.get(_OPENAI_CODEX_AUTH_CLAIM)
+    if isinstance(auth, dict):
+        account_id = str(auth.get("chatgpt_account_id") or "").strip()
+        if account_id:
+            return account_id
+    raise RuntimeError("Failed to extract accountId from token")
+
+
+def _openai_codex_user_agent() -> str:
+    try:
+        return f"pi ({platform.system().lower()} {platform.release()}; {platform.machine()})"
+    except Exception:
+        return "pi (python)"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1209,6 +1243,177 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             output_tokens=usage.get("completion_tokens", 0),
             model=model,
         )
+
+    def get_profiles(self):
+        return {
+            "deep": {"model": self._deep_model, "available": True},
+            "fast": {"model": self._fast_model, "available": True},
+        }
+
+
+class OpenAICodexOAuthLLMProvider(LLMProvider):
+    """Calls the ChatGPT Codex responses backend with OAuth bearer tokens."""
+
+    def __init__(self, api_key: str = "",
+                 deep_model: str = "gpt-5.4",
+                 fast_model: str = "gpt-5.4-mini",
+                 base_url: str = "",
+                 deep_reasoning_effort: str = "high",
+                 fast_reasoning_effort: str = "none"):
+        self._api_key = api_key
+        self._deep_model = deep_model
+        self._fast_model = fast_model or deep_model
+        self._base_url = (base_url or _OPENAI_CODEX_BASE_URL).rstrip("/")
+        self._deep_reasoning_effort = OpenAICompatibleLLMProvider._normalize_reasoning_effort(
+            deep_reasoning_effort, "high"
+        )
+        self._fast_reasoning_effort = OpenAICompatibleLLMProvider._normalize_reasoning_effort(
+            fast_reasoning_effort, "none"
+        )
+
+    def _resolve_model(self, model_tier: str) -> str:
+        if model_tier == "fast" and self._fast_model:
+            return self._fast_model
+        return self._deep_model
+
+    def _resolve_reasoning_effort(self, model_tier: str) -> str:
+        if model_tier == "fast":
+            return self._fast_reasoning_effort
+        return self._deep_reasoning_effort
+
+    def _resolve_url(self) -> str:
+        base = self._base_url or _OPENAI_CODEX_BASE_URL
+        normalized = base.rstrip("/")
+        if normalized.endswith("/codex/responses"):
+            return normalized
+        if normalized.endswith("/codex"):
+            return normalized + "/responses"
+        return normalized + "/codex/responses"
+
+    @staticmethod
+    def _messages_to_payload(messages):
+        instructions = []
+        input_items = []
+        for message in messages:
+            role = str(message.get("role", "user") or "user").strip().lower()
+            content = str(message.get("content", "") or "")
+            if role in ("system", "developer"):
+                if content.strip():
+                    instructions.append(content)
+                continue
+            if role not in ("user", "assistant"):
+                role = "user"
+            if content.strip():
+                input_items.append({"role": role, "content": content})
+        merged = "\n\n".join(instructions).strip()
+        return merged or _OPENAI_CODEX_DEFAULT_INSTRUCTIONS, input_items
+
+    @staticmethod
+    def _build_headers(api_key: str, account_id: str) -> dict:
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "OpenAI-Beta": "responses=experimental",
+            "accept": "text/event-stream",
+            "content-type": "application/json",
+            "chatgpt-account-id": account_id,
+            "originator": "pi",
+            "User-Agent": _openai_codex_user_agent(),
+        }
+
+    @staticmethod
+    def _iter_sse_events(body_text: str):
+        buffer = str(body_text or "")
+        for chunk in buffer.split("\n\n"):
+            if not chunk.strip():
+                continue
+            data_lines = [
+                line[5:].strip()
+                for line in chunk.splitlines()
+                if line.startswith("data:")
+            ]
+            if not data_lines:
+                continue
+            data = "\n".join(data_lines).strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                yield json.loads(data)
+            except Exception:
+                continue
+
+    def _parse_response(self, raw_text: str, model: str, start_time: float) -> LLMResult:
+        final_response = None
+        for event in self._iter_sse_events(raw_text):
+            event_type = str(event.get("type") or "").strip()
+            if event_type == "error":
+                raise RuntimeError(
+                    f"Codex error: {event.get('message') or event.get('code') or json.dumps(event)}"
+                )
+            if event_type == "response.failed":
+                response = event.get("response") if isinstance(event.get("response"), dict) else {}
+                error = response.get("error") if isinstance(response, dict) else {}
+                msg = error.get("message") if isinstance(error, dict) else ""
+                raise RuntimeError(msg or "Codex response failed")
+            if event_type in ("response.done", "response.completed", "response.incomplete"):
+                final_response = event.get("response") if isinstance(event.get("response"), dict) else {}
+                break
+        if not isinstance(final_response, dict):
+            raise RuntimeError("Codex responses stream completed without a final response payload")
+
+        usage = final_response.get("usage", {})
+        if not isinstance(usage, dict):
+            usage = {}
+        input_details = usage.get("input_tokens_details", {})
+        if not isinstance(input_details, dict):
+            input_details = {}
+        text = OpenAICompatibleLLMProvider._extract_responses_text(final_response)
+        status = str(final_response.get("status") or "").strip().lower()
+
+        return LLMResult(
+            text=OpenAICompatibleLLMProvider._clean_response_text(text),
+            duration=time.time() - start_time,
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            cache_read_tokens=int(input_details.get("cached_tokens", 0) or 0),
+            cache_creation_tokens=int(input_details.get("cache_creation_tokens", 0) or 0),
+            model=str(final_response.get("model", model) or model),
+            truncated=status == "incomplete",
+        )
+
+    def llm_call(self, messages, model_tier="deep",
+                 max_tokens=4000, timeout=600):
+        if not self._api_key:
+            raise RuntimeError("OpenAI Codex OAuth token is required")
+        model = self._resolve_model(model_tier)
+        account_id = _extract_openai_codex_account_id(self._api_key)
+        instructions, input_payload = self._messages_to_payload(messages)
+        payload = {
+            "model": model,
+            "store": False,
+            "stream": True,
+            "instructions": instructions or None,
+            "input": input_payload,
+            "text": {"verbosity": "medium"},
+            "include": ["reasoning.encrypted_content"],
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "reasoning": {
+                "effort": self._resolve_reasoning_effort(model_tier),
+                "summary": "auto",
+            },
+        }
+        payload = {k: v for k, v in payload.items() if v not in (None, "", [])}
+
+        req = urllib.request.Request(
+            self._resolve_url(),
+            data=json.dumps(payload).encode(),
+            headers=self._build_headers(self._api_key, account_id),
+            method="POST",
+        )
+        start_time = time.time()
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        return self._parse_response(raw, model, start_time)
 
     def get_profiles(self):
         return {

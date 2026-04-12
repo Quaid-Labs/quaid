@@ -180,6 +180,10 @@ class CodexAdapter(QuaidAdapter):
         token = self.read_auth_token()
         if token:
             return token
+        if env_var_name == "OPENAI_API_KEY":
+            oauth = os.environ.get("OPENAI_OAUTH_TOKEN", "").strip()
+            if oauth:
+                return oauth
         key = os.environ.get(env_var_name, "").strip()
         if key:
             return key
@@ -605,7 +609,7 @@ class CodexAdapter(QuaidAdapter):
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from config import get_config
-        from lib.providers import OpenAICompatibleLLMProvider
+        from lib.providers import OpenAICodexOAuthLLMProvider
 
         cfg = get_config()
         deep_model = getattr(cfg.models, "deep_reasoning", "gpt-5.4")
@@ -627,13 +631,14 @@ class CodexAdapter(QuaidAdapter):
             api_key = self.get_api_key("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError(
-                    "LLM provider is 'openai' but no Codex OpenAI token or OPENAI_API_KEY was found. "
-                    "Write an OpenAI token to QUAID_HOME/adaptors/codex/.auth-token or set OPENAI_API_KEY."
+                    "LLM provider is 'openai' but no Codex OpenAI OAuth token was found. "
+                    "Write the token produced by 'codex setup-token' to QUAID_HOME/adaptors/codex/.auth-token "
+                    "or set OPENAI_OAUTH_TOKEN."
                 )
             configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
             env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
-            base_url = configured_base_url or env_base_url or "https://api.openai.com"
-            return OpenAICompatibleLLMProvider(
+            base_url = configured_base_url or env_base_url or "https://chatgpt.com/backend-api"
+            return OpenAICodexOAuthLLMProvider(
                 base_url=base_url,
                 api_key=api_key,
                 deep_model=str(deep_model or "gpt-5.4"),

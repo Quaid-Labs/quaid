@@ -1,8 +1,19 @@
-"""LLM provider implementations for the Codex adapter."""
+"""LLM provider implementations for the Codex adapter.
+
+DEPRECATED:
+- The Codex app-server path in this module is intentionally deprecated for
+  Quaid service calls.
+- It owns hidden thread/runtime state and breaks Quaid's assumptions about
+  stateless request boundaries, visible context, deterministic extraction, and
+  predictable token accounting.
+- The code remains here only as reference / possible future resurrection.
+- Active Quaid installs should use direct provider auth transports instead.
+"""
 
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -12,6 +23,7 @@ import socket
 import subprocess
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -412,11 +424,23 @@ def _broker_run_dir() -> Path:
 
 
 def _broker_sock_path() -> Path:
-    return _broker_run_dir() / "codex-app-server-broker.sock"
+    run_dir = _broker_run_dir()
+    candidate = run_dir / "codex-app-server-broker.sock"
+    # Unix domain sockets have tight path limits (~104 bytes on Linux).
+    # Benchmark run directories can exceed that when QUAID_HOME points inside a
+    # long run path, so fall back to a short deterministic /tmp socket name.
+    if len(str(candidate)) < 96:
+        return candidate
+    digest = hashlib.sha1(str(_quaid_home_dir()).encode("utf-8")).hexdigest()[:12]
+    return Path("/tmp") / f"quaid-codex-{digest}.sock"
 
 
 def _broker_pid_path() -> Path:
     return _broker_run_dir() / "codex-app-server-broker.pid"
+
+
+def _broker_crash_log_path() -> Path:
+    return _broker_run_dir() / "codex-app-server-broker-crash.log"
 
 
 def _read_broker_pid() -> Optional[int]:
@@ -436,10 +460,16 @@ class _CodexAppServerBroker:
     """Platform-shared broker that owns a single Codex app-server process."""
 
     def __init__(self):
-        self._manager = get_shared_codex_manager()
+        self._manager = None
         self._running = False
         self._server_sock: Optional[socket.socket] = None
         self._lock = threading.RLock()
+
+    def _get_manager(self):
+        with self._lock:
+            if self._manager is None:
+                self._manager = get_shared_codex_manager()
+            return self._manager
 
     def _handle_client(self, conn: socket.socket) -> None:
         with conn:
@@ -470,7 +500,7 @@ class _CodexAppServerBroker:
                             resp = {"ok": False, "error": "Invalid run_turn params"}
                         else:
                             try:
-                                result = self._manager.run_turn(
+                                result = self._get_manager().run_turn(
                                     prompt=str(params.get("prompt") or ""),
                                     model=str(params.get("model") or ""),
                                     effort=str(params.get("effort") or ""),
@@ -537,9 +567,24 @@ def _start_broker_process() -> int:
         os.environ["QUAID_CODEX_BROKER_PROCESS"] = "1"
         try:
             _CodexAppServerBroker().run()
-        finally:
+        except Exception:
+            try:
+                _broker_crash_log_path().write_text(traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                pass
+            os._exit(1)
+        else:
             os._exit(0)
     return pid
+
+
+def _broker_start_timeout_s() -> float:
+    raw = str(os.environ.get("QUAID_CODEX_BROKER_START_TIMEOUT_S", "") or "").strip()
+    try:
+        value = float(raw) if raw else 15.0
+    except ValueError:
+        value = 15.0
+    return max(3.0, value)
 
 
 def ensure_codex_broker_alive() -> int:
@@ -556,11 +601,30 @@ def ensure_codex_broker_alive() -> int:
             return pid
         child_pid = _start_broker_process()
         sock = _broker_sock_path()
-        for _ in range(30):
+        deadline = time.time() + _broker_start_timeout_s()
+        while time.time() < deadline:
             if sock.exists():
                 return child_pid
+            try:
+                waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
+            except OSError:
+                waited_pid, status = 0, 0
+            if waited_pid == child_pid:
+                if os.WIFEXITED(status):
+                    detail = f"exit_code={os.WEXITSTATUS(status)}"
+                elif os.WIFSIGNALED(status):
+                    detail = f"signal={os.WTERMSIG(status)}"
+                else:
+                    detail = f"status={status}"
+                raise RuntimeError(
+                    "Codex app-server broker exited before creating socket "
+                    f"({detail})"
+                )
             time.sleep(0.1)
-        raise RuntimeError("Codex app-server broker did not create socket in time")
+        raise RuntimeError(
+            "Codex app-server broker did not create socket in time "
+            f"(timeout_s={_broker_start_timeout_s():.1f}, sock={sock})"
+        )
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)

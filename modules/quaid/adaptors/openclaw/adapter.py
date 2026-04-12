@@ -1,12 +1,12 @@
 """OpenClaw-specific Quaid adapter implementation.
 
-IMPORTANT: Quaid's active OpenClaw service path is no longer the
-gateway-backed LLM provider flow. Hidden thread/runtime state behind the
-gateway breaks Quaid's assumptions about stateless request boundaries,
-visible context, deterministic extraction behavior, and token accounting.
-The gateway provider code remains in this module for possible future
-resurrection, but it is deprecated and must not be used for the current
-installer/runtime path.
+IMPORTANT:
+- Quaid's active OpenClaw `openai` lane is the direct ChatGPT OAuth path
+  (`chatgpt.com/backend-api/codex/responses`), not the OpenClaw gateway.
+- The old gateway-backed provider flow remains in this module only as a
+  deprecated fallback/reference path because it may be revived later.
+- Do not route Quaid service calls through the gateway-backed OpenAI path
+  unless that deprecation is explicitly reversed.
 """
 
 import json
@@ -21,7 +21,7 @@ from typing import Optional
 from adaptors.openclaw.providers import GatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
-from lib.providers import AnthropicLLMProvider, OpenAICompatibleLLMProvider
+from lib.providers import AnthropicLLMProvider, OpenAICodexOAuthLLMProvider
 
 
 class OpenClawAdapter(QuaidAdapter):
@@ -381,6 +381,10 @@ class OpenClawAdapter(QuaidAdapter):
 
     def get_api_key(self, env_var_name: str) -> Optional[str]:
         # 1. Environment variable
+        if env_var_name == "OPENAI_API_KEY":
+            oauth = os.environ.get("OPENAI_OAUTH_TOKEN", "").strip()
+            if oauth:
+                return oauth
         key = os.environ.get(env_var_name, "").strip()
         if key:
             return key
@@ -601,13 +605,14 @@ class OpenClawAdapter(QuaidAdapter):
             api_key = self.get_api_key("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError(
-                    "LLM provider is 'openai' but no OpenClaw OpenAI token or OPENAI_API_KEY was found. "
-                    "Write a token to QUAID_HOME/adaptors/openclaw/.auth-token or set OPENAI_API_KEY."
+                    "LLM provider is 'openai' but no OpenClaw OpenAI OAuth token was found. "
+                    "Write the token produced by 'codex setup-token' to "
+                    "QUAID_HOME/adaptors/openclaw/.auth-token or set OPENAI_OAUTH_TOKEN."
                 )
             configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
             env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
-            base_url = configured_base_url or env_base_url or "https://api.openai.com"
-            return OpenAICompatibleLLMProvider(
+            base_url = configured_base_url or env_base_url or "https://chatgpt.com/backend-api"
+            return OpenAICodexOAuthLLMProvider(
                 base_url=base_url,
                 api_key=api_key,
                 deep_model=deep_model,

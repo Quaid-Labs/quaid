@@ -27,6 +27,7 @@ from lib.adapter import (
 from lib.providers import (
     AnthropicLLMProvider,
     ClaudeCodeLLMProvider,
+    OpenAICodexOAuthLLMProvider,
     OpenAICompatibleLLMProvider,
     TestLLMProvider,
 )
@@ -1277,8 +1278,8 @@ class TestCodexAdapter:
         )
         with patch("config.get_config", return_value=cfg):
             provider = adapter.get_llm_provider()
-        assert isinstance(provider, OpenAICompatibleLLMProvider)
-        assert provider._base_url == "https://api.openai.com"
+        assert isinstance(provider, OpenAICodexOAuthLLMProvider)
+        assert provider._base_url == "https://chatgpt.com/backend-api"
 
     def test_get_api_key_reads_codex_auth_token_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -1859,7 +1860,7 @@ class TestProviderFactoryMethods:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         llm = openclaw_adapter.get_llm_provider()
-        assert isinstance(llm, (AnthropicLLMProvider, OpenAICompatibleLLMProvider))
+        assert isinstance(llm, (AnthropicLLMProvider, OpenAICodexOAuthLLMProvider))
 
     @pytest.mark.adapter_openclaw
     def test_openclaw_embeddings_returns_none(self, openclaw_adapter):
