@@ -28,7 +28,11 @@ Concrete rule for local guides:
 - if the guide path is `~/quaidcode/dev/docs/AI-INSTALL.md`
 - then the repo root is `~/quaidcode/dev`
 - so the mandatory first command must start with:
-  - `cd ~/quaidcode/dev && node setup-quaid.mjs ...`
+  - `cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 node setup-quaid.mjs ...`
+- `QUAID_ALLOW_DEV_INSTALL=1` is required here because the dev checkout directory
+  (`~/quaidcode/dev/modules/quaid/`) triggers the installer's dev-machine guard.
+  On a livetest VM the dev tree is synced there intentionally — the override bypasses
+  the guard safely.
 
 Do not collapse that to `cd ~/quaidcode`.
 

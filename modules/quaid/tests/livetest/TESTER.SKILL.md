@@ -194,15 +194,15 @@ yourself.
 
     ```bash
     # OC tester
-    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs \
       --dry-run --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CC tester
-    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=claude-code-private-tmp-cc-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=claude-code-private-tmp-cc-livetest node setup-quaid.mjs \
       --dry-run --adapter claude-code --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CDX tester
-    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_INSTANCE=codex-private-tmp-cdx-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=codex-private-tmp-cdx-livetest node setup-quaid.mjs \
       --dry-run --adapter codex --owner-name OWNER_NAME --agent 2>&1 | tail -40'
     ```
 
