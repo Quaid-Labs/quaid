@@ -479,6 +479,14 @@ describe("lifecycle signal detection", () => {
     expect(__test.extractOpenAICodexAccountId(token)).toBe("acct_test_123");
   });
 
+  it("allows codex oauth requests to proceed without an account id claim", () => {
+    const payload = Buffer.from(JSON.stringify({
+      sub: "user_123",
+    })).toString("base64url");
+    const token = `header.${payload}.sig`;
+    expect(__test.extractOpenAICodexAccountId(token)).toBe("");
+  });
+
   it("parses codex oauth text from response delta events", () => {
     const text = __test.extractOpenAICodexText([
       'data: {"type":"response.created","response":{"id":"resp_1"}}',

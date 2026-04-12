@@ -2538,7 +2538,7 @@ function _getOpenAIOAuthCredential(): string | undefined {
 function _extractOpenAICodexAccountId(token: string): string {
   const parts = String(token || "").trim().split(".");
   if (parts.length < 2) {
-    throw new Error("OpenAI OAuth token is not a JWT access token");
+    return "";
   }
   try {
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
@@ -2548,14 +2548,9 @@ function _extractOpenAICodexAccountId(token: string): string {
       || payload?.auth?.chatgpt_account_id
       || ""
     ).trim();
-    if (!accountId) {
-      throw new Error("missing chatgpt account id claim");
-    }
     return accountId;
-  } catch (err: unknown) {
-    throw new Error(
-      `OpenAI OAuth token is missing a readable chatgpt account id: ${String((err as Error)?.message || err)}`
-    );
+  } catch {
+    return "";
   }
 }
 
@@ -2725,17 +2720,20 @@ async function callConfiguredLLM(
     console.log(
       `[quaid][llm] oauth_prepare tier=${modelTier} direct_url=${url} auth_token=present account_id=${accountId ? "present" : "absent"}`
     );
+    const headers: Record<string, string> = {
+      "Authorization": `Bearer ${token}`,
+      "OpenAI-Beta": "responses=experimental",
+      "accept": "text/event-stream",
+      "content-type": "application/json",
+      "originator": "pi",
+      "User-Agent": `pi (${os.platform()} ${os.release()}; ${os.arch()})`,
+    };
+    if (accountId) {
+      headers["chatgpt-account-id"] = accountId;
+    }
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "OpenAI-Beta": "responses=experimental",
-        "accept": "text/event-stream",
-        "content-type": "application/json",
-        "chatgpt-account-id": accountId,
-        "originator": "pi",
-        "User-Agent": `pi (${os.platform()} ${os.release()}; ${os.arch()})`,
-      },
+      headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });

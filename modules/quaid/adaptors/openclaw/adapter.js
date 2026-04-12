@@ -2031,21 +2031,16 @@ function _getOpenAIOAuthCredential() {
 function _extractOpenAICodexAccountId(token) {
   const parts = String(token || "").trim().split(".");
   if (parts.length < 2) {
-    throw new Error("OpenAI OAuth token is not a JWT access token");
+    return "";
   }
   try {
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
     const accountId = String(
       payload?.chatgpt_account_id || payload?.["https://api.openai.com/auth.chatgpt_account_id"] || payload?.auth?.chatgpt_account_id || ""
     ).trim();
-    if (!accountId) {
-      throw new Error("missing chatgpt account id claim");
-    }
     return accountId;
-  } catch (err) {
-    throw new Error(
-      `OpenAI OAuth token is missing a readable chatgpt account id: ${String(err?.message || err)}`
-    );
+  } catch {
+    return "";
   }
 }
 function _resolveDirectOpenAICodexUrl() {
@@ -2175,17 +2170,20 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
     console.log(
       `[quaid][llm] oauth_prepare tier=${modelTier} direct_url=${url} auth_token=present account_id=${accountId ? "present" : "absent"}`
     );
+    const headers2 = {
+      "Authorization": `Bearer ${token2}`,
+      "OpenAI-Beta": "responses=experimental",
+      "accept": "text/event-stream",
+      "content-type": "application/json",
+      "originator": "pi",
+      "User-Agent": `pi (${os.platform()} ${os.release()}; ${os.arch()})`
+    };
+    if (accountId) {
+      headers2["chatgpt-account-id"] = accountId;
+    }
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token2}`,
-        "OpenAI-Beta": "responses=experimental",
-        "accept": "text/event-stream",
-        "content-type": "application/json",
-        "chatgpt-account-id": accountId,
-        "originator": "pi",
-        "User-Agent": `pi (${os.platform()} ${os.release()}; ${os.arch()})`
-      },
+      headers: headers2,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs)
     });
