@@ -1089,6 +1089,43 @@ class TestOpenAICodexOAuthLLMProvider:
         assert body["reasoning"] == {"effort": "none", "summary": "auto"}
         assert body["stream"] is True
 
+    def test_llm_call_accumulates_sse_output_text_deltas(self):
+        token_payload = {
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_123",
+            }
+        }
+        import base64
+
+        token = "h." + base64.urlsafe_b64encode(json.dumps(token_payload).encode()).decode().rstrip("=") + ".s"
+        p = OpenAICodexOAuthLLMProvider(
+            api_key=token,
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        sse_body = "\n\n".join(
+            [
+                'data: {"type":"response.created"}',
+                'data: {"type":"response.output_text.delta","delta":"Hel"}',
+                'data: {"type":"response.output_text.delta","delta":"lo!"}',
+                'data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.4-mini","output":[],"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":2}}}}',
+            ]
+        ).encode()
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = sse_body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="fast",
+                max_tokens=100,
+            )
+
+        assert result.text == "Hello!"
+        assert result.output_tokens == 5
+
 
 class TestCodexLLMProvider:
     class _FakeManager:

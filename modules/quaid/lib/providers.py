@@ -1343,6 +1343,7 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
 
     def _parse_response(self, raw_text: str, model: str, start_time: float) -> LLMResult:
         final_response = None
+        text_chunks = []
         for event in self._iter_sse_events(raw_text):
             event_type = str(event.get("type") or "").strip()
             if event_type == "error":
@@ -1354,6 +1355,10 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
                 error = response.get("error") if isinstance(response, dict) else {}
                 msg = error.get("message") if isinstance(error, dict) else ""
                 raise RuntimeError(msg or "Codex response failed")
+            if event_type == "response.output_text.delta":
+                delta = event.get("delta")
+                if isinstance(delta, str) and delta:
+                    text_chunks.append(delta)
             if event_type in ("response.done", "response.completed", "response.incomplete"):
                 final_response = event.get("response") if isinstance(event.get("response"), dict) else {}
                 break
@@ -1366,7 +1371,7 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
         input_details = usage.get("input_tokens_details", {})
         if not isinstance(input_details, dict):
             input_details = {}
-        text = OpenAICompatibleLLMProvider._extract_responses_text(final_response)
+        text = "".join(text_chunks).strip() or OpenAICompatibleLLMProvider._extract_responses_text(final_response)
         status = str(final_response.get("status") or "").strip().lower()
 
         return LLMResult(
