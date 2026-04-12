@@ -1398,10 +1398,7 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             "stream": True,
             "instructions": instructions or None,
             "input": input_payload,
-            "text": {"verbosity": "medium"},
-            "include": ["reasoning.encrypted_content"],
-            "tool_choice": "auto",
-            "parallel_tool_calls": True,
+            "text": {"verbosity": "low"},
             "reasoning": {
                 "effort": self._resolve_reasoning_effort(model_tier),
                 "summary": "auto",

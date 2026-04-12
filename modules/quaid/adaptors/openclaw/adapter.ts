@@ -2652,10 +2652,7 @@ function _buildOpenAICodexOAuthBody(
     instructions: systemPrompt.trim()
       || "You are a concise, accurate assistant. Follow the user's instructions exactly.",
     input: [{ role: "user", content: userMessage }],
-    text: { verbosity: "medium" },
-    include: ["reasoning.encrypted_content"],
-    tool_choice: "auto",
-    parallel_tool_calls: true,
+    text: { verbosity: "low" },
     reasoning: {
       effort: modelTier === "fast" ? "none" : "high",
       summary: "auto",
@@ -6105,6 +6102,7 @@ export const __test = {
   shouldDrainDeferredNoticeForPrompt,
   extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
   extractOpenAICodexText: _extractOpenAICodexText,
+  buildOpenAICodexOAuthBody: _buildOpenAICodexOAuthBody,
   resolveConfiguredLLMTransport: _resolveConfiguredLLMTransport,
   isInternalSessionContext,
   isInternalTranscriptMessages,

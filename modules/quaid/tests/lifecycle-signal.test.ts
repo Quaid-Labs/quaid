@@ -558,6 +558,15 @@ describe("lifecycle signal detection", () => {
     expect(__test.resolveConfiguredLLMTransport("anthropic")).toBe("gateway");
   });
 
+  it("builds lean codex oauth payloads for direct provider probes", () => {
+    const body = __test.buildOpenAICodexOAuthBody("sys", "hi", "gpt-5.4-mini", "fast");
+    expect(body.text).toEqual({ verbosity: "low" });
+    expect(body.reasoning).toEqual({ effort: "none", summary: "auto" });
+    expect("include" in body).toBe(false);
+    expect("tool_choice" in body).toBe(false);
+    expect("parallel_tool_calls" in body).toBe(false);
+  });
+
   it("extracts codex oauth account ids from JWT access tokens", () => {
     const payload = Buffer.from(JSON.stringify({
       chatgpt_account_id: "acct_test_123",

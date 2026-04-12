@@ -1086,8 +1086,12 @@ class TestOpenAICodexOAuthLLMProvider:
         assert body["model"] == "gpt-5.4-mini"
         assert body["instructions"] == "sys"
         assert body["input"] == [{"role": "user", "content": "hi"}]
+        assert body["text"] == {"verbosity": "low"}
         assert body["reasoning"] == {"effort": "none", "summary": "auto"}
         assert body["stream"] is True
+        assert "include" not in body
+        assert "tool_choice" not in body
+        assert "parallel_tool_calls" not in body
 
     def test_llm_call_accumulates_sse_output_text_deltas(self):
         token_payload = {
