@@ -2521,6 +2521,114 @@ function _getAnthropicCredential(): string | undefined {
   return _getGatewayCredential(["anthropic"]);
 }
 
+function _readAdapterAuthToken(adapterName: string): string | undefined {
+  const authPath = path.join(WORKSPACE, "adaptors", adapterName, ".auth-token");
+  try {
+    const token = fs.readFileSync(authPath, "utf8").trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function _getOpenAIOAuthCredential(): string | undefined {
+  return _getGatewayCredential(["openai"]) || _readAdapterAuthToken("openclaw");
+}
+
+function _extractOpenAICodexAccountId(token: string): string {
+  const parts = String(token || "").trim().split(".");
+  if (parts.length < 2) {
+    throw new Error("OpenAI OAuth token is not a JWT access token");
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    const accountId = String(
+      payload?.["https://api.openai.com/auth.chatgpt_account_id"]
+      || payload?.auth?.chatgpt_account_id
+      || ""
+    ).trim();
+    if (!accountId) {
+      throw new Error("missing chatgpt account id claim");
+    }
+    return accountId;
+  } catch (err: unknown) {
+    throw new Error(
+      `OpenAI OAuth token is missing a readable chatgpt account id: ${String((err as Error)?.message || err)}`
+    );
+  }
+}
+
+function _resolveDirectOpenAICodexUrl(): string {
+  const envUrl = String(process.env.OPENAI_COMPATIBLE_BASE_URL || "").trim().replace(/\/+$/, "");
+  const baseUrl = envUrl || "https://chatgpt.com/backend-api";
+  if (baseUrl.endsWith("/codex/responses")) return baseUrl;
+  if (baseUrl.endsWith("/codex")) return `${baseUrl}/responses`;
+  return `${baseUrl}/codex/responses`;
+}
+
+function _buildOpenAICodexOAuthBody(
+  systemPrompt: string,
+  userMessage: string,
+  resolvedModel: string,
+  modelTier: ModelTier,
+): Record<string, unknown> {
+  return {
+    model: resolvedModel,
+    store: false,
+    stream: true,
+    instructions: systemPrompt.trim()
+      || "You are a concise, accurate assistant. Follow the user's instructions exactly.",
+    input: [{ role: "user", content: userMessage }],
+    text: { verbosity: "medium" },
+    include: ["reasoning.encrypted_content"],
+    tool_choice: "auto",
+    parallel_tool_calls: true,
+    reasoning: {
+      effort: modelTier === "fast" ? "none" : "high",
+      summary: "auto",
+    },
+  };
+}
+
+function _extractOpenAICodexText(rawBody: string): string {
+  const chunks: string[] = [];
+  for (const block of String(rawBody || "").split("\n\n")) {
+    const lines = block
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim());
+    if (!lines.length) continue;
+    const data = lines.join("\n").trim();
+    if (!data || data === "[DONE]") continue;
+    try {
+      const event = JSON.parse(data);
+      const eventType = String(event?.type || "").trim();
+      if (eventType === "response.output_text.delta" && typeof event?.delta === "string") {
+        chunks.push(event.delta);
+        continue;
+      }
+      if (eventType === "error") {
+        throw new Error(String(event?.message || event?.code || data));
+      }
+      if (eventType === "response.failed") {
+        const msg = String(event?.response?.error?.message || "").trim();
+        throw new Error(msg || "Codex response failed");
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) throw err;
+    }
+  }
+  return chunks.join("").trim();
+}
+
+function _resolveConfiguredLLMTransport(provider: string): "gateway" | "openai-codex-oauth-direct" {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "openai" || normalized === "openai-compatible") {
+    return "openai-codex-oauth-direct";
+  }
+  return "gateway";
+}
+
 function _readOpenClawConfig(): any {
   try {
     const cfgPath = _resolveOpenClawConfigPath();
@@ -2595,11 +2703,64 @@ async function callConfiguredLLM(
 ): Promise<LLMProxyResponse> {
   const resolved = facade.resolveTierModel(modelTier);
   const provider = String(resolved.provider || "").trim().toLowerCase();
+  const transport = _resolveConfiguredLLMTransport(provider);
   const started = Date.now();
 
   console.log(
-    `[quaid][llm] request tier=${modelTier} provider=${provider} model=${resolved.model} max_tokens=${maxTokens} system_len=${systemPrompt.length} user_len=${userMessage.length}`
+    `[quaid][llm] request tier=${modelTier} provider=${provider} transport=${transport} model=${resolved.model} max_tokens=${maxTokens} system_len=${systemPrompt.length} user_len=${userMessage.length}`
   );
+
+  if (transport === "openai-codex-oauth-direct") {
+    const token = _getOpenAIOAuthCredential();
+    if (!token) {
+      throw new Error(
+        `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} `
+        + "error=missing OpenAI OAuth token"
+      );
+    }
+    const url = _resolveDirectOpenAICodexUrl();
+    const accountId = _extractOpenAICodexAccountId(token);
+    const body = _buildOpenAICodexOAuthBody(systemPrompt, userMessage, resolved.model, modelTier);
+    console.log(
+      `[quaid][llm] oauth_prepare tier=${modelTier} direct_url=${url} auth_token=present account_id=${accountId ? "present" : "absent"}`
+    );
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "OpenAI-Beta": "responses=experimental",
+        "accept": "text/event-stream",
+        "content-type": "application/json",
+        "chatgpt-account-id": accountId,
+        "originator": "pi",
+        "User-Agent": `pi (${os.platform()} ${os.release()}; ${os.arch()})`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const rawBody = await response.text();
+    if (!response.ok) {
+      const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
+      throw new Error(
+        `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} `
+        + `status=${response.status} error=${bodyPreview || response.statusText || "OpenAI Codex OAuth error"}`
+      );
+    }
+    const text = _extractOpenAICodexText(rawBody);
+    const durationMs = Date.now() - started;
+    console.log(
+      `[quaid][llm] response provider=${provider} model=${resolved.model} transport=${transport} duration_ms=${durationMs} output_len=${text.length} status=${response.status}`
+    );
+    return {
+      text,
+      model: resolved.model,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      truncated: false,
+    };
+  }
 
   const gatewayUrl = `${_getGatewayBaseUrl()}/v1/responses`;
   const token = _getGatewayToken();
@@ -5862,6 +6023,9 @@ export const __test = {
   stripExecCompletedHeartbeatInstructions,
   formatDeferredNoticeRelayContext,
   shouldDrainDeferredNoticeForPrompt,
+  extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
+  extractOpenAICodexText: _extractOpenAICodexText,
+  resolveConfiguredLLMTransport: _resolveConfiguredLLMTransport,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,

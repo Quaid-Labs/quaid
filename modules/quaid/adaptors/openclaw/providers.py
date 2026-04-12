@@ -30,6 +30,24 @@ def _try_notify(msg: str, **kwargs) -> None:
         logger.debug("notify_agent unavailable; logging provider error locally: %s", msg)
 
 
+class OpenClawGatewayLLMProvider(LLMProvider):
+    """Explicit hard-stop for deprecated gateway-backed Quaid LLM routing."""
+
+    _ERROR = (
+        "OpenClaw gateway must not be used for Quaid LLM calls; "
+        "use direct OpenAI OAuth path"
+    )
+
+    def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
+        raise RuntimeError(self._ERROR)
+
+    def get_profiles(self):
+        return {
+            "deep": {"model": "disabled", "available": False},
+            "fast": {"model": "disabled", "available": False},
+        }
+
+
 class GatewayLLMProvider(LLMProvider):
     """Routes LLM calls through the OpenClaw gateway HTTP endpoint.
 

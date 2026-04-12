@@ -465,6 +465,35 @@ describe("lifecycle signal detection", () => {
     expect(block).toContain("fast language model provider");
   });
 
+  it("routes openai providers through the direct codex oauth transport", () => {
+    expect(__test.resolveConfiguredLLMTransport("openai")).toBe("openai-codex-oauth-direct");
+    expect(__test.resolveConfiguredLLMTransport("openai-compatible")).toBe("openai-codex-oauth-direct");
+    expect(__test.resolveConfiguredLLMTransport("anthropic")).toBe("gateway");
+  });
+
+  it("extracts codex oauth account ids from JWT access tokens", () => {
+    const payload = Buffer.from(JSON.stringify({
+      "https://api.openai.com/auth.chatgpt_account_id": "acct_test_123",
+    })).toString("base64url");
+    const token = `header.${payload}.sig`;
+    expect(__test.extractOpenAICodexAccountId(token)).toBe("acct_test_123");
+  });
+
+  it("parses codex oauth text from response delta events", () => {
+    const text = __test.extractOpenAICodexText([
+      'data: {"type":"response.created","response":{"id":"resp_1"}}',
+      "",
+      'data: {"type":"response.output_text.delta","delta":"Hel"}',
+      "",
+      'data: {"type":"response.output_text.delta","delta":"lo"}',
+      "",
+      'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+      "",
+      "data: [DONE]",
+    ].join("\n"));
+    expect(text).toBe("Hello");
+  });
+
   it("overrides OpenClaw heartbeat prompts attached to exec completion events", () => {
     const override = __test.buildExecCompletedHeartbeatOverride({
       prompt: [

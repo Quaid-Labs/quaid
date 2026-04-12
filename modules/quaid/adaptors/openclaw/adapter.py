@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from adaptors.openclaw.providers import GatewayLLMProvider
+from adaptors.openclaw.providers import GatewayLLMProvider, OpenClawGatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
 from lib.providers import AnthropicLLMProvider, OpenAICodexOAuthLLMProvider
@@ -587,6 +587,8 @@ class OpenClawAdapter(QuaidAdapter):
                 "LLM provider requires deepReasoning and fastReasoning to be set in config.json. "
                 f"Got deep={deep_model!r} fast={fast_model!r}."
             )
+        if provider == "openclaw-gateway":
+            return OpenClawGatewayLLMProvider()
         if provider == "anthropic":
             api_key = self.get_api_key("ANTHROPIC_API_KEY")
             if not api_key:
@@ -622,7 +624,7 @@ class OpenClawAdapter(QuaidAdapter):
             )
         raise RuntimeError(
             f"Unknown OpenClaw LLM provider '{provider}'. "
-            "Valid values: 'anthropic', 'openai'."
+            "Valid values: 'anthropic', 'openai', 'openclaw-gateway'."
         )
 
     def installer_supported_providers(self) -> list:

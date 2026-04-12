@@ -25,7 +25,7 @@ from lib.providers import (
     OllamaEmbeddingsProvider,
     MockEmbeddingsProvider,
 )
-from adaptors.openclaw.providers import GatewayLLMProvider
+from adaptors.openclaw.providers import GatewayLLMProvider, OpenClawGatewayLLMProvider
 from adaptors.codex.providers import CodexLLMProvider, _CodexAppServerManager
 
 
@@ -1839,6 +1839,11 @@ class TestGatewayLLMProvider:
         monkeypatch.setenv("HOME", str(home))
         p = GatewayLLMProvider(port=18789, token="")
         assert p._token == "cfg-token"
+
+    def test_gateway_stub_provider_raises_immediately(self):
+        provider = OpenClawGatewayLLMProvider()
+        with pytest.raises(RuntimeError, match="must not be used for Quaid LLM calls"):
+            provider.llm_call([{"role": "user", "content": "PING"}])
 
     def test_llm_call_sends_x_openclaw_model_header_fast_tier(self):
         """/v1/responses must send x-openclaw-model for per-request model routing (v2026.3.24+).
