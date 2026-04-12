@@ -63,6 +63,17 @@ describe("install daemon policy", () => {
     expect(setupText).not.toContain("leaving fallback QUAID_INSTANCE unchanged in add-instance mode");
   });
 
+  it("OpenClaw add-instance reconciles plugin registration and fails loudly if still missing", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function _readOpenClawPluginState()");
+    expect(setupText).toContain("function _ensureOpenClawPluginRegistered(pluginPath)");
+    expect(setupText).toContain("const reg = _ensureOpenClawPluginRegistered(PLUGIN_DIR);");
+    expect(setupText).toContain("OpenClaw add-instance install repaired a missing/stale plugin registration.");
+    expect(setupText).toContain("OpenClaw Quaid plugin is not fully registered after install");
+  });
+
   it("OpenClaw installer refreshes the extension dir from the canonical plugin tree", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

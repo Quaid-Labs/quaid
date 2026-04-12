@@ -2388,6 +2388,44 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   return { ok: true, reason: "" };
 }
 
+function _readOpenClawPluginState() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
+  let pluginEnabled = false;
+  let memorySlotBound = false;
+  let installPath = "";
+  try {
+    if (fs.existsSync(cfgPath)) {
+      const parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      pluginEnabled = !!parsed?.plugins?.entries?.quaid?.enabled;
+      memorySlotBound = String(parsed?.plugins?.slots?.memory || "").trim() === "quaid";
+      installPath = String(parsed?.plugins?.installs?.quaid?.installPath || "").trim();
+    }
+  } catch {}
+  return {
+    extensionDir,
+    extensionExists: fs.existsSync(extensionDir),
+    pluginEnabled,
+    memorySlotBound,
+    installPath,
+    installPathExists: !!installPath && fs.existsSync(installPath),
+  };
+}
+
+function _ensureOpenClawPluginRegistered(pluginPath) {
+  const state = _readOpenClawPluginState();
+  if (
+    state.extensionExists
+    && state.pluginEnabled
+    && state.memorySlotBound
+    && state.installPathExists
+  ) {
+    return { ok: true, reason: "", repaired: false };
+  }
+  const reg = _registerOpenClawQuaidPlugin(pluginPath);
+  return { ...reg, repaired: true };
+}
+
 function bail(msg) {
   cancel(msg);
   process.exit(1);
@@ -4307,10 +4345,13 @@ except Exception as e:
 
   if (_isPlatform("openclaw")) {
     s.start("Registering Quaid plugin in OpenClaw...");
-    const reg = _registerOpenClawQuaidPlugin(PLUGIN_DIR);
+    const reg = _ensureOpenClawPluginRegistered(PLUGIN_DIR);
     if (!reg.ok) {
       s.stop(C.red("OpenClaw plugin registration failed"));
       throw new Error(reg.reason || "openclaw plugins install/enable failed");
+    }
+    if (reg.repaired) {
+      log.info("OpenClaw add-instance install repaired a missing/stale plugin registration.");
     }
     s.message("Waiting for OpenClaw gateway to restart and warm up...");
     if (_ensureOpenClawPluginsAllowQuaid()) {
@@ -4663,6 +4704,25 @@ except Exception as e:
       s.stop(C.green("Extraction daemon started"));
     } else {
       s.stop(C.yellow("Extraction daemon skipped — will start on first hook invocation"));
+    }
+  }
+
+  if (_isPlatform("openclaw")) {
+    const pluginState = _readOpenClawPluginState();
+    if (
+      !pluginState.extensionExists
+      || !pluginState.pluginEnabled
+      || !pluginState.memorySlotBound
+      || !pluginState.installPathExists
+    ) {
+      s.stop(C.red("OpenClaw plugin validation failed"));
+      throw new Error(
+        "OpenClaw Quaid plugin is not fully registered after install "
+        + `(extensionExists=${pluginState.extensionExists}, `
+        + `pluginEnabled=${pluginState.pluginEnabled}, `
+        + `memorySlotBound=${pluginState.memorySlotBound}, `
+        + `installPathExists=${pluginState.installPathExists})`
+      );
     }
   }
 
