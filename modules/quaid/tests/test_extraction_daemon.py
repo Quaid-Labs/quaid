@@ -1645,6 +1645,64 @@ class TestCheckIdleSessions:
 
         assert captured == []
 
+    def test_discovers_uncursored_session_files_before_timeout_scan(self, monkeypatch, tmp_path):
+        """Idle scan must seed cursors for uncursored session transcripts before timing them out."""
+        instance_id = "openclaw-livetest"
+        sessions_dir = tmp_path / "openclaw-sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        session_id = "8e2157da-8f22-4008-aee7-b3a65a233101"
+        transcript_path = sessions_dir / f"{session_id}.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"I like the canal towpath near my flat."}\n',
+            encoding="utf-8",
+        )
+
+        now = 1_700_000_000.0
+        mtime = now - (60 * 60)
+        os.utime(transcript_path, (mtime, mtime))
+
+        captured = []
+
+        class _FakeAdapter:
+            def get_sessions_dir(self):
+                return sessions_dir
+
+            def parse_session_jsonl(self, path):
+                return path.read_text(encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta"),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        cursor = extraction_daemon.read_cursor(session_id)
+        assert cursor["line_offset"] == 0
+        assert cursor["transcript_path"] == str(transcript_path)
+        assert captured == [
+            {
+                "signal_type": "timeout",
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "meta": {"compact_on_timeout": True},
+            }
+        ]
+
 
 class TestRollingExtraction:
     def _setup_cursor(self, tmp_path, instance_id, session_id, line_offset, transcript_path):

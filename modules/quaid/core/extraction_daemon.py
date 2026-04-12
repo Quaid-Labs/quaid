@@ -1848,6 +1848,43 @@ def _load_runtime_adapter():
         return None
 
 
+def _ensure_discovered_session_cursors(adapter=None) -> int:
+    """Seed cursors for transcript files that exist but have never been seen.
+
+    Some host paths create transcript JSONL files without going through adapter
+    lifecycle hooks first (for example OC Matrix channel sessions). The daemon
+    still needs to discover those sessions so rolling/timeout extraction can
+    operate on them.
+    """
+    active_adapter = adapter if adapter is not None else _load_runtime_adapter()
+    if active_adapter is None or not hasattr(active_adapter, "get_sessions_dir"):
+        return 0
+    try:
+        sessions_dir = active_adapter.get_sessions_dir()
+    except Exception:
+        return 0
+    if not sessions_dir:
+        return 0
+    sessions_root = Path(sessions_dir)
+    if not sessions_root.is_dir():
+        return 0
+
+    discovered = 0
+    for transcript_path in sessions_root.rglob("*.jsonl"):
+        try:
+            session_id = _validate_session_id(transcript_path.stem)
+        except ValueError:
+            continue
+        cursor_file = _cursor_dir() / f"{session_id}.json"
+        if cursor_file.exists():
+            continue
+        if not transcript_path.is_file():
+            continue
+        write_cursor(session_id, 0, str(transcript_path))
+        discovered += 1
+    return discovered
+
+
 def _is_internal_transcript_session(
     session_id: str,
     transcript_path: str,
@@ -2966,6 +3003,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     of whether the adapter supports compaction control.
     """
     _reload_config_if_changed("idle session check")
+    adapter = _load_runtime_adapter()
+    _ensure_discovered_session_cursors(adapter)
     cursor_dir = _cursor_dir()
     if not cursor_dir.is_dir():
         return
@@ -2973,8 +3012,6 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     now = time.time()
     timeout_seconds = timeout_minutes * 60
     installed_at_ts = _read_installed_at()
-    adapter = _load_runtime_adapter()
-
     # B002: Cache registered subagent IDs once instead of scanning per cursor file
     registered_subagents: set = set()
     try:
@@ -3156,6 +3193,8 @@ def _effective_idle_timeout_minutes(
 def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     """Queue rolling extraction for sessions whose unprocessed tail crossed chunk budget."""
     _reload_config_if_changed("rolling chunk check")
+    adapter = _load_runtime_adapter()
+    _ensure_discovered_session_cursors(adapter)
     cursor_dir = _cursor_dir()
     if not cursor_dir.is_dir():
         return
@@ -3163,7 +3202,6 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
-    adapter = _load_runtime_adapter()
 
     for cursor_file in cursor_dir.glob("*.json"):
         try:
