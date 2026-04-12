@@ -106,8 +106,62 @@ will always be much larger than the actual buffered count. Check
 
 ## CC Auth Token
 
-When the CC installer asks for an auth token, provide the Yuni Anthropic OAuth
-token. Write it to the path the installer specifies. NEVER write a placeholder.
+### Step 1 — Verify the `claude` CLI OAuth token on the VM
+
+The CC platform runs `claude --dangerously-skip-permissions` on the VM. The
+`claude` CLI reads its Anthropic OAuth credentials from
+`~/.claude/.credentials.json`. This token comes from the base VM snapshot and
+**expires in ~24 hours**. If expired, the `claude` CLI returns a 401 and the
+platform agent cannot make any API calls.
+
+**Before releasing CC to start M0**, verify the token is still valid:
+
+```bash
+ssh REMOTE_HOST 'python3 -c "
+import json, time
+d = json.load(open(\"/Users/admin/.claude/.credentials.json\"))
+exp_ms = d.get(\"claudeAiOauth\", {}).get(\"expiresAt\", 0)
+diff = time.time() - exp_ms / 1000
+if diff > 0:
+    print(f\"EXPIRED {diff/3600:.1f}h ago — must refresh before CC M0\")
+else:
+    print(f\"Valid for {-diff/3600:.1f}h\")
+"'
+```
+
+If expired: tell Solomon — a fresh Anthropic OAuth token is required. He keeps
+account tokens at `~/quaidcode/anthtoken-*.md` (sol, yuni, mom). Solomon will
+say which file contains the current valid token. Once identified, write it to
+the credentials file on the VM:
+
+```bash
+TOKEN=$(cat ~/quaidcode/anthtoken-ACCOUNT.md | tr -d '[:space:]')
+ssh REMOTE_HOST "python3 -c \"
+import json, time
+p = '/Users/admin/.claude/.credentials.json'
+d = json.load(open(p))
+d['claudeAiOauth']['accessToken'] = '$TOKEN'
+d['claudeAiOauth']['expiresAt'] = int((time.time() + 86400) * 1000)
+json.dump(d, open(p, 'w'), indent=2)
+print('claude CLI credentials refreshed')
+\""
+```
+
+### Step 2 — Pre-write the Quaid adapter token
+
+**Before handing off to the CC platform agent**, proactively write the Quaid CC
+adapter token so the installer does not stop with an "Action Needed" credential
+note. The token source is `auth_token_file` in `livetest-config.json`:
+
+```bash
+TOKEN=$(cat ~/.tmp/cc-auth-token.txt | tr -d '[:space:]')
+ssh REMOTE_HOST "mkdir -p /Users/admin/.quaid/adaptors/claude-code && \
+  echo -n '$TOKEN' > /Users/admin/.quaid/adaptors/claude-code/.auth-token && \
+  chmod 600 /Users/admin/.quaid/adaptors/claude-code/.auth-token && \
+  echo 'CC Quaid adapter token written'"
+```
+
+NEVER write a placeholder token.
 
 ---
 

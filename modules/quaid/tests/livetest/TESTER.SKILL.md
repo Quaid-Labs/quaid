@@ -215,6 +215,19 @@ yourself.
     If the plan looks wrong, **stop and post an ISSUE to the coordinator mailbox** before
     proceeding. Do not run the real install if the dry-run plan is incorrect.
 
+    **If this is not the first platform installed this run** (i.e. another platform's
+    M0 has already completed), the installer will block the install by default and print
+    `"second full install is blocked"`. Add `--add-instance` to the dry-run command and
+    to the real install handoff message in step 2. Example for CC when CDX already installed:
+
+    ```bash
+    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=claude-code-private-tmp-cc-livetest node setup-quaid.mjs \
+      --dry-run --adapter claude-code --owner-name OWNER_NAME --agent --add-instance 2>&1 | tail -40'
+    ```
+
+    The dry-run will tell you whether the plan is valid. Then use `--add-instance` in
+    the install message to the platform agent as well.
+
 2. **Tell the platform to install** by sending it this message (swap in your values):
 
    > Please install Quaid by following the local AI install guide exactly, including its mandatory first command:
