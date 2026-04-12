@@ -86,8 +86,8 @@ Write request
 |------|---------|---------------------|
 | `adaptors/openclaw/adapter.py` | OpenClaw-specific adapter | `OpenClawAdapter`, sessions from `~/.openclaw/sessions/`, notifications via `openclaw message send` CLI |
 | `adaptors/openclaw/maintenance.py` | OpenClaw lifecycle registrations | `register_lifecycle_routines()` (workspace audit) |
-| `adaptors/claude_code/adapter.py` | Claude Code adapter | `ClaudeCodeAdapter`, sessions from `~/.claude/projects/`, deferred notifications via pending file, OAuth token auth |
-| `adaptors/codex/adapter.py` | Codex adapter | `CodexAdapter`, sessions from `~/.codex/sessions/`, deferred notifications via pending file, host-managed app-server provider path |
+| `adaptors/claude_code/adapter.py` | Claude Code adapter | `ClaudeCodeAdapter`, sessions from `~/.claude/projects/`, deferred notifications via pending file, Anthropic token auth |
+| `adaptors/codex/adapter.py` | Codex adapter | `CodexAdapter`, sessions from `~/.codex/sessions/`, deferred notifications via pending file, direct OpenAI token auth |
 | `adaptors/claude_code/hooks.py` | Backwards-compatible shim for CC hooks | Auto-provisions a new instance silo on first invocation if needed, then delegates to `core.interface.hooks.main` |
 | `core/interface/hooks.py` | Adapter-agnostic hook entry points (SOURCE OF TRUTH for hooks) | `hook_inject`, `hook_inject_compact`, `hook_extract`, `hook_session_init`, `hook_subagent_start`, `hook_subagent_stop` |
 
@@ -185,7 +185,7 @@ The write is idempotent — if content is unchanged the file is not touched, pre
 
 ### Auth Token
 
-The Claude Code adapter requires a long-lived OAuth token for daemon-mode API calls (nightly janitor, extraction daemon). For interactive sessions, `hook-session-init` **automatically refreshes** `.auth-token` from `CLAUDE_CODE_OAUTH_TOKEN` on every CC session start — the manual step below is only needed for daemon processes that run outside an active CC session.
+The Claude Code adapter requires a long-lived Anthropic token for daemon-mode API calls (nightly janitor, extraction daemon). Store it at `~/.quaid/adaptors/claude-code/.auth-token` or set `ANTHROPIC_API_KEY` explicitly for the daemon environment.
 
 ```bash
 claude setup-token    # Generate token

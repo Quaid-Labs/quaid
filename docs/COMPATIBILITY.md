@@ -32,16 +32,16 @@ Quaid also provides a direct operational CLI, but this page focuses on host inte
 | Compaction extraction trigger | Yes (`before_compaction`) | Yes (`PreCompact`) | No | Codex currently has no pre-compaction extraction hook. |
 | **Compaction control (wait for extraction before compact)** | **Yes** | **No** | **No** | OC sets `supports_compaction_control=True`; CC/Codex are async or post-turn extraction flows. |
 | Timeout-based extraction path | Yes | Yes | No | Codex uses synchronous stop-hook extraction rather than daemon timeout sweeps. |
-| Gateway-managed LLM path (no per-project API key setup) | Yes | No | Yes | OC uses gateway plugin route; Codex uses host-managed `codex app-server` runtime. |
-| Claude OAuth token refresh from host credentials | N/A | Yes | N/A | CC reads `~/.claude/.credentials.json` and can refresh `.auth-token` on session init. |
+| Adapter-owned auth token required for Quaid LLM calls | Yes | Yes | Yes | OC uses `~/.quaid/adaptors/openclaw/.auth-token`, CC uses `~/.quaid/adaptors/claude-code/.auth-token`, CDX uses `~/.quaid/adaptors/codex/.auth-token`. |
+| Host credential auto-refresh | No | No | No | Launch path uses explicit adapter-owned tokens, not host-owned OAuth/session credentials. |
 | Live runtime notifications | Yes | Partial | Partial | OC supports live routed notifications; CC/Codex commonly use deferred pending queues. |
 | Programmatic compaction RPC | Yes | No | No | OC path supports gateway `sessions.compact`. |
 
 ## Practical Guidance
 
-- If you want the most complete launch path today, use **OpenClaw**.
-- If your priority is Claude Code workflow integration, use **Claude Code** with the hook-based adapter and expect async extraction around compaction.
-- If your priority is Codex workflow integration, use **Codex** with hook-based recall injection and stop-hook extraction.
+- If you want the most complete launch path today, use **OpenClaw** and provide either an Anthropic or OpenAI token during install.
+- If your priority is Claude Code workflow integration, use **Claude Code** with the hook-based adapter and provide an Anthropic token.
+- If your priority is Codex workflow integration, use **Codex** with hook-based recall injection, stop-hook extraction, and an OpenAI token.
 - If you only need direct operations, use the **CLI** and drive extraction/recall manually.
 
 ## Related Docs

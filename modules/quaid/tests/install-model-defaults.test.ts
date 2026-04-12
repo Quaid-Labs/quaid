@@ -8,9 +8,9 @@ import {
 } from "../../../lib/install-model-defaults.mjs";
 
 describe("installer model defaults", () => {
-  it("uses openai-codex as OpenClaw host-managed fallback", () => {
-    expect(installerDefaultProvider("openclaw")).toBe("openai-codex");
-    expect(installerFallbackProviders("openclaw")[0]).toBe("openai-codex");
+  it("uses explicit-token providers for OpenClaw fallback", () => {
+    expect(installerDefaultProvider("openclaw")).toBe("anthropic");
+    expect(installerFallbackProviders("openclaw")).toEqual(["anthropic", "openai"]);
     expect(installerFallbackModelDefaults("openclaw", "openai-codex")).toEqual({
       deep: "gpt-5.4",
       fast: "gpt-5.4-mini",
@@ -19,9 +19,9 @@ describe("installer model defaults", () => {
     });
   });
 
-  it("derives openai-codex for unknown OpenClaw host-managed model hints", () => {
-    expect(deriveInstallerLlmProviderSetting("openclaw", "", "", "", true)).toBe("openai-codex");
-    expect(deriveInstallerLlmProviderSetting("openclaw", "default", "gpt-5.4", "gpt-5.4-mini", true)).toBe("openai-codex");
+  it("derives direct-provider settings for OpenClaw model hints", () => {
+    expect(deriveInstallerLlmProviderSetting("openclaw", "", "", "", true)).toBe("openai-compatible");
+    expect(deriveInstallerLlmProviderSetting("openclaw", "default", "gpt-5.4", "gpt-5.4-mini", true)).toBe("openai-compatible");
     expect(deriveInstallerLlmProviderSetting("openclaw", "default", "claude-sonnet-4-5", "claude-haiku-4-5", true)).toBe("anthropic");
   });
 });

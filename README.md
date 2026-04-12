@@ -46,7 +46,7 @@ After install, start here:
 | Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes | Yes |
 | Hook-based auto extraction | Yes | Yes | Yes |
 | Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** | **No** |
-| Gateway-managed LLM path (no per-project API key setup) | **Yes** | No | **Yes** |
+| Adapter-owned auth token required for Quaid LLM calls | **Yes** | **Yes** | **Yes** |
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
@@ -126,7 +126,7 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 - [Ollama](https://ollama.ai) (for local embeddings)
 - RAM for `nomic-embed-text` embeddings: ~1.5GB model footprint; recommend ~4GB available system RAM for stable local operation
 - For OpenClaw integration: [OpenClaw](https://github.com/openclaw/openclaw) gateway
-- Gateway-managed provider auth (OAuth/API key) when running inside an agentic host like OpenClaw
+- Adapter-owned provider auth tokens for OpenClaw, Claude Code, and Codex installs
 - Optional standalone auth/config when running via CLI outside a host gateway
 
 ---

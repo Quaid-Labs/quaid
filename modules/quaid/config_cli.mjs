@@ -230,7 +230,8 @@ function gatewayProviderDefault() {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
     const primary = String(cfg?.agents?.main?.modelPrimary || cfg?.agents?.defaults?.modelPrimary || "").trim();
     if (!primary.includes("/")) return "";
-    return normalizeProvider(primary.split("/", 1)[0]);
+    const provider = normalizeProvider(primary.split("/", 1)[0]);
+    return provider === "openai-codex" ? "openai" : provider;
   } catch {
     return "";
   }
@@ -238,8 +239,10 @@ function gatewayProviderDefault() {
 
 function resolveEffectiveProvider(cfg) {
   const configured = normalizeProvider(getPath(cfg, "models.llmProvider", "default"));
-  if (configured && configured !== "default") return configured;
-  return gatewayProviderDefault() || "openai-codex";
+  if (configured && configured !== "default") {
+    return configured === "openai-codex" ? "openai" : configured;
+  }
+  return gatewayProviderDefault() || "openai";
 }
 
 function tierProviderKey(tier) {
@@ -254,9 +257,9 @@ function resolveEffectiveTierProvider(cfg, tier) {
 
 function providerDisplayName(provider) {
   const p = normalizeProvider(provider);
-  if (p === "openai-codex") return "openai-codex (OpenAI Codex OAuth)";
-  if (p === "openai") return "openai (OpenAI API)";
-  if (p === "anthropic") return "anthropic (Anthropic API / Claude Code OAuth)";
+  if (p === "openai-codex") return "openai-codex (deprecated; use openai)";
+  if (p === "openai") return "openai (OpenAI API token)";
+  if (p === "anthropic") return "anthropic (Anthropic API token)";
   if (!p || p === "default") return "default";
   return p;
 }
@@ -414,16 +417,15 @@ async function chooseWithCustom(message, options, current) {
 }
 
 function providerOptions(cfg) {
-  const gwProvider = providerDisplayName(gatewayProviderDefault() || "openai-codex");
+  const gwProvider = providerDisplayName(gatewayProviderDefault() || "openai");
   return [
     {
       value: "default",
       label: "default",
       hint: `uses provider set in Agent system: OpenClaw (${gwProvider})`,
     },
-    { value: "openai", label: "openai", hint: "OpenAI API" },
-    { value: "openai-codex", label: "openai-codex", hint: "OpenAI Codex OAuth" },
-    { value: "anthropic", label: "anthropic", hint: "Anthropic API / Claude Code OAuth" },
+    { value: "openai", label: "openai", hint: "OpenAI API token" },
+    { value: "anthropic", label: "anthropic", hint: "Anthropic API token" },
   ];
 }
 
@@ -473,9 +475,8 @@ function tierProviderOptions(cfg, tier) {
         label: "default",
         hint: `inherits LLM provider (${providerDisplayName(effectiveBase)})`,
       },
-      { value: "openai", label: "openai", hint: "OpenAI API" },
-      { value: "openai-codex", label: "openai-codex", hint: "OpenAI Codex OAuth" },
-      { value: "anthropic", label: "anthropic", hint: "Anthropic API / Claude Code OAuth" },
+      { value: "openai", label: "openai", hint: "OpenAI API token" },
+      { value: "anthropic", label: "anthropic", hint: "Anthropic API token" },
     ],
   };
 }

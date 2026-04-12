@@ -1172,9 +1172,8 @@ function _platformSupportsTimeoutCompaction(adapterType = "") {
 
 function _platformUsesHostManagedLlmByDefault(adapterType = "") {
   const platform = String(adapterType || resolvedInstallerPlatform() || "").trim().toLowerCase();
-  // OpenClaw and Codex own runtime/provider resolution; keep installer on
-  // platform defaults unless the user explicitly opts into advanced setup.
-  return platform === "openclaw" || platform === "codex";
+  // Quaid now uses explicit provider auth for all launch platforms.
+  return false;
 }
 
 function _installerPlatformLabel() {
@@ -3125,6 +3124,78 @@ async function step3_models() {
           "Codex Auth Token Required — Action Needed"
         );
         bail("Install incomplete: Codex provider token not found. Write the token to the path above and re-run.");
+      }
+    }
+  }
+
+  if (adapterType === "openclaw") {
+    log.info(
+      C.dim(
+        "OpenClaw background calls now use a direct provider token. Choose the token that most closely matches your main OpenClaw gateway model/provider selection."
+      )
+    );
+    const openclawAuthTokenPath = path.join(WORKSPACE, "adaptors", "openclaw", ".auth-token");
+    const providerEnvVar = provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+    const providerLabel = provider === "anthropic" ? "Anthropic API" : "OpenAI API";
+    const existingFileToken = (() => {
+      try { return fs.existsSync(openclawAuthTokenPath) ? fs.readFileSync(openclawAuthTokenPath, "utf8").trim() : ""; }
+      catch { return ""; }
+    })();
+    const envToken = String(process.env[providerEnvVar] || "").trim();
+    const hasToken = !!(existingFileToken || envToken);
+
+    if (!AGENT_MODE) {
+      const tokenAction = hasToken
+        ? handleCancel(await select({
+            message: `OpenClaw ${providerLabel} token:`,
+            options: [
+              ...(existingFileToken || envToken ? [{ value: "keep", label: "Use current token" }] : []),
+              { value: "reset", label: "Enter a new token" },
+            ],
+          }))
+        : "reset";
+
+      if (tokenAction === "reset") {
+        log.info(C.dim(`Paste the ${providerLabel} token below (stored at: ${openclawAuthTokenPath})`));
+        const newToken = handleCancel(await text({
+          message: `${providerLabel} token:`,
+          placeholder: "paste token here",
+          validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
+        }));
+        if (newToken && newToken.trim()) {
+          if (!DRY_RUN) {
+            fs.mkdirSync(path.dirname(openclawAuthTokenPath), { recursive: true });
+            fs.writeFileSync(openclawAuthTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
+            log.success("Token stored at " + openclawAuthTokenPath);
+          } else {
+            log.info(C.dim("(dry run) Would store token at " + openclawAuthTokenPath));
+          }
+        }
+      }
+    } else if (!hasToken) {
+      if (DRY_RUN) {
+        log.warn(`(dry run) No OpenClaw ${providerLabel} token — would print out-of-band instructions and exit in real run.`);
+      } else {
+        note(
+          [
+            `Quaid needs a ${providerLabel} token for OpenClaw-backed background calls.`,
+            "",
+            "IMPORTANT: Do NOT paste the token into this conversation.",
+            "",
+            "Ask the user to write the token in a NEW terminal window:",
+            "",
+            `  mkdir -p \"${path.dirname(openclawAuthTokenPath)}\"`,
+            `  printf '%s' 'YOUR_TOKEN_HERE' > \"${openclawAuthTokenPath}\"`,
+            `  chmod 600 \"${openclawAuthTokenPath}\"`,
+            "",
+            "Then re-run the installer.",
+            "",
+            `Token path: ${openclawAuthTokenPath}`,
+            `Environment fallback: ${providerEnvVar}`,
+          ].join("\n"),
+          "OpenClaw Auth Token Required — Action Needed"
+        );
+        bail(`Install incomplete: OpenClaw ${providerLabel} token not found. Write the token to the path above and re-run.`);
       }
     }
   }

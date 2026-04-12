@@ -31,7 +31,6 @@ from lib.providers import (
     TestLLMProvider,
 )
 from adaptors.openclaw.adapter import OpenClawAdapter
-from adaptors.openclaw.providers import GatewayLLMProvider
 from adaptors.claude_code.adapter import ClaudeCodeAdapter
 from adaptors.codex.adapter import CodexAdapter
 
@@ -629,7 +628,7 @@ class TestOpenClawAdapter:
     def test_installer_provider_surface(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         adapter = OpenClawAdapter()
-        assert set(adapter.installer_supported_providers()) >= {"anthropic", "openai", "ollama"}
+        assert adapter.installer_supported_providers() == ["anthropic", "openai"]
         assert adapter.installer_default_models("anthropic") == {
             "deep": "claude-sonnet-4-5",
             "fast": "claude-haiku-4-5",
@@ -638,32 +637,8 @@ class TestOpenClawAdapter:
             "deep": "gpt-5.4",
             "fast": "gpt-5.4-mini",
         }
-        codex_defaults = adapter.installer_default_models("openai-codex")
-        assert codex_defaults is not None
-        assert codex_defaults.get("deep") == "gpt-5.4"
-        assert codex_defaults.get("fast")
-        assert codex_defaults.get("deepEffort") == "medium"
-        assert codex_defaults.get("fastEffort") == "medium"
-        assert adapter.get_deep_provider_default() == "openai-codex"
-        assert adapter.get_fast_provider_default() == "openai-codex"
-
-    def test_installer_default_models_does_not_probe_gateway_for_codex_defaults(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        adapter = OpenClawAdapter()
-        monkeypatch.setattr(
-            adapter,
-            "_probe_openai_codex_fast_model",
-            lambda: (_ for _ in ()).throw(AssertionError("STEP 3 defaults must not live-probe gateway")),
-        )
-
-        defaults = adapter.installer_default_models("openai-codex")
-
-        assert defaults == {
-            "deep": "gpt-5.4",
-            "fast": "gpt-5.4-mini",
-            "deepEffort": "medium",
-            "fastEffort": "medium",
-        }
+        assert adapter.get_deep_provider_default() == "anthropic"
+        assert adapter.get_fast_provider_default() == "anthropic"
 
     def test_installer_provider_surface_detects_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
@@ -675,8 +650,8 @@ class TestOpenClawAdapter:
         )
         monkeypatch.setattr(Path, "home", lambda: home)
         adapter = OpenClawAdapter()
-        assert adapter.get_deep_provider_default() == "openai-codex"
-        assert adapter.get_fast_provider_default() == "openai-codex"
+        assert adapter.get_deep_provider_default() == "openai"
+        assert adapter.get_fast_provider_default() == "openai"
         assert adapter.get_deep_model_default("default") == "gpt-5.4"
         assert adapter.get_fast_model_default("default") == "gpt-5.4-mini"
 
@@ -707,7 +682,7 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
 
         review = adapter.installer_review_model_pair(
-            "openai-codex",
+            "openai",
             "openai/gpt-5.4",
             "openai/gpt-5.4-mini",
         )
@@ -715,35 +690,17 @@ class TestOpenClawAdapter:
         assert review["deep"]["provider"] == "openai"
         assert review["fast"]["provider"] == "openai"
 
-    def test_installer_validate_model_pair_live_uses_gateway_provider(self, monkeypatch):
+    def test_installer_validate_model_pair_live_is_disabled(self, monkeypatch):
         adapter = OpenClawAdapter()
-        monkeypatch.setattr(adapter, "_get_gateway_auth", lambda: (18789, "tok"))
+        result = adapter.installer_validate_model_pair_live(
+            "openai",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+        )
 
-        captured = {}
-
-        class _StubProvider:
-            def __init__(self, **kwargs):
-                captured.update(kwargs)
-
-            def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
-                assert messages == [{"role": "user", "content": "PING"}]
-                assert max_tokens == 8
-                assert timeout == 35
-                return SimpleNamespace(text="PONG", model=model_tier)
-
-        with patch("adaptors.openclaw.adapter.GatewayLLMProvider", _StubProvider):
-            result = adapter.installer_validate_model_pair_live(
-                "openai-codex",
-                "gpt-5.4",
-                "gpt-5.4-mini",
-            )
-
-        assert result["supported"] is True
+        assert result["supported"] is False
         assert result["ok"] is True
-        assert len(result["results"]) == 2
-        assert captured["default_provider"] == "openai-codex"
-        assert captured["deep_model"] == "gpt-5.4"
-        assert captured["fast_model"] == "gpt-5.4-mini"
+        assert result["results"] == []
 
 
 class TestClaudeCodeAdapter:
@@ -1331,6 +1288,14 @@ class TestCodexAdapter:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         assert adapter.get_api_key("OPENAI_API_KEY") == "sk-codex-file-token"
 
+    def test_get_api_key_reads_openclaw_auth_token_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        adapter = OpenClawAdapter()
+        token_path = adapter.store_auth_token("sk-openclaw-file-token")
+        assert token_path == tmp_path / "adaptors" / "openclaw" / ".auth-token"
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        assert adapter.get_api_key("OPENAI_API_KEY") == "sk-openclaw-file-token"
+
     def test_get_cli_tools_snippet_includes_project_metadata_update_guidance(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -1889,10 +1854,12 @@ class TestProviderFactoryMethods:
         assert standalone.get_embeddings_provider() is None
 
     @pytest.mark.adapter_openclaw
-    def test_openclaw_returns_gateway_provider(self, openclaw_adapter):
-        """OpenClawAdapter.get_llm_provider() returns GatewayLLMProvider."""
+    def test_openclaw_returns_direct_provider(self, openclaw_adapter, monkeypatch):
+        """OpenClawAdapter.get_llm_provider() returns direct provider clients."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         llm = openclaw_adapter.get_llm_provider()
-        assert isinstance(llm, GatewayLLMProvider)
+        assert isinstance(llm, (AnthropicLLMProvider, OpenAICompatibleLLMProvider))
 
     @pytest.mark.adapter_openclaw
     def test_openclaw_embeddings_returns_none(self, openclaw_adapter):

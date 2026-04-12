@@ -1,4 +1,13 @@
-"""OpenClaw-specific Quaid adapter implementation."""
+"""OpenClaw-specific Quaid adapter implementation.
+
+IMPORTANT: Quaid's active OpenClaw service path is no longer the
+gateway-backed LLM provider flow. Hidden thread/runtime state behind the
+gateway breaks Quaid's assumptions about stateless request boundaries,
+visible context, deterministic extraction behavior, and token accounting.
+The gateway provider code remains in this module for possible future
+resurrection, but it is deprecated and must not be used for the current
+installer/runtime path.
+"""
 
 import json
 import os
@@ -12,6 +21,7 @@ from typing import Optional
 from adaptors.openclaw.providers import GatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
+from lib.providers import AnthropicLLMProvider, OpenAICompatibleLLMProvider
 
 
 class OpenClawAdapter(QuaidAdapter):
@@ -28,24 +38,6 @@ class OpenClawAdapter(QuaidAdapter):
     _INSTALLER_MODEL_DEFAULTS = {
         "anthropic": {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"},
         "openai": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
-        # openai-codex uses the ChatGPT Codex OAuth path (/v1/responses).
-        # Only gpt-5.4 is confirmed valid on this path for installer validation.
-        # gpt-5.1-codex-mini returns HTTP 400 during live PING validation.
-        # gpt-5.2, gpt-5.4-mini also return HTTP 400.
-        # openai-codex routes through the OC gateway (x-openclaw-model header).
-        # Models must also be present in agents.defaults.models in openclaw.json
-        # or the gateway will reject them with 400 before they reach the Codex API.
-        # installer_validate_model_pair_live() calls installer_ensure_gateway_model_allowlist()
-        # before pinging, so the allowlist is updated automatically during install.
-        # Static default: gpt-5.4-mini for fast, gpt-5.4 for deep.
-        # gpt-5.3-codex-spark is removed — bad performance and usage exhausted.
-        # The probe tries gpt-5.4-mini first; falls back to gpt-5.4 if unavailable.
-        "openai-codex": {
-            "deep": "gpt-5.4",
-            "fast": "gpt-5.4-mini",
-            "deepEffort": "medium",
-            "fastEffort": "medium",
-        },
         "openrouter": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "together": {"deep": "gpt-5.4", "fast": "gpt-5.4-mini"},
         "ollama": {"deep": "llama3.1:70b", "fast": "llama3.1:8b"},
@@ -393,6 +385,10 @@ class OpenClawAdapter(QuaidAdapter):
         if key:
             return key
 
+        token = self.read_auth_token()
+        if token:
+            return token
+
         if is_fail_hard_enabled():
             return None
 
@@ -417,6 +413,9 @@ class OpenClawAdapter(QuaidAdapter):
     def get_sessions_dir(self) -> Optional[Path]:
         d = self._openclaw_root_dir() / "sessions"
         return d if d.is_dir() else None
+
+    def auth_token_path(self) -> Optional[Path]:
+        return self.quaid_home() / "adaptors" / "openclaw" / ".auth-token"
 
     # OC gateway prepends "[Day Date HH:MM TZ]" to every user message.
     # Also strips OC-injected "(untrusted metadata)" code blocks.
@@ -561,38 +560,72 @@ class OpenClawAdapter(QuaidAdapter):
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from config import get_config
-        port, token = self._get_gateway_auth()
         cfg = get_config()
         deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
         fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
         provider = str(getattr(cfg.models, "llm_provider", "") or "").strip()
         if not provider or provider == "default":
-            provider = self._detect_gateway_primary_provider() or "anthropic"
+            provider = self._normalize_installer_provider(
+                self._detect_gateway_primary_provider() or "anthropic"
+            )
         fast_effort = str(getattr(cfg.models, "fast_reasoning_effort", "") or "").strip()
         deep_effort = str(getattr(cfg.models, "deep_reasoning_effort", "") or "").strip()
+        if model_tier == "fast":
+            fast_provider = str(getattr(cfg.models, "fast_reasoning_provider", "") or "").strip()
+            if fast_provider and fast_provider != "default":
+                provider = self._normalize_installer_provider(fast_provider)
+        elif model_tier == "deep":
+            deep_provider = str(getattr(cfg.models, "deep_reasoning_provider", "") or "").strip()
+            if deep_provider and deep_provider != "default":
+                provider = self._normalize_installer_provider(deep_provider)
         if not deep_model or not fast_model:
             raise RuntimeError(
                 "LLM provider requires deepReasoning and fastReasoning to be set in config.json. "
                 f"Got deep={deep_model!r} fast={fast_model!r}."
             )
-        return GatewayLLMProvider(
-            port=port,
-            token=token,
-            deep_model=deep_model,
-            fast_model=fast_model,
-            default_provider=provider,
-            fast_reasoning_effort=fast_effort,
-            deep_reasoning_effort=deep_effort,
+        if provider == "anthropic":
+            api_key = self.get_api_key("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "LLM provider is 'anthropic' but no OpenClaw Anthropic token or ANTHROPIC_API_KEY was found. "
+                    "Write a token to QUAID_HOME/adaptors/openclaw/.auth-token or set ANTHROPIC_API_KEY."
+                )
+            return AnthropicLLMProvider(
+                api_key=api_key,
+                deep_model=deep_model,
+                fast_model=fast_model,
+                deep_reasoning_effort=deep_effort or "high",
+                fast_reasoning_effort=fast_effort or "none",
+            )
+        if provider in ("openai", "openai-compatible"):
+            api_key = self.get_api_key("OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "LLM provider is 'openai' but no OpenClaw OpenAI token or OPENAI_API_KEY was found. "
+                    "Write a token to QUAID_HOME/adaptors/openclaw/.auth-token or set OPENAI_API_KEY."
+                )
+            configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
+            env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
+            base_url = configured_base_url or env_base_url or "https://api.openai.com"
+            return OpenAICompatibleLLMProvider(
+                base_url=base_url,
+                api_key=api_key,
+                deep_model=deep_model,
+                fast_model=fast_model,
+                deep_reasoning_effort=deep_effort or "high",
+                fast_reasoning_effort=fast_effort or "none",
+            )
+        raise RuntimeError(
+            f"Unknown OpenClaw LLM provider '{provider}'. "
+            "Valid values: 'anthropic', 'openai'."
         )
 
     def installer_supported_providers(self) -> list:
-        providers = set(self._INSTALLER_MODEL_DEFAULTS.keys())
-        detected = self._detect_gateway_primary_provider()
-        if detected:
-            providers.add(str(detected).strip().lower())
-        return sorted(providers)
+        return ["anthropic", "openai"]
 
-    # Fast-lane candidates for openai-codex provider, probed in priority order.
+    # Deprecated gateway validation support kept in-tree for possible future
+    # resurrection only. Do not route active Quaid service calls through this.
+    # Fast-lane candidates for the legacy openai-codex provider, probed in priority order.
     _OPENAI_CODEX_FAST_CANDIDATES = [
         "gpt-5.4-mini",  # ~3.0s via gateway — broadly available
         "gpt-5.4",       # ~10s  via gateway — always available
@@ -648,12 +681,16 @@ class OpenClawAdapter(QuaidAdapter):
         return None
 
     def get_fast_provider_default(self) -> str:
-        detected = self._detect_gateway_primary_provider()
-        return detected or "openai-codex"
+        detected = self._normalize_installer_provider(self._detect_gateway_primary_provider())
+        if detected in {"anthropic", "openai"}:
+            return detected
+        return "anthropic"
 
     def get_deep_provider_default(self) -> str:
-        detected = self._detect_gateway_primary_provider()
-        return detected or "openai-codex"
+        detected = self._normalize_installer_provider(self._detect_gateway_primary_provider())
+        if detected in {"anthropic", "openai"}:
+            return detected
+        return "anthropic"
 
     def get_fast_model_default(self, provider: str) -> Optional[str]:
         p = str(provider or "").strip().lower()
@@ -764,7 +801,7 @@ class OpenClawAdapter(QuaidAdapter):
         }
 
     def installer_supports_live_model_validation(self) -> bool:
-        return True
+        return False
 
     def installer_ensure_gateway_model_allowlist(self, model_strings: list) -> None:
         """Add model strings to the OC gateway's per-agent model allowlist.
@@ -811,58 +848,8 @@ class OpenClawAdapter(QuaidAdapter):
         deep_model: str,
         fast_model: str,
     ) -> dict:
-        # Use raw provider (not alias-normalized) as the gateway routing prefix.
-        # Normalizing openai-codex -> openai would cause the gateway to route
-        # via the standard OpenAI key path instead of the Codex OAuth path.
-        raw_provider = str(
-            provider or self._detect_gateway_primary_provider() or "anthropic"
-        ).strip().lower() or "anthropic"
-        # Ensure both models are in the OC gateway allowlist before pinging.
-        # The gateway rejects models not in agents.defaults.models with HTTP 400
-        # before they reach the upstream provider.  This applies to all gateway-
-        # routed providers, not just openai-codex.
-        self.installer_ensure_gateway_model_allowlist(
-            [f"{raw_provider}/{deep_model}", f"{raw_provider}/{fast_model}"]
-        )
-        port, token = self._get_gateway_auth()
-        llm = GatewayLLMProvider(
-            port=port,
-            token=token,
-            deep_model=str(deep_model or "").strip(),
-            fast_model=str(fast_model or "").strip(),
-            default_provider=raw_provider,
-        )
-
-        results = []
-        for tier, model_name in (("fast", fast_model), ("deep", deep_model)):
-            model = str(model_name or "").strip()
-            if not model:
-                raise RuntimeError(f"Installer {tier} model is empty")
-            response = llm.llm_call(
-                [{"role": "user", "content": "PING"}],
-                model_tier=tier,
-                max_tokens=8,
-                timeout=35,
-            )
-            text = str(getattr(response, "text", "") or "").strip()
-            if not text:
-                raise RuntimeError(
-                    f"OpenClaw {tier} model '{model}' returned an empty response to installer PING"
-                )
-            results.append(
-                {
-                    "tier": tier,
-                    "model": model,
-                    "text": text[:120],
-                }
-            )
-
-        return {
-            "supported": True,
-            "ok": True,
-            "message": "OpenClaw model validation passed",
-            "results": results,
-        }
+        _ = (provider, deep_model, fast_model)
+        return {"supported": False, "ok": True, "message": "", "results": []}
 
     def _get_agent_config_dir(self) -> Path:
         """Path to the gateway's agent config directory."""
