@@ -82,3 +82,5 @@ modules/quaid/tests/livetest/livetest-config.json
 modules/quaid/tests/livetest/.livetest-vm.state
 modules/quaid/tests/livetest/scripts/.tmux-targets.json
 modules/quaid/tests/livetest/scripts/.tmux-mailbox/
+pytest-home/
+pytest-home/
