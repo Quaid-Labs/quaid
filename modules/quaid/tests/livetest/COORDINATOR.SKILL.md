@@ -56,15 +56,24 @@ If outdated: update the base snapshot (not the run VM). Versions must be pinned 
 
 ## OC Interaction
 
-OC live testing uses the TUI (`openclaw tui`) for all interaction.
-Extraction is triggered by `/new` in the TUI — the adapter detects the
-new session key in sessions.json and signals extraction for the old session.
-After `/new`, send one follow-up message in the new session to ensure the
-session key is written to sessions.json.
+OC live testing uses **Matrix DM** for all interaction — not the TUI.
+The Matrix server (`ai.quaid.matrix-synapse`) and OpenClaw gateway
+(`ai.openclaw.gateway`) run as persistent services on the VM; no launch step
+is needed after M0.
+
+Messages are sent via the `matrix-send` helper on the VM:
+```bash
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "message text"'
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+```
+
+Extraction is triggered by `/new` sent as a Matrix DM message — this routes
+through `handleSlashLifecycleFromMessage`, writing the session_end signal
+directly (same code path as Telegram). After `/new`, send one follow-up
+message to confirm the new session is active.
 
 **Do NOT use tg-extract or any manual signal injection.** These bypass the
-feature under test and poison reset-dedupe markers, preventing the adapter's
-native `/new` detection from working on subsequent attempts.
+feature under test and poison reset-dedupe markers.
 
 If `/new` does not trigger extraction, that is a bug to investigate and fix —
 not a condition to work around with manual signals.
@@ -325,9 +334,10 @@ Open the platform interaction panes (SSH to remote, start platforms after instal
 
 ```bash
 # These are populated after M0 install — do not start platforms before install
-tmux send-keys -t livetest:OC.1  "ssh REMOTE_HOST" Enter
 tmux send-keys -t livetest:CC.1  "ssh REMOTE_HOST" Enter
 tmux send-keys -t livetest:CDX.1 "ssh REMOTE_HOST" Enter
+# OC uses Matrix DM — no TUI pane needed. OC.1 can be used for log monitoring:
+# tmux send-keys -t livetest:OC.1 "ssh REMOTE_HOST 'tail -f ~/.quaid/instances/OC_INSTANCE/logs/daemon.log'" Enter
 ```
 
 If you find an active live-test lane running under a non-canonical **local**
