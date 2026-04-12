@@ -950,6 +950,10 @@ function resolveSessionFileFromIndexRow(row, sessionId) {
   }
   return getOpenClawSessionFile(sessionId);
 }
+function shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey) {
+  const key = String(sessionKey || "").trim().toLowerCase();
+  return /^agent:[^:]+:matrix:channel:/.test(key);
+}
 function sessionHasMeaningfulUserActivity(sessionId, preferredPath) {
   const sid = String(sessionId || "").trim();
   if (!sid) return false;
@@ -3057,6 +3061,9 @@ ${notice}` : notice;
           const timeoutActivitySessionId = sessionId;
           if (sessionId) {
             rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id");
+            if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey)) {
+              preserveSessionTranscript(sessionId, sessionFile, "transcript-update-matrix");
+            }
           }
           if (sessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })) {
             const instanceRoot = _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : WORKSPACE;
@@ -4955,6 +4962,7 @@ const __test = {
   isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
+  shouldMirrorTranscriptUpdateToPreservedCopy,
   selectNewKeyFanoutTarget,
   resolveLifecycleFlushSessionCandidate,
   NEW_KEY_FALLBACK_DELAY_MS

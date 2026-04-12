@@ -520,6 +520,13 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("mirrors matrix channel transcript updates into preserved copies", () => {
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost")).toBe(true);
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:worker:matrix:channel:!room:localhost")).toBe(true);
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:main")).toBe(false);
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:tui-123")).toBe(false);
+  });
+
   it("exports a delayed new-key fallback window so stronger signals can win first", () => {
     expect(__test.NEW_KEY_FALLBACK_DELAY_MS).toBeGreaterThan(0);
   });

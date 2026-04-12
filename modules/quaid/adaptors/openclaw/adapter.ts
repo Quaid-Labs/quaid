@@ -1224,6 +1224,11 @@ function resolveSessionFileFromIndexRow(row: any, sessionId: string): string {
   return getOpenClawSessionFile(sessionId);
 }
 
+function shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey: string): boolean {
+  const key = String(sessionKey || "").trim().toLowerCase();
+  return /^agent:[^:]+:matrix:channel:/.test(key);
+}
+
 function sessionHasMeaningfulUserActivity(sessionId: string, preferredPath?: string): boolean {
   const sid = String(sessionId || "").trim();
   if (!sid) return false;
@@ -3841,6 +3846,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           // Track resolved sessionId → transcript file for daemon signals
           if (sessionId) {
             rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id");
+            if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey)) {
+              preserveSessionTranscript(sessionId, sessionFile, "transcript-update-matrix");
+            }
           }
 
           // Seed an initial extraction cursor so the daemon's rolling poller can
@@ -6103,6 +6111,7 @@ export const __test = {
   isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
+  shouldMirrorTranscriptUpdateToPreservedCopy,
   selectNewKeyFanoutTarget,
   resolveLifecycleFlushSessionCandidate,
   NEW_KEY_FALLBACK_DELAY_MS,
