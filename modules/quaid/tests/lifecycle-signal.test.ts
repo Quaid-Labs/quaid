@@ -473,7 +473,7 @@ describe("lifecycle signal detection", () => {
 
   it("extracts codex oauth account ids from JWT access tokens", () => {
     const payload = Buffer.from(JSON.stringify({
-      "https://api.openai.com/auth.chatgpt_account_id": "acct_test_123",
+      chatgpt_account_id: "acct_test_123",
     })).toString("base64url");
     const token = `header.${payload}.sig`;
     expect(__test.extractOpenAICodexAccountId(token)).toBe("acct_test_123");

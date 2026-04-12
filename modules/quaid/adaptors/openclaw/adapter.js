@@ -2036,7 +2036,7 @@ function _extractOpenAICodexAccountId(token) {
   try {
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
     const accountId = String(
-      payload?.["https://api.openai.com/auth.chatgpt_account_id"] || payload?.auth?.chatgpt_account_id || ""
+      payload?.chatgpt_account_id || payload?.["https://api.openai.com/auth.chatgpt_account_id"] || payload?.auth?.chatgpt_account_id || ""
     ).trim();
     if (!accountId) {
       throw new Error("missing chatgpt account id claim");
