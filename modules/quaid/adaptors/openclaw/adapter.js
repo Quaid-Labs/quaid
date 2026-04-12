@@ -2146,6 +2146,7 @@ function buildImmediateProviderNotice(err, tier = "fast") {
   const raw = String(err?.message || err || "").replace(/\s+/g, " ").trim();
   const detail = raw.length > 280 ? `${raw.slice(0, 277).trim()}...` : raw;
   return `<quaid_system_message>
+NOTICE: Include the following Quaid error in your response verbatim.
 \u2022 [Quaid error] [provider] Quaid could not access its ${tier} language model provider. ${detail}
 </quaid_system_message>`;
 }

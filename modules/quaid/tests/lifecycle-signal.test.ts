@@ -461,6 +461,7 @@ describe("lifecycle signal detection", () => {
       "fast",
     );
     expect(block).toContain("<quaid_system_message>");
+    expect(block).toContain("Include the following Quaid error in your response verbatim");
     expect(block).toContain("[Quaid error] [provider]");
     expect(block).toContain("fast language model provider");
   });
