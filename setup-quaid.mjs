@@ -634,13 +634,13 @@ function _beginChainedPlatformInstall(adapterId, queuedAdapters = []) {
 }
 
 async function promptNextPlatformInstall(installedPlatform) {
-  if (AGENT_MODE || DRY_RUN || SURVEY_ONLY || _testAnswers || FORCED_ADAPTER_TYPE) {
-    return false;
-  }
   if (_chainedPlatformQueue.length > 0) {
     const [nextAdapter, ...queuedAdapters] = _chainedPlatformQueue;
     _beginChainedPlatformInstall(nextAdapter, queuedAdapters);
     return true;
+  }
+  if (AGENT_MODE || DRY_RUN || SURVEY_ONLY || _testAnswers || FORCED_ADAPTER_TYPE) {
+    return false;
   }
   const installed = String(installedPlatform || resolvedInstallerPlatform() || "").trim().toLowerCase();
   const remaining = _remainingInstallableAdapterOptions(installed);

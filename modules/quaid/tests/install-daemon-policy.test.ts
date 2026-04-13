@@ -60,6 +60,12 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('if (INSTALL_ALL_PLATFORMS) {');
     expect(setupText).toContain('platform = "__install_all__";');
     expect(setupText).toContain('_beginChainedPlatformInstall(firstAdapter, queuedAdapters);');
+    expect(setupText).toContain('if (_chainedPlatformQueue.length > 0) {');
+    const queueIdx = setupText.indexOf('if (_chainedPlatformQueue.length > 0) {');
+    const gateIdx = setupText.indexOf('if (AGENT_MODE || DRY_RUN || SURVEY_ONLY || _testAnswers || FORCED_ADAPTER_TYPE) {');
+    expect(queueIdx).toBeGreaterThanOrEqual(0);
+    expect(gateIdx).toBeGreaterThanOrEqual(0);
+    expect(queueIdx).toBeLessThan(gateIdx);
   });
 
 
