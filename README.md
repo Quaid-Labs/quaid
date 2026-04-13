@@ -19,6 +19,7 @@ On machines with multiple supported hosts installed, the interactive installer
 can now do either:
 - a single-platform install, or
 - `Install All Available`, which runs the normal per-platform install flow in sequence
+- the CLI equivalent: `node setup-quaid.mjs --all-platforms`
 
 The first install provisions shared Quaid credentials. Later platform installs
 reuse that shared credential store instead of asking again.

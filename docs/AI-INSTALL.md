@@ -49,6 +49,7 @@ Platform selection rule:
   - an individual platform
   - `Install All Available`
 - `Install All Available` is preferred when the human wants Quaid wired into every detected host on the machine
+- CLI equivalent: `node setup-quaid.mjs --all-platforms`
 - this is not a separate install path; it reuses the same per-platform install flow sequentially
 - only the first install flow prompts for credentials; later platform installs reuse the shared credential store
 

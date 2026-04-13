@@ -82,6 +82,7 @@ function parseInstallArgs(argv) {
     dryRun: false,
     survey: false,
     help: false,
+    allPlatforms: false,
     errors: [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -227,6 +228,10 @@ function parseInstallArgs(argv) {
       opts.claudeCode = true;
       continue;
     }
+    if (arg === "--all-platforms") {
+      opts.allPlatforms = true;
+      continue;
+    }
     if (arg === "--force") {
       opts.force = true;
       continue;
@@ -264,6 +269,8 @@ Options:
   --github-repo <r>   GitHub repo for github source (default: quaid-labs/quaid)
   --artifact <path>   Local file path or URL to .tar.gz when --source artifact
   --agent             Non-interactive agent mode (accepts sane defaults)
+  --all-platforms     Install every currently installable platform by reusing
+                      the normal per-platform install flow in sequence
   --claude-code       Install for Claude Code (hooks + OAuth provider)
   --add-instance      Allow install on a host that already has Quaid and
                       provision a new silo. For OpenClaw, also bind gateway
@@ -293,6 +300,7 @@ const INSTALL_REF = String(INSTALL_ARGS.ref || process.env.QUAID_INSTALL_REF || 
 const INSTALL_GITHUB_REPO = String(INSTALL_ARGS.githubRepo || process.env.QUAID_INSTALL_GITHUB_REPO || "quaid-labs/quaid").trim();
 const INSTALL_ARTIFACT = String(INSTALL_ARGS.artifact || process.env.QUAID_INSTALL_ARTIFACT || "").trim();
 const SURVEY_ONLY = !!INSTALL_ARGS.survey;
+const INSTALL_ALL_PLATFORMS = !!INSTALL_ARGS.allPlatforms;
 const FORCE_INSTALL = !!INSTALL_ARGS.force;
 const ADD_INSTANCE_MODE = !!INSTALL_ARGS.addInstance;
 const ALLOW_EXISTING_INSTALL = FORCE_INSTALL || ADD_INSTANCE_MODE;
@@ -311,6 +319,10 @@ if (INSTALL_SOURCE === "artifact" && !INSTALL_ARTIFACT) {
 }
 if (SURVEY_ONLY && !INSTALL_ARGS.dryRun) {
   console.error("[x] --survey requires --dry-run.");
+  process.exit(2);
+}
+if (INSTALL_ALL_PLATFORMS && (FORCED_ADAPTER_TYPE || INSTALL_ARGS.claudeCode)) {
+  console.error("[x] --all-platforms cannot be combined with --adapter or --claude-code.");
   process.exit(2);
 }
 
@@ -2625,18 +2637,23 @@ async function step1_preflight() {
     if (!firstSelectable) {
       bail("No installable platforms were detected on this system.");
     }
-    const platform = handleCancel(await select({
-      message: "Which platform are you installing for?",
-      initialValue: firstSelectable?.value || "claude-code",
-      options: [
-        ...(installableAdapterOptions.length > 1 ? [{
-          value: "__install_all__",
-          label: "Install All Available",
-          hint: `Install ${installableAdapterOptions.map((opt) => opt.label).join(", ")} in sequence`,
-        }] : []),
-        ...adapterOptions,
-      ],
-    }));
+    let platform = "";
+    if (INSTALL_ALL_PLATFORMS) {
+      platform = "__install_all__";
+    } else {
+      platform = handleCancel(await select({
+        message: "Which platform are you installing for?",
+        initialValue: firstSelectable?.value || "claude-code",
+        options: [
+          ...(installableAdapterOptions.length > 1 ? [{
+            value: "__install_all__",
+            label: "Install All Available",
+            hint: `Install ${installableAdapterOptions.map((opt) => opt.label).join(", ")} in sequence`,
+          }] : []),
+          ...adapterOptions,
+        ],
+      }));
+    }
     if (platform === "__install_all__") {
       const [firstAdapter, ...queuedAdapters] = installableAdapterOptions.map((opt) => opt.value);
       _beginChainedPlatformInstall(firstAdapter, queuedAdapters);

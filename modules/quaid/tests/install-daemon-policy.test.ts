@@ -49,6 +49,19 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("!ALLOW_EXISTING_INSTALL && !_chainedPlatformInstall");
   });
 
+  it("supports a CLI bulk-install flag that reuses the chained platform flow", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain('if (arg === "--all-platforms")');
+    expect(setupText).toContain('const INSTALL_ALL_PLATFORMS = !!INSTALL_ARGS.allPlatforms;');
+    expect(setupText).toContain('--all-platforms     Install every currently installable platform by reusing');
+    expect(setupText).toContain('--all-platforms cannot be combined with --adapter or --claude-code.');
+    expect(setupText).toContain('if (INSTALL_ALL_PLATFORMS) {');
+    expect(setupText).toContain('platform = "__install_all__";');
+    expect(setupText).toContain('_beginChainedPlatformInstall(firstAdapter, queuedAdapters);');
+  });
+
   it("OpenClaw install hard-stops when the gateway is unreachable", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
