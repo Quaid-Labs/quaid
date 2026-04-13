@@ -99,3 +99,39 @@ def test_api_key_fallback_warning_uses_auth_refresh(monkeypatch, capsys) -> None
     err = capsys.readouterr().err
     assert "quaid auth refresh <token>" in err
     assert "config set-auth" not in err
+
+
+def test_http_404_notifies_agent_before_raise(monkeypatch) -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="claude-sonnet-4-5",
+        fast_model="claude-haiku-4-5",
+    )
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+
+    http_err = urllib.error.HTTPError(
+        url="https://api.anthropic.com/v1/messages",
+        code=404,
+        msg="not found",
+        hdrs={},
+        fp=io.BytesIO(b'{"type":"error","error":{"type":"not_found_error"}}'),
+    )
+
+    with patch.object(provider, "_api_call", side_effect=http_err), patch(
+        "adaptors.claude_code.providers.notify_agent",
+        return_value=True,
+    ) as notify:
+        with patch("adaptors.claude_code.providers.is_fail_hard_enabled", return_value=True):
+            try:
+                provider.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 404
+            else:
+                raise AssertionError("Expected HTTPError")
+
+    assert notify.call_count == 1
+    msg = notify.call_args.args[0]
+    assert "HTTP 404" in msg
+    assert "Check fastReasoning/deepReasoning in config.json" in msg
+    assert notify.call_args.kwargs["severity"] == "error"
+    assert notify.call_args.kwargs["source"] == "provider"
+    assert notify.call_args.kwargs["dedupe_key"] == "cc-http-error:fast:404"

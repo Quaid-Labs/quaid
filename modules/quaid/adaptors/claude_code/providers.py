@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from typing import Optional, Tuple
 
+from lib.agent_notice import notify_agent
 from lib.fail_policy import is_fail_hard_enabled
 from lib.runtime_context import queue_deferred_notice
 from lib.providers import AnthropicLLMProvider, LLMProvider, LLMResult
@@ -325,6 +326,19 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                 "max_tokens=%s system_len=%s user_len=%s body: %s",
                 e.code, model, max_tokens, system_len, user_len, body[:1200],
             )
+            msg = (
+                f"Quaid could not reach its LLM provider: HTTP {e.code} from Anthropic API "
+                f"(model={model}). Check fastReasoning/deepReasoning in config.json."
+            )
+            try:
+                notify_agent(
+                    msg,
+                    severity="error",
+                    source="provider",
+                    dedupe_key=f"cc-http-error:{model_tier}:{e.code}",
+                )
+            except Exception:
+                logger.debug("notify_agent unavailable; logging provider error locally: %s", msg)
             raise
 
     def llm_call(self, messages, model_tier="deep",
