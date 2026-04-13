@@ -57,8 +57,10 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('const INSTALL_ALL_PLATFORMS = !!INSTALL_ARGS.allPlatforms;');
     expect(setupText).toContain('--all-platforms     Install every currently installable platform by reusing');
     expect(setupText).toContain('--all-platforms cannot be combined with --adapter or --claude-code.');
+    expect(setupText).toContain('if (INSTALL_ALL_PLATFORMS && !_platformOverride && _chainedPlatformQueue.length === 0) {');
+    expect(setupText).toContain('const [firstAdapter, ...queuedAdapters] = installableAdapterOptions.map((opt) => opt.value);');
     expect(setupText).toContain('if (INSTALL_ALL_PLATFORMS) {');
-    expect(setupText).toContain('platform = "__install_all__";');
+    expect(setupText).toContain('platform = resolvedInstallerPlatform() ? "" : "__install_all__";');
     expect(setupText).toContain('_beginChainedPlatformInstall(firstAdapter, queuedAdapters);');
     expect(setupText).toContain('if (_chainedPlatformQueue.length > 0) {');
     const queueIdx = setupText.indexOf('if (_chainedPlatformQueue.length > 0) {');

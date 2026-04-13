@@ -2626,6 +2626,21 @@ async function step1_preflight() {
 
   const s = spinner();
 
+  if (INSTALL_ALL_PLATFORMS && !_platformOverride && _chainedPlatformQueue.length === 0) {
+    const installableAdapterOptions = _adapterOptionsForSelect().map((opt) => {
+      const installState = _readAdapterInstallState(opt.value);
+      return {
+        ...opt,
+        disabled: installState.status !== "can_install",
+      };
+    }).filter((opt) => !opt.disabled);
+    const [firstAdapter, ...queuedAdapters] = installableAdapterOptions.map((opt) => opt.value);
+    if (!firstAdapter) {
+      bail("No installable platforms were detected on this system.");
+    }
+    _beginChainedPlatformInstall(firstAdapter, queuedAdapters);
+  }
+
   // Platform selection — ask here so platform-specific preflight runs with the right target.
   if (!AGENT_MODE && !FORCED_ADAPTER_TYPE && !_platformOverride) {
     const adapterOptions = _adapterOptionsForSelect().map((opt) => {
@@ -2643,7 +2658,7 @@ async function step1_preflight() {
     }
     let platform = "";
     if (INSTALL_ALL_PLATFORMS) {
-      platform = "__install_all__";
+      platform = resolvedInstallerPlatform() ? "" : "__install_all__";
     } else {
       platform = handleCancel(await select({
         message: "Which platform are you installing for?",
