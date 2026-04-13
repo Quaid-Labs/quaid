@@ -604,14 +604,12 @@ class OpenClawAdapter(QuaidAdapter):
             if not api_key:
                 raise RuntimeError(
                     "LLM provider is 'anthropic' but no OpenClaw Anthropic token or ANTHROPIC_API_KEY was found. "
-                    "Write a token to QUAID_HOME/adaptors/openclaw/.auth-token or set ANTHROPIC_API_KEY."
+                    "Register a credential in QUAID_HOME/shared/auth/credentials.json or set ANTHROPIC_API_KEY."
                 )
             return AnthropicLLMProvider(
                 api_key=api_key,
                 deep_model=deep_model,
                 fast_model=fast_model,
-                deep_reasoning_effort=deep_effort or "high",
-                fast_reasoning_effort=fast_effort or "none",
             )
         if provider in ("openai", "openai-compatible"):
             api_key = self.get_api_key("OPENAI_API_KEY")

@@ -690,8 +690,6 @@ class CodexAdapter(QuaidAdapter):
             return {
                 "deep": "claude-sonnet-4-5",
                 "fast": "claude-haiku-4-5",
-                "deepEffort": "high",
-                "fastEffort": "none",
             }
         if normalized == "openai":
             return {

@@ -842,8 +842,6 @@ class TestCodexAdapter:
         assert adapter.installer_default_models("anthropic") == {
             "deep": "claude-sonnet-4-5",
             "fast": "claude-haiku-4-5",
-            "deepEffort": "high",
-            "fastEffort": "none",
         }
         assert adapter.installer_default_models("openai") == {
             "deep": "gpt-5.4",
