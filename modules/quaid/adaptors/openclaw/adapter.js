@@ -489,11 +489,13 @@ function isAutoInjectEnabled(config = getMemoryConfig()) {
 }
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
+const OPENCLAW_QUEUED_SESSION_START_RE = /\n*---\s*\n?Queued\s*#\d+\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
+const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
 function stripOpenClawInternalContext(raw) {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
 }
 function scrubAutoInjectQuery(raw) {
-  return stripOpenClawInternalContext(raw).replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
+  return stripOpenClawInternalContext(raw).replace(OPENCLAW_QUEUED_SESSION_START_RE, "").replace(OPENCLAW_QUEUED_LABEL_RE, "\n").replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now()) {
   const rawPrompt = String(event?.prompt || "").trim();

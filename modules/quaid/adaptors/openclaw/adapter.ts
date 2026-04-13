@@ -665,6 +665,9 @@ type LastUserMessageQuery = { text: string; seenAtMs: number } | null;
 
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
+const OPENCLAW_QUEUED_SESSION_START_RE =
+  /\n*---\s*\n?Queued\s*#\d+\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
+const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
 
 function stripOpenClawInternalContext(raw: string): string {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
@@ -672,6 +675,9 @@ function stripOpenClawInternalContext(raw: string): string {
 
 function scrubAutoInjectQuery(raw: string): string {
   return stripOpenClawInternalContext(raw)
+    // Strip queued OC startup wrapper blocks from /new or /reset handoff prompts.
+    .replace(OPENCLAW_QUEUED_SESSION_START_RE, "")
+    .replace(OPENCLAW_QUEUED_LABEL_RE, "\n")
     // Strip our own prior injections that OC persists back into future turns
     .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
     .replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "")
@@ -685,6 +691,7 @@ function scrubAutoInjectQuery(raw: string): string {
     .replace(/^System:\s*/i, "")
     .replace(/^\s*(\[.*?\]\s*)+/s, "")
     .replace(/^---\s*/m, "")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 

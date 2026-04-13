@@ -308,6 +308,28 @@ describe("lifecycle signal detection", () => {
     expect(selected.source).toBe("message_received_cache");
   });
 
+  it("strips queued OC session-startup wrapper text from raw prompt queries", () => {
+    const selected = __test.selectAutoInjectQuery(
+      {
+        prompt: [
+          "Queued #",
+          "",
+          "",
+          "What do you know about my dog Baxter?",
+          "",
+          "---",
+          "Queued #2",
+          "A new session was started via /new or /reset. Run your Session Startup sequence - read the required files.",
+        ].join("\n"),
+        messages: [],
+      },
+      null,
+      1_000,
+    );
+    expect(selected.query).toBe("What do you know about my dog Baxter?");
+    expect(selected.source).toBe("rawPrompt_scrubbed");
+  });
+
   it("uses the instance silo db path for adapter python calls", () => {
     expect(__test.resolveAdapterMemoryDbPath(
       "/tmp/quaid-home",
