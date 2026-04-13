@@ -63,13 +63,31 @@ describe("install daemon policy", () => {
   });
 
 
-  it("OpenClaw platform install does not prompt for or gate on a platform-specific credential", () => {
+  it("platform installs no longer prompt for platform-specific credentials", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).not.toContain('message: `OpenClaw ${providerLabel} token:`');
     expect(setupText).not.toContain('OpenClaw Auth Token Required — Action Needed');
     expect(setupText).not.toContain('Install incomplete: OpenClaw ${providerLabel} credential not found. Register it and re-run.');
+    expect(setupText).not.toContain('message: `Codex ${providerLabel} credential:`');
+    expect(setupText).not.toContain('Codex Auth Token Required — Action Needed');
+    expect(setupText).not.toContain('Install incomplete: Codex credential not found. Register it and re-run.');
+    expect(setupText).not.toContain('message: "Quaid OAuth token:"');
+    expect(setupText).not.toContain('Auth Token Required — Action Needed');
+    expect(setupText).not.toContain('Install incomplete: auth credential not found. Register it and re-run.');
+  });
+
+  it("first install owns a single shared auth gate", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain('const sharedAuthTokenPath = sharedAuthRegistryPath(WORKSPACE);');
+    expect(setupText).toContain('const sharedCredentialKinds = allSharedAuthKinds();');
+    expect(setupText).toContain('if (!_existingInstallDetected) {');
+    expect(setupText).toContain('message: "Quaid shared provider credential:"');
+    expect(setupText).toContain('Shared Auth Credential Required — Action Needed');
+    expect(setupText).toContain('Install incomplete: shared auth credential not found. Register it and re-run.');
   });
 
   it("OpenClaw install hard-stops when the gateway is unreachable", () => {

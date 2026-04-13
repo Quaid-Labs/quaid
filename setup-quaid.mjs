@@ -367,6 +367,10 @@ function authKindsForProvider(provider = "") {
   return ["anthropic_oauth", "anthropic_api"];
 }
 
+function allSharedAuthKinds() {
+  return Object.keys(SHARED_AUTH_KIND_LABELS);
+}
+
 function authKindPromptLabel(kind = "") {
   return SHARED_AUTH_KIND_LABELS[String(kind || "").trim()] || String(kind || "").trim();
 }
@@ -2698,6 +2702,84 @@ async function step1_preflight() {
   s.message(`Running ${resolvedInstallerPlatform() || "platform"} preflight...`);
   runAdapterInstallHook(resolvedInstallerPlatform(), "preinstall");
 
+  const sharedAuthTokenPath = sharedAuthRegistryPath(WORKSPACE);
+  const sharedCredentialKinds = allSharedAuthKinds();
+  const existingSharedCredential = getSharedAuthCredential(WORKSPACE, sharedCredentialKinds);
+  const existingSharedToken = existingSharedCredential?.token || "";
+  const sharedEnvToken = String([
+    process.env.ANTHROPIC_API_KEY || "",
+    process.env.OPENAI_OAUTH_TOKEN || "",
+    process.env.OPENAI_API_KEY || "",
+    process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
+  ].find(Boolean) || "").trim();
+  const hasSharedCredential = !!(existingSharedToken || sharedEnvToken);
+
+  if (!_existingInstallDetected) {
+    if (!AGENT_MODE) {
+      const tokenAction = hasSharedCredential
+        ? handleCancel(await select({
+            message: "Quaid shared provider credential:",
+            options: [
+              ...(existingSharedToken || sharedEnvToken ? [{ value: "keep", label: "Use current credential" }] : []),
+              { value: "reset", label: "Enter a new credential" },
+            ],
+          }))
+        : "reset";
+
+      if (tokenAction === "reset") {
+        log.info(C.dim("Use one global shared credential for Quaid background calls."));
+        log.info(C.dim("Recommended: Anthropic OAuth token from `claude setup-token`."));
+        log.info(C.dim("OpenAI-backed lanes are experimental and benchmark lower than Anthropic."));
+        log.info(C.dim("Paste the credential below (canonical registry: " + sharedAuthTokenPath + ")"));
+        const newToken = handleCancel(await text({
+          message: "Shared Quaid credential:",
+          placeholder: "paste token here",
+          validate: (v) => (!v || !v.trim()) ? "Credential is required." : undefined,
+        }));
+        if (newToken && newToken.trim()) {
+          const kind = inferSharedAuthKind(newToken.trim()) || "anthropic_oauth";
+          if (!DRY_RUN) {
+            writeSharedAuthCredential(WORKSPACE, kind, newToken.trim());
+            log.success(`Credential stored in shared registry as ${authKindPromptLabel(kind)} at ${sharedAuthTokenPath}`);
+          } else {
+            log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(kind)} at ${sharedAuthTokenPath}`));
+          }
+        }
+      }
+    } else if (!hasSharedCredential) {
+      if (DRY_RUN) {
+        log.warn("(dry run) No shared auth credential — would print out-of-band instructions and exit in real run.");
+      } else {
+        note(
+          [
+            "Quaid needs one shared provider credential for background LLM calls.",
+            "",
+            "IMPORTANT: Do NOT paste the credential into this conversation.",
+            "",
+            "Ask the user to complete these steps in a NEW terminal window:",
+            "",
+            "  Preferred: claude setup-token",
+            "  Then register it:",
+            `    quaid auth refresh --kind anthropic_oauth 'YOUR_TOKEN_HERE'`,
+            "  or",
+            `    quaid auth refresh --kind anthropic_api 'YOUR_TOKEN_HERE'`,
+            "",
+            "  Experimental alternatives:",
+            `    quaid auth refresh --kind codex_oauth 'YOUR_TOKEN_HERE'`,
+            "  or",
+            `    quaid auth refresh --kind openai_api 'YOUR_TOKEN_HERE'`,
+            "",
+            "Then re-run the installer.",
+            "",
+            `Registry path: ${sharedAuthTokenPath}`,
+          ].join("\n"),
+          "Shared Auth Credential Required — Action Needed"
+        );
+        bail("Install incomplete: shared auth credential not found. Register it and re-run.");
+      }
+    }
+  }
+
   if (_isPlatform("claude-code")) {
     // --- Claude Code mode ---
     s.message("Checking Claude Code...");
@@ -2706,83 +2788,6 @@ async function step1_preflight() {
       s.stop(C.yellow("Claude Code CLI not found"), 2);
       log.warn("Install Claude Code: https://docs.anthropic.com/en/docs/claude-code");
       log.warn("Continuing anyway — CLI is needed at runtime, not install time.");
-    }
-    // Check and store OAuth token — Quaid uses its own token file so it is not
-    // dependent on credentials.json, which can be stale or scoped incorrectly.
-    const authKinds = authKindsForProvider("anthropic");
-    const authTokenPath = sharedAuthRegistryPath(WORKSPACE);
-    const existingCredential = getSharedAuthCredential(WORKSPACE, authKinds);
-    const existingFileToken = existingCredential?.token || "";
-    const envToken = (process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || "").trim();
-    const hasToken = !!(existingFileToken || envToken);
-    s.stop(
-      hasToken
-        ? C.green("Claude Code") + C.dim(existingFileToken ? " — auth token found" : " — CLAUDE_CODE_OAUTH_TOKEN set")
-        : C.yellow("Claude Code") + C.dim(" — no auth token")
-    );
-
-    if (!_existingInstallDetected && !AGENT_MODE) {
-      // In interactive mode: always offer to confirm or replace the token.
-      const tokenAction = hasToken
-        ? handleCancel(await select({
-            message: "Quaid OAuth token:",
-            options: [
-              ...(existingFileToken || envToken ? [{ value: "keep",  label: "Use current token" }] : []),
-              { value: "reset", label: "Enter a new token" },
-            ],
-          }))
-        : "reset";
-
-      if (tokenAction === "reset") {
-        log.info(C.dim("Use either an Anthropic OAuth token from `claude setup-token` or a standard Anthropic API key."));
-        log.info(C.dim("Paste the credential below (canonical registry: " + authTokenPath + ")"));
-        const newToken = handleCancel(await text({
-          message: "Anthropic OAuth token or API key:",
-          placeholder: "paste token here",
-          validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
-        }));
-        if (newToken && newToken.trim()) {
-          const kind = inferSharedAuthKind(newToken.trim()) || "anthropic_oauth";
-          if (!DRY_RUN) {
-            writeSharedAuthCredential(WORKSPACE, kind, newToken.trim());
-            log.success(`Credential stored in shared registry as ${authKindPromptLabel(kind)} at ${authTokenPath}`);
-          } else {
-            log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(kind)} at ${authTokenPath}`));
-          }
-        }
-      }
-    } else if (!hasToken) {
-      // Agent mode with no token: emit structured instructions the agent can
-      // relay to the user, directing them to write the token out-of-band.
-      // In dry-run mode, note the gap but continue so the full plan is shown.
-      if (DRY_RUN) {
-        log.warn("(dry run) No auth token — would print out-of-band instructions and exit in real run.");
-      } else {
-        note(
-          [
-            "Quaid needs an Anthropic OAuth token or API key for background API calls.",
-            "",
-            "IMPORTANT: Do NOT paste the credential into this conversation.",
-            "",
-            "Ask the user to complete these steps in a NEW terminal window:",
-            "",
-            "  Step 1 — Prepare the credential:",
-            "    Option A: claude setup-token",
-            "    Option B: use an Anthropic API key",
-            "",
-            "  Step 2 — Register it with Quaid (replace YOUR_TOKEN_HERE):",
-            `    quaid auth refresh --kind anthropic_oauth 'YOUR_TOKEN_HERE'`,
-            "    or",
-            `    quaid auth refresh --kind anthropic_api 'YOUR_TOKEN_HERE'`,
-            "",
-            `  Step 3 — Re-run the installer.`,
-            "",
-            `Registry path: ${authTokenPath}`,
-          ].join("\n"),
-          "Auth Token Required — Action Needed"
-        );
-        bail("Install incomplete: auth credential not found. Register it and re-run.");
-      }
     }
     if (!DRY_RUN) {
       fs.mkdirSync(WORKSPACE, { recursive: true });
@@ -3186,104 +3191,6 @@ async function step3_models() {
     log.warn("OpenAI lanes are experimental in alpha.");
     log.warn("Benchmarks and live tests showed materially worse memory quality than Anthropic.");
     log.warn("Prefer Anthropic unless you are blocked on credentials.");
-  }
-
-  if (adapterType === "codex") {
-    const codexAuthTokenPath = sharedAuthRegistryPath(WORKSPACE);
-    const authKinds = authKindsForProvider(provider);
-    const existingCredential = getSharedAuthCredential(WORKSPACE, authKinds);
-    const existingFileToken = existingCredential?.token || "";
-    const providerEnvVars = provider === "anthropic"
-      ? ["ANTHROPIC_API_KEY"]
-      : ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"];
-    const envToken = String(providerEnvVars.map((name) => process.env[name] || "").find(Boolean) || "").trim();
-    const hasToken = !!(existingFileToken || envToken);
-    const providerLabel = provider === "anthropic" ? "Anthropic" : "OpenAI";
-
-    if (!_existingInstallDetected && !AGENT_MODE) {
-      const tokenAction = hasToken
-        ? handleCancel(await select({
-            message: `Codex ${providerLabel} credential:`,
-            options: [
-              ...(existingFileToken || envToken ? [{ value: "keep", label: "Use current token" }] : []),
-              { value: "reset", label: "Enter a new token" },
-            ],
-          }))
-        : "reset";
-
-      if (tokenAction === "reset") {
-        const kindOptions = authKinds.map((kind) => ({
-          value: kind,
-          label: authKindPromptLabel(kind),
-          hint: kind === "codex_oauth"
-            ? "Experimental — highest friction, lower quality than Anthropic"
-            : kind === "openai_api"
-              ? "Experimental — lower quality than Anthropic in our tests"
-              : kind === "anthropic_oauth"
-                ? "Recommended"
-                : "Stable direct key",
-        }));
-        const selectedKind = handleCancel(await select({
-          message: `Codex ${providerLabel} credential type:`,
-          options: kindOptions,
-        }));
-        if (selectedKind === "anthropic_oauth") {
-          log.info(C.dim("Run 'claude setup-token' if needed, then paste the credential below."));
-        } else if (selectedKind === "codex_oauth") {
-          log.info(C.dim("Run 'codex setup-token' if needed, then paste the credential below."));
-        }
-        log.info(C.dim(`Credential will be stored in the shared registry at: ${codexAuthTokenPath}`));
-        const newToken = handleCancel(await text({
-          message: `${authKindPromptLabel(selectedKind)}:`,
-          placeholder: "paste token here",
-          validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
-        }));
-        if (newToken && newToken.trim()) {
-          if (!DRY_RUN) {
-            writeSharedAuthCredential(WORKSPACE, selectedKind, newToken.trim());
-            log.success(`Credential stored in shared registry as ${authKindPromptLabel(selectedKind)} at ${codexAuthTokenPath}`);
-          } else {
-            log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(selectedKind)} at ${codexAuthTokenPath}`));
-          }
-        }
-      }
-    } else if (!hasToken) {
-      if (DRY_RUN) {
-        log.warn(`(dry run) No Codex ${providerLabel} credential — would print out-of-band instructions and exit in real run.`);
-      } else {
-        note(
-          [
-            `Quaid needs a ${providerLabel} credential for Codex-backed background calls.`,
-            "",
-            "IMPORTANT: Do NOT paste the credential into this conversation.",
-            "",
-            "Ask the user to register it in a NEW terminal window:",
-            "",
-            ...(provider === "anthropic"
-              ? [
-                  `  quaid auth refresh --kind anthropic_oauth 'YOUR_TOKEN_HERE'`,
-                  "  or",
-                  `  quaid auth refresh --kind anthropic_api 'YOUR_TOKEN_HERE'`,
-                ]
-              : [
-                  `  quaid auth refresh --kind codex_oauth 'YOUR_TOKEN_HERE'`,
-                  "  or",
-                  `  quaid auth refresh --kind openai_api 'YOUR_TOKEN_HERE'`,
-                ]),
-            "",
-            "Then re-run the installer.",
-            "",
-            `Registry path: ${codexAuthTokenPath}`,
-            ...(provider === "openai"
-              ? ["WARNING: OpenAI lanes are experimental and benchmarked materially below Anthropic."]
-              : []),
-            `Environment fallback: ${providerEnvVars[0]}`,
-          ].join("\n"),
-          "Codex Auth Token Required — Action Needed"
-        );
-        bail("Install incomplete: Codex credential not found. Register it and re-run.");
-      }
-    }
   }
 
 
