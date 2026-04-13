@@ -44,6 +44,14 @@ Install home rule:
 - do not pass a custom `--workspace` during normal installs
 - do not treat install home as a survey field or editable parameter
 
+Platform selection rule:
+- on a fresh interactive install, the installer may offer:
+  - an individual platform
+  - `Install All Available`
+- `Install All Available` is preferred when the human wants Quaid wired into every detected host on the machine
+- this is not a separate install path; it reuses the same per-platform install flow sequentially
+- only the first install flow prompts for credentials; later platform installs reuse the shared credential store
+
 ## Human Instructions for Agent (Copy/Paste)
 
 Use this exact minimal prompt shape when asking an AI agent to install Quaid:

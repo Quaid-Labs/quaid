@@ -561,6 +561,7 @@ function runtimePendingInstallMigrationPath() {
 let _adapterManifests = [];
 let _existingInstallDetected = false;
 let _chainedPlatformInstall = false;
+let _chainedPlatformQueue = [];
 
 function _refreshAdapterManifests() {
   try {
@@ -598,9 +599,32 @@ function _remainingInstallableAdapterOptions(excludeAdapterId = "") {
     .filter((opt) => opt.installState.status === "can_install");
 }
 
+function _beginChainedPlatformInstall(adapterId, queuedAdapters = []) {
+  _platformOverride = adapterId;
+  _instanceIdOverride = "";
+  delete process.env.QUAID_INSTANCE;
+  syncInstallerInstanceEnv(adapterId);
+  _chainedPlatformInstall = true;
+  _chainedPlatformQueue = Array.isArray(queuedAdapters)
+    ? queuedAdapters.map((v) => String(v || "").trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  const warnings = _adapterCompatibilityWarnings(adapterId);
+  if (warnings.length > 0) {
+    for (const msg of warnings) {
+      log.warn(`  ${msg}`);
+    }
+  }
+}
+
 async function promptNextPlatformInstall(installedPlatform) {
   if (AGENT_MODE || DRY_RUN || SURVEY_ONLY || _testAnswers || FORCED_ADAPTER_TYPE) {
     return false;
+  }
+  if (_chainedPlatformQueue.length > 0) {
+    const [nextAdapter, ...queuedAdapters] = _chainedPlatformQueue;
+    _beginChainedPlatformInstall(nextAdapter, queuedAdapters);
+    return true;
   }
   const installed = String(installedPlatform || resolvedInstallerPlatform() || "").trim().toLowerCase();
   const remaining = _remainingInstallableAdapterOptions(installed);
@@ -610,6 +634,11 @@ async function promptNextPlatformInstall(installedPlatform) {
     message: `You've installed Quaid on ${_installerPlatformLabel()}. Other supported platforms were detected. Install another?`,
     initialValue: "exit",
     options: [
+      ...(remaining.length > 1 ? [{
+        value: "__install_all__",
+        label: "Install All Available",
+        hint: `Install ${remaining.map((opt) => opt.label).join(", ")} in sequence`,
+      }] : []),
       ...remaining.map((opt) => ({
         value: opt.value,
         label: opt.label,
@@ -620,18 +649,13 @@ async function promptNextPlatformInstall(installedPlatform) {
   }));
   if (answer === "exit") return false;
 
-  _platformOverride = answer;
-  _instanceIdOverride = "";
-  delete process.env.QUAID_INSTANCE;
-  syncInstallerInstanceEnv(answer);
-  _chainedPlatformInstall = true;
-
-  const warnings = _adapterCompatibilityWarnings(answer);
-  if (warnings.length > 0) {
-    for (const msg of warnings) {
-      log.warn(`  ${msg}`);
-    }
+  if (answer === "__install_all__") {
+    const [firstAdapter, ...queuedAdapters] = remaining.map((opt) => opt.value);
+    _beginChainedPlatformInstall(firstAdapter, queuedAdapters);
+    return true;
   }
+
+  _beginChainedPlatformInstall(answer, []);
   return true;
 }
 
@@ -2596,27 +2620,40 @@ async function step1_preflight() {
         disabled: installState.status !== "can_install",
       };
     });
-    const firstSelectable = adapterOptions.find((opt) => !opt.disabled);
+    const installableAdapterOptions = adapterOptions.filter((opt) => !opt.disabled);
+    const firstSelectable = installableAdapterOptions[0];
     if (!firstSelectable) {
       bail("No installable platforms were detected on this system.");
     }
     const platform = handleCancel(await select({
       message: "Which platform are you installing for?",
       initialValue: firstSelectable?.value || "claude-code",
-      options: adapterOptions,
+      options: [
+        ...(installableAdapterOptions.length > 1 ? [{
+          value: "__install_all__",
+          label: "Install All Available",
+          hint: `Install ${installableAdapterOptions.map((opt) => opt.label).join(", ")} in sequence`,
+        }] : []),
+        ...adapterOptions,
+      ],
     }));
-    _platformOverride = platform;
-    syncInstallerInstanceEnv();
+    if (platform === "__install_all__") {
+      const [firstAdapter, ...queuedAdapters] = installableAdapterOptions.map((opt) => opt.value);
+      _beginChainedPlatformInstall(firstAdapter, queuedAdapters);
+    } else {
+      _platformOverride = platform;
+      syncInstallerInstanceEnv();
 
-    // Show platform-specific compatibility warnings
-    const warnings = _adapterCompatibilityWarnings(platform);
-    if (warnings.length > 0) {
-      for (const msg of warnings) {
-        log.warn(`  ${msg}`);
+      // Show platform-specific compatibility warnings
+      const warnings = _adapterCompatibilityWarnings(platform);
+      if (warnings.length > 0) {
+        for (const msg of warnings) {
+          log.warn(`  ${msg}`);
+        }
       }
     }
 
-    s.start(`Checking ${platform} environment...`);
+    s.start(`Checking ${resolvedInstallerPlatform() || platform} environment...`);
   } else {
     s.start(`Checking ${resolvedInstallerPlatform() || "installer"} environment...`);
   }

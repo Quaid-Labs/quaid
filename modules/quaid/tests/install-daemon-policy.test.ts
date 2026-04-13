@@ -39,7 +39,12 @@ describe("install daemon policy", () => {
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain("async function promptNextPlatformInstall(installedPlatform)");
+    expect(setupText).toContain("let _chainedPlatformQueue = [];");
+    expect(setupText).toContain("function _beginChainedPlatformInstall(adapterId, queuedAdapters = [])");
+    expect(setupText).toContain('value: "__install_all__"');
+    expect(setupText).toContain('label: "Install All Available"');
     expect(setupText).toContain("_remainingInstallableAdapterOptions(installed)");
+    expect(setupText).toContain("if (_chainedPlatformQueue.length > 0)");
     expect(setupText).toContain("Other supported platforms were detected. Install another?");
     expect(setupText).toContain("!ALLOW_EXISTING_INSTALL && !_chainedPlatformInstall");
   });

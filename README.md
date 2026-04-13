@@ -15,6 +15,14 @@ Quaid is not another memory plugin — it is an **active knowledge layer** for a
 curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
 ```
 
+On machines with multiple supported hosts installed, the interactive installer
+can now do either:
+- a single-platform install, or
+- `Install All Available`, which runs the normal per-platform install flow in sequence
+
+The first install provisions shared Quaid credentials. Later platform installs
+reuse that shared credential store instead of asking again.
+
 Or just point your agent here:
 ```text
 https://github.com/quaid-labs/quaid/blob/main/docs/AI-INSTALL.md
@@ -128,7 +136,7 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 - [Ollama](https://ollama.ai) (for local embeddings)
 - RAM for `nomic-embed-text` embeddings: ~1.5GB model footprint; recommend ~4GB available system RAM for stable local operation
 - For OpenClaw integration: [OpenClaw](https://github.com/openclaw/openclaw) gateway
-- Adapter-owned provider auth tokens for OpenClaw, Claude Code, and Codex installs
+- Shared Quaid provider credentials for host installs
 - Optional standalone auth/config when running via CLI outside a host gateway
 
 ---
