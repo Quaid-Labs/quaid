@@ -38,6 +38,13 @@ import {
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
+import {
+  SHARED_AUTH_KIND_LABELS,
+  getSharedAuthCredential,
+  inferSharedAuthKind,
+  sharedAuthRegistryPath,
+  writeSharedAuthCredential,
+} from "./lib/auth-registry.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -341,6 +348,16 @@ const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/releases/tag/v2026.3.
 const MIN_GATEWAY_VERSION = "2026.3.7";
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";
 const TOTAL_INSTALL_STEPS = 7;
+
+function authKindsForProvider(provider = "") {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "openai") return ["codex_oauth", "openai_api"];
+  return ["anthropic_oauth", "anthropic_api"];
+}
+
+function authKindPromptLabel(kind = "") {
+  return SHARED_AUTH_KIND_LABELS[String(kind || "").trim()] || String(kind || "").trim();
+}
 
 // AI agents: this is the canonical pre-install survey contract.
 // Only include fields listed here when presenting a survey to a human.
@@ -2638,12 +2655,11 @@ async function step1_preflight() {
     }
     // Check and store OAuth token — Quaid uses its own token file so it is not
     // dependent on credentials.json, which can be stale or scoped incorrectly.
-    const authTokenPath = path.join(WORKSPACE, "adaptors", "claude-code", ".auth-token");
-    const existingFileToken = (() => {
-      try { return fs.existsSync(authTokenPath) ? fs.readFileSync(authTokenPath, "utf8").trim() : ""; }
-      catch { return ""; }
-    })();
-    const envToken = (process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim();
+    const authKinds = authKindsForProvider("anthropic");
+    const authTokenPath = sharedAuthRegistryPath(WORKSPACE);
+    const existingCredential = getSharedAuthCredential(WORKSPACE, authKinds);
+    const existingFileToken = existingCredential?.token || "";
+    const envToken = (process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || "").trim();
     const hasToken = !!(existingFileToken || envToken);
     s.stop(
       hasToken
@@ -2651,7 +2667,7 @@ async function step1_preflight() {
         : C.yellow("Claude Code") + C.dim(" — no auth token")
     );
 
-    if (!AGENT_MODE) {
+    if (!_existingInstallDetected && !AGENT_MODE) {
       // In interactive mode: always offer to confirm or replace the token.
       const tokenAction = hasToken
         ? handleCancel(await select({
@@ -2664,20 +2680,20 @@ async function step1_preflight() {
         : "reset";
 
       if (tokenAction === "reset") {
-        log.info(C.dim("Run `claude setup-token` in another terminal to generate a long-lived token."));
-        log.info(C.dim("Paste the token below (it will be stored at: " + authTokenPath + ")"));
+        log.info(C.dim("Use either an Anthropic OAuth token from `claude setup-token` or a standard Anthropic API key."));
+        log.info(C.dim("Paste the credential below (canonical registry: " + authTokenPath + ")"));
         const newToken = handleCancel(await text({
-          message: "OAuth token:",
+          message: "Anthropic OAuth token or API key:",
           placeholder: "paste token here",
           validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
         }));
         if (newToken && newToken.trim()) {
+          const kind = inferSharedAuthKind(newToken.trim()) || "anthropic_oauth";
           if (!DRY_RUN) {
-            fs.mkdirSync(path.dirname(authTokenPath), { recursive: true });
-            fs.writeFileSync(authTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
-            log.success("Token stored at " + authTokenPath);
+            writeSharedAuthCredential(WORKSPACE, kind, newToken.trim());
+            log.success(`Credential stored in shared registry as ${authKindPromptLabel(kind)} at ${authTokenPath}`);
           } else {
-            log.info(C.dim("(dry run) Would store token at " + authTokenPath));
+            log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(kind)} at ${authTokenPath}`));
           }
         }
       }
@@ -2690,28 +2706,28 @@ async function step1_preflight() {
       } else {
         note(
           [
-            "Quaid needs a long-lived OAuth token for background API calls.",
+            "Quaid needs an Anthropic OAuth token or API key for background API calls.",
             "",
-            "IMPORTANT: Do NOT paste the token into this conversation.",
+            "IMPORTANT: Do NOT paste the credential into this conversation.",
             "",
             "Ask the user to complete these steps in a NEW terminal window:",
             "",
-            "  Step 1 — Generate the token:",
-            "    claude setup-token",
-            "    (copy the token that is printed)",
+            "  Step 1 — Prepare the credential:",
+            "    Option A: claude setup-token",
+            "    Option B: use an Anthropic API key",
             "",
-            "  Step 2 — Write it to disk (replace YOUR_TOKEN_HERE with the copied token):",
-            `    mkdir -p "${path.dirname(authTokenPath)}"`,
-            `    printf '%s' 'YOUR_TOKEN_HERE' > "${authTokenPath}"`,
-            `    chmod 600 "${authTokenPath}"`,
+            "  Step 2 — Register it with Quaid (replace YOUR_TOKEN_HERE):",
+            `    quaid auth refresh --kind anthropic_oauth 'YOUR_TOKEN_HERE'`,
+            "    or",
+            `    quaid auth refresh --kind anthropic_api 'YOUR_TOKEN_HERE'`,
             "",
-            "  Step 3 — Tell the agent the token has been written, then re-run the installer.",
+            `  Step 3 — Re-run the installer.`,
             "",
-            `Token path: ${authTokenPath}`,
+            `Registry path: ${authTokenPath}`,
           ].join("\n"),
           "Auth Token Required — Action Needed"
         );
-        bail("Install incomplete: auth token not found. Write the token to the path above and re-run.");
+        bail("Install incomplete: auth credential not found. Register it and re-run.");
       }
     }
     if (!DRY_RUN) {
@@ -3112,20 +3128,28 @@ async function step3_models() {
     }
   }
 
+  if (provider === "openai") {
+    log.warn("OpenAI lanes are experimental in alpha.");
+    log.warn("Benchmarks and live tests showed materially worse memory quality than Anthropic.");
+    log.warn("Prefer Anthropic unless you are blocked on credentials.");
+  }
+
   if (adapterType === "codex") {
-    const codexAuthTokenPath = path.join(WORKSPACE, "adaptors", "codex", ".auth-token");
-    const existingFileToken = (() => {
-      try { return fs.existsSync(codexAuthTokenPath) ? fs.readFileSync(codexAuthTokenPath, "utf8").trim() : ""; }
-      catch { return ""; }
-    })();
-    const providerEnvVars = ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"];
+    const codexAuthTokenPath = sharedAuthRegistryPath(WORKSPACE);
+    const authKinds = authKindsForProvider(provider);
+    const existingCredential = getSharedAuthCredential(WORKSPACE, authKinds);
+    const existingFileToken = existingCredential?.token || "";
+    const providerEnvVars = provider === "anthropic"
+      ? ["ANTHROPIC_API_KEY"]
+      : ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"];
     const envToken = String(providerEnvVars.map((name) => process.env[name] || "").find(Boolean) || "").trim();
     const hasToken = !!(existingFileToken || envToken);
+    const providerLabel = provider === "anthropic" ? "Anthropic" : "OpenAI";
 
-    if (!AGENT_MODE) {
+    if (!_existingInstallDetected && !AGENT_MODE) {
       const tokenAction = hasToken
         ? handleCancel(await select({
-            message: "Codex OpenAI OAuth token:",
+            message: `Codex ${providerLabel} credential:`,
             options: [
               ...(existingFileToken || envToken ? [{ value: "keep", label: "Use current token" }] : []),
               { value: "reset", label: "Enter a new token" },
@@ -3134,47 +3158,76 @@ async function step3_models() {
         : "reset";
 
       if (tokenAction === "reset") {
-        log.info(C.dim(`Run 'codex setup-token' if needed, then paste the OpenAI OAuth token below (stored at: ${codexAuthTokenPath})`));
+        const kindOptions = authKinds.map((kind) => ({
+          value: kind,
+          label: authKindPromptLabel(kind),
+          hint: kind === "codex_oauth"
+            ? "Experimental — highest friction, lower quality than Anthropic"
+            : kind === "openai_api"
+              ? "Experimental — lower quality than Anthropic in our tests"
+              : kind === "anthropic_oauth"
+                ? "Recommended"
+                : "Stable direct key",
+        }));
+        const selectedKind = handleCancel(await select({
+          message: `Codex ${providerLabel} credential type:`,
+          options: kindOptions,
+        }));
+        if (selectedKind === "anthropic_oauth") {
+          log.info(C.dim("Run 'claude setup-token' if needed, then paste the credential below."));
+        } else if (selectedKind === "codex_oauth") {
+          log.info(C.dim("Run 'codex setup-token' if needed, then paste the credential below."));
+        }
+        log.info(C.dim(`Credential will be stored in the shared registry at: ${codexAuthTokenPath}`));
         const newToken = handleCancel(await text({
-          message: "OpenAI OAuth token:",
+          message: `${authKindPromptLabel(selectedKind)}:`,
           placeholder: "paste token here",
           validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
         }));
         if (newToken && newToken.trim()) {
           if (!DRY_RUN) {
-            fs.mkdirSync(path.dirname(codexAuthTokenPath), { recursive: true });
-            fs.writeFileSync(codexAuthTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
-            log.success("Token stored at " + codexAuthTokenPath);
+            writeSharedAuthCredential(WORKSPACE, selectedKind, newToken.trim());
+            log.success(`Credential stored in shared registry as ${authKindPromptLabel(selectedKind)} at ${codexAuthTokenPath}`);
           } else {
-            log.info(C.dim("(dry run) Would store token at " + codexAuthTokenPath));
+            log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(selectedKind)} at ${codexAuthTokenPath}`));
           }
         }
       }
     } else if (!hasToken) {
       if (DRY_RUN) {
-        log.warn("(dry run) No Codex provider token — would print out-of-band instructions and exit in real run.");
+        log.warn(`(dry run) No Codex ${providerLabel} credential — would print out-of-band instructions and exit in real run.`);
       } else {
         note(
           [
-            "Quaid needs an OpenAI OAuth token for Codex-backed background calls.",
+            `Quaid needs a ${providerLabel} credential for Codex-backed background calls.`,
             "",
-            "IMPORTANT: Do NOT paste the token into this conversation.",
+            "IMPORTANT: Do NOT paste the credential into this conversation.",
             "",
-            "Ask the user to write the token in a NEW terminal window:",
+            "Ask the user to register it in a NEW terminal window:",
             "",
-            `  mkdir -p \"${path.dirname(codexAuthTokenPath)}\"`,
-            `  printf '%s' 'YOUR_TOKEN_HERE' > \"${codexAuthTokenPath}\"`,
-            `  chmod 600 \"${codexAuthTokenPath}\"`,
+            ...(provider === "anthropic"
+              ? [
+                  `  quaid auth refresh --kind anthropic_oauth 'YOUR_TOKEN_HERE'`,
+                  "  or",
+                  `  quaid auth refresh --kind anthropic_api 'YOUR_TOKEN_HERE'`,
+                ]
+              : [
+                  `  quaid auth refresh --kind codex_oauth 'YOUR_TOKEN_HERE'`,
+                  "  or",
+                  `  quaid auth refresh --kind openai_api 'YOUR_TOKEN_HERE'`,
+                ]),
             "",
             "Then re-run the installer.",
             "",
-            `Token path: ${codexAuthTokenPath}`,
-            "Preferred source: token produced by 'codex setup-token'",
-            "Environment fallback: OPENAI_OAUTH_TOKEN",
+            `Registry path: ${codexAuthTokenPath}`,
+            ...(provider === "openai"
+              ? ["WARNING: OpenAI lanes are experimental and benchmarked materially below Anthropic."]
+              : []),
+            `Environment fallback: ${providerEnvVars[0]}`,
           ].join("\n"),
           "Codex Auth Token Required — Action Needed"
         );
-        bail("Install incomplete: Codex provider token not found. Write the token to the path above and re-run.");
+        bail("Install incomplete: Codex credential not found. Register it and re-run.");
       }
     }
   }
@@ -3182,22 +3235,21 @@ async function step3_models() {
   if (adapterType === "openclaw") {
     log.info(
       C.dim(
-        "OpenClaw background calls now use a direct provider token. Choose the token that most closely matches your main OpenClaw gateway model/provider selection."
+        "OpenClaw background calls use Quaid's shared credential registry."
       )
     );
-    const openclawAuthTokenPath = path.join(WORKSPACE, "adaptors", "openclaw", ".auth-token");
+    const openclawAuthTokenPath = sharedAuthRegistryPath(WORKSPACE);
+    const authKinds = authKindsForProvider(provider);
     const providerEnvVars = provider === "anthropic"
       ? ["ANTHROPIC_API_KEY"]
       : ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"];
-    const providerLabel = provider === "anthropic" ? "Anthropic API" : "OpenAI OAuth";
-    const existingFileToken = (() => {
-      try { return fs.existsSync(openclawAuthTokenPath) ? fs.readFileSync(openclawAuthTokenPath, "utf8").trim() : ""; }
-      catch { return ""; }
-    })();
+    const providerLabel = provider === "anthropic" ? "Anthropic" : "OpenAI";
+    const existingCredential = getSharedAuthCredential(WORKSPACE, authKinds);
+    const existingFileToken = existingCredential?.token || "";
     const envToken = String(providerEnvVars.map((name) => process.env[name] || "").find(Boolean) || "").trim();
     const hasToken = !!(existingFileToken || envToken);
 
-    if (!AGENT_MODE) {
+    if (!_existingInstallDetected && !AGENT_MODE) {
       const tokenAction = hasToken
         ? handleCancel(await select({
             message: `OpenClaw ${providerLabel} token:`,
@@ -3209,22 +3261,38 @@ async function step3_models() {
         : "reset";
 
       if (tokenAction === "reset") {
-        if (provider === "openai") {
-          log.info(C.dim("Run 'codex setup-token' if needed, then paste the OpenAI OAuth token below."));
+        const kindOptions = authKinds.map((kind) => ({
+          value: kind,
+          label: authKindPromptLabel(kind),
+          hint: kind === "codex_oauth"
+            ? "Experimental — lower quality than Anthropic"
+            : kind === "openai_api"
+              ? "Experimental — lower quality than Anthropic"
+              : kind === "anthropic_oauth"
+                ? "Recommended"
+                : "Stable direct key",
+        }));
+        const selectedKind = handleCancel(await select({
+          message: `OpenClaw ${providerLabel} credential type:`,
+          options: kindOptions,
+        }));
+        if (selectedKind === "anthropic_oauth") {
+          log.info(C.dim("Run 'claude setup-token' if needed, then paste the credential below."));
+        } else if (selectedKind === "codex_oauth") {
+          log.info(C.dim("Run 'codex setup-token' if needed, then paste the credential below."));
         }
-        log.info(C.dim(`Paste the ${providerLabel} token below (stored at: ${openclawAuthTokenPath})`));
+        log.info(C.dim(`Credential will be stored in the shared registry at: ${openclawAuthTokenPath}`));
         const newToken = handleCancel(await text({
-          message: `${providerLabel} token:`,
+          message: `${authKindPromptLabel(selectedKind)}:`,
           placeholder: "paste token here",
           validate: (v) => (!v || !v.trim()) ? "Token is required." : undefined,
         }));
         if (newToken && newToken.trim()) {
           if (!DRY_RUN) {
-            fs.mkdirSync(path.dirname(openclawAuthTokenPath), { recursive: true });
-            fs.writeFileSync(openclawAuthTokenPath, newToken.trim() + "\n", { encoding: "utf8", mode: 0o600 });
-            log.success("Token stored at " + openclawAuthTokenPath);
+            writeSharedAuthCredential(WORKSPACE, selectedKind, newToken.trim());
+            log.success(`Credential stored in shared registry as ${authKindPromptLabel(selectedKind)} at ${openclawAuthTokenPath}`);
           } else {
-            log.info(C.dim("(dry run) Would store token at " + openclawAuthTokenPath));
+            log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(selectedKind)} at ${openclawAuthTokenPath}`));
           }
         }
       }
@@ -3236,23 +3304,31 @@ async function step3_models() {
           [
             `Quaid needs a ${providerLabel} token for OpenClaw-backed background calls.`,
             "",
-            "IMPORTANT: Do NOT paste the token into this conversation.",
+            "IMPORTANT: Do NOT paste the credential into this conversation.",
             "",
-            "Ask the user to write the token in a NEW terminal window:",
+            "Ask the user to register it in a NEW terminal window:",
             "",
-            `  mkdir -p \"${path.dirname(openclawAuthTokenPath)}\"`,
-            `  printf '%s' 'YOUR_TOKEN_HERE' > \"${openclawAuthTokenPath}\"`,
-            `  chmod 600 \"${openclawAuthTokenPath}\"`,
+            ...(provider === "anthropic"
+              ? [
+                  `  quaid auth refresh --kind anthropic_oauth 'YOUR_TOKEN_HERE'`,
+                  "  or",
+                  `  quaid auth refresh --kind anthropic_api 'YOUR_TOKEN_HERE'`,
+                ]
+              : [
+                  `  quaid auth refresh --kind codex_oauth 'YOUR_TOKEN_HERE'`,
+                  "  or",
+                  `  quaid auth refresh --kind openai_api 'YOUR_TOKEN_HERE'`,
+                ]),
             "",
             "Then re-run the installer.",
             "",
-            `Token path: ${openclawAuthTokenPath}`,
-            ...(provider === "openai" ? ["Preferred source: token produced by 'codex setup-token'"] : []),
+            `Registry path: ${openclawAuthTokenPath}`,
+            ...(provider === "openai" ? ["WARNING: OpenAI lanes are experimental and benchmarked materially below Anthropic."] : []),
             `Environment fallback: ${providerEnvVars[0]}`,
           ].join("\n"),
           "OpenClaw Auth Token Required — Action Needed"
         );
-        bail(`Install incomplete: OpenClaw ${providerLabel} token not found. Write the token to the path above and re-run.`);
+        bail(`Install incomplete: OpenClaw ${providerLabel} credential not found. Register it and re-run.`);
       }
     }
   }

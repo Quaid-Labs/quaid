@@ -46,7 +46,9 @@ After install, start here:
 | Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes | Yes |
 | Hook-based auto extraction | Yes | Yes | Yes |
 | Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** | **No** |
-| Adapter-owned auth token required for Quaid LLM calls | **Yes** | **Yes** | **Yes** |
+| Shared provider credential required for Quaid LLM calls | **Yes** | **Yes** | **Yes** |
+
+OpenAI-backed lanes remain available in alpha, but they are currently experimental and benchmark materially below Anthropic for Quaid memory quality. Anthropic is the recommended backend unless you are blocked on credentials.
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 

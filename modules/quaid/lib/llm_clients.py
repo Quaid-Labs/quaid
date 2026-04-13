@@ -589,7 +589,7 @@ def call_llm(system_prompt: str, user_message: str,
                 timeout_for_attempt = deadline - time.time()
                 if timeout_for_attempt <= 0:
                     raise TimeoutError("LLM deadline exhausted before provider call")
-            with acquire_llm_slot(timeout_seconds=timeout_for_attempt):
+            with acquire_llm_slot(timeout_seconds=timeout_for_attempt, pool_kind=resolved_tier):
                 call_timeout = timeout_for_attempt
                 if deadline is not None:
                     call_timeout = deadline - time.time()

@@ -41,14 +41,27 @@ def _resolve_refresh_token(args: argparse.Namespace) -> str:
         "quaid auth refresh --file /path/to/anthtoken.md"
     )
 
+def _resolve_refresh_kind(adapter, args: argparse.Namespace, token: str) -> str:
+    explicit = str(getattr(args, "kind", "") or "").strip().lower()
+    if explicit:
+        return explicit
+    inferred = adapter.infer_auth_token_kind(token)
+    if inferred:
+        return inferred
+    raise RuntimeError(
+        "Could not infer credential kind. Pass --kind "
+        "(anthropic_oauth|anthropic_api|codex_oauth|openai_api)."
+    )
+
 
 def cmd_refresh(args: argparse.Namespace) -> int:
     from lib.adapter import get_adapter
 
     adapter = get_adapter()
     token = _resolve_refresh_token(args)
-    stored_path = adapter.store_auth_token(token)
-    print(f"Auth token stored at {stored_path}")
+    kind = _resolve_refresh_kind(adapter, args, token)
+    stored_path = adapter.store_shared_auth_token(kind, token)
+    print(f"Auth credential ({kind}) stored at {stored_path}")
     return 0
 
 
@@ -59,6 +72,10 @@ def main(argv: list[str] | None = None) -> int:
     refresh_p = sub.add_parser("refresh", help="Refresh the adapter auth token")
     refresh_p.add_argument("token", nargs="?", help="Token value (omit to read from stdin or --file)")
     refresh_p.add_argument("--file", help="Read token from a file path")
+    refresh_p.add_argument(
+        "--kind",
+        help="Credential kind: anthropic_oauth, anthropic_api, codex_oauth, openai_api",
+    )
 
     args = parser.parse_args(argv)
 

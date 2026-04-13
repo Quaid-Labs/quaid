@@ -121,7 +121,7 @@ There is no Quaid-managed Codex app-server or shared broker in the active path.
 Instance isolation comes from:
 - per-instance `QUAID_INSTANCE`
 - per-project `CODEX_PROJECT_DIR`
-- per-lane auth token file at `WORKSPACE/adaptors/codex/.auth-token`
+- shared provider credential registry at `WORKSPACE/shared/auth/credentials.json`
 
 If CDX turns hang, investigate the configured provider/token path and the daemon,
 not a Codex app-server sidecar.

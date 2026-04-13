@@ -381,17 +381,24 @@ class OpenClawAdapter(QuaidAdapter):
 
     def get_api_key(self, env_var_name: str) -> Optional[str]:
         # 1. Environment variable
+        if env_var_name == "ANTHROPIC_API_KEY":
+            token = self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"]) or self.read_auth_token()
+            if token:
+                return token
         if env_var_name == "OPENAI_API_KEY":
+            token = self.read_shared_auth_token(["codex_oauth", "openai_api"])
+            if token:
+                return token
             oauth = os.environ.get("OPENAI_OAUTH_TOKEN", "").strip()
             if oauth:
                 return oauth
         key = os.environ.get(env_var_name, "").strip()
         if key:
             return key
-
-        token = self.read_auth_token()
-        if token:
-            return token
+        if env_var_name != "ANTHROPIC_API_KEY":
+            token = self.read_auth_token()
+            if token:
+                return token
 
         if is_fail_hard_enabled():
             return None
@@ -420,6 +427,9 @@ class OpenClawAdapter(QuaidAdapter):
 
     def auth_token_path(self) -> Optional[Path]:
         return self.quaid_home() / "adaptors" / "openclaw" / ".auth-token"
+
+    def auth_registry_kinds(self) -> list[str]:
+        return ["anthropic_oauth", "anthropic_api", "codex_oauth", "openai_api"]
 
     # OC gateway prepends "[Day Date HH:MM TZ]" to every user message.
     # Also strips OC-injected "(untrusted metadata)" code blocks.

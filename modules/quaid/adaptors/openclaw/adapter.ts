@@ -2601,22 +2601,75 @@ function _getGatewayCredential(providers: string[]): string | undefined {
   return undefined;
 }
 
-function _getAnthropicCredential(): string | undefined {
-  return _getGatewayCredential(["anthropic"]);
+function _readSharedAuthCredentialKinds(kinds: string[]): string | undefined {
+  const registryPath = path.join(WORKSPACE, "shared", "auth", "credentials.json");
+  try {
+    const raw = fs.readFileSync(registryPath, "utf8");
+    const data = JSON.parse(raw);
+    const creds = data && typeof data.credentials === "object" ? data.credentials : {};
+    for (const kind of kinds) {
+      const payload = creds?.[kind];
+      if (payload && typeof payload === "object") {
+        const token = String(payload.token || "").trim();
+        if (token) return token;
+      } else if (typeof payload === "string" && payload.trim()) {
+        return payload.trim();
+      }
+    }
+  } catch {}
+  return undefined;
 }
 
-function _readAdapterAuthToken(adapterName: string): string | undefined {
-  const authPath = path.join(WORKSPACE, "adaptors", adapterName, ".auth-token");
-  try {
-    const token = fs.readFileSync(authPath, "utf8").trim();
-    return token || undefined;
-  } catch {
-    return undefined;
-  }
+function _getAnthropicCredential(): string | undefined {
+  return _readSharedAuthCredentialKinds(["anthropic_oauth", "anthropic_api"])
+    || String(process.env.ANTHROPIC_API_KEY || "").trim()
+    || _getGatewayCredential(["anthropic"]);
 }
 
 function _getOpenAIOAuthCredential(): string | undefined {
-  return _getGatewayCredential(["openai"]) || _readAdapterAuthToken("openclaw");
+  return _readSharedAuthCredentialKinds(["codex_oauth", "openai_api"])
+    || _getGatewayCredential(["openai"])
+    || String(process.env.OPENAI_OAUTH_TOKEN || process.env.OPENAI_API_KEY || "").trim()
+    || undefined;
+}
+
+function _isAnthropicOAuthToken(token: string): boolean {
+  return String(token || "").trim().startsWith("sk-ant-oat");
+}
+
+function _buildAnthropicHeaders(credential: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": "prompt-caching-2024-07-31",
+  };
+  if (_isAnthropicOAuthToken(credential)) {
+    headers["Authorization"] = `Bearer ${credential}`;
+    headers["Accept"] = "application/json";
+    headers["user-agent"] = "claude-cli/2.1.2 (external, cli)";
+    headers["x-app"] = "cli";
+    headers["anthropic-beta"] = "prompt-caching-2024-07-31,claude-code-20250219,oauth-2025-04-20";
+  } else {
+    headers["x-api-key"] = credential;
+  }
+  return headers;
+}
+
+function _buildAnthropicSystemBlocks(systemPrompt: string, credential: string): Array<Record<string, unknown>> {
+  const blocks: Array<Record<string, unknown>> = [];
+  if (_isAnthropicOAuthToken(credential)) {
+    blocks.push({
+      type: "text",
+      text: "You are Claude Code, Anthropic's official CLI for Claude.",
+      cache_control: { type: "ephemeral" },
+    });
+  }
+  blocks.push({
+    type: "text",
+    text: String(systemPrompt || "").trim(),
+    cache_control: { type: "ephemeral" },
+  });
+  return blocks;
 }
 
 function _extractOpenAICodexAccountId(token: string): string {
@@ -2698,8 +2751,11 @@ function _extractOpenAICodexText(rawBody: string): string {
   return chunks.join("").trim();
 }
 
-function _resolveConfiguredLLMTransport(provider: string): "gateway" | "openai-codex-oauth-direct" {
+function _resolveConfiguredLLMTransport(provider: string): "gateway" | "openai-codex-oauth-direct" | "anthropic-direct" {
   const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "anthropic") {
+    return "anthropic-direct";
+  }
   if (normalized === "openai" || normalized === "openai-compatible") {
     return "openai-codex-oauth-direct";
   }
@@ -2840,6 +2896,56 @@ async function callConfiguredLLM(
       cache_read_tokens: 0,
       cache_creation_tokens: 0,
       truncated: false,
+    };
+  }
+
+  if (transport === "anthropic-direct") {
+    const credential = _getAnthropicCredential();
+    if (!credential) {
+      throw new Error(
+        `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} `
+        + "error=missing Anthropic credential"
+      );
+    }
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: _buildAnthropicHeaders(credential),
+      body: JSON.stringify({
+        model: resolved.model,
+        max_tokens: maxTokens,
+        system: _buildAnthropicSystemBlocks(systemPrompt, credential),
+        messages: [{ role: "user", content: userMessage }],
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const rawBody = await response.text();
+    if (!response.ok) {
+      const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
+      throw new Error(
+        `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} `
+        + `status=${response.status} error=${bodyPreview || response.statusText || "Anthropic error"}`
+      );
+    }
+    const data = JSON.parse(rawBody || "{}");
+    const contentBlocks = Array.isArray(data?.content) ? data.content : [];
+    const text = contentBlocks
+      .filter((block: any) => block && block.type === "text" && typeof block.text === "string")
+      .map((block: any) => String(block.text))
+      .join("\n")
+      .trim();
+    const usage = data && typeof data.usage === "object" ? data.usage : {};
+    const durationMs = Date.now() - started;
+    console.log(
+      `[quaid][llm] response provider=${provider} model=${resolved.model} transport=${transport} duration_ms=${durationMs} output_len=${text.length} status=${response.status}`
+    );
+    return {
+      text,
+      model: String(data?.model || resolved.model),
+      input_tokens: Number(usage.input_tokens || 0),
+      output_tokens: Number(usage.output_tokens || 0),
+      cache_read_tokens: Number(usage.cache_read_input_tokens || 0),
+      cache_creation_tokens: Number(usage.cache_creation_input_tokens || 0),
+      truncated: String(data?.stop_reason || "") === "max_tokens",
     };
   }
 

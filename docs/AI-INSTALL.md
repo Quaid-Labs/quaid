@@ -335,7 +335,7 @@ If the human wants to change embedding defaults later, tell them it is best to u
 - The installer writes six hook entries to `~/.claude/settings.json`:
   `SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`.
 - The janitor is configured in Quaid config and runs from the runtime/extraction layer; the installer no longer creates OS-level launchd/cron/task-scheduler janitor jobs in the standard path.
-- At runtime, the adapter reads the long-lived Anthropic token from `~/.quaid/adaptors/claude-code/.auth-token` (or `ANTHROPIC_API_KEY` if explicitly set). Do not rely on `~/.claude/.credentials.json` for Quaid service calls.
+- At runtime, the adapter reads Anthropic credentials from `~/.quaid/shared/auth/credentials.json` (or `ANTHROPIC_API_KEY` if explicitly set). Do not rely on `~/.claude/.credentials.json` for Quaid service calls.
 - The installer creates visible instance identity files at `<QUAID_VISIBLE_HOME>/instances/<instance-id>/`
   (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) plus `journal/`.
 
@@ -344,7 +344,7 @@ If the human wants to change embedding defaults later, tell them it is best to u
 - Installer now attempts to auto-heal missing `agents.list` in `~/.openclaw/openclaw.json`.
 - Installer sanitizes stale `plugins.entries.quaid` keys that newer OpenClaw builds reject.
 - Installer registers the Quaid plugin, ensures the runtime instance env is written into the OpenClaw config, and waits for the gateway to come back online.
-- Installer requires an explicit provider token for Quaid background calls. OpenClaw installs choose either Anthropic or OpenAI auth and store the token at `~/.quaid/adaptors/openclaw/.auth-token`.
+- Installer requires an explicit provider credential for Quaid background calls. OpenClaw installs choose either Anthropic or OpenAI auth and store it in `~/.quaid/shared/auth/credentials.json`. OpenAI lanes are experimental and benchmark materially below Anthropic; Anthropic is recommended.
 
 ## Minimal Non-interactive Command
 
@@ -507,5 +507,7 @@ quaid doctor
 Expected output from hooks check: `['SessionStart', 'UserPromptSubmit', 'PreCompact', 'SessionEnd', 'SubagentStart', 'SubagentStop']` (or similar — any subset present means hooks are wired).
 
 Supported platforms: OpenClaw, Claude Code, and Codex. Quaid uses the fixed split home layout (`~/.quaid` hidden, `~/quaid` visible).
-All three launch adapters require explicit provider tokens for Quaid background calls:
-OpenClaw (Anthropic or OpenAI), Claude Code (Anthropic), and Codex (OpenAI).
+All three launch adapters require explicit provider credentials for Quaid background calls, stored in the shared registry at `~/.quaid/shared/auth/credentials.json`:
+OpenClaw (Anthropic or OpenAI), Claude Code (Anthropic), and Codex (Anthropic or OpenAI).
+OpenAI lanes remain available but are experimental in alpha and benchmark materially below Anthropic for Quaid memory quality.
+Only the first install flow prompts for credentials. Later platform installs reuse the shared registry and will stop with instructions if the required credential is missing.

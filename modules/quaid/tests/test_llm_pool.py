@@ -26,7 +26,9 @@ def _reset_pool():
     import lib.llm_pool as m
     with m._POOL_LOCK:
         m._POOL = None
+        m._DEEP_POOL = None
         m._POOL_SIZE = 0
+        m._DEEP_POOL_SIZE = 0
         m._POOL_RESIZE_WARNED = False
 
 
@@ -249,35 +251,22 @@ class TestPoolInit:
 
 
 class TestProcessLock:
-    def test_process_lock_disabled_for_non_openclaw(self, monkeypatch):
-        """Standalone/CC/CDX retain the in-process pool without a filesystem lock."""
+    def test_process_lock_enabled_globally(self, monkeypatch, tmp_path):
+        """All adapters share the same global cross-process lock directory."""
         import lib.llm_pool as m
 
         monkeypatch.delenv("QUAID_LLM_PROCESS_LOCK", raising=False)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
         cfg = SimpleNamespace(
             core=SimpleNamespace(parallel=SimpleNamespace(llm_workers=1)),
             adapter=SimpleNamespace(type="codex"),
         )
         with patch("config.get_config", return_value=cfg):
-            assert m._process_lock_path() is None
-
-    def test_process_lock_enabled_for_openclaw_instance(self, monkeypatch, tmp_path):
-        """OpenClaw uses a shared gateway, so separate Quaid processes serialize calls."""
-        import lib.llm_pool as m
-        from lib.llm_pool import acquire_llm_slot
-
-        monkeypatch.delenv("QUAID_LLM_PROCESS_LOCK", raising=False)
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-livetest")
-        cfg = SimpleNamespace(
-            core=SimpleNamespace(parallel=SimpleNamespace(llm_workers=1)),
-            adapter=SimpleNamespace(type="openclaw"),
-        )
-        with patch("config.get_config", return_value=cfg):
             lock_path = m._process_lock_path()
-            assert lock_path == tmp_path / "shared" / "run" / "openclaw-gateway-llm" / "slot-0.lock"
-            assert len(m._process_lock_paths()) == 4
+            assert lock_path == tmp_path / "shared" / "run" / "llm" / "slot-0.lock"
+            assert len(m._process_lock_paths()) == 1
+            from lib.llm_pool import acquire_llm_slot
             with acquire_llm_slot(timeout_seconds=0.1):
                 assert lock_path.exists()
 
@@ -293,9 +282,31 @@ class TestProcessLock:
         )
         with patch("config.get_config", return_value=cfg):
             assert m._process_lock_paths() == [
-                tmp_path / "shared" / "run" / "openclaw-gateway-llm" / "slot-0.lock",
-                tmp_path / "shared" / "run" / "openclaw-gateway-llm" / "slot-1.lock",
+                tmp_path / "shared" / "run" / "llm" / "slot-0.lock",
+                tmp_path / "shared" / "run" / "llm" / "slot-1.lock",
             ]
+
+    def test_fast_lane_keeps_reserved_slot_when_deep_is_busy(self, monkeypatch, tmp_path):
+        import lib.llm_pool as m
+        from lib.llm_pool import acquire_llm_slot
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_LLM_PROCESS_LOCK", "0")
+        monkeypatch.setenv("QUAID_LLM_FAST_RESERVED_SLOTS", "1")
+        cfg = SimpleNamespace(
+            core=SimpleNamespace(parallel=SimpleNamespace(llm_workers=2)),
+            adapter=SimpleNamespace(type="codex"),
+        )
+
+        with patch("config.get_config", return_value=cfg):
+            with acquire_llm_slot(pool_kind="deep", timeout_seconds=0.1):
+                assert m._POOL_SIZE == 2
+                assert m._DEEP_POOL_SIZE == 1
+                with acquire_llm_slot(pool_kind="fast", timeout_seconds=0.1):
+                    pass
+                with pytest.raises(TimeoutError, match="deep LLM worker slot"):
+                    with acquire_llm_slot(pool_kind="deep", timeout_seconds=0.05):
+                        pass
 
 
 # ---------------------------------------------------------------------------

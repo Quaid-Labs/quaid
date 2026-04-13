@@ -577,7 +577,7 @@ describe("lifecycle signal detection", () => {
   it("routes openai providers through the direct codex oauth transport", () => {
     expect(__test.resolveConfiguredLLMTransport("openai")).toBe("openai-codex-oauth-direct");
     expect(__test.resolveConfiguredLLMTransport("openai-compatible")).toBe("openai-codex-oauth-direct");
-    expect(__test.resolveConfiguredLLMTransport("anthropic")).toBe("gateway");
+    expect(__test.resolveConfiguredLLMTransport("anthropic")).toBe("anthropic-direct");
   });
 
   it("builds lean codex oauth payloads for direct provider probes", () => {

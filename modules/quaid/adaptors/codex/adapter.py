@@ -42,8 +42,8 @@ class CodexAdapter(QuaidAdapter):
         flags=re.DOTALL | re.IGNORECASE,
     )
     _QUAID_NOTICE_COMMENTARY_RE = re.compile(
-        r"^\s*Assistant:\s*(?:You started a new interaction\..*?pending Quaid notice.*?|I(?:'|’)m checking .*?Quaid.*?notice.*?)(?=\n\n(?:User|Assistant|Subagent/)|\Z)",
-        flags=re.DOTALL | re.IGNORECASE | re.MULTILINE,
+        r"^\s*(?:You started a new interaction\..*?pending Quaid notice.*?|I(?:'|’)m checking .*?Quaid.*?notice.*?)\s*$",
+        flags=re.DOTALL | re.IGNORECASE,
     )
     _QUAID_NOTICE_BULLET_BLOCK_RE = re.compile(
         r"\n\nQuaid notices?:\n(?:- .*(?:\n|$))+",
@@ -177,9 +177,18 @@ class CodexAdapter(QuaidAdapter):
         return None
 
     def get_api_key(self, env_var_name: str) -> Optional[str]:
-        token = self.read_auth_token()
-        if token:
-            return token
+        if env_var_name == "ANTHROPIC_API_KEY":
+            token = self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"]) or self.read_auth_token()
+            if token:
+                return token
+        elif env_var_name == "OPENAI_API_KEY":
+            token = self.read_shared_auth_token(["codex_oauth", "openai_api"])
+            if token:
+                return token
+        else:
+            token = self.read_auth_token()
+            if token:
+                return token
         if env_var_name == "OPENAI_API_KEY":
             oauth = os.environ.get("OPENAI_OAUTH_TOKEN", "").strip()
             if oauth:
@@ -209,6 +218,9 @@ class CodexAdapter(QuaidAdapter):
 
     def auth_token_path(self) -> Optional[Path]:
         return self.quaid_home() / "adaptors" / "codex" / ".auth-token"
+
+    def auth_registry_kinds(self) -> list[str]:
+        return ["anthropic_oauth", "anthropic_api", "codex_oauth", "openai_api"]
 
     def get_host_info(self):
         from core.compatibility import HostInfo
@@ -609,14 +621,14 @@ class CodexAdapter(QuaidAdapter):
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from config import get_config
-        from lib.providers import OpenAICodexOAuthLLMProvider
+        from lib.providers import AnthropicLLMProvider, OpenAICodexOAuthLLMProvider
 
         cfg = get_config()
-        deep_model = getattr(cfg.models, "deep_reasoning", "gpt-5.4")
-        fast_model = getattr(cfg.models, "fast_reasoning", "gpt-5.4-mini")
+        deep_model = getattr(cfg.models, "deep_reasoning", "claude-sonnet-4-5")
+        fast_model = getattr(cfg.models, "fast_reasoning", "claude-haiku-4-5")
         deep_effort = getattr(cfg.models, "deep_reasoning_effort", "high")
         fast_effort = getattr(cfg.models, "fast_reasoning_effort", "none")
-        provider_id = getattr(cfg.models, "llm_provider", "")
+        provider_id = getattr(cfg.models, "llm_provider", "") or "anthropic"
         if model_tier == "fast":
             fast_provider = getattr(cfg.models, "fast_reasoning_provider", "default")
             if fast_provider and fast_provider != "default":
@@ -627,13 +639,30 @@ class CodexAdapter(QuaidAdapter):
                 provider_id = deep_provider
         provider_id = str(provider_id or "").strip().lower()
 
+        if provider_id == "anthropic":
+            api_key = self.get_api_key("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "LLM provider is 'anthropic' but no Codex Anthropic credential was found. "
+                    "Write an Anthropic OAuth token or API key to "
+                    "QUAID_HOME/shared/auth/credentials.json via 'quaid auth refresh --kind anthropic_oauth|anthropic_api', "
+                    "or set ANTHROPIC_API_KEY."
+                )
+            return AnthropicLLMProvider(
+                api_key=api_key,
+                deep_model=str(deep_model or "claude-sonnet-4-5"),
+                fast_model=str(fast_model or "claude-haiku-4-5"),
+            )
+
         if provider_id in ("openai", "openai-compatible"):
             api_key = self.get_api_key("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError(
-                    "LLM provider is 'openai' but no Codex OpenAI OAuth token was found. "
-                    "Write the token produced by 'codex setup-token' to QUAID_HOME/adaptors/codex/.auth-token "
-                    "or set OPENAI_OAUTH_TOKEN."
+                    "LLM provider is 'openai' but no Codex/OpenAI credential was found. "
+                    "Write a Codex OAuth token or OpenAI API key to "
+                    "QUAID_HOME/shared/auth/credentials.json via "
+                    "'quaid auth refresh --kind codex_oauth|openai_api', "
+                    "or set OPENAI_OAUTH_TOKEN / OPENAI_API_KEY."
                 )
             configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
             env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
@@ -649,14 +678,21 @@ class CodexAdapter(QuaidAdapter):
 
         raise RuntimeError(
             f"Unknown Codex LLM provider '{provider_id}'. "
-            "Valid value: 'openai'."
+            "Valid values: 'anthropic', 'openai'."
         )
 
     def installer_supported_providers(self) -> list:
-        return ["openai"]
+        return ["anthropic", "openai"]
 
     def installer_default_models(self, provider: str) -> Optional[dict]:
         normalized = str(provider or "").strip().lower()
+        if normalized == "anthropic":
+            return {
+                "deep": "claude-sonnet-4-5",
+                "fast": "claude-haiku-4-5",
+                "deepEffort": "high",
+                "fastEffort": "none",
+            }
         if normalized == "openai":
             return {
                 "deep": "gpt-5.4",
@@ -679,7 +715,7 @@ class CodexAdapter(QuaidAdapter):
         return {"supported": False, "ok": True, "message": "", "results": []}
 
     def get_fast_provider_default(self) -> str:
-        return "openai"
+        return "anthropic"
 
     def get_deep_provider_default(self) -> str:
-        return "openai"
+        return "anthropic"

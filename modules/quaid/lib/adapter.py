@@ -225,35 +225,86 @@ class QuaidAdapter(abc.ABC):
         """
         return None
 
-    def read_auth_token(self) -> Optional[str]:
-        """Read the adapter's stored auth token from disk.
+    def shared_auth_registry_path(self) -> Path:
+        """Canonical shared auth registry for Quaid-managed provider creds."""
+        return self.quaid_home() / "shared" / "auth" / "credentials.json"
 
-        Returns the token string or None if no token file exists.
-        """
-        p = self.auth_token_path()
-        if p is None or not p.is_file():
+    def auth_registry_kinds(self) -> List[str]:
+        """Ordered credential kinds this adapter should consume by default."""
+        return []
+
+    @staticmethod
+    def infer_auth_token_kind(token: str) -> Optional[str]:
+        value = str(token or "").strip()
+        if not value:
             return None
+        if value.startswith("sk-ant-oat"):
+            return "anthropic_oauth"
+        if value.startswith("sk-ant-"):
+            return "anthropic_api"
+        if value.count(".") >= 2:
+            return "codex_oauth"
+        if value.startswith("sk-"):
+            return "openai_api"
+        return None
+
+    def _read_shared_auth_registry(self) -> Dict[str, Any]:
+        path = self.shared_auth_registry_path()
+        if not path.is_file():
+            return {}
         try:
-            token = p.read_text(encoding="utf-8").strip()
-            return token if token else None
-        except (IOError, OSError):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (IOError, OSError, json.JSONDecodeError):
+            return {}
+
+    def read_shared_auth_token(self, kinds: List[str]) -> Optional[str]:
+        wanted = [str(kind or "").strip() for kind in (kinds or []) if str(kind or "").strip()]
+        if not wanted:
             return None
+        data = self._read_shared_auth_registry()
+        creds = data.get("credentials", {}) if isinstance(data, dict) else {}
+        if not isinstance(creds, dict):
+            return None
+        for kind in wanted:
+            payload = creds.get(kind)
+            if isinstance(payload, dict):
+                token = str(payload.get("token") or "").strip()
+                if token:
+                    return token
+            elif isinstance(payload, str) and payload.strip():
+                return payload.strip()
+        return None
+
+    def store_shared_auth_token(self, kind: str, token: str) -> Path:
+        normalized_kind = str(kind or "").strip()
+        value = str(token or "").strip()
+        if not normalized_kind:
+            raise ValueError("auth credential kind is required")
+        if not value:
+            raise ValueError("auth credential token is required")
+        path = self.shared_auth_registry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = self._read_shared_auth_registry()
+        creds = data.get("credentials", {}) if isinstance(data, dict) else {}
+        if not isinstance(creds, dict):
+            creds = {}
+        creds[normalized_kind] = {"token": value}
+        data["credentials"] = creds
+        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    def read_auth_token(self) -> Optional[str]:
+        """Read the adapter's shared auth token from the canonical registry."""
+        return self.read_shared_auth_token(self.auth_registry_kinds())
 
     def store_auth_token(self, token: str) -> Path:
-        """Write a long-lived auth token to the adapter-owned path.
-
-        Returns the path where the token was written.
-        Raises ValueError if this adapter does not support token-file auth.
-        """
-        p = self.auth_token_path()
-        if p is None:
-            raise ValueError(
-                f"{type(self).__name__} does not support token-file auth"
-            )
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(token.strip() + "\n", encoding="utf-8")
-        p.chmod(0o600)
-        return p
+        """Write a long-lived auth token to the canonical shared registry."""
+        kind = self.infer_auth_token_kind(token)
+        if not kind:
+            raise ValueError("Could not infer credential kind from token")
+        return self.store_shared_auth_token(kind, token)
 
     # ---- Sessions ----
 

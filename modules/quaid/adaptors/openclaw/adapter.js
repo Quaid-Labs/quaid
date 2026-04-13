@@ -2073,20 +2073,66 @@ function _getGatewayCredential(providers) {
   }
   return void 0;
 }
-function _getAnthropicCredential() {
-  return _getGatewayCredential(["anthropic"]);
-}
-function _readAdapterAuthToken(adapterName) {
-  const authPath = path.join(WORKSPACE, "adaptors", adapterName, ".auth-token");
+function _readSharedAuthCredentialKinds(kinds) {
+  const registryPath = path.join(WORKSPACE, "shared", "auth", "credentials.json");
   try {
-    const token = fs.readFileSync(authPath, "utf8").trim();
-    return token || void 0;
+    const raw = fs.readFileSync(registryPath, "utf8");
+    const data = JSON.parse(raw);
+    const creds = data && typeof data.credentials === "object" ? data.credentials : {};
+    for (const kind of kinds) {
+      const payload = creds?.[kind];
+      if (payload && typeof payload === "object") {
+        const token = String(payload.token || "").trim();
+        if (token) return token;
+      } else if (typeof payload === "string" && payload.trim()) {
+        return payload.trim();
+      }
+    }
   } catch {
-    return void 0;
   }
+  return void 0;
+}
+function _getAnthropicCredential() {
+  return _readSharedAuthCredentialKinds(["anthropic_oauth", "anthropic_api"]) || String(process.env.ANTHROPIC_API_KEY || "").trim() || _getGatewayCredential(["anthropic"]);
 }
 function _getOpenAIOAuthCredential() {
-  return _getGatewayCredential(["openai"]) || _readAdapterAuthToken("openclaw");
+  return _readSharedAuthCredentialKinds(["codex_oauth", "openai_api"]) || _getGatewayCredential(["openai"]) || String(process.env.OPENAI_OAUTH_TOKEN || process.env.OPENAI_API_KEY || "").trim() || void 0;
+}
+function _isAnthropicOAuthToken(token) {
+  return String(token || "").trim().startsWith("sk-ant-oat");
+}
+function _buildAnthropicHeaders(credential) {
+  const headers = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": "prompt-caching-2024-07-31"
+  };
+  if (_isAnthropicOAuthToken(credential)) {
+    headers["Authorization"] = `Bearer ${credential}`;
+    headers["Accept"] = "application/json";
+    headers["user-agent"] = "claude-cli/2.1.2 (external, cli)";
+    headers["x-app"] = "cli";
+    headers["anthropic-beta"] = "prompt-caching-2024-07-31,claude-code-20250219,oauth-2025-04-20";
+  } else {
+    headers["x-api-key"] = credential;
+  }
+  return headers;
+}
+function _buildAnthropicSystemBlocks(systemPrompt, credential) {
+  const blocks = [];
+  if (_isAnthropicOAuthToken(credential)) {
+    blocks.push({
+      type: "text",
+      text: "You are Claude Code, Anthropic's official CLI for Claude.",
+      cache_control: { type: "ephemeral" }
+    });
+  }
+  blocks.push({
+    type: "text",
+    text: String(systemPrompt || "").trim(),
+    cache_control: { type: "ephemeral" }
+  });
+  return blocks;
 }
 function _extractOpenAICodexAccountId(token) {
   const parts = String(token || "").trim().split(".");
@@ -2153,6 +2199,9 @@ function _extractOpenAICodexText(rawBody) {
 }
 function _resolveConfiguredLLMTransport(provider) {
   const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "anthropic") {
+    return "anthropic-direct";
+  }
   if (normalized === "openai" || normalized === "openai-compatible") {
     return "openai-codex-oauth-direct";
   }
@@ -2265,6 +2314,49 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
       cache_read_tokens: 0,
       cache_creation_tokens: 0,
       truncated: false
+    };
+  }
+  if (transport === "anthropic-direct") {
+    const credential = _getAnthropicCredential();
+    if (!credential) {
+      throw new Error(
+        `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} error=missing Anthropic credential`
+      );
+    }
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: _buildAnthropicHeaders(credential),
+      body: JSON.stringify({
+        model: resolved.model,
+        max_tokens: maxTokens,
+        system: _buildAnthropicSystemBlocks(systemPrompt, credential),
+        messages: [{ role: "user", content: userMessage }]
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const rawBody2 = await response.text();
+    if (!response.ok) {
+      const bodyPreview = rawBody2.slice(0, 500).replace(/\s+/g, " ");
+      throw new Error(
+        `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} status=${response.status} error=${bodyPreview || response.statusText || "Anthropic error"}`
+      );
+    }
+    const data2 = JSON.parse(rawBody2 || "{}");
+    const contentBlocks = Array.isArray(data2?.content) ? data2.content : [];
+    const text2 = contentBlocks.filter((block) => block && block.type === "text" && typeof block.text === "string").map((block) => String(block.text)).join("\n").trim();
+    const usage = data2 && typeof data2.usage === "object" ? data2.usage : {};
+    const durationMs2 = Date.now() - started;
+    console.log(
+      `[quaid][llm] response provider=${provider} model=${resolved.model} transport=${transport} duration_ms=${durationMs2} output_len=${text2.length} status=${response.status}`
+    );
+    return {
+      text: text2,
+      model: String(data2?.model || resolved.model),
+      input_tokens: Number(usage.input_tokens || 0),
+      output_tokens: Number(usage.output_tokens || 0),
+      cache_read_tokens: Number(usage.cache_read_input_tokens || 0),
+      cache_creation_tokens: Number(usage.cache_creation_input_tokens || 0),
+      truncated: String(data2?.stop_reason || "") === "max_tokens"
     };
   }
   const gatewayUrl = `${_getGatewayBaseUrl()}/v1/responses`;

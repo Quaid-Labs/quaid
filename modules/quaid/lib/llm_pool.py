@@ -19,9 +19,12 @@ from typing import Iterator, Optional
 
 _POOL_LOCK = threading.Lock()
 _POOL: Optional[threading.BoundedSemaphore] = None
+_DEEP_POOL: Optional[threading.BoundedSemaphore] = None
 _POOL_SIZE = 0
+_DEEP_POOL_SIZE = 0
 _POOL_RESIZE_WARNED = False
 _DEFAULT_PROCESS_LOCK_SLOTS = 4
+_DEFAULT_FAST_RESERVED_SLOTS = 1
 
 
 def _configured_slots() -> int:
@@ -36,13 +39,31 @@ def _configured_slots() -> int:
     return max(1, slots)
 
 
+def _configured_fast_reserved_slots(total_slots: Optional[int] = None) -> int:
+    raw = str(os.environ.get("QUAID_LLM_FAST_RESERVED_SLOTS", "") or "").strip()
+    if raw:
+        try:
+            reserve = max(0, int(raw))
+        except Exception:
+            reserve = _DEFAULT_FAST_RESERVED_SLOTS
+    else:
+        reserve = _DEFAULT_FAST_RESERVED_SLOTS
+    total = _configured_slots() if total_slots is None else max(1, int(total_slots))
+    if total <= 1:
+        return 0
+    return max(0, min(total - 1, reserve))
+
+
 def _ensure_pool() -> threading.BoundedSemaphore:
-    global _POOL, _POOL_SIZE, _POOL_RESIZE_WARNED
+    global _POOL, _DEEP_POOL, _POOL_SIZE, _DEEP_POOL_SIZE, _POOL_RESIZE_WARNED
     desired = _configured_slots()
+    desired_deep = max(1, desired - _configured_fast_reserved_slots(desired))
     with _POOL_LOCK:
         if _POOL is None:
             _POOL = threading.BoundedSemaphore(desired)
+            _DEEP_POOL = threading.BoundedSemaphore(desired_deep)
             _POOL_SIZE = desired
+            _DEEP_POOL_SIZE = desired_deep
             _POOL_RESIZE_WARNED = False
         elif _POOL_SIZE != desired and not _POOL_RESIZE_WARNED:
             # Resizing a live semaphore can strand waiters on the old instance.
@@ -56,58 +77,59 @@ def _ensure_pool() -> threading.BoundedSemaphore:
         return _POOL
 
 
+def _ensure_deep_pool() -> threading.BoundedSemaphore:
+    _ensure_pool()
+    assert _DEEP_POOL is not None
+    return _DEEP_POOL
+
+
 def _process_lock_enabled() -> bool:
     override = str(os.environ.get("QUAID_LLM_PROCESS_LOCK", "")).strip().lower()
     if override in {"0", "false", "no", "off"}:
         return False
-
-    enabled = override in {"1", "true", "yes", "on"}
-    if not enabled:
-        try:
-            from config import get_config
-            cfg = get_config()
-            adapter_type = str(getattr(getattr(cfg, "adapter", object()), "type", "") or "").strip().lower()
-        except Exception:
-            adapter_type = ""
-        instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip().lower()
-        enabled = adapter_type == "openclaw" or instance.startswith("openclaw-")
-    return enabled
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    return True
 
 
 def _process_lock_slot_count() -> int:
     raw = str(os.environ.get("QUAID_LLM_PROCESS_LOCK_SLOTS", "") or "").strip()
     if not raw:
-        return _DEFAULT_PROCESS_LOCK_SLOTS
+        try:
+            return max(1, _configured_slots())
+        except Exception:
+            return _DEFAULT_PROCESS_LOCK_SLOTS
     try:
         return max(1, min(64, int(raw)))
     except Exception:
         return _DEFAULT_PROCESS_LOCK_SLOTS
 
 
-def _process_lock_paths() -> list[Path]:
-    """Return cross-process LLM slot lock paths for providers that need them."""
+def _process_lock_paths(pool_kind: str = "fast") -> list[Path]:
+    """Return cross-process LLM slot lock paths for the requested pool kind."""
     if not _process_lock_enabled():
         return []
 
     home_raw = str(os.environ.get("QUAID_HOME", "") or "").strip()
     home = Path(home_raw).expanduser() if home_raw else Path.home() / ".quaid"
-    # Temporary launch containment for OpenClaw's shared gateway. The runtime
-    # supervisor TODO should replace this with a real platform-level lease pool.
-    lock_dir = home / "shared" / "run" / "openclaw-gateway-llm"
-    return [lock_dir / f"slot-{idx}.lock" for idx in range(_process_lock_slot_count())]
+    lock_dir = home / "shared" / "run" / "llm"
+    slot_count = _process_lock_slot_count()
+    reserved_fast = _configured_fast_reserved_slots(slot_count)
+    start_idx = reserved_fast if str(pool_kind or "fast").strip().lower() == "deep" else 0
+    return [lock_dir / f"slot-{idx}.lock" for idx in range(start_idx, slot_count)]
 
 
 def _process_lock_path() -> Optional[Path]:
     """Return the first cross-process LLM slot path, kept for diagnostics/tests."""
-    paths = _process_lock_paths()
+    paths = _process_lock_paths("fast")
     if not paths:
         return None
     return paths[0]
 
 
 @contextmanager
-def _acquire_process_lock(timeout_seconds: Optional[float]) -> Iterator[None]:
-    lock_paths = _process_lock_paths()
+def _acquire_process_lock(timeout_seconds: Optional[float], pool_kind: str = "fast") -> Iterator[None]:
+    lock_paths = _process_lock_paths(pool_kind)
     if not lock_paths:
         yield
         return
@@ -148,17 +170,30 @@ def _acquire_process_lock(timeout_seconds: Optional[float]) -> Iterator[None]:
 
 
 @contextmanager
-def acquire_llm_slot(timeout_seconds: Optional[float] = None) -> Iterator[None]:
+def acquire_llm_slot(timeout_seconds: Optional[float] = None, pool_kind: str = "fast") -> Iterator[None]:
     """Acquire a shared LLM slot before making provider calls."""
     sem = _ensure_pool()
+    deep_sem = _ensure_deep_pool() if str(pool_kind or "fast").strip().lower() == "deep" else None
+    deep_acquired = False
+    if deep_sem is not None:
+        if timeout_seconds is None:
+            deep_acquired = deep_sem.acquire()
+        else:
+            deep_acquired = deep_sem.acquire(timeout=max(0.0, float(timeout_seconds)))
+        if not deep_acquired:
+            raise TimeoutError("Timed out waiting for deep LLM worker slot")
     if timeout_seconds is None:
         acquired = sem.acquire()
     else:
         acquired = sem.acquire(timeout=max(0.0, float(timeout_seconds)))
     if not acquired:
+        if deep_acquired and deep_sem is not None:
+            deep_sem.release()
         raise TimeoutError("Timed out waiting for LLM worker slot")
     try:
-        with _acquire_process_lock(timeout_seconds):
+        with _acquire_process_lock(timeout_seconds, pool_kind):
             yield
     finally:
         sem.release()
+        if deep_acquired and deep_sem is not None:
+            deep_sem.release()

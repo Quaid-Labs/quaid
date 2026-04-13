@@ -838,16 +838,21 @@ class TestClaudeCodeAdapter:
 class TestCodexAdapter:
     def test_installer_provider_surface_is_direct_provider_models(self):
         adapter = CodexAdapter()
-        assert adapter.installer_supported_providers() == ["openai"]
-        result = adapter.installer_default_models("openai")
-        assert result == {
+        assert adapter.installer_supported_providers() == ["anthropic", "openai"]
+        assert adapter.installer_default_models("anthropic") == {
+            "deep": "claude-sonnet-4-5",
+            "fast": "claude-haiku-4-5",
+            "deepEffort": "high",
+            "fastEffort": "none",
+        }
+        assert adapter.installer_default_models("openai") == {
             "deep": "gpt-5.4",
             "fast": "gpt-5.4-mini",
             "deepEffort": "high",
             "fastEffort": "none",
         }
-        assert adapter.get_deep_provider_default() == "openai"
-        assert adapter.get_fast_provider_default() == "openai"
+        assert adapter.get_deep_provider_default() == "anthropic"
+        assert adapter.get_fast_provider_default() == "anthropic"
         assert adapter.installer_supports_live_model_validation() is False
 
     def test_installer_install_state_reports_missing_codex_cli(self, tmp_path, monkeypatch):
@@ -1281,19 +1286,46 @@ class TestCodexAdapter:
         assert isinstance(provider, OpenAICodexOAuthLLMProvider)
         assert provider._base_url == "https://chatgpt.com/backend-api"
 
+    def test_get_llm_provider_returns_anthropic_provider(self, monkeypatch):
+        adapter = CodexAdapter()
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="anthropic",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="claude-sonnet-4-5",
+                fast_reasoning="claude-haiku-4-5",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, AnthropicLLMProvider)
+
     def test_get_api_key_reads_codex_auth_token_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = CodexAdapter()
         token_path = adapter.store_auth_token("sk-codex-file-token")
-        assert token_path == tmp_path / "adaptors" / "codex" / ".auth-token"
+        assert token_path == tmp_path / "shared" / "auth" / "credentials.json"
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         assert adapter.get_api_key("OPENAI_API_KEY") == "sk-codex-file-token"
+
+    def test_get_api_key_reads_shared_registry_before_adapter_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        adapter = CodexAdapter()
+        adapter.store_shared_auth_token("anthropic_api", "sk-ant-registry")
+        adapter.store_auth_token("sk-openai-file-token")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert adapter.get_api_key("ANTHROPIC_API_KEY") == "sk-ant-registry"
 
     def test_get_api_key_reads_openclaw_auth_token_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = OpenClawAdapter()
         token_path = adapter.store_auth_token("sk-openclaw-file-token")
-        assert token_path == tmp_path / "adaptors" / "openclaw" / ".auth-token"
+        assert token_path == tmp_path / "shared" / "auth" / "credentials.json"
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         assert adapter.get_api_key("OPENAI_API_KEY") == "sk-openclaw-file-token"
 

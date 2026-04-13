@@ -156,18 +156,16 @@ print('claude CLI credentials refreshed')
 \""
 ```
 
-### Step 2 — Pre-write the Quaid adapter token
+### Step 2 — Pre-write the shared Quaid auth credential
 
 **Before handing off to the CC platform agent**, proactively write the Quaid CC
-adapter token so the installer does not stop with an "Action Needed" credential
-note. The token source is `auth_token_file` in `livetest-config.json`:
+shared credential so the first installer does not stop with an "Action Needed"
+credential note. The token source is `auth_token_file` in `livetest-config.json`:
 
 ```bash
 TOKEN=$(cat ~/.tmp/cc-auth-token.txt | tr -d '[:space:]')
-ssh REMOTE_HOST "mkdir -p /Users/admin/.quaid/adaptors/claude-code && \
-  echo -n '$TOKEN' > /Users/admin/.quaid/adaptors/claude-code/.auth-token && \
-  chmod 600 /Users/admin/.quaid/adaptors/claude-code/.auth-token && \
-  echo 'CC Quaid adapter token written'"
+ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && \
+  echo 'CC Quaid shared auth credential written'"
 ```
 
 NEVER write a placeholder token.
@@ -599,10 +597,10 @@ be fixed before proceeding to M1.
 
 ### Post-install coordinator steps (after M0 PASS, before M1)
 
-**Write CC auth token** (required for daemon LLM calls):
+**Write CC auth credential** (required for daemon LLM calls):
 ```bash
 TOKEN=$(cat CC_AUTH_TOKEN_FILE | tr -d '[:space:]')
-ssh REMOTE_HOST "mkdir -p WORKSPACE/adaptors/claude-code && echo -n '$TOKEN' > WORKSPACE/adaptors/claude-code/.auth-token && chmod 600 WORKSPACE/adaptors/claude-code/.auth-token && echo 'Auth token written'"
+ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && echo 'Auth credential written'"
 ```
 
 **Verify installer model policy** on each silo (HARD RULE — trust installer defaults):
