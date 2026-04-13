@@ -62,6 +62,16 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('_beginChainedPlatformInstall(firstAdapter, queuedAdapters);');
   });
 
+
+  it("OpenClaw platform install does not prompt for or gate on a platform-specific credential", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).not.toContain('message: `OpenClaw ${providerLabel} token:`');
+    expect(setupText).not.toContain('OpenClaw Auth Token Required — Action Needed');
+    expect(setupText).not.toContain('Install incomplete: OpenClaw ${providerLabel} credential not found. Register it and re-run.');
+  });
+
   it("OpenClaw install hard-stops when the gateway is unreachable", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
