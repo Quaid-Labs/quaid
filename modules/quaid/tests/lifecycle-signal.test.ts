@@ -574,6 +574,10 @@ describe("lifecycle signal detection", () => {
     expect(block).toContain("fast language model provider");
   });
 
+  it("does not expose any hook-side deferred notice drain gate", () => {
+    expect("shouldDrainDeferredNoticeForPrompt" in __test).toBe(false);
+  });
+
   it("routes openai providers through the direct codex oauth transport", () => {
     expect(__test.resolveConfiguredLLMTransport("openai")).toBe("openai-codex-oauth-direct");
     expect(__test.resolveConfiguredLLMTransport("openai-compatible")).toBe("openai-codex-oauth-direct");

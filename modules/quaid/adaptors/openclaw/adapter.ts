@@ -773,15 +773,6 @@ function selectAutoInjectQuery(
   };
 }
 
-function shouldDrainDeferredNoticeForPrompt(query: string): boolean {
-  const normalized = String(query || "").trim();
-  if (normalized.length < 3) return false;
-  if (PROMPT_RELAY_SKIP_RE.test(normalized)) return false;
-  if (normalized.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
-  if (facade.isInternalMaintenancePrompt(normalized)) return false;
-  return true;
-}
-
 function readSessionsIndex(): Record<string, any> {
   try {
     const sessionsPath = getOpenClawSessionsPath();
@@ -3510,28 +3501,6 @@ notify_user(${JSON.stringify(message)})
           session_id: String(event?.sessionId || ctx?.sessionId || ""),
         });
       }
-      try {
-        const relayProbe = selectAutoInjectQuery(event, lastUserMessageQuery);
-        if (shouldDrainDeferredNoticeForPrompt(relayProbe.query)) {
-          const relayContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
-          if (relayContext) {
-            prependSystemContext = prependSystemContext
-              ? `${prependSystemContext}\n\n${relayContext}`
-              : relayContext;
-            writeHookTrace("deferred_notice.prompt_relay", {
-              agent_label: promptAgentLabel,
-              session_id: String(event?.sessionId || ctx?.sessionId || ""),
-              query_source: relayProbe.source,
-            });
-          }
-        }
-      } catch (err: unknown) {
-        writeHookTrace("deferred_notice.prompt_relay_error", {
-          agent_label: promptAgentLabel,
-          session_id: String(event?.sessionId || ctx?.sessionId || ""),
-          error: String((err as Error)?.message || err),
-        });
-      }
       if (isSystemEnabled("projects")) {
         const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         writeHookTrace("hook.docs_gate_check", {
@@ -6212,7 +6181,6 @@ export const __test = {
   buildExecCompletedHeartbeatVisibleReply,
   stripExecCompletedHeartbeatInstructions,
   formatDeferredNoticeRelayContext,
-  shouldDrainDeferredNoticeForPrompt,
   extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
   extractOpenAICodexText: _extractOpenAICodexText,
   buildOpenAICodexOAuthBody: _buildOpenAICodexOAuthBody,
