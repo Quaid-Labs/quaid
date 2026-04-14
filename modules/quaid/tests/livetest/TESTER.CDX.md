@@ -9,9 +9,9 @@ Platform-specific notes for the CDX tester. Read this alongside `TESTER.SKILL.md
 After M0 install, start the CDX interaction pane:
 
 ```bash
-tmux respawn-pane -k -t livetest:CDX 'zsh -il'
-tmux send-keys -t livetest:CDX "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CDX "mkdir -p /tmp/cdx-livetest && cd /tmp/cdx-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE codex --yolo" Enter
+tmux respawn-pane -k -t livetest:CDX.1 'zsh -il'
+tmux send-keys -t livetest:CDX.1 "ssh REMOTE_HOST" Enter
+tmux send-keys -t livetest:CDX.1 "mkdir -p /tmp/cdx-livetest && cd /tmp/cdx-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE codex --yolo" Enter
 ```
 
 **MANDATORY — always launch Codex in a FRESH process after Quaid install.**
@@ -36,16 +36,25 @@ ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"WORKSPACE/instances
 
 ## Sending Messages
 
+The platform (Codex on the remote VM) runs in the **CDX.1** pane:
+
 ```bash
-tmux send-keys -t livetest:CDX "your message" Enter
+tmux send-keys -t livetest:CDX.1 "your message" Enter
 sleep 10
-tmux capture-pane -t livetest:CDX -p | tail -30
+tmux capture-pane -t livetest:CDX.1 -p | tail -30
 ```
 
-**Input quirk:** if text lands in the buffer without submitting, send a bare Enter:
+**Input quirk (common):** Codex often stages text in the input buffer without
+submitting it. After every `send-keys`, verify that the message actually submitted
+by checking for a model response. If the text is staged but not submitted, send a
+bare Enter:
+
 ```bash
-tmux send-keys -t livetest:CDX "" Enter
+tmux send-keys -t livetest:CDX.1 "" Enter
 ```
+
+This must be sent by whoever is driving the pane — the tester agent (from CDX.0),
+or the coordinator directly if the tester's delivery is failing.
 
 Exit CDX with Ctrl+D or `/exit`.
 
@@ -93,8 +102,19 @@ message in the new session (e.g. `Hello`) to trigger `hook-inject` and fire
 `check_session_transition`. Do not just wait — no message means no hook fires
 and extraction never starts.
 
-**Hook trace marker:** `hook.inject.session_transition_signal_written` (not
-`hook.codex.session_init.orphan_swept` — orphan sweep is removed).
+**CDX does NOT have `quaid-hook-trace.jsonl`.** Do not check for this file — it is
+OC-native and will always be absent from CDX instance log directories. Checking for
+it and treating absence as a failure is a false-negative.
+
+**How to verify CDX hook activity:**
+- Check `logs/daemon/rolling-extraction.jsonl` for `rolling_stage` / `rolling_flush` events (primary check)
+- Check `logs/daemon/extraction-daemon.log` for session timeout / signal processing lines
+- Check `data/extraction-signals/` for pending signal files
+
+**Hook trace marker (daemon log):** Look for session timeout or transition lines in
+`extraction-daemon.log` (e.g. `idle for Ns with N unextracted lines, generating timeout signal`).
+The marker `hook.inject.session_transition_signal_written` appears in OC hook traces only;
+for CDX the equivalent evidence is a rollout file written to `data/rolling-extraction/`.
 
 CDX does not use `SessionTimeoutManager`, but the daemon still honors
 `capture.inactivityTimeoutMinutes` through its idle-session timeout path.

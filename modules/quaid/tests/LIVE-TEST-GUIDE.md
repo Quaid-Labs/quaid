@@ -1087,7 +1087,10 @@ For CC/CDX: prompt the agent in the active session and use `/reset`.
 Check after extraction:
 
 ```bash
-ssh REMOTE_HOST 'tail -20 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists)"'
+# Primary check (all platforms):
+ssh REMOTE_HOST 'tail -20 ~/quaid/projects/quaid/PROJECT.log 2>/dev/null || echo "(quaid/PROJECT.log absent)"'
+# OC fallback: OC sessions may route PROJECT.log to openclaw-workspace/ based on session context
+ssh REMOTE_HOST 'tail -20 ~/quaid/projects/openclaw-workspace/PROJECT.log 2>/dev/null || echo "(openclaw-workspace/PROJECT.log absent)"'
 ```
 
 Pass criteria:
@@ -1095,7 +1098,7 @@ Pass criteria:
 - Phase 2: show, update work correctly
 - Phase 3: delete removes the project but not the source directory
 - **Phase 4**: Throwaway file is registered to the misc project in the docs registry; agent reported the registration to user. File path is not graded. Fail only if the file is not registered to any project at all.
-- `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
+- A `PROJECT.log` file (at either `projects/quaid/PROJECT.log` or `projects/openclaw-workspace/PROJECT.log` for OC) has at least one timestamped entry added during this session
 
 Note: Phase 1 is a hard requirement. Phase 4 failure (no registry entry at all) should be reported to claude-dev before continuing.
 
