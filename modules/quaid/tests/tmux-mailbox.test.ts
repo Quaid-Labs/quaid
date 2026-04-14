@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +66,76 @@ describe("tmux mailbox", () => {
     const count = runMailbox(["count", "main:4.0"], env);
     expect(count.status, count.stderr).toBe(0);
     expect(count.stdout.trim()).toBe("0");
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not send a stale alert for a message acked after status snapshot", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-mailbox-watch-"));
+    const mailboxRoot = path.join(root, "mailbox");
+    const tmuxLog = path.join(root, "tmux.log");
+    const tmuxMsgScript = path.join(root, "tmux-msg.sh");
+    fs.writeFileSync(
+      tmuxMsgScript,
+      [
+        "#!/bin/bash",
+        "echo \"$*\" >> \"$TMUX_MAILBOX_TEST_LOG\"",
+      ].join("\n") + "\n",
+      { encoding: "utf8", mode: 0o755 },
+    );
+
+    const env = {
+      ...process.env,
+      TMUX_MAILBOX_ROOT: mailboxRoot,
+      TMUX_MAILBOX_TMUX_MSG_SCRIPT: tmuxMsgScript,
+      TMUX_MAILBOX_TEST_LOG: tmuxLog,
+      TMUX_MSG_SENDER: "tester",
+      TMUX_MSG_SOURCE: "main:3.0",
+    };
+
+    const post = runMailbox(["post", "main:4.0", "old mailbox item"], env);
+    expect(post.status, post.stderr).toBe(0);
+
+    const messages = readMessages(mailboxRoot);
+    expect(messages).toHaveLength(1);
+    const messageId = messages[0].id;
+    const messagesPath = path.join(mailboxRoot, "messages.jsonl");
+    const aged = {
+      ...messages[0],
+      posted_at: "2026-04-01T00:00:00Z",
+    };
+    fs.writeFileSync(messagesPath, `${JSON.stringify(aged)}\n`, "utf8");
+
+    const watchEnv = {
+      ...env,
+      TMUX_MAILBOX_TEST_PRE_STALE_CHECK_SLEEP_MS: "200",
+      TMUX_MAILBOX_TEST_WATCH_SINGLE_PASS: "1",
+    };
+    const watcher = spawn("bash", [mailboxScript, "watch", "--interval", "1", "--stale-seconds", "0", "main:4.0"], {
+      env: watchEnv,
+      stdio: "pipe",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const ack = runMailbox(["ack", "main:4.0", messageId], env);
+    expect(ack.status, ack.stderr).toBe(0);
+    expect(ack.stdout).toContain(`Acknowledged ${messageId}`);
+
+    await new Promise<void>((resolve, reject) => {
+      watcher.on("error", reject);
+      watcher.on("exit", (code) => {
+        if (code !== 0) {
+          reject(new Error(`watcher exited ${code}`));
+          return;
+        }
+        resolve();
+      });
+    });
+
+    const log = fs.existsSync(tmuxLog) ? fs.readFileSync(tmuxLog, "utf8") : "";
+    expect(log).not.toContain("MAILBOX STALLED");
+    expect(runMailbox(["count", "main:4.0"], env).stdout.trim()).toBe("0");
 
     fs.rmSync(root, { recursive: true, force: true });
   });

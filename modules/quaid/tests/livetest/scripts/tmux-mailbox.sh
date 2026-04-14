@@ -44,6 +44,8 @@ shift || true
 mkdir -p "$MAILBOX_ROOT"
 WATCHER_PID_FILE="$MAILBOX_ROOT/watch.pid"
 WATCHER_LOG_FILE="$MAILBOX_ROOT/watch.log"
+TEST_PRE_STALE_CHECK_SLEEP_MS="${TMUX_MAILBOX_TEST_PRE_STALE_CHECK_SLEEP_MS:-0}"
+TEST_WATCH_SINGLE_PASS="${TMUX_MAILBOX_TEST_WATCH_SINGLE_PASS:-0}"
 
 _detected_pane="$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || echo "unknown")"
 SENDER="${TMUX_MSG_SENDER:-}"
@@ -443,6 +445,14 @@ watch_mailbox_loop() {
             if [[ -z "$head_id" || "$age_seconds" -lt "$stale_seconds" ]]; then
                 continue
             fi
+            if [[ "$TEST_PRE_STALE_CHECK_SLEEP_MS" =~ ^[0-9]+$ ]] && [[ "$TEST_PRE_STALE_CHECK_SLEEP_MS" -gt 0 ]]; then
+                python3 - "$TEST_PRE_STALE_CHECK_SLEEP_MS" <<'PY'
+import sys
+import time
+
+time.sleep(max(0.0, int(sys.argv[1]) / 1000.0))
+PY
+            fi
             local stale_result
             stale_result="$(mailbox_python "$target" stale-check "$head_id" "$age_seconds" <<'PY'
 import fcntl
@@ -457,9 +467,17 @@ op = sys.argv[3]
 head_id = sys.argv[4]
 age_seconds = int(sys.argv[5])
 lock_path = root / "mailbox.lock"
+messages_path = root / "messages.jsonl"
+acks_path = root / "acks.jsonl"
 state_path = root / "notify-state.json"
 root.mkdir(parents=True, exist_ok=True)
 lock_path.touch(exist_ok=True)
+
+def load_jsonl(path):
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as handle:
+        return [json.loads(raw) for raw in handle if raw.strip()]
 
 def load_state(path):
     if not path.exists():
@@ -472,6 +490,19 @@ def load_state(path):
 
 with lock_path.open("r+", encoding="utf-8") as lock_handle:
     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    messages = load_jsonl(messages_path)
+    acked = {
+        row["id"]
+        for row in load_jsonl(acks_path)
+        if row.get("target") == target and row.get("id")
+    }
+    pending = [
+        row for row in messages
+        if row.get("target") == target and row.get("id") not in acked
+    ]
+    if not pending or str(pending[0].get("id", "")) != head_id:
+        print(json.dumps({"should_nudge": False}))
+        raise SystemExit(0)
     state = load_state(state_path)
     target_state = state.get(target)
     if not isinstance(target_state, dict):
@@ -507,6 +538,9 @@ PY
                     "$TMUX_MSG_SCRIPT" "$target" "$notice" >/dev/null 2>&1 || true
             fi
         done <<<"$targets_output"
+        if [[ "$TEST_WATCH_SINGLE_PASS" == "1" ]]; then
+            break
+        fi
         sleep "$interval"
     done
 }
