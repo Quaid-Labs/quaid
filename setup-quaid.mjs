@@ -797,7 +797,7 @@ function _readAdapterInstallerCapabilities(adapterId) {
   if (DEBUG_SETUP) {
     log.info(C.dim(`[step3_models] reading adapter installer capabilities: adapter=${normalized} instance=${instanceId}`));
   }
-  const res = spawnSync("python3", ["-c", py], {
+  const res = python3Spawn(["-c", py], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -848,7 +848,7 @@ function _runAdapterInstallerJson(adapterId, pyLines) {
   const normalized = String(adapterId || "").trim().toLowerCase();
   if (!normalized) return null;
   const instanceId = resolvedInstallerInstanceId(normalized);
-  const res = spawnSync("python3", ["-c", pyLines.join("\n")], {
+  const res = python3Spawn(["-c", pyLines.join("\n")], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -947,7 +947,7 @@ function runAdapterInstallHook(adapterId, hookName) {
     cmd = process.execPath || "node";
     args = [scriptPath];
   } else if (ext === ".py") {
-    cmd = "python3";
+    cmd = python3Command();
     args = [scriptPath];
   }
   const res = spawnSync(cmd, args, {
@@ -1888,13 +1888,13 @@ function ownerIdFromDisplayName(displayName) {
 }
 
 function _hasSqliteVec() {
-  return spawnSync("python3", ["-c", "import sqlite_vec"], { stdio: "pipe" }).status === 0;
+  return python3Spawn(["-c", "import sqlite_vec"], { stdio: "pipe" }).status === 0;
 }
 
 function _installSqliteVec() {
   const attempts = [
-    ["python3", ["-m", "pip", "install", "sqlite-vec"]],
-    ["python3", ["-m", "pip", "install", "--user", "sqlite-vec"]],
+    [python3Command(), ["-m", "pip", "install", "sqlite-vec"]],
+    [python3Command(), ["-m", "pip", "install", "--user", "sqlite-vec"]],
     ["pip3", ["install", "sqlite-vec"]],
     ["pip", ["install", "sqlite-vec"]],
   ];
@@ -2894,21 +2894,28 @@ async function step1_preflight() {
 
   // --- Python ---
   s.start("Checking Python 3.10+...");
-  if (!canRun("python3")) {
+  const resolvedPython = resolvePython3Binary();
+  if (!resolvedPython) {
     s.stop(C.red("Python 3 not found"), 2);
     const installed = await tryBrewInstall("python@3.12", "Python 3.12");
     if (!installed) bail("Python 3.10+ is required.");
     s.start("Rechecking Python...");
   }
-  const pyVer = shell('python3 -c "import sys; print(f\'{sys.version_info.major}.{sys.version_info.minor}\')"');
-  const pyOk = spawnSync("python3", ["-c", "import sys; exit(0 if sys.version_info >= (3, 10) else 1)"], { stdio: "pipe" }).status === 0;
+  const pyVer = String(python3Spawn(["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"], {
+    encoding: "utf8",
+    stdio: "pipe",
+  }).stdout || "").trim();
+  const pyOk = python3Spawn(["-c", "import sys; exit(0 if sys.version_info >= (3, 10) else 1)"], { stdio: "pipe" }).status === 0;
   if (!pyOk) {
     s.stop(C.red(`Python ${pyVer} — too old`), 2);
     const installed = await tryBrewInstall("python@3.12", "Python 3.12");
     if (!installed) bail("Python 3.10+ is required.");
     s.start("Rechecking Python...");
-    const newVer = shell('python3 -c "import sys; print(f\'{sys.version_info.major}.{sys.version_info.minor}\')"');
-    const newOk = spawnSync("python3", ["-c", "import sys; exit(0 if sys.version_info >= (3, 10) else 1)"], { stdio: "pipe" }).status === 0;
+    const newVer = String(python3Spawn(["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"], {
+      encoding: "utf8",
+      stdio: "pipe",
+    }).stdout || "").trim();
+    const newOk = python3Spawn(["-c", "import sys; exit(0 if sys.version_info >= (3, 10) else 1)"], { stdio: "pipe" }).status === 0;
     if (!newOk) bail("Python 3.10+ required. Update your PATH to use Homebrew Python.");
     s.stop(C.green(`Python ${newVer}`));
   } else {
@@ -2917,15 +2924,21 @@ async function step1_preflight() {
 
   // --- SQLite ---
   s.start("Checking SQLite 3.35+...");
-  const sqliteVer = shell('python3 -c "import sqlite3; print(sqlite3.sqlite_version)"');
-  const sqliteOk = spawnSync("python3", ["-c", "import sqlite3; parts=[int(x) for x in sqlite3.sqlite_version.split('.')]; exit(0 if (parts[0],parts[1])>=(3,35) else 1)"], { stdio: "pipe" }).status === 0;
+  const sqliteVer = String(python3Spawn(["-c", "import sqlite3; print(sqlite3.sqlite_version)"], {
+    encoding: "utf8",
+    stdio: "pipe",
+  }).stdout || "").trim();
+  const sqliteOk = python3Spawn(["-c", "import sqlite3; parts=[int(x) for x in sqlite3.sqlite_version.split('.')]; exit(0 if (parts[0],parts[1])>=(3,35) else 1)"], { stdio: "pipe" }).status === 0;
   if (!sqliteOk) {
     s.stop(C.red(`SQLite ${sqliteVer} — too old`), 2);
     log.warn("Python's sqlite3 module uses the system SQLite. Installing Python via Homebrew links it to a modern SQLite.");
     const installed = await tryBrewInstall("python@3.12", "Python 3.12 (with modern SQLite)");
     if (!installed) bail("SQLite 3.35+ required for FTS5 + JSON support.");
     s.start("Rechecking SQLite...");
-    const newVer = shell('python3 -c "import sqlite3; print(sqlite3.sqlite_version)"');
+    const newVer = String(python3Spawn(["-c", "import sqlite3; print(sqlite3.sqlite_version)"], {
+      encoding: "utf8",
+      stdio: "pipe",
+    }).stdout || "").trim();
     s.stop(C.green(`SQLite ${newVer}`));
   } else {
     s.stop(C.green(`SQLite ${sqliteVer}`));
@@ -2933,7 +2946,7 @@ async function step1_preflight() {
 
   // --- FTS5 ---
   s.start("Checking FTS5 support...");
-  const fts5Ok = spawnSync("python3", ["-c", "import sqlite3; c=sqlite3.connect(':memory:'); c.execute('CREATE VIRTUAL TABLE t USING fts5(content)'); c.close()"], { stdio: "pipe" }).status === 0;
+  const fts5Ok = python3Spawn(["-c", "import sqlite3; c=sqlite3.connect(':memory:'); c.execute('CREATE VIRTUAL TABLE t USING fts5(content)'); c.close()"], { stdio: "pipe" }).status === 0;
   if (!fts5Ok) {
     s.stop(C.red("FTS5 not available"), 2);
     log.warn("FTS5 is included in Homebrew's SQLite.");
@@ -2943,7 +2956,7 @@ async function step1_preflight() {
     }
     if (!installed) bail("SQLite FTS5 support is required.");
     s.start("Rechecking FTS5...");
-    const ok = spawnSync("python3", ["-c", "import sqlite3; c=sqlite3.connect(':memory:'); c.execute('CREATE VIRTUAL TABLE t USING fts5(content)'); c.close()"], { stdio: "pipe" }).status === 0;
+    const ok = python3Spawn(["-c", "import sqlite3; c=sqlite3.connect(':memory:'); c.execute('CREATE VIRTUAL TABLE t USING fts5(content)'); c.close()"], { stdio: "pipe" }).status === 0;
     if (!ok) bail("FTS5 still not available. Try: brew install sqlite && brew reinstall python@3.12");
     s.stop(C.green("FTS5 support"));
   } else {
@@ -4164,7 +4177,7 @@ with open(${JSON.stringify(schemaPath)}) as f:
     conn.executescript(f.read())
 conn.close()
 `;
-  const initResult = spawnSync("python3", ["-c", initScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  const initResult = python3Spawn(["-c", initScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
   if (initResult.status !== 0) {
     s.stop(C.red("Database initialization failed"));
     const detail = (initResult.stderr || initResult.stdout || "").trim();
@@ -4177,7 +4190,7 @@ row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND na
 conn.close()
 print(int(row[0] if row else 0))
 `;
-  const verifyResult = spawnSync("python3", ["-c", verifyScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  const verifyResult = python3Spawn(["-c", verifyScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
   const nodesTableCount = Number((verifyResult.stdout || "").trim());
   if (verifyResult.status !== 0 || !Number.isFinite(nodesTableCount) || nodesTableCount < 1) {
     s.stop(C.red("Database initialization failed"));
@@ -4204,7 +4217,7 @@ from config import get_config
 _cfg = get_config()
 print('[+] Datastore init hooks complete')
 `;
-  const domainInitResult = spawnSync("python3", ["-c", domainInitScript], {
+  const domainInitResult = python3Spawn(["-c", domainInitScript], {
     cwd: PLUGIN_DIR,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
@@ -4316,7 +4329,7 @@ try:
 except Exception as e:
     print(f'warn: {e}', file=sys.stderr)
 `;
-  spawnSync("python3", ["-c", storeScript], { cwd: PLUGIN_DIR, stdio: "pipe" });
+  python3Spawn(["-c", storeScript], { cwd: PLUGIN_DIR, stdio: "pipe" });
   s.stop(C.green(`Owner node: ${owner.display}`));
 
   if (_isPlatform("openclaw")) {
@@ -4408,7 +4421,7 @@ for name in names:
         print(f'warn: {name}: {e}', file=sys.stderr)
 print(total_docs)
 `;
-      const regResult = spawnSync("python3", ["-c", registerScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      const regResult = python3Spawn(["-c", registerScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
       const regCount = (regResult.stdout || "").trim();
       s.stop(C.green(`Registered ${existingDirs.length} project(s), ${regCount} doc(s) indexed`));
     }
@@ -4451,7 +4464,7 @@ print(len(found))
     if (quaidAlreadyRegisteredViaExisting) {
       log.info("Quaid project docs were already registered in the existing-project scan; skipping duplicate registration pass.");
     } else {
-      const regQuaidResult = spawnSync("python3", ["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      const regQuaidResult = python3Spawn(["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
       const quaidDocCount = (regQuaidResult.stdout || "").trim();
       log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
     }
@@ -4479,7 +4492,7 @@ try:
 except ValueError:
     print('exists')
 `;
-        const result = spawnSync("python3", ["-c", regScript], {
+        const result = python3Spawn(["-c", regScript], {
           cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
           env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME },
         });
@@ -4492,7 +4505,7 @@ except ValueError:
     // Keep projects/quaid/TOOLS.md domain block aligned after install.
     const syncToolsScript = path.join(pluginSrc, "scripts", "sync-tools-domain-block.py");
     if (fs.existsSync(syncToolsScript)) {
-      spawnSync("python3", [syncToolsScript, "--workspace", WORKSPACE], {
+      python3Spawn([syncToolsScript, "--workspace", WORKSPACE], {
         cwd: __dirname,
         stdio: "pipe",
         env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME, OPENCLAW_WORKSPACE: WORKSPACE },
@@ -4566,7 +4579,7 @@ c = sqlite3.connect(${JSON.stringify(dbPath)})
 print(c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0])
 c.close()
 `;
-    const tableResult = spawnSync("python3", ["-c", tableProbe], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    const tableResult = python3Spawn(["-c", tableProbe], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
     const tables = tableResult.status === 0 ? (tableResult.stdout || "").trim() : "unknown";
     checks.push(`${C.green("■")} Database     ${C.dim("—")} ${tables} tables`);
   } else {
@@ -4643,7 +4656,7 @@ except Exception as e:
     print(f'warn: {e}', file=sys.stderr)
     print('PARTIAL')
 `;
-  const smoke = spawnSync("python3", ["-c", smokeScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  const smoke = python3Spawn(["-c", smokeScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
   const smokeResult = (smoke.stdout || "").trim();
   if (smoke.status !== 0) {
     s.stop(C.red("Smoke test failed — Python execution error"));
@@ -4674,7 +4687,7 @@ except Exception as e:
     print(f'warn: {e}', file=sys.stderr)
     print('SKIP')
 `;
-    const daemon = spawnSync("python3", ["-c", daemonScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    const daemon = python3Spawn(["-c", daemonScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
     const daemonResult = (daemon.stdout || "").trim();
     if (daemonResult === "OK") {
       s.stop(C.green("Extraction daemon started"));
@@ -4884,6 +4897,23 @@ function resolveHostBinary(cmd, extraCandidates = []) {
     } catch {}
   }
   return "";
+}
+
+function resolvePython3Binary() {
+  for (const candidate of ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"]) {
+    try {
+      if (candidate && fs.existsSync(candidate)) return candidate;
+    } catch {}
+  }
+  return resolveHostBinary("python3");
+}
+
+function python3Command() {
+  return resolvePython3Binary() || "python3";
+}
+
+function python3Spawn(args, options = {}) {
+  return spawnSync(python3Command(), args, options);
 }
 
 function _shellQuote(value) {
@@ -5747,7 +5777,7 @@ print("ok" if ok else "unavailable")
   env.PYTHONPATH = env.PYTHONPATH ? `${pythonRoot}${sep}${env.PYTHONPATH}` : pythonRoot;
   env.QUAID_INSTANCE = env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedInstallerPlatform());
 
-  const res = spawnSync("python3", ["-c", py], {
+  const res = python3Spawn(["-c", py], {
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
     env,
@@ -5808,7 +5838,7 @@ print("ok" if ok else "no_channel")
   env.OPENCLAW_WORKSPACE = WORKSPACE;
   env.PYTHONPATH = env.PYTHONPATH ? `${PLUGIN_DIR}${sep}${env.PYTHONPATH}` : PLUGIN_DIR;
 
-  const res = spawnSync("python3", ["-c", py], {
+  const res = python3Spawn(["-c", py], {
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
     env,
