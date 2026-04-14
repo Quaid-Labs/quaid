@@ -2337,11 +2337,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         "semantic_tokens_added": 0,
         "buffered_line_offset": int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
     }
+    refreshed_semantic_buffer_for_nonrolling = False
     buffered_line_offset = max(
         int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
         int(cursor_offset or 0),
     )
-    if rolling_mode and total_lines > buffered_line_offset:
+    if total_lines > buffered_line_offset:
         staged_state, semantic_buffer_metrics = _buffer_transcript_tail(
             transcript_path,
             buffered_line_offset,
@@ -2349,9 +2350,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             adapter=adapter,
         )
         write_rolling_state(session_id, staged_state)
-        buffered_line_offset = int(
-            staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
-        )
+        if rolling_mode:
+            buffered_line_offset = int(
+                staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
+            )
+        else:
+            refreshed_semantic_buffer_for_nonrolling = True
     read_start_offset = cursor_offset if rolling_mode else buffered_line_offset
     pending_subagent_harvest = False
     new_lines = (
@@ -2455,9 +2459,16 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     chunk_budget=chunk_budget,
                     chunk_line_budget=chunk_line_budget,
                 )
+                refreshed_semantic_buffer_for_nonrolling = False
             buffered_text = str(staged_state.get("semantic_buffer", "") or "").strip()
             tail_text = str(transcript_text or "").strip()
-            transcript_text = f"{buffered_text}\n\n{tail_text}" if buffered_text and tail_text else (buffered_text or tail_text)
+            if refreshed_semantic_buffer_for_nonrolling:
+                # The non-rolling pre-buffer step already appended the new tail
+                # into semantic_buffer. Re-appending tail_text here would
+                # duplicate the fresh session content on under-budget flushes.
+                transcript_text = buffered_text or tail_text
+            else:
+                transcript_text = f"{buffered_text}\n\n{tail_text}" if buffered_text and tail_text else (buffered_text or tail_text)
 
         if not rolling_mode and not transcript_text.strip():
             if staged_state_has_payload(staged_state):

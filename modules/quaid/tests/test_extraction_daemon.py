@@ -2881,7 +2881,8 @@ class TestRollingExtraction:
             )
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 
-            assert seen_transcripts[0] == "User: My sister is Diana"
+            assert seen_transcripts[0].startswith("User: My sister is Diana")
+            assert "Assistant: Her daughter Alice just opened" in seen_transcripts[0]
             assert seen_transcripts[1].startswith("Assistant: Her daughter Alice just opened")
             assert [metric["event"] for metric in rolling_metrics[-2:]] == ["rolling_stage", "rolling_flush"]
             assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
@@ -2891,6 +2892,184 @@ class TestRollingExtraction:
             )
             assert "phase=rolling_stage" in buffer_log
             assert "signal=compaction" in buffer_log
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
+    def test_process_signal_compaction_under_budget_does_not_duplicate_tail_after_buffer_refresh(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"My sister is Diana"}\n'
+            '{"role":"assistant","content":"Her daughter Alice opened a studio."}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
+            json.dumps(
+                {
+                    "adapter": {"type": "standalone"},
+                    "livetest": {"enableExtractionBufferLog": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
+        extraction_daemon.write_rolling_state(
+            "sess-roll",
+            {
+                "session_id": "sess-roll",
+                "transcript_path": str(transcript_path),
+                "processed_line_offset": 1,
+                "buffered_line_offset": 1,
+                "semantic_buffer": "User: My sister is Diana",
+                "semantic_buffer_tokens": 4,
+                "carry_facts": [],
+                "raw_facts": [],
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8_000: 10_000)
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                return "Assistant: Her daughter Alice opened a studio."
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        seen_transcripts = []
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+                "dry_run": True,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "carry_facts": [],
+                "carry_duplicate_facts_dropped": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "chunk_calls": 1,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: {
+                **payload,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(
+            ingest_runtime_mod,
+            "run_session_logs_ingest",
+            lambda **kwargs: {"status": "indexed"},
+        )
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(
+            docs_updater_mod,
+            "update_project_docs",
+            lambda snapshots, extraction_result: {"docs_updated": 0},
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_read_usage_totals",
+            lambda: {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "fast_calls": 0,
+                "fast_input_tokens": 0,
+                "fast_output_tokens": 0,
+                "deep_calls": 0,
+                "deep_input_tokens": 0,
+                "deep_output_tokens": 0,
+            },
+        )
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="compaction",
+                session_id="sess-roll",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert seen_transcripts == [
+                "User: My sister is Diana\n\nAssistant: Her daughter Alice opened a studio."
+            ]
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry
