@@ -313,6 +313,47 @@ def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypat
     assert captured == []
 
 
+def test_check_idle_sessions_does_not_skip_fresh_transcript_when_installed_at_missing(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n',
+        encoding="utf-8",
+    )
+
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+    cursor_dir.mkdir(parents=True, exist_ok=True)
+    (cursor_dir / "sess-fresh.json").write_text(
+        (
+            '{"session_id":"sess-fresh","line_offset":0,'
+            f'"transcript_path":"{transcript_path}","transcript_size_bytes":0'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    now = 1_700_000_000.0
+    stale_mtime = now - (31 * 60)
+    os.utime(transcript_path, (stale_mtime, stale_mtime))
+
+    captured = []
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+    assert len(captured) == 1
+    assert captured[0][1]["signal_type"] == "timeout"
+    assert captured[0][1]["session_id"] == "sess-fresh"
+    assert (tmp_path / "instances" / instance_id / "data" / "installed-at.json").is_file()
+
+
 def test_check_idle_sessions_advances_internal_session_cursor_to_eof(monkeypatch, tmp_path):
     import sys
     import types

@@ -2962,7 +2962,11 @@ def _read_installed_at() -> float:
         _atomic_write(path, json.dumps({"installedAt": installed_at}))
     except Exception:
         pass
-    return time.time()
+    # If the lower-bound file is first created during an idle sweep, returning
+    # "now" would immediately classify any already-written fresh transcript as
+    # older than installedAt and skip timeout extraction forever. Seed the file
+    # for future scans, but let this first scan evaluate existing transcripts.
+    return 0.0
 
 
 def _get_idle_timeout_minutes(default: int = 30) -> int:
