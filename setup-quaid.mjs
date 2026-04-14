@@ -578,6 +578,7 @@ let _adapterManifests = [];
 let _existingInstallDetected = false;
 let _chainedPlatformInstall = false;
 let _chainedPlatformQueue = [];
+let _sharedCredentialSelection = "unset";
 
 function _refreshAdapterManifests() {
   try {
@@ -683,6 +684,67 @@ function _adapterCompatibilityWarnings(adapterId) {
   return manifest.install.compatibilityWarnings
     .map((v) => String(v || "").trim())
     .filter(Boolean);
+}
+
+function _requiredAuthKindsForAdapterProvider(adapterType, provider = "") {
+  const platform = String(adapterType || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  if (!platform) return [];
+  if (platform === "claude-code") return ["anthropic_oauth", "anthropic_api"];
+  if (platform === "codex" || platform === "openclaw") {
+    return authKindsForProvider(provider || installerDefaultProvider(platform));
+  }
+  return [];
+}
+
+async function _ensureCompatibleSharedCredentialForInstall(adapterType, provider, sharedAuthTokenPath) {
+  const requiredKinds = _requiredAuthKindsForAdapterProvider(adapterType, provider);
+  if (requiredKinds.length === 0) return;
+
+  const currentCredential = getSharedAuthCredential(WORKSPACE, allSharedAuthKinds());
+  const currentKind = String(currentCredential?.kind || "").trim();
+  const currentToken = String(currentCredential?.token || "").trim();
+  if (!currentKind || !currentToken) return;
+  if (requiredKinds.includes(currentKind)) return;
+
+  const requiredLabels = requiredKinds.map((kind) => authKindPromptLabel(kind)).join(" or ");
+  const providerLabel = String(provider || installerDefaultProvider(adapterType) || "provider").trim().toLowerCase();
+  const mismatchMessage =
+    `${_installerPlatformLabel(adapterType)} requires ${requiredLabels} for its ${providerLabel} lane, `
+    + `but the shared registry currently has ${authKindPromptLabel(currentKind)}.`;
+
+  if (!_existingInstallDetected && !AGENT_MODE) {
+    log.warn(mismatchMessage);
+    log.info(C.dim(`Canonical registry: ${sharedAuthTokenPath}`));
+    const newToken = handleCancel(await text({
+      message: `${_installerPlatformLabel(adapterType)} ${providerLabel} credential:`,
+      placeholder: `paste ${requiredLabels} token here`,
+      validate: (v) => (!v || !v.trim()) ? "Credential is required." : undefined,
+    }));
+    if (newToken && newToken.trim()) {
+      const inferredKind = inferSharedAuthKind(newToken.trim()) || "";
+      if (!requiredKinds.includes(inferredKind)) {
+        bail(
+          `Install incomplete: credential kind ${authKindPromptLabel(inferredKind || "unknown")} `
+          + `does not satisfy ${_installerPlatformLabel(adapterType)} ${providerLabel}. `
+          + `Expected ${requiredLabels}.`
+        );
+      }
+      if (!DRY_RUN) {
+        writeSharedAuthCredential(WORKSPACE, inferredKind, newToken.trim());
+        _sharedCredentialSelection = "reset";
+        log.success(`Credential stored in shared registry as ${authKindPromptLabel(inferredKind)} at ${sharedAuthTokenPath}`);
+      } else {
+        log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(inferredKind)} at ${sharedAuthTokenPath}`));
+      }
+      return;
+    }
+  }
+
+  bail(
+    `Install incomplete: shared auth credential kind ${authKindPromptLabel(currentKind || "unknown")} `
+    + `does not satisfy ${_installerPlatformLabel(adapterType)} ${providerLabel}. `
+    + `Expected ${requiredLabels}. Registry: ${sharedAuthTokenPath}`
+  );
 }
 
 function _normalizeAdapterInstallState(raw) {
@@ -2742,6 +2804,7 @@ async function step1_preflight() {
         : "reset";
 
       if (tokenAction === "reset") {
+        _sharedCredentialSelection = "reset";
         log.info(C.dim("Use one global shared credential for Quaid background calls."));
         log.info(C.dim("Recommended: Anthropic OAuth token from `claude setup-token`."));
         log.info(C.dim("OpenAI-backed lanes are experimental and benchmark lower than Anthropic."));
@@ -2760,6 +2823,9 @@ async function step1_preflight() {
             log.info(C.dim(`(dry run) Would store ${authKindPromptLabel(kind)} at ${sharedAuthTokenPath}`));
           }
         }
+      }
+      if (tokenAction === "keep") {
+        _sharedCredentialSelection = "keep";
       }
     } else if (!hasSharedCredential) {
       if (DRY_RUN) {
@@ -3220,6 +3286,8 @@ async function step3_models() {
     log.warn("Benchmarks and live tests showed materially worse memory quality than Anthropic.");
     log.warn("Prefer Anthropic unless you are blocked on credentials.");
   }
+
+  await _ensureCompatibleSharedCredentialForInstall(adapterType, provider, sharedAuthTokenPath);
 
 
 
@@ -3934,6 +4002,86 @@ function installLaunchdSchedule(hour) {
   }
 }
 
+function installCodexDaemonLaunchAgent(instanceId) {
+  if (process.platform !== "darwin") {
+    log.warn("Persistent Codex daemon supervision is launchd-only on macOS.");
+    return false;
+  }
+
+  const normalizedInstance = String(instanceId || resolvedInstallerInstanceId("codex") || "codex-main").trim() || "codex-main";
+  const quaidCmd = fs.existsSync(path.join(PLUGIN_DIR, "quaid"))
+    ? path.join(PLUGIN_DIR, "quaid")
+    : "quaid";
+  const label = `com.quaid.daemon.${normalizedInstance}`;
+  const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
+  const daemonLogDir = path.join(hiddenInstanceLogsDir(normalizedInstance), "daemon");
+  const outPath = path.join(daemonLogDir, "launchd.log");
+  const errPath = path.join(daemonLogDir, "launchd-err.log");
+
+  fs.mkdirSync(daemonLogDir, { recursive: true });
+
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${quaidCmd}</string>
+    <string>daemon</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>QUAID_HOME</key>
+    <string>${WORKSPACE}</string>
+    <key>QUAID_VISIBLE_HOME</key>
+    <string>${VISIBLE_HOME}</string>
+    <key>OPENCLAW_WORKSPACE</key>
+    <string>${WORKSPACE}</string>
+    <key>QUAID_INSTANCE</key>
+    <string>${normalizedInstance}</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>${PLUGIN_DIR}</string>
+  <key>StandardOutPath</key>
+  <string>${outPath}</string>
+  <key>StandardErrorPath</key>
+  <string>${errPath}</string>
+</dict>
+</plist>
+`;
+
+  try {
+    if (fs.existsSync(plistPath)) {
+      spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "pipe" });
+      spawnSync("launchctl", ["unload", plistPath], { stdio: "pipe" });
+    }
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, plist, "utf8");
+    let load = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath], { stdio: "pipe" });
+    if (load.status !== 0) {
+      load = spawnSync("launchctl", ["load", plistPath], { stdio: "pipe" });
+    }
+    if (load.status !== 0) {
+      const detail = String(load.stderr || load.stdout || "").trim();
+      log.warn(`launchctl daemon load failed for ${normalizedInstance}: ${detail || "unknown error"}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log.warn(`failed to install Codex daemon launch agent: ${String(err?.message || err)}`);
+    return false;
+  }
+}
+
 function installWindowsScheduledTask(hour) {
   // Windows Task Scheduler for nightly janitor.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
@@ -4160,6 +4308,13 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     s.start("Configuring Codex hooks...");
     setupCodexHooks();
     s.stop(C.green("Codex hooks configured"));
+    s.start("Installing Codex daemon launch agent...");
+    if (installCodexDaemonLaunchAgent(resolvedInstanceId)) {
+      s.stop(C.green("Codex daemon launch agent installed"));
+    } else {
+      s.stop(C.yellow("Codex daemon launch agent not installed"));
+      log.warn("Codex background extraction will rely on manual/one-shot daemon startup until launchd is available.");
+    }
   }
 
   // Initialize database

@@ -96,6 +96,7 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('message: "Quaid shared provider credential:"');
     expect(setupText).toContain('Shared Auth Credential Required — Action Needed');
     expect(setupText).toContain('Install incomplete: shared auth credential not found. Register it and re-run.');
+    expect(setupText).toContain("async function _ensureCompatibleSharedCredentialForInstall(adapterType, provider, sharedAuthTokenPath)");
   });
 
   it("OpenClaw install hard-stops when the gateway is unreachable", () => {
@@ -194,5 +195,17 @@ describe("install daemon policy", () => {
     expect(postinstallText).toContain('updatedToml = upsertTomlStringInTable(');
     expect(postinstallText).toContain('"trust_level"');
     expect(postinstallText).toContain('"trusted"');
+  });
+
+  it("Codex install also registers a persistent launchd daemon agent", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function installCodexDaemonLaunchAgent(instanceId)");
+    expect(setupText).toContain('const label = `com.quaid.daemon.${normalizedInstance}`;');
+    expect(setupText).toContain('<string>daemon</string>');
+    expect(setupText).toContain('<string>run</string>');
+    expect(setupText).toContain('s.start("Installing Codex daemon launch agent...")');
+    expect(setupText).toContain("installCodexDaemonLaunchAgent(resolvedInstanceId)");
   });
 });
