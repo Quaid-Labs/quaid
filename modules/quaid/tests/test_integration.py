@@ -414,3 +414,26 @@ class TestBootstrapConfigIntegration:
              patch("glob.glob", return_value=[]):
             result = get_monitored_files()
             assert "AGENTS.md" in result
+
+
+def test_get_edges_resolves_node_name_and_alias(tmp_path):
+    from datastore.memorydb.memory_graph import create_edge, get_graph, _resolve_node_identifier
+
+    graph, _db_file = _make_graph(tmp_path)
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        result = create_edge("Nia", "knows", "Pavel", owner_id="quaid")
+        assert result["status"] == "created"
+        nia = graph.find_node_by_name("Nia")
+        assert nia is not None
+        graph.add_alias("Nea", "Nia", canonical_node_id=nia.id, owner_id="quaid")
+
+        resolved_by_name = _resolve_node_identifier(graph, "Nia")
+        resolved_by_alias = _resolve_node_identifier(graph, "Nea")
+        assert resolved_by_name is not None
+        assert resolved_by_name.id == nia.id
+        assert resolved_by_alias is not None
+        assert resolved_by_alias.id == nia.id
+        edges = graph.get_edges(resolved_by_name.id)
+        assert len(edges) == 1
+        assert edges[0].relation == "knows"

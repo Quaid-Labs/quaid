@@ -187,7 +187,7 @@ class InstanceManager:
 
     def _ensure_shared_quaid_project(self, instance_id: str) -> None:
         """Ensure the shared quaid project exists and is linked to this instance."""
-        from core.project_registry import create_project as _cp, get_project as _gp, link_project as _lp
+        from core.project_registry import create_project as _cp, get_project as _gp, link_project as _lp, _sync_docs_registry_project
 
         project_name = "quaid"
         project_dir = self.adapter.visible_home() / "projects" / project_name
@@ -202,6 +202,17 @@ class InstanceManager:
             _cp(project_name, description=desc, initial_instance=instance_id)
         else:
             _lp(project_name, instance_id=instance_id)
+
+        # During silo creation the ambient QUAID_INSTANCE may still point at a
+        # different instance. Mirror the project definition into the target
+        # silo DB explicitly so PROJECT.log routing works on first use.
+        _sync_docs_registry_project(
+            project_name,
+            description=desc,
+            source_root=None,
+            canonical=project_dir,
+            db_path=(self.adapter.instance_root().parent / instance_id / "data" / "memory.db"),
+        )
 
     def _default_config(self) -> dict:
         """Return a complete default config skeleton.

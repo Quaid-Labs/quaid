@@ -25,12 +25,13 @@ def _sync_docs_registry_project(
     description: str,
     source_root: Optional[str],
     canonical: Path,
+    db_path: Optional[Path] = None,
 ) -> None:
     """Mirror project metadata into the docs-registry source of truth."""
     from config import ProjectDefinition
     from datastore.docsdb.registry import DocsRegistry
 
-    registry = DocsRegistry()
+    registry = DocsRegistry(db_path=db_path)
     existing = registry.get_project_definition(name)
     label = existing.label if existing else name.replace("-", " ").title()
     patterns = list(existing.patterns) if existing and existing.patterns else ["*.md"]
@@ -406,7 +407,7 @@ def rename_project(old_name: str, new_name: str) -> Dict[str, Any]:
         ValueError: If old_name does not exist or new_name is already taken.
     """
     from datastore.docsdb.registry import DocsRegistry
-    registry = DocsRegistry()
+    registry = DocsRegistry(db_path=db_path)
     return registry.rename_project(old_name, new_name)
 
 
@@ -422,7 +423,7 @@ def archive_project(name: str) -> Dict[str, Any]:
         ValueError: If project does not exist.
     """
     from datastore.docsdb.registry import DocsRegistry
-    registry = DocsRegistry()
+    registry = DocsRegistry(db_path=db_path)
     return registry.archive_project(name)
 
 

@@ -171,7 +171,8 @@ class TestInstanceManagerBase:
              patch("lib.instance.validate_instance_id"), \
              patch("core.project_registry.get_project", side_effect=[None, None]) as mock_get_project, \
              patch("core.project_registry.create_project") as mock_create_project, \
-             patch("core.project_registry.link_project") as mock_link_project:
+             patch("core.project_registry.link_project") as mock_link_project, \
+             patch("core.project_registry._sync_docs_registry_project") as mock_sync_docs:
             mgr.create("proj")
 
         assert (tmp_path / "visible" / "projects" / "quaid").is_dir()
@@ -182,6 +183,8 @@ class TestInstanceManagerBase:
             initial_instance="claude-code-proj",
         )
         mock_link_project.assert_not_called()
+        mock_sync_docs.assert_called_once()
+        assert str(mock_sync_docs.call_args.kwargs["db_path"]).endswith("claude-code-proj/data/memory.db")
 
     def test_create_links_existing_quaid_project(self, tmp_path):
         from lib.instance_manager import InstanceManager
@@ -197,7 +200,8 @@ class TestInstanceManagerBase:
              patch("lib.instance.validate_instance_id"), \
              patch("core.project_registry.get_project", side_effect=[{"instances": ["other"]}, None]), \
              patch("core.project_registry.create_project") as mock_create_project, \
-             patch("core.project_registry.link_project") as mock_link_project:
+             patch("core.project_registry.link_project") as mock_link_project, \
+             patch("core.project_registry._sync_docs_registry_project") as mock_sync_docs:
             mgr.create("proj")
 
         mock_create_project.assert_any_call(
@@ -206,6 +210,8 @@ class TestInstanceManagerBase:
             initial_instance="claude-code-proj",
         )
         mock_link_project.assert_called_once_with("quaid", instance_id="claude-code-proj")
+        mock_sync_docs.assert_called_once()
+        assert str(mock_sync_docs.call_args.kwargs["db_path"]).endswith("claude-code-proj/data/memory.db")
 
 
 # ---- CC InstanceManager ----

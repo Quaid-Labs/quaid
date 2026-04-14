@@ -9961,6 +9961,42 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
     return results or None
 
 
+
+
+def _resolve_node_identifier(graph: "MemoryGraph", identifier: str) -> Optional[Node]:
+    value = str(identifier or "").strip()
+    if not value:
+        return None
+    node = graph.get_node(value)
+    if node:
+        return node
+    with graph._get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM nodes WHERE LOWER(name) = LOWER(?) ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, LENGTH(name) ASC LIMIT 1",
+            (value,),
+        ).fetchone()
+        if row:
+            return graph._row_to_node(row)
+        alias_row = conn.execute(
+            "SELECT canonical_node_id, canonical_name FROM entity_aliases WHERE LOWER(alias) = LOWER(?) ORDER BY CASE WHEN canonical_node_id IS NULL OR canonical_node_id = '' THEN 1 ELSE 0 END LIMIT 1",
+            (value,),
+        ).fetchone()
+        if alias_row:
+            canonical_node_id = str(alias_row["canonical_node_id"] or "").strip()
+            if canonical_node_id:
+                row = conn.execute("SELECT * FROM nodes WHERE id = ? LIMIT 1", (canonical_node_id,)).fetchone()
+                if row:
+                    return graph._row_to_node(row)
+            canonical_name = str(alias_row["canonical_name"] or "").strip()
+            if canonical_name:
+                row = conn.execute(
+                    "SELECT * FROM nodes WHERE LOWER(name) = LOWER(?) ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, LENGTH(name) ASC LIMIT 1",
+                    (canonical_name,),
+                ).fetchone()
+                if row:
+                    return graph._row_to_node(row)
+    return None
+
 def get_recent_dedup_rejections(hours: int = 24, limit: int = 50) -> List[Dict[str, Any]]:
     """Get recent dedup rejections for nightly review."""
     graph = get_graph()
@@ -10677,7 +10713,11 @@ if __name__ == "__main__":
 
         elif args.command == "get-edges":
             graph = get_graph()
-            edges = graph.get_edges(args.id)
+            node = _resolve_node_identifier(graph, args.id)
+            if node is None:
+                print(f"Node not found: {args.id}", file=sys.stderr)
+                sys.exit(1)
+            edges = graph.get_edges(node.id)
             if edges:
                 print(json.dumps([asdict(e) for e in edges], indent=2))
             else:
