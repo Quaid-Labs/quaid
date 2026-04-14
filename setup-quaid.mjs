@@ -754,11 +754,15 @@ async function _ensureCompatibleSharedCredentialForInstall(adapterType, provider
   const requiredKinds = _requiredAuthKindsForAdapterProvider(adapterType, provider);
   if (requiredKinds.length === 0) return;
 
+  // If a compatible credential already exists in the registry, all good.
+  const compatibleCredential = getSharedAuthCredential(WORKSPACE, requiredKinds);
+  if (compatibleCredential?.token) return;
+
+  // No compatible credential — check what IS there to generate a useful mismatch message.
   const currentCredential = getSharedAuthCredential(WORKSPACE, allSharedAuthKinds());
   const currentKind = String(currentCredential?.kind || "").trim();
   const currentToken = String(currentCredential?.token || "").trim();
   if (!currentKind || !currentToken) return;
-  if (requiredKinds.includes(currentKind)) return;
 
   const requiredLabels = requiredKinds.map((kind) => authKindPromptLabel(kind)).join(" or ");
   const providerLabel = String(provider || installerDefaultProvider(adapterType) || "provider").trim().toLowerCase();
