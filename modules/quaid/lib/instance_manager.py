@@ -15,6 +15,7 @@ Usage::
 import json
 import logging
 import sqlite3
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -175,6 +176,7 @@ class InstanceManager:
         # agents can find it immediately without a manual project-create step.
         if register_misc_project:
             try:
+                self._ensure_shared_quaid_project(instance_id)
                 misc_name = f"misc--{instance_id}"
                 misc_desc = "Scratch pad for ephemeral and temporary files."
                 from core.project_registry import create_project as _cp, get_project as _gp
@@ -182,6 +184,24 @@ class InstanceManager:
                     _cp(misc_name, description=misc_desc, initial_instance=instance_id)
             except Exception as _e:
                 logger.warning("misc project registration skipped at silo init: %s", _e)
+
+    def _ensure_shared_quaid_project(self, instance_id: str) -> None:
+        """Ensure the shared quaid project exists and is linked to this instance."""
+        from core.project_registry import create_project as _cp, get_project as _gp, link_project as _lp
+
+        project_name = "quaid"
+        project_dir = self.adapter.visible_home() / "projects" / project_name
+        bundled_dir = Path(__file__).resolve().parent.parent / "projects" / project_name
+        if bundled_dir.is_dir():
+            shutil.copytree(bundled_dir, project_dir, dirs_exist_ok=True)
+        else:
+            project_dir.mkdir(parents=True, exist_ok=True)
+
+        desc = "Quaid runtime, memory, project-doc, and adapter reference docs."
+        if not _gp(project_name):
+            _cp(project_name, description=desc, initial_instance=instance_id)
+        else:
+            _lp(project_name, instance_id=instance_id)
 
     def _default_config(self) -> dict:
         """Return a complete default config skeleton.

@@ -285,6 +285,15 @@ class TestLinkProject:
         loaded = get_project("my-app")
         assert "linker-instance" in loaded["instances"]
 
+    def test_link_accepts_explicit_instance_id(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+
+        entry = link_project("my-app", instance_id="bootstrap-instance")
+
+        assert "bootstrap-instance" in entry["instances"]
+
 
 class TestUnlinkProject:
     def test_unlink_removes_current_instance(self, mock_adapter):

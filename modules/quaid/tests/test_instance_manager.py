@@ -157,6 +157,56 @@ class TestInstanceManagerBase:
         mock_get_project.assert_not_called()
         mock_create_project.assert_not_called()
 
+    def test_create_seeds_and_links_quaid_project(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.adapter_id.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
+        mgr = InstanceManager(adapter)
+
+        with patch("lib.instance.instance_exists", return_value=False), \
+             patch("lib.instance.validate_instance_id"), \
+             patch("core.project_registry.get_project", side_effect=[None, None]) as mock_get_project, \
+             patch("core.project_registry.create_project") as mock_create_project, \
+             patch("core.project_registry.link_project") as mock_link_project:
+            mgr.create("proj")
+
+        assert (tmp_path / "visible" / "projects" / "quaid").is_dir()
+        mock_get_project.assert_any_call("quaid")
+        mock_create_project.assert_any_call(
+            "quaid",
+            description="Quaid runtime, memory, project-doc, and adapter reference docs.",
+            initial_instance="claude-code-proj",
+        )
+        mock_link_project.assert_not_called()
+
+    def test_create_links_existing_quaid_project(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.adapter_id.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
+        mgr = InstanceManager(adapter)
+
+        with patch("lib.instance.instance_exists", return_value=False), \
+             patch("lib.instance.validate_instance_id"), \
+             patch("core.project_registry.get_project", side_effect=[{"instances": ["other"]}, None]), \
+             patch("core.project_registry.create_project") as mock_create_project, \
+             patch("core.project_registry.link_project") as mock_link_project:
+            mgr.create("proj")
+
+        mock_create_project.assert_any_call(
+            "misc--claude-code-proj",
+            description="Scratch pad for ephemeral and temporary files.",
+            initial_instance="claude-code-proj",
+        )
+        mock_link_project.assert_called_once_with("quaid", instance_id="claude-code-proj")
+
 
 # ---- CC InstanceManager ----
 

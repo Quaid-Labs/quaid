@@ -269,7 +269,7 @@ def update_project(name: str, **updates: Any) -> Dict[str, Any]:
     return registry["projects"][name]
 
 
-def link_project(name: str) -> Dict[str, Any]:
+def link_project(name: str, *, instance_id: Optional[str] = None) -> Dict[str, Any]:
     """Add the current QUAID_INSTANCE to a project's instances list.
 
     Used when a second adapter wants to participate in an existing project
@@ -277,6 +277,8 @@ def link_project(name: str) -> Dict[str, Any]:
 
     Args:
         name: Project name.
+        instance_id: Optional explicit instance ID. When omitted, reads the
+            current QUAID_INSTANCE from the environment.
 
     Returns:
         The updated project entry.
@@ -288,8 +290,11 @@ def link_project(name: str) -> Dict[str, Any]:
     if name not in registry["projects"]:
         raise KeyError(f"Project not found: {name}")
 
-    from lib.instance import instance_id as _instance_id
-    instance = _instance_id()
+    if instance_id is not None:
+        instance = str(instance_id).strip()
+    else:
+        from lib.instance import instance_id as _instance_id
+        instance = _instance_id()
     instances = registry["projects"][name].setdefault("instances", [])
     if instance not in instances:
         instances.append(instance)

@@ -137,4 +137,16 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("failed to copy canonical plugin into extension dir");
     expect(setupText).not.toContain("fs.symlinkSync(pluginPath, extensionDir, \"dir\")");
   });
+
+  it("first install seeds the shared quaid project docs", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain('const quaidProjDir = path.join(PROJECTS_DIR, "quaid");');
+    expect(setupText).toContain('const quaidProjSrc = path.join(__dirname, "projects", "quaid");');
+    expect(setupText).toContain("copyMissingDirSync(quaidProjSrc, quaidProjDir);");
+    expect(setupText).toContain("reg.create_project(");
+    expect(setupText).toContain("'quaid',");
+    expect(setupText).toContain("home_dir='projects/quaid/'");
+  });
 });
