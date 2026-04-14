@@ -3341,6 +3341,7 @@ async function step3_models() {
     log.warn("Prefer Anthropic unless you are blocked on credentials.");
   }
 
+  const sharedAuthTokenPath = sharedAuthRegistryPath(WORKSPACE);
   await _ensureCompatibleSharedCredentialForInstall(adapterType, provider, sharedAuthTokenPath);
 
 
