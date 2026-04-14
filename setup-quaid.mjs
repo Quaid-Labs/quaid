@@ -4716,16 +4716,35 @@ try:
     reg.create_project(${JSON.stringify(bucket.name)}, label=${JSON.stringify(bucket.label)},
         home_dir=${JSON.stringify(`projects/${bucket.name}/`)},
         description=${JSON.stringify(bucket.description)})
-    print('created')
+    created = True
 except ValueError:
-    print('exists')
+    created = False
+from core.project_registry import create_project as create_global_project, get_project as get_global_project, link_project as link_global_project
+if not get_global_project(${JSON.stringify(bucket.name)}):
+    create_global_project(
+        ${JSON.stringify(bucket.name)},
+        description=${JSON.stringify(bucket.description)},
+        initial_instance=${JSON.stringify(resolvedInstanceId)},
+    )
+else:
+    link_global_project(${JSON.stringify(bucket.name)}, instance_id=${JSON.stringify(resolvedInstanceId)})
+print('created' if created else 'exists')
 `;
         const result = python3Spawn(["-c", regScript], {
           cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
           env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME },
         });
+        if (result.error) {
+          throw result.error;
+        }
+        if (result.status !== 0) {
+          const detail = String(result.stderr || result.stdout || "").trim();
+          throw new Error(detail || `Shared bucket registration failed for ${bucket.name}`);
+        }
         if ((result.stdout || "").trim() === "created") {
           log.info(`Registered shared bucket: ${bucket.name}`);
+        } else {
+          log.info(`Re-linked shared bucket: ${bucket.name}`);
         }
       }
     }

@@ -165,6 +165,18 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("if (regQuaidResult.status !== 0)");
   });
 
+  it("install re-registers the instance misc project in both registries", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("Register instance misc project in projects/misc--{instanceId}/.");
+    expect(setupText).toContain("from core.project_registry import create_project as create_global_project, get_project as get_global_project, link_project as link_global_project");
+    expect(setupText).toContain('create_global_project(');
+    expect(setupText).toContain('link_global_project(${JSON.stringify(bucket.name)}, instance_id=');
+    expect(setupText).toContain("if (result.status !== 0)");
+    expect(setupText).toContain("Re-linked shared bucket:");
+  });
+
   it("Claude Code install creates a plain-shell CLI shim", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
