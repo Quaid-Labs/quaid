@@ -422,7 +422,7 @@ class OpenClawAdapter(QuaidAdapter):
         return None
 
     def get_sessions_dir(self) -> Optional[Path]:
-        d = self._openclaw_root_dir() / "sessions"
+        d = self._openclaw_root_dir() / "agents" / "main" / "sessions"
         return d if d.is_dir() else None
 
     def auth_token_path(self) -> Optional[Path]:

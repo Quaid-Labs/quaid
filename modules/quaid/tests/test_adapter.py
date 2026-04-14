@@ -571,7 +571,7 @@ class TestOpenClawAdapter:
         assert info.session_key == "agent:main:telegram:direct:1000000000"
 
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
-        sessions_dir = tmp_path / ".openclaw" / "sessions"
+        sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
         sessions_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         adapter = OpenClawAdapter()
