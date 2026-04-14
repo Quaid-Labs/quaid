@@ -24,6 +24,10 @@ from lib.instance import instance_slug_from_project_dir
 
 
 class ClaudeCodeAdapter(QuaidAdapter):
+    ADAPTER_CONFIG = {
+        "deferred_notice_relay": True,
+    }
+
     _QUAID_MEMORY_CONTEXT_RE = re.compile(
         r"<quaid_memory_context>.*?</quaid_memory_context>",
         flags=re.DOTALL | re.IGNORECASE,

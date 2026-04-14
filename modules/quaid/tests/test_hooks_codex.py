@@ -450,3 +450,99 @@ def test_codex_inject_writes_session_end_signal_for_clear_command(monkeypatch, t
     assert sig["meta"]["command"] == "/clear"
     assert sig["meta"]["reason"] == "command:clear"
     assert err.strip() == ""
+
+
+def test_codex_deferred_notice_relay_context_is_enabled(monkeypatch):
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_adapter_capability", lambda key, default=None: True if key == "deferred_notice_relay" else default)
+    with patch("lib.runtime_context.drain_deferred_notices", return_value=[{"message": "Deferred relay test"}]):
+        context = hooks._get_deferred_notice_relay_context()
+
+    assert "Deferred relay test" in context
+    assert "must" in context.lower() or "relay" in context.lower()
+
+
+def test_codex_hook_inject_surfaces_new_pending_notice_on_same_turn(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = MagicMock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("core.interface.hooks._get_owner_id", lambda: "codex-owner")
+    monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+
+    def _raise_and_queue(*_args, **_kwargs):
+        adapter.get_pending_context.return_value = (
+            "The following are pending notifications for the user — please relay them in your response:\n\n"
+            "<quaid_system_message>\n• [Quaid error] [provider] queued during recall\n</quaid_system_message>"
+        )
+        raise RuntimeError("provider HTTP 500")
+
+    with patch("core.interface.api.recall_fast", side_effect=_raise_and_queue), \
+         patch("core.interface.api.projects_search_docs", return_value=None):
+        out, err = _run_hook_inject(
+            {
+                "prompt": "What do you know about Maya?",
+                "session_id": "sess-codex-provider-same-turn",
+                "cwd": str(tmp_path),
+                "thread_id": "sess-codex-provider-same-turn",
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "queued during recall" in context
+    assert "[Quaid error] [provider]" in context
+    assert "hook-inject" in err
+
+
+def test_codex_session_init_passes_full_hook_payload_to_transition_check(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+
+    adapter = MagicMock()
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = ""
+    adapter.data_dir.return_value = tmp_path / "data"
+    adapter.instance_root.return_value = tmp_path
+    adapter.adapter_id.return_value = "codex"
+    adapter.check_session_transition.return_value = None
+
+    monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
+    monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
+    monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
+    monkeypatch.setattr(hooks, "_current_adapter_id", lambda: "codex")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("core.compatibility.notify_on_use_if_degraded", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+
+    with patch("core.project_registry.list_projects", return_value={}):
+        _run_hook_session_init(
+            {"thread_id": "thread-123", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+        )
+
+    adapter.check_session_transition.assert_called_once_with({"thread_id": "thread-123", "cwd": str(tmp_path)})

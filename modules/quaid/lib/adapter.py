@@ -537,6 +537,30 @@ class QuaidAdapter(abc.ABC):
             subclass_config = {}
         return subclass_config.get(key)
 
+    def get_capability(self, key: str, default: Any = None) -> Any:
+        """Return an adapter capability from config.adapter.capabilities.
+
+        Resolution order:
+        1. Per-instance config.adapter.capabilities[key]
+        2. Adapter ADAPTER_CONFIG[key]
+        3. provided default
+        """
+        capability_key = str(key or "").strip()
+        if not capability_key:
+            return default
+        try:
+            from config import get_config
+
+            cfg = get_config()
+            adapter_cfg = getattr(cfg, "adapter", None)
+            capabilities = getattr(adapter_cfg, "capabilities", None)
+            if isinstance(capabilities, dict) and capability_key in capabilities:
+                return capabilities.get(capability_key)
+        except Exception:
+            pass
+        configured = self.get_adapter_config(capability_key)
+        return default if configured is None else configured
+
     # ---- Providers ----
 
     @abc.abstractmethod

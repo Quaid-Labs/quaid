@@ -3582,6 +3582,13 @@ notify_user(${JSON.stringify(message)})
         };
       };
 
+      const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
+      if (deferredNoticeContext) {
+        appendSystemContext = appendSystemContext
+          ? `${appendSystemContext}\n\n${deferredNoticeContext}`
+          : deferredNoticeContext;
+      }
+
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
 

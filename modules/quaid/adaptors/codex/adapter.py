@@ -25,6 +25,10 @@ def _now_iso() -> str:
 class CodexAdapter(QuaidAdapter):
     """Adapter for Codex CLI/app sessions."""
 
+    ADAPTER_CONFIG = {
+        "deferred_notice_relay": True,
+    }
+
     _HOOK_STATUS_LINE_RE = re.compile(
         r"^\s*(?:•\s*)?(?:Running\s+)?(?:SessionStart|UserPromptSubmit|Stop|session_start|user_prompt_submit|stop)\s+hook(?::|\s+\(completed\)).*$",
         flags=re.IGNORECASE,
@@ -306,6 +310,43 @@ class CodexAdapter(QuaidAdapter):
         except OSError:
             pass
 
+    def _extract_hook_session_id(self, hook_input: dict) -> str:
+        if not isinstance(hook_input, dict):
+            return ""
+
+        def _candidate(value) -> str:
+            return str(value or "").strip()
+
+        candidates = [
+            _candidate(hook_input.get("session_id")),
+            _candidate(hook_input.get("thread_id")),
+            _candidate(hook_input.get("threadId")),
+            _candidate(hook_input.get("conversation_id")),
+        ]
+        session_obj = hook_input.get("session")
+        if isinstance(session_obj, dict):
+            candidates.extend([
+                _candidate(session_obj.get("id")),
+                _candidate(session_obj.get("session_id")),
+                _candidate(session_obj.get("thread_id")),
+            ])
+        thread_obj = hook_input.get("thread")
+        if isinstance(thread_obj, dict):
+            candidates.extend([
+                _candidate(thread_obj.get("id")),
+                _candidate(thread_obj.get("thread_id")),
+                _candidate(thread_obj.get("session_id")),
+            ])
+        transcript_path = _candidate(hook_input.get("transcript_path"))
+        if transcript_path:
+            match = self._ROLLOUT_SESSION_ID_RE.search(Path(transcript_path).name)
+            if match:
+                candidates.append(_candidate(match.group(1)))
+        for value in candidates:
+            if value:
+                return value
+        return ""
+
     def check_session_transition(self, hook_input: dict) -> Optional[dict]:
         """Detect when a CDX /new or /clear started a new session.
 
@@ -320,7 +361,7 @@ class CodexAdapter(QuaidAdapter):
         """
         if not isinstance(hook_input, dict):
             return None
-        current_id = str(hook_input.get("session_id") or "").strip()
+        current_id = self._extract_hook_session_id(hook_input)
         if not current_id:
             return None
         last_id = self._read_last_session_id()

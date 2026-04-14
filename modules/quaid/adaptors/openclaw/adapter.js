@@ -2864,6 +2864,12 @@ ${projectPlacementContext}` : projectPlacementContext;
           ...appendSystemContext ? { appendSystemContext } : {}
         };
       };
+      const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
+      if (deferredNoticeContext) {
+        appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${deferredNoticeContext}` : deferredNoticeContext;
+      }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
       try {

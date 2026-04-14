@@ -883,6 +883,29 @@ class TestCodexAdapter:
         adapter = CodexAdapter()
         assert adapter.get_session_path(session_id) == session_file
 
+
+    def test_check_session_transition_accepts_thread_id_payload(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        adapter = CodexAdapter()
+        adapter._write_last_session_id("old-thread")
+        ended = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "14"
+            / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        )
+        ended.parent.mkdir(parents=True)
+        ended.write_text("{}\n", encoding="utf-8")
+
+        signal = adapter.check_session_transition({"thread_id": "new-thread"})
+        assert signal is not None
+        assert signal["ended_session_id"] == "old-thread"
+        assert signal["signal_type"] == "session_end"
+        assert adapter._read_last_session_id() == "new-thread"
+
     def test_parse_session_jsonl_prefers_event_messages(self, tmp_path):
         path = tmp_path / "rollout.jsonl"
         path.write_text(

@@ -497,6 +497,7 @@ class SystemsConfig:
 @dataclass
 class AdapterConfig:
     type: str = "standalone"  # standalone | openclaw | claude-code | codex
+    capabilities: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -1481,8 +1482,12 @@ def _load_config_inner() -> MemoryConfig:
     adapter_data = config_data.get('adapter', {})
     if isinstance(adapter_data, str):
         adapter_data = {"type": adapter_data}
+    adapter_caps = adapter_data.get("capabilities", {})
+    if not isinstance(adapter_caps, dict):
+        adapter_caps = {}
     adapter = AdapterConfig(
         type=str(adapter_data.get('type', 'standalone')).strip().lower(),
+        capabilities=dict(adapter_caps),
     )
     plugins_data = config_data.get('plugins', {})
     raw_paths = plugins_data.get('paths', [])

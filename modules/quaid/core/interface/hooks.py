@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 def _read_stdin_json() -> dict:
@@ -342,7 +342,7 @@ def hook_inject(args):
     except (json.JSONDecodeError, ValueError):
         return
 
-    session_id = hook_input.get("session_id", "").strip()
+    session_id = _extract_hook_session_id(hook_input)
     query = hook_input.get("prompt", "").strip()
     if not query:
         return
@@ -491,11 +491,9 @@ def hook_inject(args):
         except Exception:
             pass
 
-    # Ask the adapter for any active pending context and check whether there
-    # are deferred notices waiting for an explicit agent-driven drain.
-    pending_context = _get_pending_context()
-    deferred_notice_relay_context = _get_deferred_notice_relay_context()
-    deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
+    pending_context = ""
+    deferred_notice_relay_context = ""
+    deferred_notice_hint = ""
 
     try:
         from concurrent.futures import ThreadPoolExecutor
@@ -509,6 +507,15 @@ def hook_inject(args):
             "query": query[:160],
             "session_id": session_id,
         })
+        if _current_adapter_id() == "codex":
+            _write_hook_trace("hook.inject.codex_payload", {
+                "query": query[:160],
+                "session_id": session_id,
+                "keys": sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
+                "thread_id": str(hook_input.get("thread_id") or hook_input.get("threadId") or "").strip() if isinstance(hook_input, dict) else "",
+                "session_field": str(hook_input.get("session_id") or "").strip() if isinstance(hook_input, dict) else "",
+                "transcript_path": str(hook_input.get("transcript_path") or "").strip() if isinstance(hook_input, dict) else "",
+            })
         with ThreadPoolExecutor(max_workers=2) as pool:
             mem_future = pool.submit(
                 lambda: recall_fast(query=query, owner_id=owner, limit=10, return_meta=True)
@@ -543,6 +550,10 @@ def hook_inject(args):
             "project": (docs_bundle or {}).get("project") if isinstance(docs_bundle, dict) else None,
             "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
         })
+
+        pending_context = _get_pending_context()
+        deferred_notice_relay_context = _get_deferred_notice_relay_context()
+        deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
 
         context_parts = []
 
@@ -604,6 +615,9 @@ def hook_inject(args):
         }))
 
     except (RuntimeError, Exception) as e:
+        pending_context = _get_pending_context()
+        deferred_notice_relay_context = _get_deferred_notice_relay_context()
+        deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
         fallback_context_parts = []
         if _is_provider_failure(e):
             # Provider/LLM failure — surface to agent so they can inform the user
@@ -680,7 +694,7 @@ def _get_deferred_notice_relay_context() -> str:
     must be made explicit on the real human turn instead of relying on a weak
     advisory hint.
     """
-    if _current_adapter_id() != "claude-code":
+    if not _adapter_capability("deferred_notice_relay", False):
         return ""
     try:
         from lib.runtime_context import drain_deferred_notices
@@ -703,6 +717,37 @@ def _current_adapter_id() -> str:
         return str(get_adapter().adapter_id() or "").strip().lower()
     except Exception:
         return ""
+
+
+def _adapter_capability(key: str, default: Any = None) -> Any:
+    try:
+        from lib.adapter import get_adapter
+
+        return get_adapter().get_capability(key, default)
+    except Exception:
+        return default
+
+
+def _extract_hook_session_id(hook_input: dict) -> str:
+    if not isinstance(hook_input, dict):
+        return ""
+    try:
+        from lib.adapter import get_adapter
+
+        adapter = get_adapter()
+        extractor = getattr(adapter, "_extract_hook_session_id", None)
+        if callable(extractor):
+            resolved = str(extractor(hook_input) or "").strip()
+            if resolved:
+                return resolved
+    except Exception:
+        pass
+
+    for key in ("session_id", "thread_id", "threadId", "conversation_id"):
+        value = str(hook_input.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcript_path: str = "") -> str:
@@ -1081,7 +1126,7 @@ def hook_session_init(args):
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
 
-    current_session_id = hook_input.get("session_id", "")
+    current_session_id = _extract_hook_session_id(hook_input)
     adapter_id = _current_adapter_id()
 
     # Refresh the adapter's auth token from the session-scoped CC OAuth token.
@@ -1127,8 +1172,7 @@ def hook_session_init(args):
         from lib.adapter import get_adapter
         _adapter = get_adapter()
         if hasattr(_adapter, "check_session_transition"):
-            _hook_input_for_transition = {"session_id": current_session_id}
-            _transition = _adapter.check_session_transition(_hook_input_for_transition)
+            _transition = _adapter.check_session_transition(hook_input if isinstance(hook_input, dict) else {})
             if _transition:
                 _ended_sid = str(_transition.get("ended_session_id") or "").strip()
                 _ended_tx = str(_transition.get("ended_transcript_path") or "").strip()
