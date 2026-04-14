@@ -56,7 +56,11 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Set
 
 from lib.config import get_db_path, get_ollama_url, get_embedding_dim as _get_configured_embedding_dim
-from lib.database import get_connection as _lib_get_connection, has_vec as _lib_has_vec
+from lib.database import (
+    get_connection as _lib_get_connection,
+    has_vec as _lib_has_vec,
+    refresh_read_visibility as _refresh_db_read_visibility,
+)
 from datastore.memorydb.domain_registry import (
     ensure_domain_tables as _ensure_domain_registry_tables,
     read_active_domains as _read_active_domain_map,
@@ -1353,6 +1357,7 @@ class MemoryGraph:
 
         results = []
         with self._get_conn() as conn:
+            _refresh_db_read_visibility(conn)
             # vec0 KNN query — retrieve more candidates than needed for post-filtering
             vec_rows = conn.execute(
                 "SELECT node_id, distance FROM vec_nodes WHERE embedding MATCH ? AND k = ? ORDER BY distance",

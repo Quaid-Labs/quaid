@@ -63,6 +63,20 @@ def _load_vec(conn: sqlite3.Connection) -> None:
         logger.warning("sqlite-vec per-connection load failed: %s; vec operations may error", exc)
 
 
+def refresh_read_visibility(conn: sqlite3.Connection) -> None:
+    """Best-effort WAL visibility refresh before cross-process vector reads.
+
+    Hook recall commonly reads immediately after a separate CLI process has
+    written vec_nodes entries. A passive checkpoint is cheap and avoids a class
+    of "fresh write not yet visible to this reader" races without blocking
+    active writers.
+    """
+    try:
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    except Exception as exc:
+        logger.debug("wal checkpoint pre-read refresh skipped: %s", exc)
+
+
 @contextmanager
 def get_connection(db_path: Optional[Path] = None):
     """Get a configured SQLite connection as a context manager.

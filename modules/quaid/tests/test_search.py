@@ -192,6 +192,37 @@ class TestSearchFTS:
 class TestSearchSemantic:
     """Tests for MemoryGraph.search_semantic()."""
 
+    def test_search_vec_refreshes_read_visibility_before_knn_query(self, tmp_path):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            from datastore.memorydb.memory_graph import MemoryGraph
+
+            db_file = tmp_path / "vec_refresh.db"
+            graph = MemoryGraph(db_path=db_file)
+
+            calls = []
+
+            class _Conn:
+                def execute(self, sql, params=None):
+                    calls.append((sql, params))
+                    if "SELECT node_id, distance FROM vec_nodes" in sql:
+                        return SimpleNamespace(fetchall=lambda: [])
+                    return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: None)
+
+            class _Ctx:
+                def __enter__(self):
+                    return _Conn()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            with patch.object(graph, "_get_conn", return_value=_Ctx()):
+                out = graph._search_vec([0.1] * 128, 5, None, None, None, 0.0, None, None)
+
+            assert out == []
+            assert len(calls) >= 2
+            assert calls[0][0] == "PRAGMA wal_checkpoint(PASSIVE)"
+            assert "SELECT node_id, distance FROM vec_nodes" in calls[1][0]
+
     def test_returns_empty_when_no_embedding(self, tmp_path):
         """When get_embedding returns None, search_semantic returns []."""
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", return_value=None):
