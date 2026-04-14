@@ -127,6 +127,33 @@ def _format_direct_agent_notices(messages: List[str]) -> str:
     )
 
 
+def _get_quaid_agents_baseline_context() -> str:
+    """Return the file-placement guidance block from projects/quaid/AGENTS.md."""
+    try:
+        agents_path = _get_projects_dir() / "quaid" / "AGENTS.md"
+        if not agents_path.is_file():
+            return ""
+        text = agents_path.read_text(encoding="utf-8").strip()
+        if not text:
+            return ""
+        match = re.search(
+            r"## File Placement — MANDATORY RULES\s*(.*?)(?=\n---\n|\n## |\Z)",
+            text,
+            flags=re.DOTALL,
+        )
+        body = match.group(0).strip() if match else ""
+        if not body:
+            return ""
+        return (
+            "<quaid_system_message>\n"
+            "[Quaid Project Guidance]\n"
+            f"{body}\n"
+            "</quaid_system_message>"
+        )
+    except Exception:
+        return ""
+
+
 def _format_deferred_notice_relay(messages: List[str]) -> str:
     notices = [str(message or "").strip() for message in messages if str(message or "").strip()]
     if not notices:
@@ -589,6 +616,9 @@ def hook_inject(args):
         docs_context = _format_project_docs(docs_bundle or {})
         if docs_context:
             context_parts.append(docs_context)
+        baseline_agents_context = _get_quaid_agents_baseline_context()
+        if baseline_agents_context:
+            context_parts.append(baseline_agents_context)
 
         if not context_parts:
             _write_hook_trace("hook.inject.empty", {

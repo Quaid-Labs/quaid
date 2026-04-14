@@ -596,6 +596,10 @@ class TestHookInjectRecallResilience:
         """When recall_fast returns [], hook produces no stdout (no additionalContext)."""
         from core import extraction_daemon
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
 
         with patch("core.interface.api.recall_fast", return_value=[]):
             out, err = _run_hook_inject(
@@ -608,6 +612,38 @@ class TestHookInjectRecallResilience:
             )
 
         assert out.strip() == "", f"Expected no stdout, got: {out!r}"
+
+    def test_recall_fast_empty_list_still_injects_quaid_agents_baseline(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        projects_dir = tmp_path / "projects"
+        quaid_dir = projects_dir / "quaid"
+        quaid_dir.mkdir(parents=True)
+        (quaid_dir / "AGENTS.md").write_text(
+            "# Quaid — Operating Guide\n\n"
+            "## File Placement — MANDATORY RULES\n\n"
+            "**Before writing any file or delegating work to a sub-agent, pick the first matching rule:**\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("core.interface.hooks._get_projects_dir", lambda: projects_dir)
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "nothing in memory",
+                    "session_id": "sess-empty-baseline",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid Project Guidance]" in context
+        assert "Before writing any file or delegating work to a sub-agent" in context
 
     def test_recall_fast_provider_exception_surfaces_quaid_error_notice(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
