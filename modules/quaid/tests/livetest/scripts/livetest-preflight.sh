@@ -4,8 +4,12 @@
 # Run this before every live test run. It:
 #   1. Verifies the remote host is not the same machine as the local host
 #   2. Verifies SSH connectivity to the remote
-#   3. Wipes Quaid from the remote (full wipe by default)
-#   4. Starts platform services on the remote (OC gateway)
+#   3. Verifies remote Homebrew Python 3.10+ is present
+#   4. Upgrades platform CLIs on the remote
+#   5. Wipes Quaid from the remote (full wipe by default)
+#   6. Syncs the latest dev tree to the remote
+#   7. Injects the CC API key into remote ~/.claude/settings.json
+#   8. Starts platform services on the remote
 #
 # The remote host will have Quaid wiped and reinstalled repeatedly during a run.
 # It may be running broken or unstable code at any point. It must be a dedicated
@@ -105,7 +109,7 @@ echo ""
 ERRORS=0
 
 # --- Check 1: Remote ≠ local ---
-echo "[1/6] Verifying remote is not this machine..."
+echo "[1/8] Verifying remote is not this machine..."
 
 LOCAL_HOSTNAME="$(hostname -s 2>/dev/null || hostname)"
 LOCAL_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "")"
@@ -154,7 +158,7 @@ fi
 
 # --- Check 2: SSH connectivity ---
 echo ""
-echo "[2/6] Verifying SSH connectivity to $REMOTE_HOST..."
+echo "[2/8] Verifying SSH connectivity to $REMOTE_HOST..."
 
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would ssh $REMOTE_HOST 'echo ok'"
@@ -169,9 +173,48 @@ else
     fi
 fi
 
-# --- Step 3: Upgrade platform CLIs ---
+# --- Check 3: Homebrew Python 3.10+ on remote ---
 echo ""
-echo "[3/6] Upgrading platform CLIs on remote to latest..."
+echo "[3/8] Verifying remote Homebrew Python 3.10+..."
+
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "  [dry-run] would verify /opt/homebrew/bin/python3 >= 3.10 on $REMOTE_HOST"
+else
+    PY_CHECK_RESULT="$(ssh "$REMOTE_HOST" '
+if [ ! -x /opt/homebrew/bin/python3 ]; then
+  echo MISSING
+  exit 0
+fi
+/opt/homebrew/bin/python3 - <<'"'"'"'"'"'"'"'"'PY'"'"'"'"'"'"'"'"'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+' 2>&1 || true)"
+    PY_CHECK_LAST_LINE="$(printf '%s\n' "$PY_CHECK_RESULT" | tail -n 1 | tr -d '\r')"
+    if [[ "$PY_CHECK_LAST_LINE" == "MISSING" ]]; then
+        echo "  $FAIL  /opt/homebrew/bin/python3 not found on remote"
+        echo "         Install Homebrew Python 3.12+ on the VM base image and retry."
+        ERRORS=$((ERRORS + 1))
+    elif [[ "$PY_CHECK_LAST_LINE" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        PY_MAJOR="${PY_CHECK_LAST_LINE%%.*}"
+        PY_MINOR="${PY_CHECK_LAST_LINE##*.}"
+        if (( PY_MAJOR > 3 || (PY_MAJOR == 3 && PY_MINOR >= 10) )); then
+            echo "  $PASS  remote Homebrew Python $PY_CHECK_LAST_LINE"
+        else
+            echo "  $FAIL  /opt/homebrew/bin/python3 is too old ($PY_CHECK_LAST_LINE)"
+            echo "         Install Homebrew Python 3.12+ on the VM base image and retry."
+            ERRORS=$((ERRORS + 1))
+        fi
+    else
+        echo "  $FAIL  could not verify /opt/homebrew/bin/python3 on remote: $PY_CHECK_RESULT"
+        ERRORS=$((ERRORS + 1))
+    fi
+fi
+
+# --- Step 4: Upgrade platform CLIs ---
+echo ""
+echo "[4/8] Upgrading platform CLIs on remote to latest..."
 
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would upgrade claude, codex, openclaw to latest on $REMOTE_HOST"
@@ -211,17 +254,19 @@ else
 fi
 REMOTE_UPGRADE
 fi
+echo "  [4/8] CLI upgrade SSH session complete"
 
 # --- Abort early if safety checks failed ---
+echo "  checking for preflight errors (ERRORS=$ERRORS)..."
 if [[ "$ERRORS" -gt 0 ]]; then
     echo ""
     echo "Preflight aborted: $ERRORS check(s) failed." >&2
     exit 1
 fi
 
-# --- Step 4: Wipe ---
+# --- Step 5: Wipe ---
 echo ""
-echo "[4/6] Wiping Quaid on remote ($WIPE_PLATFORM)..."
+echo "[5/8] Wiping Quaid on remote ($WIPE_PLATFORM)..."
 
 if [[ "$SKIP_WIPE" == "1" ]]; then
     echo "  (skipped — --skip-wipe)"
@@ -229,12 +274,14 @@ else
     WIPE_ARGS=("--platform" "$WIPE_PLATFORM" "--config" "$CONFIG_PATH")
     [[ "$DRY_RUN" == "1" ]] && WIPE_ARGS+=("--dry-run")
 
+    echo "  invoking livetest-wipe.sh --platform $WIPE_PLATFORM ..."
     LIVETEST_WIPE_YES=1 "$SCRIPT_DIR/livetest-wipe.sh" "${WIPE_ARGS[@]}"
+    echo "  [5/8] wipe complete"
 fi
 
-# --- Step 5: Code sync to remote (after wipe so dev tree is not deleted) ---
+# --- Step 6: Code sync to remote (after wipe so dev tree is not deleted) ---
 echo ""
-echo "[5/6] Syncing latest Quaid code to remote..."
+echo "[6/8] Syncing latest Quaid code to remote..."
 
 LOCAL_DEV="$HOME/quaidcode/dev"
 LOCAL_HEAD="$(cd "$LOCAL_DEV" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -244,6 +291,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
 else
     echo "  Building runtime artifacts (local HEAD: $LOCAL_HEAD)..."
     (cd "$LOCAL_DEV/modules/quaid" && npm run build:runtime --silent)
+    echo "  rsyncing dev tree to remote..."
     rsync -a --checksum \
         --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
         --exclude='.git/' --exclude='logs/' --exclude='.env*' --exclude='.tmp/' \
@@ -257,9 +305,44 @@ else
     echo "  $PASS  remote dev tree synced (local HEAD: $LOCAL_HEAD)"
 fi
 
-# --- Step 6: Platform services ---
+# --- Step 7: Inject CC API key into remote settings ---
+# Pre-injects ANTHROPIC_API_KEY so CC never relies on expirable OAuth during the run.
+# Reads the key from ~/.tmp/cc-auth-token.txt (maintained by the coordinator guide).
 echo ""
-echo "[6/6] Starting platform services on remote..."
+echo "[7/8] Injecting ANTHROPIC_API_KEY into CC settings on remote..."
+
+CC_ENABLED="$(read_config platforms.cc.enabled)"
+if [[ "$CC_ENABLED" != "True" && "$CC_ENABLED" != "true" ]]; then
+    echo "  (skipped — CC platform not enabled in config)"
+elif [[ "$DRY_RUN" == "1" ]]; then
+    echo "  [dry-run] would inject ANTHROPIC_API_KEY from ~/.tmp/cc-auth-token.txt into remote ~/.claude/settings.json"
+else
+    CC_KEY_FILE="$HOME/.tmp/cc-auth-token.txt"
+    if [[ ! -f "$CC_KEY_FILE" ]]; then
+        echo "  WARN  $CC_KEY_FILE not found — CC will rely on OAuth (may expire mid-run)"
+    else
+        YUNI_KEY="$(tr -d '[:space:]' < "$CC_KEY_FILE")"
+        if [[ -z "$YUNI_KEY" ]]; then
+            echo "  WARN  $CC_KEY_FILE is empty — CC will rely on OAuth (may expire mid-run)"
+        else
+            echo "  injecting key via SSH python3..."
+            ssh "$REMOTE_HOST" python3 << PYEOF
+import json, pathlib
+key = "$YUNI_KEY"
+p = pathlib.Path.home() / '.claude' / 'settings.json'
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault('env', {})['ANTHROPIC_API_KEY'] = key
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+PYEOF
+            echo "  $PASS  ANTHROPIC_API_KEY injected into remote ~/.claude/settings.json"
+        fi
+    fi
+fi
+
+# --- Step 8: Platform services ---
+echo ""
+echo "[8/8] Starting platform services on remote..."
 
 
 if [[ "$SKIP_PLATFORM_START" == "1" ]]; then
@@ -268,7 +351,9 @@ else
     START_ARGS=("--config" "$CONFIG_PATH")
     [[ "$DRY_RUN" == "1" ]] && START_ARGS+=("--dry-run")
 
+    echo "  invoking livetest-platform-start.sh..."
     "$SCRIPT_DIR/livetest-platform-start.sh" "${START_ARGS[@]}"
+    echo "  [8/8] platform start complete"
 fi
 
 # --- Done ---

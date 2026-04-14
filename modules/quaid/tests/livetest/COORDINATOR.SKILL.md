@@ -83,25 +83,30 @@ not a condition to work around with manual signals.
 After the first M0 clears, inject test-specific config overrides:
 ```bash
 ssh admin@$VM_IP 'mkdir -p ~/.quaid/shared/config/global && \
-  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":500,\"inactivityTimeoutMinutes\":1}}" \
+  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":1500,\"inactivityTimeoutMinutes\":1}}" \
   > ~/.quaid/shared/config/global/config.json'
 ```
-This sets: extraction buffer logging (for sanitizer audits), chunk_tokens=500
+This sets: extraction buffer logging (for sanitizer audits), chunk_tokens=1500
 (the livetest standard; triggers rolling extraction in normal test sessions;
 production default is 8000), and inactivityTimeoutMinutes=1 (so idle extraction
 fires within ~1 min, enabling M4 and other idle-dependent milestones without a
 long wait; production default is 60). Do this once per run. Restart daemons after.
 
 **Also: if any instance config has its own `capture.chunk_tokens` override,
-overwrite it to 500 — instance config takes precedence over global.**
+overwrite it to 1500 — instance config takes precedence over global. The installer
+writes 8000 as the default; always overwrite after M0.**
 ```bash
-for inst in openclaw-livetest claude-code-private-tmp-cc-livetest codex-private-tmp-cdx-livetest; do
+for inst in openclaw-livetest openclaw-main codex-main claude-code-main; do
   ssh admin@$VM_IP "python3 -c '
 import json
 p = \"/Users/admin/.quaid/instances/$inst/config.json\"
-d = json.load(open(p))
-d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 500
-json.dump(d, open(p, \"w\"), indent=2)
+try:
+    d = json.load(open(p))
+    d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
+    d.setdefault(\"capture\", {})[\"inactivityTimeoutMinutes\"] = 1
+    json.dump(d, open(p, \"w\"), indent=2)
+    print(\"updated:\", p)
+except: pass
 '"
 done
 ```
@@ -470,11 +475,11 @@ that is an M0 FAIL — investigate the installer, fix, and retry.
 ssh REMOTE_HOST 'pgrep -f openclaw-gateway > /dev/null 2>&1 || (nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &); for i in $(seq 1 30); do curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break || sleep 2; done'
 ```
 
-**OC only** — verify gateway models are registered (installer PINGs these before proceeding):
+**OC only** — check gateway model list (informational — the OC installer uses hardcoded defaults, not /v1/models):
 ```bash
 ssh REMOTE_HOST 'curl -sf http://localhost:18789/v1/models | python3 -c "import json,sys; ms=[m[\"id\"] for m in json.load(sys.stdin).get(\"data\",[])]; print(\"Models:\", ms)"'
 ```
-Confirm `gpt-5.4-mini` and `gpt-5.4` appear in the list. If either model is missing, the installer will fail hard at model selection — add the model to the gateway config before proceeding.
+Note: gpt-5.4 and gpt-5.4-mini may not appear in /v1/models even on a healthy gateway. The OC adapter's `installer_validate_model_pair_live` returns `supported: False` (no live check). The installer uses hardcoded static defaults per provider and calls `installer_ensure_gateway_model_allowlist` to register models in `agents.defaults.models` after install. This /v1/models query is informational only — the install does NOT require these models to appear here.
 
 **CC only** — clear any stale Quaid hooks before install:
 ```bash
@@ -634,9 +639,9 @@ for INSTANCE in OC_INSTANCE CC_INSTANCE CDX_INSTANCE; do
   ssh REMOTE_HOST "python3 -c \"
 import json; p = 'WORKSPACE/instances/$INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
-d.setdefault('capture', {})['chunk_tokens'] = 500
+d.setdefault('capture', {})['chunk_tokens'] = 1500
 with open(p, 'w') as f: json.dump(d, f, indent=2)
-print('chunk_tokens=500 for $INSTANCE')
+print('chunk_tokens=1500 for $INSTANCE')
 \""
 done
 ```

@@ -1305,6 +1305,11 @@ Not a failure:
 This milestone verifies that OpenClaw's multi-agent silo structure is correct
 and that extraction signals route to the right agent's silo.
 
+**Path note (Run 93):** Steps 2–4 and 6 below use `~/quaid/<agent>/` (visible-home).
+On VMs where Quaid is installed to hidden-home (`~/.quaid/`), the silo paths will be
+`~/.quaid/instances/<agent>/` instead. If the guide paths show ABSENT/FAIL, check the
+hidden-home equivalent before ruling a failure.
+
 **Step 1 — list_agent_instance_ids returns multiple IDs including openclaw-livetest:**
 
 ```bash
