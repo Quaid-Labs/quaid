@@ -117,6 +117,15 @@ describe("install daemon policy", () => {
     expect(setupText).not.toContain("leaving fallback QUAID_INSTANCE unchanged in add-instance mode");
   });
 
+  it("OpenClaw install reconciles runtime env to the created instance before finishing", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("const runtimeEnvReconciled = _ensureOpenClawRuntimeInstanceEnv(resolvedInstanceId);");
+    expect(setupText).toContain("Reconciled OpenClaw runtime instance env to");
+    expect(setupText).toContain('spawnSync("openclaw", ["gateway", "restart"]');
+  });
+
   it("OpenClaw add-instance reconciles plugin registration and fails loudly if still missing", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

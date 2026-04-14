@@ -4120,6 +4120,18 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       }
     }
   }
+  if (_isPlatform("openclaw") && resolvedInstanceId) {
+    const runtimeEnvReconciled = _ensureOpenClawRuntimeInstanceEnv(resolvedInstanceId);
+    if (runtimeEnvReconciled) {
+      log.info(`Reconciled OpenClaw runtime instance env to ${resolvedInstanceId}`);
+      const restart = spawnSync("openclaw", ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
+      if (restart.status === 0) {
+        await waitForGatewayWarmup(30_000);
+      } else {
+        log.warn("OpenClaw gateway restart after runtime env reconcile failed.");
+      }
+    }
+  }
   if (_isPlatform("claude-code")) {
     s.start("Configuring Claude Code hooks...");
     setupClaudeCodeHooks();
