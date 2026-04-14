@@ -21,6 +21,7 @@ from typing import Optional, Tuple
 
 from lib.agent_notice import notify_agent
 from lib.fail_policy import is_fail_hard_enabled
+from lib.providers import _is_anthropic_oauth_token
 from lib.runtime_context import queue_deferred_notice
 from lib.providers import AnthropicLLMProvider, LLMProvider, LLMResult
 
@@ -83,6 +84,14 @@ def _get_valid_token() -> Tuple[Optional[str], str]:
     file_token = _read_token_file()
     if file_token:
         return file_token, "ok"
+
+    # 1c. Standalone janitor / plain-shell fallback: some environments only
+    # export the shared Anthropic credential through ANTHROPIC_API_KEY. If
+    # that value is actually an OAuth token, route it through the bearer-auth
+    # OAuth path instead of the x-api-key API-key path.
+    env_api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if env_api_key and _is_anthropic_oauth_token(env_api_key):
+        return env_api_key, "ok"
 
     return None, "no_credentials"
 

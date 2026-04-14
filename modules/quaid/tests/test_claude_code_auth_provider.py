@@ -101,6 +101,26 @@ def test_api_key_fallback_warning_uses_auth_refresh(monkeypatch, capsys) -> None
     assert "config set-auth" not in err
 
 
+def test_oauth_token_in_anthropic_api_key_env_uses_bearer_path(monkeypatch) -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="claude-sonnet-4-5",
+        fast_model="claude-haiku-4-5",
+    )
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-oat01-standalone-oauth")
+
+    with patch.object(provider, "_api_call", return_value=type("R", (), {"text": "ok"})()) as api_call, patch.object(
+        provider,
+        "_get_api_key_provider",
+        side_effect=AssertionError("api key fallback should not be used for oauth token env"),
+    ):
+        result = provider.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+    assert result.text == "ok"
+    assert api_call.call_count == 1
+    assert api_call.call_args.args[0] == "sk-ant-oat01-standalone-oauth"
+
+
 def test_http_404_notifies_agent_before_raise(monkeypatch) -> None:
     provider = ClaudeCodeOAuthLLMProvider(
         deep_model="claude-sonnet-4-5",
