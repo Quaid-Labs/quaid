@@ -106,9 +106,18 @@ EDGE DIRECTION RULES (critical):
 - owns: OWNER is subject
 
 EDGE FORMAT:
-- subject: The source entity name (exact as mentioned, e.g., "Carol Smith" or "Carol")
+- subject: The source entity name as a MINIMAL entity label (e.g., "Carol Smith" or "Carol"), not a whole clause or sentence
 - relation: One of: parent_of, sibling_of, spouse_of, has_pet, friend_of, works_at, lives_at, owns, colleague_of, neighbor_of, knows, family_of, caused_by, led_to
-- object: The target entity name
+- object: The target entity name as a MINIMAL entity label
+
+ENTITY NAME RULES (critical):
+- Extract only the entity name, not the surrounding sentence.
+- Good: "Diana"
+- Good: "Diana Steadman"
+- Bad: "Solomon Steadman has a sister named Diana"
+- Bad: "my sister is Diana"
+- If a sentence says "Solomon Steadman has a sister named Diana", the edge should use the minimal label "Diana" for the person entity.
+- Prefer first name or first+last name when that is how the person is identified. Do not include verbs, relationship phrases, or extra narration in the entity label.
 
 Only extract edges when BOTH entities are clearly named. Don't infer entity names.
 

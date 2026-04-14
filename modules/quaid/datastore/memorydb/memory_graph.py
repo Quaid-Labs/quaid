@@ -2680,6 +2680,22 @@ def _is_placeholder_entity_name(name: str, owner_full: Optional[str] = None) -> 
     return any(lowered.startswith(prefix) for prefix in _ENTITY_PLACEHOLDER_PREFIXES)
 
 
+def _is_sentence_like_entity_name(name: str) -> bool:
+    """Return True when an extracted entity label looks like a whole sentence/clause."""
+    text = " ".join(str(name or "").strip().split())
+    if not text:
+        return False
+    if len(text.split()) < 3:
+        return False
+    lowered = text.lower()
+    if any(ch in lowered for ch in ".?!\n"):
+        return True
+    return bool(re.search(
+        r"\b(has|have|had|is|are|was|were|named|works|work|lives|live|called|says|said|remember|remembered)\b",
+        lowered,
+    ))
+
+
 def _get_owner_names() -> set:
     """Get the owner's name variants for pronoun resolution."""
     if not _HAS_CONFIG:
@@ -9403,6 +9419,11 @@ def create_edge(
         return {
             "status": "error",
             "message": "Placeholder entity label cannot be used for edge creation",
+        }
+    if _is_sentence_like_entity_name(subject_name) or _is_sentence_like_entity_name(object_name):
+        return {
+            "status": "error",
+            "message": "Entity label looks like a full sentence; use the minimal entity name",
         }
 
     # Keep symmetric relations deterministic to avoid A->B and B->A duplicates.

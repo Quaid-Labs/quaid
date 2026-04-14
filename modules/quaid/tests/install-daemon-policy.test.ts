@@ -155,9 +155,14 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('const quaidProjDir = path.join(PROJECTS_DIR, "quaid");');
     expect(setupText).toContain('const quaidProjSrc = path.join(__dirname, "projects", "quaid");');
     expect(setupText).toContain("copyMissingDirSync(quaidProjSrc, quaidProjDir);");
+    expect(setupText).toContain('ensureProjectSeedFileFromTemplate(quaidProjSrc, quaidProjDir, "AGENTS.md", MINIMAL_QUAID_PROJECT_AGENTS_MD);');
+    expect(setupText).toContain("Before writing any file or delegating work to a sub-agent, pick the first matching rule:");
+    expect(setupText).toContain("You MUST NOT write any file to");
     expect(setupText).toContain("reg.create_project(");
     expect(setupText).toContain("'quaid',");
     expect(setupText).toContain("home_dir='projects/quaid/'");
+    expect(setupText).toContain("link_global_project('quaid', instance_id=");
+    expect(setupText).toContain("if (regQuaidResult.status !== 0)");
   });
 
   it("Claude Code install creates a plain-shell CLI shim", () => {

@@ -360,6 +360,60 @@ const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/releases/tag/v2026.3.
 const MIN_GATEWAY_VERSION = "2026.3.7";
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";
 const TOTAL_INSTALL_STEPS = 7;
+const MINIMAL_QUAID_PROJECT_AGENTS_MD = `# Quaid — Operating Guide
+
+## File Placement — MANDATORY RULES
+
+**You MUST NOT write any file to \`/tmp/\`, \`/var/tmp/\`, or anywhere under \`~/quaid/\` or \`~/.quaid/\` except through Quaid's own managed flows.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
+
+**Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
+
+1. **Existing project owns this work** -> place the file inside that project's directory.
+2. **Throwaway / one-off / scratch / quick / hello-world** -> use the misc project as the owner, but do not treat \`~/quaid/\` or \`~/.quaid/\` as the working directory:
+   \`\`\`bash
+   # The misc project is pre-created. Confirm it exists:
+   quaid project show misc--$QUAID_INSTANCE
+   # Write the file at a real working path, then register it to misc:
+   quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
+   \`\`\`
+   Prefer a user-visible working path or the active repo. Always tell the user the file is tracked by the misc project and offer to promote it to a real project.
+3. **Durable new work** -> create a project first, then write files:
+   \`\`\`bash
+   quaid project create <name> --source-root <path>
+   # THEN write files / spawn sub-agents
+   \`\`\`
+4. **User specifies a path outside the project system** -> write there, then register the file so the project tracks it:
+   \`\`\`bash
+   # Write the file at the user's requested path (e.g. ~/my-scripts/tool.py)
+   # Then link it into the owning project:
+   quaid registry register ~/my-scripts/tool.py --project <name>
+   \`\`\`
+   Always tell the user the file is tracked via the registry even though it lives outside the project directory.
+
+**Example — user asks for a throwaway script:**
+> "Can you write a quick hello world script?"
+
+Correct response:
+\`\`\`bash
+# Step 1: confirm misc project exists
+quaid project show misc--$QUAID_INSTANCE
+# Step 2: write the file at a real working path
+# Step 3: register it to misc
+quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
+\`\`\`
+Tell the user: "I tracked it under the misc project so it stays in Quaid's project system."
+Do NOT write to \`/tmp/hello.py\` or any other path.
+
+**Example — user asks to build a new tool:**
+> "I have a Python script. Can you build it into a proper CLI tool?"
+
+Correct response:
+\`\`\`bash
+# Step 1: create a project BEFORE doing any work or spawning sub-agents
+quaid project create my-cli-tool --source-root /path/to/script
+# Step 2: then proceed with the work
+\`\`\`
+`;
 
 function authKindsForProvider(provider = "") {
   const normalized = String(provider || "").trim().toLowerCase();
@@ -4591,6 +4645,9 @@ print(total_docs)
     if (fs.existsSync(quaidProjSrc)) {
       copyMissingDirSync(quaidProjSrc, quaidProjDir);
     }
+    ensureProjectSeedFileFromTemplate(quaidProjSrc, quaidProjDir, "AGENTS.md", MINIMAL_QUAID_PROJECT_AGENTS_MD);
+    ensureProjectSeedFileFromTemplate(quaidProjSrc, quaidProjDir, "TOOLS.md");
+    ensureProjectSeedFileFromTemplate(quaidProjSrc, quaidProjDir, "PROJECT.md");
     const quaidSourceRoot = path.relative(WORKSPACE, PLUGIN_DIR).split(path.sep).join("/");
     const quaidSourceRoots = JSON.stringify(quaidSourceRoot ? [quaidSourceRoot] : []);
     // Register Quaid as a project unless it was already covered by existing project scan.
@@ -4602,7 +4659,16 @@ ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
+from core.project_registry import create_project as create_global_project, get_project as get_global_project, link_project as link_global_project
 reg = DocsRegistry()
+if not get_global_project('quaid'):
+    create_global_project(
+        'quaid',
+        description='Quaid runtime, memory, project-doc, and adapter reference docs.',
+        initial_instance=${JSON.stringify(resolvedInstanceId)},
+    )
+else:
+    link_global_project('quaid', instance_id=${JSON.stringify(resolvedInstanceId)})
 try:
     reg.create_project(
         'quaid',
@@ -4616,11 +4682,18 @@ except ValueError:
 found = reg.auto_discover('quaid')
 print(len(found))
 `;
+    const regQuaidResult = python3Spawn(["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    if (regQuaidResult.error) {
+      throw regQuaidResult.error;
+    }
+    if (regQuaidResult.status !== 0) {
+      const detail = String(regQuaidResult.stderr || regQuaidResult.stdout || "").trim();
+      throw new Error(detail || "Bundled quaid project registration failed");
+    }
+    const quaidDocCount = (regQuaidResult.stdout || "").trim();
     if (quaidAlreadyRegisteredViaExisting) {
-      log.info("Quaid project docs were already registered in the existing-project scan; skipping duplicate registration pass.");
+      log.info(`Quaid project re-linked and refreshed (${quaidDocCount} docs discovered in refresh pass)`);
     } else {
-      const regQuaidResult = python3Spawn(["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-      const quaidDocCount = (regQuaidResult.stdout || "").trim();
       log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
     }
 
@@ -5696,6 +5769,20 @@ function copyMissingDirSync(src, dest) {
     } else if ((entry.isFile() || entry.isSymbolicLink()) && !fs.existsSync(destPath)) {
       fs.copyFileSync(srcPath, destPath);
     }
+  }
+}
+
+function ensureProjectSeedFileFromTemplate(sourceDir, destDir, relPath, fallbackText = "") {
+  const destPath = path.join(destDir, relPath);
+  if (fs.existsSync(destPath)) return;
+  const srcPath = sourceDir ? path.join(sourceDir, relPath) : "";
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  if (srcPath && fs.existsSync(srcPath)) {
+    fs.copyFileSync(srcPath, destPath);
+    return;
+  }
+  if (fallbackText) {
+    fs.writeFileSync(destPath, fallbackText.trimEnd() + "\n", "utf8");
   }
 }
 

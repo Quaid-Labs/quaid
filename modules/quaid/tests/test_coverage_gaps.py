@@ -1009,6 +1009,23 @@ class TestCreateEdgeAtomicity:
                     owner_id="quaid",
                 )
 
+    def test_create_edge_rejects_sentence_like_entity_labels(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_sentence_label.db")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = create_edge(
+                subject_name="Solomon Steadman",
+                relation="sibling_of",
+                object_name="Solomon Steadman has a sister named Diana",
+                owner_id="quaid",
+            )
+
+        assert result["status"] == "error"
+        assert "minimal entity name" in result["message"]
+
 
 class TestReviewFixTransaction:
     def test_fix_rolls_back_when_edge_rebuild_fails(self, tmp_path):

@@ -12,6 +12,7 @@ from datastore.memorydb.maintenance_ops import (
 from datastore.memorydb.memory_graph import (
     _canonicalize_owner_alias as _graph_canonicalize_owner_alias,
     _is_placeholder_entity_name as _graph_is_placeholder_entity_name,
+    _is_sentence_like_entity_name,
 )
 
 
@@ -290,6 +291,10 @@ class TestPlaceholderEntityFiltering:
         assert _graph_canonicalize_owner_alias("the user", "Solomon Steadman") == "Solomon Steadman"
         assert _graph_is_placeholder_entity_name("User's sister", "Solomon Steadman")
         assert not _graph_is_placeholder_entity_name("Diana", "Solomon Steadman")
+
+    def test_sentence_like_entity_name_is_detected(self):
+        assert _is_sentence_like_entity_name("Solomon Steadman has a sister named Diana")
+        assert not _is_sentence_like_entity_name("Diana Steadman")
 
 
 class TestWhitespaceAndCase:
