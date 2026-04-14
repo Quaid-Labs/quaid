@@ -123,6 +123,44 @@ function upsertTomlBool(text, tableName, key, value) {
   return `${lines.join("\n").replace(/\n*$/, "\n")}`;
 }
 
+function upsertTomlStringInTable(text, tableName, key, quotedValue) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  const lines = normalized ? normalized.split("\n") : [];
+  const tableLine = `[${tableName}]`;
+  const valueLine = `${key} = ${quotedValue}`;
+
+  let tableIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === tableLine) {
+      tableIndex = i;
+      break;
+    }
+  }
+
+  if (tableIndex === -1) {
+    const prefix = normalized.trimEnd();
+    return `${prefix}${prefix ? "\n\n" : ""}${tableLine}\n${valueLine}\n`;
+  }
+
+  let sectionEnd = lines.length;
+  for (let i = tableIndex + 1; i < lines.length; i++) {
+    if (/^\s*\[[^\]]+\]\s*$/.test(lines[i])) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  for (let i = tableIndex + 1; i < sectionEnd; i++) {
+    if (new RegExp(`^\\s*${key}\\s*=`).test(lines[i])) {
+      lines[i] = valueLine;
+      return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+    }
+  }
+
+  lines.splice(sectionEnd, 0, valueLine);
+  return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+}
+
 const workspace = resolveWorkspace();
 const instance = String(process.env.QUAID_INSTANCE || "codex-main").trim() || "codex-main";
 const quaidBinary = resolveQuaidBinary(workspace);
@@ -202,6 +240,21 @@ let currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8"
 let updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));
 // Enable the codex_hooks feature flag.
 updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);
+const trustCandidates = Array.from(
+  new Set(
+    [process.cwd(), fs.realpathSync.native(process.cwd())]
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean),
+  ),
+);
+for (const candidate of trustCandidates) {
+  updatedToml = upsertTomlStringInTable(
+    updatedToml,
+    `projects.${JSON.stringify(candidate)}`,
+    "trust_level",
+    JSON.stringify("trusted"),
+  );
+}
 if (updatedToml !== currentToml) {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const tmpPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;

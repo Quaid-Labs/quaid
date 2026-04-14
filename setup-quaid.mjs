@@ -4143,6 +4143,11 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       log.warn("Could not update Claude Code CLI shim automatically.");
     }
   }
+  if (_isPlatform("codex")) {
+    s.start("Configuring Codex hooks...");
+    setupCodexHooks();
+    s.stop(C.green("Codex hooks configured"));
+  }
 
   // Initialize database
   s.start("Initializing database...");
@@ -5123,6 +5128,35 @@ function setupClaudeCodeHooks() {
     log.info("Claude Code hooks already configured");
   }
 
+}
+
+function setupCodexHooks() {
+  const postinstallPath = path.join(
+    PLUGIN_DIR,
+    "adaptors",
+    "manifests",
+    "codex",
+    "hooks",
+    "postinstall.mjs",
+  );
+  if (!fs.existsSync(postinstallPath)) {
+    throw new Error(`Codex postinstall hook script not found: ${postinstallPath}`);
+  }
+  const result = spawnSync("node", [postinstallPath], {
+    encoding: "utf8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      QUAID_HOME: WORKSPACE,
+      QUAID_VISIBLE_HOME: VISIBLE_HOME,
+      OPENCLAW_WORKSPACE: WORKSPACE,
+      QUAID_INSTANCE: resolvedInstallerInstanceId("codex"),
+    },
+  });
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || "").trim();
+    throw new Error(detail || "Codex hooks setup failed");
+  }
 }
 
 async function tryBrewInstall(pkg, label) {

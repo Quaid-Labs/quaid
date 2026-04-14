@@ -764,8 +764,34 @@ def write_rolling_state(session_id: str, state: Dict[str, Any]) -> None:
 
 
 def clear_rolling_state(session_id: str) -> None:
+    target_path = _rolling_state_path(session_id)
+    removed = False
     try:
-        _rolling_state_path(session_id).unlink()
+        target_path.unlink()
+        removed = True
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("rolling state unlink failed for %s at %s: %s", session_id, target_path, exc)
+
+    if removed:
+        return
+
+    # Reconcile stale files whose basename drifted from the logical session_id
+    # but whose payload still points at this session. This keeps rolling_flush
+    # cleanup authoritative even if an earlier write used a mismatched path key.
+    try:
+        for state_file in _rolling_state_dir().glob("*.json"):
+            try:
+                payload = json.loads(state_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if str(payload.get("session_id") or "").strip() != str(session_id or "").strip():
+                continue
+            try:
+                state_file.unlink()
+            except OSError as exc:
+                logger.warning("rolling state unlink failed for %s at %s: %s", session_id, state_file, exc)
     except OSError:
         pass
 
@@ -1876,9 +1902,20 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
         except ValueError:
             continue
         cursor_file = _cursor_dir() / f"{session_id}.json"
-        if cursor_file.exists():
-            continue
         if not transcript_path.is_file():
+            continue
+        if cursor_file.exists():
+            try:
+                cursor_data = json.loads(cursor_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                cursor_data = {}
+            existing_path = str(cursor_data.get("transcript_path") or "").strip()
+            if existing_path and os.path.isfile(existing_path):
+                continue
+            line_offset = int(cursor_data.get("line_offset", 0) or 0)
+            internal = bool(cursor_data.get("internal", False))
+            write_cursor(session_id, line_offset, str(transcript_path), internal=internal)
+            discovered += 1
             continue
         write_cursor(session_id, 0, str(transcript_path))
         discovered += 1

@@ -171,4 +171,24 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("Updated Claude Code CLI shim:");
     expect(setupText).toContain("Could not update Claude Code CLI shim automatically.");
   });
+
+  it("Codex install configures hooks via the managed postinstall path", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const postinstallText = fs.readFileSync(
+      path.join(repoRoot, "modules", "quaid", "adaptors", "manifests", "codex", "hooks", "postinstall.mjs"),
+      "utf8",
+    );
+
+    expect(setupText).toContain("function setupCodexHooks()");
+    expect(setupText).toContain('s.start("Configuring Codex hooks...")');
+    expect(setupText).toContain("setupCodexHooks();");
+    expect(setupText).toContain('s.stop(C.green("Codex hooks configured"))');
+    expect(postinstallText).toContain('const hooksPath = path.join(os.homedir(), ".codex", "hooks.json");');
+    expect(postinstallText).toContain('updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));');
+    expect(postinstallText).toContain('updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);');
+    expect(postinstallText).toContain('updatedToml = upsertTomlStringInTable(');
+    expect(postinstallText).toContain('"trust_level"');
+    expect(postinstallText).toContain('"trusted"');
+  });
 });

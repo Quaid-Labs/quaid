@@ -225,6 +225,56 @@ def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(
     ]
 
 
+def test_ensure_discovered_session_cursors_repairs_broken_existing_cursor(monkeypatch, tmp_path):
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    sessions_dir = tmp_path / "sessions"
+    transcript = sessions_dir / "-tmp-quaid-dev" / "sess-cc.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+    cursor_dir.mkdir(parents=True, exist_ok=True)
+    broken = cursor_dir / "sess-cc.json"
+    broken.write_text(
+        json.dumps(
+            {
+                "session_id": "sess-cc",
+                "line_offset": 1,
+                "internal": False,
+                "transcript_path": str(tmp_path / "missing" / "sess-cc.jsonl"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Adapter:
+        def get_sessions_dir(self):
+            return sessions_dir
+
+    repaired = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+    assert repaired == 1
+    data = json.loads(broken.read_text(encoding="utf-8"))
+    assert data["line_offset"] == 1
+    assert data["transcript_path"] == str(transcript)
+
+
+def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+    rolling_dir.mkdir(parents=True, exist_ok=True)
+    stale_file = rolling_dir / "unknown-legacy.json"
+    stale_file.write_text(
+        json.dumps({"session_id": "sess-roll-stale", "carry_facts": [{"text": "fact"}]}),
+        encoding="utf-8",
+    )
+
+    extraction_daemon.clear_rolling_state("sess-roll-stale")
+
+    assert not stale_file.exists()
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
