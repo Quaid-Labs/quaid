@@ -174,6 +174,8 @@ wipe_cdx() {
         "rm -rf $WORKSPACE/instances/$CDX_INSTANCE && echo 'CDX silo wiped'"
     run_remote "clear Codex Quaid hooks" \
         "python3 -c \"from pathlib import Path; p=Path.home()/'.codex'/'hooks.json'; p.unlink(missing_ok=True); print('Codex Quaid hooks cleared')\""
+    run_remote "clear Codex config JSON" \
+        "python3 -c \"from pathlib import Path; p=Path.home()/'.codex'/'config.json'; p.unlink(missing_ok=True); print('Codex config.json cleared')\""
     run_remote "clear Codex hook feature flag" \
         "python3 -c \"
 from pathlib import Path

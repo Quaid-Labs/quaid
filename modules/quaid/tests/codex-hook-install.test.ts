@@ -50,6 +50,7 @@ describe("codex postinstall hook registration", () => {
     expect(second.status).toBe(0);
 
     const hooks = JSON.parse(fs.readFileSync(path.join(codexDir, "hooks.json"), "utf8"));
+    const configJson = JSON.parse(fs.readFileSync(path.join(codexDir, "config.json"), "utf8"));
     const configToml = fs.readFileSync(path.join(codexDir, "config.toml"), "utf8");
 
     const flattenCommands = (eventName: string) =>
@@ -74,6 +75,13 @@ describe("codex postinstall hook registration", () => {
     expect(stopCommands.some((cmd) => cmd.includes("hook-codex-stop"))).toBe(true);
     expect(allManaged).toHaveLength(3);
     expect(allManaged.every((cmd) => cmd.includes('codex-livetest'))).toBe(true);
+    expect(configJson.features.codex_hooks).toBe(true);
+    expect(configJson.hooks.session_start).toBeTruthy();
+    expect(configJson.hooks.user_prompt_submit).toBeTruthy();
+    expect(configJson.hooks.stop).toBeTruthy();
+    expect(
+      Object.values(configJson.projects || {}).some((entry: any) => entry?.trust_level === "trusted"),
+    ).toBe(true);
     expect(configToml).toContain('model = "gpt-5.2"');
     expect(configToml).toContain("[features]");
     expect(configToml).toContain("codex_hooks = true");

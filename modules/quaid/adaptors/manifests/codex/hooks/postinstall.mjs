@@ -173,8 +173,10 @@ const envPrefix = [
   `QUAID_INSTANCE="\${QUAID_INSTANCE:-${defaultInstance}}"`,
 ].join(" ");
 
-const hooksPath = path.join(os.homedir(), ".codex", "hooks.json");
-const configPath = path.join(os.homedir(), ".codex", "config.toml");
+const codexDir = path.join(os.homedir(), ".codex");
+const hooksPath = path.join(codexDir, "hooks.json");
+const configPath = path.join(codexDir, "config.toml");
+const configJsonPath = path.join(codexDir, "config.json");
 
 const managedCommands = [
   "hook-session-init",
@@ -235,11 +237,6 @@ for (const [eventName, groups] of Object.entries(desiredHooks)) {
 
 writeJson(hooksPath, hooksConfig);
 
-let currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-// Point codex at the hooks file so it is loaded on startup.
-let updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));
-// Enable the codex_hooks feature flag.
-updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);
 const trustCandidates = Array.from(
   new Set(
     [process.cwd(), fs.realpathSync.native(process.cwd())]
@@ -247,6 +244,38 @@ const trustCandidates = Array.from(
       .filter(Boolean),
   ),
 );
+
+const configJson = readJson(configJsonPath, {});
+if (!configJson || typeof configJson !== "object" || Array.isArray(configJson)) {
+  throw new Error(`Invalid Codex config JSON at ${configJsonPath}`);
+}
+configJson.hooks = hooksConfig.hooks;
+configJson.features = {
+  ...(configJson.features && typeof configJson.features === "object" && !Array.isArray(configJson.features)
+    ? configJson.features
+    : {}),
+  codex_hooks: true,
+};
+configJson.projects = {
+  ...(configJson.projects && typeof configJson.projects === "object" && !Array.isArray(configJson.projects)
+    ? configJson.projects
+    : {}),
+};
+for (const candidate of trustCandidates) {
+  configJson.projects[candidate] = {
+    ...(configJson.projects[candidate] && typeof configJson.projects[candidate] === "object"
+      ? configJson.projects[candidate]
+      : {}),
+    trust_level: "trusted",
+  };
+}
+writeJson(configJsonPath, configJson);
+
+let currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+// Point codex at the hooks file so it is loaded on startup.
+let updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));
+// Enable the codex_hooks feature flag.
+updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);
 for (const candidate of trustCandidates) {
   updatedToml = upsertTomlStringInTable(
     updatedToml,
@@ -263,3 +292,4 @@ if (updatedToml !== currentToml) {
 }
 
 console.log(`[quaid][adapter:codex][postinstall] Codex hooks configured in ${hooksPath}`);
+console.log(`[quaid][adapter:codex][postinstall] Codex config mirrored in ${configJsonPath}`);

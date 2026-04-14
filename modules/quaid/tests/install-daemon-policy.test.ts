@@ -184,7 +184,11 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('s.start("Configuring Codex hooks...")');
     expect(setupText).toContain("setupCodexHooks();");
     expect(setupText).toContain('s.stop(C.green("Codex hooks configured"))');
-    expect(postinstallText).toContain('const hooksPath = path.join(os.homedir(), ".codex", "hooks.json");');
+    expect(postinstallText).toContain('const codexDir = path.join(os.homedir(), ".codex");');
+    expect(postinstallText).toContain('const hooksPath = path.join(codexDir, "hooks.json");');
+    expect(postinstallText).toContain('const configJsonPath = path.join(codexDir, "config.json");');
+    expect(postinstallText).toContain("configJson.hooks = hooksConfig.hooks;");
+    expect(postinstallText).toContain("configJson.features = {");
     expect(postinstallText).toContain('updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));');
     expect(postinstallText).toContain('updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);');
     expect(postinstallText).toContain('updatedToml = upsertTomlStringInTable(');
