@@ -482,6 +482,17 @@ class TestStoreBasic:
             attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
             assert attrs.get("domains") == ["technical"]
 
+    def test_cli_store_defaults_domains_to_personal_when_omitted(self):
+        from datastore.memorydb.memory_graph import _resolve_cli_store_domains
+
+        assert _resolve_cli_store_domains("") == ["personal"]
+        assert _resolve_cli_store_domains(None) == ["personal"]
+
+    def test_cli_store_preserves_explicit_domains(self):
+        from datastore.memorydb.memory_graph import _resolve_cli_store_domains
+
+        assert _resolve_cli_store_domains("technical,project") == ["technical", "project"]
+
     def test_store_preserves_privacy(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
