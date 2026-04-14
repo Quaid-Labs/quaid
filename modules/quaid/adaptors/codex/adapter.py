@@ -26,7 +26,7 @@ class CodexAdapter(QuaidAdapter):
     """Adapter for Codex CLI/app sessions."""
 
     _HOOK_STATUS_LINE_RE = re.compile(
-        r"^\s*(?:•\s*)?(?:Running\s+)?(?:SessionStart|UserPromptSubmit|Stop)\s+hook(?::|\s+\(completed\)).*$",
+        r"^\s*(?:•\s*)?(?:Running\s+)?(?:SessionStart|UserPromptSubmit|Stop|session_start|user_prompt_submit|stop)\s+hook(?::|\s+\(completed\)).*$",
         flags=re.IGNORECASE,
     )
     _HOOK_CONTEXT_LINE_RE = re.compile(

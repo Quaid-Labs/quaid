@@ -22,7 +22,7 @@ describe("codex postinstall hook registration", () => {
       JSON.stringify(
         {
           hooks: {
-            UserPromptSubmit: [
+            user_prompt_submit: [
               { hooks: [{ type: "command", command: "echo keep-me" }] },
               { hooks: [{ type: "command", command: "QUAID_INSTANCE=\"${QUAID_INSTANCE:-old}\" '/old/quaid' hook-inject" }] },
             ],
@@ -55,32 +55,24 @@ describe("codex postinstall hook registration", () => {
     const flattenCommands = (eventName: string) =>
       (hooks.hooks[eventName] || []).flatMap((group: any) => (group.hooks || []).map((hook: any) => String(hook.command || "")));
 
-    const sessionStartCommands = flattenCommands("SessionStart");
-    const promptCommands = flattenCommands("UserPromptSubmit");
-    const stopCommands = flattenCommands("Stop");
-    const subagentStartCommands = flattenCommands("SubagentStart");
-    const subagentStopCommands = flattenCommands("SubagentStop");
+    const sessionStartCommands = flattenCommands("session_start");
+    const promptCommands = flattenCommands("user_prompt_submit");
+    const stopCommands = flattenCommands("stop");
     const allManaged = [
       ...sessionStartCommands,
       ...promptCommands,
       ...stopCommands,
-      ...subagentStartCommands,
-      ...subagentStopCommands,
     ].filter((cmd) =>
       cmd.includes("hook-session-init")
       || cmd.includes("hook-inject")
-      || cmd.includes("hook-codex-stop")
-      || cmd.includes("hook-subagent-start")
-      || cmd.includes("hook-subagent-stop"),
+      || cmd.includes("hook-codex-stop"),
     );
 
     expect(promptCommands).toContain("echo keep-me");
     expect(sessionStartCommands.some((cmd) => cmd.includes("hook-session-init"))).toBe(true);
     expect(promptCommands.some((cmd) => cmd.includes("hook-inject"))).toBe(true);
     expect(stopCommands.some((cmd) => cmd.includes("hook-codex-stop"))).toBe(true);
-    expect(subagentStartCommands.some((cmd) => cmd.includes("hook-subagent-start"))).toBe(true);
-    expect(subagentStopCommands.some((cmd) => cmd.includes("hook-subagent-stop"))).toBe(true);
-    expect(allManaged).toHaveLength(5);
+    expect(allManaged).toHaveLength(3);
     expect(allManaged.every((cmd) => cmd.includes('codex-livetest'))).toBe(true);
     expect(configToml).toContain('model = "gpt-5.2"');
     expect(configToml).toContain("[features]");

@@ -147,7 +147,7 @@ const managedCommands = [
 ];
 
 const desiredHooks = {
-  SessionStart: [
+  session_start: [
     {
       hooks: [
         {
@@ -158,7 +158,7 @@ const desiredHooks = {
       ],
     },
   ],
-  UserPromptSubmit: [
+  user_prompt_submit: [
     {
       hooks: [
         {
@@ -169,33 +169,13 @@ const desiredHooks = {
       ],
     },
   ],
-  Stop: [
+  stop: [
     {
       hooks: [
         {
           type: "command",
           command: `${envPrefix} ${quaidCommand} hook-codex-stop`,
           timeout: 120,
-        },
-      ],
-    },
-  ],
-  SubagentStart: [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: `${envPrefix} ${quaidCommand} hook-subagent-start`,
-        },
-      ],
-    },
-  ],
-  SubagentStop: [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: `${envPrefix} ${quaidCommand} hook-subagent-stop`,
         },
       ],
     },
