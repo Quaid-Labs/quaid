@@ -1215,6 +1215,36 @@ def _synthesize_user_snippets_from_facts(
     return snippets
 
 
+def _synthesize_project_logs_from_facts(
+    facts: List[Dict[str, Any]],
+    published_facts: List[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Fallback project log lines from project-tagged published facts.
+
+    Carry-only flushes can arrive with facts already staged/published by other
+    paths, but without explicit `project_logs` entries. Synthesizing from the
+    successfully published facts preserves PROJECT.log updates without requiring
+    another extraction pass.
+    """
+    synthesized: Dict[str, List[str]] = {}
+    fact_rows = [fact for fact in (facts or []) if isinstance(fact, dict)]
+    published_rows = [entry for entry in (published_facts or []) if isinstance(entry, dict)]
+    for fact, entry in zip(fact_rows, published_rows):
+        status = str(entry.get("status", "") or "").strip().lower()
+        if status not in {"stored", "updated", "would_store"}:
+            continue
+        project_name = str(fact.get("project", "") or "").strip()
+        text = str(fact.get("text", "") or "").strip()
+        if not project_name or not text:
+            continue
+        synthesized.setdefault(project_name, []).append(text)
+    return {
+        project_name: list(dict.fromkeys(entries))
+        for project_name, entries in synthesized.items()
+        if entries
+    }
+
+
 def _extract_chunk_payloads(
     *,
     chunk: str,
@@ -2016,6 +2046,20 @@ def apply_extracted_payloads(
             cleaned = [s.strip() for s in items if isinstance(s, str) and s.strip()]
             if cleaned:
                 result["project_logs"][project_name] = cleaned
+
+    if not result["project_logs"]:
+        synthesized_project_logs = _synthesize_project_logs_from_facts(
+            facts,
+            result.get("facts", []),
+        )
+        if synthesized_project_logs:
+            result["project_logs"] = synthesized_project_logs
+            logger.info(
+                "[extract] %s: synthesized project logs from %d fact(s) across %d project(s)",
+                label,
+                sum(len(v) for v in synthesized_project_logs.values()),
+                len(synthesized_project_logs),
+            )
 
     if result["project_logs"]:
         trigger = "Compaction" if "compaction" in label.lower() else (

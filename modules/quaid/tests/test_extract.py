@@ -894,6 +894,69 @@ class TestExtractFromTranscript:
         assert call["source_id"] == "child-session-1"
         assert call["source_type"] == "subagent"
 
+    @patch("ingest.extract.append_project_logs")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_synthesizes_project_logs_from_project_facts_when_missing(
+        self,
+        mock_store,
+        mock_append_project_logs,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+        mock_append_project_logs.return_value = {
+            "projects_seen": 1,
+            "projects_updated": 1,
+            "entries_seen": 1,
+            "entries_written": 1,
+            "projects_unknown": 0,
+            "projects_missing_file": 0,
+        }
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Added a hello_world.py scratch helper for the live test",
+                    "category": "fact",
+                    "speaker": "assistant",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "project": "quaid",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="carry-flush",
+            session_id="sess-project-log",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 1
+        assert applied["project_logs"] == {
+            "quaid": ["Added a hello_world.py scratch helper for the live test"],
+        }
+        assert applied["project_log_metrics"]["entries_written"] == 1
+        mock_append_project_logs.assert_called_once_with(
+            {"quaid": ["Added a hello_world.py scratch helper for the live test"]},
+            trigger="CLI",
+            dry_run=False,
+        )
+
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     def test_skips_short_facts(self, mock_store, mock_llm):
