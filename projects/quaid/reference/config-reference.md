@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `e6fe94bd74a9`
+Source hash: `9860d37f1cac`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -19,6 +19,7 @@ Notes:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `adapter.type` | `str` | `"standalone"` | standalone \| openclaw \| claude-code \| codex |
+| `adapter.capabilities` | `dict[str, Any]` | `{}` |  |
 
 ## `capture`
 
