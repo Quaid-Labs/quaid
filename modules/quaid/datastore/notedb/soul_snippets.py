@@ -2091,9 +2091,6 @@ def run_soul_snippets_review(
         print("  Snippets disabled in config")
         return {"skipped": True, "reason": "snippets_disabled"}
 
-    if not dry_run:
-        _refresh_generated_projection_hygiene()
-
     target_files = _get_target_files()
     total_snippet_count = 0
     file_payloads: Dict[str, Dict[str, Any]] = {}
@@ -2315,6 +2312,9 @@ def run_soul_snippets_review(
             stats["rewritten"] += int(file_stats.get("rewritten", 0))
             stats["discarded"] += int(file_stats.get("discarded", 0))
             stats["errors"].extend(file_stats.get("errors", []))
+
+    if not dry_run and file_payloads:
+        _refresh_generated_projection_hygiene()
 
     print(f"  Results: {stats['folded']} folded, {stats['rewritten']} rewritten, "
           f"{stats['discarded']} discarded from {total_snippet_count} snippets")

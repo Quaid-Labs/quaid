@@ -48,7 +48,31 @@ from prompt_sets import get_prompt
 from lib.domain_text import normalize_domain_id
 
 logger = logging.getLogger(__name__)
-_memory = get_memory_service()
+
+
+class _LazyMemoryService:
+    def _svc(self):
+        from core.services.memory_service import get_memory_service as _runtime_get_memory_service
+
+        return _runtime_get_memory_service()
+
+    def __getattr__(self, name: str):
+        return getattr(self._svc(), name)
+
+    def warm_embeddings(self, *args, **kwargs):
+        return self._svc().warm_embeddings(*args, **kwargs)
+
+    def batch_write(self, *args, **kwargs):
+        return self._svc().batch_write(*args, **kwargs)
+
+    def create_edge(self, *args, **kwargs):
+        return self._svc().create_edge(*args, **kwargs)
+
+    def store(self, *args, **kwargs):
+        return self._svc().store(*args, **kwargs)
+
+
+_memory = _LazyMemoryService()
 
 DEFAULT_EXTRACT_WALL_SECONDS = 2400.0
 EXTRACT_RETRY_TARGET_TOKENS = 8000

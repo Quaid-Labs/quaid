@@ -1,5 +1,6 @@
 """Tests for extract.py — Memory extraction from conversation transcripts."""
 
+import importlib
 import itertools
 import json
 import os
@@ -1254,6 +1255,37 @@ class TestExtractFromTranscript:
         assert conn_a.execute.call_args_list[0].args[0] == "BEGIN IMMEDIATE"
         assert conn_b.execute.call_args_list[0].args[0] == "BEGIN IMMEDIATE"
         assert seen_store == [conn_a, conn_b]
+
+    def test_extract_import_does_not_bind_memory_service_at_module_import(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        calls = {"count": 0}
+
+        def fake_get_memory_service():
+            calls["count"] += 1
+
+            class _Svc:
+                def warm_embeddings(self, texts):
+                    return {
+                        "requested": len(texts),
+                        "unique": len(texts),
+                        "cache_hits": 0,
+                        "warmed": len(texts),
+                        "failed": 0,
+                        "skipped_empty": 0,
+                    }
+
+            return _Svc()
+
+        monkeypatch.setattr("core.services.memory_service.get_memory_service", fake_get_memory_service)
+        reloaded = importlib.reload(extract_mod)
+
+        assert calls["count"] == 0
+
+        stats = reloaded._memory.warm_embeddings(["alpha", "beta"])
+        assert calls["count"] == 1
+        assert stats["requested"] == 2
+
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_rechecks_only_new_rows_before_batch_publish(self, mock_store):

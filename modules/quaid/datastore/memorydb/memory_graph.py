@@ -115,10 +115,6 @@ except ImportError:
     _HAS_CONFIG = False
 
 
-# Configuration — resolved from config system
-DB_PATH = get_db_path()
-
-
 @dataclass
 class Node:
     """A memory node (entity, fact, preference, etc.)"""
@@ -208,8 +204,8 @@ def content_hash(text: str) -> str:
 class MemoryGraph:
     """Local graph-based memory system."""
 
-    def __init__(self, db_path: Path = DB_PATH):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[Path] = None):
+        self.db_path = Path(db_path) if db_path is not None else get_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
