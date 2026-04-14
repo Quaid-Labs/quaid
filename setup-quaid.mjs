@@ -944,7 +944,7 @@ function runAdapterInstallHook(adapterId, hookName) {
   let cmd = scriptPath;
   let args = [];
   if (ext === ".mjs" || ext === ".js" || ext === ".cjs") {
-    cmd = "node";
+    cmd = process.execPath || "node";
     args = [scriptPath];
   } else if (ext === ".py") {
     cmd = "python3";
@@ -5142,7 +5142,7 @@ function setupCodexHooks() {
   if (!fs.existsSync(postinstallPath)) {
     throw new Error(`Codex postinstall hook script not found: ${postinstallPath}`);
   }
-  const result = spawnSync("node", [postinstallPath], {
+  const result = spawnSync(process.execPath || "node", [postinstallPath], {
     encoding: "utf8",
     stdio: "pipe",
     env: {
