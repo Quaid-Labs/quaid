@@ -895,7 +895,8 @@ describe("QuaidFacade", () => {
       } as any,
     ]);
 
-    expect(out).toContain("- [memory-quality] Retrieved memory for this topic looks conflicted.");
+    expect(out).toContain("Maya joined Stripe as a senior PM.");
+    expect(out).not.toContain("[memory-quality]");
   });
 
   it("formatMemoriesForInjection prefers user attribution for duplicate claim text", () => {
@@ -1237,6 +1238,7 @@ describe("QuaidFacade", () => {
         { text: "beta", category: "fact", similarity: 0.8 },
       ],
       100,
+      2,
     );
     expect(merged).toEqual(["alpha", "beta"]);
     expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual(["alpha", "beta"]);
@@ -1272,6 +1274,77 @@ describe("QuaidFacade", () => {
       eventMessages: [{ role: "user", content: "hello", timestamp: Date.now() }],
       context: { sessionId: "sess-auto" },
       existingPrependContext: "seed",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+    expect(second).toBeNull();
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("prepareAutoInjectionContext re-injects for a fresh conversation restart on the same session id", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-reset-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      { id: "m1", text: "Baxter loves tennis balls", category: "fact", similarity: 0.93 },
+      { id: "m2", text: "Baxter is a golden retriever", category: "fact", similarity: 0.91 },
+    ];
+
+    const first = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [
+        { role: "user", content: "hello", timestamp: Date.now() },
+        { role: "assistant", content: "hi", timestamp: Date.now() + 1 },
+        { role: "user", content: "tell me about Baxter", timestamp: Date.now() + 2 },
+      ],
+      context: { sessionId: "sess-auto-reset" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+    expect(first?.toInject.map((m) => m.id)).toEqual(["m1", "m2"]);
+
+    const second = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [
+        { role: "user", content: "fresh chat", timestamp: Date.now() },
+        { role: "assistant", content: "ready", timestamp: Date.now() + 1 },
+      ],
+      context: { sessionId: "sess-auto-reset" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+    expect(second?.toInject.map((m) => m.id)).toEqual(["m1", "m2"]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("prepareAutoInjectionContext does not clear dedup on a normal turn-2 short conversation", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-no-reset-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      { id: "m1", text: "Baxter loves tennis balls", category: "fact", similarity: 0.93 },
+    ];
+
+    const first = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-no-reset" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+    expect(first?.toInject.map((m) => m.id)).toEqual(["m1"]);
+
+    const second = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [
+        { role: "user", content: "tell me more", timestamp: Date.now() },
+        { role: "assistant", content: "checking", timestamp: Date.now() + 1 },
+      ],
+      context: { sessionId: "sess-auto-no-reset" },
+      existingPrependContext: "",
       injectLimit: 5,
       maxInjectionIdsPerSession: 100,
     });

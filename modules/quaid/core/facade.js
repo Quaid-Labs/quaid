@@ -1458,13 +1458,17 @@ function createQuaidFacade(deps) {
     const rawInjected = logData.injected ?? logData.memoryTexts;
     return Array.isArray(rawInjected) ? rawInjected.map((item) => String(item || "").trim()).filter(Boolean) : [];
   }
-  function saveInjectedMemoryKeys(sessionId, previousKeys, memories, maxEntries) {
+  function saveInjectedMemoryKeys(sessionId, previousKeys, memories, maxEntries, visibleTurnCount) {
     const newKeys = memories.map((m) => m.id || m.text);
     const merged = [...previousKeys, ...newKeys].map((k) => String(k || "").trim()).filter(Boolean).slice(-Math.max(1, Number(maxEntries) || 1));
-    writeInjectionLog(sessionId, {
+    const payload = {
       injected: merged,
       lastInjectedAt: (/* @__PURE__ */ new Date()).toISOString()
-    });
+    };
+    if (Number.isFinite(Number(visibleTurnCount)) && Number(visibleTurnCount) >= 0) {
+      payload.visibleTurnCount = Number(visibleTurnCount);
+    }
+    writeInjectionLog(sessionId, payload);
     pruneInjectionLogFiles();
     return merged;
   }
@@ -2405,9 +2409,6 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       return preferredByClaim.get(claimKey) === candidate;
     });
     const lines = regularMemories.map((m) => formatMemoryLine(m));
-    if (qualityNote) {
-      lines.unshift(`- [memory-quality] ${qualityNote}`);
-    }
     if (graphAnchorExpansions.length > 0) {
       const grouped = /* @__PURE__ */ new Map();
       for (const row of graphAnchorExpansions) {
@@ -2573,8 +2574,18 @@ ${lines.join("\n")}
     const filtered = filterMemoriesByPrivacy(allMemories, currentOwner);
     if (!filtered.length) return null;
     const uniqueSessionId = extractSessionId(eventMessages || [], context);
-    const previouslyInjected = loadInjectedMemoryKeys(uniqueSessionId);
-    const newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
+    const priorInjectionLog = readInjectionLog(uniqueSessionId);
+    let previouslyInjected = loadInjectedMemoryKeys(uniqueSessionId);
+    let newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
+    const visibleRoles = Array.isArray(eventMessages) ? eventMessages.map((msg) => String(msg?.role || "").trim().toLowerCase()).filter((role) => role === "user" || role === "assistant") : [];
+    const visibleTurnCount = visibleRoles.length;
+    const priorVisibleTurnCount = Number(priorInjectionLog?.visibleTurnCount || 0);
+    const restartedConversation = priorVisibleTurnCount > 0 && visibleTurnCount < priorVisibleTurnCount;
+    if (!newMemories.length && filtered.length > 0 && restartedConversation && previouslyInjected.length > 0) {
+      resetInjectionDedupAfterCompaction(uniqueSessionId);
+      previouslyInjected = [];
+      newMemories = filtered;
+    }
     const toInject = newMemories.slice(0, injectLimit);
     if (!toInject.length) return null;
     const formatted = formatMemoriesForInjection(toInject);
@@ -2585,7 +2596,8 @@ ${formatted}` : formatted;
       uniqueSessionId,
       previouslyInjected,
       toInject,
-      maxInjectionIdsPerSession
+      maxInjectionIdsPerSession,
+      visibleTurnCount
     );
     return { prependContext, toInject, uniqueSessionId };
   }
