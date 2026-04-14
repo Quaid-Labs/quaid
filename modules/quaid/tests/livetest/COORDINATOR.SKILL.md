@@ -83,12 +83,14 @@ not a condition to work around with manual signals.
 After the first M0 clears, inject test-specific config overrides:
 ```bash
 ssh admin@$VM_IP 'mkdir -p ~/.quaid/shared/config/global && \
-  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":500}}" \
+  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":500,\"inactivityTimeoutMinutes\":1}}" \
   > ~/.quaid/shared/config/global/config.json'
 ```
-This sets: extraction buffer logging (for sanitizer audits) and chunk_tokens=500
+This sets: extraction buffer logging (for sanitizer audits), chunk_tokens=500
 (the livetest standard; triggers rolling extraction in normal test sessions;
-production default is 8000). Do this once per run. Restart daemons after.
+production default is 8000), and inactivityTimeoutMinutes=1 (so idle extraction
+fires within ~1 min, enabling M4 and other idle-dependent milestones without a
+long wait; production default is 60). Do this once per run. Restart daemons after.
 
 **Also: if any instance config has its own `capture.chunk_tokens` override,
 overwrite it to 500 — instance config takes precedence over global.**

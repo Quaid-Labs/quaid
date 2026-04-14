@@ -747,37 +747,13 @@ Pass:
 
 ### M4: Timeout Extraction
 
-Temporarily set `capture.inactivityTimeoutMinutes` to `1`. The change must be
-followed by a restart — both OC and CC cache config at startup:
+`capture.inactivityTimeoutMinutes` is already set to `1` by the post-M0 global
+livetest config step (see COORDINATOR.SKILL.md). No per-milestone config change
+is needed — all daemons load the 1-minute timeout from the shared global config.
 
-**OC** — set config then restart OpenClaw:
-```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
-# Then restart OpenClaw on alfie.
-```
-
-**CC** — set config then restart the CC daemon:
-```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
-```
-
-After restart, start a fresh visible CC session in main:99 from
-`/tmp/cc-livetest`, mention something
-memorable (e.g. `"My morning run route goes along the canal towpath — about 8km."`)
+Start a fresh session in the test pane, mention something memorable
+(e.g. `"My morning run route goes along the canal towpath — about 8km."`)
 then let the session idle for >1 minute without sending any further messages.
-
-After the test, restore the timeout and restart again:
-
-```bash
-# OC
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
-# Then restart OpenClaw on alfie.
-
-# CC
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
-```
 
 Pass:
 - the timeout fact is extracted with no explicit lifecycle command
