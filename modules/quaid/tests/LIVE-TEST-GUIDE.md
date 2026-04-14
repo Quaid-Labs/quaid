@@ -94,13 +94,13 @@ Pane assignments:
 |--------|-------|------|
 | `main:97` | codex-livetester (CC) | Drives CC milestones M0–M13 |
 | `main:98` | codex-livetester (OC) | Drives OC milestones M0–M13 |
-| `main:99` | live-test | Visible OC interaction pane (`openclaw tui`) |
+| `main:99` | live-test | OC verification pane (SSH + coordinator CLI; OC interaction via Matrix) |
 | `main:100` | CC-interact | Visible CC interaction pane (`claude`) |
 | `main:4` | claude-dev | Coordinator |
 
 Dedicated live-test silos:
 - OC instance: `openclaw-livetest`
-- CC instance: `claude-code-livetest`
+- CC instance: `claude-code-private-tmp-cc-livetest` (derived from launch dir `/tmp/cc-livetest` → `/private/tmp/cc-livetest` → slug `private-tmp-cc-livetest`)
 - Fixed CC project dir: `/tmp/cc-livetest`
 
 Do not reuse `*-main` silos for live validation. The live pane must point at
@@ -134,7 +134,7 @@ is faster and safer than surgical cleanup.
 > print("CC hooks cleared")
 > PY'
 > ```
-> Leave `~/quaid/openclaw-livetest`, `~/.openclaw/extensions/quaid`, and the
+> Leave `~/quaid/instances/openclaw-livetest`, `~/.openclaw/extensions/quaid`, and the
 > OC gateway untouched — OC is live on all of those.
 >
 > After the CC installer completes, **also apply the chunk_tokens override**
@@ -292,7 +292,7 @@ Preview first:
 
 ```bash
 ssh REMOTE_HOST 'openclaw plugins list 2>/dev/null | grep quaid || true'
-ssh REMOTE_HOST 'ls -ld ~/quaid ~/quaid/openclaw-livetest ~/quaid/projects 2>/dev/null || true'
+ssh REMOTE_HOST 'ls -ld ~/quaid ~/quaid/instances/openclaw-livetest ~/quaid/projects 2>/dev/null || true'
 ```
 
 Ensure the OpenClaw gateway is running before installing — the installer will
@@ -328,7 +328,7 @@ if p.exists():
     p.write_text(json.dumps(data, indent=2))
 print("Cleared existing Quaid Claude Code hooks if present")
 PY'
-ssh REMOTE_HOST 'mkdir -p /tmp/cc-livetest && cd /tmp/quaid-install-canary && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/USER/quaid" --source local'
+ssh REMOTE_HOST 'mkdir -p /tmp/cc-livetest && cd /tmp/quaid-install-canary && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code-private-tmp-cc-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/USER/quaid" --source local'
 ```
 
 After the installer runs, write the API-scoped OAuth token to Quaid's shared
@@ -374,8 +374,8 @@ installer or inject manually.
 ### Post-install verification
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
 ssh REMOTE_HOST 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
 # Verify QUAID_HOME in global settings and QUAID_INSTANCE in per-project settings.
 # QUAID_INSTANCE is NOT in ~/.claude/settings.json — it is pinned per-project so
@@ -383,7 +383,7 @@ ssh REMOTE_HOST 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=js
 ssh REMOTE_HOST 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE (should be absent):\",e.get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
 ssh REMOTE_HOST 'cat /tmp/cc-livetest/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_INSTANCE (per-project):\",e.get(\"QUAID_INSTANCE\",\"MISSING\"))"'
 # Expected: QUAID_HOME: /Users/USER/quaid   and   QUAID_INSTANCE (per-project): claude-code-livetest
-ssh REMOTE_HOST 'ls -l ~/quaid/openclaw-livetest/identity/SOUL.md ~/quaid/claude-code-livetest/identity/SOUL.md 2>/dev/null || true'
+ssh REMOTE_HOST 'ls -l ~/quaid/instances/openclaw-livetest/identity/SOUL.md ~/.quaid/instances/claude-code-private-tmp-cc-livetest/identity/SOUL.md 2>/dev/null || true'
 ```
 
 If either instance-local `identity/SOUL.md` is missing, the installer did not
@@ -414,7 +414,7 @@ disk) for the extraction daemon to find it:
 
 ```bash
 # OC instance — CLI command (works reliably for OC)
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
 
 # CC instance — inject definition directly (CLI "already exists" false-positive
 # can occur due to config singleton state; direct injection is reliable)
@@ -483,58 +483,63 @@ Expected: `OC chunk_tokens: 1500` and `CC chunk_tokens: 1500`.
 OC and CC run in parallel — OC uses `main:99`, CC uses `main:100`. Each pane
 must be set up before its suite starts.
 
-**OC phase start** — reset `main:99`:
+**OC phase start** — verify Matrix and gateway are up:
 ```bash
-tmux respawn-pane -k -t main:99 'zsh -il'
-tmux send-keys -t main:99 "ssh REMOTE_HOST" Enter
-tmux send-keys -t main:99 "openclaw tui" Enter
+ssh REMOTE_HOST 'curl -sf http://127.0.0.1:8008/_matrix/client/versions > /dev/null && echo "matrix ok" || echo "matrix DOWN"'
+ssh REMOTE_HOST 'launchctl list | grep -E "matrix-synapse|openclaw.gateway"'
 ```
+OC receives messages via Matrix DM — no TUI window needed for test interaction. The `main:99` pane is used only for coordinator SSH verification commands, not for typing messages to OC.
 
 **CC phase start** — reset `main:100` (do this once OC M0 passes):
 ```bash
 tmux respawn-pane -k -t main:100 'zsh -il'
 tmux send-keys -t main:100 "ssh REMOTE_HOST" Enter
-tmux send-keys -t main:100 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
+tmux send-keys -t main:100 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
 ```
 
 Respawn the relevant pane again if it becomes contaminated mid-run.
 
 ### OpenClaw
 
-OC live interaction must be visible in local tmux pane `main:99`, just like
-Claude Code. Do not use `/tmp/oc-send.sh` or any hidden SSH wrapper for live
-milestones. The goal is to simulate a real user session.
+OC interaction uses **Matrix DM**, not the TUI. All test messages and slash commands
+are sent via `matrix-send` on the VM. The Matrix server (`ai.quaid.matrix-synapse`)
+and OpenClaw gateway must be running before any OC milestone.
 
-Pattern:
+**Why Matrix, not TUI:** TUI `/new` creates `tui-`-prefixed sessions that don't fire
+`hook.openclaw.session_end`. Matrix `/new` routes through `handleSlashLifecycleFromMessage`
+— the same path as Telegram `/new` — and correctly fires session_end.
 
+Verify before starting OC milestones:
 ```bash
-tmux respawn-pane -k -t main:99 'zsh -il'
-tmux send-keys -t main:99 "ssh REMOTE_HOST" Enter
-tmux send-keys -t main:99 "openclaw tui" Enter
+ssh REMOTE_HOST 'curl -sf http://127.0.0.1:8008/_matrix/client/versions > /dev/null && echo "matrix ok" || echo "matrix DOWN"'
+ssh REMOTE_HOST 'launchctl list | grep -E "matrix-synapse|openclaw.gateway"'
 ```
 
-Then send normal user messages or slash commands directly in that pane:
-
+Pattern for all OC interaction:
 ```bash
-tmux send-keys -t main:99 "message here" Enter
-tmux send-keys -t main:99 "/new" Enter
-tmux send-keys -t main:99 "/reset" Enter
-tmux send-keys -t main:99 "/compact" Enter
-tmux capture-pane -t main:99 -p | tail -30
+# Send a message to OC
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "message here"'
+# New session
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+# Reset
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/reset"'
+# Read OC's reply
+ssh REMOTE_HOST 'python3 ~/quaidcode/util/scripts/matrix-read.py 2>/dev/null | tail -20'
 ```
 
-Use SSH/CLI commands only for verification, DB queries, logs, config changes,
-install, and uninstall. Do not use them to simulate the agent conversation.
+OC replies appear as `@openclaw-bot:localhost` messages in the Matrix room.
+Use SSH/CLI commands for verification, DB queries, logs, config changes, install, and uninstall.
 
 ### Claude Code
 
-CC hooks require interactive mode. Run CC visibly in local tmux pane `main:99`,
-SSH to `REMOTE_HOST`, and launch `claude` from there.
+CC hooks require interactive mode. Run CC visibly in local tmux pane `main:100`,
+SSH to `REMOTE_HOST`, and launch `claude` from the CC project dir. The instance name
+is derived from the project dir — do NOT set QUAID_INSTANCE explicitly for CC.
 
 ```bash
-tmux respawn-pane -k -t main:99 'zsh -il'
-tmux send-keys -t main:99 "ssh REMOTE_HOST" Enter
-tmux send-keys -t main:99 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions" Enter
+tmux respawn-pane -k -t main:100 'zsh -il'
+tmux send-keys -t main:100 "ssh REMOTE_HOST" Enter
+tmux send-keys -t main:100 "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && claude --dangerously-skip-permissions" Enter
 ```
 
 **MANDATORY — set model before any CC interaction:**
@@ -560,7 +565,7 @@ tmux capture-pane -t main:99 -p | tail -30
 **Important:** For this live test flow, end the visible CC session with
 `/exit` in pane `99` to return cleanly to the remote shell. After each CC
 session end, explicitly verify that extraction happened by checking
-`~/quaid/claude-code-livetest/data/extraction-signals/`, the CC daemon log, or the
+`~/.quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-signals/`, the CC daemon log, or the
 shared DB at `~/quaid/data/memory.db`. If a session ends cleanly but no
 `session_end` signal appears, do not assume extraction fired.
 
@@ -595,7 +600,7 @@ Quick checks:
 
 ```bash
 ssh REMOTE_HOST 'wc -l ~/.claude/rules/quaid-projects.md && sed -n "1,220p" ~/.claude/rules/quaid-projects.md'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid registry list 2>&1'
 ssh REMOTE_HOST 'find ~/quaid/projects -maxdepth 3 -type f | sort'
 ssh REMOTE_HOST 'python3 - <<\"PY\"
 import json
@@ -637,48 +642,35 @@ OC and CC run **in parallel**, not sequentially. The execution order is:
 3. Both livetester agents run their M0–M13 suites concurrently from that point.
 4. The run is not complete until **both** OC and CC have reached M13 PASS.
 
-OC milestones play out in `main:99` (openclaw tui).
+OC milestones use Matrix DM for all interaction (see OpenClaw section above).
 CC milestones play out in `main:100` (claude interactive).
 
 ### M1: Extraction via `/new`
 
-> **OC TUI behavior:** OC TUI `/new` adds a brand-new key to `sessions.json`
-> rather than updating an existing key's session ID. The adapter detects this
-> via a new-key arrival branch in `tickSessionIndex`: when a new key appears,
-> it signals any recently-active sessions with content immediately (within 1s).
-> No follow-up message or `.reset.*` backup needed.
->
-> **OC 2026.3.13+ note:** `/new` may no longer be intercepted as a built-in TUI
-> slash command in this version — OC passes it through to the model as a user
-> message and the model responds saying it doesn't know the command. In this
-> case the `new_key_detected` path does NOT fire (no new sessions.json key), but
-> the adapter's `handleSlashLifecycleFromMessage` path DOES detect `/new` in the
-> message event and writes a ResetSignal for the pre-/new session. Extraction
-> still fires. Check for `hook.message.command_detected` (command=new) in the
-> hook trace instead of `session_index.new_key_detected`.
+> **OC Matrix `/new` behavior:** Matrix `/new` routes through
+> `handleSlashLifecycleFromMessage` and writes a ResetSignal for the pre-/new
+> session immediately. Check for `hook.message.command_detected` (command=new)
+> in the hook trace.
 
 Procedure:
-1. Tell the agent something memorable in natural conversation — pick a vivid,
-   distinctive detail that would not already be in memory. For example:
-   `"My neighbour just told me she won a regional chili cook-off last weekend
-   using a smoked brisket recipe she's kept secret for twenty years."`
+1. Send the agent something memorable via Matrix:
+   ```bash
+   ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "My neighbour just told me she won a regional chili cook-off last weekend using a smoked brisket recipe she has kept secret for twenty years."'
+   ```
    Note the distinctive keyword(s) you'll search for (e.g. `chili cook-off`).
-2. Wait for full idle.
-3. Send `/new`.
-   - **OC < 2026.3.13 (TUI intercepts):** sessions.json is NOT updated yet —
-     visual-only switch. Send one message to the new session (e.g. `Hello`)
-     to write the new key and trigger `new_key_detected`.
-   - **OC 2026.3.13+ (TUI passes to model):** model will reply "no /new
-     command". That's OK — adapter detects it via message event and fires
-     ResetSignal immediately. No follow-up message needed.
+2. Wait for full idle (OC reply visible via matrix-read).
+3. Send `/new`:
+   ```bash
+   ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+   ```
 4. Wait 30–60 seconds for extraction.
 5. Check DB for the distinctive keyword:
 
 ```bash
 # OC
-ssh REMOTE_HOST 'sqlite3 ~/quaid/openclaw-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
+ssh REMOTE_HOST 'sqlite3 ~/.quaid/instances/openclaw-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
 # CC
-ssh REMOTE_HOST 'sqlite3 ~/quaid/claude-code-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
+ssh REMOTE_HOST 'sqlite3 ~/.quaid/instances/claude-code-private-tmp-cc-livetest/data/memory.db "SELECT id, name FROM nodes_fts WHERE nodes_fts MATCH '\''<keyword>'\'' LIMIT 3;"'
 ```
 
 Hook trace markers to confirm:
@@ -724,9 +716,9 @@ Before `/compact` — verify rolling extraction fired during the session:
 
 ```bash
 # OC
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
 # CC
-ssh REMOTE_HOST 'cat ~/quaid/claude-code-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
+ssh REMOTE_HOST 'cat ~/.quaid/instances/claude-code-private-tmp-cc-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | tail -5'
 ```
 
 Expected: at least one line with `"event": "rolling_stage"`. If the log is empty
@@ -737,7 +729,7 @@ After `/compact` and the extraction wait — verify the flush:
 
 ```bash
 # OC
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | python3 -c "import sys,json; lines=[json.loads(l) for l in sys.stdin if l.strip()]; stages=[l for l in lines if l.get(\"event\")==\"rolling_stage\"]; flushes=[l for l in lines if l.get(\"event\")==\"rolling_flush\"]; print(f\"rolling_stage count: {len(stages)}, rolling_flush count: {len(flushes)}\")"'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | python3 -c "import sys,json; lines=[json.loads(l) for l in sys.stdin if l.strip()]; stages=[l for l in lines if l.get(\"event\")==\"rolling_stage\"]; flushes=[l for l in lines if l.get(\"event\")==\"rolling_flush\"]; print(f\"rolling_stage count: {len(stages)}, rolling_flush count: {len(flushes)}\")"'
 # CC (same pattern with claude-code-livetest path)
 ```
 
@@ -747,7 +739,7 @@ Pass:
 - `rolling-extraction.jsonl` contains at least one `rolling_stage` event and one `rolling_flush` event
 - rolling state file is cleared after flush:
   ```bash
-  ssh REMOTE_HOST 'ls ~/quaid/openclaw-livetest/data/rolling-extraction/ 2>/dev/null || echo "(empty — correct)"'
+  ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-livetest/data/rolling-extraction/ 2>/dev/null || echo "(empty — correct)"'
   ```
 
 ### M4: Timeout Extraction
@@ -757,14 +749,14 @@ followed by a restart — both OC and CC cache config at startup:
 
 **OC** — set config then restart OpenClaw:
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
 # Then restart OpenClaw on alfie.
 ```
 
 **CC** — set config then restart the CC daemon:
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
 ```
 
 After restart, start a fresh visible CC session in main:99 from
@@ -776,12 +768,12 @@ After the test, restore the timeout and restart again:
 
 ```bash
 # OC
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
 # Then restart OpenClaw on alfie.
 
 # CC
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
 ```
 
 Pass:
@@ -794,7 +786,7 @@ Pass:
 
 Verify extraction happened (use `name` column, not `text`):
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "canal towpath"'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "canal towpath"'
 # OR direct DB check:
 ssh REMOTE_HOST python3 << 'EOF'
 import sqlite3
@@ -818,7 +810,7 @@ needed.
 Seed a known fact directly so you can test injection in isolation:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
 ```
 
 Start a fresh session and ask naturally — do NOT include meta-commentary about
@@ -879,10 +871,10 @@ primary pass/fail: smaller models (sonnet, haiku) miss secondary edges from
 compound facts even when the extraction prompt includes the exact example.
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa" 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David has a son named Oliver" 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David has a son named Oliver" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
 ```
 
 Check immediately:
@@ -898,8 +890,8 @@ attribute, no named-entity relationship), then run backfill and confirm it
 processes facts with zero edges:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is 42 years old" 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid store "David is 42 years old" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
 ```
 
 Pass for Phase 2: backfill runs and reports `found N facts / created M edges`
@@ -959,7 +951,7 @@ ssh REMOTE_HOST 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM 
 Delete each found node (replace `<id>` with actual IDs):
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid delete-node <id>'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid delete-node <id>'
 ```
 
 Verify clean:
@@ -972,25 +964,29 @@ ssh REMOTE_HOST 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FROM 
 Step 2 — Restart the extraction daemon so any patched files are loaded:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start'
 ```
 
 Step 3 — Start a completely fresh OC session for seeding.
-Kill and restart pane `main:99` with a new named session so the transcript
-is empty before seeding. **Do not retry within the same session** — each
-retry appends to the transcript, which contaminate carry_facts.
+Start a fresh Matrix session so the transcript is empty before seeding.
+**Do not retry within the same session** — each retry appends to the transcript,
+which contaminates carry_facts. Send `/new` via Matrix to start a clean session:
 
 ```bash
-# Kill current pane 99 content and start fresh session
-ssh REMOTE_HOST 'openclaw tui --session oc-m7p3-$(date +%s)'
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
 ```
 
-In the new session, tell the agent two facts naturally — do NOT say "niece":
+In the new session, send two facts via Matrix — do NOT say "niece":
 
-- `My sister's name is Diana.`
-- `Diana has a daughter named Alice.`
+```bash
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "My sister'\''s name is Diana."'
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "Diana has a daughter named Alice."'
+```
 
-Then trigger `/reset` to extract those facts and start a new session.
+Then trigger `/reset` to extract those facts and start a new session:
+```bash
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/reset"'
+```
 
 **Verify edges before asking the agent** — if extraction went wrong, fix it
 before wasting a session query:
@@ -1070,7 +1066,7 @@ Verify from shell:
 
 ```bash
 # Use registry list (SQLite backend) — quaid project list reads a separate JSON file not used by the agent
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
 ssh REMOTE_HOST 'test -f /tmp/quaid-live-src/main.py && echo source_still_exists'
 ```
 
@@ -1082,27 +1078,32 @@ Ask the agent to create a throwaway file:
 
 > `Can you write a quick throwaway script that prints hello world? Just put it somewhere temporary.`
 
-**Expected:** Agent writes to the misc project `misc--openclaw-livetest` at
-`~/quaid/projects/misc--openclaw-livetest/`, NOT to any ad-hoc path like `~/quaid/scratch/` or `/tmp/`.
-The agent should reference the project by name and tell the user it's in misc.
-Verify:
+**Expected:** The file is registered to the misc project (`misc--<instance>`). File placement
+(actual path) is secondary — what matters is that the agent routes the file through the misc project
+and the item appears in the docs registry. The agent should tell the user explicitly that the file
+was registered to misc.
 
+Verify registration (not just placement):
 ```bash
-ssh REMOTE_HOST 'ls ~/quaid/projects/misc--openclaw-livetest/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
-# Verify misc project is in the SQLite project_definitions table (it won't appear in
-# 'quaid registry list' because that lists registered docs, not projects — misc projects
-# have no docs and are invisible to doc-list output):
-ssh REMOTE_HOST "sqlite3 ~/quaid/data/memory.db \"SELECT name, state FROM project_definitions WHERE name LIKE 'misc--%';\""
+# Check file was registered to misc project in docs registry
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list --project misc--openclaw-livetest 2>&1'
+# Verify misc project exists in project_definitions
+ssh REMOTE_HOST "sqlite3 ~/.quaid/instances/openclaw-livetest/data/memory.db \"SELECT name, state FROM project_definitions WHERE name LIKE 'misc--%';\""
 ```
 
-After project CRUD, trigger extraction to generate project logs. Tell the agent
-naturally something about the session, then do `/reset`:
+**Pass (Phase 4):** File is registered to the misc project in the docs registry AND the agent
+told the user it's in misc. File placement (path) is not graded — only registry membership.
+**PWN (not hard fail):** File written to /tmp or another path but still registered to misc.
+**Fail:** File not registered to any project at all.
 
-> "We've just tested project creation, show, list, update, and delete for the
-> live-test project via the quaid CLI. This is part of the quaid live-test
-> suite M8 run. Triggering a reset to capture project activity."
+After project CRUD, trigger extraction to generate project logs. For OC, send via Matrix:
 
-Then `/reset`.
+```bash
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "We have just tested project creation, show, list, update, and delete for the live-test project via the quaid CLI. This is part of the quaid live-test suite M8 run."'
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/reset"'
+```
+
+For CC/CDX: prompt the agent in the active session and use `/reset`.
 
 Check after extraction:
 
@@ -1114,10 +1115,10 @@ Pass criteria:
 - **Phase 1 (hard)**: Agent creates project via CLI before writing any files in response to work directive
 - Phase 2: show, update work correctly
 - Phase 3: delete removes the project but not the source directory
-- **Phase 4 (hard)**: Throwaway file lands in `misc--openclaw-livetest` project, not an ad-hoc path
+- **Phase 4**: Throwaway file is registered to the misc project in the docs registry; agent reported the registration to user. File path is not graded. Fail only if the file is not registered to any project at all.
 - `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
 
-Note: Phase 1 and Phase 4 are new hard requirements. If they fail, report to claude-dev before continuing.
+Note: Phase 1 is a hard requirement. Phase 4 failure (no registry entry at all) should be reported to claude-dev before continuing.
 
 **Expected noise — not a failure:** The session watcher writes `[quaid][daemon-signal] reset signal` entries for stale sessions when a new session key appears (normal fanout behavior). Seeing these signals before the agent responds is expected and is NOT a fail criterion for M8. Only an unrecoverable injection loop (agent never responds) would be a failure.
 
@@ -1127,7 +1128,7 @@ Before running, capture the pre-janitor artifact state:
 
 ```bash
 # Record line counts so you can verify condensation happened
-ssh REMOTE_HOST 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'echo "OC SOUL.snippets:"; wc -l ~/quaid/instances/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/instances/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/instances/openclaw-livetest/identity/SOUL.md 2>/dev/null || echo "(absent)"'
 ```
 
 Run:
@@ -1135,22 +1136,22 @@ Run:
 ```bash
 # Dry-run must complete in ≤60s — hang here = regression in dry-run LLM/checkpoint bypass
 # Uses shell-based timeout (portable — macOS does not have the `timeout` binary)
-ssh REMOTE_HOST '{ cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1; } & pid=$!; (sleep 60 && kill $pid 2>/dev/null) & watcher=$!; wait $pid; ec=$?; kill $watcher 2>/dev/null; wait $watcher 2>/dev/null; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || { [ $ec -gt 128 ] && echo "FAIL: dry-run exit=$ec (killed=hang)" || echo "FAIL: dry-run exit=$ec"; }'
+ssh REMOTE_HOST '{ cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1; } & pid=$!; (sleep 60 && kill $pid 2>/dev/null) & watcher=$!; wait $pid; ec=$?; kill $watcher 2>/dev/null; wait $watcher 2>/dev/null; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || { [ $ec -gt 128 ] && echo "FAIL: dry-run exit=$ec (killed=hang)" || echo "FAIL: dry-run exit=$ec"; }'
 # Apply — first run can take 15–30 minutes (LLM review of accumulated memories + snippets).
 # Repeated "vec_nodes upsert recovered" and "snippet remap" lines are normal — not a hang.
 # Long silent periods (up to 10 min) are LLM calls in progress.
 # If still running after 45 minutes, report to claude-dev as a potential hang.
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
 ```
 
 After the run, verify condensation:
 
 ```bash
 # Stats: snippets_folded + snippets_rewritten + snippets_discarded should be > 0
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
 # Post-janitor snippet and identity state
-ssh REMOTE_HOST 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null'
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/identity/SOUL.md 2>/dev/null | head -40'
+ssh REMOTE_HOST 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/instances/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/instances/openclaw-livetest/identity/SOUL.md 2>/dev/null'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/identity/SOUL.md 2>/dev/null | head -40'
 ```
 
 Pass:
@@ -1170,11 +1171,11 @@ Fail:
 Run health and stats:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid stats 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid stats 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
 ```
 
 **New-doc indexing via `docs update --apply`** (tests 470f9741 fix — newly registered standalone docs
@@ -1183,20 +1184,20 @@ must be indexed without requiring `janitor --task rag`):
 ```bash
 # Write a throwaway doc and register it
 ssh REMOTE_HOST 'echo "# M10 test\nThe carillon clock rings at noon." > /tmp/m10-test-doc.md'
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register /tmp/m10-test-doc.md --project quaid 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register /tmp/m10-test-doc.md --project quaid 2>&1'
 
 # docs update must pick it up without janitor rag
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
 
 # Verify it is now searchable
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs search "carillon clock" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "carillon clock" '"'"'{"stores":["docs"]}'"'"' 2>&1'
 
 # Cleanup
 ssh REMOTE_HOST 'rm -f /tmp/m10-test-doc.md'
 ```
 
 Pass for new-doc test: `docs update --apply` output includes "Indexing new doc:" (not "all up-to-date"),
-and `docs search "carillon clock"` returns the doc.
+and the recall returns the doc.
 Fail: "All docs up-to-date" with no indexing = regression in new-doc detection.
 
 **Session Extraction Surface** (verifies session extraction plumbing, not a public CLI):
@@ -1208,14 +1209,17 @@ calling `quaid session list/load`.
 
 ```bash
 # Step 1: Restart OC daemon so it has the latest code
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 2; QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 
-# Step 2: In the OC TUI, do a quick exchange and /new to trigger extraction.
-#   Tell OC: "The session test keyword is zephyr-delta-nine."
-#   Then send /new (or /reset). Wait ~30s for daemon to process.
+# Step 2: Send session content and /new via Matrix (NOT TUI — TUI /new creates tui- sessions
+#   that don't fire the OC hook; Matrix /new routes through handleSlashLifecycleFromMessage correctly).
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "The session test keyword is zephyr-delta-nine."'
+# Wait a moment, then send /new to trigger session_end extraction
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+# Wait ~30s for daemon to process.
 
 # Step 3: Check daemon/runtime evidence that the fresh session extraction ran
-ssh REMOTE_HOST 'tail -40 ~/quaid/instances/openclaw-livetest/logs/daemon/extraction-daemon.log 2>/dev/null | grep -i "session_end\\|compaction\\|reset\\|stored\\|facts" || echo "daemon log evidence not found"'
+ssh REMOTE_HOST 'tail -40 ~/.quaid/instances/openclaw-livetest/logs/daemon/extraction-daemon.log 2>/dev/null | grep -i "session_end\\|compaction\\|reset\\|stored\\|facts" || echo "daemon log evidence not found"'
 
 # Step 4: Confirm the preserved transcript copy exists for the extracted session
 ssh REMOTE_HOST 'ls -lt ~/.quaid/instances/openclaw-livetest/logs/quaid/sessions/*.jsonl 2>/dev/null | head -3 || echo "no preserved session copies found"'
@@ -1240,7 +1244,7 @@ loaded at startup; if the daemon started while M9 janitor was running the DB
 may be cached stale). Restart before triggering the trigger extraction:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 ```
 
 Then do a fresh OC session + `/reset` to trigger a full extraction cycle.
@@ -1269,11 +1273,11 @@ Purely technical messages produce `project_logs` but not `soul_snippets`.
 
 ```bash
 # OC
-ssh REMOTE_HOST 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
-ssh REMOTE_HOST 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/instances/openclaw-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'echo "=== OC USER.snippets ==="; cat ~/quaid/instances/openclaw-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
 # CC
-ssh REMOTE_HOST 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
-ssh REMOTE_HOST 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'echo "=== CC SOUL.snippets ==="; cat ~/.quaid/instances/claude-code-private-tmp-cc-livetest/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
+ssh REMOTE_HOST 'echo "=== CC USER.snippets ==="; cat ~/.quaid/instances/claude-code-private-tmp-cc-livetest/USER.snippets.md 2>/dev/null || echo "(absent)"'
 ```
 
 Pass: OC `USER.snippets.md` has at least one entry (hard gate). `SOUL.snippets.md`
@@ -1286,8 +1290,8 @@ CC snippets may be absent on first install — they build via CC sessions.
 **Journal entries** (written when LLM includes `journal_entries`; discretionary):
 
 ```bash
-ssh REMOTE_HOST 'echo "=== OC journals ==="; ls ~/quaid/openclaw-livetest/journal/ 2>/dev/null; for f in ~/quaid/openclaw-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
-ssh REMOTE_HOST 'echo "=== CC journals ==="; ls ~/quaid/claude-code-livetest/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh REMOTE_HOST 'echo "=== OC journals ==="; ls ~/quaid/instances/openclaw-livetest/journal/ 2>/dev/null; for f in ~/quaid/instances/openclaw-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh REMOTE_HOST 'echo "=== CC journals ==="; ls ~/.quaid/instances/claude-code-private-tmp-cc-livetest/journal/ 2>/dev/null || echo "(absent)"; for f in ~/.quaid/instances/claude-code-private-tmp-cc-livetest/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
 ```
 
 Pass: Journal directory exists. Presence of entries is correct but not required
@@ -1322,7 +1326,7 @@ and that extraction signals route to the right agent's silo.
 **Step 1 — list_agent_instance_ids returns multiple IDs including openclaw-livetest:**
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest \
   python3 -c "
 import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
 from adaptors.factory import create_adapter
@@ -1394,7 +1398,7 @@ Pass: signal dir exists under the per-agent silo, not a shared or flat path.
 **Step 5 — quaid instances list shows OC agent silos:**
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest \
   ~/.openclaw/extensions/quaid/quaid instances list 2>&1 || \
   echo "(instances list not available — check quaid version)"'
 ```
@@ -1448,7 +1452,7 @@ and that the running instance appears in `list_agent_instance_ids()`.
 **Step 1 — list_agent_instance_ids returns claude-code-livetest:**
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest \
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest \
   python3 -c "
 import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
 from adaptors.factory import create_adapter
@@ -1538,10 +1542,10 @@ Fail:
 This milestone verifies that the CDX adapter's multi-agent silo structure is correct
 and that the running instance appears in `list_agent_instance_ids()`.
 
-**Step 1 — list_agent_instance_ids returns codex-livetest:**
+**Step 1 — list_agent_instance_ids returns codex-private-tmp-cdx-livetest:**
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=codex-livetest \
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-livetest \
   python3 -c "
 import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
 from adaptors.factory import create_adapter
@@ -1549,7 +1553,7 @@ a = create_adapter(\"codex\")
 ids = a.list_agent_instance_ids()
 print(ids)
 assert len(ids) >= 1, \"Expected at least one instance ID\"
-assert \"codex-livetest\" in ids, \"codex-livetest not in IDs\"
+assert \"codex-private-tmp-cdx-livetest\" in ids, \"codex-private-tmp-cdx-livetest not in IDs\"
 print(\"PASS: list_agent_instance_ids =\", ids)
 "'
 ```
@@ -1558,7 +1562,7 @@ print(\"PASS: list_agent_instance_ids =\", ids)
 
 ```bash
 ssh REMOTE_HOST '
-silo="$HOME/quaid/instances/codex-livetest"
+silo="$HOME/quaid/instances/codex-private-tmp-cdx-livetest"
 if [ -d "$silo/data" ]; then
   echo "PASS: $silo/data exists"
 else
@@ -1571,7 +1575,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-sigdir="$HOME/quaid/instances/codex-livetest/data/extraction-signals"
+sigdir="$HOME/quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-signals"
 if [ -d "$sigdir" ]; then
   echo "PASS: $sigdir exists"
 else
@@ -1584,7 +1588,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-SIGNAL_DIR="$HOME/quaid/instances/codex-livetest/data/extraction-signals"
+SIGNAL_DIR="$HOME/quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-signals"
 if [ ! -d "$SIGNAL_DIR" ]; then
   echo "FAIL: $SIGNAL_DIR does not exist"
   exit 1
@@ -1597,11 +1601,11 @@ rm -f "$SIGNAL_FILE"
 '
 ```
 
-**Step 5 — extraction-daemon.pid exists for codex-livetest:**
+**Step 5 — extraction-daemon.pid exists for codex-private-tmp-cdx-livetest:**
 
 ```bash
 ssh REMOTE_HOST '
-pid_file="$HOME/quaid/instances/codex-livetest/data/extraction-daemon.pid"
+pid_file="$HOME/quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-daemon.pid"
 if [ -f "$pid_file" ]; then
   pid=$(cat "$pid_file")
   if kill -0 "$pid" 2>/dev/null; then
@@ -1610,14 +1614,14 @@ if [ -f "$pid_file" ]; then
     echo "WARN: pid file exists but process $pid is not running"
   fi
 else
-  echo "FAIL: no extraction-daemon.pid found for codex-livetest"
+  echo "FAIL: no extraction-daemon.pid found for codex-private-tmp-cdx-livetest"
 fi
 '
 ```
 
 Pass:
-- `list_agent_instance_ids()` returns at least `["codex-livetest"]`
-- `data/` and `extraction-signals/` dirs exist under the codex-livetest silo
+- `list_agent_instance_ids()` returns at least `["codex-private-tmp-cdx-livetest"]`
+- `data/` and `extraction-signals/` dirs exist under the codex-private-tmp-cdx-livetest silo
 - synthetic signal write succeeds in the per-agent silo dir
 - `extraction-daemon.pid` exists and points to a live process
 
@@ -1659,7 +1663,7 @@ Note the printed ID — use it in the remaining steps.
 
 ```bash
 ssh REMOTE_HOST 'mkdir -p /tmp/quaid-m13-test && cd /tmp/quaid-m13-test && \
-  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  QUAID_HOME=/Users/admin/.quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
   claude --dangerously-skip-permissions -p "hello" 2>&1 | tail -10'
 ```
 
@@ -1685,15 +1689,15 @@ fi
 **Step 5 — canary isolation: store in test instance:**
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
-  ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-cc-m13-9981" 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  ~/.openclaw/extensions/quaid/quaid store "xyloquartz-cc-m13-9981 is the cc m13 spillover canary" 2>&1'
 ```
 
 **Step 6 — canary must NOT appear in livetest instance:**
 
 ```bash
 ssh REMOTE_HOST 'echo "=== livetest: must NOT see m13test canary ==="; \
-  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/cc-livetest \
+  QUAID_HOME=/Users/admin/.quaid CLAUDE_PROJECT_DIR=/tmp/cc-livetest \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cc-m13-9981" 2>&1 | tail -5'
 ```
 
@@ -1703,7 +1707,7 @@ Pass: no results. Fail: canary appears.
 
 ```bash
 ssh REMOTE_HOST 'echo "=== m13test: MUST see its own canary ==="; \
-  QUAID_HOME=~/quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
+  QUAID_HOME=/Users/admin/.quaid CLAUDE_PROJECT_DIR=/tmp/quaid-m13-test \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cc-m13-9981" 2>&1 | tail -5'
 ```
 
@@ -1759,7 +1763,7 @@ print(\"Expected instance ID: codex-\" + slug)
 
 ```bash
 ssh REMOTE_HOST 'mkdir -p /tmp/cdx-m13-test && cd /tmp/cdx-m13-test && \
-  QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
+  QUAID_HOME=/Users/admin/.quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
   codex --yolo -p "hello" 2>&1 | tail -10'
 ```
 
@@ -1785,15 +1789,15 @@ fi
 **Step 5 — canary isolation: store in test instance:**
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
-  ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-cdx-m13-9982" 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
+  ~/.openclaw/extensions/quaid/quaid store "xyloquartz-cdx-m13-9982 is the cdx m13 spillover canary" 2>&1'
 ```
 
 **Step 6 — canary must NOT appear in livetest instance:**
 
 ```bash
 ssh REMOTE_HOST 'echo "=== livetest: must NOT see m13test canary ==="; \
-  QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-livetest \
+  QUAID_HOME=/Users/admin/.quaid CODEX_PROJECT_DIR=/tmp/cdx-livetest \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cdx-m13-9982" 2>&1 | tail -5'
 ```
 
@@ -1803,7 +1807,7 @@ Pass: no results. Fail: canary appears.
 
 ```bash
 ssh REMOTE_HOST 'echo "=== m13test: MUST see its own canary ==="; \
-  QUAID_HOME=~/quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
+  QUAID_HOME=/Users/admin/.quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-cdx-m13-9982" 2>&1 | tail -5'
 ```
 
@@ -1847,7 +1851,7 @@ ssh REMOTE_HOST 'source ~/.zprofile; \
 **Step 2 — verify list_agent_instance_ids includes openclaw-m13test:**
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest \
   python3 -c "
 import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
 from adaptors.factory import create_adapter
@@ -1862,7 +1866,7 @@ print(\"PASS: openclaw-m13test in list_agent_instance_ids\")
 **Step 3 — initialise m13test silo:**
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m13test \
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-m13test \
   ~/.openclaw/extensions/quaid/quaid doctor 2>&1 | tail -5'
 ```
 
@@ -1883,15 +1887,15 @@ fi
 **Step 5 — canary isolation: store in m13test instance:**
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m13test \
-  ~/.openclaw/extensions/quaid/quaid store "spillover-canary xyloquartz-oc-m13-9983" 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-m13test \
+  ~/.openclaw/extensions/quaid/quaid store "xyloquartz-oc-m13-9983 is the oc m13 spillover canary" 2>&1'
 ```
 
 **Step 6 — canary must NOT appear in openclaw-livetest:**
 
 ```bash
 ssh REMOTE_HOST 'echo "=== openclaw-livetest: must NOT see m13test canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest \
+  QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-oc-m13-9983" 2>&1 | tail -5'
 ```
 
@@ -1901,7 +1905,7 @@ Pass: no results. Fail: canary appears.
 
 ```bash
 ssh REMOTE_HOST 'echo "=== openclaw-m13test: MUST see its own canary ==="; \
-  QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-m13test \
+  QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-m13test \
   ~/.openclaw/extensions/quaid/quaid recall "xyloquartz-oc-m13-9983" 2>&1 | tail -5'
 ```
 
@@ -1954,21 +1958,21 @@ Ask OC naturally:
 Verify from shell:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
 ```
 
 If the doc file exists but is not listed, register it manually:
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
 ```
 
 After the doc is registered, run `docs update --apply` to index it (new standalone docs with no
 existing chunks should be detected and indexed automatically — this is what M10 verifies):
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
 ```
 
 Expected output includes "Indexing new doc:" for the registered file. If it says "All docs up-to-date"
@@ -1978,7 +1982,7 @@ report to claude-dev.
 Then verify recall:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
 Then ask OC:
@@ -1998,35 +2002,44 @@ Ask CC naturally:
 Verify from shell:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid registry list 2>&1 | grep cross-live-test'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
 Pass:
 - CC can use the existing project rather than needing a new one
 - CC can add a doc and Quaid can recall it
 
-### Sync docs across instances before Phase 3
+### Cross-link docs across instances before Phase 3
 
-Each adapter maintains its own docs index. After both docs are registered, run
-`docs update --apply` on both instances so each side has both docs indexed:
+Each adapter maintains its own docs index. After both docs are registered, each instance
+only has its own doc indexed. Cross-link by registering each doc in the other instance,
+then run `docs update --apply` on both. The daemon picks up doc changes lazily — always
+run `docs update --apply` explicitly rather than waiting, and wait for it to confirm
+indexing before proceeding to Phase 3.
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -5'
+# Register OC beacon doc in CC instance
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid registry register <path-to-beacon-doc> --project cross-live-test 2>&1'
+# Register CC Ember Glass doc in OC instance
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid registry register <path-to-ember-glass-doc> --project cross-live-test 2>&1'
+
+# Force index on both — wait for "Indexed" confirmation before continuing
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid docs update --apply 2>&1'
 ```
 
 Verify cross-instance CLI recall before asking agents conversationally:
 
 ```bash
 # CC must find beacon (OC-added doc)
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 # OC must find Ember Glass (CC-added doc)
-ssh REMOTE_HOST 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
-If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the docs sync is not working and conversational Phase 3 will also fail.
+If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the cross-link registration or indexing is not working and conversational Phase 3 will also fail.
 
 ### Phase 3: Cross-recall both directions
 
@@ -2034,22 +2047,29 @@ Ask CC (use content-specific phrasing so the model matches the doc, not just PRO
 
 - `Can you search the cross-live-test project docs for anything about the north pier beacon?`
 
-If that still returns nothing, try the explicit fallback:
+If that still returns nothing, try more specific phrasing:
 
-- `Run: quaid docs search "north pier beacon" --project cross-live-test`
+- `What does the cross-live-test project say about the north pier beacon maintenance window?`
 
-Ask OC:
+Ask OC via Matrix:
 
-- `What does the cross-live-test project say about Ember Glass?`
+```bash
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "Can you search the cross-live-test project docs for anything about Ember Glass escalation?"'
+```
 
-Optional provenance follow-up if needed:
+If no answer, try:
+```bash
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "What is the escalation code word Ember Glass in the cross-live-test project docs?"'
+```
 
-- `How did you know that?`
+Optional provenance follow-up:
+```bash
+ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "How did you know that?"'
+```
 
-Note: The query framing "What did the project say about X?" semantically matches PROJECT.md
-files in the vector index, not content docs. Content-specific or explicit tool-call prompts
-reliably surface the right doc. If the agent answers correctly via explicit docs search that
-is still a PASS (grounded in Quaid, not disk browsing).
+Note: The generic "What does the project say about X?" framing matches PROJECT.md in the vector index
+and misses content docs. Use docs-specific phrasing that names the concept explicitly so the model
+searches the docs store. Both prompts above are content-specific and reliably surface the right doc.
 
 Pass:
 - CC can answer from the OC-added doc
@@ -2067,23 +2087,23 @@ Fail:
 After all milestones and the cross-platform project linking test.
 
 Instances on alfie use per-instance subdirectories under `~/quaid/`:
-- OC: `~/quaid/openclaw-livetest/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-livetest`)
-- CC: `~/quaid/claude-code-livetest/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-livetest`)
+- OC: `~/quaid/instances/openclaw-livetest/` (`QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest`)
+- CC: `~/.quaid/instances/claude-code-private-tmp-cc-livetest/` (`QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest`)
 
 ```bash
 # OC instance health
 ssh REMOTE_HOST 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
 ssh REMOTE_HOST 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
-ssh REMOTE_HOST 'ls ~/quaid/openclaw-livetest/journal/'
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/USER.snippets.md 2>/dev/null'
-ssh REMOTE_HOST 'ls -lt ~/quaid/openclaw-livetest/logs/ | head -20'
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/config/memory.json | python3 -m json.tool | head -20'
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/data/circuit-breaker.json 2>/dev/null'
-ssh REMOTE_HOST 'cat ~/quaid/openclaw-livetest/logs/janitor/checkpoint-all.json 2>/dev/null'
+ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-livetest/journal/'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/USER.snippets.md 2>/dev/null'
+ssh REMOTE_HOST 'ls -lt ~/quaid/instances/openclaw-livetest/logs/ | head -20'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/config/memory.json | python3 -m json.tool | head -20'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/data/circuit-breaker.json 2>/dev/null'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/logs/janitor/checkpoint-all.json 2>/dev/null'
 
 # CC instance health
-ssh REMOTE_HOST 'sqlite3 ~/quaid/claude-code-livetest/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
-ssh REMOTE_HOST 'ls ~/quaid/claude-code-livetest/journal/ 2>/dev/null || echo "CC journal not found"'
+ssh REMOTE_HOST 'sqlite3 ~/.quaid/instances/claude-code-private-tmp-cc-livetest/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
+ssh REMOTE_HOST 'ls ~/.quaid/instances/claude-code-private-tmp-cc-livetest/journal/ 2>/dev/null || echo "CC journal not found"'
 ```
 
 Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirectory):

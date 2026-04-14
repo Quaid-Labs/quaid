@@ -113,7 +113,7 @@ indexed (e.g. registered via `quaid registry register` without a source-files pa
 `last_indexed_at IS NULL`).
 
 **Regression for:** Post-run-16 fix `623f5d21` — `cmd_update_stale()` skipped `source_files IS NULL`
-docs entirely, leaving them invisible to docs search.
+docs entirely, leaving them invisible to docs recall.
 
 **Platform:** Either
 **Estimated time:** 5–7 min
@@ -137,7 +137,7 @@ docs entirely, leaving them invisible to docs search.
 4. **Verify it was indexed**: Output should include `Indexed: /tmp/aux-test-doc.md (N chunks)`.
 5. **Verify searchable**:
    ```bash
-   quaid docs search "never-indexed test document"
+   quaid recall "never-indexed test document" '{"stores":["docs"]}'
    ```
    Should return the doc.
 
@@ -206,7 +206,7 @@ needing to go through the full XP cross-registration ceremony.
    ```
 4. **Verify on OC**:
    ```bash
-   quaid docs search "cross-platform test content"
+   quaid recall "cross-platform test content" '{"stores":["docs"]}'
    ```
    Should return the doc.
 
