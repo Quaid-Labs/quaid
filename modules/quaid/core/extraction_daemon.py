@@ -3090,7 +3090,15 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if internal_state == "frozen":
             continue
         if internal_state == "advanced":
-            logger.info("session %s is internal maintenance-only during idle scan, advancing cursor to EOF", session_id)
+            logger.info(
+                "session %s marked internal maintenance-only during idle scan; "
+                "advancing cursor to EOF and skipping timeout (transcript=%s, "
+                "cursor_offset=%s, cursor_size_bytes=%s)",
+                session_id,
+                transcript_path,
+                data.get("line_offset", 0),
+                data.get("transcript_size_bytes", 0),
+            )
             continue
         if internal_state == "unfrozen":
             logger.info(
