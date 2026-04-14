@@ -123,13 +123,20 @@ def _decode_jwt_payload(token: str) -> dict:
 
 
 def _extract_openai_codex_account_id(token: str) -> str:
-    payload = _decode_jwt_payload(token)
+    try:
+        payload = _decode_jwt_payload(token)
+    except Exception as exc:
+        logger.debug("Failed to decode Codex OAuth token payload: %s", exc)
+        return ""
     auth = payload.get(_OPENAI_CODEX_AUTH_CLAIM)
     if isinstance(auth, dict):
         account_id = str(auth.get("chatgpt_account_id") or "").strip()
         if account_id:
             return account_id
-    raise RuntimeError("Failed to extract accountId from token")
+    account_id = str(payload.get("chatgpt_account_id") or "").strip()
+    if account_id:
+        return account_id
+    return ""
 
 
 def _openai_codex_user_agent() -> str:
@@ -1310,15 +1317,17 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
 
     @staticmethod
     def _build_headers(api_key: str, account_id: str) -> dict:
-        return {
+        headers = {
             "Authorization": f"Bearer {api_key}",
             "OpenAI-Beta": "responses=experimental",
             "accept": "text/event-stream",
             "content-type": "application/json",
-            "chatgpt-account-id": account_id,
             "originator": "pi",
             "User-Agent": _openai_codex_user_agent(),
         }
+        if account_id:
+            headers["chatgpt-account-id"] = account_id
+        return headers
 
     @staticmethod
     def _iter_sse_events(body_text: str):

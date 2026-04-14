@@ -149,4 +149,14 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("'quaid',");
     expect(setupText).toContain("home_dir='projects/quaid/'");
   });
+
+  it("Claude Code install creates a plain-shell CLI shim", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function ensureClaudeCliShim()");
+    expect(setupText).toContain("resolveHostBinary(\"claude\"");
+    expect(setupText).toContain("Updated Claude Code CLI shim:");
+    expect(setupText).toContain("Could not update Claude Code CLI shim automatically.");
+  });
 });

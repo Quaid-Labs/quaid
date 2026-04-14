@@ -4124,6 +4124,12 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     s.start("Configuring Claude Code hooks...");
     setupClaudeCodeHooks();
     s.stop(C.green("Claude Code hooks configured"));
+    const claudeShimPath = ensureClaudeCliShim();
+    if (claudeShimPath) {
+      log.info(`Updated Claude Code CLI shim: ${claudeShimPath}`);
+    } else {
+      log.warn("Could not update Claude Code CLI shim automatically.");
+    }
   }
 
   // Initialize database
@@ -4833,10 +4839,39 @@ function enableRequiredOpenClawHooks() {
   }
 }
 
-function ensureQuaidCliShim(pluginDirPath) {
+function resolveHostBinary(cmd, extraCandidates = []) {
+  const quoted = String(cmd || "").trim();
+  if (!quoted) return "";
   try {
-    const target = path.join(pluginDirPath, "quaid");
-    if (!fs.existsSync(target)) {
+    const found = spawnSync("sh", ["-c", `command -v '${quoted.replace(/'/g, "'\\''")}'`], {
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    const resolved = String(found.stdout || "").trim();
+    if (found.status === 0 && resolved) return resolved;
+  } catch {}
+
+  const candidates = [...extraCandidates];
+  try {
+    const npmPrefix = spawnSync("npm", ["config", "get", "prefix"], { stdio: "pipe", encoding: "utf8" });
+    const prefix = String(npmPrefix.stdout || "").trim();
+    if (npmPrefix.status === 0 && prefix && prefix !== "undefined" && prefix !== "null") {
+      candidates.push(path.join(prefix, "bin", quoted));
+    }
+  } catch {}
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {}
+  }
+  return "";
+}
+
+function ensureCliShim(target, shimName) {
+  try {
+    if (!target || !fs.existsSync(target)) {
       return "";
     }
     const preferredDirs = Array.from(new Set([
@@ -4875,7 +4910,7 @@ function ensureQuaidCliShim(pluginDirPath) {
       fs.mkdirSync(shimDir, { recursive: true });
     }
 
-    const shimPath = path.join(shimDir, "quaid");
+    const shimPath = path.join(shimDir, shimName);
     fs.rmSync(shimPath, { force: true });
     fs.symlinkSync(target, shimPath);
 
@@ -4904,6 +4939,21 @@ function ensureQuaidCliShim(pluginDirPath) {
   } catch {
     return "";
   }
+}
+
+function ensureQuaidCliShim(pluginDirPath) {
+  const target = path.join(pluginDirPath, "quaid");
+  return ensureCliShim(target, "quaid");
+}
+
+function ensureClaudeCliShim() {
+  const target = resolveHostBinary("claude", [
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
+    path.join(os.homedir(), ".npm-global", "bin", "claude"),
+    path.join(os.homedir(), ".local", "bin", "claude"),
+  ]);
+  return target ? ensureCliShim(target, "claude") : "";
 }
 
 function setupClaudeCodeHooks() {
