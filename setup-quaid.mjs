@@ -4869,7 +4869,27 @@ function resolveHostBinary(cmd, extraCandidates = []) {
   return "";
 }
 
-function ensureCliShim(target, shimName) {
+function _shellQuote(value) {
+  return `'${String(value || "").replace(/'/g, `'\\''`)}'`;
+}
+
+function buildClaudeCliWrapper(target) {
+  try {
+    const realTarget = fs.realpathSync(target);
+    if (!realTarget || path.basename(realTarget) !== "cli.js" || !fs.existsSync(realTarget)) {
+      return "";
+    }
+    return [
+      "#!/bin/sh",
+      `exec ${_shellQuote(process.execPath)} ${_shellQuote(realTarget)} \"$@\"`,
+      "",
+    ].join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function ensureCliShim(target, shimName, options = {}) {
   try {
     if (!target || !fs.existsSync(target)) {
       return "";
@@ -4884,6 +4904,8 @@ function ensureCliShim(target, shimName) {
     ]));
 
     let shimDir = "";
+    let selfTargetCollision = false;
+    const resolvedTargetPath = path.resolve(String(target));
     for (const candidate of preferredDirs) {
       if (!candidate) continue;
       const normalized = candidate.replace(/^~(?=$|\/)/, os.homedir());
@@ -4893,6 +4915,11 @@ function ensureCliShim(target, shimName) {
         && normalized !== "/usr/local/bin"
         && normalized !== "/opt/homebrew/bin"
       ) {
+        continue;
+      }
+      const candidateShimPath = path.join(normalized, shimName);
+      if (path.resolve(candidateShimPath) === resolvedTargetPath) {
+        selfTargetCollision = true;
         continue;
       }
       try {
@@ -4912,7 +4939,15 @@ function ensureCliShim(target, shimName) {
 
     const shimPath = path.join(shimDir, shimName);
     fs.rmSync(shimPath, { force: true });
-    fs.symlinkSync(target, shimPath);
+    const wrapperScript = selfTargetCollision && typeof options.wrapperScript === "string"
+      ? String(options.wrapperScript)
+      : "";
+    if (wrapperScript) {
+      fs.writeFileSync(shimPath, wrapperScript, { encoding: "utf8", mode: 0o755 });
+      fs.chmodSync(shimPath, 0o755);
+    } else {
+      fs.symlinkSync(target, shimPath);
+    }
 
     // Ensure ~/bin is in the PATH exposed to OC agents via env.vars in openclaw.json.
     // OC's bash tool inherits this PATH so agents can call `quaid` without a full path.
@@ -4953,7 +4988,7 @@ function ensureClaudeCliShim() {
     path.join(os.homedir(), ".npm-global", "bin", "claude"),
     path.join(os.homedir(), ".local", "bin", "claude"),
   ]);
-  return target ? ensureCliShim(target, "claude") : "";
+  return target ? ensureCliShim(target, "claude", { wrapperScript: buildClaudeCliWrapper(target) }) : "";
 }
 
 function setupClaudeCodeHooks() {

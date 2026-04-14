@@ -155,7 +155,10 @@ describe("install daemon policy", () => {
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain("function ensureClaudeCliShim()");
+    expect(setupText).toContain("function buildClaudeCliWrapper(target)");
     expect(setupText).toContain("resolveHostBinary(\"claude\"");
+    expect(setupText).toContain("if (path.resolve(candidateShimPath) === resolvedTargetPath)");
+    expect(setupText).toContain("wrapperScript: buildClaudeCliWrapper(target)");
     expect(setupText).toContain("Updated Claude Code CLI shim:");
     expect(setupText).toContain("Could not update Claude Code CLI shim automatically.");
   });
