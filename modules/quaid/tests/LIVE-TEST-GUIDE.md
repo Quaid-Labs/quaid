@@ -122,7 +122,7 @@ is faster and safer than surgical cleanup.
 > active (the normal parallel case), do **not** run the full wipe below.
 > Instead, CC-only wipe:
 > ```bash
-> ssh REMOTE_HOST 'rm -rf ~/quaid/claude-code-livetest && echo "CC silo wiped"'
+> ssh REMOTE_HOST 'rm -rf ~/quaid/instances/claude-code-private-tmp-cc-livetest && echo "CC silo wiped"'
 > ssh REMOTE_HOST 'python3 - <<"PY"
 > import json; from pathlib import Path
 > p = Path.home() / ".claude/settings.json"
@@ -140,7 +140,7 @@ is faster and safer than surgical cleanup.
 > After the CC installer completes, **also apply the chunk_tokens override**
 > (same step as the full M0 post-install — do not skip it in the parallel path):
 > ```bash
-> ssh REMOTE_HOST 'python3 -c "import json; p=\"/Users/USER/quaid/claude-code-livetest/config/memory.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
+> ssh REMOTE_HOST 'python3 -c "import json; p=\"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
 > ```
 
 **Uninstall the plugin first to remove registry entries:**
@@ -345,7 +345,7 @@ ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && echo 'Aut
 Also verify model config was written by the installer:
 
 ```bash
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/claude-code-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
 ```
 
 Expected output: `{'deepReasoning': 'claude-opus-4-6', 'fastReasoning': 'claude-haiku-4-5-20251001'}`.
@@ -382,7 +382,7 @@ ssh REMOTE_HOST 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=js
 # different CC project dirs can use different silos without cross-contamination.
 ssh REMOTE_HOST 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE (should be absent):\",e.get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
 ssh REMOTE_HOST 'cat /tmp/cc-livetest/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_INSTANCE (per-project):\",e.get(\"QUAID_INSTANCE\",\"MISSING\"))"'
-# Expected: QUAID_HOME: /Users/USER/quaid   and   QUAID_INSTANCE (per-project): claude-code-livetest
+# Expected: QUAID_HOME: /Users/USER/.quaid   and   QUAID_INSTANCE (per-project): (absent — derived from path)
 ssh REMOTE_HOST 'ls -l ~/quaid/instances/openclaw-livetest/identity/SOUL.md ~/.quaid/instances/claude-code-private-tmp-cc-livetest/identity/SOUL.md 2>/dev/null || true'
 ```
 
@@ -399,9 +399,12 @@ for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
     if not src.exists():
         print(f"WARNING: template missing: {src}")
         continue
-    for instance in ("openclaw-livetest", "claude-code-livetest"):
-        dst = Path("/Users/USER/quaid") / instance / "identity" / fname
-        dst.parent.mkdir(parents=True, exist_ok=True)
+    for dst_dir in (
+        Path("/Users/USER/quaid/openclaw-livetest/identity"),
+        Path("/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/identity"),
+    ):
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / fname
         if not dst.exists():
             dst.write_bytes(src.read_bytes())
             print(f"created {dst}")
@@ -420,7 +423,7 @@ ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest
 # can occur due to config singleton state; direct injection is reliable)
 ssh REMOTE_HOST 'python3 -c "
 import json
-p = \"/Users/USER/quaid/claude-code-livetest/config/memory.json\"
+p = \"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
 with open(p) as f: d = json.load(f)
 if \"quaid\" not in d[\"projects\"][\"definitions\"]:
     d[\"projects\"][\"definitions\"][\"quaid\"] = {
@@ -459,11 +462,11 @@ print(\"capture.chunk_tokens set to 1500 for openclaw-livetest\")
 # CC silo
 ssh REMOTE_HOST 'python3 -c "
 import json
-p = \"/Users/USER/quaid/claude-code-livetest/config/memory.json\"
+p = \"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
 with open(p) as f: d = json.load(f)
 d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
 with open(p, \"w\") as f: json.dump(d, f, indent=2)
-print(\"capture.chunk_tokens set to 1500 for claude-code-livetest\")
+print(\"capture.chunk_tokens set to 1500 for claude-code-private-tmp-cc-livetest\")
 "'
 ```
 
@@ -471,7 +474,7 @@ Verify both silos have the override:
 
 ```bash
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/openclaw-livetest/config/memory.json\")); print(\"OC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/claude-code-livetest/config/memory.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
 ```
 
 Expected: `OC chunk_tokens: 1500` and `CC chunk_tokens: 1500`.
@@ -730,7 +733,7 @@ After `/compact` and the extraction wait — verify the flush:
 ```bash
 # OC
 ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-livetest/logs/daemon/rolling-extraction.jsonl 2>/dev/null | python3 -c "import sys,json; lines=[json.loads(l) for l in sys.stdin if l.strip()]; stages=[l for l in lines if l.get(\"event\")==\"rolling_stage\"]; flushes=[l for l in lines if l.get(\"event\")==\"rolling_flush\"]; print(f\"rolling_stage count: {len(stages)}, rolling_flush count: {len(flushes)}\")"'
-# CC (same pattern with claude-code-livetest path)
+# CC (same pattern with claude-code-private-tmp-cc-livetest path)
 ```
 
 Pass:
@@ -780,9 +783,9 @@ Pass:
 - the timeout fact is extracted with no explicit lifecycle command
 - for Claude Code, verify `quaid daemon status` points at the correct
   instance root before idling:
-  - `instance_root: /Users/USER/quaid/claude-code-livetest`
-  - `log_file: /Users/USER/quaid/claude-code-livetest/logs/daemon/extraction-daemon.log`
-  - `pid_file: /Users/USER/quaid/claude-code-livetest/data/extraction-daemon.pid`
+  - `instance_root: /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest`
+  - `log_file: /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/logs/daemon/extraction-daemon.log`
+  - `pid_file: /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-daemon.pid`
 
 Verify extraction happened (use `name` column, not `text`):
 ```bash
@@ -1449,18 +1452,18 @@ Fail:
 This milestone verifies that the CC adapter's multi-agent silo structure is correct
 and that the running instance appears in `list_agent_instance_ids()`.
 
-**Step 1 — list_agent_instance_ids returns claude-code-livetest:**
+**Step 1 — list_agent_instance_ids returns claude-code-private-tmp-cc-livetest:**
 
 ```bash
 ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest \
   python3 -c "
-import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.quaid/plugins/quaid\"))
 from adaptors.factory import create_adapter
 a = create_adapter(\"claude_code\")
 ids = a.list_agent_instance_ids()
 print(ids)
 assert len(ids) >= 1, \"Expected at least one instance ID\"
-assert \"claude-code-livetest\" in ids, \"claude-code-livetest not in IDs\"
+assert \"claude-code-private-tmp-cc-livetest\" in ids, \"claude-code-private-tmp-cc-livetest not in IDs\"
 print(\"PASS: list_agent_instance_ids =\", ids)
 "'
 ```
@@ -1469,7 +1472,7 @@ print(\"PASS: list_agent_instance_ids =\", ids)
 
 ```bash
 ssh REMOTE_HOST '
-silo="$HOME/quaid/instances/claude-code-livetest"
+silo="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest"
 if [ -d "$silo/data" ]; then
   echo "PASS: $silo/data exists"
 else
@@ -1482,7 +1485,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-sigdir="$HOME/quaid/instances/claude-code-livetest/data/extraction-signals"
+sigdir="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-signals"
 if [ -d "$sigdir" ]; then
   echo "PASS: $sigdir exists"
 else
@@ -1495,7 +1498,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-SIGNAL_DIR="$HOME/quaid/instances/claude-code-livetest/data/extraction-signals"
+SIGNAL_DIR="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-signals"
 if [ ! -d "$SIGNAL_DIR" ]; then
   echo "FAIL: $SIGNAL_DIR does not exist"
   exit 1
@@ -1508,11 +1511,11 @@ rm -f "$SIGNAL_FILE"
 '
 ```
 
-**Step 5 — extraction-daemon.pid exists for claude-code-livetest:**
+**Step 5 — extraction-daemon.pid exists for claude-code-private-tmp-cc-livetest:**
 
 ```bash
 ssh REMOTE_HOST '
-pid_file="$HOME/quaid/instances/claude-code-livetest/data/extraction-daemon.pid"
+pid_file="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-daemon.pid"
 if [ -f "$pid_file" ]; then
   pid=$(cat "$pid_file")
   if kill -0 "$pid" 2>/dev/null; then
@@ -1521,14 +1524,14 @@ if [ -f "$pid_file" ]; then
     echo "WARN: pid file exists but process $pid is not running"
   fi
 else
-  echo "FAIL: no extraction-daemon.pid found for claude-code-livetest"
+  echo "FAIL: no extraction-daemon.pid found for claude-code-private-tmp-cc-livetest"
 fi
 '
 ```
 
 Pass:
-- `list_agent_instance_ids()` returns at least `["claude-code-livetest"]`
-- `data/` and `extraction-signals/` dirs exist under the claude-code-livetest silo
+- `list_agent_instance_ids()` returns at least `["claude-code-private-tmp-cc-livetest"]`
+- `data/` and `extraction-signals/` dirs exist under the claude-code-private-tmp-cc-livetest silo
 - synthetic signal write succeeds in the per-agent silo dir
 - `extraction-daemon.pid` exists and points to a live process
 
@@ -2112,7 +2115,7 @@ Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirector
 # OC identity
 ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 # CC identity
-ssh REMOTE_HOST 'for f in /Users/USER/quaid/claude-code-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh REMOTE_HOST 'for f in /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 ```
 
 Audit project docs and snippets/journals:
@@ -2123,8 +2126,8 @@ ssh REMOTE_HOST 'find /Users/USER/quaid/projects -maxdepth 3 \( -name "PROJECT.m
 # Live-test project
 ssh REMOTE_HOST 'find /Users/USER/quaid/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
 # Snippets and journals
-ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-livetest/SOUL.snippets.md /Users/USER/quaid/openclaw-livetest/USER.snippets.md /Users/USER/quaid/claude-code-livetest/SOUL.snippets.md /Users/USER/quaid/claude-code-livetest/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
-ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-livetest/journal/SOUL.journal.md /Users/USER/quaid/openclaw-livetest/journal/USER.journal.md /Users/USER/quaid/openclaw-livetest/journal/MEMORY.journal.md /Users/USER/quaid/claude-code-livetest/journal/SOUL.journal.md /Users/USER/quaid/claude-code-livetest/journal/USER.journal.md /Users/USER/quaid/claude-code-livetest/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-livetest/SOUL.snippets.md /Users/USER/quaid/openclaw-livetest/USER.snippets.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/SOUL.snippets.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
+ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-livetest/journal/SOUL.journal.md /Users/USER/quaid/openclaw-livetest/journal/USER.journal.md /Users/USER/quaid/openclaw-livetest/journal/MEMORY.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/SOUL.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/USER.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
 # Project logs
 ssh REMOTE_HOST 'find /Users/USER/quaid/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
 ```

@@ -115,46 +115,27 @@ will always be much larger than the actual buffered count. Check
 
 ## CC Auth Token
 
-### Step 1 — Verify the `claude` CLI OAuth token on the VM
+### Step 1 — Inject fresh `claude` CLI credentials from the coordinator machine
 
-The CC platform runs `claude --dangerously-skip-permissions` on the VM. The
-`claude` CLI reads its Anthropic OAuth credentials from
-`~/.claude/.credentials.json`. This token comes from the base VM snapshot and
-**expires in ~24 hours**. If expired, the `claude` CLI returns a 401 and the
-platform agent cannot make any API calls.
+The CC platform reads Anthropic OAuth credentials from `~/.claude/.credentials.json`.
+The base snapshot bakes in a token that is already expired by the time a clone boots.
+**Do not rely on the baked token — always inject fresh credentials as part of preflight.**
 
-**Before releasing CC to start M0**, verify the token is still valid:
-
-```bash
-ssh REMOTE_HOST 'python3 -c "
-import json, time
-d = json.load(open(\"/Users/admin/.claude/.credentials.json\"))
-exp_ms = d.get(\"claudeAiOauth\", {}).get(\"expiresAt\", 0)
-diff = time.time() - exp_ms / 1000
-if diff > 0:
-    print(f\"EXPIRED {diff/3600:.1f}h ago — must refresh before CC M0\")
-else:
-    print(f\"Valid for {-diff/3600:.1f}h\")
-"'
-```
-
-If expired: tell Solomon — a fresh Anthropic OAuth token is required. He keeps
-account tokens at `~/quaidcode/anthtoken-*.md` (sol, yuni, mom). Solomon will
-say which file contains the current valid token. Once identified, write it to
-the credentials file on the VM:
+The coordinator machine's running CC instance always has a valid, auto-refreshed
+`~/.claude/.credentials.json`. Copy it directly to the VM after clone:
 
 ```bash
-TOKEN=$(cat ~/quaidcode/anthtoken-ACCOUNT.md | tr -d '[:space:]')
-ssh REMOTE_HOST "python3 -c \"
-import json, time
-p = '/Users/admin/.claude/.credentials.json'
-d = json.load(open(p))
-d['claudeAiOauth']['accessToken'] = '$TOKEN'
-d['claudeAiOauth']['expiresAt'] = int((time.time() + 86400) * 1000)
-json.dump(d, open(p, 'w'), indent=2)
-print('claude CLI credentials refreshed')
-\""
+scp ~/.claude/.credentials.json admin@REMOTE_HOST:~/.claude/.credentials.json
 ```
+
+Then verify:
+
+```bash
+ssh REMOTE_HOST 'source ~/.zprofile && claude auth status'
+```
+
+Expected output includes `"loggedIn": true`. If it does not, check that the
+coordinator machine's own CC session is authenticated before copying.
 
 ### Step 2 — Pre-write the shared Quaid auth credential
 
@@ -167,6 +148,24 @@ TOKEN=$(cat ~/.tmp/cc-auth-token.txt | tr -d '[:space:]')
 ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && \
   echo 'CC Quaid shared auth credential written'"
 ```
+
+**`~/.tmp/cc-auth-token.txt` must contain the long-lived Yuni Anthropic OAuth key.**
+Short-lived session tokens expire within the lifetime of a VM clone and will cause
+credential failures mid-run. Before each run, ensure the file holds the Yuni key:
+
+```bash
+# Verify cc-auth-token.txt holds the Yuni long-lived key (not a session token)
+# Yuni key source: ~/quaidcode/anthtoken-yuni.md
+# Sol key source:  ~/quaidcode/anthtoken-sol.md
+YUNI=$(cat ~/quaidcode/anthtoken-yuni.md | tr -d '[:space:]')
+echo "$YUNI" > ~/.tmp/cc-auth-token.txt
+```
+
+This token is the single global Quaid credential used by all platforms (OC, CC, CDX).
+The installer should accept any one of `anthropic_oauth`, `anthropic_api`, `openai_oauth`,
+or `openai_api` — the Yuni `anthropic_oauth` key is the correct default.
+
+Note: the preflight wipes `~/.quaid`, so this pre-write must happen AFTER preflight completes.
 
 NEVER write a placeholder token.
 
@@ -421,6 +420,13 @@ guide on canary and installs Quaid itself. Do not run the installer directly.
 2. Once lead M0 passes, send start signals to the other two testers simultaneously.
 3. M0 must pass on all platforms before M1 begins.
 
+**Preferred: single-invocation all-platforms install.** The installer supports
+`--all-platforms` (commit d9e5262d1) which installs OC, CC, and CDX sequentially
+in one run. Use this when doing a clean full-suite install: send the lead tester
+one install message that includes `Install All Available` / `--all-platforms` in
+its framing. Only the first platform install prompts for credentials; subsequent
+installs reuse the shared credential store.
+
 ### What to send each platform
 
 Tell the platform pane:
@@ -429,8 +435,8 @@ Tell the platform pane:
 > `~/quaidcode/dev/docs/AI-INSTALL.md`
 >
 > Use these parameters:
-> - Adapter/platform: PLATFORM
-> - Instance name: INSTANCE_NAME
+> - Adapter/platform: All platforms (`Install All Available`)
+> - Instance names: OC=INSTANCE_NAME_OC, CC=INSTANCE_NAME_CC, CDX=INSTANCE_NAME_CDX
 > - Owner name: OWNER_NAME
 >
 > Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not choose or pass a custom workspace path.
@@ -438,7 +444,10 @@ Tell the platform pane:
 > Do not browse the web for install docs or source code during M0.
 > Do not install a release build or any non-canary branch.
 >
-> Tell me when Quaid is installed and `quaid doctor` returns healthy.
+> Tell me when all platforms are installed and `quaid doctor` returns healthy for each.
+
+If installing individual platforms instead of all-at-once, send a separate message
+to each tester pane specifying only its own platform and instance name.
 
 **Delivery per platform:**
 
