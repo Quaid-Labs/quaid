@@ -539,6 +539,16 @@ CC hooks require interactive mode. Run CC visibly in local tmux pane `main:100`,
 SSH to `REMOTE_HOST`, and launch `claude` from the CC project dir. The instance name
 is derived from the project dir — do NOT set QUAID_INSTANCE explicitly for CC.
 
+> **CC instance derivation:** The CC adapter derives `QUAID_INSTANCE` from the
+> transcript path at hook execution time. `/tmp/cc-livetest` → `/private/tmp/cc-livetest`
+> → instance `claude-code-private-tmp-cc-livetest`. Setting `QUAID_INSTANCE` in
+> your shell environment has **no effect** on where CC facts are stored. Always
+> verify with `QUAID_INSTANCE=claude-code-private-tmp-cc-livetest quaid recall <query>`.
+
+> **CC extraction is asynchronous.** Unlike OC (which extracts inline), CC extracts
+> after `/exit` via the session_end hook and daemon queue. Allow **at least 2 minutes**
+> after `/exit` before checking recall or DB for new facts.
+
 ```bash
 tmux respawn-pane -k -t main:100 'zsh -il'
 tmux send-keys -t main:100 "ssh REMOTE_HOST" Enter
@@ -666,7 +676,9 @@ Procedure:
    ```bash
    ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
    ```
-4. Wait 30–60 seconds for extraction.
+4. Wait for extraction. OC extracts inline (30–60 s after `/new`). CC extracts
+   asynchronously via session_end hook — wait **at least 2 minutes** after `/exit`
+   before checking.
 5. Check DB for the distinctive keyword:
 
 ```bash

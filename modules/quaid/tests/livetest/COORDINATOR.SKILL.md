@@ -470,6 +470,17 @@ Tell the platform pane:
 If installing individual platforms instead of all-at-once, send a separate message
 to each tester pane specifying only its own platform and instance name.
 
+**CC instance caveat:** Do NOT tell the CC tester to set `QUAID_INSTANCE` in their
+shell. CC derives the instance from the transcript path — `/tmp/cc-livetest` →
+`claude-code-private-tmp-cc-livetest`. Setting `QUAID_INSTANCE` in the shell has
+no effect on where facts are stored. For coordinator verification: always use
+`QUAID_INSTANCE=claude-code-private-tmp-cc-livetest quaid recall <query>`.
+
+**CC async extraction:** CC extraction fires asynchronously after `/exit` (not
+inline like OC). Tell CC testers to wait **at least 2 minutes** after exiting a
+session before checking recall or the DB. Checking immediately after `/exit` will
+always show 0 nodes — this is not a failure.
+
 **Delivery per platform:**
 
 | Platform | How to send |
