@@ -375,6 +375,39 @@ fi
 echo ""
 echo "[8/8] Starting platform services on remote..."
 
+# In release verify mode, clear stale quaid plugin references from openclaw.json before
+# starting the gateway. The wipe removes the quaid plugin runtime but leaves the OC gateway
+# config intact, causing "plugin not found: quaid" on startup if the references remain.
+if [[ -n "$RELEASE_VERIFY" && "$SKIP_PLATFORM_START" != "1" && "$DRY_RUN" != "1" ]]; then
+    echo "  [release-verify] clearing stale quaid plugin references from remote openclaw.json..."
+    ssh "$REMOTE_HOST" python3 <<'PYEOF'
+import json, pathlib
+p = pathlib.Path.home() / '.openclaw' / 'openclaw.json'
+if not p.exists():
+    print('  ~/.openclaw/openclaw.json not found — skipping')
+else:
+    d = json.loads(p.read_text())
+    changed = False
+    plugins = d.get('plugins', {})
+    entries = plugins.get('entries', {})
+    if 'quaid' in entries:
+        del entries['quaid']
+        changed = True
+    allow = plugins.get('allow', [])
+    if 'quaid' in allow:
+        allow.remove('quaid')
+        changed = True
+    slots = plugins.get('slots', {})
+    if slots.get('memory') == 'quaid':
+        del slots['memory']
+        changed = True
+    if changed:
+        p.write_text(json.dumps(d, indent=2))
+        print('  cleared stale quaid references from ~/.openclaw/openclaw.json')
+    else:
+        print('  ~/.openclaw/openclaw.json has no stale quaid references — no changes needed')
+PYEOF
+fi
 
 if [[ "$SKIP_PLATFORM_START" == "1" ]]; then
     echo "  (skipped — --skip-platform-start)"
