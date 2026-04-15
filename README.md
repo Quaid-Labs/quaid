@@ -8,7 +8,11 @@
 
 > **Early alpha** — launched 2026, active daily development.
 
-Quaid is not another memory plugin — it is an **active knowledge layer** for agents that need to operate over time. Local-first, cross-platform, and built for long-running agents, it captures, maintains, and retrieves knowledge across sessions while keeping your data on your machine. Quaid is designed to solve the failure modes that show up once agents leave a single context window behind: resets, stale facts, project drift, and rising token cost. To study that regime, we built AgentLife — a benchmark for persistence, recall under resets, and cross-session coherence.
+Quaid helps your agent remember who you are, what you are working on, and what already happened, so you do not have to reteach it after every reset, new session, or context loss.
+
+If you use coding agents a lot, you have probably seen the failure mode already: the agent forgets decisions, loses project context, repeats mistakes, or needs the same background explained again. Quaid is the layer that stores that knowledge, keeps it organized, and feeds back the right parts when the agent needs them.
+
+Under the hood, Quaid is an **active knowledge layer** for long-running agents. It is local-first, cross-platform, and built to capture, maintain, and retrieve knowledge across sessions while keeping your data on your machine. To study that regime, we built AgentLife — a benchmark for persistence, recall under resets, and cross-session coherence.
 
 ## How to Install
 
@@ -30,6 +34,8 @@ After install, start here:
 ## Benchmarks
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
+
+**Headline result: on the long-form AgentLife lanes, Quaid matches or beats the Full Context baseline while using about one-fifth of the evaluation tokens.**
 
 Context-window baselines like Full Context are included here as short-horizon upper bounds, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets, controlling cost growth, and preserving continuity across sessions.
 
