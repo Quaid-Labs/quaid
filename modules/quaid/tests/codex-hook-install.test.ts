@@ -75,6 +75,8 @@ describe("codex postinstall hook registration", () => {
     expect(stopCommands.some((cmd) => cmd.includes("hook-codex-stop"))).toBe(true);
     expect(allManaged).toHaveLength(3);
     expect(allManaged.some((cmd) => cmd.includes("QUAID_INSTANCE"))).toBe(false);
+    expect(allManaged.every((cmd) => cmd.includes('QUAID_ADAPTER_TYPE="codex"'))).toBe(true);
+    expect(allManaged.every((cmd) => cmd.includes('CODEX_PROJECT_DIR="${CODEX_PROJECT_DIR:-$PWD}"'))).toBe(true);
     expect(configJson.features.codex_hooks).toBe(true);
     expect(configJson.hooks.SessionStart).toBeTruthy();
     expect(configJson.hooks.UserPromptSubmit).toBeTruthy();

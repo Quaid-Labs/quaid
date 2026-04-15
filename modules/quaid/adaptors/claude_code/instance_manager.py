@@ -194,7 +194,9 @@ class ClaudeCodeInstanceManager(InstanceManager):
         visible_home = str(self.adapter.visible_home())
         env_prefix = (
             f"QUAID_HOME='{workspace}' "
-            f"QUAID_VISIBLE_HOME='{visible_home}'"
+            f"QUAID_VISIBLE_HOME='{visible_home}' "
+            "QUAID_ADAPTER_TYPE='claude-code' "
+            "CLAUDE_PROJECT_DIR=\"${CLAUDE_PROJECT_DIR:-$PWD}\""
         )
 
         desired: dict = {

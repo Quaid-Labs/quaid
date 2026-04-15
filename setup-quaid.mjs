@@ -5350,7 +5350,12 @@ function setupClaudeCodeHooks() {
   // across every workspace on the machine.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_VISIBLE_HOME='${VISIBLE_HOME}'`;
+  const envPrefix = [
+    `QUAID_HOME='${WORKSPACE}'`,
+    `QUAID_VISIBLE_HOME='${VISIBLE_HOME}'`,
+    "QUAID_ADAPTER_TYPE='claude-code'",
+    "CLAUDE_PROJECT_DIR=\"${CLAUDE_PROJECT_DIR:-$PWD}\"",
+  ].join(" ");
 
   const desiredHooks = {
     SessionStart: [

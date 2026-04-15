@@ -1,6 +1,7 @@
 """Unit tests for InstanceManager base class and CC subclass."""
 
 import json
+import os
 import sqlite3
 import pytest
 from pathlib import Path
@@ -253,6 +254,8 @@ class TestClaudeCodeInstanceManager:
         session_start_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         assert "hook-session-init" in session_start_cmd
         assert "QUAID_INSTANCE='" not in session_start_cmd
+        assert "QUAID_ADAPTER_TYPE='claude-code'" in session_start_cmd
+        assert 'CLAUDE_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"' in session_start_cmd
 
     def test_make_instance_overwrites_existing_instance(self, tmp_path):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
@@ -294,6 +297,7 @@ class TestClaudeCodeInstanceManager:
         assert "echo keep-me" in session_start_cmds
         assert any("hook-session-init" in cmd for cmd in session_start_cmds)
         assert all("QUAID_INSTANCE='claude-code-old'" not in cmd for cmd in session_start_cmds)
+        assert any("QUAID_ADAPTER_TYPE='claude-code'" in cmd for cmd in session_start_cmds)
 
     def test_make_instance_dry_run_no_writes(self, tmp_path):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
@@ -431,3 +435,26 @@ def test_get_adapter_repairs_instance_projects_after_auto_provision(tmp_path, mo
 
     assert adapter.adapter_id() == "claude-code"
     assert calls == [f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"]
+
+
+def test_auto_provision_derives_claude_code_instance_from_cwd_when_adapter_type_is_known(tmp_path, monkeypatch):
+    from lib import adapter as adapter_mod
+    from lib.instance import instance_slug_from_project_dir
+
+    project_dir = tmp_path / "cc-project"
+    project_dir.mkdir()
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "claude-code")
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(project_dir)
+
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    expected = f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"
+    assert os.environ.get("QUAID_INSTANCE") == expected
+    assert (tmp_path / "instances" / expected / "config.json").is_file()

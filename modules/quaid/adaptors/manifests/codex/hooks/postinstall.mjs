@@ -168,6 +168,8 @@ const defaultHome = escapeShellDefault(workspace);
 const envPrefix = [
   `QUAID_HOME="\${QUAID_HOME:-${defaultHome}}"`,
   `OPENCLAW_WORKSPACE="\${OPENCLAW_WORKSPACE:-${defaultHome}}"`,
+  'QUAID_ADAPTER_TYPE="codex"',
+  'CODEX_PROJECT_DIR="${CODEX_PROJECT_DIR:-$PWD}"',
 ].join(" ");
 
 const codexDir = path.join(os.homedir(), ".codex");

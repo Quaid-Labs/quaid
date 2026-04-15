@@ -1383,13 +1383,12 @@ def _adapter_config_paths() -> List[Path]:
     if home and instance:
         paths.append(Path(home) / "instances" / instance / "config.json")
 
-    # Secondary: CLAUDE_PROJECT_DIR-derived instance path when QUAID_INSTANCE is not
-    # yet set.  Instance derivation normally happens after config is found (in
-    # _bootstrap_instance_env), so we eagerly resolve the instance name here to
-    # avoid the chicken-and-egg failure where the config search misses the silo.
-    #
-    # Uses the canonical slug derivation in lib.instance (single source of truth
-    # for project-dir-to-slug conversion).
+    explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
+
+    # Secondary: path-derived instance path when QUAID_INSTANCE is not yet set.
+    # This covers normal hook execution (host exports project env) and fresh
+    # helper shells launched from a project cwd where only QUAID_ADAPTER_TYPE is
+    # available.
     if home and not instance:
         _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         if _cpd:
@@ -1405,12 +1404,17 @@ def _adapter_config_paths() -> List[Path]:
             paths.append(
                 Path(home) / "instances" / f"codex-{_slug}" / "config.json"
             )
+        if explicit_adapter_type in ("claude-code", "codex"):
+            from lib.instance import instance_slug_from_project_dir
+            _slug = instance_slug_from_project_dir(os.getcwd())
+            paths.append(
+                Path(home) / "instances" / f"{explicit_adapter_type}-{_slug}" / "config.json"
+            )
 
     # Shared platform config fallback for shared-only installs. If adapter type
     # is explicitly known, prefer that platform config. Otherwise, if exactly one
     # platform-shared config exists under QUAID_HOME/shared/config/, use it.
     if home:
-        explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
         if explicit_adapter_type:
             paths.append(Path(home) / "shared" / "config" / explicit_adapter_type / "config.json")
         else:
@@ -1422,6 +1426,12 @@ def _adapter_config_paths() -> List[Path]:
                 ]
             except Exception:
                 platform_cfgs = []
+            if len(platform_cfgs) == 1 and platform_cfgs[0].parent.name in ("claude-code", "codex"):
+                from lib.instance import instance_slug_from_project_dir
+                _slug = instance_slug_from_project_dir(os.getcwd())
+                paths.append(
+                    Path(home) / "instances" / f"{platform_cfgs[0].parent.name}-{_slug}" / "config.json"
+                )
             if len(platform_cfgs) == 1:
                 paths.append(platform_cfgs[0])
 
@@ -1487,7 +1497,7 @@ def _read_adapter_type_from_config() -> str:
 
         if kind:
             return kind
-        raise RuntimeError(f"Config {cfg_path} must set adapter.type to a non-empty string (found: {adapter_cfg!r}).")
+        continue
 
     searched = ", ".join(str(p) for p in _adapter_config_paths())
     if last_existing is None:
@@ -1496,7 +1506,10 @@ def _read_adapter_type_from_config() -> str:
             "with {\"adapter\": {\"type\": \"<adapter-id>\"}}. "
             f"Searched: {searched}"
         )
-    raise RuntimeError("Adapter type could not be resolved from config.")
+    raise RuntimeError(
+        "Adapter type could not be resolved from config. "
+        f"Searched existing configs: {searched}"
+    )
 
 
 def _infer_adapter_type_from_instance(instance_id: str) -> str:
@@ -1527,15 +1540,16 @@ def _auto_provision_from_env_if_needed() -> None:
     home = os.environ.get("QUAID_HOME", "").strip()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
 
-    # When QUAID_INSTANCE is absent but CLAUDE_PROJECT_DIR is set, derive the
-    # CC instance name from the project path (same logic as _adapter_config_paths
-    # and ClaudeCodeAdapter.get_instance_name).  Setting QUAID_INSTANCE here means
-    # the silo is provisioned and _bootstrap_instance_env won't override it later.
+    # When QUAID_INSTANCE is absent, derive a path-based instance from explicit
+    # project env first, then from cwd when the adapter type is already known.
+    # This keeps helper CLI commands inside a project directory on the same silo
+    # even if the host shell did not export CLAUDE_PROJECT_DIR/CODEX_PROJECT_DIR.
     if home and not instance:
         from lib.instance import instance_slug_from_project_dir
 
         claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
+        explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
         if claude_project_dir and codex_project_dir:
             try:
                 if Path(claude_project_dir).resolve() != Path(codex_project_dir).resolve():
@@ -1560,6 +1574,12 @@ def _auto_provision_from_env_if_needed() -> None:
                 instance = f"{prefix}-{_slug}"
                 os.environ["QUAID_INSTANCE"] = instance
                 break
+
+        if not instance and explicit_adapter_type in ("claude-code", "codex"):
+            _slug = instance_slug_from_project_dir(os.getcwd())
+            if _slug:
+                instance = f"{explicit_adapter_type}-{_slug}"
+                os.environ["QUAID_INSTANCE"] = instance
 
     if not home or not instance:
         return

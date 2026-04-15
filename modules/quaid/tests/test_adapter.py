@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -1433,6 +1434,48 @@ class TestAdapterSelection:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = get_adapter()
         assert isinstance(adapter, CodexAdapter)
+
+    def test_config_claude_code_from_cwd_with_explicit_adapter_type(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "cc-project"
+        project_dir.mkdir()
+        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        cfg_dir = tmp_path / "instances" / f"claude-code-{slug}"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text('{"adapter":{"type":"claude-code"}}', encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.setenv("QUAID_ADAPTER_TYPE", "claude-code")
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+        monkeypatch.chdir(project_dir)
+
+        adapter = get_adapter()
+
+        assert isinstance(adapter, ClaudeCodeAdapter)
+        assert os.environ.get("QUAID_INSTANCE") == f"claude-code-{slug}"
+
+    def test_config_codex_from_cwd_with_explicit_adapter_type(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "cdx-project"
+        project_dir.mkdir()
+        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        cfg_dir = tmp_path / "instances" / f"codex-{slug}"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text('{"adapter":{"type":"codex"}}', encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+        monkeypatch.chdir(project_dir)
+
+        adapter = get_adapter()
+
+        assert isinstance(adapter, CodexAdapter)
+        assert os.environ.get("QUAID_INSTANCE") == f"codex-{slug}"
 
     @pytest.mark.adapter_openclaw
     def test_config_openclaw_from_single_shared_platform_config(self, monkeypatch, tmp_path):
