@@ -2658,25 +2658,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     buffered_line_offset,
                     chunk_budget,
                 )
-                if (
-                    remaining_tokens >= chunk_budget
-                    or (
-                        chunk_line_budget > 0
-                        and int(semantic_buffer_metrics.get("raw_lines_added", len(new_lines)) or 0)
-                        >= chunk_line_budget
-                    )
-                ):
-                    write_signal(
-                        signal_type="rolling",
-                        session_id=session_id,
-                        transcript_path=transcript_path,
-                        meta={
-                            "reason": "continued_chunk_budget",
-                            "chunk_tokens": chunk_budget,
-                            "chunk_lines": chunk_line_budget,
-                            "buffered_line_offset": buffered_line_offset,
-                        },
-                    )
+                write_signal(
+                    signal_type="rolling",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    meta={
+                        "reason": "continued_chunk_budget",
+                        "chunk_tokens": chunk_budget,
+                        "chunk_lines": chunk_line_budget,
+                        "buffered_line_offset": buffered_line_offset,
+                        "remaining_tokens_estimate": remaining_tokens,
+                        "remaining_lines": max(0, int(total_lines) - int(buffered_line_offset)),
+                    },
+                )
             return
 
         tail_result = None
