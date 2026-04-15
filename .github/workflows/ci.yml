@@ -2,7 +2,9 @@ name: Quaid CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'ci/main/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -127,7 +129,7 @@ jobs:
 
   full-suite:
     needs: changes
-    if: needs.changes.outputs.needs_plugin == 'true'
+    if: needs.changes.outputs.needs_plugin == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
