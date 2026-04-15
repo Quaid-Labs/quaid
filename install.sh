@@ -230,65 +230,14 @@ if [[ -z "$RELEASE_DIR" || ! -f "$RELEASE_DIR/setup-quaid.mjs" ]]; then
     exit 1
 fi
 
-# --- Detect workspace ---
-WORKSPACE=""
-if [[ -n "${QUAID_WORKSPACE:-}" ]]; then
-    WORKSPACE="$QUAID_WORKSPACE"
-    info "Using QUAID_WORKSPACE: $WORKSPACE"
-elif [[ -n "${QUAID_HOME:-}" ]]; then
-    WORKSPACE="$QUAID_HOME"
-    info "Using QUAID_HOME: $WORKSPACE"
-elif [[ -n "${CLAWDBOT_WORKSPACE:-}" ]]; then
-    WORKSPACE="$CLAWDBOT_WORKSPACE"
-    info "Using CLAWDBOT_WORKSPACE: $WORKSPACE"
-elif command -v clawdbot &>/dev/null || command -v openclaw &>/dev/null; then
-    # Try to detect from CLI
-    WORKSPACE=$(clawdbot config get workspace 2>/dev/null || openclaw config get workspace 2>/dev/null || echo "")
-    if [[ -n "$WORKSPACE" ]]; then
-        info "Detected workspace from CLI: $WORKSPACE"
-    fi
-fi
-# Fallback to OpenClaw config file if CLI lookup is unavailable/empty.
-if [[ -z "$WORKSPACE" && -f "$HOME/.openclaw/openclaw.json" ]]; then
-    WORKSPACE="$(python3 - <<'PY'
-import json, os
-cfg = os.path.expanduser("~/.openclaw/openclaw.json")
-try:
-    data = json.load(open(cfg, "r", encoding="utf-8"))
-except Exception:
-    print("")
-    raise SystemExit(0)
-for candidate in [data.get("workspace"), ((data.get("agents") or {}).get("defaults") or {}).get("workspace")]:
-    if isinstance(candidate, str) and candidate.strip():
-        print(candidate.strip())
-        raise SystemExit(0)
-print("")
-PY
-)"
-    if [[ -n "$WORKSPACE" ]]; then
-        info "Detected workspace from ~/.openclaw/openclaw.json: $WORKSPACE"
-    fi
-fi
-# Last resort: standalone default
-WORKSPACE="${WORKSPACE:-$HOME/quaid}"
-
-# Create workspace directory if it doesn't exist (standalone fresh installs)
-if [[ ! -d "$WORKSPACE" ]]; then
-    info "Creating workspace directory: $WORKSPACE"
-    mkdir -p "$WORKSPACE"
-fi
-
-# Export canonical env vars for setup-quaid.mjs
-export QUAID_HOME="$WORKSPACE"
-export CLAWDBOT_WORKSPACE="$WORKSPACE"
 if [[ "$QUAID_MODE" == "openclaw" ]]; then
-    info "Mode: OpenClaw (workspace: $WORKSPACE)"
+    info "Mode: OpenClaw"
 else
-    info "Mode: Standalone (home: $WORKSPACE)"
+    info "Mode: Standalone"
 fi
 
 # --- Run guided installer ---
+# Do not export QUAID_HOME or set workspace here — setup-quaid.mjs owns path resolution.
 ok "Downloaded. Starting guided installer..."
 echo ""
-cd "$WORKSPACE" 2>/dev/null || true
 node "$RELEASE_DIR/setup-quaid.mjs" "$@"
