@@ -470,6 +470,7 @@ class TestOpenClawAdapter:
         assert "You are running as a subagent" not in transcript
 
 
+
     def test_parse_session_jsonl_strips_openclaw_hook_memory_context_block(self, tmp_path):
         session_file = tmp_path / "oc-hook-memory-context.jsonl"
         session_file.write_text(

@@ -1557,16 +1557,6 @@ function preserveSessionTranscript(sessionId: string, preferredPath: string | nu
   if (resetBackup) {
     candidates.push(resetBackup);
   }
-  // When OC assigns a new UUID to a session whose physical file uses a different name
-  // (e.g. b68db697.jsonl), the UUID-based backup lookup above finds nothing. Fall back
-  // to the most recently modified session file and look for its .reset.* backup.
-  const latestPhysical = findLatestOCSessionFile();
-  if (latestPhysical) {
-    const physBackup = latestResetBackupFromPath(latestPhysical);
-    if (physBackup) {
-      candidates.push(physBackup);
-    }
-  }
   const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
   const sourcePath = selectBestTranscriptCandidate(deduped, {
     preferResetBackup: reason.includes("reset"),
@@ -1756,32 +1746,23 @@ function writeDaemonSignal(
         if (backup) {
           resolvedPath = backup;
         } else {
-          // UUID-based path not on disk and no matching backup found. OC may have
-          // assigned a new UUID to a session whose physical file uses a different name
-          // (e.g. b68db697.jsonl). Scan for the most recently modified session file
-          // and look for its .reset.* backup as a last resort.
-          const latestPhysical = findLatestOCSessionFile();
-          if (latestPhysical) {
-            const physBackup = latestResetBackupFromPath(latestPhysical);
-            if (physBackup) {
-              resolvedPath = physBackup;
-              sessionTranscriptPaths.set(sessionId, physBackup);
-            }
-          }
+          writeHookTrace("session.daemon_signal_reset_backup_missing", {
+            session_id: sessionId,
+            signal_type: signalType,
+            resolved_path: resolvedPath,
+          });
         }
       }
     }
   }
-  // Compaction/session_end: the resolved path may be a UUID-based name that doesn't exist
-  // on disk (e.g. 87826784-....jsonl) because OC reused the physical file (46becb55.jsonl)
-  // for the post-reset session. Scan by mtime to find the actual current file.
   if ((signalType === "compaction" || signalType === "session_end") &&
       resolvedPath && !fs.existsSync(resolvedPath)) {
-    const actual = findLatestOCSessionFile();
-    if (actual) {
-      resolvedPath = actual;
-      sessionTranscriptPaths.set(sessionId, resolvedPath);
-    }
+    writeHookTrace("session.daemon_signal_missing_transcript", {
+      session_id: sessionId,
+      signal_type: signalType,
+      resolved_path: resolvedPath,
+    });
+    resolvedPath = "";
   }
 
   // Route to the agent's own Quaid silo if known, otherwise the primary instance.
@@ -6222,6 +6203,7 @@ export const __test = {
   isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
+  preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,
   selectNewKeyFanoutTarget,
   resolveLifecycleFlushSessionCandidate,

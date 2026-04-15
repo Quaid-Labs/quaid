@@ -237,6 +237,68 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+
+  it("does not preserve a session from the latest unrelated physical backup", () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-"));
+    const sessionsDir = path.join(baseDir, "sessions");
+    const preserveDir = path.join(baseDir, "preserved");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(preserveDir, { recursive: true });
+
+    const staleFile = path.join(sessionsDir, "24d3611f.jsonl");
+    const staleBackup = path.join(sessionsDir, "24d3611f.jsonl.reset.20260415T192500Z");
+    fs.writeFileSync(staleFile, '{\"stale\":true}\n', "utf8");
+    fs.writeFileSync(staleBackup, '{\"old\":true}\n', "utf8");
+
+    const originalEnv = {
+      HOME: process.env.HOME,
+      QUAID_HOME: process.env.QUAID_HOME,
+      QUAID_VISIBLE_HOME: process.env.QUAID_VISIBLE_HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      QUAID_INSTANCE: process.env.QUAID_INSTANCE,
+    };
+    const homeDir = path.join(baseDir, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    process.env.HOME = homeDir;
+    process.env.QUAID_HOME = path.join(baseDir, ".quaid");
+    process.env.QUAID_VISIBLE_HOME = path.join(baseDir, "quaid");
+    process.env.OPENCLAW_CONFIG_PATH = path.join(homeDir, ".openclaw", "openclaw.json");
+    process.env.QUAID_INSTANCE = "openclaw-main";
+    fs.mkdirSync(path.dirname(process.env.OPENCLAW_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }), "utf8");
+    fs.mkdirSync(path.join(process.env.QUAID_HOME, "instances", "openclaw-main", "data", "preserved-sessions"), { recursive: true });
+
+    const originalReaddirSync = fs.readdirSync;
+    const originalCopyFileSync = fs.copyFileSync;
+    const copyCalls: Array<{ src: string; dest: string }> = [];
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation(((target: fs.PathLike, options?: any) => {
+      const asString = String(target);
+      if (asString === sessionsDir) {
+        return [path.basename(staleFile), path.basename(staleBackup)] as any;
+      }
+      return (originalReaddirSync as any)(target, options);
+    }) as any);
+    const copySpy = vi.spyOn(fs, "copyFileSync").mockImplementation(((src: fs.PathLike, dest: fs.PathLike, mode?: number) => {
+      copyCalls.push({ src: String(src), dest: String(dest) });
+      return (originalCopyFileSync as any)(src, dest, mode);
+    }) as any);
+
+    try {
+      const result = __test.preserveSessionTranscript("2e9c4150", "", "command-new");
+      expect(result).toBe(null);
+      expect(copyCalls).toHaveLength(0);
+    } finally {
+      readdirSpy.mockRestore();
+      copySpy.mockRestore();
+      if (originalEnv.HOME === undefined) delete process.env.HOME; else process.env.HOME = originalEnv.HOME;
+      if (originalEnv.QUAID_HOME === undefined) delete process.env.QUAID_HOME; else process.env.QUAID_HOME = originalEnv.QUAID_HOME;
+      if (originalEnv.QUAID_VISIBLE_HOME === undefined) delete process.env.QUAID_VISIBLE_HOME; else process.env.QUAID_VISIBLE_HOME = originalEnv.QUAID_VISIBLE_HOME;
+      if (originalEnv.OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH; else process.env.OPENCLAW_CONFIG_PATH = originalEnv.OPENCLAW_CONFIG_PATH;
+      if (originalEnv.QUAID_INSTANCE === undefined) delete process.env.QUAID_INSTANCE; else process.env.QUAID_INSTANCE = originalEnv.QUAID_INSTANCE;
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("distinguishes Quaid event logs from preserved conversation transcripts", () => {
     const eventLogFile = `/tmp/quaid-oc-event-log-${Date.now()}.jsonl`;
     const transcriptFile = `/tmp/quaid-oc-transcript-${Date.now()}.jsonl`;

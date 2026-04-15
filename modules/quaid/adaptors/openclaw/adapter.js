@@ -1227,13 +1227,6 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
   if (resetBackup) {
     candidates.push(resetBackup);
   }
-  const latestPhysical = findLatestOCSessionFile();
-  if (latestPhysical) {
-    const physBackup = latestResetBackupFromPath(latestPhysical);
-    if (physBackup) {
-      candidates.push(physBackup);
-    }
-  }
   const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
   const sourcePath = selectBestTranscriptCandidate(deduped, {
     preferResetBackup: reason.includes("reset")
@@ -1385,24 +1378,22 @@ function writeDaemonSignal(sessionId, signalType, meta) {
         if (backup) {
           resolvedPath = backup;
         } else {
-          const latestPhysical = findLatestOCSessionFile();
-          if (latestPhysical) {
-            const physBackup = latestResetBackupFromPath(latestPhysical);
-            if (physBackup) {
-              resolvedPath = physBackup;
-              sessionTranscriptPaths.set(sessionId, physBackup);
-            }
-          }
+          writeHookTrace("session.daemon_signal_reset_backup_missing", {
+            session_id: sessionId,
+            signal_type: signalType,
+            resolved_path: resolvedPath
+          });
         }
       }
     }
   }
   if ((signalType === "compaction" || signalType === "session_end") && resolvedPath && !fs.existsSync(resolvedPath)) {
-    const actual = findLatestOCSessionFile();
-    if (actual) {
-      resolvedPath = actual;
-      sessionTranscriptPaths.set(sessionId, resolvedPath);
-    }
+    writeHookTrace("session.daemon_signal_missing_transcript", {
+      session_id: sessionId,
+      signal_type: signalType,
+      resolved_path: resolvedPath
+    });
+    resolvedPath = "";
   }
   const agentLabel = sessionIdToAgentId.get(sessionId);
   const signalDir = !agentLabel || agentLabel === "main" ? DAEMON_SIGNAL_DIR : getDaemonSignalDir(agentLabel);
@@ -5055,6 +5046,7 @@ const __test = {
   isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
   looksLikeQuaidEventLogTranscript,
+  preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,
   selectNewKeyFanoutTarget,
   resolveLifecycleFlushSessionCandidate,
