@@ -26,10 +26,7 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
             from datastore.docsdb.registry import ProjectRegistry
             from lib.config import get_db_path
             misc_name = misc_dir.name  # e.g. "misc--openclaw-main"
-            try:
-                rel_home = str(misc_dir.relative_to(root)) + "/"
-            except ValueError:
-                rel_home = str(misc_dir) + "/"
+            rel_home = f"projects/{misc_name}/"
             reg = ProjectRegistry(get_db_path())
             desc = "Scratch pad for ephemeral and temporary files."
             try:

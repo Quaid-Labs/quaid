@@ -407,7 +407,7 @@ def rename_project(old_name: str, new_name: str) -> Dict[str, Any]:
         ValueError: If old_name does not exist or new_name is already taken.
     """
     from datastore.docsdb.registry import DocsRegistry
-    registry = DocsRegistry(db_path=db_path)
+    registry = DocsRegistry()
     return registry.rename_project(old_name, new_name)
 
 
@@ -423,7 +423,7 @@ def archive_project(name: str) -> Dict[str, Any]:
         ValueError: If project does not exist.
     """
     from datastore.docsdb.registry import DocsRegistry
-    registry = DocsRegistry(db_path=db_path)
+    registry = DocsRegistry()
     return registry.archive_project(name)
 
 
