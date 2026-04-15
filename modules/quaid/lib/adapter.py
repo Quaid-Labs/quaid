@@ -1406,6 +1406,28 @@ def _adapter_config_paths() -> List[Path]:
                 Path(home) / "instances" / f"codex-{_slug}" / "config.json"
             )
 
+    # Shared platform config fallback for shared-only installs. If adapter type
+    # is explicitly known, prefer that platform config. Otherwise, if exactly one
+    # platform-shared config exists under QUAID_HOME/shared/config/, use it.
+    if home:
+        explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
+        if explicit_adapter_type:
+            paths.append(Path(home) / "shared" / "config" / explicit_adapter_type / "config.json")
+        else:
+            shared_root = Path(home) / "shared" / "config"
+            try:
+                platform_cfgs = [
+                    p for p in shared_root.glob("*/config.json")
+                    if p.parent.name != "global"
+                ]
+            except Exception:
+                platform_cfgs = []
+            if len(platform_cfgs) == 1:
+                paths.append(platform_cfgs[0])
+
+        # Global shared config remains the last shared fallback.
+        paths.append(Path(home) / "shared" / "config" / "global" / "config.json")
+
     # Legacy: flat QUAID_HOME/config/config.json
     if home:
         paths.append(Path(home) / "config" / "config.json")

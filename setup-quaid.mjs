@@ -4324,7 +4324,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
   // Installer creates only shared/runtime state. Per-instance silos are created
   // on first hook use, once the adapter has the real instance ID.
-  const resolvedInstanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
+  const resolvedInstanceId = String(process.env.QUAID_INSTANCE || "").trim();
   if (resolvedInstanceId) {
     const hiddenRoot = hiddenInstanceDir(resolvedInstanceId);
     const visibleRoot = visibleInstanceDir(resolvedInstanceId);
@@ -4624,7 +4624,7 @@ except Exception as e:
     } catch { /* no projects dir yet */ }
 
     // Register any existing project directories (e.g. migrating from a previous install)
-    if (existingDirs.length > 0) {
+    if (resolvedInstanceId && existingDirs.length > 0) {
       log.info(`Found ${C.bcyan(existingDirs.length)} existing project dir(s): ${C.bcyan(existingDirs.join(", "))}`);
       s.start("Registering existing projects...");
       const projNames = JSON.stringify(existingDirs);
@@ -4665,6 +4665,8 @@ print(total_docs)
       const regResult = python3Spawn(["-c", registerScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
       const regCount = (regResult.stdout || "").trim();
       s.stop(C.green(`Registered ${existingDirs.length} project(s), ${regCount} doc(s) indexed`));
+    } else if (existingDirs.length > 0) {
+      log.info("Skipping existing project docs registration until the first real instance is created.");
     }
 
     log.info(C.dim("Your agent can discover more projects — ask it to \"set up projects\""));
@@ -4684,8 +4686,9 @@ print(total_docs)
     const quaidSourceRoots = JSON.stringify(quaidSourceRoot ? [quaidSourceRoot] : []);
     // Register Quaid as a project unless it was already covered by existing project scan.
     const quaidAlreadyRegisteredViaExisting = existingDirs.includes("quaid");
-    s.start("Registering bundled project docs...");
-    const regQuaidScript = `
+    if (resolvedInstanceId) {
+      s.start("Registering bundled project docs...");
+      const regQuaidScript = `
 import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
@@ -4714,19 +4717,22 @@ except ValueError:
 found = reg.auto_discover('quaid')
 print(len(found))
 `;
-    const regQuaidResult = python3Spawn(["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-    if (regQuaidResult.error) {
-      throw regQuaidResult.error;
-    }
-    if (regQuaidResult.status !== 0) {
-      const detail = String(regQuaidResult.stderr || regQuaidResult.stdout || "").trim();
-      throw new Error(detail || "Bundled quaid project registration failed");
-    }
-    const quaidDocCount = (regQuaidResult.stdout || "").trim();
-    if (quaidAlreadyRegisteredViaExisting) {
-      log.info(`Quaid project re-linked and refreshed (${quaidDocCount} docs discovered in refresh pass)`);
+      const regQuaidResult = python3Spawn(["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      if (regQuaidResult.error) {
+        throw regQuaidResult.error;
+      }
+      if (regQuaidResult.status !== 0) {
+        const detail = String(regQuaidResult.stderr || regQuaidResult.stdout || "").trim();
+        throw new Error(detail || "Bundled quaid project registration failed");
+      }
+      const quaidDocCount = (regQuaidResult.stdout || "").trim();
+      if (quaidAlreadyRegisteredViaExisting) {
+        log.info(`Quaid project re-linked and refreshed (${quaidDocCount} docs discovered in refresh pass)`);
+      } else {
+        log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
+      }
     } else {
-      log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
+      log.info("Skipping bundled project docs registration until the first real instance is created.");
     }
 
     // Register instance misc project in projects/misc--{instanceId}/.
@@ -4790,7 +4796,7 @@ print('created' if created else 'exists')
         env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME, OPENCLAW_WORKSPACE: WORKSPACE },
       });
     }
-    s.stop(C.green("Bundled project docs registered"));
+    s.stop(C.green("Bundled project docs ready"));
   }
 
   if (resolvedInstanceId && !postInstallStateStabilized) {
@@ -4852,7 +4858,7 @@ async function step8_validate(owner, models, embeddings, systems) {
   const checks = [];
 
   // Database
-  const _validationInstanceId = String(process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
+  const _validationInstanceId = String(process.env.QUAID_INSTANCE || "").trim();
   const dbPath = hiddenInstanceDbPath(_validationInstanceId);
   if (fs.existsSync(dbPath)) {
     const tableProbe = `
@@ -5753,7 +5759,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     ? deepMergeMissing(config, sharedPlatformCfg)
     : config;
 
-  const instanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedAdapterType)).trim();
+  const instanceId = String(process.env.QUAID_INSTANCE || "").trim();
   if (instanceId) {
     // Explicit instance: write directly to instance config path.
     const instanceConfigDir = hiddenInstanceDir(instanceId);
@@ -6089,7 +6095,7 @@ print("ok" if ok else "unavailable")
   env.QUAID_HOME = WORKSPACE;
   env.OPENCLAW_WORKSPACE = WORKSPACE;
   env.PYTHONPATH = env.PYTHONPATH ? `${pythonRoot}${sep}${env.PYTHONPATH}` : pythonRoot;
-  const installInstance = resolvedInstallerInstanceId(resolvedInstallerPlatform());
+  const installInstance = String(process.env.QUAID_INSTANCE || "").trim();
   if (installInstance) env.QUAID_INSTANCE = env.QUAID_INSTANCE || installInstance;
   else delete env.QUAID_INSTANCE;
 
@@ -6235,7 +6241,7 @@ function notifyInstallWarmupNotice() {
  */
 function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule) {
   const platform = resolvedInstallerPlatform();
-  const instanceId = resolvedInstallerInstanceId(platform);
+  const instanceId = String(process.env.QUAID_INSTANCE || "").trim();
   const authTokenPath = platform === "codex"
     ? path.join(WORKSPACE, "adaptors", "codex", ".auth-token")
     : path.join(WORKSPACE, "adaptors", "claude-code", ".auth-token");

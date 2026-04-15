@@ -42,6 +42,12 @@ def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
     (cfg_dir / "config.json").write_text(f'{{"adapter": {{"type": "{adapter_type}"}}}}')
 
 
+def _write_shared_platform_config(tmp_path: Path, adapter_type: str) -> None:
+    cfg_dir = tmp_path / "shared" / "config" / adapter_type
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "config.json").write_text(f'{{"adapter": {{"type": "{adapter_type}"}}}}')
+
+
 def _write_adapter_manifest(
     tmp_path: Path,
     adapter_id: str,
@@ -1391,6 +1397,14 @@ class TestAdapterSelection:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = get_adapter()
         assert isinstance(adapter, CodexAdapter)
+
+    @pytest.mark.adapter_openclaw
+    def test_config_openclaw_from_single_shared_platform_config(self, monkeypatch, tmp_path):
+        _write_shared_platform_config(tmp_path, "openclaw")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        adapter = get_adapter()
+        assert isinstance(adapter, OpenClawAdapter)
 
     def test_missing_adapter_raises(self, monkeypatch, tmp_path):
         reset_adapter()
