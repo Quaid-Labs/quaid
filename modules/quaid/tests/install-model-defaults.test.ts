@@ -19,6 +19,10 @@ describe("installer model defaults", () => {
     });
   });
 
+  it("defaults Codex installs to OpenAI lanes", () => {
+    expect(installerDefaultProvider("codex")).toBe("openai");
+  });
+
   it("derives direct-provider settings for OpenClaw model hints", () => {
     expect(deriveInstallerLlmProviderSetting("openclaw", "", "", "", true)).toBe("openai-compatible");
     expect(deriveInstallerLlmProviderSetting("openclaw", "default", "gpt-5.4", "gpt-5.4-mini", true)).toBe("openai-compatible");

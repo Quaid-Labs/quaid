@@ -755,7 +755,7 @@ class CodexAdapter(QuaidAdapter):
         return {"supported": False, "ok": True, "message": "", "results": []}
 
     def get_fast_provider_default(self) -> str:
-        return "anthropic"
+        return "openai"
 
     def get_deep_provider_default(self) -> str:
-        return "anthropic"
+        return "openai"
