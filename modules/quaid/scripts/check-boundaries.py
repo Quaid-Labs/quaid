@@ -32,7 +32,15 @@ ALLOWLIST = {
     ("core/docs/updater.py", "datastore"),
     ("core/docs_updater_hook.py", "datastore"),
     ("core/plugins/memorydb_contract.py", "datastore"),
+    ("core/plugins/docsdb_contract.py", "datastore"),
+    ("core/project_registry.py", "datastore"),
+    ("core/extraction_daemon.py", "datastore"),
     ("core/lifecycle/soul_snippets.py", "datastore"),
+    # Legacy composition points on the shipped line that still bridge into
+    # core-owned project/runtime metadata.
+    ("datastore/docsdb/system_context.py", "core"),
+    ("datastore/memorydb/memory_graph.py", "core"),
+    ("lib/instance_manager.py", "core"),
     # Adapter selection composition point.
     ("lib/adapter.py", "adaptors"),
     # Archive compatibility shim forwards to datastore-owned implementation.
