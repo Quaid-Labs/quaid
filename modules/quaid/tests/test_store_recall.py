@@ -3146,6 +3146,81 @@ class TestDomainFilterAllTrue:
             assert ids_all_true == ids_no_domain
 
 
+class TestDomainFilterTaggedPlusUnscoped:
+    """Specific domain filters should still keep unscoped facts when allowed."""
+
+    def test_specific_domain_keeps_matching_and_unscoped_rows(self, tmp_path):
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            personal = store(
+                "Baxter is a golden retriever",
+                owner_id="quaid",
+                skip_dedup=True,
+                domains=["personal"],
+            )
+            unscoped = store(
+                "Baxter loves tennis balls",
+                owner_id="quaid",
+                skip_dedup=True,
+            )
+            technical = store(
+                "Baxter tracker runs on PostgreSQL",
+                owner_id="quaid",
+                skip_dedup=True,
+                domains=["technical"],
+            )
+
+            results = recall(
+                "Baxter",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain={"personal": True},
+                include_unscoped=True,
+                limit=10,
+            )
+            found_ids = {r["id"] for r in results}
+            assert personal["id"] in found_ids
+            assert unscoped["id"] in found_ids
+            assert technical["id"] not in found_ids
+
+    def test_specific_domain_excludes_unscoped_when_disabled(self, tmp_path):
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            personal = store(
+                "Baxter is a golden retriever",
+                owner_id="quaid",
+                skip_dedup=True,
+                domains=["personal"],
+            )
+            unscoped = store(
+                "Baxter loves tennis balls",
+                owner_id="quaid",
+                skip_dedup=True,
+            )
+
+            results = recall(
+                "Baxter",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain={"personal": True},
+                include_unscoped=False,
+                limit=10,
+            )
+            found_ids = {r["id"] for r in results}
+            assert personal["id"] in found_ids
+            assert unscoped["id"] not in found_ids
+
+
 # ---------------------------------------------------------------------------
 # Score threshold: below-threshold memories excluded
 # ---------------------------------------------------------------------------

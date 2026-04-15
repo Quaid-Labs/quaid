@@ -5303,13 +5303,23 @@ def _recall_once(
                     if (
                         r.get("id") in allowed_ids
                         or bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                        or (
+                            include_unscoped
+                            and not _domains_from_attrs({"domains": r.get("domains")})
+                        )
                     )
                 ]
             except Exception:
                 # Fallback to attribute-based filtering if join table is unavailable.
                 output = [
                     r for r in output
-                    if bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                    if (
+                        bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                        or (
+                            include_unscoped
+                            and not _domains_from_attrs({"domains": r.get("domains")})
+                        )
+                    )
                 ]
         else:
             # Explicit {"all": false} with no selected domains means return nothing.
