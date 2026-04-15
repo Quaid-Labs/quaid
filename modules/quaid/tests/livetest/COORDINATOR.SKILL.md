@@ -470,6 +470,37 @@ that is an M0 FAIL — investigate the installer, fix, and retry.
 
 ### Pre-install coordinator prep
 
+**All platforms** — write shared auth credentials to the remote BEFORE M0 install.
+The installer checks for existing credentials and may bail if they are missing or wrong kind.
+OC requires `codex_oauth` (openai-compatible provider). CC requires `anthropic_oauth`.
+Write BOTH before install:
+```bash
+# anthropic_oauth — for CC platform Quaid daemon calls
+ANTH_TOKEN=$(cat ~/.tmp/cc-auth-token.txt | tr -d '[:space:]')
+# codex_oauth — for OC platform Quaid daemon calls (from OC auth-profiles.json)
+CDX_TOKEN=$(python3 -c "
+import json
+p = open('$HOME/.openclaw/agents/main/agent/auth-profiles.json')
+d = json.load(p)
+# Get the lastGood profile or fall back to 'openai-codex:default'
+last_good = d.get('lastGood', {}).get('openai-codex', 'openai-codex:default')
+print(d['profiles'][last_good]['access'])
+")
+ssh REMOTE_HOST "python3 << 'PYEOF'
+import json, pathlib, os
+p = pathlib.Path.home() / '.quaid' / 'shared' / 'auth' / 'credentials.json'
+p.parent.mkdir(parents=True, exist_ok=True)
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault('credentials', {})
+d['credentials']['anthropic_oauth'] = {'token': '$ANTH_TOKEN'}
+d['credentials']['codex_oauth'] = {'token': '$CDX_TOKEN'}
+p.write_text(json.dumps(d, indent=2))
+os.chmod(p, 0o600)
+print('credentials.json: anthropic_oauth + codex_oauth written')
+PYEOF
+"
+```
+
 **OC only** — ensure the OC gateway is running and has the expected models registered before the OC agent tries to install:
 ```bash
 ssh REMOTE_HOST 'pgrep -f openclaw-gateway > /dev/null 2>&1 || (nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &); for i in $(seq 1 30); do curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break || sleep 2; done'
