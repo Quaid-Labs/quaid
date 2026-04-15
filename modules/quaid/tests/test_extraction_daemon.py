@@ -922,7 +922,7 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
     monkeypatch.setattr(
         extraction_daemon,
         "_buffer_transcript_tail",
-        lambda path, from_line, state, adapter=None: (
+        lambda path, from_line, state, adapter=None, **kwargs: (
             {
                 "buffered_line_offset": initial_lines + 1,
                 "semantic_buffer": "User: My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend.",
@@ -2055,6 +2055,129 @@ class TestRollingExtraction:
             assert "short note" in second_state["semantic_buffer"]
             assert "another longer note with extra words" in second_state["semantic_buffer"]
         finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+    def test_process_signal_rolling_requeues_continuation_when_transcript_tail_remains(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"first rolling chunk message"}\n'
+            '{"role":"user","content":"second rolling chunk message"}\n'
+            '{"role":"user","content":"third rolling chunk message"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-roll-cont", 0, str(transcript_path))
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                rows = []
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    payload = json.loads(raw)
+                    content = str(payload.get("content", "") or "").strip()
+                    if content:
+                        rows.append(f"User: {content}")
+                return "\n\n".join(rows)
+
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 200)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 1)
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_collapse_staged_semantic_duplicates",
+            lambda existing, incoming: (
+                list(incoming or []),
+                {
+                    "semantic_dedup_eliminated": 0,
+                    "semantic_dedup_llm_calls": 0,
+                    "semantic_dedup_fast_calls": 0,
+                    "semantic_dedup_deep_calls": 0,
+                    "semantic_dedup_input_tokens": 0,
+                    "semantic_dedup_output_tokens": 0,
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_warm_payload_embeddings",
+            lambda facts: {
+                "requested": len(facts),
+                "unique": len(facts),
+                "cache_hits": 0,
+                "warmed": len(facts),
+                "failed": 0,
+                "skipped_empty": 0,
+            },
+        )
+
+        real_extract = sys.modules.get("ingest.extract")
+        extract_mod = types.ModuleType("ingest.extract")
+        extract_mod.extract_from_transcript = lambda **kwargs: {
+            "carry_facts": [],
+            "raw_facts": [{"text": "rolling fact", "status": "new"}],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts_skipped": 0,
+            "payload_duplicate_facts_collapsed": 0,
+            "carry_duplicate_facts_dropped": 0,
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "root_chunks": 1,
+            "split_events": 0,
+            "split_child_chunks": 0,
+            "leaf_chunks": 1,
+            "max_split_depth": 0,
+            "deep_calls": 1,
+            "repair_calls": 0,
+            "assessment_usable": 1,
+            "assessment_nothing_usable": 0,
+            "assessment_needs_smaller_chunk": 0,
+            "unclassified_empty_payloads": 0,
+        }
+        extract_mod.collapse_duplicate_payload_facts = lambda facts: (list(facts or []), 0)
+        extract_mod.apply_extracted_payloads = lambda payload, **kwargs: payload
+        sys.modules["ingest.extract"] = extract_mod
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id="sess-roll-cont",
+                transcript_path=str(transcript_path),
+            )
+            first_signal = extraction_daemon.read_pending_signals()[0]
+            extraction_daemon.process_signal(first_signal)
+
+            # Incremental progression: first rolling stage should not jump to EOF.
+            cursor = extraction_daemon.read_cursor("sess-roll-cont")
+            assert cursor["line_offset"] == 1
+
+            pending = extraction_daemon.read_pending_signals()
+            assert len(pending) == 1
+            assert pending[0]["type"] == "rolling"
+            assert pending[0]["meta"]["reason"] == "continued_chunk_budget"
+        finally:
+            if real_extract is not None:
+                sys.modules["ingest.extract"] = real_extract
+            else:
+                sys.modules.pop("ingest.extract", None)
             if real_adapter is not None:
                 sys.modules["lib.adapter"] = real_adapter
             else:

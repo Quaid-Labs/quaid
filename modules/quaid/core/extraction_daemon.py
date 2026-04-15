@@ -1564,9 +1564,20 @@ def _buffer_transcript_tail(
     state: Dict[str, Any],
     *,
     adapter=None,
+    max_tokens: Optional[int] = None,
+    max_lines: int = 0,
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
     """Parse new raw session lines into the semantic rolling buffer."""
-    lines = read_transcript_slice(transcript_path, start_line)
+    if max_tokens is not None and int(max_tokens or 0) > 0:
+        lines = read_transcript_token_window(
+            transcript_path,
+            start_line,
+            int(max_tokens),
+            int(max_lines or 0),
+            adapter=adapter,
+        )
+    else:
+        lines = read_transcript_slice(transcript_path, start_line)
     metrics = {
         "raw_lines_added": len(lines),
         "semantic_chars_added": 0,
@@ -2354,11 +2365,15 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         int(cursor_offset or 0),
     )
     if total_lines > buffered_line_offset:
+        buffer_kwargs: Dict[str, Any] = {"adapter": adapter}
+        if rolling_mode:
+            buffer_kwargs["max_tokens"] = chunk_budget
+            buffer_kwargs["max_lines"] = chunk_line_budget
         staged_state, semantic_buffer_metrics = _buffer_transcript_tail(
             transcript_path,
             buffered_line_offset,
             staged_state,
-            adapter=adapter,
+            **buffer_kwargs,
         )
         write_rolling_state(session_id, staged_state)
         if rolling_mode:
@@ -2637,6 +2652,31 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
             write_cursor(session_id, buffered_line_offset, transcript_path)
             mark_signal_processed(signal_data)
+            if buffered_line_offset > cursor_offset and total_lines > buffered_line_offset:
+                remaining_tokens = estimate_unextracted_tokens(
+                    transcript_path,
+                    buffered_line_offset,
+                    chunk_budget,
+                )
+                if (
+                    remaining_tokens >= chunk_budget
+                    or (
+                        chunk_line_budget > 0
+                        and int(semantic_buffer_metrics.get("raw_lines_added", len(new_lines)) or 0)
+                        >= chunk_line_budget
+                    )
+                ):
+                    write_signal(
+                        signal_type="rolling",
+                        session_id=session_id,
+                        transcript_path=transcript_path,
+                        meta={
+                            "reason": "continued_chunk_budget",
+                            "chunk_tokens": chunk_budget,
+                            "chunk_lines": chunk_line_budget,
+                            "buffered_line_offset": buffered_line_offset,
+                        },
+                    )
             return
 
         tail_result = None
@@ -3271,6 +3311,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         return
 
     chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
+    chunk_line_budget = _get_capture_chunk_max_lines()
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
 
@@ -3316,20 +3357,33 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 buffered_line_offset,
                 state,
                 adapter=adapter,
+                max_tokens=chunk_budget,
+                max_lines=chunk_line_budget,
             )
             write_rolling_state(session_id, state)
             buffered_line_offset = int(state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset)
 
         semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
-        if semantic_tokens < chunk_budget:
+        should_signal = semantic_tokens >= chunk_budget or (
+            semantic_tokens > 0 and buffered_line_offset < total_lines
+        )
+        if not should_signal:
             continue
 
-        logger.info(
-            "session %s crossed rolling extract budget (%d >= %d semantic tokens), generating rolling signal",
-            session_id,
-            semantic_tokens,
-            chunk_budget,
-        )
+        if semantic_tokens >= chunk_budget:
+            logger.info(
+                "session %s crossed rolling extract budget (%d >= %d semantic tokens), generating rolling signal",
+                session_id,
+                semantic_tokens,
+                chunk_budget,
+            )
+        else:
+            logger.info(
+                "session %s has staged semantic buffer below budget (%d < %d) with unread transcript tail, generating rolling signal",
+                session_id,
+                semantic_tokens,
+                chunk_budget,
+            )
         write_signal(
             signal_type="rolling",
             session_id=session_id,
