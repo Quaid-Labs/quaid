@@ -233,6 +233,7 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
     monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
@@ -259,6 +260,42 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
     assert "Error type: RuntimeError" in context
     assert "invalid-model-xyzzy" not in context
     assert "hook-inject" in err
+
+
+def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = MagicMock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
+
+    with patch(
+        "core.interface.api.recall_fast",
+        side_effect=RuntimeError(
+            "Quaid could not access its fast language model provider: codex gateway HTTP 404 model=invalid-model-xyzzy"
+        ),
+    ), patch("core.interface.api.projects_search_docs", return_value=None), \
+         pytest.raises(RuntimeError, match="language model provider"):
+        _run_hook_inject(
+            {
+                "prompt": "What do you know about Maya?",
+                "session_id": "sess-codex-provider-failhard",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
 
 
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):

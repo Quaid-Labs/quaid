@@ -651,6 +651,7 @@ class TestHookInjectRecallResilience:
         from core import extraction_daemon
 
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
 
         with patch(
             "core.interface.api.recall_fast",
@@ -674,6 +675,29 @@ class TestHookInjectRecallResilience:
         assert "Error type: RuntimeError" in context
         assert "invalid-model-xyzzy" not in context
         assert "hook-inject" in err
+
+    def test_recall_fast_provider_exception_raises_when_fail_hard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+
+        with patch(
+            "core.interface.api.recall_fast",
+            side_effect=RuntimeError(
+                "Quaid could not access its fast language model provider: claude-code-oauth HTTP 404 model=invalid-model-xyzzy"
+            ),
+        ), pytest.raises(RuntimeError, match="language model provider"):
+            _run_hook_inject(
+                {
+                    "prompt": "What do you know about Maya?",
+                    "session_id": "sess-provider-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
 
     def test_deferred_notice_hint_is_injected_without_draining(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

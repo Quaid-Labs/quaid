@@ -645,6 +645,15 @@ def hook_inject(args):
         }))
 
     except (RuntimeError, Exception) as e:
+        if _is_provider_failure(e):
+            try:
+                from lib.fail_policy import is_fail_hard_enabled
+
+                fail_hard = is_fail_hard_enabled()
+            except Exception:
+                fail_hard = True
+            if fail_hard:
+                raise
         pending_context = _get_pending_context()
         deferred_notice_relay_context = _get_deferred_notice_relay_context()
         deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
