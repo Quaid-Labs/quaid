@@ -22,7 +22,7 @@ describe("codex postinstall hook registration", () => {
       JSON.stringify(
         {
           hooks: {
-            user_prompt_submit: [
+            UserPromptSubmit: [
               { hooks: [{ type: "command", command: "echo keep-me" }] },
               { hooks: [{ type: "command", command: "QUAID_INSTANCE=\"${QUAID_INSTANCE:-old}\" '/old/quaid' hook-inject" }] },
             ],
@@ -56,9 +56,9 @@ describe("codex postinstall hook registration", () => {
     const flattenCommands = (eventName: string) =>
       (hooks.hooks[eventName] || []).flatMap((group: any) => (group.hooks || []).map((hook: any) => String(hook.command || "")));
 
-    const sessionStartCommands = flattenCommands("session_start");
-    const promptCommands = flattenCommands("user_prompt_submit");
-    const stopCommands = flattenCommands("stop");
+    const sessionStartCommands = flattenCommands("SessionStart");
+    const promptCommands = flattenCommands("UserPromptSubmit");
+    const stopCommands = flattenCommands("Stop");
     const allManaged = [
       ...sessionStartCommands,
       ...promptCommands,
@@ -76,9 +76,9 @@ describe("codex postinstall hook registration", () => {
     expect(allManaged).toHaveLength(3);
     expect(allManaged.every((cmd) => cmd.includes('codex-livetest'))).toBe(true);
     expect(configJson.features.codex_hooks).toBe(true);
-    expect(configJson.hooks.session_start).toBeTruthy();
-    expect(configJson.hooks.user_prompt_submit).toBeTruthy();
-    expect(configJson.hooks.stop).toBeTruthy();
+    expect(configJson.hooks.SessionStart).toBeTruthy();
+    expect(configJson.hooks.UserPromptSubmit).toBeTruthy();
+    expect(configJson.hooks.Stop).toBeTruthy();
     expect(
       Object.values(configJson.projects || {}).some((entry: any) => entry?.trust_level === "trusted"),
     ).toBe(true);

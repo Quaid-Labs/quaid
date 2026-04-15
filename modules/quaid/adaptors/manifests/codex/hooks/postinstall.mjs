@@ -187,7 +187,7 @@ const managedCommands = [
 ];
 
 const desiredHooks = {
-  session_start: [
+  SessionStart: [
     {
       hooks: [
         {
@@ -198,7 +198,7 @@ const desiredHooks = {
       ],
     },
   ],
-  user_prompt_submit: [
+  UserPromptSubmit: [
     {
       hooks: [
         {
@@ -209,7 +209,7 @@ const desiredHooks = {
       ],
     },
   ],
-  stop: [
+  Stop: [
     {
       hooks: [
         {
