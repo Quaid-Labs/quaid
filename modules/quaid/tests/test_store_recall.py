@@ -728,6 +728,41 @@ class TestRecallBasic:
             assert results
             assert all("technical" in (r.get("domains") or []) for r in results)
 
+    def test_recall_domain_filter_applies_to_anchor_expansions(self, tmp_path):
+        from datastore.memorydb.memory_graph import store, recall
+
+        graph, _ = _make_graph(tmp_path)
+        synthetic_personal_row = {
+            "text": "Quaid's mother is named Wendy",
+            "category": "fact",
+            "similarity": 0.999,
+            "verified": False,
+            "pinned": False,
+            "id": "synthetic-personal-anchor",
+            "domains": [],
+            "project": None,
+        }
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q), \
+             patch(
+                 "datastore.memorydb.memory_graph._expand_high_confidence_entity_anchors",
+                 return_value=([], [synthetic_personal_row]),
+             ):
+            store("Quaid fixed SQL injection in search endpoint", owner_id="quaid", skip_dedup=True, domains=["technical"])
+            results = recall(
+                "search endpoint SQL injection",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain={"technical": True},
+            )
+
+        assert results
+        assert all("technical" in (r.get("domains") or []) for r in results)
+        assert all(r.get("id") != "synthetic-personal-anchor" for r in results)
+
     def test_recall_domain_all_false_returns_empty(self, tmp_path):
         from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)

@@ -5311,6 +5311,33 @@ def _recall_once(
         _phase_ms["graph_traversal_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     _phase_t0 = _time.monotonic()
+    def _enforce_selected_domain_scope(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if include_all_domains:
+            return rows
+        if not included_domains:
+            # Explicit {"all": false} with no selected domains means return nothing.
+            return []
+        try:
+            with graph._get_conn() as conn:
+                placeholders = ",".join("?" for _ in included_domains)
+                lookup_rows = conn.execute(
+                    f"SELECT DISTINCT node_id FROM node_domains WHERE domain IN ({placeholders})",
+                    list(included_domains),
+                ).fetchall()
+                allowed_ids = {r[0] for r in lookup_rows}
+            return [
+                r for r in rows
+                if (
+                    r.get("id") in allowed_ids
+                    or bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                )
+            ]
+        except Exception:
+            return [
+                r for r in rows
+                if bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+            ]
+
     if not include_all_domains:
         if included_domains:
             # Primary path: use indexed node_domains lookup for domain filtering.
@@ -5348,6 +5375,11 @@ def _recall_once(
         else:
             # Explicit {"all": false} with no selected domains means return nothing.
             output = []
+
+    # Enforce strict selected-domain scope even if upstream filters allowed
+    # unscoped rows; explicit domain selections must not leak unrelated rows.
+    output = _enforce_selected_domain_scope(output)
+
     if requested_project:
         output = [
             r for r in output
@@ -5407,6 +5439,25 @@ def _recall_once(
 
     if anchor_expansions:
         output.extend(anchor_expansions)
+        # Anchor expansion can surface rows outside selected domain scope.
+        output = _enforce_selected_domain_scope(output)
+        if requested_project:
+            output = [
+                r for r in output
+                if _normalize_project_tag(r.get("project")) == requested_project
+            ]
+        if date_from or date_to:
+            def _anchor_in_date_range(r: Dict[str, Any]) -> bool:
+                created = r.get("created_at", "")
+                if not created:
+                    return True
+                date_part = created.split("T")[0] if "T" in created else created
+                if date_from and date_part < date_from:
+                    return False
+                if date_to and date_part > date_to:
+                    return False
+                return True
+            output = [r for r in output if _anchor_in_date_range(r)]
 
     # Sort by similarity and limit
     scope_filters = {
