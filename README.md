@@ -29,28 +29,29 @@ After install, start here:
 
 Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
 
-Context-window baselines like FC are included here as short-horizon upper bounds, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets, controlling cost growth, and preserving continuity across sessions.
+Context-window baselines like Full Context are included here as short-horizon upper bounds, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets, controlling cost growth, and preserving continuity across sessions.
 
 Terminology:
-- `AL-S`: clean core AgentLife lane
-- `AL-L`: long/noisy lane with filler sessions
-- `AL-L OBD`: `AL-L` compressed into one operational day, simulates a power user
-- `FC`: full-context baseline without a memory system
+- `AgentLife-S`: clean core AgentLife lane
+- `AgentLife-L`: long/noisy lane with filler sessions
+- `AgentLife-L OBD`: `AgentLife-L` compressed into one operational day, simulates a power user
+- `Full Context`: full-context baseline without a memory system
 - `Tokens`: minimum eval tokens to answer all 283 benchmark questions
 
 Headline launch summary:
 
-| Lane | Quaid Acc | Quaid Tok | FC Acc | FC Tok | OpenClaw Acc | OpenClaw Tok |
+| Lane | Quaid Acc | Quaid Tok | Full Context Acc | Full Context Tok | OpenClaw Acc | OpenClaw Tok |
 |---|---:|---:|---:|---:|---:|---:|
-| AL-S | 92.23% | 5,753,673 | 92.90% | 29,828,646 | 69.40% | unknown |
-| AL-L | 87.81% | 5,917,209 | 87.70% | 34,596,206 | 63.06% | unknown |
-| AL-L OBD | 89.58% | 8,382,952 | 87.70%* | 34,596,206* | 63.06%* | unknown* |
+| AgentLife-S | 92.23% | 5,753,673 | 92.90% | 29,828,646 | 69.40% | unknown |
+| AgentLife-L | 87.81% | 5,917,209 | 87.70% | 34,596,206 | 63.06% | unknown |
+| AgentLife-L OBD | 89.58% | 8,382,952 | 87.70%* | 34,596,206* | 63.06%* | unknown* |
 
-Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AL-S` remains the clean reference lane. `AL-L` and `AL-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the FC Sonnet baseline. In the long-form FC rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row where a published baseline exists.
+Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AgentLife-S` remains the clean reference lane. `AgentLife-L` and `AgentLife-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the Full Context Sonnet baseline. In the long-form Full Context rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row where a published baseline exists.
 
 Those study rows are the basis for the claim that Quaid can stay near full-context quality at roughly one-fifth the eval token cost on long-form lanes.
 
-* FC and OpenClaw Native do not currently distinguish between `AL-L` and `AL-L OBD`, so the OBD row mirrors the same published baseline values.
+* Full Context and OpenClaw Native do not currently distinguish between `AgentLife-L` and `AgentLife-L OBD`, so the OBD row mirrors the same published baseline values.
+* Benchmark accuracy snapshot: 2026-04-05.
 
 Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
 
@@ -87,7 +88,17 @@ OpenAI-backed lanes remain available in alpha, but they are currently experiment
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
-## A New Open Standard For Portability
+## Design Philosophy: LLM-First
+
+Almost every decision in Quaid is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. The system splits work between a **deep-reasoning LLM** (fact review, contradiction resolution, journal distillation) and a **fast-reasoning LLM** (reranking, dedup verification, query expansion) to balance quality against cost and speed. The fast-reasoning model isn't just cheaper — it's fast. Memory recall needs to feel instant, not take three seconds waiting on a premium model to rerank results.
+
+Because the system leans heavily on LLM reasoning, Quaid naturally scales with AI models — as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
+
+---
+
+## Future Forward
+
+### A New Open Standard For Portability
 
 _“We Can Remember It for You Wholesale.”_
 
@@ -102,19 +113,11 @@ Community discussion: [github.com/Quaid-Labs/quaid/discussions/3](https://github
 
 This is vision, not a released feature.
 
-## Extensible Data Layer
+### Extensible Data Layer
 
 Quaid is being designed to be extensible not only at the platform-adaptor layer, but eventually at the datastore and ingest layers as well. The long-term direction is for Quaid to act as an open coordination layer for AI knowledge systems: accepting multiple datastore types and input pipelines, enforcing clear boundaries between them in core, and making those boundaries exportable and importable through modular `.ego` artifacts.
 
 This depends on stronger plugin and datastore contracts than exist today, and is part of the post-launch direction rather than a completed surface.
-
-## Design Philosophy: LLM-First
-
-Almost every decision in Quaid is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. The system splits work between a **deep-reasoning LLM** (fact review, contradiction resolution, journal distillation) and a **fast-reasoning LLM** (reranking, dedup verification, query expansion) to balance quality against cost and speed. The fast-reasoning model isn't just cheaper — it's fast. Memory recall needs to feel instant, not take three seconds waiting on a premium model to rerank results.
-
-Because the system leans heavily on LLM reasoning, Quaid naturally scales with AI models — as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
-
----
 
 ## Requirements
 
