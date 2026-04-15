@@ -26,11 +26,15 @@ def _output_path() -> Path:
 
 
 def _type_to_string(tp: Any) -> str:
+    if tp is type(None):
+        return "None"
     origin = get_origin(tp)
     if origin is None:
         if hasattr(tp, "__name__"):
-            return tp.__name__
-        return str(tp).replace("typing.", "")
+            name = tp.__name__
+            return "None" if name == "NoneType" else name
+        rendered = str(tp).replace("typing.", "")
+        return rendered.replace("NoneType", "None")
     args = get_args(tp)
     if origin in (list, List):
         return f"list[{_type_to_string(args[0])}]" if args else "list[Any]"
