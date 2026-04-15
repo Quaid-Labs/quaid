@@ -305,38 +305,40 @@ else
     echo "  $PASS  remote dev tree synced (local HEAD: $LOCAL_HEAD)"
 fi
 
-# --- Step 7: Inject CC API key into remote settings ---
-# Pre-injects ANTHROPIC_API_KEY so CC never relies on expirable OAuth during the run.
-# Reads the key from ~/.tmp/cc-auth-token.txt (maintained by the coordinator guide).
+# --- Step 7: Copy coordinator CC OAuth credentials to remote ---
+# Copies the coordinator's ~/.claude/.credentials.json to the remote so CC uses
+# fresh OAuth rather than a potentially-expired/revoked API key.
+# The coordinator's running CC session always has a valid auto-refreshed token.
+# Do NOT inject ANTHROPIC_API_KEY — it overrides credentials.json and may be stale.
 echo ""
-echo "[7/8] Injecting ANTHROPIC_API_KEY into CC settings on remote..."
+echo "[7/8] Copying CC OAuth credentials to remote..."
 
 CC_ENABLED="$(read_config platforms.cc.enabled)"
 if [[ "$CC_ENABLED" != "True" && "$CC_ENABLED" != "true" ]]; then
     echo "  (skipped — CC platform not enabled in config)"
 elif [[ "$DRY_RUN" == "1" ]]; then
-    echo "  [dry-run] would inject ANTHROPIC_API_KEY from ~/.tmp/cc-auth-token.txt into remote ~/.claude/settings.json"
+    echo "  [dry-run] would scp ~/.claude/.credentials.json to $REMOTE_HOST:~/.claude/.credentials.json"
 else
-    CC_KEY_FILE="$HOME/.tmp/cc-auth-token.txt"
-    if [[ ! -f "$CC_KEY_FILE" ]]; then
-        echo "  WARN  $CC_KEY_FILE not found — CC will rely on OAuth (may expire mid-run)"
+    LOCAL_CREDS="$HOME/.claude/.credentials.json"
+    if [[ ! -f "$LOCAL_CREDS" ]]; then
+        echo "  WARN  $LOCAL_CREDS not found — CC will use whatever credentials are in base image"
     else
-        YUNI_KEY="$(tr -d '[:space:]' < "$CC_KEY_FILE")"
-        if [[ -z "$YUNI_KEY" ]]; then
-            echo "  WARN  $CC_KEY_FILE is empty — CC will rely on OAuth (may expire mid-run)"
-        else
-            echo "  injecting key via SSH python3..."
-            ssh "$REMOTE_HOST" python3 << PYEOF
+        ssh "$REMOTE_HOST" 'mkdir -p ~/.claude'
+        scp "$LOCAL_CREDS" "$REMOTE_HOST:~/.claude/.credentials.json"
+        echo "  $PASS  CC OAuth credentials copied to remote ~/.claude/.credentials.json"
+        # Ensure any stale ANTHROPIC_API_KEY is removed from settings.json (it overrides .credentials.json)
+        ssh "$REMOTE_HOST" python3 << 'PYEOF'
 import json, pathlib
-key = "$YUNI_KEY"
 p = pathlib.Path.home() / '.claude' / 'settings.json'
-d = json.loads(p.read_text()) if p.exists() else {}
-d.setdefault('env', {})['ANTHROPIC_API_KEY'] = key
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(json.dumps(d, indent=2))
+if p.exists():
+    d = json.loads(p.read_text())
+    env = d.get('env', {})
+    if 'ANTHROPIC_API_KEY' in env:
+        del env['ANTHROPIC_API_KEY']
+        d['env'] = env
+        p.write_text(json.dumps(d, indent=2))
+        print('  removed stale ANTHROPIC_API_KEY from settings.json')
 PYEOF
-            echo "  $PASS  ANTHROPIC_API_KEY injected into remote ~/.claude/settings.json"
-        fi
     fi
 fi
 

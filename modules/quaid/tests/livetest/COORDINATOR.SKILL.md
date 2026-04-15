@@ -475,17 +475,18 @@ The installer checks for existing credentials and may bail if they are missing o
 OC requires `codex_oauth` (openai-compatible provider). CC requires `anthropic_oauth`.
 Write BOTH before install:
 ```bash
-# anthropic_oauth — for CC platform Quaid daemon calls
+# anthropic_oauth — for CC platform Quaid daemon calls (long-lived Yuni key)
 ANTH_TOKEN=$(cat ~/.tmp/cc-auth-token.txt | tr -d '[:space:]')
-# codex_oauth — for OC platform Quaid daemon calls (from OC auth-profiles.json)
-CDX_TOKEN=$(python3 -c "
-import json
-p = open('$HOME/.openclaw/agents/main/agent/auth-profiles.json')
-d = json.load(p)
-# Get the lastGood profile or fall back to 'openai-codex:default'
-last_good = d.get('lastGood', {}).get('openai-codex', 'openai-codex:default')
-print(d['profiles'][last_good]['access'])
-")
+
+# codex_oauth — read from the VM's ~/.codex/auth.json (Codex CLI maintains this,
+# auto-refreshes each session, longer valid window than coordinator OC auth-profiles).
+# Do NOT read from coordinator's OC auth-profiles — those expire quickly and aren't refreshed.
+CDX_TOKEN=$(ssh REMOTE_HOST 'python3 -c "
+import json, pathlib
+d = json.loads(pathlib.Path.home().joinpath(\".codex/auth.json\").read_text())
+print(d[\"tokens\"][\"access_token\"])
+"')
+
 ssh REMOTE_HOST "python3 << 'PYEOF'
 import json, pathlib, os
 p = pathlib.Path.home() / '.quaid' / 'shared' / 'auth' / 'credentials.json'
@@ -497,6 +498,22 @@ d['credentials']['codex_oauth'] = {'token': '$CDX_TOKEN'}
 p.write_text(json.dumps(d, indent=2))
 os.chmod(p, 0o600)
 print('credentials.json: anthropic_oauth + codex_oauth written')
+PYEOF
+"
+
+# Also inject codex_oauth into OC auth-profiles so the OC gateway picks it up at start.
+# This prevents 401 errors from the OC deep provider during extraction.
+ssh REMOTE_HOST "python3 << 'PYEOF'
+import json, pathlib, os
+profiles_path = pathlib.Path.home() / '.openclaw' / 'agents' / 'main' / 'agent' / 'auth-profiles.json'
+if profiles_path.exists():
+    profiles = json.loads(profiles_path.read_text())
+    profiles.setdefault('profiles', {}).setdefault('openai-codex:default', {})['access_token'] = '$CDX_TOKEN'
+    profiles.setdefault('lastGood', {})['openai-codex'] = 'openai-codex:default'
+    profiles_path.write_text(json.dumps(profiles, indent=2))
+    print('auth-profiles.json: openai-codex:default updated')
+else:
+    print('auth-profiles.json not found — OC not yet installed, skipping')
 PYEOF
 "
 ```
