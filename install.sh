@@ -291,4 +291,4 @@ fi
 ok "Downloaded. Starting guided installer..."
 echo ""
 cd "$WORKSPACE" 2>/dev/null || true
-node "$RELEASE_DIR/setup-quaid.mjs"
+node "$RELEASE_DIR/setup-quaid.mjs" "$@"

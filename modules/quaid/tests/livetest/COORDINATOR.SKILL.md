@@ -416,25 +416,31 @@ tests/livetest/scripts/livetest-preflight.sh --wipe-platform cc --skip-platform-
 
 ---
 
-## Step 3 — M0: Agent-Driven Install
+## Step 3 — M0: Install
 
-**M0 tests the installer itself.** Each platform agent reads the Quaid AI install
-guide and installs Quaid itself. Do not run the installer directly.
+**M0 tests the installer itself.**
 
-**Install source depends on run mode** (set by preflight):
+**Install mode depends on run type:**
 
-| Mode | Preflight flag | Install source | Guide path | Notes |
-|------|---------------|----------------|------------|-------|
-| Normal dev run (default) | *(none)* | `~/quaidcode/dev` (rsync from local) | `~/quaidcode/dev/docs/AI-INSTALL.md` | Requires `QUAID_ALLOW_DEV_INSTALL=1` |
-| Release verification | `--release-verify <tag>` | `~/quaid-release` (cloned from GitHub tag) | `~/quaid-release/docs/AI-INSTALL.md` | Do NOT pass `QUAID_ALLOW_DEV_INSTALL=1` |
+| Mode | Preflight flag | Who installs | Install command | Notes |
+|------|---------------|--------------|-----------------|-------|
+| Normal dev run (default) | *(none)* | Tester agent reads `~/quaidcode/dev/docs/AI-INSTALL.md` | `QUAID_ALLOW_DEV_INSTALL=1 node setup-quaid.mjs --agent --all-platforms` | Tester follows guide exactly |
+| Release verification | `--release-verify <tag>` | **Coordinator** runs curl install directly via SSH | `curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh \| QUAID_VERSION=<tag> bash -s -- --agent --all-platforms` | Mimics real user install; no pre-staged code on VM; testers start at M1 |
 
 Release verification runs are rare — only used to confirm a shipped release installs correctly end-to-end. Default runs always use the dev tree.
 
-### Execution order
+### Execution order (normal dev run)
 
 1. Pick a lead platform (rotate each run or randomize). Run that platform's M0 alone first.
 2. Once lead M0 passes, send start signals to the other two testers simultaneously.
 3. M0 must pass on all platforms before M1 begins.
+
+### Execution order (release verification)
+
+1. Coordinator runs pre-install prep (write credentials to VM).
+2. Coordinator runs the curl install via SSH — no tester involvement.
+3. Coordinator verifies all platforms with `quaid doctor`.
+4. If all healthy, brief testers directly at M1 (skip tester M0).
 
 **Preferred: single-invocation all-platforms install.** The installer supports
 `--all-platforms` (commit d9e5262d1) which installs OC, CC, and CDX sequentially
@@ -443,12 +449,12 @@ one install message that includes `Install All Available` / `--all-platforms` in
 its framing. Only the first platform install prompts for credentials; subsequent
 installs reuse the shared credential store.
 
-### What to send each platform
+### What to send each platform (dev run only)
 
 Tell the platform pane:
 
 > Please install Quaid by following the local AI install guide exactly, including its mandatory first command:
-> `<GUIDE_PATH>`  ← dev runs: `~/quaidcode/dev/docs/AI-INSTALL.md` | release verify: `~/quaid-release/docs/AI-INSTALL.md`
+> `~/quaidcode/dev/docs/AI-INSTALL.md`
 >
 > Use these parameters:
 > - Adapter/platform: All platforms (`Install All Available`)
@@ -471,6 +477,26 @@ to each tester pane specifying only its own platform and instance name.
 | OC | Via the OC agent CLI (`openclaw agent --agent main -m "..."`) |
 | CC | tmux send-keys to `livetest:CC`, then Enter |
 | CDX | tmux send-keys to `livetest:CDX`, then Enter |
+
+### Release verify install (coordinator-driven, no tester involvement)
+
+Pre-install prep, then install directly via SSH:
+
+```bash
+# 1. Write credentials to VM (see Pre-install coordinator prep section below)
+
+# 2. Run the install
+REMOTE="admin@192.168.64.77"
+TAG="v0.3.0-alpha"
+ssh "$REMOTE" "curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | QUAID_VERSION=$TAG bash -s -- --agent --all-platforms --owner-name 'Solomon Steadman'"
+
+# 3. Verify
+ssh "$REMOTE" "~/.quaid/plugins/quaid/quaid doctor"
+
+# 4. Brief testers at M1 (skip tester M0)
+```
+
+`install.sh` downloads the release tarball from GitHub, extracts it, and runs `setup-quaid.mjs` with forwarded flags. No pre-staged code on the VM needed.
 
 Do not provide specific command lines to the platform — let it read the guide.
 Answer clarifying questions naturally. If it cannot complete the install,

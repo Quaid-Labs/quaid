@@ -294,22 +294,12 @@ fi
 # --- Step 6: Code sync to remote (after wipe so install source is not deleted) ---
 echo ""
 if [[ -n "$RELEASE_VERIFY" ]]; then
-    echo "[6/8] Release verification mode — cloning $RELEASE_VERIFY from GitHub..."
-    RELEASE_REPO="https://github.com/Quaid-Labs/quaid.git"
-    if [[ "$DRY_RUN" == "1" ]]; then
-        echo "  [dry-run] would clone $RELEASE_REPO (tag $RELEASE_VERIFY) to remote ~/quaid-release"
-    else
-        ssh "$REMOTE_HOST" bash -s <<REMOTE_CLONE
-set -euo pipefail
-rm -rf ~/quaid-release
-git clone --depth 1 --branch "$RELEASE_VERIFY" "$RELEASE_REPO" ~/quaid-release 2>&1 | tail -3
-echo "  cloned $RELEASE_VERIFY to ~/quaid-release"
-REMOTE_CLONE
-        echo "  $PASS  release $RELEASE_VERIFY cloned to remote ~/quaid-release"
-        echo "  M0 install source : ~/quaid-release"
-        echo "  M0 guide path     : ~/quaid-release/docs/AI-INSTALL.md"
-        echo "  Note: do NOT pass QUAID_ALLOW_DEV_INSTALL=1 in release verify mode"
-    fi
+    echo "[6/8] Release verification mode — no code sync needed."
+    echo "  The coordinator will install via:"
+    echo "    curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh \\"
+    echo "      | QUAID_VERSION=$RELEASE_VERIFY bash -s -- --agent --all-platforms"
+    echo "  install.sh downloads the release tarball directly from GitHub releases."
+    [[ "$DRY_RUN" == "1" ]] && echo "  [dry-run] no-op"
 else
     echo "[6/8] Syncing latest Quaid code to remote..."
     LOCAL_DEV="$HOME/quaidcode/dev"
@@ -426,9 +416,8 @@ echo "========================================"
 echo " Preflight complete — remote is clean"
 if [[ -n "$RELEASE_VERIFY" ]]; then
     echo " Mode     : RELEASE VERIFICATION ($RELEASE_VERIFY)"
-    echo " Source   : ~/quaid-release"
-    echo " Guide    : ~/quaid-release/docs/AI-INSTALL.md"
-    echo " Ready to start release verification M0."
+    echo " Install  : curl | bash via install.sh (coordinator-driven)"
+    echo " Ready for coordinator to run M0 install, then brief testers at M1."
 else
     echo " Ready to start Run M0."
 fi
