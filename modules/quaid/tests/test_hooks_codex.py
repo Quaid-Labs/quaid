@@ -230,6 +230,7 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
     adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
 
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")

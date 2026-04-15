@@ -397,3 +397,37 @@ def test_adapter_bootstrap_silo_init_skips_misc_project_registration_under_adapt
     assert seen["skip_misc"] is True
     assert config_path.is_file()
     assert (config_path.parent / "data" / "memory.db").is_file()
+
+
+def test_get_adapter_repairs_instance_projects_after_auto_provision(tmp_path, monkeypatch):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+    from lib import adapter as adapter_mod
+    from lib.instance import instance_slug_from_project_dir
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+    monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+
+    adapter_mod.reset_adapter()
+
+    calls = []
+
+    def record_ensure(self, instance_id):
+        calls.append(instance_id)
+
+    monkeypatch.setattr("lib.instance_manager.InstanceManager.ensure_registered_projects", record_ensure)
+    monkeypatch.setattr(
+        adapter_mod,
+        "_instantiate_adapter_from_manifest",
+        lambda _kind: ClaudeCodeAdapter(home=tmp_path),
+    )
+
+    adapter = adapter_mod.get_adapter()
+
+    assert adapter.adapter_id() == "claude-code"
+    assert calls == [f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"]

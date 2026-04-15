@@ -199,9 +199,16 @@ class OpenClawAdapter(QuaidAdapter):
         buildPythonEnv(). This method reads that value so Python callsites
         have a consistent way to get the instance name across adapters.
 
-        Falls back to "openclaw-main" if QUAID_INSTANCE is not set.
+        Falls back to the primary OC agent label "main" if QUAID_INSTANCE is
+        not set. The adapter layer owns the "openclaw-" prefix; callers here
+        should return the label only.
         """
-        return os.environ.get("QUAID_INSTANCE", "openclaw-main")
+        raw = os.environ.get("QUAID_INSTANCE", "").strip()
+        if raw.startswith("openclaw-"):
+            return raw[len("openclaw-"):] or "main"
+        if raw == "openclaw":
+            return "main"
+        return "main"
 
     def get_host_info(self):
         """Detect OpenClaw platform version and binary path."""

@@ -14,8 +14,10 @@ Usage::
 
 import json
 import logging
+import os
 import sqlite3
 import shutil
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -46,6 +48,15 @@ def _read_json_object(path: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _is_temp_path(path: Path) -> bool:
+    try:
+        resolved = Path(os.path.realpath(path.expanduser().resolve()))
+        tmp_root = Path(os.path.realpath(tempfile.gettempdir()))
+        return resolved == tmp_root or str(resolved).startswith(f"{tmp_root}{os.sep}")
+    except Exception:
+        return False
 
 
 class InstanceManager:
@@ -176,14 +187,38 @@ class InstanceManager:
         # agents can find it immediately without a manual project-create step.
         if register_misc_project:
             try:
-                self._ensure_shared_quaid_project(instance_id)
-                misc_name = f"misc--{instance_id}"
-                misc_desc = "Scratch pad for ephemeral and temporary files."
-                from core.project_registry import create_project as _cp, get_project as _gp
-                if not _gp(misc_name):
-                    _cp(misc_name, description=misc_desc, initial_instance=instance_id)
+                self.ensure_registered_projects(instance_id)
             except Exception as _e:
                 logger.warning("misc project registration skipped at silo init: %s", _e)
+
+    def ensure_registered_projects(self, instance_id: str) -> None:
+        """Ensure shared/quaid and misc projects exist for an instance."""
+        self._ensure_shared_quaid_project(instance_id)
+        misc_name = f"misc--{instance_id}"
+        misc_desc = "Scratch pad for ephemeral and temporary files."
+        from core.project_registry import create_project as _cp, get_project as _gp, link_project as _lp, _sync_docs_registry_project
+        if not _gp(misc_name):
+            try:
+                _cp(misc_name, description=misc_desc, initial_instance=instance_id)
+            except ValueError:
+                pass
+        else:
+            _lp(misc_name, instance_id=instance_id)
+        misc_canonical = self.adapter.visible_home() / "projects" / misc_name
+        if _is_temp_path(misc_canonical):
+            logger.info(
+                "Skipping docs-registry sync for temp misc project %s (%s)",
+                misc_name,
+                misc_canonical,
+            )
+            return
+        _sync_docs_registry_project(
+            misc_name,
+            description=misc_desc,
+            source_root=None,
+            canonical=misc_canonical,
+            db_path=(self.adapter.quaid_home() / "instances" / instance_id / "data" / "memory.db"),
+        )
 
     def _ensure_shared_quaid_project(self, instance_id: str) -> None:
         """Ensure the shared quaid project exists and is linked to this instance."""
@@ -206,6 +241,13 @@ class InstanceManager:
         # During silo creation the ambient QUAID_INSTANCE may still point at a
         # different instance. Mirror the project definition into the target
         # silo DB explicitly so PROJECT.log routing works on first use.
+        if _is_temp_path(project_dir):
+            logger.info(
+                "Skipping docs-registry sync for temp project %s (%s)",
+                project_name,
+                project_dir,
+            )
+            return
         _sync_docs_registry_project(
             project_name,
             description=desc,

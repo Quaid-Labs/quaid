@@ -618,8 +618,9 @@ class QuaidAdapter(abc.ABC):
         For single-agent platforms with a bare instance ID (no "-main" suffix),
         returns instance_id() unchanged.
 
-        Subclasses may override to return adapter_id() directly (e.g. "claude-code"),
-        which is equivalent when QUAID_INSTANCE follows the "<adapter>-main" convention.
+        Subclasses may override to return adapter_id() directly for platforms
+        whose instance IDs are already path-derived under a stable adapter prefix
+        (for example "claude-code-<project-slug>").
         """
         iid = self.instance_id()
         return iid[:-5] if iid.endswith("-main") else iid
@@ -1232,6 +1233,9 @@ class TestAdapter(StandaloneAdapter):
 
 _adapter: Optional[QuaidAdapter] = None
 _adapter_lock = threading.Lock()
+_adapter_project_bootstrap_lock = threading.Lock()
+_adapter_project_bootstrap_local = threading.local()
+_adapter_project_bootstrapped_instances: set[str] = set()
 
 
 def _normalize_adapter_id(value: str) -> str:
@@ -1508,6 +1512,20 @@ def _auto_provision_from_env_if_needed() -> None:
     if home and not instance:
         from lib.instance import instance_slug_from_project_dir
 
+        claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+        codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
+        if claude_project_dir and codex_project_dir:
+            try:
+                if Path(claude_project_dir).resolve() != Path(codex_project_dir).resolve():
+                    import logging as _logging
+                    _logging.getLogger(__name__).error(
+                        "Both CLAUDE_PROJECT_DIR and CODEX_PROJECT_DIR are set with different paths; "
+                        "refusing to guess an instance silo"
+                    )
+                    return
+            except Exception:
+                return
+
         for env_name, prefix in (
             ("CLAUDE_PROJECT_DIR", "claude-code"),
             ("CODEX_PROJECT_DIR", "codex"),
@@ -1524,7 +1542,9 @@ def _auto_provision_from_env_if_needed() -> None:
     if not home or not instance:
         return
     silo_root = Path(home) / "instances" / instance
-    if (silo_root / "config.json").exists():
+    config_path = silo_root / "config.json"
+    db_path = silo_root / "data" / "memory.db"
+    if config_path.exists() and db_path.exists():
         return  # Already initialised — nothing to do
 
     adapter_type = _infer_adapter_type_from_instance(instance)
@@ -1551,12 +1571,10 @@ def _auto_provision_from_env_if_needed() -> None:
             def adapter_id(self):  # type: ignore[override]
                 return adapter_type
             def agent_id_prefix(self):  # type: ignore[override]
-                prefix_map = {"openclaw": "openclaw", "claude_code": "claude-code", "codex": "codex"}
+                prefix_map = {"openclaw": "openclaw", "claude-code": "claude-code", "codex": "codex"}
                 return prefix_map.get(adapter_type, adapter_type)
 
         mgr = InstanceManager(_BootstrapAdapter())  # type: ignore[arg-type]
-        prefix = mgr.adapter.agent_id_prefix()
-        label = instance[len(prefix) + 1:] if instance.startswith(f"{prefix}-") else instance
         # Do not touch project_registry while _adapter_lock is held.
         # project_registry resolves its path via get_adapter(), which would
         # re-enter this bootstrap path and self-deadlock on _adapter_lock.
@@ -1566,7 +1584,45 @@ def _auto_provision_from_env_if_needed() -> None:
             "Auto-provisioned instance silo: %s (adapter=%s)", instance, adapter_type
         )
     except Exception:
-        pass  # Never block — let downstream raise with a useful message
+        import logging as _logging
+        _logging.getLogger(__name__).exception(
+            "Auto-provision failed for instance %s", instance
+        )
+
+
+def _ensure_instance_projects_bootstrapped(adapter: QuaidAdapter) -> None:
+    """Finish per-instance project registration after adapter bootstrap.
+
+    _auto_provision_from_env_if_needed() intentionally avoids project_registry
+    while _adapter_lock is held, because project_registry resolves paths via
+    get_adapter() and would deadlock. After the adapter is instantiated and the
+    lock is released, repair the shared quaid project link and ensure the
+    instance misc project exists.
+    """
+    instance = os.environ.get("QUAID_INSTANCE", "").strip()
+    if not instance:
+        return
+    if getattr(_adapter_project_bootstrap_local, "active", False):
+        return
+    _adapter_project_bootstrap_local.active = True
+    try:
+        with _adapter_project_bootstrap_lock:
+            if instance in _adapter_project_bootstrapped_instances:
+                return
+            from lib.instance_manager import InstanceManager
+
+            mgr = InstanceManager(adapter)
+            try:
+                mgr.ensure_registered_projects(instance)
+            except Exception:
+                import logging as _logging
+                _logging.getLogger(__name__).exception(
+                    "Instance project bootstrap failed for %s", instance
+                )
+                return
+            _adapter_project_bootstrapped_instances.add(instance)
+    finally:
+        _adapter_project_bootstrap_local.active = False
 
 
 def get_adapter() -> QuaidAdapter:
@@ -1585,15 +1641,19 @@ def get_adapter() -> QuaidAdapter:
     """
     global _adapter
     if _adapter is not None:
+        _ensure_instance_projects_bootstrapped(_adapter)
         return _adapter
     with _adapter_lock:
         if _adapter is not None:
-            return _adapter
-        _auto_provision_from_env_if_needed()
-        kind = _normalize_adapter_id(_read_adapter_type_from_config())
-        _adapter = _instantiate_adapter_from_manifest(kind)
-        _bootstrap_instance_env(_adapter)
-        return _adapter
+            adapter = _adapter
+        else:
+            _auto_provision_from_env_if_needed()
+            kind = _normalize_adapter_id(_read_adapter_type_from_config())
+            _adapter = _instantiate_adapter_from_manifest(kind)
+            _bootstrap_instance_env(_adapter)
+            adapter = _adapter
+    _ensure_instance_projects_bootstrapped(adapter)
+    return adapter
 
 
 def _bootstrap_instance_env(adapter: QuaidAdapter) -> None:
@@ -1646,6 +1706,7 @@ def set_adapter(adapter: QuaidAdapter) -> None:
     global _adapter
     with _adapter_lock:
         _adapter = adapter
+    _adapter_project_bootstrapped_instances.clear()
 
 
 def reset_adapter() -> None:
@@ -1657,6 +1718,8 @@ def reset_adapter() -> None:
     global _adapter
     with _adapter_lock:
         _adapter = None
+    _adapter_project_bootstrapped_instances.clear()
+    _adapter_project_bootstrap_local.active = False
     # Clear embeddings provider cache so it re-resolves against the new adapter
     try:
         from lib.embeddings import reset_embeddings_provider

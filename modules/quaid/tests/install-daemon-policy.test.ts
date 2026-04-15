@@ -26,11 +26,13 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("shouldStartExtractionDaemonAfterInstall(validationAdapterType)");
   });
 
-  it("installer hydrates the default resolved instance config, not only explicit env instances", () => {
+  it("installer writes shared platform config without inventing a default instance silo", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
-    expect(setupText).toContain("process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedAdapterType)");
+    expect(setupText).toContain('const instanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedAdapterType)).trim();');
+    expect(setupText).toContain("if (instanceId) {");
+    expect(setupText).not.toContain("return `${platform}-main`;");
     expect(setupText).toContain("hydratePlatformInstanceConfigs");
   });
 
@@ -112,7 +114,8 @@ describe("install daemon policy", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
-    expect(setupText).toContain("const runtimeEnvChanged = _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);");
+    expect(setupText).toContain("const runtimeEnvChanged = _ocRuntimeInstance");
+    expect(setupText).toContain("? _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance)");
     expect(setupText).toContain("responsesEndpointChanged || agentModelChanged || runtimeEnvChanged");
     expect(setupText).toContain("parsed.env.OPENCLAW_WORKSPACE = WORKSPACE;");
     expect(setupText).not.toContain("leaving fallback QUAID_INSTANCE unchanged in add-instance mode");
@@ -165,11 +168,12 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("if (regQuaidResult.status !== 0)");
   });
 
-  it("install re-registers the instance misc project in both registries", () => {
+  it("installer only registers misc buckets when an explicit instance is being provisioned", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain("Register instance misc project in projects/misc--{instanceId}/.");
+    expect(setupText).toContain('if (resolvedInstanceId && resolvedInstanceId !== "standalone") {');
     expect(setupText).toContain("from core.project_registry import create_project as create_global_project, get_project as get_global_project, link_project as link_global_project");
     expect(setupText).toContain('create_global_project(');
     expect(setupText).toContain('link_global_project(${JSON.stringify(bucket.name)}, instance_id=');
@@ -214,7 +218,7 @@ describe("install daemon policy", () => {
     expect(postinstallText).toContain('"trusted"');
   });
 
-  it("Codex install also registers a persistent launchd daemon agent", () => {
+  it("Codex install only registers a persistent launchd daemon agent for explicit instance installs", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
@@ -222,8 +226,10 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('const label = `com.quaid.daemon.${normalizedInstance}`;');
     expect(setupText).toContain('<string>daemon</string>');
     expect(setupText).toContain('<string>run</string>');
+    expect(setupText).toContain('if (resolvedInstanceId) {');
     expect(setupText).toContain('s.start("Installing Codex daemon launch agent...")');
     expect(setupText).toContain("installCodexDaemonLaunchAgent(resolvedInstanceId)");
+    expect(setupText).toContain("Skipping Codex daemon launch agent install until the first real instance is created by hook use.");
   });
 
   it("install ensures all visible identity stubs exist for the resolved instance", () => {

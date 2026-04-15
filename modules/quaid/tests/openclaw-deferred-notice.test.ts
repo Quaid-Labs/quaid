@@ -4,6 +4,29 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const childProcessState = vi.hoisted(() => ({
+  daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: ((file: string, args?: readonly string[] | null, options?: any) => {
+      const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+      if (normalizedArgs[0] === "daemon" && normalizedArgs[1] === "start") {
+        childProcessState.daemonStartCalls.push({
+          file,
+          args: normalizedArgs,
+          env: (options?.env || {}) as Record<string, string | undefined>,
+        });
+        return "";
+      }
+      return actual.execFileSync(file, args as any, options);
+    }) as typeof actual.execFileSync,
+  };
+});
+
 type AdapterPlugin = {
   register: (api: any) => void;
 };
@@ -105,6 +128,7 @@ function seedDeferredNoticeFixture(prefix: string, instanceId: string, message: 
 }
 
 afterEach(() => {
+  childProcessState.daemonStartCalls = [];
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();

@@ -195,9 +195,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def agent_id_prefix(self) -> str:
         """CC adapter prefix for building instance IDs (e.g. "claude-code").
 
-        QUAID_INSTANCE is the current instance's full ID ("claude-code-main" by
-        default, or "claude-code-<project>" for per-project isolation).
-        Stripping "-main" gives the shared prefix.
+        QUAID_INSTANCE is the current instance's full ID
+        ("claude-code-<project-slug>" for path-derived isolation).
         """
         return self.adapter_id()  # "claude-code"
 

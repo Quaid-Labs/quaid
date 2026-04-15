@@ -74,7 +74,7 @@ describe("codex postinstall hook registration", () => {
     expect(promptCommands.some((cmd) => cmd.includes("hook-inject"))).toBe(true);
     expect(stopCommands.some((cmd) => cmd.includes("hook-codex-stop"))).toBe(true);
     expect(allManaged).toHaveLength(3);
-    expect(allManaged.every((cmd) => cmd.includes('codex-livetest'))).toBe(true);
+    expect(allManaged.some((cmd) => cmd.includes("QUAID_INSTANCE"))).toBe(false);
     expect(configJson.features.codex_hooks).toBe(true);
     expect(configJson.hooks.SessionStart).toBeTruthy();
     expect(configJson.hooks.UserPromptSubmit).toBeTruthy();

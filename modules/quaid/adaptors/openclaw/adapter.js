@@ -108,7 +108,7 @@ function _resolveQuaidInstance() {
     } catch {
     }
   }
-  return "";
+  return "openclaw-main";
 }
 function _resolvePythonPluginRoot() {
   const modulesRoot = path.join(WORKSPACE, "modules", "quaid");
@@ -1477,7 +1477,16 @@ function pingDaemonAliveIfNeeded(instanceId = _QUAID_INSTANCE, nowMs = Date.now(
   _lastDaemonAliveCheckMsByInstance.set(target, nowMs);
   ensureDaemonAlive(target);
 }
-for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
+for (const p of [
+  QUAID_RUNTIME_DIR,
+  QUAID_TMP_DIR,
+  QUAID_NOTES_DIR,
+  QUAID_INJECTION_LOG_DIR,
+  QUAID_NOTIFY_DIR,
+  QUAID_LOGS_DIR,
+  QUAID_TIMEOUT_LOG_DIR,
+  QUAID_SESSION_PRESERVE_DIR
+]) {
   try {
     fs.mkdirSync(p, { recursive: true });
   } catch (err) {
@@ -1586,7 +1595,12 @@ function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
   const pyPath = existing ? `${PYTHON_PLUGIN_ROOT}${sep}${existing}` : PYTHON_PLUGIN_ROOT;
-  const memoryDbPath = resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH);
+  const requestedInstance = String(extra.QUAID_INSTANCE || _QUAID_INSTANCE || "").trim();
+  const memoryDbPath = resolveAdapterMemoryDbPath(
+    WORKSPACE,
+    requestedInstance,
+    path.join(WORKSPACE, "data", "memory.db")
+  );
   return {
     ...process.env,
     MEMORY_DB_PATH: memoryDbPath,
@@ -1598,7 +1612,7 @@ function buildPythonEnv(extra = {}) {
     // Explicitly set QUAID_INSTANCE so Python subprocesses always know which
     // agent silo they are serving. Callers pass agent-specific overrides via
     // extra (e.g. getInstanceId(agentLabel)) when routing to a non-primary agent.
-    QUAID_INSTANCE: _QUAID_INSTANCE || void 0,
+    QUAID_INSTANCE: requestedInstance || void 0,
     PYTHONPATH: pyPath,
     ...extra
   };
@@ -1644,6 +1658,8 @@ function buildFallbackMemoryConfig() {
       }
     },
     retrieval: {
+      fail_hard: false,
+      failHard: false,
       maxLimit: 8
     }
   };
@@ -1758,7 +1774,7 @@ function isFailHardEnabled() {
   const retrieval = getMemoryConfig().retrieval || {};
   if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
   if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
-  return true;
+  return false;
 }
 function isMissingFileError(err) {
   const code = err?.code;
@@ -2709,6 +2725,14 @@ const quaidPlugin = {
       }
       return api.registerHttpRoute(route);
     };
+    const mainProvisioned = ensureAgentInstanceProvisioned("main", "plugin_bootstrap");
+    if (!mainProvisioned) {
+      const err = new Error("failed to provision primary OpenClaw instance before datastore init");
+      console.error("[quaid] Primary instance provisioning failed before plugin bootstrap");
+      if (isFailHardEnabled2()) {
+        throw err;
+      }
+    }
     try {
       const initialized = facade.initializeDatastoreIfMissing();
       if (initialized) {

@@ -162,15 +162,12 @@ function upsertTomlStringInTable(text, tableName, key, quotedValue) {
 }
 
 const workspace = resolveWorkspace();
-const instance = String(process.env.QUAID_INSTANCE || "codex-main").trim() || "codex-main";
 const quaidBinary = resolveQuaidBinary(workspace);
 const quaidCommand = escapeShellSingle(quaidBinary);
 const defaultHome = escapeShellDefault(workspace);
-const defaultInstance = escapeShellDefault(instance);
 const envPrefix = [
   `QUAID_HOME="\${QUAID_HOME:-${defaultHome}}"`,
   `OPENCLAW_WORKSPACE="\${OPENCLAW_WORKSPACE:-${defaultHome}}"`,
-  `QUAID_INSTANCE="\${QUAID_INSTANCE:-${defaultInstance}}"`,
 ].join(" ");
 
 const codexDir = path.join(os.homedir(), ".codex");

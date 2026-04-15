@@ -10,6 +10,7 @@ import fcntl
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,15 @@ from typing import Any, Dict, List, Optional
 from lib.project_templates import render_project_md_template
 
 logger = logging.getLogger(__name__)
+
+
+def _is_temp_canonical_path(path: Path) -> bool:
+    try:
+        resolved = Path(os.path.realpath(path.expanduser().resolve()))
+        tmp_root = Path(os.path.realpath(tempfile.gettempdir()))
+        return resolved == tmp_root or str(resolved).startswith(f"{tmp_root}{os.sep}")
+    except Exception:
+        return False
 
 
 def _sync_docs_registry_project(
@@ -28,6 +38,13 @@ def _sync_docs_registry_project(
     db_path: Optional[Path] = None,
 ) -> None:
     """Mirror project metadata into the docs-registry source of truth."""
+    if _is_temp_canonical_path(canonical):
+        logger.info(
+            "Skipping docs-registry sync for temp project %s (%s)",
+            name,
+            canonical,
+        )
+        return
     from config import ProjectDefinition
     from datastore.docsdb.registry import DocsRegistry
 

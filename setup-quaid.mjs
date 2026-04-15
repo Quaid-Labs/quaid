@@ -591,36 +591,47 @@ const PROJECTS_DIR = path.join(VISIBLE_HOME, "projects");
 const ADAPTER_REGISTRY_DIR = path.join(WORKSPACE, "adaptors");
 const HIDDEN_INSTANCES_DIR = path.join(WORKSPACE, "instances");
 const VISIBLE_INSTANCES_DIR = path.join(VISIBLE_HOME, "instances");
+const SHARED_DATA_DIR = path.join(WORKSPACE, "data");
+const SHARED_LOGS_DIR = path.join(WORKSPACE, "logs");
 
 process.env.QUAID_HOME = WORKSPACE;
 process.env.QUAID_VISIBLE_HOME = VISIBLE_HOME;
 process.env.QUAID_WORKSPACE = WORKSPACE;
 
-function hiddenInstanceDir(instanceId = resolvedInstallerInstanceId()) {
-  return path.join(HIDDEN_INSTANCES_DIR, instanceId);
+function _resolvedInstallerPathInstanceId(instanceId = "") {
+  return String(instanceId || resolvedInstallerInstanceId()).trim();
 }
 
-function visibleInstanceDir(instanceId = resolvedInstallerInstanceId()) {
-  return path.join(VISIBLE_INSTANCES_DIR, instanceId);
+function hiddenInstanceDir(instanceId = "") {
+  const resolved = _resolvedInstallerPathInstanceId(instanceId);
+  return resolved ? path.join(HIDDEN_INSTANCES_DIR, resolved) : HIDDEN_INSTANCES_DIR;
 }
 
-function instanceConfigPath(instanceId = resolvedInstallerInstanceId()) {
-  return path.join(hiddenInstanceDir(instanceId), "config.json");
+function visibleInstanceDir(instanceId = "") {
+  const resolved = _resolvedInstallerPathInstanceId(instanceId);
+  return resolved ? path.join(VISIBLE_INSTANCES_DIR, resolved) : VISIBLE_INSTANCES_DIR;
 }
 
-function hiddenInstanceDataDir(instanceId = resolvedInstallerInstanceId()) {
-  return path.join(hiddenInstanceDir(instanceId), "data");
+function instanceConfigPath(instanceId = "") {
+  const resolved = _resolvedInstallerPathInstanceId(instanceId);
+  return resolved ? path.join(hiddenInstanceDir(resolved), "config.json") : "";
 }
 
-function hiddenInstanceLogsDir(instanceId = resolvedInstallerInstanceId()) {
-  return path.join(hiddenInstanceDir(instanceId), "logs");
+function hiddenInstanceDataDir(instanceId = "") {
+  const resolved = _resolvedInstallerPathInstanceId(instanceId);
+  return resolved ? path.join(hiddenInstanceDir(resolved), "data") : SHARED_DATA_DIR;
 }
 
-function hiddenInstanceDbPath(instanceId = resolvedInstallerInstanceId()) {
+function hiddenInstanceLogsDir(instanceId = "") {
+  const resolved = _resolvedInstallerPathInstanceId(instanceId);
+  return resolved ? path.join(hiddenInstanceDir(resolved), "logs") : SHARED_LOGS_DIR;
+}
+
+function hiddenInstanceDbPath(instanceId = "") {
   return path.join(hiddenInstanceDataDir(instanceId), "memory.db");
 }
 
-function hiddenInstanceInstallStatePath(instanceId = resolvedInstallerInstanceId()) {
+function hiddenInstanceInstallStatePath(instanceId = "") {
   return path.join(hiddenInstanceDataDir(instanceId), "installed-at.json");
 }
 
@@ -846,6 +857,15 @@ function _readAdapterInstallerCapabilities(adapterId) {
   const normalized = String(adapterId || "").trim().toLowerCase();
   if (!normalized) return null;
   const instanceId = resolvedInstallerInstanceId(normalized);
+  const probeEnv = {
+    ...process.env,
+    QUAID_HOME: WORKSPACE,
+    QUAID_VISIBLE_HOME: VISIBLE_HOME,
+    QUAID_WORKSPACE: WORKSPACE,
+    QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
+    QUAID_ADAPTER_TYPE: normalized,
+  };
+  if (instanceId) probeEnv.QUAID_INSTANCE = instanceId;
   const py = [
     "import json, os, sys",
     "sys.path.insert(0, os.environ.get('QUAID_PYTHONPATH', ''))",
@@ -919,15 +939,7 @@ function _readAdapterInstallerCapabilities(adapterId) {
   }
   const res = python3Spawn(["-c", py], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      QUAID_HOME: WORKSPACE,
-      QUAID_VISIBLE_HOME: VISIBLE_HOME,
-      QUAID_WORKSPACE: WORKSPACE,
-      QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
-      QUAID_ADAPTER_TYPE: normalized,
-      QUAID_INSTANCE: instanceId,
-    },
+    env: probeEnv,
     stdio: ["pipe", "pipe", "pipe"],
     timeout: 15000,
   });
@@ -968,17 +980,18 @@ function _runAdapterInstallerJson(adapterId, pyLines) {
   const normalized = String(adapterId || "").trim().toLowerCase();
   if (!normalized) return null;
   const instanceId = resolvedInstallerInstanceId(normalized);
+  const helperEnv = {
+    ...process.env,
+    QUAID_HOME: WORKSPACE,
+    QUAID_VISIBLE_HOME: VISIBLE_HOME,
+    QUAID_WORKSPACE: WORKSPACE,
+    QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
+    QUAID_ADAPTER_TYPE: normalized,
+  };
+  if (instanceId) helperEnv.QUAID_INSTANCE = instanceId;
   const res = python3Spawn(["-c", pyLines.join("\n")], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      QUAID_HOME: WORKSPACE,
-      QUAID_VISIBLE_HOME: VISIBLE_HOME,
-      QUAID_WORKSPACE: WORKSPACE,
-      QUAID_PYTHONPATH: path.join(__dirname, "modules", "quaid"),
-      QUAID_ADAPTER_TYPE: normalized,
-      QUAID_INSTANCE: instanceId,
-    },
+    env: helperEnv,
     stdio: ["pipe", "pipe", "pipe"],
   });
   if (res.error) {
@@ -1134,17 +1147,14 @@ function resolvedInstallerPlatform() {
 function resolvedInstallerInstanceId(adapterType = "") {
   if (_instanceIdOverride) return _instanceIdOverride;
   const platform = String(adapterType || resolvedInstallerPlatform()).trim();
-  // Convention: instance IDs follow "<prefix>-<label>". Default label is "main".
-  // Standalone has no multi-agent concept and uses the platform name as-is.
-  if (platform && platform !== "standalone") {
-    return `${platform}-main`;
-  }
-  return platform || "standalone";
+  if (platform === "standalone") return "standalone";
+  return "";
 }
 
 function syncInstallerInstanceEnv(adapterType = "") {
   const instance = resolvedInstallerInstanceId(adapterType);
-  process.env.QUAID_INSTANCE = instance;
+  if (instance) process.env.QUAID_INSTANCE = instance;
+  else delete process.env.QUAID_INSTANCE;
   return instance;
 }
 
@@ -1304,8 +1314,8 @@ async function promptInstanceId(adapterType) {
 
   if (adapterType === "claude-code") {
     log.message(
-      C.dim("Claude Code: default is \"claude-code-main\". Use \"claude-code-<project>\" per project\n" +
-            "  for isolated memory silos (set QUAID_INSTANCE in .claude/settings.json).")
+      C.dim("Claude Code instances are derived from the active project path on first hook use.\n" +
+            "  Do not preseed claude-code-main or a global QUAID_INSTANCE during install.")
     );
   } else if (adapterType === "openclaw") {
     log.message(
@@ -2996,7 +3006,9 @@ async function step1_preflight() {
     _sanitizeOpenClawQuaidPluginEntry();
     _removeOpenClawPluginsAllowQuaid();
     const _ocRuntimeInstance = resolvedInstallerInstanceId();
-    const runtimeEnvChanged = _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance);
+    const runtimeEnvChanged = _ocRuntimeInstance
+      ? _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance)
+      : false;
     const agentModelChanged = _ensureOpenClawDefaultAgentModel();
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged || agentModelChanged || runtimeEnvChanged) {
@@ -4067,7 +4079,11 @@ function installCodexDaemonLaunchAgent(instanceId) {
     return false;
   }
 
-  const normalizedInstance = String(instanceId || resolvedInstallerInstanceId("codex") || "codex-main").trim() || "codex-main";
+  const normalizedInstance = String(instanceId || resolvedInstallerInstanceId("codex")).trim();
+  if (!normalizedInstance) {
+    log.warn("Codex daemon launch agent requires a real instance ID; skipping installer-time launch agent.");
+    return false;
+  }
   const quaidCmd = fs.existsSync(path.join(PLUGIN_DIR, "quaid"))
     ? path.join(PLUGIN_DIR, "quaid")
     : "quaid";
@@ -4306,9 +4322,8 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
-  // Create per-instance identity directory for SOUL.md, USER.md, ENVIRONMENT.md.
-  // Required by the janitor's snippet processor for all adapter types.
-  // Use the resolved QUAID_INSTANCE so the directory matches the actual silo path.
+  // Installer creates only shared/runtime state. Per-instance silos are created
+  // on first hook use, once the adapter has the real instance ID.
   const resolvedInstanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
   if (resolvedInstanceId) {
     const hiddenRoot = hiddenInstanceDir(resolvedInstanceId);
@@ -4363,52 +4378,61 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     s.start("Configuring Codex hooks...");
     setupCodexHooks();
     s.stop(C.green("Codex hooks configured"));
-    s.start("Installing Codex daemon launch agent...");
-    if (installCodexDaemonLaunchAgent(resolvedInstanceId)) {
-      s.stop(C.green("Codex daemon launch agent installed"));
+    if (resolvedInstanceId) {
+      s.start("Installing Codex daemon launch agent...");
+      if (installCodexDaemonLaunchAgent(resolvedInstanceId)) {
+        s.stop(C.green("Codex daemon launch agent installed"));
+      } else {
+        s.stop(C.yellow("Codex daemon launch agent not installed"));
+        log.warn("Codex background extraction will rely on manual/one-shot daemon startup until launchd is available.");
+      }
     } else {
-      s.stop(C.yellow("Codex daemon launch agent not installed"));
-      log.warn("Codex background extraction will rely on manual/one-shot daemon startup until launchd is available.");
+      log.info("Skipping Codex daemon launch agent install until the first real instance is created by hook use.");
     }
   }
 
-  // Initialize database
-  s.start("Initializing database...");
-  const dbPath = hiddenInstanceDbPath(resolvedInstanceId);
-  const schemaPath = path.join(PLUGIN_DIR, "datastore/memorydb/schema.sql");
-  if (!fs.existsSync(schemaPath)) {
-    s.stop(C.red("Database initialization failed"));
-    throw new Error(`schema.sql not found: ${schemaPath}`);
-  }
-  const initScript = `
+  if (resolvedInstanceId) {
+    // Explicit instance install: initialize the target silo now. Standard
+    // installs defer silo creation to first hook use.
+    s.start("Initializing database...");
+    const dbPath = hiddenInstanceDbPath(resolvedInstanceId);
+    const schemaPath = path.join(PLUGIN_DIR, "datastore/memorydb/schema.sql");
+    if (!fs.existsSync(schemaPath)) {
+      s.stop(C.red("Database initialization failed"));
+      throw new Error(`schema.sql not found: ${schemaPath}`);
+    }
+    const initScript = `
 import sqlite3
 conn = sqlite3.connect(${JSON.stringify(dbPath)})
 with open(${JSON.stringify(schemaPath)}) as f:
     conn.executescript(f.read())
 conn.close()
 `;
-  const initResult = python3Spawn(["-c", initScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-  if (initResult.status !== 0) {
-    s.stop(C.red("Database initialization failed"));
-    const detail = (initResult.stderr || initResult.stdout || "").trim();
-    throw new Error(detail || "python schema initialization failed");
-  }
-  const verifyScript = `
+    const initResult = python3Spawn(["-c", initScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    if (initResult.status !== 0) {
+      s.stop(C.red("Database initialization failed"));
+      const detail = (initResult.stderr || initResult.stdout || "").trim();
+      throw new Error(detail || "python schema initialization failed");
+    }
+    const verifyScript = `
 import sqlite3
 conn = sqlite3.connect(${JSON.stringify(dbPath)})
 row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='nodes'").fetchone()
 conn.close()
 print(int(row[0] if row else 0))
 `;
-  const verifyResult = python3Spawn(["-c", verifyScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-  const nodesTableCount = Number((verifyResult.stdout || "").trim());
-  if (verifyResult.status !== 0 || !Number.isFinite(nodesTableCount) || nodesTableCount < 1) {
-    s.stop(C.red("Database initialization failed"));
-    const detail = (verifyResult.stderr || verifyResult.stdout || "").trim();
-    throw new Error(detail || "nodes table missing after schema initialization");
+    const verifyResult = python3Spawn(["-c", verifyScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    const nodesTableCount = Number((verifyResult.stdout || "").trim());
+    if (verifyResult.status !== 0 || !Number.isFinite(nodesTableCount) || nodesTableCount < 1) {
+      s.stop(C.red("Database initialization failed"));
+      const detail = (verifyResult.stderr || verifyResult.stdout || "").trim();
+      throw new Error(detail || "nodes table missing after schema initialization");
+    }
+    try { fs.chmodSync(dbPath, 0o600); } catch {}
+    s.stop(C.green("Database initialized"));
+  } else {
+    log.info("Skipping instance database initialization until the first hook creates a real instance silo.");
   }
-  try { fs.chmodSync(dbPath, 0o600); } catch {}
-  s.stop(C.green("Database initialized"));
 
   // Write config
   s.start("Writing configuration...");
@@ -4417,8 +4441,9 @@ print(int(row[0] if row else 0))
 
   // Installer-owned contract bootstrap: load config once so datastore init/config
   // hooks run exactly once (for all enabled datastores).
-  s.start("Bootstrapping datastores...");
-  const domainInitScript = `
+  if (resolvedInstanceId) {
+    s.start("Bootstrapping datastores...");
+    const domainInitScript = `
 import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
@@ -4427,24 +4452,26 @@ from config import get_config
 _cfg = get_config()
 print('[+] Datastore init hooks complete')
 `;
-  const domainInitResult = python3Spawn(["-c", domainInitScript], {
-    cwd: PLUGIN_DIR,
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  if (domainInitResult.status !== 0) {
-    const detail = String(domainInitResult.stderr || domainInitResult.stdout || "").trim();
-    log.warn(`Datastore init hook bootstrap failed during install; continuing. ${detail || ""}`.trim());
+    const domainInitResult = python3Spawn(["-c", domainInitScript], {
+      cwd: PLUGIN_DIR,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    if (domainInitResult.status !== 0) {
+      const detail = String(domainInitResult.stderr || domainInitResult.stdout || "").trim();
+      log.warn(`Datastore init hook bootstrap failed during install; continuing. ${detail || ""}`.trim());
+    }
+    s.stop(C.green("Datastore bootstrap complete"));
+  } else {
+    log.info("Skipping datastore bootstrap until the first hook creates an instance config.");
   }
-  s.stop(C.green("Datastore bootstrap complete"));
 
   // Contract-owned project workspace dirs should exist after datastore init hooks.
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
   // install always yields expected workspace shape.
   // misc is a tracked project in projects/misc--{instanceId}/
-  const miscBucketId = resolvedInstanceId || resolvedInstallerInstanceId();
-  const instanceMiscDir = path.join(PROJECTS_DIR, `misc--${miscBucketId}`);
-  const contractOwnedDirs = Array.from(new Set([PROJECTS_DIR, instanceProjectsDir(), instanceMiscDir]));
+  const instanceMiscDir = resolvedInstanceId ? path.join(PROJECTS_DIR, `misc--${resolvedInstanceId}`) : "";
+  const contractOwnedDirs = Array.from(new Set([PROJECTS_DIR, instanceProjectsDir(), ...(instanceMiscDir ? [instanceMiscDir] : [])]));
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   s.start("Reconciling workspace structure...");
   if (missingContractOwnedDirs.length > 0) {
@@ -4459,7 +4486,7 @@ print('[+] Datastore init hooks complete')
 
   // The misc project is the only installer-owned bucket for ad-hoc drafts.
   // The installer only bootstraps local history after datastore init has run.
-  if (fs.existsSync(instanceMiscDir) && !fs.existsSync(path.join(instanceMiscDir, ".git"))) {
+  if (instanceMiscDir && fs.existsSync(instanceMiscDir) && !fs.existsSync(path.join(instanceMiscDir, ".git"))) {
     const miscGitInit = spawnSync("git", ["init"], {
       cwd: instanceMiscDir,
       stdio: "pipe",
@@ -4471,7 +4498,7 @@ print('[+] Datastore init hooks complete')
       const detail = String(miscGitInit.stderr || miscGitInit.stdout || "").trim();
       log.warn(`Could not initialize misc/ git history${detail ? `: ${detail}` : ""}`);
     }
-  } else if (!fs.existsSync(instanceMiscDir)) {
+  } else if (instanceMiscDir && !fs.existsSync(instanceMiscDir)) {
     log.warn("misc project dir missing after datastore init hooks; skipping git history bootstrap.");
   }
   s.stop(C.green("Workspace structure ready"));
@@ -4527,8 +4554,9 @@ print('[+] Datastore init hooks complete')
   }
 
   // Create owner Person node
-  s.start("Creating owner node...");
-  const storeScript = `
+  if (resolvedInstanceId) {
+    s.start("Creating owner node...");
+    const storeScript = `
 import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
@@ -4539,8 +4567,11 @@ try:
 except Exception as e:
     print(f'warn: {e}', file=sys.stderr)
 `;
-  python3Spawn(["-c", storeScript], { cwd: PLUGIN_DIR, stdio: "pipe" });
-  s.stop(C.green(`Owner node: ${owner.display}`));
+    python3Spawn(["-c", storeScript], { cwd: PLUGIN_DIR, stdio: "pipe" });
+    s.stop(C.green(`Owner node: ${owner.display}`));
+  } else {
+    log.info("Skipping owner node creation until the first hook creates an instance database.");
+  }
 
   if (_isPlatform("openclaw")) {
     s.start("Registering Quaid plugin in OpenClaw...");
@@ -4570,8 +4601,8 @@ except Exception as e:
   const migrationCompleted = true;
   const mdFiles = [];
 
-  if (!postInstallStateStabilized) {
-    const postInstall = _stabilizePostInstallExtractionState();
+  if (resolvedInstanceId && !postInstallStateStabilized) {
+    const postInstall = _stabilizePostInstallExtractionState(resolvedInstanceId);
     postInstallStateStabilized = true;
     log.info(
       `Marked prior sessions as extracted: seeded ${postInstall.cursorsSeeded} cursor(s), `
@@ -4666,9 +4697,9 @@ if not get_global_project('quaid'):
     create_global_project(
         'quaid',
         description='Quaid runtime, memory, project-doc, and adapter reference docs.',
-        initial_instance=${JSON.stringify(resolvedInstanceId)},
+        initial_instance=${resolvedInstanceId ? JSON.stringify(resolvedInstanceId) : "None"},
     )
-else:
+elif ${resolvedInstanceId ? "True" : "False"}:
     link_global_project('quaid', instance_id=${JSON.stringify(resolvedInstanceId)})
 try:
     reg.create_project(
@@ -4762,8 +4793,8 @@ print('created' if created else 'exists')
     s.stop(C.green("Bundled project docs registered"));
   }
 
-  if (!postInstallStateStabilized) {
-    const postInstall = _stabilizePostInstallExtractionState();
+  if (resolvedInstanceId && !postInstallStateStabilized) {
+    const postInstall = _stabilizePostInstallExtractionState(resolvedInstanceId);
     postInstallStateStabilized = true;
     log.info(
       `Marked prior sessions as extracted: seeded ${postInstall.cursorsSeeded} cursor(s), `
@@ -4778,14 +4809,16 @@ print('created' if created else 'exists')
   // Write install timestamp so the session-index watcher knows to ignore
   // sessions that predate this install (prevents orphan extraction fan-out
   // after a clean reinstall/wipe).
-  try {
-    fs.mkdirSync(hiddenInstanceDataDir(resolvedInstanceId), { recursive: true });
-    fs.writeFileSync(
-      hiddenInstanceInstallStatePath(resolvedInstanceId),
-      JSON.stringify({ installedAt: new Date().toISOString() }),
-      { mode: 0o600 },
-    );
-  } catch {}
+  if (resolvedInstanceId) {
+    try {
+      fs.mkdirSync(hiddenInstanceDataDir(resolvedInstanceId), { recursive: true });
+      fs.writeFileSync(
+        hiddenInstanceInstallStatePath(resolvedInstanceId),
+        JSON.stringify({ installedAt: new Date().toISOString() }),
+        { mode: 0o600 },
+      );
+    } catch {}
+  }
   log.message("");
   try {
     const markerPath = runtimePendingInstallMigrationPath();
@@ -4819,7 +4852,8 @@ async function step8_validate(owner, models, embeddings, systems) {
   const checks = [];
 
   // Database
-  const dbPath = hiddenInstanceDbPath();
+  const _validationInstanceId = String(process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
+  const dbPath = hiddenInstanceDbPath(_validationInstanceId);
   if (fs.existsSync(dbPath)) {
     const tableProbe = `
 import sqlite3
@@ -4830,8 +4864,10 @@ c.close()
     const tableResult = python3Spawn(["-c", tableProbe], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
     const tables = tableResult.status === 0 ? (tableResult.stdout || "").trim() : "unknown";
     checks.push(`${C.green("■")} Database     ${C.dim("—")} ${tables} tables`);
-  } else {
+  } else if (_validationInstanceId) {
     checks.push(`${C.red("■")} Database     ${C.dim("—")} MISSING`);
+  } else {
+    checks.push(`${C.yellow("■")} Database     ${C.dim("—")} Deferred until first hook`);
   }
 
   // Embeddings
@@ -4921,7 +4957,7 @@ except Exception as e:
   // Start the extraction daemon for platforms that rely on background
   // session/lifecycle processing so the first real session is ready immediately.
   const validationAdapterType = models?.adapterType || resolvedInstallerPlatform();
-  if (shouldStartExtractionDaemonAfterInstall(validationAdapterType)) {
+  if (_validationInstanceId && shouldStartExtractionDaemonAfterInstall(validationAdapterType)) {
     s.start("Starting extraction daemon...");
     const daemonScript = `
 import os, sys
@@ -4942,6 +4978,8 @@ except Exception as e:
     } else {
       s.stop(C.yellow("Extraction daemon skipped — will start on first hook invocation"));
     }
+  } else if (shouldStartExtractionDaemonAfterInstall(validationAdapterType)) {
+    log.info("Skipping extraction daemon startup until the first real instance is created by hook use.");
   }
 
   if (_isPlatform("openclaw")) {
@@ -5428,7 +5466,6 @@ function setupCodexHooks() {
       QUAID_HOME: WORKSPACE,
       QUAID_VISIBLE_HOME: VISIBLE_HOME,
       OPENCLAW_WORKSPACE: WORKSPACE,
-      QUAID_INSTANCE: resolvedInstallerInstanceId("codex"),
     },
   });
   if (result.status !== 0) {
@@ -5843,10 +5880,13 @@ function _parseMessageTimestampMs(msg) {
   return null;
 }
 
-function _stabilizePostInstallExtractionState() {
-  const instanceId = resolvedInstallerInstanceId();
-  const dataDir = hiddenInstanceDataDir(instanceId);
-  const sessionMessagesDir = path.join(hiddenInstanceLogsDir(instanceId), "quaid", "sessions");
+function _stabilizePostInstallExtractionState(instanceId = "") {
+  const resolved = String(instanceId || resolvedInstallerInstanceId()).trim();
+  if (!resolved) {
+    return { cursorsSeeded: 0, pendingSignalsCleared: 0, timeoutBuffersCleared: 0 };
+  }
+  const dataDir = hiddenInstanceDataDir(resolved);
+  const sessionMessagesDir = path.join(hiddenInstanceLogsDir(resolved), "quaid", "sessions");
   const cursorDir = path.join(dataDir, "session-cursors");
   const pendingSignalsDir = path.join(dataDir, "pending-extraction-signals");
   const timeoutBuffersDir = path.join(dataDir, "timeout-buffers");
@@ -6049,7 +6089,9 @@ print("ok" if ok else "unavailable")
   env.QUAID_HOME = WORKSPACE;
   env.OPENCLAW_WORKSPACE = WORKSPACE;
   env.PYTHONPATH = env.PYTHONPATH ? `${pythonRoot}${sep}${env.PYTHONPATH}` : pythonRoot;
-  env.QUAID_INSTANCE = env.QUAID_INSTANCE || resolvedInstallerInstanceId(resolvedInstallerPlatform());
+  const installInstance = resolvedInstallerInstanceId(resolvedInstallerPlatform());
+  if (installInstance) env.QUAID_INSTANCE = env.QUAID_INSTANCE || installInstance;
+  else delete env.QUAID_INSTANCE;
 
   const res = python3Spawn(["-c", py], {
     encoding: "utf8",
@@ -6187,7 +6229,7 @@ function notifyInstallWarmupNotice() {
  * Comparing a dry-run plan (interactive mode) against a real agent-mode
  * install plan is the recommended way to verify parity between modes:
  *   node setup-quaid.mjs --dry-run > /tmp/plan-interactive.json
- *   cat WORKSPACE/instances/INSTANCE/last-install-plan.json
+ *   cat WORKSPACE/runtime/last-install-plan.json
  * Any key divergence (e.g. an option enabled by agent mode that interactive
  * would not have offered) indicates a parity bug to investigate.
  */
@@ -6392,8 +6434,7 @@ async function main() {
       // If they diverge (e.g. agent mode enabled an option interactive wouldn't
       // have offered), that is a parity bug to investigate.
       try {
-        const instanceId = resolvedInstallerInstanceId(resolvedInstallerPlatform());
-        const planPath = path.join(WORKSPACE, "instances", instanceId, "last-install-plan.json");
+        const planPath = path.join(RUNTIME_DIR, "last-install-plan.json");
         const plan = buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedule);
         fs.mkdirSync(path.dirname(planPath), { recursive: true });
         fs.writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { encoding: "utf8", mode: 0o644 });

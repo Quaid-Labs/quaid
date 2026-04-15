@@ -110,10 +110,10 @@ function _resolveVisibleWorkspace(root: string): string {
 }
 const VISIBLE_WORKSPACE = _resolveVisibleWorkspace(WORKSPACE);
 
-// Resolve QUAID_INSTANCE from env first, then fall back to a sidecar file written
-// by the installer at QUAID_HOME/.oc-instance-name.  The OC gateway plugin process
-// cannot receive env vars via plugin config (schema rejects the "env" key), so the
-// installer writes the instance name to a file that the adapter reads at startup.
+// Resolve QUAID_INSTANCE from env first. If the gateway process cannot receive a
+// current instance id, fall back to the platform's primary runtime instance.
+// Instance silos are still created lazily on first hook use; this fallback only
+// gives the plugin a stable adapter prefix for signal/db path resolution.
 function _resolveQuaidInstance(): string {
   const fromEnv = String(process.env.QUAID_INSTANCE || "").trim();
   if (fromEnv) return fromEnv;
@@ -130,11 +130,9 @@ function _resolveQuaidInstance(): string {
       if (fromCfgTop) return fromCfgTop;
     }
   } catch {}
-  // OC plugin config schema rejects an "env" key, so there is no OC-native way to
-  // inject QUAID_INSTANCE into the gateway plugin process.  Read from a sidecar file
-  // written by the installer.  Try two locations: one relative to WORKSPACE (works
-  // when QUAID_HOME is in the gateway env) and one at the fixed OC extension dir
-  // (absolute, always reachable regardless of WORKSPACE resolution).
+  // Legacy installer fallback: older installs wrote the primary OC instance to
+  // a sidecar file. Keep reading it for compatibility, but runtime no longer
+  // relies on the installer to pre-create or preseed instances.
   const candidates = [
     path.join(WORKSPACE, ".oc-instance-name"),
     path.join(os.homedir(), ".openclaw", "extensions", "quaid", ".oc-instance-name"),
@@ -147,7 +145,7 @@ function _resolveQuaidInstance(): string {
       }
     } catch {}
   }
-  return "";
+  return "openclaw-main";
 }
 
 function _resolvePythonPluginRoot(): string {
@@ -1878,7 +1876,16 @@ function pingDaemonAliveIfNeeded(instanceId: string = _QUAID_INSTANCE, nowMs: nu
   ensureDaemonAlive(target);
 }
 
-for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
+for (const p of [
+  QUAID_RUNTIME_DIR,
+  QUAID_TMP_DIR,
+  QUAID_NOTES_DIR,
+  QUAID_INJECTION_LOG_DIR,
+  QUAID_NOTIFY_DIR,
+  QUAID_LOGS_DIR,
+  QUAID_TIMEOUT_LOG_DIR,
+  QUAID_SESSION_PRESERVE_DIR,
+]) {
   try {
     fs.mkdirSync(p, { recursive: true });
   } catch (err: unknown) {
@@ -2023,11 +2030,16 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
   const pyPath = existing ? `${PYTHON_PLUGIN_ROOT}${sep}${existing}` : PYTHON_PLUGIN_ROOT;
+  const requestedInstance = String(extra.QUAID_INSTANCE || _QUAID_INSTANCE || "").trim();
   // When QUAID_INSTANCE is set, Python resolves the DB path from QUAID_HOME/QUAID_INSTANCE
   // via get_adapter().instance_root(). Do NOT override with MEMORY_DB_PATH — that would
   // bypass the silo-specific path and point at the workspace-root legacy DB instead.
   // Only set MEMORY_DB_PATH in the legacy flat-layout case (no QUAID_INSTANCE).
-  const memoryDbPath = resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH);
+  const memoryDbPath = resolveAdapterMemoryDbPath(
+    WORKSPACE,
+    requestedInstance,
+    path.join(WORKSPACE, "data", "memory.db"),
+  );
   return {
     ...process.env,
     MEMORY_DB_PATH: memoryDbPath,
@@ -2039,7 +2051,7 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
     // Explicitly set QUAID_INSTANCE so Python subprocesses always know which
     // agent silo they are serving. Callers pass agent-specific overrides via
     // extra (e.g. getInstanceId(agentLabel)) when routing to a non-primary agent.
-    QUAID_INSTANCE: _QUAID_INSTANCE || undefined,
+    QUAID_INSTANCE: requestedInstance || undefined,
     PYTHONPATH: pyPath,
     ...extra,
   };
@@ -2096,6 +2108,8 @@ function buildFallbackMemoryConfig(): any {
       },
     },
     retrieval: {
+      fail_hard: false,
+      failHard: false,
       maxLimit: 8,
     },
   };
@@ -2233,7 +2247,7 @@ function isFailHardEnabled(): boolean {
   const retrieval = getMemoryConfig().retrieval || {};
   if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
   if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
-  return true;
+  return false;
 }
 
 function isMissingFileError(err: unknown): boolean {
@@ -3376,6 +3390,15 @@ const quaidPlugin = {
       }
       return api.registerHttpRoute(route as any);
     };
+
+    const mainProvisioned = ensureAgentInstanceProvisioned("main", "plugin_bootstrap");
+    if (!mainProvisioned) {
+      const err = new Error("failed to provision primary OpenClaw instance before datastore init");
+      console.error("[quaid] Primary instance provisioning failed before plugin bootstrap");
+      if (isFailHardEnabled()) {
+        throw err;
+      }
+    }
 
     // Ensure database exists (facade owns the init policy; adapter supplies callback).
     try {
