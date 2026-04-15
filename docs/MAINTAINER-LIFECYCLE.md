@@ -13,18 +13,19 @@ This is the maintainer operating model for Quaid after public usage begins.
 - Do not force-push `main`
 - Do not rewrite published history
 - Do not delete `main`
-- Merge via PR with passing CI
+- Maintainer changes land on `main` only through the guarded CI push flow
 - Tag/release only from commits already on `main`
 
 ## Required GitHub Protections
 
 Enable branch protection on `main`:
 
-- Require pull request before merging
 - Require status checks to pass before merging
 - Require conversation resolution before merging
 - Restrict force pushes
 - Restrict branch deletion
+
+Maintainer pushes do not require a PR review. CI is the gate.
 
 Apply via script:
 
@@ -58,17 +59,17 @@ cd ~/quaidcode/dev
 
 ## Hotfix Flow
 
-- Branch from `main` (`hotfix/<topic>`)
-- Minimal patch + tests + docs note
-- PR merge to `main`
-- Tag patched release
+- Patch on `release/<major.minor>` when the fix is release-line-specific.
+- Patch on `main` when the fix should move both development and the active release line forward.
+- Use `./scripts/push-main.sh github` for maintainer pushes to `main`.
+- Tag patched release from the release branch after the fix is validated there.
 
 ## Rollback
 
 If a bad release lands:
 
 - Re-point users to prior release tag/asset
-- Revert commit(s) on `main` via PR (no history rewrite)
+- Revert commit(s) on `main` with the guarded maintainer push flow (no history rewrite)
 - Publish patch release with rollback notes
 
 ## Operator Hygiene

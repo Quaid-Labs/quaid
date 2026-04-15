@@ -211,7 +211,7 @@ The old e2e automation is deprecated and is not part of release truth.
 For `main`, use the guarded push path:
 
 ```bash
-bash scripts/push-main.sh
+./scripts/push-main.sh github
 ```
 
 This script:
@@ -221,7 +221,7 @@ This script:
 - refuses to push a range that still contains banned local/bot attribution
 - scans tracked files for local/private markers before push
 - runs the mainline identity/docs/runtime checks
-- pushes only to `github main`
+- pushes to `ci/main/<sha>`, waits for GitHub `Quaid CI`, then fast-forwards `main`
 
 ## Tarball Build
 
