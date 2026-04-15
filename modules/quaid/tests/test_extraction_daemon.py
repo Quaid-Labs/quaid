@@ -3336,6 +3336,121 @@ class TestRollingExtraction:
         assert sorted(fact["domains"]) == ["personal", "schedule"]
         assert fact["extraction_confidence"] == "high"
 
+    def test_merge_staged_payloads_subset_overlap_triggers_llm_below_gray_zone(self, monkeypatch):
+        import datastore.memorydb.memory_graph as memory_graph
+        import lib.similarity as similarity
+
+        class _FakeGraph:
+            def get_embedding(self, text):
+                return [1.0, 0.0] if text else None
+
+        state = {
+            "raw_facts": [
+                {
+                    "text": "Solomon has a dog named Baxter",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                }
+            ],
+            "rolling_batches": 1,
+            "payload_duplicate_facts_collapsed": 0,
+        }
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Solomon has a dog named Baxter who loves tennis balls",
+                    "category": "fact",
+                    "domains": ["personal", "pets"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "carry_duplicate_facts_dropped": 0,
+        }
+
+        monkeypatch.setattr(extraction_daemon, "_stage_dedup_settings", lambda: (0.98, 0.88, True))
+        monkeypatch.setattr(extraction_daemon, "_semantic_candidate_overlaps", lambda *_args, **_kwargs: [0])
+        monkeypatch.setattr(memory_graph, "get_graph", lambda: _FakeGraph())
+        monkeypatch.setattr(similarity, "cosine_similarity", lambda *_args, **_kwargs: 0.72)
+        monkeypatch.setattr(
+            memory_graph,
+            "_llm_dedup_check_many",
+            lambda *_args, **_kwargs: {
+                1: {
+                    "is_same": True,
+                    "subsumes": "a_subsumes_b",
+                    "reasoning": "subset duplicate",
+                }
+            },
+        )
+
+        merged = extraction_daemon.merge_staged_payloads(state, payload)
+
+        assert len(merged["raw_facts"]) == 1
+        assert merged["staged_semantic_subset_rows"] == 1
+        assert merged["staged_semantic_llm_checks"] == 1
+        assert merged["staged_semantic_llm_same_hits"] == 1
+        assert merged["staged_semantic_duplicate_facts_collapsed"] == 1
+        fact = merged["raw_facts"][0]
+        assert fact["text"] == "Solomon has a dog named Baxter who loves tennis balls"
+        assert sorted(fact["domains"]) == ["personal", "pets"]
+        assert fact["extraction_confidence"] == "high"
+
+    def test_merge_staged_payloads_subset_overlap_ignores_negation_mismatch(self, monkeypatch):
+        import datastore.memorydb.memory_graph as memory_graph
+        import lib.similarity as similarity
+
+        class _FakeGraph:
+            def get_embedding(self, text):
+                return [1.0, 0.0] if text else None
+
+        state = {
+            "raw_facts": [
+                {
+                    "text": "Solomon has a dog named Baxter",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                }
+            ],
+            "rolling_batches": 1,
+            "payload_duplicate_facts_collapsed": 0,
+        }
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Solomon does not have a dog named Baxter",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "carry_duplicate_facts_dropped": 0,
+        }
+
+        monkeypatch.setattr(extraction_daemon, "_stage_dedup_settings", lambda: (0.98, 0.88, True))
+        monkeypatch.setattr(extraction_daemon, "_semantic_candidate_overlaps", lambda *_args, **_kwargs: [0])
+        monkeypatch.setattr(memory_graph, "get_graph", lambda: _FakeGraph())
+        monkeypatch.setattr(similarity, "cosine_similarity", lambda *_args, **_kwargs: 0.72)
+        monkeypatch.setattr(memory_graph, "_llm_dedup_check_many", lambda *_args, **_kwargs: {})
+
+        merged = extraction_daemon.merge_staged_payloads(state, payload)
+
+        assert len(merged["raw_facts"]) == 2
+        assert merged["staged_semantic_subset_rows"] == 0
+        assert merged["staged_semantic_llm_checks"] == 0
+        assert merged["staged_semantic_duplicate_facts_collapsed"] == 0
+
     def test_skips_session_where_transcript_not_grown_past_cursor(self, monkeypatch, tmp_path):
         """No timeout signal when transcript line count <= cursor offset (nothing new)."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")

@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from lib.tokens import texts_are_near_identical, extract_key_tokens
+from lib.tokens import texts_are_near_identical, extract_key_tokens, is_subset_overlap_candidate
 
 
 class TestTextsAreNearIdentical:
@@ -85,3 +85,30 @@ class TestExtractKeyTokens:
     def test_all_stopwords(self):
         tokens = extract_key_tokens("the is a an")
         assert tokens == []
+
+
+class TestSubsetOverlapCandidate:
+    """Tests for is_subset_overlap_candidate()."""
+
+    def test_detects_subset_overlap_without_negation(self):
+        assert is_subset_overlap_candidate(
+            "Solomon has a dog named Baxter who loves tennis balls",
+            "Solomon has a dog named Baxter",
+        ) is True
+
+    def test_negation_word_boundary_avoids_substring_false_hit(self):
+        # "knowledge"/"notorious" should not count as negation tokens.
+        assert is_subset_overlap_candidate(
+            "Solomon shares knowledge about Baxter and tennis balls",
+            "Solomon shares knowledge about Baxter",
+        ) is True
+        assert is_subset_overlap_candidate(
+            "Solomon has a notorious dog named Baxter who loves tennis balls",
+            "Solomon has a notorious dog named Baxter",
+        ) is True
+
+    def test_negation_mismatch_blocks_subset_overlap(self):
+        assert is_subset_overlap_candidate(
+            "Solomon has a dog named Baxter who loves tennis balls",
+            "Solomon does not have a dog named Baxter",
+        ) is False

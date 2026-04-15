@@ -44,7 +44,7 @@ from datastore.memorydb.memory_graph import (
     store_edge_keywords,
 )
 from lib.config import get_db_path
-from lib.tokens import extract_key_tokens, estimate_tokens
+from lib.tokens import extract_key_tokens, estimate_tokens, is_subset_overlap_candidate
 from datastore.memorydb.archive_store import archive_node as _archive_node
 from config import get_config
 from lib.llm_clients import (
@@ -1233,6 +1233,11 @@ def recall_candidates(graph: MemoryGraph, text: str, exclude_id: str,
     return [graph._row_to_node(r) for r in rows]
 
 
+def _is_subset_duplicate_candidate(text_a: str, text_b: str) -> bool:
+    """Shared subset/superset candidate heuristic."""
+    return is_subset_overlap_candidate(text_a, text_b)
+
+
 # =============================================================================
 # Shared recall pass — builds candidate pairs once for both dedup & contradiction
 # =============================================================================
@@ -1366,8 +1371,14 @@ def recall_similar_pairs(
             vector_comparisons += 1
             sim = graph.cosine_similarity(new_node.embedding, cand.embedding)
 
-            # Dedup range (any type)
-            if DUPLICATE_MIN_SIM <= sim < DUPLICATE_MAX_SIM:
+            # Dedup range (any type), plus strict subset/superset candidates
+            # below the cosine threshold.
+            in_similarity_band = DUPLICATE_MIN_SIM <= sim < DUPLICATE_MAX_SIM
+            subset_overlap_below_band = (
+                sim < DUPLICATE_MIN_SIM
+                and _is_subset_duplicate_candidate(new_node.name, cand.name)
+            )
+            if in_similarity_band or subset_overlap_below_band:
                 dup_candidates.append({
                     "id_a": new_node.id,
                     "text_a": new_node.name,
@@ -1376,6 +1387,7 @@ def recall_similar_pairs(
                     "similarity": round(sim, 3),
                     "type_a": new_node.type,
                     "type_b": cand.type,
+                    "dedup_reason": "subset_overlap" if subset_overlap_below_band else "similarity_band",
                 })
 
             # Contradiction range (Facts only — let LLM decide, no negation heuristic)
@@ -1397,7 +1409,12 @@ def recall_similar_pairs(
                 })
 
     print(f"  Token recall: {total_recalled} candidates, {vector_comparisons} vector checks")
-    print(f"  Buckets: {len(dup_candidates)} dedup, {len(contradiction_candidates)} contradiction")
+    subset_rows = sum(1 for row in dup_candidates if row.get("dedup_reason") == "subset_overlap")
+    print(
+        f"  Buckets: {len(dup_candidates)} dedup"
+        + (f" ({subset_rows} subset-overlap)" if subset_rows else "")
+        + f", {len(contradiction_candidates)} contradiction"
+    )
     metrics.end_task("recall_pass")
 
     return {

@@ -839,6 +839,7 @@ def _semantic_stage_metrics_defaults() -> Dict[str, int]:
         "staged_semantic_duplicate_facts_collapsed": 0,
         "staged_semantic_auto_reject_hits": 0,
         "staged_semantic_gray_zone_rows": 0,
+        "staged_semantic_subset_rows": 0,
         "staged_semantic_llm_checks": 0,
         "staged_semantic_llm_same_hits": 0,
         "staged_semantic_llm_different_hits": 0,
@@ -975,6 +976,12 @@ def _semantic_candidate_overlaps(new_text: str, existing_facts: List[Dict[str, A
     return [idx for _overlap, idx in scored[:max_candidates]]
 
 
+def _semantic_subset_overlap_candidate(new_text: str, existing_text: str) -> bool:
+    from lib.tokens import is_subset_overlap_candidate
+
+    return is_subset_overlap_candidate(new_text, existing_text)
+
+
 def _collapse_staged_semantic_duplicates(
     existing_facts: List[Dict[str, Any]],
     incoming_facts: List[Dict[str, Any]],
@@ -1032,6 +1039,10 @@ def _collapse_staged_semantic_duplicates(
                 break
             if sim >= gray_zone_low:
                 metrics["staged_semantic_gray_zone_rows"] += 1
+                gray_zone.append((idx, existing_fact, sim))
+                continue
+            if _semantic_subset_overlap_candidate(new_text, existing_text):
+                metrics["staged_semantic_subset_rows"] += 1
                 gray_zone.append((idx, existing_fact, sim))
 
         if merged:

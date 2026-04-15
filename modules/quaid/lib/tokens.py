@@ -51,6 +51,53 @@ def extract_key_tokens(text: str, min_length: int = 3, max_tokens: int = 8) -> L
     return tokens
 
 
+def is_subset_overlap_candidate(text_a: str, text_b: str) -> bool:
+    """Heuristic: one text is a likely strict subset of the other.
+
+    Intended for candidate expansion only; merge decisions should remain
+    guarded by higher-level checks (for example LLM verification).
+    """
+    a = str(text_a or "").strip()
+    b = str(text_b or "").strip()
+    if not a or not b or a == b:
+        return False
+    if len(a.split()) < 3 or len(b.split()) < 3:
+        return False
+
+    negation_tokens = {"not", "no", "never", "without", "none", "cannot", "cant", "don't", "dont"}
+
+    def _has_negation_token(text_lower: str) -> bool:
+        for tok in negation_tokens:
+            if re.search(rf"\b{re.escape(tok)}\b", text_lower):
+                return True
+        return False
+
+    a_lower = a.lower()
+    b_lower = b.lower()
+    a_neg = _has_negation_token(a_lower)
+    b_neg = _has_negation_token(b_lower)
+    if a_neg != b_neg:
+        return False
+
+    tokens_a = set(extract_key_tokens(a, max_tokens=24))
+    tokens_b = set(extract_key_tokens(b, max_tokens=24))
+    if not tokens_a or not tokens_b:
+        return False
+
+    if len(tokens_a) <= len(tokens_b):
+        smaller, larger = tokens_a, tokens_b
+    else:
+        smaller, larger = tokens_b, tokens_a
+    if len(smaller) >= len(larger):
+        return False
+
+    overlap = len(smaller & larger)
+    if overlap < 3:
+        return False
+    coverage = overlap / max(len(smaller), 1)
+    return coverage >= 0.8
+
+
 def texts_are_near_identical(a: str, b: str) -> bool:
     """Check if two texts are near-identical strings (not just similar embeddings).
 

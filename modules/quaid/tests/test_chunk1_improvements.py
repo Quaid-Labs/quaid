@@ -7,6 +7,7 @@ import json
 import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 # Ensure plugin root is on the path
@@ -436,6 +437,85 @@ class TestDebugFlag:
 
 class TestTemporalContradictionCandidates:
     """recall_similar_pairs and batch_contradiction_check temporal awareness."""
+
+    def test_recall_similar_pairs_includes_subset_overlap_below_similarity_band(self, monkeypatch):
+        """Subset/superset fact pairs should enter dedup candidates even below min cosine."""
+        from datastore.memorydb import maintenance_ops
+
+        metrics = maintenance_ops.JanitorMetrics()
+        sim_value = float(maintenance_ops.DUPLICATE_MIN_SIM) - 0.12
+
+        new_node = SimpleNamespace(
+            id="n-new",
+            name="Solomon has a dog named Baxter who loves tennis balls",
+            embedding=[1.0, 0.0],
+            type="Fact",
+            created_at="2026-04-01T00:00:00",
+            valid_from=None,
+            valid_until=None,
+        )
+        old_node = SimpleNamespace(
+            id="n-old",
+            name="Solomon has a dog named Baxter",
+            embedding=[1.0, 0.0],
+            type="Fact",
+            created_at="2026-03-01T00:00:00",
+            valid_from=None,
+            valid_until=None,
+        )
+
+        class _FakeGraph:
+            def cosine_similarity(self, *_args, **_kwargs):
+                return sim_value
+
+        monkeypatch.setattr(maintenance_ops, "get_nodes_since", lambda *_args, **_kwargs: [new_node])
+        monkeypatch.setattr(maintenance_ops, "recall_candidates", lambda *_args, **_kwargs: [old_node])
+
+        out = maintenance_ops.recall_similar_pairs(_FakeGraph(), metrics, since=None, max_nodes=0)
+
+        assert len(out["duplicates"]) == 1
+        row = out["duplicates"][0]
+        assert row["id_a"] == "n-new"
+        assert row["id_b"] == "n-old"
+        assert row["dedup_reason"] == "subset_overlap"
+        assert row["similarity"] == round(sim_value, 3)
+
+    def test_recall_similar_pairs_skips_subset_overlap_on_negation_mismatch(self, monkeypatch):
+        """Subset heuristic must not fire when only one side is negated."""
+        from datastore.memorydb import maintenance_ops
+
+        metrics = maintenance_ops.JanitorMetrics()
+        sim_value = float(maintenance_ops.DUPLICATE_MIN_SIM) - 0.12
+
+        new_node = SimpleNamespace(
+            id="n-new",
+            name="Solomon has a dog named Baxter who loves tennis balls",
+            embedding=[1.0, 0.0],
+            type="Fact",
+            created_at="2026-04-01T00:00:00",
+            valid_from=None,
+            valid_until=None,
+        )
+        old_node = SimpleNamespace(
+            id="n-old",
+            name="Solomon does not have a dog named Baxter",
+            embedding=[1.0, 0.0],
+            type="Fact",
+            created_at="2026-03-01T00:00:00",
+            valid_from=None,
+            valid_until=None,
+        )
+
+        class _FakeGraph:
+            def cosine_similarity(self, *_args, **_kwargs):
+                return sim_value
+
+        monkeypatch.setattr(maintenance_ops, "get_nodes_since", lambda *_args, **_kwargs: [new_node])
+        monkeypatch.setattr(maintenance_ops, "recall_candidates", lambda *_args, **_kwargs: [old_node])
+
+        out = maintenance_ops.recall_similar_pairs(_FakeGraph(), metrics, since=None, max_nodes=0)
+
+        assert out["duplicates"] == []
 
     def test_contradiction_candidates_include_temporal_fields(self, tmp_path):
         """recall_similar_pairs includes temporal fields in contradiction candidates."""
