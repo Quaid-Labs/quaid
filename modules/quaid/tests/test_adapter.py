@@ -469,6 +469,41 @@ class TestOpenClawAdapter:
         assert "[Subagent Context]" not in transcript
         assert "You are running as a subagent" not in transcript
 
+
+    def test_parse_session_jsonl_strips_openclaw_hook_memory_context_block(self, tmp_path):
+        session_file = tmp_path / "oc-hook-memory-context.jsonl"
+        session_file.write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "• Running UserPromptSubmit hook: Quaid recalling memory\n\n"
+                                    "UserPromptSubmit hook (completed)\n"
+                                    "  hook context: [Quaid Memory Context]\n"
+                                    "  1. [fact] Henley lock keeper loves canal chili (relevance: 0.91)\n"
+                                    "  2. [fact] The canal museum sells chili jam (relevance: 0.88)\n\n"
+                                    "The watermill ledger mentions a 7.4-foot sluice gate."
+                                ),
+                            }
+                        ],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "Running UserPromptSubmit hook" not in transcript
+        assert "hook context:" not in transcript
+        assert "Henley lock keeper loves canal chili" not in transcript
+        assert "canal museum sells chili jam" not in transcript
+        assert "The watermill ledger mentions a 7.4-foot sluice gate." in transcript
+
     def test_parse_session_jsonl_strips_openclaw_internal_context_block(self, tmp_path):
         session_file = tmp_path / "oc-internal-context.jsonl"
         session_file.write_text(

@@ -453,6 +453,22 @@ class OpenClawAdapter(QuaidAdapter):
         r"<quaid_notification>.*?</quaid_notification>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _HOOK_STATUS_LINE_RE = re.compile(
+        r"^\s*(?:•\s*)?(?:Running\s+)?(?:SessionStart|UserPromptSubmit|Stop|session_start|user_prompt_submit|stop)\s+hook(?::|\s+\(completed\)).*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    _HOOK_CONTEXT_LINE_RE = re.compile(
+        r"^\s*hook\s+(?:context|output):.*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    _HOOK_CONTEXT_MEMORY_BLOCK_RE = re.compile(
+        r"^\s*hook\s+(?:context|output):\s*\[Quaid Memory Context\]\n(?:\s*\d+\.\s*\[[^\]]+\].*(?:\n|$))+",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    _PLAIN_QUAID_MEMORY_CONTEXT_RE = re.compile(
+        r"(?:^|\n)\s*\[Quaid Memory Context\]\n(?:[ \t].*(?:\n|$))+",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
     _OC_INTERNAL_CONTEXT_RE = re.compile(
         r"<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         flags=re.DOTALL | re.IGNORECASE,
@@ -466,8 +482,13 @@ class OpenClawAdapter(QuaidAdapter):
         value = self._OC_UNTRUSTED_METADATA_RE.sub("", value)
         value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
         value = self._QUAID_NOTIFICATION_RE.sub("", value)
+        value = self._HOOK_STATUS_LINE_RE.sub("", value)
+        value = self._HOOK_CONTEXT_MEMORY_BLOCK_RE.sub("", value)
+        value = self._HOOK_CONTEXT_LINE_RE.sub("", value)
+        value = self._PLAIN_QUAID_MEMORY_CONTEXT_RE.sub("\n", value)
         # Strip gateway timestamp prefix from the start of each line.
         value = self._OC_TIMESTAMP_PREFIX_RE.sub("", value)
+        value = re.sub(r"\n{3,}", "\n\n", value)
         return value.strip()
 
     def filter_system_messages(self, text: str) -> bool:
