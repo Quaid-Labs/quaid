@@ -109,5 +109,5 @@ After force-push:
   repo
 - verify leaked strings no longer appear in `git log -S`
 - verify author/committer history no longer contains local or bot identities
-- confirm release/canary gates now pass the privacy step
+- confirm release/main gates now pass the privacy step
 - send the GitHub Support purge request
