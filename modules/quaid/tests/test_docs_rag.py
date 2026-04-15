@@ -265,6 +265,33 @@ class TestIndexDocument:
         assert doc_ids == [f"{test_file}:0", f"{test_file}:1"]
         assert vec_ids == doc_ids
 
+    def test_index_document_collapses_symlinked_source_alias_paths(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        real_file = tmp_path / "projects" / "quaid" / "reference" / "memory-reference.md"
+        real_file.parent.mkdir(parents=True, exist_ok=True)
+        real_file.write_text("# Reference\nCanonical content.")
+
+        alias_projects = tmp_path / "instances" / "benchrunner" / "projects"
+        alias_projects.parent.mkdir(parents=True, exist_ok=True)
+        alias_projects.symlink_to(tmp_path / "projects", target_is_directory=True)
+        alias_file = alias_projects / "quaid" / "reference" / "memory-reference.md"
+        assert alias_file.exists()
+        assert alias_file.samefile(real_file)
+
+        with patch.object(rag, "chunk_markdown", return_value=["# Reference\nCanonical content."]), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3]]):
+            assert rag.index_document(str(real_file)) == 1
+            assert rag.index_document(str(alias_file)) == 1
+
+        with sqlite3.connect(rag.db_path) as conn:
+            rows = conn.execute(
+                "SELECT source_file, COUNT(*) FROM doc_chunks GROUP BY source_file"
+            ).fetchall()
+            ids = [row[0] for row in conn.execute("SELECT id FROM doc_chunks").fetchall()]
+
+        assert rows == [(str(real_file.resolve()), 1)]
+        assert ids == [f"{real_file.resolve()}:0"]
+
 
 class TestReindexAll:
     """Tests for DocsRAG.reindex_all()."""

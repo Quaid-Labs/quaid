@@ -46,6 +46,35 @@ def _resolve_project_root(raw: str) -> Path:
         return get_visible_quaid_home() / raw
     return _workspace() / raw
 
+
+def _canonical_source_path(raw_path: str) -> str:
+    """Resolve a source path into a stable absolute path string.
+
+    This collapses symlink aliases (for example benchmark run roots exposing the
+    same project docs through both ``projects/...`` and
+    ``instances/benchrunner/projects/...``). Keeping a canonical source path
+    avoids duplicate doc_chunks rows for the same physical file.
+    """
+    value = str(raw_path or "").strip()
+    if not value:
+        return ""
+    path = Path(value).expanduser()
+    try:
+        return str(path.resolve(strict=False))
+    except TypeError:
+        # Python versions without the strict kwarg.
+        try:
+            return str(path.resolve())
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        return str(Path(os.path.realpath(str(path))))
+    except Exception:
+        return str(path)
+
+
 def _rag_config():
     """Get RAG config section (lazy import to avoid circular deps)."""
     try:
@@ -471,16 +500,29 @@ class DocsRAG:
 
     def needs_reindex_many(self, file_paths: List[str]) -> Dict[str, bool]:
         """Check many files for staleness with batched doc_chunks lookups."""
-        files = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
-        if not files:
+        requested_files = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
+        if not requested_files:
             return {}
+
+        variant_map: Dict[str, List[str]] = {}
+        lookup_paths: List[str] = []
+        for file_path in requested_files:
+            variants: List[str] = []
+            canonical = _canonical_source_path(file_path)
+            for candidate in (file_path, canonical):
+                normalized = str(candidate or "").strip()
+                if normalized and normalized not in variants:
+                    variants.append(normalized)
+                if normalized and normalized not in lookup_paths:
+                    lookup_paths.append(normalized)
+            variant_map[file_path] = variants
 
         indexed_at_by_file: Dict[str, str] = {}
         batch_size = 250
         try:
             with _lib_get_connection(self.db_path) as conn:
-                for start in range(0, len(files), batch_size):
-                    batch = files[start:start + batch_size]
+                for start in range(0, len(lookup_paths), batch_size):
+                    batch = lookup_paths[start:start + batch_size]
                     placeholders = ",".join("?" for _ in batch)
                     rows = conn.execute(
                         f"""
@@ -495,23 +537,24 @@ class DocsRAG:
                         indexed_at_by_file[str(row["source_file"])] = str(row["indexed_at"] or "")
         except sqlite3.OperationalError as exc:
             if "no such table: doc_chunks" in str(exc).lower():
-                return {file_path: True for file_path in files}
+                return {file_path: True for file_path in requested_files}
             raise
 
-        return {
-            file_path: self._needs_reindex_from_indexed_at(file_path, indexed_at_by_file.get(file_path))
-            for file_path in files
-        }
+        result: Dict[str, bool] = {}
+        for file_path in requested_files:
+            latest_indexed_at: Optional[str] = None
+            for variant in variant_map.get(file_path, []):
+                indexed_at = indexed_at_by_file.get(variant)
+                if indexed_at and (latest_indexed_at is None or indexed_at > latest_indexed_at):
+                    latest_indexed_at = indexed_at
+            canonical = _canonical_source_path(file_path) or file_path
+            result[file_path] = self._needs_reindex_from_indexed_at(canonical, latest_indexed_at)
+        return result
 
     def needs_reindex(self, file_path: str) -> bool:
         """Check if file needs reindexing based on modification time."""
         try:
-            with _lib_get_connection(self.db_path) as conn:
-                result = conn.execute(
-                    "SELECT MAX(updated_at) FROM doc_chunks WHERE source_file = ?",
-                    (file_path,),
-                ).fetchone()
-            return self._needs_reindex_from_indexed_at(file_path, result[0] if result else None)
+            return self.needs_reindex_many([file_path]).get(file_path, True)
         except Exception as e:
             logger.warning("Error checking if %s needs reindex: %s", file_path, e)
             return True  # When in doubt, reindex
@@ -540,16 +583,24 @@ class DocsRAG:
 
     def index_document(self, file_path: str) -> int:
         """Index a single document, returning number of chunks created."""
+        canonical_file_path = _canonical_source_path(file_path)
+        if not canonical_file_path:
+            logger.warning("Empty document path provided for indexing")
+            return 0
+        source_variants: List[str] = []
+        for candidate in (str(file_path or "").strip(), canonical_file_path):
+            if candidate and candidate not in source_variants:
+                source_variants.append(candidate)
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(canonical_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
-            logger.warning("Error reading %s: %s", file_path, e)
+            logger.warning("Error reading %s: %s", canonical_file_path, e)
             return 0
 
         # Add temporal context for archived log files
-        if self._is_archive_log(file_path):
-            content = self._archive_temporal_header(file_path) + content
+        if self._is_archive_log(canonical_file_path):
+            content = self._archive_temporal_header(canonical_file_path) + content
 
         # Chunk the content
         chunk_texts = self.chunk_markdown(content)
@@ -571,12 +622,12 @@ class DocsRAG:
                 logger.warning(
                     "Failed embedding for chunk %s in %s; aborting reindex to preserve old chunks",
                     i,
-                    file_path,
+                    canonical_file_path,
                 )
                 return 0
             prepared_chunks.append((
-                f"{file_path}:{i}",
-                file_path,
+                f"{canonical_file_path}:{i}",
+                canonical_file_path,
                 i,
                 chunk_text,
                 section_header,
@@ -590,11 +641,15 @@ class DocsRAG:
         # All embeddings succeeded — now safe to delete and replace
         chunks_created = 0
         with _lib_get_connection(self.db_path) as conn:
+            placeholders = ",".join("?" for _ in source_variants)
             old_chunk_ids = [row[0] for row in conn.execute(
-                "SELECT id FROM doc_chunks WHERE source_file = ?",
-                (file_path,),
+                f"SELECT id FROM doc_chunks WHERE source_file IN ({placeholders})",
+                tuple(source_variants),
             ).fetchall()]
-            conn.execute("DELETE FROM doc_chunks WHERE source_file = ?", (file_path,))
+            conn.execute(
+                f"DELETE FROM doc_chunks WHERE source_file IN ({placeholders})",
+                tuple(source_variants),
+            )
             conn.executemany(
                 """
                     INSERT INTO doc_chunks
@@ -631,11 +686,11 @@ class DocsRAG:
                         "[docs] vec INSERT appeared to succeed but %s is absent from "
                         "vec_doc_chunks_rowids; last_indexed_at will NOT be set so the "
                         "doc is re-indexed on the next run",
-                        file_path,
+                        canonical_file_path,
                     )
                     chunks_created = 0
-        
-        logger.info("[docs] Indexed %s chunks from %s", chunks_created, file_path)
+
+        logger.info("[docs] Indexed %s chunks from %s", chunks_created, canonical_file_path)
 
         # Sync indexed timestamp to registry
         if chunks_created > 0:
@@ -645,8 +700,9 @@ class DocsRAG:
                 now = datetime.now().isoformat()
                 # Try both absolute and relative paths
                 registry.update_timestamps(file_path, indexed_at=now)
+                registry.update_timestamps(canonical_file_path, indexed_at=now)
                 try:
-                    rel = str(Path(file_path).relative_to(_workspace()))
+                    rel = str(Path(canonical_file_path).relative_to(_workspace()))
                     registry.update_timestamps(rel, indexed_at=now)
                 except ValueError:
                     pass
