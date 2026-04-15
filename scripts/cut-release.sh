@@ -58,6 +58,14 @@ ref_sha() {
   git rev-parse --verify "$ref" 2>/dev/null || true
 }
 
+tag_commit_sha() {
+  local tag="$1"
+  if ! git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+    return 0
+  fi
+  git rev-parse --verify "${tag}^{commit}" 2>/dev/null || true
+}
+
 release_body_file() {
   if [[ -f "$POST_FILE" ]]; then
     printf '%s\n' "$POST_FILE"
@@ -129,7 +137,7 @@ if [[ -n "$REMOTE_BRANCH_SHA" && "$REMOTE_BRANCH_SHA" != "$HEAD_SHA" ]]; then
   fi
 fi
 
-TAG_SHA="$(git rev-parse "${TAG}^{commit}" 2>/dev/null || true)"
+TAG_SHA="$(tag_commit_sha "$TAG")"
 if [[ -n "$TAG_SHA" && "$TAG_SHA" != "$HEAD_SHA" ]]; then
   die "tag $TAG already exists at $TAG_SHA, not release HEAD $HEAD_SHA"
 elif [[ -z "$TAG_SHA" ]]; then
