@@ -812,11 +812,16 @@ function transcriptPathMatchesSession(sessionId: string, filePath: string): bool
   return Boolean(sid && (!pathSessionId || pathSessionId === sid));
 }
 
-function rememberSessionTranscriptPath(sessionId: string, filePath: string, source: string): boolean {
+function rememberSessionTranscriptPath(
+  sessionId: string,
+  filePath: string,
+  source: string,
+  opts?: { trustedSessionMapping?: boolean },
+): boolean {
   const sid = String(sessionId || "").trim();
   const candidate = String(filePath || "").trim();
   if (!sid || !candidate) return false;
-  if (!transcriptPathMatchesSession(sid, candidate)) {
+  if (!Boolean(opts?.trustedSessionMapping) && !transcriptPathMatchesSession(sid, candidate)) {
     writeHookTrace("session.transcript_path_mismatch_skipped", {
       source,
       session_id: sid,
@@ -1702,16 +1707,6 @@ function writeDaemonSignal(
     if (backup) {
       resolvedPath = backup;
       sessionTranscriptPaths.set(sessionId, backup);
-    }
-  }
-  // After a gateway restart sessionTranscriptPaths is empty. For compaction/session_end
-  // the UUID-based candidate paths (e.g. 87826784-....jsonl) won't exist when OC reused
-  // the physical file (46becb55.jsonl) for a post-reset session. Scan by mtime instead.
-  if (!resolvedPath && (signalType === "compaction" || signalType === "session_end")) {
-    const actual = findLatestOCSessionFile();
-    if (actual) {
-      resolvedPath = actual;
-      sessionTranscriptPaths.set(sessionId, resolvedPath);
     }
   }
   if (!resolvedPath) {
@@ -3887,7 +3882,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           // Track transcript path for daemon signal writing
           const trackSessionId = String(update?.sessionId || "").trim();
           if (trackSessionId) {
-            rememberSessionTranscriptPath(trackSessionId, sessionFile, "transcript-update-session-id");
+            rememberSessionTranscriptPath(trackSessionId, sessionFile, "transcript-update-session-id", {
+              trustedSessionMapping: true,
+            });
           }
           const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
@@ -3905,7 +3902,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           // Also register the path-derived sessionId so writeDaemonSignal can find
           // the transcript even when update.sessionId is missing (e.g. openresponses sessions).
           if (sessionId && sessionId !== trackSessionId) {
-            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-path-session-id");
+            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-path-session-id", {
+              trustedSessionMapping: true,
+            });
           }
           const sessionKey = String(
             update?.sessionKey
@@ -3937,7 +3936,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
           // Track resolved sessionId → transcript file for daemon signals
           if (sessionId) {
-            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id");
+            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id", {
+              trustedSessionMapping: true,
+            });
             if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey)) {
               preserveSessionTranscript(sessionId, sessionFile, "transcript-update-matrix");
             }
@@ -6202,6 +6203,8 @@ export const __test = {
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
+  rememberSessionTranscriptPath,
+  writeDaemonSignal,
   looksLikeQuaidEventLogTranscript,
   preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,

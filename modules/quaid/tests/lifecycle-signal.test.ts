@@ -299,6 +299,33 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("trusts explicit transcript-update session mappings for physical OC filenames", () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-map-"));
+    const sessionsDir = path.join(baseDir, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const sid = "8fe2f1ee";
+    const sessionFile = path.join(sessionsDir, "46becb55.jsonl");
+    fs.writeFileSync(
+      sessionFile,
+      `${JSON.stringify({ role: "user", content: "Japanese maple seed" })}\n`,
+      "utf8",
+    );
+
+    const remembered = __test.rememberSessionTranscriptPath(
+      sid,
+      sessionFile,
+      "transcript-update-resolved-session-id",
+      { trustedSessionMapping: true },
+    );
+
+    expect(remembered).toBe(true);
+    const sigPath = __test.writeDaemonSignal(sid, "compaction", { source: "timeout_extract" });
+    expect(sigPath).toBeTruthy();
+    const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+    expect(payload.transcript_path).toBe(sessionFile);
+    try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+  });
+
   it("distinguishes Quaid event logs from preserved conversation transcripts", () => {
     const eventLogFile = `/tmp/quaid-oc-event-log-${Date.now()}.jsonl`;
     const transcriptFile = `/tmp/quaid-oc-transcript-${Date.now()}.jsonl`;

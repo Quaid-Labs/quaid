@@ -589,11 +589,11 @@ function transcriptPathMatchesSession(sessionId, filePath) {
   const pathSessionId = parseSessionIdFromTranscriptFilePath(filePath);
   return Boolean(sid && (!pathSessionId || pathSessionId === sid));
 }
-function rememberSessionTranscriptPath(sessionId, filePath, source) {
+function rememberSessionTranscriptPath(sessionId, filePath, source, opts) {
   const sid = String(sessionId || "").trim();
   const candidate = String(filePath || "").trim();
   if (!sid || !candidate) return false;
-  if (!transcriptPathMatchesSession(sid, candidate)) {
+  if (!Boolean(opts?.trustedSessionMapping) && !transcriptPathMatchesSession(sid, candidate)) {
     writeHookTrace("session.transcript_path_mismatch_skipped", {
       source,
       session_id: sid,
@@ -1347,13 +1347,6 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     if (backup) {
       resolvedPath = backup;
       sessionTranscriptPaths.set(sessionId, backup);
-    }
-  }
-  if (!resolvedPath && (signalType === "compaction" || signalType === "session_end")) {
-    const actual = findLatestOCSessionFile();
-    if (actual) {
-      resolvedPath = actual;
-      sessionTranscriptPaths.set(sessionId, resolvedPath);
     }
   }
   if (!resolvedPath) {
@@ -3110,7 +3103,9 @@ ${notice}` : notice;
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
           const trackSessionId = String(update?.sessionId || "").trim();
           if (trackSessionId) {
-            rememberSessionTranscriptPath(trackSessionId, sessionFile, "transcript-update-session-id");
+            rememberSessionTranscriptPath(trackSessionId, sessionFile, "transcript-update-session-id", {
+              trustedSessionMapping: true
+            });
           }
           const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
@@ -3123,7 +3118,9 @@ ${notice}` : notice;
             []
           ) || String(update?.sessionId || "").trim();
           if (sessionId && sessionId !== trackSessionId) {
-            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-path-session-id");
+            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-path-session-id", {
+              trustedSessionMapping: true
+            });
           }
           const sessionKey = String(
             update?.sessionKey || update?.targetSessionKey || resolveSessionKeyForSessionId(sessionId) || ""
@@ -3144,7 +3141,9 @@ ${notice}` : notice;
           }
           const timeoutActivitySessionId = sessionId;
           if (sessionId) {
-            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id");
+            rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id", {
+              trustedSessionMapping: true
+            });
             if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey)) {
               preserveSessionTranscript(sessionId, sessionFile, "transcript-update-matrix");
             }
@@ -5045,6 +5044,8 @@ const __test = {
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
+  rememberSessionTranscriptPath,
+  writeDaemonSignal,
   looksLikeQuaidEventLogTranscript,
   preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,

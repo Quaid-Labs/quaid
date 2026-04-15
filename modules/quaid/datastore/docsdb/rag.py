@@ -667,8 +667,14 @@ class DocsRAG:
                         "DELETE FROM vec_doc_chunks WHERE chunk_id = ?",
                         [(chunk_id,) for chunk_id in old_chunk_ids],
                     )
+                target_chunk_ids = list({chunk_id for chunk_id, _, _, _, _, _ in prepared_chunks})
+                if target_chunk_ids and self._doc_vec_table_exists(conn):
+                    conn.executemany(
+                        "DELETE FROM vec_doc_chunks WHERE chunk_id = ?",
+                        [(chunk_id,) for chunk_id in target_chunk_ids],
+                    )
                 conn.executemany(
-                    "INSERT OR REPLACE INTO vec_doc_chunks(chunk_id, embedding) VALUES (?, ?)",
+                    "INSERT INTO vec_doc_chunks(chunk_id, embedding) VALUES (?, ?)",
                     [(chunk_id, packed_embedding) for chunk_id, _, _, _, _, packed_embedding in prepared_chunks],
                 )
                 # Verify the vec entry was actually created. The INSERT can partially
@@ -1225,6 +1231,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 reg_docs = _DR().list_docs()
                 runtime_workspace = _workspace()
                 registry_paths = []
+                seen_registry_paths = set()
                 for doc in reg_docs:
                     raw_path = doc.get("file_path", "")
                     if not raw_path:
@@ -1234,7 +1241,11 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         p = runtime_workspace / p
                     if not p.is_file():
                         continue
-                    registry_paths.append(str(p))
+                    resolved = str(p.resolve())
+                    if resolved in seen_registry_paths:
+                        continue
+                    seen_registry_paths.add(resolved)
+                    registry_paths.append(resolved)
 
                 registry_reindex = rag.needs_reindex_many(registry_paths)
                 for file_path in registry_paths:

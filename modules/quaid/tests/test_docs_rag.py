@@ -913,6 +913,30 @@ class TestRagMaintenanceThirdPass:
         mock_index.assert_not_called()
         assert result.metrics["rag_files_skipped"] >= 1
 
+    def test_registry_third_pass_dedupes_duplicate_paths(self, tmp_path):
+        """Duplicate registry rows for the same file are indexed once."""
+        handler = self._register_and_get_handler()
+        ctx = _make_rag_ctx(tmp_path)
+
+        existing_file = tmp_path / "dup.md"
+        existing_file.write_text("# Duplicate\nStill one file.")
+        resolved = str(existing_file.resolve())
+
+        fake_reg = MagicMock()
+        fake_reg.list_docs.return_value = [
+            {"file_path": str(existing_file)},
+            {"file_path": str(existing_file)},
+        ]
+
+        with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
+             patch("datastore.docsdb.rag.DocsRAG.needs_reindex_many", return_value={resolved: True}), \
+             patch("datastore.docsdb.rag.DocsRAG.index_document", return_value=2) as mock_index:
+            result = handler(ctx)
+
+        mock_index.assert_called_once_with(resolved)
+        assert result.metrics["rag_files_indexed"] >= 1
+
     def test_nonexistent_path_is_silently_skipped(self, tmp_path):
         """A registered doc whose path does not exist on disk is silently skipped."""
         handler = self._register_and_get_handler()
