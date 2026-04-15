@@ -289,6 +289,7 @@ class CodexAdapter(QuaidAdapter):
             "- For throwaway or temporary work, use the misc project for this instance:\n"
             f"  - `misc--{instance_name}` at `{misc_path}/`\n"
             f"  - If it is missing, create it first with `quaid project create misc--{instance_name} --source-root {misc_path}/`\n"
+            f"  - After writing a throwaway file, register it: `quaid registry register <absolute-file-path> --project misc--{instance_name}`\n"
             "- Always tell the user which project received the file.\n"
         )
 

@@ -187,6 +187,9 @@ describe("openclaw auto-provision", () => {
 
     expect(String(promptResult?.prependSystemContext || "")).toContain("instance: openclaw-m13test");
     expect(String(promptResult?.prependSystemContext || "")).toContain("misc--openclaw-m13test");
+    expect(String(promptResult?.prependSystemContext || "")).toContain(
+      "quaid registry register <absolute-file-path> --project misc--openclaw-m13test",
+    );
     expect(String(promptResult?.prependSystemContext || "")).not.toContain("openclaw-main");
 
     warn.mockRestore();

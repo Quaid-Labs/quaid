@@ -2834,6 +2834,8 @@ notify_user(${JSON.stringify(message)})
             `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
             `  Misc project path: ${miscPath}/`,
             `  The misc project directory already exists \u2014 write files there directly.`,
+            `  After writing the file, register it to misc:`,
+            `    quaid registry register <absolute-file-path> --project misc--${promptInstanceId}`,
             `  If quaid commands say "project not found" for misc--${promptInstanceId}, create it first:`,
             `    quaid project create misc--${promptInstanceId} --source-root ${miscPath}/`,
             `  (If registration says "already exists", that is fine \u2014 proceed to write.)`,

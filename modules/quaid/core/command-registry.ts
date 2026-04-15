@@ -23,7 +23,8 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     id: "misc_project",
     description:
       "Throwaway, temp, quick, or hello-world files and scripts — anything the user explicitly wants to put somewhere temporary",
-    hint: "Throwaway file — write to: {misc_path}",
+    hint:
+      "Throwaway file — write to: {misc_path}; then register it: quaid registry register <absolute-file-path> --project misc--{instance}",
   },
   {
     id: "create_project",

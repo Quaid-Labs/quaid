@@ -80,6 +80,7 @@ from lib.worker_pool import run_callables
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.tokens import (
     extract_key_tokens as _lib_extract_key_tokens,
+    is_subset_overlap_candidate,
     texts_are_near_identical,
     STOPWORDS as _LIB_STOPWORDS,
 )
@@ -9196,9 +9197,40 @@ def store(
                 for idx, (existing, sim) in enumerate(batch, start=1):
                     llm_result = llm_results.get(idx) if llm_results else None
                     if llm_result is not None:
-                        if llm_result["is_same"]:
+                        subsumes = llm_result.get("subsumes")
+                        is_same = bool(llm_result.get("is_same"))
+
+                        # Guard against over-eager duplicate rejections: if the LLM
+                        # says "same" but omits subsumption direction, infer it when
+                        # token-overlap clearly indicates subset/superset; otherwise
+                        # treat as distinct unless strings are near-identical.
+                        if is_same and subsumes is None:
+                            if is_subset_overlap_candidate(text, existing.name):
+                                text_tokens = _lib_extract_key_tokens(text)
+                                existing_tokens = _lib_extract_key_tokens(existing.name)
+                                if len(text_tokens) >= len(existing_tokens):
+                                    subsumes = "a_subsumes_b"
+                                else:
+                                    subsumes = "b_subsumes_a"
+                            elif not texts_are_near_identical(text, existing.name):
+                                dedup_telemetry["llm_different_hits"] += 1
+                                dedup_telemetry["llm_accept_hits"] += 1
+                                log_dedup_decision(
+                                    graph,
+                                    text,
+                                    existing.id,
+                                    existing.name,
+                                    sim,
+                                    "llm_accept_guard",
+                                    llm_reasoning=llm_result.get("reasoning"),
+                                    owner_id=owner_id,
+                                    source=source,
+                                    conn=_conn,
+                                )
+                                continue
+
+                        if is_same or subsumes is not None:
                             dedup_telemetry["llm_same_hits"] += 1
-                            subsumes = llm_result.get("subsumes")
                             decision = "llm_reject"
                             if subsumes == "a_subsumes_b":
                                 decision = "llm_subsume_update"

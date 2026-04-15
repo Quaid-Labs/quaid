@@ -2286,6 +2286,8 @@ class TestRollingExtraction:
             assert kwargs["session_id"] == "sess-roll"
             flush_metric = rolling_metrics[-1]
             assert flush_metric["event"] == "rolling_flush"
+            assert flush_metric["staged_batches"] == 1
+            assert flush_metric["staged_facts"] == 1
             assert flush_metric["carry_facts_final"] == 1
             assert flush_metric["carry_duplicate_facts_dropped"] == 2
             assert flush_metric["payload_duplicate_facts_collapsed"] == 0

@@ -58,6 +58,17 @@ QUALITY RULES:
 - Use the user's name as subject, third person
 - Each fact must be self-contained and understandable without context
 - Be specific: "User likes spicy Thai food" > "User likes food"
+- Favor specific facts over generalities.
+- Preserve concrete anchors from the transcript whenever available: names, organizations, places, dates, times, numbers, and version identifiers.
+- Do NOT abstract a concrete statement into a generic umbrella fact.
+  Example: prefer "User switched to gpt-5.4-mini on April 12" over "User changed models".
+- If a concrete anchored version exists, do not emit a competing generic paraphrase for the same claim.
+- This applies to ALL fact categories (relationships, preferences, events, technical/project changes), not just relationship facts.
+- Do NOT degrade named/anchored facts into generic paraphrases.
+  Examples:
+  - prefer "Solomon Steadman has a sister named Diana" over "Solomon Steadman has a sister".
+  - prefer "Quaid added retry cap 60 in providers.py" over "Quaid changed retries".
+- If both generic and specific versions are present, keep the most specific anchored version.
 - If a recommendation later paid off or was adopted, keep BOTH the original recommendation object and the later outcome as separate searchable facts when both are explicitly present.
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Add "domains" as an array of domain tags from the available domain list

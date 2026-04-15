@@ -264,6 +264,7 @@ class TestResolveCommandRegistry:
         misc_entry = next(c for c in resolved if c["id"] == "misc_project")
         expected = str(tmp_path / "projects" / "misc--openclaw-main")
         assert expected in misc_entry["hint"]
+        assert "quaid registry register <absolute-file-path> --project misc--openclaw-main" in misc_entry["hint"]
 
     def test_falls_back_to_directory_scan(self, tmp_path, monkeypatch):
         """resolve_command_registry finds instance by scanning misc-- dirs."""

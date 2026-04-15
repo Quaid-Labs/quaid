@@ -2179,6 +2179,81 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
 EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 
 
+_HEURISTIC_CHILD_PHRASE_RE = re.compile(
+    r"""(?x)
+    (?:(?P<parent>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})\s+)?
+    (?i:\bhas\s+(?:a|an)\s+(?:\w+\s+)?(?:daughter|son|child)\b(?:\s+named)?\s+)
+    (?P<child>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
+    """
+)
+_HEURISTIC_POSSESSIVE_CHILD_RE = re.compile(
+    r"""(?x)
+    (?P<parent>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
+    ['’]s\s+(?i:(?:daughter|son|child)\b(?:\s+is)?\s+)
+    (?P<child>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
+    """
+)
+
+
+def _heuristic_family_edges_for_fact(fact_id: str, fact_text: str, owner_full: Optional[str]) -> List[Dict[str, Any]]:
+    """Best-effort family-edge fallback when LLM returns no edges."""
+    text = " ".join(str(fact_text or "").strip().split())
+    if not text:
+        return []
+
+    candidates: List[Tuple[str, str]] = []
+
+    # Pattern: "... has a daughter/son/child (named) Alice"
+    last_explicit_parent = ""
+    for match in _HEURISTIC_CHILD_PHRASE_RE.finditer(text):
+        child = str(match.group("child") or "").strip()
+        parent = str(match.group("parent") or "").strip()
+        if parent:
+            last_explicit_parent = parent
+        elif last_explicit_parent:
+            parent = last_explicit_parent
+        if parent and child:
+            candidates.append((parent, child))
+
+    # Pattern: "Diana's daughter Alice ..."
+    for match in _HEURISTIC_POSSESSIVE_CHILD_RE.finditer(text):
+        parent = str(match.group("parent") or "").strip()
+        child = str(match.group("child") or "").strip()
+        if parent and child:
+            candidates.append((parent, child))
+
+    edges: List[Dict[str, Any]] = []
+    seen = set()
+    for parent_raw, child_raw in candidates:
+        subject = _canonicalize_owner_alias(parent_raw, owner_full)
+        obj = _canonicalize_owner_alias(child_raw, owner_full)
+        if not subject or not obj:
+            continue
+        if _is_placeholder_entity_name(subject, owner_full) or _is_placeholder_entity_name(obj, owner_full):
+            continue
+        if subject.lower() == obj.lower():
+            continue
+        subject, subject_type, relation, obj, obj_type = _normalize_edge(
+            subject, "Person", "parent_of", obj, "Person"
+        )
+        key = (subject.lower(), relation, obj.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append(
+            {
+                "fact_id": fact_id,
+                "fact_text": fact_text,
+                "subject": subject,
+                "subject_type": subject_type,
+                "relation": relation,
+                "object": obj,
+                "object_type": obj_type,
+            }
+        )
+    return edges
+
+
 def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
                         metrics: JanitorMetrics,
                         relations_list: str = "") -> List[List[Dict[str, Any]]]:
@@ -2324,6 +2399,19 @@ JSON array only:"""
             fact_edges.append(fact_edge)
 
         results[idx - 1] = fact_edges
+
+    # Fallback: if LLM returns no edges for explicit family-child statements,
+    # synthesize parent_of edges deterministically.
+    for idx, fact in enumerate(facts):
+        if results[idx]:
+            continue
+        heuristics = _heuristic_family_edges_for_fact(
+            fact_id=str(fact.get("id", "") or ""),
+            fact_text=str(fact.get("text", "") or ""),
+            owner_full=owner_full,
+        )
+        if heuristics:
+            results[idx] = heuristics
 
     return results
 
@@ -3152,6 +3240,13 @@ Respond with a JSON array only, no markdown fencing:
                 if isinstance(maybe, list):
                     cur = maybe
                     break
+            else:
+                # Some retries return a single decision object instead of an array.
+                # Accept this shape to avoid false "missing_ids" hard-failures.
+                has_id = isinstance(cur.get("id"), str) or isinstance(cur.get("memory_id"), str)
+                has_action = isinstance(cur.get("action"), str) or isinstance(cur.get("decision"), str)
+                if has_id and has_action:
+                    cur = [cur]
 
         if not isinstance(cur, list):
             return []
@@ -3325,9 +3420,52 @@ Respond with a JSON array only, no markdown fencing:
                     missing = sorted(batch_ids - batch_covered)
 
             if missing:
+                targeted_missing = list(missing)
+                print(
+                    f"    WARNING: Review batch {batch_num}: retry still missing "
+                    f"{len(targeted_missing)} id(s); running targeted retries"
+                )
+                _diag_log_decision(
+                    "review_batch_targeted_retry",
+                    batch_num=batch_num,
+                    missing_ids=targeted_missing,
+                )
+                if metrics:
+                    metrics.add_warning(
+                        f"Review batch {batch_num}: targeted retry for missing_ids={targeted_missing}"
+                    )
+
+                for missing_id in targeted_missing:
+                    row_payload = next((item for item in batch_data if item.get("id") == missing_id), None)
+                    if not isinstance(row_payload, dict):
+                        continue
+                    single_prompt = (
+                        "Return exactly one decision for the memory below.\n"
+                        "Allowed actions: KEEP, DELETE, FIX.\n"
+                        "Do not use MERGE.\n\n"
+                        f"Memory:\n{json.dumps(row_payload, indent=2)}\n\n"
+                        "Respond with JSON object only:\n"
+                        "{\"id\":\"...\",\"action\":\"KEEP\"}"
+                    )
+                    single_text, single_duration = call_deep_reasoning(
+                        single_prompt,
+                        system_prompt=system_prompt,
+                        max_tokens=300,
+                    )
+                    if metrics:
+                        metrics.add_llm_call(single_duration)
+                    single_raw = parse_json_response(single_text or "")
+                    single_decisions = _normalize_review_decisions(single_raw)
+                    if single_decisions:
+                        decisions.extend(single_decisions)
+
+                batch_covered = _collect_covered_ids(decisions)
+                missing = sorted(batch_ids - batch_covered)
+
+            if missing:
                 missing_ids_overall.extend(missing)
                 msg = (
-                    f"Review batch {batch_num}: incomplete decision coverage after retry; "
+                    f"Review batch {batch_num}: incomplete decision coverage after targeted retry; "
                     f"missing_ids={missing}"
                 )
                 if metrics:

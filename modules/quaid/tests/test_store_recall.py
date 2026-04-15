@@ -956,6 +956,178 @@ class TestStoreDedup:
         assert result["dedup_telemetry"]["llm_subsume_update_hits"] == 1
         assert result["dedup_telemetry"]["llm_subsume_keep_hits"] == 0
 
+    def test_llm_same_without_subsumes_infers_subset_update(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        from types import SimpleNamespace
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store("Solomon has a sister named Diana", owner_id="quaid", skip_dedup=True)
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        vec_meta = {
+            "vec_query_count": 1,
+            "vec_candidates_returned": 1,
+            "vec_candidate_limit": 64,
+            "vec_limit_hits": 0,
+        }
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", True), \
+             patch(
+                 "datastore.memorydb.memory_graph._get_memory_config",
+                 return_value=SimpleNamespace(
+                     janitor=SimpleNamespace(
+                         dedup=SimpleNamespace(
+                             auto_reject_threshold=0.98,
+                             gray_zone_low=0.88,
+                             llm_verify_enabled=True,
+                         )
+                     )
+                 ),
+             ), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 return_value=([(existing_row, 0.91)], vec_meta),
+             ), \
+             patch(
+                 "datastore.memorydb.memory_graph._llm_dedup_check_many",
+                 return_value={
+                     1: {
+                         "is_same": True,
+                         "subsumes": None,
+                         "reasoning": "same core relation",
+                     }
+                 },
+             ), \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=False):
+            result = store("Solomon has a sister named Diana who lives in Seattle", owner_id="quaid")
+
+        assert result["status"] == "updated"
+        assert result["dedup_telemetry"]["llm_subsume_update_hits"] == 1
+        node = graph.get_node(created["id"])
+        assert node is not None
+        assert node.name == "Solomon has a sister named Diana who lives in Seattle"
+
+    def test_llm_same_without_subsumes_and_no_overlap_stores_new_fact(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        from types import SimpleNamespace
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store("Solomon has a sister", owner_id="quaid", skip_dedup=True)
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        vec_meta = {
+            "vec_query_count": 1,
+            "vec_candidates_returned": 1,
+            "vec_candidate_limit": 64,
+            "vec_limit_hits": 0,
+        }
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", True), \
+             patch(
+                 "datastore.memorydb.memory_graph._get_memory_config",
+                 return_value=SimpleNamespace(
+                     janitor=SimpleNamespace(
+                         dedup=SimpleNamespace(
+                             auto_reject_threshold=0.98,
+                             gray_zone_low=0.88,
+                             llm_verify_enabled=True,
+                         )
+                     )
+                 ),
+             ), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 return_value=([(existing_row, 0.90)], vec_meta),
+             ), \
+             patch(
+                 "datastore.memorydb.memory_graph._llm_dedup_check_many",
+                 return_value={
+                     1: {
+                         "is_same": True,
+                         "subsumes": None,
+                         "reasoning": "possibly related",
+                     }
+                 },
+             ), \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=False):
+            result = store("Diana has a daughter named Alice", owner_id="quaid")
+
+        assert result["status"] == "created"
+        assert result["dedup_telemetry"]["llm_accept_hits"] == 1
+        with graph._get_conn() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM nodes WHERE owner_id = ?", ("quaid",)).fetchone()[0]
+        assert count == 2
+
+    def test_llm_same_without_subsumes_keeps_more_specific_existing_fact(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        from types import SimpleNamespace
+
+        graph, _ = _make_graph(tmp_path)
+        specific = "Solomon has a sister named Diana who lives in Seattle"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store(specific, owner_id="quaid", skip_dedup=True)
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        vec_meta = {
+            "vec_query_count": 1,
+            "vec_candidates_returned": 1,
+            "vec_candidate_limit": 64,
+            "vec_limit_hits": 0,
+        }
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", True), \
+             patch(
+                 "datastore.memorydb.memory_graph._get_memory_config",
+                 return_value=SimpleNamespace(
+                     janitor=SimpleNamespace(
+                         dedup=SimpleNamespace(
+                             auto_reject_threshold=0.98,
+                             gray_zone_low=0.88,
+                             llm_verify_enabled=True,
+                         )
+                     )
+                 ),
+             ), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 return_value=([(existing_row, 0.91)], vec_meta),
+             ), \
+             patch(
+                 "datastore.memorydb.memory_graph._llm_dedup_check_many",
+                 return_value={
+                     1: {
+                         "is_same": True,
+                         "subsumes": None,
+                         "reasoning": "same relation, less detail",
+                     }
+                 },
+             ), \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=False):
+            result = store("Solomon has a sister named Diana", owner_id="quaid")
+
+        assert result["status"] == "duplicate"
+        assert result["dedup_telemetry"]["llm_subsume_keep_hits"] == 1
+        node = graph.get_node(created["id"])
+        assert node is not None
+        assert node.name == specific
+
 
 # ---------------------------------------------------------------------------
 # Prompt injection blocklist

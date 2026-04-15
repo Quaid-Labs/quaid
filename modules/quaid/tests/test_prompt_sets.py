@@ -37,6 +37,9 @@ def test_default_extraction_prompt_contains_expected_sections():
     assert "Extract personal facts comprehensively" in text
     assert "do not store manually" in text
     assert "remember that" in text
+    assert "Favor specific facts over generalities." in text
+    assert "Preserve concrete anchors from the transcript whenever available" in text
+    assert "This applies to ALL fact categories" in text
     assert "works_at, spouse_of, parent_of, sibling_of" in text
 
 

@@ -1357,6 +1357,7 @@ class TestCodexAdapter:
         snippet = adapter.get_cli_tools_snippet()
         assert "quaid project update <name> --description" in snippet
         assert "Do not treat edits to `PROJECT.md`" in snippet
+        assert "quaid registry register <absolute-file-path> --project misc--codex-livetest" in snippet
 
     def test_get_api_key_raises_when_fail_hard_enabled(self, monkeypatch):
         adapter = CodexAdapter()
