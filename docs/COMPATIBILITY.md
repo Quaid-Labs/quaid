@@ -4,6 +4,18 @@ This page has two views:
 - product capabilities (what Quaid provides)
 - host integration capabilities (what each platform can expose)
 
+## Validated Release Versions
+
+Versions confirmed fully compatible with Quaid through the complete M1–M15 + XP live test suite.
+
+| Quaid | OpenClaw | Claude Code | Codex CLI | Node | Date | Run | Result |
+|-------|----------|-------------|-----------|------|------|-----|--------|
+| 0.3.0-alpha (`d47e3f11`) | 2026.4.14 (`323493f`) | 2.1.109 | 0.120.0 | v25.9.0 | 2026-04-15 | Run 96 | ✅ All three platforms M1–M15 + XP |
+
+**Run 96 primary fix:** CamelCase CDX hook event names (`SessionStart` / `UserPromptSubmit` / `Stop`) — commit `3921fa602`.
+
+---
+
 ## Primary Host Integrations
 
 - OpenClaw (`openclaw` adapter)

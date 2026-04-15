@@ -1277,13 +1277,11 @@ def cmd_update_stale(
     """
     stale = check_staleness(project=project)
     purposes = get_doc_purposes()
-    cfg = get_config()
-    max_docs = cfg.docs.max_docs_per_update
     updated = 0
     skipped_significant = 0
 
     if stale:
-        for doc_path, info in list(stale.items())[:max_docs]:
+        for doc_path, info in list(stale.items()):
             # Check classification if trivial_only mode
             if trivial_only and info.change_classification:
                 cls = info.change_classification.get("classification", "significant")
@@ -1329,12 +1327,12 @@ def cmd_update_stale(
             e for e in all_docs
             if not e.get("last_indexed_at") and Path(e.get("file_path", "")).exists()
         ]
-        never_indexable = len(never_indexed[:max_docs])
+        never_indexable = len(never_indexed)
         if never_indexed:
             if dry_run:
                 print(f"\nWould index {never_indexable} never-indexed doc(s)")
             else:
-                for entry in never_indexed[:max_docs]:
+                for entry in never_indexed:
                     fp = entry.get("file_path", "")
                     try:
                         chunks = rag.index_document(fp)
