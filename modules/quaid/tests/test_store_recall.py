@@ -222,6 +222,21 @@ class TestStoreBasic:
         assert node is not None
         assert node.session_id == "session-1"
 
+    def test_dedup_update_prefers_current_uuid_session_id(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        text = "The Japanese maple by the back gate turns brilliant red in October"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(text, owner_id="quaid", session_id="8580e142")
+            second = store(text, owner_id="quaid", session_id="2ba1c14b")
+
+        node = graph.get_node(first["id"])
+        assert second["status"] in {"duplicate", "updated"}
+        assert node is not None
+        assert node.session_id == "2ba1c14b"
+
     def test_batch_write_duplicate_logging_reuses_shared_connection(self, tmp_path):
         from datastore.memorydb.memory_graph import batch_write, store
 

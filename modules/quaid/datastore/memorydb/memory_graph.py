@@ -8888,11 +8888,13 @@ def store(
             return existing_value
         if not existing_value:
             return new_value
+        if str(existing_value) == str(new_value):
+            return existing_value
         existing_match = re.match(r"session-(\d+)$", str(existing_value))
         new_match = re.match(r"session-(\d+)$", str(new_value))
         if existing_match and new_match:
             return existing_value if int(existing_match.group(1)) <= int(new_match.group(1)) else new_value
-        return existing_value
+        return new_value
 
     def _apply_metadata_flags(existing: Node) -> None:
         """Persist source/domain metadata on dedup-update paths."""
