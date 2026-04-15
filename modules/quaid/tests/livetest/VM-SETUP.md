@@ -92,8 +92,11 @@ python3 -m pip install --user sqlite-vec --break-system-packages
 npm install -g openclaw@latest  # or follow openclaw install procedure
 
 # Codex
-npm install -g @openai/codex@latest
-# or: brew install codex (if available)
+npm install -g @openai/codex@0.118.0
+# Keep Codex pinned at 0.118.0 for livetest/base images.
+# Newer 0.119.0/0.120.0 builds ship the native Rust binary with hooks still unimplemented,
+# which breaks Quaid's Codex hook integration.
+# or: brew install codex@0.118.0 (if available)
 
 # Claude Code
 npm install -g @anthropic-ai/claude-code@latest
@@ -148,12 +151,16 @@ Typical upgrade session:
 ```bash
 ssh admin@<vm-ip>
 openclaw update
-npm install -g @openai/codex@latest
+npm install -g @openai/codex@0.118.0
 npm install -g @anthropic-ai/claude-code@latest
 python3 -m pip install --user --upgrade sqlite-vec --break-system-packages
 exit
 ```
 Then press ENTER in the upgrade script.
+
+Base image tracking note:
+- Keep Codex pinned at `0.118.0` until hook support is implemented in newer releases.
+- Do not upgrade Codex to `@latest` in the base image or preflight automation until that changes.
 
 ---
 

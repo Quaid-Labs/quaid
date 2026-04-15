@@ -361,7 +361,7 @@ cmd_upgrade_base() {
     echo ""
     echo " Typical upgrade steps:"
     echo "   openclaw update"
-    echo "   npm install -g @openai/codex@latest  # or brew upgrade codex"
+    echo "   npm install -g @openai/codex@0.118.0  # keep pinned until newer Codex hooks work"
     echo "   # verify claude --version"
     echo ""
     echo " When done, come back here and press ENTER to save as new base."

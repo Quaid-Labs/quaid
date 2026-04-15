@@ -238,7 +238,7 @@ upgrade_cli() {
 }
 
 upgrade_cli "claude"   "npm install -g @anthropic-ai/claude-code@latest --prefer-offline 2>/dev/null || npm install -g @anthropic-ai/claude-code@latest"
-upgrade_cli "codex"    "npm install -g @openai/codex@latest --prefer-offline 2>/dev/null || npm install -g @openai/codex@latest"
+upgrade_cli "codex"    "npm install -g @openai/codex@0.118.0 --prefer-offline 2>/dev/null || npm install -g @openai/codex@0.118.0"
 # openclaw: try built-in updater, fall back to no-op if not available
 if command -v openclaw &>/dev/null; then
     printf "  upgrading %-12s ... " "openclaw"
