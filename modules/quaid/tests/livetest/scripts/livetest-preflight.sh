@@ -17,11 +17,12 @@
 #
 # Usage:
 #   livetest-preflight.sh [options]
-#   livetest-preflight.sh                         # full preflight
+#   livetest-preflight.sh                         # full preflight (dev tree)
 #   livetest-preflight.sh --wipe-platform cc      # CC-only wipe (OC is live)
 #   livetest-preflight.sh --skip-wipe             # skip wipe, just check + start services
 #   livetest-preflight.sh --dry-run               # print commands without executing
 #   livetest-preflight.sh --config path/to/livetest-config.json
+#   livetest-preflight.sh --release-verify v0.3.0-alpha  # release verification mode
 #
 # Options:
 #   --wipe-platform <all|oc|cc|cdx>  Wipe scope (default: all)
@@ -29,6 +30,10 @@
 #   --skip-platform-start            Skip starting platform services
 #   --dry-run                        Print commands without executing them
 #   --config <path>                  Path to livetest-config.json (default: auto-detected)
+#   --release-verify <tag>           Release verification mode: step 6 clones the tagged
+#                                    GitHub release instead of rsyncing the dev tree.
+#                                    Use for post-release validation only. Default mode
+#                                    always pulls from dev.
 #   -h, --help                       Show this help
 #
 # Exit codes:
@@ -48,6 +53,7 @@ SKIP_WIPE=0
 SKIP_PLATFORM_START=0
 DRY_RUN=0
 CONFIG_PATH="$CONFIG_DEFAULT"
+RELEASE_VERIFY=""   # empty = dev mode (default); set to a tag like v0.3.0-alpha for release verification
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
@@ -57,6 +63,7 @@ while [[ $# -gt 0 ]]; do
         --skip-platform-start)  SKIP_PLATFORM_START=1; shift ;;
         --dry-run)              DRY_RUN=1; shift ;;
         --config)               CONFIG_PATH="$2"; shift 2 ;;
+        --release-verify)       RELEASE_VERIFY="$2"; shift 2 ;;
         -h|--help)
             sed -n '2,/^$/{ s/^# //; s/^#//; p }' "$0"
             exit 0
@@ -102,7 +109,12 @@ echo "========================================"
 echo " livetest-preflight"
 echo " Remote host : $REMOTE_HOST"
 echo " Wipe scope  : $WIPE_PLATFORM"
-[[ "$DRY_RUN" == "1" ]] && echo " Mode        : DRY RUN"
+if [[ -n "$RELEASE_VERIFY" ]]; then
+    echo " Mode        : RELEASE VERIFICATION ($RELEASE_VERIFY)"
+else
+    echo " Mode        : dev (default)"
+fi
+[[ "$DRY_RUN" == "1" ]] && echo " Dry-run     : YES"
 echo "========================================"
 echo ""
 
@@ -279,30 +291,47 @@ else
     echo "  [5/8] wipe complete"
 fi
 
-# --- Step 6: Code sync to remote (after wipe so dev tree is not deleted) ---
+# --- Step 6: Code sync to remote (after wipe so install source is not deleted) ---
 echo ""
-echo "[6/8] Syncing latest Quaid code to remote..."
-
-LOCAL_DEV="$HOME/quaidcode/dev"
-LOCAL_HEAD="$(cd "$LOCAL_DEV" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
-
-if [[ "$DRY_RUN" == "1" ]]; then
-    echo "  [dry-run] would sync local dev ($LOCAL_HEAD) to remote"
+if [[ -n "$RELEASE_VERIFY" ]]; then
+    echo "[6/8] Release verification mode — cloning $RELEASE_VERIFY from GitHub..."
+    RELEASE_REPO="https://github.com/Quaid-Labs/quaid.git"
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would clone $RELEASE_REPO (tag $RELEASE_VERIFY) to remote ~/quaid-release"
+    else
+        ssh "$REMOTE_HOST" bash -s <<REMOTE_CLONE
+set -euo pipefail
+rm -rf ~/quaid-release
+git clone --depth 1 --branch "$RELEASE_VERIFY" "$RELEASE_REPO" ~/quaid-release 2>&1 | tail -3
+echo "  cloned $RELEASE_VERIFY to ~/quaid-release"
+REMOTE_CLONE
+        echo "  $PASS  release $RELEASE_VERIFY cloned to remote ~/quaid-release"
+        echo "  M0 install source : ~/quaid-release"
+        echo "  M0 guide path     : ~/quaid-release/docs/AI-INSTALL.md"
+        echo "  Note: do NOT pass QUAID_ALLOW_DEV_INSTALL=1 in release verify mode"
+    fi
 else
-    echo "  Building runtime artifacts (local HEAD: $LOCAL_HEAD)..."
-    (cd "$LOCAL_DEV/modules/quaid" && npm run build:runtime --silent)
-    echo "  rsyncing dev tree to remote..."
-    rsync -a --checksum \
-        --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
-        --exclude='.git/' --exclude='logs/' --exclude='.env*' --exclude='.tmp/' \
-        --exclude='*MagicMock*' --exclude='<MagicMock*' --exclude='~/' \
-        "$LOCAL_DEV/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
-    # Do not pre-seed ~/.quaid/plugins/quaid before M0 install.
-    # A plugin/runtime copy in place before the installer runs can cause the
-    # OpenClaw gateway to auto-provision an instance and make the installer
-    # think Quaid is already installed. Sync only the dev tree here; let M0
-    # install own the runtime/plugin deployment step.
-    echo "  $PASS  remote dev tree synced (local HEAD: $LOCAL_HEAD)"
+    echo "[6/8] Syncing latest Quaid code to remote..."
+    LOCAL_DEV="$HOME/quaidcode/dev"
+    LOCAL_HEAD="$(cd "$LOCAL_DEV" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would sync local dev ($LOCAL_HEAD) to remote"
+    else
+        echo "  Building runtime artifacts (local HEAD: $LOCAL_HEAD)..."
+        (cd "$LOCAL_DEV/modules/quaid" && npm run build:runtime --silent)
+        echo "  rsyncing dev tree to remote..."
+        rsync -a --checksum \
+            --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
+            --exclude='.git/' --exclude='logs/' --exclude='.env*' --exclude='.tmp/' \
+            --exclude='*MagicMock*' --exclude='<MagicMock*' --exclude='~/' \
+            "$LOCAL_DEV/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
+        # Do not pre-seed ~/.quaid/plugins/quaid before M0 install.
+        # A plugin/runtime copy in place before the installer runs can cause the
+        # OpenClaw gateway to auto-provision an instance and make the installer
+        # think Quaid is already installed. Sync only the dev tree here; let M0
+        # install own the runtime/plugin deployment step.
+        echo "  $PASS  remote dev tree synced (local HEAD: $LOCAL_HEAD)"
+    fi
 fi
 
 # --- Step 7: Copy coordinator CC OAuth credentials to remote ---
@@ -362,5 +391,12 @@ fi
 echo ""
 echo "========================================"
 echo " Preflight complete — remote is clean"
-echo " Ready to start Run M0."
+if [[ -n "$RELEASE_VERIFY" ]]; then
+    echo " Mode     : RELEASE VERIFICATION ($RELEASE_VERIFY)"
+    echo " Source   : ~/quaid-release"
+    echo " Guide    : ~/quaid-release/docs/AI-INSTALL.md"
+    echo " Ready to start release verification M0."
+else
+    echo " Ready to start Run M0."
+fi
 echo "========================================"

@@ -419,7 +419,16 @@ tests/livetest/scripts/livetest-preflight.sh --wipe-platform cc --skip-platform-
 ## Step 3 — M0: Agent-Driven Install
 
 **M0 tests the installer itself.** Each platform agent reads the Quaid AI install
-guide on main and installs Quaid itself. Do not run the installer directly.
+guide and installs Quaid itself. Do not run the installer directly.
+
+**Install source depends on run mode** (set by preflight):
+
+| Mode | Preflight flag | Install source | Guide path | Notes |
+|------|---------------|----------------|------------|-------|
+| Normal dev run (default) | *(none)* | `~/quaidcode/dev` (rsync from local) | `~/quaidcode/dev/docs/AI-INSTALL.md` | Requires `QUAID_ALLOW_DEV_INSTALL=1` |
+| Release verification | `--release-verify <tag>` | `~/quaid-release` (cloned from GitHub tag) | `~/quaid-release/docs/AI-INSTALL.md` | Do NOT pass `QUAID_ALLOW_DEV_INSTALL=1` |
+
+Release verification runs are rare — only used to confirm a shipped release installs correctly end-to-end. Default runs always use the dev tree.
 
 ### Execution order
 
@@ -439,7 +448,7 @@ installs reuse the shared credential store.
 Tell the platform pane:
 
 > Please install Quaid by following the local AI install guide exactly, including its mandatory first command:
-> `~/quaidcode/dev/docs/AI-INSTALL.md`
+> `<GUIDE_PATH>`  ← dev runs: `~/quaidcode/dev/docs/AI-INSTALL.md` | release verify: `~/quaid-release/docs/AI-INSTALL.md`
 >
 > Use these parameters:
 > - Adapter/platform: All platforms (`Install All Available`)
@@ -447,9 +456,8 @@ Tell the platform pane:
 > - Owner name: OWNER_NAME
 >
 > Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not choose or pass a custom workspace path.
-> The guide path is inside the local main checkout, so use that checkout directly as the install source.
+> The guide is inside the install source checkout — use that directory as the repo root.
 > Do not browse the web for install docs or source code during M0.
-> Do not install a release build or any non-main branch.
 >
 > Tell me when all platforms are installed and `quaid doctor` returns healthy for each.
 
