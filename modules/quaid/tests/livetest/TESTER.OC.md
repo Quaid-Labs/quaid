@@ -24,18 +24,19 @@ ssh REMOTE_HOST 'curl -sf http://localhost:18789/health && echo "gateway ok" || 
 
 ## Sending Messages
 
-All OC messages are sent via `matrix-send` on the VM:
+All OC messages are sent via the canonical synced helper on the VM:
 
 ```bash
 # Send a message to OC
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "your message here"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "your message here"'
 
 # Send a lifecycle command (new session, reset)
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/reset"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/reset"'
 ```
 
-Config is in `~/quaidcode/util/scripts/.matrix-config` on the VM:
+Config is read from env or `.matrix-config` next to the helper. For VM compatibility,
+the helper also falls back to `~/quaidcode/util/scripts/.matrix-config` if present:
 - Homeserver: `http://127.0.0.1:8008`
 - Room: `!fDTDMrzcdmaVKRnhxu:localhost`
 - OC bot: `@openclaw-bot:localhost`
@@ -162,9 +163,9 @@ just as for CC and CDX. See `LIVE-TEST-GUIDE.md` post-M0 steps.
 ### M1 — Extraction via `/new`
 Send a message to seed a memorable fact, build 2–3 exchanges, then:
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
 # Wait 3–5 seconds for OC to process the lifecycle command
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "Hello"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "Hello"'
 ```
 Wait 60s, then verify via FTS direct check — use `sqlite3 ... nodes_fts` rather
 than `quaid recall` for exact keyword lookup. Use `rowid` not `id` as the column.

@@ -505,7 +505,7 @@ Respawn the relevant pane again if it becomes contaminated mid-run.
 ### OpenClaw
 
 OC interaction uses **Matrix DM**, not the TUI. All test messages and slash commands
-are sent via `matrix-send` on the VM. The Matrix server (`ai.quaid.matrix-synapse`)
+are sent via the canonical `modules/quaid/tests/livetest/scripts/matrix-send` helper on the VM. The Matrix server (`ai.quaid.matrix-synapse`)
 and OpenClaw gateway must be running before any OC milestone.
 
 **Why Matrix, not TUI:** TUI `/new` creates `tui-`-prefixed sessions that don't fire
@@ -521,13 +521,13 @@ ssh REMOTE_HOST 'launchctl list | grep -E "matrix-synapse|openclaw.gateway"'
 Pattern for all OC interaction:
 ```bash
 # Send a message to OC
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "message here"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "message here"'
 # New session
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
 # Reset
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/reset"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/reset"'
 # Read OC's reply
-ssh REMOTE_HOST 'python3 ~/quaidcode/util/scripts/matrix-read.py 2>/dev/null | tail -20'
+ssh REMOTE_HOST 'python3 ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-read.py 2>/dev/null | tail -20'
 ```
 
 OC replies appear as `@openclaw-bot:localhost` messages in the Matrix room.
@@ -668,13 +668,13 @@ CC milestones play out in `main:100` (claude interactive).
 Procedure:
 1. Send the agent something memorable via Matrix:
    ```bash
-   ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "My neighbour just told me she won a regional chili cook-off last weekend using a smoked brisket recipe she has kept secret for twenty years."'
+   ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "My neighbour just told me she won a regional chili cook-off last weekend using a smoked brisket recipe she has kept secret for twenty years."'
    ```
    Note the distinctive keyword(s) you'll search for (e.g. `chili cook-off`).
 2. Wait for full idle (OC reply visible via matrix-read).
 3. Send `/new`:
    ```bash
-   ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+   ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
    ```
 4. Wait for extraction. OC extracts inline (30–60 s after `/new`). CC extracts
    asynchronously via session_end hook — wait **at least 2 minutes** after `/exit`
@@ -963,19 +963,19 @@ Start a fresh Matrix session so the transcript is empty before seeding.
 which contaminates carry_facts. Send `/new` via Matrix to start a clean session:
 
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
 ```
 
 In the new session, send two facts via Matrix — do NOT say "niece":
 
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "My sister'\''s name is Diana."'
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "Diana has a daughter named Alice."'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "My sister'\''s name is Diana."'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "Diana has a daughter named Alice."'
 ```
 
 Then trigger `/reset` to extract those facts and start a new session:
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/reset"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/reset"'
 ```
 
 **Verify edges before asking the agent** — if extraction went wrong, fix it
@@ -1089,8 +1089,8 @@ told the user it's in misc. File placement (path) is not graded — only registr
 After project CRUD, trigger extraction to generate project logs. For OC, send via Matrix:
 
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "We have just tested project creation, show, list, update, and delete for the live-test project via the quaid CLI. This is part of the quaid live-test suite M8 run."'
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/reset"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "We have just tested project creation, show, list, update, and delete for the live-test project via the quaid CLI. This is part of the quaid live-test suite M8 run."'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/reset"'
 ```
 
 For CC/CDX: prompt the agent in the active session and use `/reset`.
@@ -1206,9 +1206,9 @@ ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-livetest
 
 # Step 2: Send session content and /new via Matrix (NOT TUI — TUI /new creates tui- sessions
 #   that don't fire the OC hook; Matrix /new routes through handleSlashLifecycleFromMessage correctly).
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "The session test keyword is zephyr-delta-nine."'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "The session test keyword is zephyr-delta-nine."'
 # Wait a moment, then send /new to trigger session_end extraction
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
 # Wait ~30s for daemon to process.
 
 # Step 3: Check daemon/runtime evidence that the fresh session extraction ran
@@ -2052,17 +2052,17 @@ If that still returns nothing, try more specific phrasing:
 Ask OC via Matrix:
 
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "Can you search the cross-live-test project docs for anything about Ember Glass escalation?"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "Can you search the cross-live-test project docs for anything about Ember Glass escalation?"'
 ```
 
 If no answer, try:
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "What is the escalation code word Ember Glass in the cross-live-test project docs?"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "What is the escalation code word Ember Glass in the cross-live-test project docs?"'
 ```
 
 Optional provenance follow-up:
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "How did you know that?"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "How did you know that?"'
 ```
 
 Note: The generic "What does the project say about X?" framing matches PROJECT.md in the vector index

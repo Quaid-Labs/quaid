@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Send a Matrix DM into the OpenClaw test room.
+
+Config resolution order:
+1. MATRIX_HOMESERVER / MATRIX_TOKEN / MATRIX_ROOM_ID env vars
+2. .matrix-config next to this script
+3. ~/quaidcode/util/scripts/.matrix-config (back-compat for old VM setups)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    data: dict[str, str] = {}
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            data[key.strip()] = value.strip().strip("'").strip('"')
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        pass
+    return data
+
+
+def _cfg() -> dict[str, str]:
+    script_dir = Path(__file__).resolve().parent
+    cfg = {}
+    cfg.update(_load_env_file(Path.home() / "quaidcode" / "util" / "scripts" / ".matrix-config"))
+    cfg.update(_load_env_file(script_dir / ".matrix-config"))
+    for key in ("MATRIX_HOMESERVER", "MATRIX_TOKEN", "MATRIX_ROOM_ID"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            cfg[key] = value
+    return cfg
+
+
+def main() -> int:
+    if len(sys.argv) < 2 or not str(sys.argv[1]).strip():
+        print("Usage: matrix-send <message>", file=sys.stderr)
+        return 1
+
+    cfg = _cfg()
+    homeserver = str(cfg.get("MATRIX_HOMESERVER") or cfg.get("HOMESERVER") or "").strip().rstrip("/")
+    token = str(cfg.get("MATRIX_TOKEN") or cfg.get("TOKEN") or "").strip()
+    room_id = str(cfg.get("MATRIX_ROOM_ID") or cfg.get("ROOM") or "").strip()
+    if not homeserver or not token or not room_id:
+        print(
+            "matrix-send config missing. Set MATRIX_HOMESERVER, MATRIX_TOKEN, MATRIX_ROOM_ID "
+            "via env or scripts/.matrix-config",
+            file=sys.stderr,
+        )
+        return 2
+
+    message = " ".join(sys.argv[1:]).strip()
+    room_enc = urllib.parse.quote(room_id, safe="")
+    txn_id = f"quaid-{int(time.time() * 1000)}"
+    url = f"{homeserver}/_matrix/client/v3/rooms/{room_enc}/send/m.room.message/{txn_id}"
+    payload = json.dumps({"msgtype": "m.text", "body": message}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+    if raw.strip():
+        print(raw.strip())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

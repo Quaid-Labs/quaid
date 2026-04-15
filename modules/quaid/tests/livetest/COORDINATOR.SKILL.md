@@ -61,10 +61,10 @@ The Matrix server (`ai.quaid.matrix-synapse`) and OpenClaw gateway
 (`ai.openclaw.gateway`) run as persistent services on the VM; no launch step
 is needed after M0.
 
-Messages are sent via the `matrix-send` helper on the VM:
+Messages are sent via the canonical synced `matrix-send` helper on the VM:
 ```bash
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "message text"'
-ssh REMOTE_HOST '~/quaidcode/util/scripts/matrix-send "/new"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "message text"'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
 ```
 
 Extraction is triggered by `/new` sent as a Matrix DM message — this routes
