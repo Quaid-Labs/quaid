@@ -34,6 +34,42 @@ After install, start here:
 
 ---
 
+## Benchmarks
+
+Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
+
+Context-window baselines like FC are included here as short-horizon upper bounds, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets, controlling cost growth, and preserving continuity across sessions.
+
+Terminology:
+- `AL-S`: clean core AgentLife lane
+- `AL-L`: long/noisy lane with filler sessions
+- `AL-L OBD`: `AL-L` compressed into one operational day, simulates a power user
+- `FC`: full-context baseline without a memory system
+- `Tokens`: minimum eval tokens to answer all 283 benchmark questions
+
+Headline launch summary:
+
+| Lane | Quaid Acc | Quaid Tok | FC Acc | FC Tok | OC Acc | OC Tok |
+|---|---:|---:|---:|---:|---:|---:|
+| AL-S | 92.23% | 5,753,673 | 92.90% | 29,828,646 | 69.40% | unknown |
+| AL-L | 87.81% | 5,917,209 | 87.70% | 34,596,206 | 63.06% | unknown |
+| AL-L OBD | 89.58% | 8,382,952 | 87.70%* | 34,596,206* | 63.06%* | unknown* |
+
+Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AL-S` remains the clean reference lane. `AL-L` and `AL-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the FC Sonnet baseline. In the long-form FC rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row where a published baseline exists.
+
+Those study rows are the basis for the claim that Quaid can stay near full-context quality at roughly one-fifth the eval token cost on long-form lanes.
+
+* FC and OpenClaw Native do not currently distinguish between `AL-L` and `AL-L OBD`, so the OBD row mirrors the same published baseline values.
+
+Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
+
+Use these canonical links:
+- [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
+- [AgentLife Technical Report (2026-03-29)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260329.md)
+- [AgentLife Technical Report (2026-04-05)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260405.md)
+
+---
+
 ## How Quaid Is Different
 
 - **Local-first by default:** memory graph, embeddings, and maintenance run on your machine.
@@ -50,12 +86,11 @@ After install, start here:
 
 | Capability | OpenClaw | Claude Code | Codex |
 |---|---|---|---|
-| Memory + janitor lifecycle | Yes | Yes | Yes |
-| Project docs + RAG system | Yes | Yes | Yes |
-| Evolving `SOUL/USER/ENVIRONMENT` | Yes | Yes | Yes |
-| Hook-based auto extraction | Yes | Yes | Yes |
-| Timeout Triggered Compaction (harvests token savings) | **Yes** | **No** | **No** |
-| Shared provider credential required for Quaid LLM calls | **Yes** | **Yes** | **Yes** |
+| Memory + janitor lifecycle | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
+| Project docs + RAG system | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
+| Evolving `SOUL/USER/ENVIRONMENT` | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
+| Hook-based auto extraction | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
+| Timeout Triggered Compaction (harvests token savings) | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#b91c1c;font-weight:600">No</span> | <span style="color:#b91c1c;font-weight:600">No</span> |
 
 OpenAI-backed lanes remain available in alpha, but they are currently experimental and benchmark materially below Anthropic for Quaid memory quality. Anthropic is the recommended backend unless you are blocked on credentials.
 
@@ -81,45 +116,6 @@ This is vision, not a released feature.
 Quaid is being designed to be extensible not only at the platform-adaptor layer, but eventually at the datastore and ingest layers as well. The long-term direction is for Quaid to act as an open coordination layer for AI knowledge systems: accepting multiple datastore types and input pipelines, enforcing clear boundaries between them in core, and making those boundaries exportable and importable through modular `.ego` artifacts.
 
 This depends on stronger plugin and datastore contracts than exist today, and is part of the post-launch direction rather than a completed surface.
-
-## Benchmarks
-
-Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
-
-Context-window baselines like FC are included here as short-horizon upper bounds, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets, controlling cost growth, and preserving continuity across sessions.
-
-Terminology:
-- `AL-S`: clean core AgentLife lane
-- `AL-L`: long/noisy lane with filler sessions
-- `AL-L OBD`: `AL-L` compressed into one operational day, simulates a power user
-- `FC`: full-context baseline without a memory system
-- `Tokens`: minimum eval tokens to answer all 283 benchmark questions
-
-Headline launch summary:
-
-|        | Quaid Sonnet/Sonnet | FC Sonnet | OpenClaw Native |
-|--------|---------------------|-----------|-----------------|
-| AL-S   | 92.23%              | 92.90%    | 69.40%          |
-| AL-L   | 87.81%              | 87.70%    | 63.06%          |
-| AL-L OBD | 89.58%            | 87.70%    | unknown         |
-
-Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AL-S` remains the clean reference lane. `AL-L` and `AL-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the FC Sonnet baseline. In the long-form FC rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row where a published baseline exists.
-
-Historical token-cost reference from the March 29 Sonnet/Haiku study (`AGENTLIFE_TECHNICAL_REPORT_20260329.md`):
-- `AL-S`: Quaid Sonnet/Haiku (`r880`, `r847`) reached `87.69%` at `5,753,673` eval tokens, versus FC Sonnet (`r606`) at `92.90%` and `29,828,646` eval tokens.
-- `AL-L`: Quaid Sonnet/Haiku (`r895`, `r863`) reached `85.82%` at `5,917,209` eval tokens, versus FC Sonnet (`r857`) at `87.70%` and `34,596,206` eval tokens.
-- Sonnet eval study: `AL-L` Haiku-ingest + Sonnet-eval (`r944`) reached `88.69%` at `8,382,952` eval tokens, versus the same FC Sonnet row at `34,596,206`.
-
-Those study rows are the basis for the claim that Quaid can stay near full-context quality at roughly one-fifth the eval token cost on long-form lanes.
-
-Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
-
-Use these canonical links:
-- [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
-- [AgentLife Technical Report (2026-03-29)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260329.md)
-- [AgentLife Technical Report (2026-04-05)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260405.md)
-
----
 
 ## Design Philosophy: LLM-First
 
