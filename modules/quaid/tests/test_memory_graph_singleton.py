@@ -48,3 +48,23 @@ def test_get_graph_initializes_singleton_once_under_concurrency():
     finally:
         mg.MemoryGraph = old_memory_graph_cls
         mg._graph = old_graph
+
+
+def test_health_repairs_missing_visible_identity_stubs(tmp_path, monkeypatch):
+    from lib.adapter import TestAdapter, set_adapter, reset_adapter
+    import datastore.memorydb.memory_graph as mg
+
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    try:
+        visible_root = adapter.visible_instance_root()
+        visible_root.mkdir(parents=True, exist_ok=True)
+        created = mg._ensure_visible_identity_stubs()
+        assert sorted(created) == ["ENVIRONMENT.md", "SOUL.md", "USER.md"]
+        assert (visible_root / "SOUL.md").read_text(encoding="utf-8") == "# SOUL\n"
+        assert (visible_root / "USER.md").read_text(encoding="utf-8") == "# USER\n"
+        assert (visible_root / "ENVIRONMENT.md").read_text(encoding="utf-8") == "# ENVIRONMENT\n"
+    finally:
+        reset_adapter()

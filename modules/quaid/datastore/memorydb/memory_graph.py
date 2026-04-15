@@ -87,6 +87,29 @@ from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_log
 
 logger = logging.getLogger(__name__)
 
+
+def _ensure_visible_identity_stubs() -> List[str]:
+    """Ensure visible identity markdown exists for the active instance."""
+    try:
+        adapter = get_adapter_instance()
+        visible_root = adapter.visible_instance_root()
+    except Exception:
+        return []
+
+    created: List[str] = []
+    try:
+        visible_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return []
+
+    for name in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
+        target = visible_root / name
+        if target.exists():
+            continue
+        target.write_text(f"# {name.removesuffix('.md')}\n", encoding="utf-8")
+        created.append(name)
+    return created
+
 # Prompt injection blocklist — defense-in-depth for stored facts
 _INJECTION_PATTERNS = [
     re.compile(p, re.IGNORECASE) for p in [
@@ -10540,6 +10563,9 @@ if __name__ == "__main__":
             print(json.dumps(graph.get_stats(), indent=2))
 
         elif args.command == "health":
+            created = _ensure_visible_identity_stubs()
+            if created:
+                logger.info("Auto-created missing visible identity stubs: %s", ", ".join(created))
             graph = get_graph()
             print(json.dumps(graph.get_health_metrics(), indent=2))
 

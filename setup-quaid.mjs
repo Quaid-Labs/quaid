@@ -4318,12 +4318,8 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
     log.info(`Created hidden instance directory: ${hiddenRoot}`);
     log.info(`Created visible instance directory: ${visibleRoot}`);
-    for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
-      const fp = path.join(visibleRoot, f);
-      if (!fs.existsSync(fp)) {
-        fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
-        log.info(`Created ${f}`);
-      }
+    for (const f of ensureVisibleIdentityStubs(visibleRoot)) {
+      log.info(`Created ${f}`);
     }
     const instanceJournalDir = path.join(visibleRoot, "journal");
     if (!fs.existsSync(instanceJournalDir)) {
@@ -5808,6 +5804,18 @@ function ensureProjectSeedFileFromTemplate(sourceDir, destDir, relPath, fallback
   if (fallbackText) {
     fs.writeFileSync(destPath, fallbackText.trimEnd() + "\n", "utf8");
   }
+}
+
+function ensureVisibleIdentityStubs(visibleRoot) {
+  fs.mkdirSync(visibleRoot, { recursive: true });
+  const created = [];
+  for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
+    const fp = path.join(visibleRoot, f);
+    if (fs.existsSync(fp)) continue;
+    fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`, "utf8");
+    created.push(f);
+  }
+  return created;
 }
 
 function sleep(ms) {

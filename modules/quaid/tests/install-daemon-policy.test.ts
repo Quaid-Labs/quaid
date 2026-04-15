@@ -225,4 +225,13 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('s.start("Installing Codex daemon launch agent...")');
     expect(setupText).toContain("installCodexDaemonLaunchAgent(resolvedInstanceId)");
   });
+
+  it("install ensures all visible identity stubs exist for the resolved instance", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function ensureVisibleIdentityStubs(visibleRoot)");
+    expect(setupText).toContain('for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"])');
+    expect(setupText).toContain("for (const f of ensureVisibleIdentityStubs(visibleRoot))");
+  });
 });
