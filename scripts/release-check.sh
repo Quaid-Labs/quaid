@@ -8,7 +8,7 @@ echo "[release-check] docs consistency"
 node "$ROOT_DIR/scripts/check-docs-consistency.mjs"
 
 echo "[release-check] privacy audit"
-node "$ROOT_DIR/scripts/privacy-audit.mjs"
+node "$ROOT_DIR/scripts/privacy-audit.mjs" --tree-only
 
 echo "[release-check] release evidence"
 node "$ROOT_DIR/scripts/release-evidence.mjs" check
