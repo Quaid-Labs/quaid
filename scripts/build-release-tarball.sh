@@ -5,18 +5,17 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUT1="$ROOT_DIR/release/quaid-release.tar.gz"
 OUT2="${ROOT_DIR%/dev}/quaid-release.tar.gz"
 TMP_TAR="/tmp/quaid-release.tar.gz"
+HEAD_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 
 mkdir -p "$(dirname "$OUT1")"
 
 cd "$ROOT_DIR"
 
-tar \
-  --exclude='.git' \
-  --exclude='node_modules' \
-  --exclude='logs' \
-  --exclude='.pytest-home' \
-  -czf "$TMP_TAR" \
-  .
+# Build the release artifact from tracked files at HEAD only.
+# Do not package the whole working tree: local VM images, temp dirs, prior
+# tarballs, and other untracked/ignored artifacts can be enormous and are not
+# part of the release surface.
+git archive --format=tar "$HEAD_SHA" | gzip -c > "$TMP_TAR"
 
 cp "$TMP_TAR" "$OUT1"
 cp "$TMP_TAR" "$OUT2"
