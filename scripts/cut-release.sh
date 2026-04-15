@@ -11,16 +11,11 @@ POST_FILE="docs/releases/${TAG}-release-post.md"
 TARBALL_PATH="$ROOT_DIR/release/quaid-release.tar.gz"
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 DRY_RUN=0
-ALLOW_CANARY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
       DRY_RUN=1
-      shift
-      ;;
-    --allow-canary)
-      ALLOW_CANARY=1
       shift
       ;;
     *)
@@ -89,11 +84,8 @@ fi
 case "$CURRENT_BRANCH" in
   main|release/*)
     ;;
-  canary)
-    [[ "$ALLOW_CANARY" -eq 1 ]] || die "refusing to cut a release from canary without --allow-canary"
-    ;;
   *)
-    die "release cuts must run from main or release/* (or canary with --allow-canary during transition); current branch is $CURRENT_BRANCH"
+    die "release cuts must run from main or release/*; current branch is $CURRENT_BRANCH"
     ;;
 esac
 
@@ -150,8 +142,6 @@ if [[ "$CURRENT_BRANCH" == "main" ]]; then
   run_cmd git push github main
 elif [[ "$CURRENT_BRANCH" == release/* ]]; then
   echo "[cut-release] source branch is release branch; no separate main push"
-elif [[ "$CURRENT_BRANCH" == "canary" ]]; then
-  echo "[cut-release] transitional canary source; not pushing canary as part of release"
 fi
 
 echo "[cut-release] push release branch"

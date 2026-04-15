@@ -252,7 +252,7 @@ Quaid uses the fixed split home layout (`~/.quaid` hidden, `~/quaid` visible); d
 > `/tmp/quaid-install` or similar fixed paths from a prior run. Let the installer manage
 > its own source.
 
-## Canary / Private Test Installs (No Public Release Required)
+## Branch / Private Test Installs (No Public Release Required)
 
 For pre-release validation, install directly from a branch or commit SHA:
 
@@ -260,7 +260,7 @@ For pre-release validation, install directly from a branch or commit SHA:
 node setup-quaid.mjs --agent \
   --owner-name "<Person Name>" \
   --source github \
-  --ref canary
+  --ref main
 ```
 
 Pin to an exact commit for reproducible tests:
@@ -272,7 +272,7 @@ node setup-quaid.mjs --agent \
   --ref <commit-sha>
 ```
 
-Artifact fallback (local file path or URL to a `.tar.gz` canary package):
+Artifact fallback (local file path or URL to a `.tar.gz` package):
 
 ```bash
 node setup-quaid.mjs --agent \

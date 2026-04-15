@@ -251,9 +251,9 @@ yourself.
    > - Owner name: OWNER_NAME
    >
    > Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not choose or pass a custom workspace path.
-   > The guide path is inside the local canary checkout, so use that checkout directly as the install source.
+   > The guide path is inside the local main checkout, so use that checkout directly as the install source.
    > Do not browse the web for install docs or source code during M0.
-   > Do not install a release build or any non-canary branch.
+   > Do not install a release build or any non-main branch.
    >
    > Tell me when Quaid is installed and `quaid doctor` returns healthy.
 
@@ -288,7 +288,7 @@ yourself.
 
 5. **Verify install quality** per your platform supplement and the guide.
 
-**M0 PASS:** Platform self-installed from canary AND pre-install survey visible AND install messages visible AND `quaid doctor` healthy.
+**M0 PASS:** Platform self-installed from main AND pre-install survey visible AND install messages visible AND `quaid doctor` healthy.
 **M0 FAIL:** Platform could not install, silent install, or `quaid doctor` errors.
 On FAIL: post an ISSUE to the coordinator mailbox with the full platform pane capture.
 

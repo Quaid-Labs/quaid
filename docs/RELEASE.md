@@ -58,11 +58,11 @@ node scripts/release-owner-check.mjs
 ```
 
 If an unpushed commit was created with any other identity, amend or rewrite it
-before any canary push or release step.
+before any main push or release step.
 
 ## Privacy Guard
 
-Release and canary checks read local blocked markers from
+Release and main-push checks read local blocked markers from
 `.quaid-dev.local.json` and fail if those values appear in:
 
 - tracked files, or
@@ -185,7 +185,7 @@ For live clears:
   - `Quaid/Claude Code`
   - `Quaid/Codex`
 - XP is part of release readiness, but it does not replace host compatibility rows.
-- Live clears write the accepted cleared runtime SHA into `compatibility.json` on `canary`.
+- Live clears write the accepted cleared runtime SHA into `compatibility.json` for the active release line.
 - If `HEAD` has already moved by the time the live lane records the clear, pass
   `--sha <cleared-runtime-sha>` so the row reflects what was actually tested.
 - `bash scripts/release-check.sh` rewrites those SHA placeholders to the released Quaid version when the clear SHA still matches release `HEAD`, or when Solomon has locally approved the post-clear delta with `scripts/release-approve-delta.mjs`.
@@ -206,23 +206,22 @@ The old e2e automation is deprecated and is not part of release truth.
 - Do not treat `run-quaid-e2e.sh` or `run-quaid-e2e-matrix.sh` as a required pre-release gate.
 - If e2e is ever rebuilt, it should return as a new supported lane rather than a silently assumed one.
 
-## Canary Pushes
+## Main Pushes
 
-For `canary`, use the lighter guarded push path:
+For `main`, use the guarded push path:
 
 ```bash
-bash scripts/push-canary.sh
+bash scripts/push-main.sh
 ```
 
 This script:
 
-- refuses pushes from non-`canary` branches
-- refuses `main` pushes
+- refuses pushes from non-`main` branches
 - requires a clean worktree
-- refuses to push on top of a `canary` branch whose unique history still contains banned local/bot attribution
+- refuses to push a range that still contains banned local/bot attribution
 - scans tracked files for local/private markers before push
-- runs the canary-safe identity/docs/runtime checks
-- pushes only to `github canary`
+- runs the mainline identity/docs/runtime checks
+- pushes only to `github main`
 
 ## Tarball Build
 

@@ -114,6 +114,7 @@ function scanTrackedTree(blocked) {
       'NOTICE',
       'scripts/privacy-audit.mjs',
       'scripts/push-canary.sh',
+      'scripts/push-main.sh',
     ].includes(file));
 
   for (const [needle, source] of blocked.entries()) {
@@ -163,7 +164,7 @@ const blockedStrings = collectBlockedStrings(localConfig);
 if (blockedStrings.size === 0) {
   die([
     `no local privacy markers found in ${path.relative(repoRoot, localConfigPath) || localConfigPath}`,
-    'populate .quaid-dev.local.json with real local values and/or privacy.blockedStrings before release or canary push',
+    'populate .quaid-dev.local.json with real local values and/or privacy.blockedStrings before release or main push',
   ]);
 }
 

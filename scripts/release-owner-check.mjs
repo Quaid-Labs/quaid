@@ -64,7 +64,7 @@ const failures = [];
 
 if (isLocalOnlyEmail(expectedEmail)) {
   failures.push(
-    `release owner email "${expectedEmail}" is local-only; set a public-safe email before release/canary push`,
+    `release owner email "${expectedEmail}" is local-only; set a public-safe email before release/main push`,
   );
 }
 
@@ -101,7 +101,7 @@ if (!localEmail.ok || localEmail.out !== expectedEmail) {
 }
 if (localEmail.ok && isLocalOnlyEmail(localEmail.out)) {
   failures.push(
-    `git config user.email is "${localEmail.out}", which is local-only and not valid for public release/canary push`,
+    `git config user.email is "${localEmail.out}", which is local-only and not valid for public release/main push`,
   );
 }
 

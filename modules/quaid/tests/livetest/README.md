@@ -77,7 +77,7 @@ auth (no passphrase prompt).
   launching the coordinator agent.
 - SSH access to the remote host (key-based, no passphrase prompt)
 - The tester agent CLI available (`codex --yolo` by default — change in config)
-- This repo checked out on `canary`
+- This repo checked out on `main`
 
 ### On the remote host
 
@@ -249,14 +249,14 @@ The status JSON is the first place to check for drops (`state`, `stop_reason`,
 
 3. The run loop:
    - **M0** — Wipes the remote, tells each platform to self-install Quaid from
-     the canary AI install guide, verifies install quality.
+     the main-branch AI install guide, verifies install quality.
    - **M1–M13** — Testers run the milestone suite on all three platforms in
      parallel (after M0 passes).
    - **XP** — Cross-platform project linking test (after all platforms reach M13).
    - **Commit check** — If any commits were made during the run, the loop repeats.
      The run is only complete when a full suite passes with zero new commits.
 
-4. On completion the coordinator pushes canary, deploys to the remote, and
+4. On completion the coordinator pushes main, deploys to the remote, and
    sends a notification if configured.
 
 ---
@@ -267,7 +267,7 @@ Full milestone definitions are in `tests/LIVE-TEST-GUIDE.md`.
 
 | Milestone | What it tests |
 |-----------|---------------|
-| M0 | Agent-driven install from canary |
+| M0 | Agent-driven install from main |
 | M1 | Basic store and injection |
 | M2 | Multi-turn extraction and graph edges |
 | M3 | Compact / reset extraction trigger |
@@ -303,7 +303,7 @@ the tester CLI from `livetest-config.json`. Send the tester its SKILL.md and the
 current milestone on first message.
 
 **Platform install silent / no output** — M0 explicitly checks that the
-platform showed the pre-install survey, confirmed canary install provenance,
+platform showed the pre-install survey, confirmed main-branch install provenance,
 and emitted install status messages in the platform pane. Missing survey,
 ambiguous source, or silent install is a failure signal, not a pass. Do not
 paper over a silent installer by asking the platform agent to narrate progress.

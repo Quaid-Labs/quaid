@@ -38,7 +38,7 @@ by diverging from real behavior hides a bug instead of fixing it.
 
 - Use this document as the source of truth for the live test procedure.
 - Start from a clean install unless the user explicitly says to skip it.
-- Run the live test from the `canary` branch. Verify the checkout before
+- Run the live test from the `main` branch. Verify the checkout before
   installing or testing.
 - Use the installer script, not ad hoc install steps.
 - Do not use hidden helper wrappers for agent interaction during the live run.
@@ -80,7 +80,7 @@ TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh 5 "
 
 Main test environment:
 - Repo root: `~/quaid/dev`
-- Required branch: `canary`
+- Required branch: `main`
 - Test guide: `~/quaid/dev/modules/quaid/tests/LIVE-TEST-GUIDE.md`
 - Reference tool guide: `~/quaid/dev/projects/quaid/TOOLS.md`
 
@@ -184,7 +184,7 @@ Do not skip the reinstall. There is no "note it and move on" option — a run
 without installer reinstall is not a live install validation run.
 
 After the wipe and before M1:
-- verify the repo checkout is on `canary`
+- verify the repo checkout is on `main`
 - build runtime artifacts and sync to alfie
 - run the installer for OC and CC (see commands below)
 - run post-install verification checks
@@ -202,7 +202,7 @@ Valid install sources for a live run are:
 
 - local `~/quaid/dev` on this machine
 - GitHub `openclaw` when that is the target under test
-- Quaid `canary`
+- Quaid `main`
 
 When using the local dev tree, build the runtime artifacts first, then sync
 to alfie. `adapter.js` is a build artifact — rsync copies it as-is, so it
@@ -241,7 +241,7 @@ Verify branch on the local source checkout:
 cd ~/quaid/dev && git branch --show-current && git rev-parse --short HEAD
 ```
 
-Pass only if the branch is exactly `canary`.
+Pass only if the branch is exactly `main`.
 
 ### Hot-deploy during a live run (mid-test fix)
 

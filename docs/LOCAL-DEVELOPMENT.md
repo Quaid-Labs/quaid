@@ -82,7 +82,7 @@ directory such as `~/quaidcode/`.
 `privacy`
 
 - `blockedStrings`: local-only leak markers to scan for in tracked files and
-  reachable git history before release or canary push
+  reachable git history before release or main push
 - use this for legacy Telegram ids, old hostnames, historical absolute paths,
   and old private handles that must not remain reachable on GitHub
 
@@ -94,7 +94,7 @@ These repo tools read `.quaid-dev.local.json` today:
 - `modules/quaid/scripts/apply-runtime-profile.py`
 - `scripts/privacy-audit.mjs`
 - `scripts/release-owner-check.mjs`
-- `scripts/push-canary.sh`
+- `scripts/push-main.sh`
 
 Benchmark and local automation tooling may also read the `auth` section for
 provider key paths.
@@ -117,5 +117,5 @@ Tracked files should use generic placeholders and relative paths rooted at
 
 Before release, keep `privacy.blockedStrings` in your ignored local config up to
 date with any legacy private markers that were ever pushed. The privacy audit
-uses that local list to block release/canary while leaked history is still
+uses that local list to block release/main pushes while leaked history is still
 reachable.

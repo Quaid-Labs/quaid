@@ -379,7 +379,7 @@ Save as RUN_START_SHA. Compare HEAD against this at run end.
 
 Do this **every run loop iteration**, immediately after the cleanup / wipe phase
 and before you launch M0 or any tester work. Do not assume the remote checkout
-is current just because local `canary` is current.
+is current just because local `main` is current.
 
 Minimum check:
 ```bash
@@ -389,7 +389,7 @@ ssh REMOTE_HOST 'cd ~/quaidcode/dev && git rev-parse --short HEAD'
 
 If the remote SHA differs, update it before launching that loop iteration:
 ```bash
-ssh REMOTE_HOST 'cd ~/quaidcode/dev && git pull --ff-only origin canary'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && git pull --ff-only origin main'
 ```
 
 After any remote code update, restart the relevant runtime/daemon before
@@ -419,7 +419,7 @@ tests/livetest/scripts/livetest-preflight.sh --wipe-platform cc --skip-platform-
 ## Step 3 — M0: Agent-Driven Install
 
 **M0 tests the installer itself.** Each platform agent reads the Quaid AI install
-guide on canary and installs Quaid itself. Do not run the installer directly.
+guide on main and installs Quaid itself. Do not run the installer directly.
 
 ### Execution order
 
@@ -447,9 +447,9 @@ Tell the platform pane:
 > - Owner name: OWNER_NAME
 >
 > Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not choose or pass a custom workspace path.
-> The guide path is inside the local canary checkout, so use that checkout directly as the install source.
+> The guide path is inside the local main checkout, so use that checkout directly as the install source.
 > Do not browse the web for install docs or source code during M0.
-> Do not install a release build or any non-canary branch.
+> Do not install a release build or any non-main branch.
 >
 > Tell me when all platforms are installed and `quaid doctor` returns healthy for each.
 
@@ -583,7 +583,7 @@ After the platform reports completion:
 
 1. **Survey and install messages visible** — capture the platform pane and confirm:
    - the mandatory pre-install survey appeared
-   - the platform clearly stated it would install from canary
+   - the platform clearly stated it would install from main
    - installer status messages appeared during execution
    ```bash
    tmux capture-pane -t livetest:OC -p | grep -i "quaid\|install\|hook\|schema\|ready\|error" | tail -20
@@ -781,9 +781,9 @@ cd /path/to/quaid && git log --oneline RUN_START_SHA..HEAD
 
 Full suite passed with no code changes.
 
-1. Push canary:
+1. Push main:
    ```bash
-   cd /path/to/quaid && ./scripts/push-canary.sh github
+   cd /path/to/quaid && ./scripts/push-main.sh github
    ```
 2. Deploy to remote:
    ```bash
@@ -801,7 +801,7 @@ Full suite passed with no code changes.
    ```bash
    cd modules/quaid && npm run build:runtime
    ```
-2. Push canary (use `./scripts/push-canary.sh github`, not raw `git push`).
+2. Push main (use `./scripts/push-main.sh github`, not raw `git push`).
 3. Deploy to remote (rsync as above).
 4. Log all new commits to `unreviewed-commits.md` under a new run section.
 5. Print the end-of-run report (see **End-of-Run Report** below).

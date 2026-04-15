@@ -26,7 +26,7 @@ Replace `<version>` below with the actual release tag (e.g. `v0.3.0-alpha`).
 - Create annotated tag:
   - `git tag -a <version> -m "Quaid <version>"`
 - Push branch + tag:
-  - `git push origin canary`
+  - `git push origin release/0.3`
   - `git push origin <version>`
 
 ## 4) GitHub release
