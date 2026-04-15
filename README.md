@@ -15,15 +15,6 @@ Quaid is not another memory plugin — it is an **active knowledge layer** for a
 curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
 ```
 
-On machines with multiple supported hosts installed, the interactive installer
-can now do either:
-- a single-platform install, or
-- `Install All Available`, which runs the normal per-platform install flow in sequence
-- the CLI equivalent: `node setup-quaid.mjs --all-platforms`
-
-The first install provisions shared Quaid credentials. Later platform installs
-reuse that shared credential store instead of asking again.
-
 Or just point your agent here:
 ```text
 https://github.com/quaid-labs/quaid/blob/main/docs/AI-INSTALL.md
@@ -49,7 +40,7 @@ Terminology:
 
 Headline launch summary:
 
-| Lane | Quaid Acc | Quaid Tok | FC Acc | FC Tok | OC Acc | OC Tok |
+| Lane | Quaid Acc | Quaid Tok | FC Acc | FC Tok | OpenClaw Acc | OpenClaw Tok |
 |---|---:|---:|---:|---:|---:|---:|
 | AL-S | 92.23% | 5,753,673 | 92.90% | 29,828,646 | 69.40% | unknown |
 | AL-L | 87.81% | 5,917,209 | 87.70% | 34,596,206 | 63.06% | unknown |
