@@ -842,6 +842,21 @@ Full suite passed with no code changes.
 
 ### Case B — One or more new commits
 
+**Before starting a new loop run: validate patches on the current VM first.**
+
+The VM is already provisioned and all instances are warm. Do not burn a full
+M0–M15 suite to verify a single bug fix. Instead:
+
+1. Direct W1 (codex-dev) and W3 (codex-bench) to reproduce each bug on the
+   current VM and validate the fix in place — targeted, not full suite.
+2. Only after targeted validation passes on the live VM: stage the commit.
+3. Then proceed to the loop run for clean full-suite verification.
+
+This applies to all bugs filed after the run — infrastructure bugs to W1,
+recall/quality bugs to W3.
+
+Once targeted validation is complete and commits are staged:
+
 1. Build runtime:
    ```bash
    cd modules/quaid && npm run build:runtime

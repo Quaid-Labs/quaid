@@ -294,12 +294,18 @@ fi
 # --- Step 6: Code sync to remote (after wipe so install source is not deleted) ---
 echo ""
 if [[ -n "$RELEASE_VERIFY" ]]; then
-    echo "[6/8] Release verification mode — no code sync needed."
-    echo "  The coordinator will install via:"
-    echo "    curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh \\"
-    echo "      | QUAID_VERSION=$RELEASE_VERIFY bash -s -- --agent --all-platforms"
-    echo "  install.sh downloads the release tarball directly from GitHub releases."
-    [[ "$DRY_RUN" == "1" ]] && echo "  [dry-run] no-op"
+    echo "[6/8] Release verification mode — removing dev tree from remote (guards clean install)..."
+    # The dev tree (~/quaidcode/dev/modules/quaid/) left from prior dev runs triggers
+    # setup-quaid.mjs's dev-machine guard. Remove it so the release install runs clean.
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would rm -rf ~/quaidcode on remote"
+    else
+        ssh "$REMOTE_HOST" 'rm -rf ~/quaidcode && echo "  dev tree removed" || echo "  ~/quaidcode not present (ok)"'
+        echo "  The coordinator will install via:"
+        echo "    curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh \\"
+        echo "      | QUAID_VERSION=$RELEASE_VERIFY bash -s -- --agent --all-platforms"
+        echo "  install.sh downloads the release tarball directly from GitHub releases."
+    fi
 else
     echo "[6/8] Syncing latest Quaid code to remote..."
     LOCAL_DEV="$HOME/quaidcode/dev"
