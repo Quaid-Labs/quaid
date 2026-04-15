@@ -724,7 +724,14 @@ class TestRecallBasic:
                 skip_dedup=True,
                 domains=["technical"],
             )
-            results = recall("search endpoint SQL injection", owner_id="quaid", use_routing=False, min_similarity=0.0, domain={"technical": True})
+            results = recall(
+                "search endpoint SQL injection",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain={"technical": True},
+                include_unscoped=False,
+            )
             assert results
             assert all("technical" in (r.get("domains") or []) for r in results)
 
@@ -757,6 +764,7 @@ class TestRecallBasic:
                 use_routing=False,
                 min_similarity=0.0,
                 domain={"technical": True},
+                include_unscoped=False,
             )
 
         assert results

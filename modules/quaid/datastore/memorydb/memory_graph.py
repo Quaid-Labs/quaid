@@ -5330,12 +5330,22 @@ def _recall_once(
                 if (
                     r.get("id") in allowed_ids
                     or bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                    or (
+                        include_unscoped
+                        and not _domains_from_attrs({"domains": r.get("domains")})
+                    )
                 )
             ]
         except Exception:
             return [
                 r for r in rows
-                if bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                if (
+                    bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                    or (
+                        include_unscoped
+                        and not _domains_from_attrs({"domains": r.get("domains")})
+                    )
+                )
             ]
 
     if not include_all_domains:
