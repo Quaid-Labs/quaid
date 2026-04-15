@@ -4525,20 +4525,6 @@ def _normalize_domains(values: Any) -> List[str]:
     return out
 
 
-def _resolve_cli_store_domains(raw_value: Any) -> List[str]:
-    """Normalize manual CLI store domains, defaulting to personal when omitted.
-
-    `quaid store` is used for direct user-authored facts. Those facts must be
-    recallable from the default personal-memory lane (`vector_basic`), which
-    requires at least the `personal` domain when no explicit tags were given.
-    """
-    values = raw_value
-    if isinstance(raw_value, str):
-        values = [part.strip() for part in raw_value.split(",") if part.strip()]
-    domains = _normalize_domains(values)
-    return domains or ["personal"]
-
-
 def _domains_from_attrs(attrs: Any) -> List[str]:
     """Read normalized domains from attrs."""
     if not isinstance(attrs, dict):
@@ -10580,7 +10566,10 @@ if __name__ == "__main__":
         elif args.command == "store":
             try:
                 owner = args.owner or _get_memory_config().users.default_owner
-                parsed_domains = _resolve_cli_store_domains(getattr(args, "domains", ""))
+                parsed_domains = [
+                    d.strip() for d in str(getattr(args, "domains", "") or "").split(",")
+                    if d.strip()
+                ]
                 result = store(
                     args.text,
                     category=args.category,
