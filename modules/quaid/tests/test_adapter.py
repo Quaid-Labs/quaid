@@ -539,6 +539,40 @@ class TestOpenClawAdapter:
         assert "session_key=agent:main" not in transcript
         assert "source=subagent" not in transcript
 
+    def test_parse_session_jsonl_strips_session_start_boilerplate_lines(self, tmp_path):
+        session_file = tmp_path / "oc-startup-boilerplate.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "A new session was started via /new or /reset. "
+                                    "If runtime-provided startup context is included for this first turn, use it before responding to the user. "
+                                    "Then greet the user in your configured persona, if one is provided. "
+                                    "Be yourself - use your defined voice, mannerisms, and mood. "
+                                    "Keep it to 1-3 sentences and ask what they want to do. "
+                                    "If the runtime model differs from default_model in the system prompt, mention the default model. "
+                                    "Do not mention internal steps, files, tools, or reasoning.\n"
+                                    "Current time: Thursday, April 16th, 2026 - 9:46 AM (UTC) / 2026-04-16 09:46 UTC\n\n"
+                                    "My morning run route takes me past the old watermill on Henley Road."
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "A new session was started via /new or /reset" not in transcript
+        assert "Current time:" not in transcript
+        assert "User: My morning run route takes me past the old watermill on Henley Road." in transcript
+
     def test_get_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-key")
         adapter = OpenClawAdapter()
