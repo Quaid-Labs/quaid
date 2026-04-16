@@ -169,16 +169,13 @@ def _owner_full_name(owner_id: Optional[str] = None) -> str:
             speaker = next((str(s).strip() for s in identity.speakers if str(s).strip()), "")
             if speaker:
                 return speaker
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("owner identity fallback lookup failed for owner_id=%s: %s", owner_id_text, exc)
 
     # Backward-compatible runtime profiles may expose top-level owner_name.
-    try:
-        owner_name = str(getattr(_cfg, "owner_name", "") or "").strip()
-        if owner_name:
-            return owner_name
-    except Exception:
-        pass
+    owner_name = str(getattr(_cfg, "owner_name", "") or "").strip()
+    if owner_name:
+        return owner_name
 
     try:
         default = _cfg.users.default_owner
@@ -189,8 +186,8 @@ def _owner_full_name(owner_id: Optional[str] = None) -> str:
             speaker = next((str(s).strip() for s in identity.speakers if str(s).strip()), "")
             if speaker:
                 return speaker
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("default owner identity fallback lookup failed: %s", exc)
 
     # Last-resort fallback: if a configured owner id is slug-formatted, convert it
     # to a display name so owner alias edges are not dropped as "the user".
