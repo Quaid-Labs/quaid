@@ -30,7 +30,13 @@ def _cfg() -> dict[str, str]:
     cfg = {}
     cfg.update(_load_env_file(Path.home() / "quaidcode" / "util" / "scripts" / ".matrix-config"))
     cfg.update(_load_env_file(script_dir / ".matrix-config"))
-    for key in ("MATRIX_HOMESERVER", "MATRIX_TOKEN", "MATRIX_ROOM_ID", "MATRIX_READ_LIMIT"):
+    for key in (
+        "MATRIX_HOMESERVER",
+        "MATRIX_TOKEN",
+        "MATRIX_ACCESS_TOKEN",
+        "MATRIX_ROOM_ID",
+        "MATRIX_READ_LIMIT",
+    ):
         value = os.environ.get(key, "").strip()
         if value:
             cfg[key] = value
@@ -40,7 +46,12 @@ def _cfg() -> dict[str, str]:
 def main() -> int:
     cfg = _cfg()
     homeserver = str(cfg.get("MATRIX_HOMESERVER") or cfg.get("HOMESERVER") or "").strip().rstrip("/")
-    token = str(cfg.get("MATRIX_TOKEN") or cfg.get("TOKEN") or "").strip()
+    token = str(
+        cfg.get("MATRIX_TOKEN")
+        or cfg.get("MATRIX_ACCESS_TOKEN")
+        or cfg.get("TOKEN")
+        or ""
+    ).strip()
     room_id = str(cfg.get("MATRIX_ROOM_ID") or cfg.get("ROOM") or "").strip()
     try:
         limit = int(str(cfg.get("MATRIX_READ_LIMIT") or "20").strip() or "20")
@@ -48,7 +59,7 @@ def main() -> int:
         limit = 20
     if not homeserver or not token or not room_id:
         print(
-            "matrix-read config missing. Set MATRIX_HOMESERVER, MATRIX_TOKEN, MATRIX_ROOM_ID "
+            "matrix-read config missing. Set MATRIX_HOMESERVER, MATRIX_TOKEN(or MATRIX_ACCESS_TOKEN), MATRIX_ROOM_ID "
             "via env or scripts/.matrix-config",
             file=sys.stderr,
         )

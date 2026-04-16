@@ -2,7 +2,7 @@
 """Send a Matrix DM into the OpenClaw test room.
 
 Config resolution order:
-1. MATRIX_HOMESERVER / MATRIX_TOKEN / MATRIX_ROOM_ID env vars
+1. MATRIX_HOMESERVER / MATRIX_TOKEN(or MATRIX_ACCESS_TOKEN) / MATRIX_ROOM_ID env vars
 2. .matrix-config next to this script
 3. ~/quaidcode/util/scripts/.matrix-config (back-compat for old VM setups)
 """
@@ -37,7 +37,7 @@ def _cfg() -> dict[str, str]:
     cfg = {}
     cfg.update(_load_env_file(Path.home() / "quaidcode" / "util" / "scripts" / ".matrix-config"))
     cfg.update(_load_env_file(script_dir / ".matrix-config"))
-    for key in ("MATRIX_HOMESERVER", "MATRIX_TOKEN", "MATRIX_ROOM_ID"):
+    for key in ("MATRIX_HOMESERVER", "MATRIX_TOKEN", "MATRIX_ACCESS_TOKEN", "MATRIX_ROOM_ID"):
         value = os.environ.get(key, "").strip()
         if value:
             cfg[key] = value
@@ -51,11 +51,16 @@ def main() -> int:
 
     cfg = _cfg()
     homeserver = str(cfg.get("MATRIX_HOMESERVER") or cfg.get("HOMESERVER") or "").strip().rstrip("/")
-    token = str(cfg.get("MATRIX_TOKEN") or cfg.get("TOKEN") or "").strip()
+    token = str(
+        cfg.get("MATRIX_TOKEN")
+        or cfg.get("MATRIX_ACCESS_TOKEN")
+        or cfg.get("TOKEN")
+        or ""
+    ).strip()
     room_id = str(cfg.get("MATRIX_ROOM_ID") or cfg.get("ROOM") or "").strip()
     if not homeserver or not token or not room_id:
         print(
-            "matrix-send config missing. Set MATRIX_HOMESERVER, MATRIX_TOKEN, MATRIX_ROOM_ID "
+            "matrix-send config missing. Set MATRIX_HOMESERVER, MATRIX_TOKEN(or MATRIX_ACCESS_TOKEN), MATRIX_ROOM_ID "
             "via env or scripts/.matrix-config",
             file=sys.stderr,
         )
