@@ -184,17 +184,16 @@ def create_project(
         registry = _load_registry()
         if name in registry["projects"]:
             raise ValueError(f"Project already exists: {name}")
-
         if initial_instance is not None:
-            _current_instance = initial_instance
+            current_instance = str(initial_instance).strip()
         else:
             from lib.instance import instance_id as _instance_id
-            _current_instance = _instance_id()  # raises InstanceError if unset
+            current_instance = _instance_id()
 
         entry = {
             "canonical_path": str(canonical),
             "source_root": source_root,
-            "instances": [_current_instance],
+            "instances": [current_instance],
             "created_at": datetime.now(tz=timezone.utc).isoformat(),
             "description": description,
         }

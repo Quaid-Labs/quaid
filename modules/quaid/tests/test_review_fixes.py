@@ -113,7 +113,7 @@ class TestDeferredExtraction:
             reason="test_reason",
         )
 
-        deferred_dir = tmp_path / instance_id / "data" / "deferred-extractions"
+        deferred_dir = tmp_path / "instances" / instance_id / "data" / "deferred-extractions"
         files = list(deferred_dir.glob("sess-test_*.json"))
         assert len(files) == 1
 

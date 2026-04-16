@@ -75,10 +75,11 @@ def test_review_pending_memories_raises_on_incomplete_coverage_after_retry(tmp_p
     responses = [
         (json.dumps([{"id": n1.id, "action": "KEEP"}]), 0.1),  # Missing n2
         (json.dumps([]), 0.1),  # Retry still missing n2
+        (json.dumps([]), 0.1),  # Targeted retry still missing n2
     ]
 
     with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", side_effect=responses):
-        with pytest.raises(RuntimeError, match="incomplete decision coverage after retry"):
+        with pytest.raises(RuntimeError, match="incomplete decision coverage after targeted retry"):
             review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
 
     with graph._get_conn() as conn:

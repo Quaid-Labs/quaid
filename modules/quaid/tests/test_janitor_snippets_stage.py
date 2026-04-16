@@ -796,6 +796,9 @@ class TestRunSoulSnippetsReview:
     def test_snippets_review_returns_errors_list_not_raises(self, tmp_path, monkeypatch):
         """run_soul_snippets_review accumulates errors in result dict, does not raise."""
         from lib.adapter import set_adapter, reset_adapter, TestAdapter
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
         adapter = TestAdapter(tmp_path)
         set_adapter(adapter)
         try:
@@ -817,8 +820,7 @@ class TestRunSoulSnippetsReview:
                 "SOUL.md": {"purpose": "inner life", "maxLines": 80},
             }
 
-            # Workspace is adapter.instance_root() (tmp_path / "instances" / "pytest-runner")
-            ws = adapter.instance_root()
+            ws = adapter.visible_instance_root()
             (ws / "SOUL.snippets.md").write_text(
                 "# SOUL — Pending Snippets\n## Compaction — 2026-03-01 00:00:00\n- Test snippet\n",
                 encoding="utf-8",
@@ -851,6 +853,9 @@ class TestRunSoulSnippetsReview:
     def test_snippets_review_discard_succeeds_without_target_file(self, tmp_path, monkeypatch):
         """Snippets with DISCARD decision work even when target markdown file doesn't exist."""
         from lib.adapter import set_adapter, reset_adapter, TestAdapter
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
         adapter = TestAdapter(tmp_path)
         set_adapter(adapter)
         try:
@@ -871,8 +876,7 @@ class TestRunSoulSnippetsReview:
                 "SOUL.md": {"purpose": "inner life", "maxLines": 80},
             }
 
-            # Workspace is adapter.instance_root() (tmp_path / "instances" / "pytest-runner")
-            ws = adapter.instance_root()
+            ws = adapter.visible_instance_root()
             (ws / "SOUL.snippets.md").write_text(
                 "# SOUL — Pending Snippets\n## Compaction — 2026-03-01 00:00:00\n- Redundant snippet\n",
                 encoding="utf-8",

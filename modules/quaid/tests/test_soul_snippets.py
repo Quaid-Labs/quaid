@@ -14,14 +14,24 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 @pytest.fixture(autouse=True)
-def workspace_dir(tmp_path):
+def workspace_dir(tmp_path, monkeypatch):
     """Create a temporary workspace for each test."""
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
 
     iroot = adapter.instance_root()
-    (iroot / "identity").mkdir(parents=True, exist_ok=True)
+    identity_root = iroot / "identity"
+    identity_root.mkdir(parents=True, exist_ok=True)
+    adapter.identity_dir = lambda: identity_root
+    visible_projects = tmp_path / "projects"
+    visible_projects.mkdir(parents=True, exist_ok=True)
+    projects_link = iroot / "projects"
+    if not projects_link.exists():
+        projects_link.symlink_to(visible_projects, target_is_directory=True)
     yield iroot
 
     reset_adapter()

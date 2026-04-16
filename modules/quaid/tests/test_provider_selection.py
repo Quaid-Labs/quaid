@@ -31,7 +31,7 @@ from lib.providers import (
     MockEmbeddingsProvider,
 )
 from adaptors.openclaw.adapter import OpenClawAdapter
-from adaptors.openclaw.providers import GatewayLLMProvider
+from adaptors.openclaw.providers import GatewayLLMProvider, OpenClawGatewayLLMProvider
 
 
 # ---------------------------------------------------------------------------
@@ -43,12 +43,22 @@ class TestLLMProviderSelection:
 
     @pytest.mark.adapter_openclaw
     def test_openclaw_produces_gateway(self, monkeypatch, tmp_path):
-        """OpenClawAdapter.get_llm_provider() returns GatewayLLMProvider."""
+        """OpenClawAdapter returns the gateway provider when configured explicitly."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         adapter = OpenClawAdapter()
         set_adapter(adapter)
-        llm = adapter.get_llm_provider()
-        assert isinstance(llm, GatewayLLMProvider)
+        cfg = SimpleNamespace(models=SimpleNamespace(
+            llm_provider="openclaw-gateway",
+            deep_reasoning="claude-sonnet-4-5",
+            fast_reasoning="claude-haiku-4-5",
+            fast_reasoning_effort="none",
+            deep_reasoning_effort="high",
+            fast_reasoning_provider="",
+            deep_reasoning_provider="",
+        ))
+        with patch("config.get_config", return_value=cfg):
+            llm = adapter.get_llm_provider()
+        assert isinstance(llm, OpenClawGatewayLLMProvider)
 
     def test_standalone_produces_anthropic(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")

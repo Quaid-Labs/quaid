@@ -19,14 +19,14 @@ from lib.adapter import set_adapter, reset_adapter, TestAdapter
 
 @contextmanager
 def _wa_adapter_patch(tmp_path):
-    """Context manager that sets the adapter to use tmp_path as quaid home.
-
-    Yields the instance root path (where files are resolved).
-    """
+    """Context manager that binds workspace_audit paths to a temp visible home."""
+    os.environ["QUAID_HOME"] = str(tmp_path)
+    os.environ["QUAID_VISIBLE_HOME"] = str(tmp_path)
+    os.environ["QUAID_INSTANCE"] = "pytest-runner"
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     try:
-        yield adapter.instance_root()
+        yield adapter.visible_home()
     finally:
         reset_adapter()
 
@@ -318,14 +318,24 @@ class TestWorkspaceAuditProtectedRegions:
 
 
 @pytest.fixture(autouse=True)
-def snippets_workspace_dir(tmp_path):
+def snippets_workspace_dir(tmp_path, monkeypatch):
     """Create a temporary workspace for each test."""
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
 
     iroot = adapter.instance_root()
-    (iroot / "identity").mkdir(parents=True, exist_ok=True)
+    identity_root = iroot / "identity"
+    identity_root.mkdir(parents=True, exist_ok=True)
+    adapter.identity_dir = lambda: identity_root
+    visible_projects = tmp_path / "projects"
+    visible_projects.mkdir(parents=True, exist_ok=True)
+    projects_link = iroot / "projects"
+    if not projects_link.exists():
+        projects_link.symlink_to(visible_projects, target_is_directory=True)
     yield iroot
 
     reset_adapter()

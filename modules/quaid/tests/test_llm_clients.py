@@ -580,7 +580,7 @@ class TestCallLlmProvider:
         captured_call_timeouts = []
 
         @contextmanager
-        def _slot(timeout_seconds=None):
+        def _slot(timeout_seconds=None, pool_kind=None):
             captured_slot_timeouts.append(timeout_seconds)
             yield
 
@@ -608,7 +608,7 @@ class TestCallLlmProvider:
         captured_call_timeouts = []
 
         @contextmanager
-        def _slot(timeout_seconds=None):
+        def _slot(timeout_seconds=None, pool_kind=None):
             captured_slot_timeouts.append(timeout_seconds)
             yield
 

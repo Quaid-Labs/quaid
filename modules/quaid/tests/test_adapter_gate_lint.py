@@ -20,6 +20,7 @@ def test_shared_layers_do_not_add_new_hardcoded_platform_conditionals():
         ("core/interface/hooks.py", 'pattern = f"rollout-*{session_id}.jsonl" if adapter_id == "codex" else f"{session_id}.jsonl"'),
         ("core/interface/hooks.py", 'if hook_cwd and sessions_dir and adapter_id == "claude-code":'),
         ("core/interface/hooks.py", 'if adapter_id == "codex":'),
+        ("core/interface/hooks.py", 'elif wants_codex and not existing_codex:'),
         ("core/interface/hooks.py", 'if sessions_dir and adapter_id in ("openclaw", "standalone", ""):'),
         ("core/interface/hooks.py", 'elif args.command == "codex-stop":'),
     }

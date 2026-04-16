@@ -24,7 +24,7 @@ def _git_available():
 
 
 @pytest.fixture
-def project_env(tmp_path):
+def project_env(tmp_path, monkeypatch):
     """Set up a complete project system environment."""
     quaid_home = tmp_path / "quaid-home"
     quaid_home.mkdir()
@@ -43,6 +43,9 @@ def project_env(tmp_path):
     adapter.instance_root.return_value = quaid_home / "test-instance"
     adapter.adapter_id.return_value = "test-adapter"
     adapter.projects_dir.return_value = quaid_home / "shared" / "projects"
+    monkeypatch.setenv("QUAID_HOME", str(quaid_home))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(quaid_home))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-instance")
 
     with patch("lib.adapter.get_adapter", return_value=adapter):
         yield {
