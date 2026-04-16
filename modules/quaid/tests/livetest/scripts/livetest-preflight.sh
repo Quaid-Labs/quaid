@@ -255,21 +255,29 @@ REMOTE_UPGRADE
 
     printf "  upgrading %-12s ... " "openclaw"
     oc_output=""
-    if oc_output="$("$SCRIPT_DIR/openclaw-cli-safe.sh" \
+    oc_rc=0
+    # Guard step-4 against implicit errexit behavior inside command substitutions.
+    # Preflight must continue into wipe/sync/start even when OpenClaw update times
+    # out or fails; we classify and log that outcome here instead of aborting.
+    set +e
+    oc_output="$("$SCRIPT_DIR/openclaw-cli-safe.sh" \
         --timeout "${OPENCLAW_CLI_TIMEOUT_S:-45}" \
         --label "openclaw-preflight-update" \
         --on-timeout "ssh \"$REMOTE_HOST\" 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
-        -- ssh "$REMOTE_HOST" 'set -euo pipefail; export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"; eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo "__OPENCLAW_MISSING__"; exit 0; fi; openclaw update --yes' 2>&1)"; then
-        if printf '%s\n' "$oc_output" | grep -q "__OPENCLAW_MISSING__"; then
+        -- ssh "$REMOTE_HOST" 'set -euo pipefail; export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"; eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo "__OPENCLAW_MISSING__"; exit 0; fi; openclaw update --yes' 2>&1)"
+    oc_rc=$?
+    set -e
+
+    if [[ "$oc_rc" -eq 0 ]]; then
+        if [[ "$oc_output" == *"__OPENCLAW_MISSING__"* ]]; then
             echo "not found, skipping"
         else
             echo "done (updated)"
         fi
     else
-        oc_rc=$?
         if [[ "$oc_rc" -eq 124 ]]; then
             echo "skipped/timeout (continuing)"
-        elif printf '%s\n' "$oc_output" | grep -q "__OPENCLAW_MISSING__"; then
+        elif [[ "$oc_output" == *"__OPENCLAW_MISSING__"* ]]; then
             echo "not found, skipping"
         else
             echo "WARN: upgrade failed (continuing)"
