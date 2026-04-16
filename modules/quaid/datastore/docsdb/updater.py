@@ -1337,7 +1337,12 @@ def cmd_update_stale(
                     p = Path(raw_path).expanduser()
                     resolved = p if p.is_absolute() else _resolve_path(raw_path)
                 resolved = resolved.resolve()
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "docs update skipped unresolved registry path %r: %s",
+                    raw_path,
+                    exc,
+                )
                 continue
             if not resolved.exists():
                 continue

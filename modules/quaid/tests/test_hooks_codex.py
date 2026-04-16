@@ -304,6 +304,47 @@ def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypa
         )
 
 
+def test_codex_hook_inject_traces_raw_tool_output_when_present(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    trace_entries = []
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_write_hook_trace", lambda event, payload=None: trace_entries.append((event, payload or {})))
+
+    with patch("core.interface.api.recall_fast", return_value=([], None)), \
+         patch("core.interface.api.projects_search_docs", return_value=None):
+        _run_hook_inject(
+            {
+                "prompt": "summarize the output",
+                "session_id": "sess-codex-tool-trace",
+                "cwd": str(tmp_path),
+                "tool_output": "quaid project list\nhello-cli\nquaid-live-cli",
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payloads = [payload for event, payload in trace_entries if event == "hook.inject.codex_payload"]
+    assert payloads
+    payload = payloads[-1]
+    assert payload["tool_output_len"] > 0
+    assert payload["tool_output_truncated"] is False
+    assert "tool_output" in payload["tool_output_keys"]
+    assert "quaid-live-cli" in payload["tool_output"]
+
+
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test.jsonl"
     transcript_path.write_text(

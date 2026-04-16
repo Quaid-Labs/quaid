@@ -34,6 +34,15 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
+_CODEX_TOOL_OUTPUT_KEYS = (
+    "tool_output",
+    "toolOutput",
+    "stdout",
+    "output",
+    "last_tool_output",
+    "lastToolOutput",
+)
+
 
 def _read_stdin_json() -> dict:
     """Read a JSON object from stdin without blocking on newline or EOF.
@@ -278,6 +287,48 @@ def _write_hook_trace(event: str, payload: dict | None = None) -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -> Dict[str, Any]:
+    """Return best-effort tool output details for Codex hook trace debugging."""
+    if not isinstance(hook_input, dict):
+        return {}
+
+    snippets: List[tuple[str, str]] = []
+
+    def _add_snippet(key: str, value: Any) -> None:
+        text = str(value or "").strip()
+        if text:
+            snippets.append((key, text))
+
+    for key in _CODEX_TOOL_OUTPUT_KEYS:
+        if key in hook_input:
+            _add_snippet(key, hook_input.get(key))
+
+    tool_results = hook_input.get("tool_results")
+    if isinstance(tool_results, list):
+        for idx, entry in enumerate(tool_results):
+            if not isinstance(entry, dict):
+                continue
+            for field in ("output", "stdout", "result", "text"):
+                if field in entry:
+                    _add_snippet(f"tool_results[{idx}].{field}", entry.get(field))
+
+    if not snippets:
+        return {}
+
+    rendered = []
+    for key, text in snippets:
+        rendered.append(f"[{key}]\n{text}")
+    combined = "\n\n".join(rendered)
+    truncated = len(combined) > max_chars
+
+    return {
+        "tool_output_keys": [key for key, _ in snippets],
+        "tool_output_len": len(combined),
+        "tool_output_truncated": truncated,
+        "tool_output": combined[:max_chars],
+    }
 
 
 def _summarize_recall_results(memories: List[Dict], limit: int = 5) -> List[Dict]:
@@ -555,14 +606,16 @@ def hook_inject(args):
             "session_id": session_id,
         })
         if _current_adapter_id() == "codex":
-            _write_hook_trace("hook.inject.codex_payload", {
+            payload = {
                 "query": query[:160],
                 "session_id": session_id,
                 "keys": sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
                 "thread_id": str(hook_input.get("thread_id") or hook_input.get("threadId") or "").strip() if isinstance(hook_input, dict) else "",
                 "session_field": str(hook_input.get("session_id") or "").strip() if isinstance(hook_input, dict) else "",
                 "transcript_path": str(hook_input.get("transcript_path") or "").strip() if isinstance(hook_input, dict) else "",
-            })
+            }
+            payload.update(_extract_codex_tool_output_trace(hook_input if isinstance(hook_input, dict) else {}))
+            _write_hook_trace("hook.inject.codex_payload", payload)
         docs_project_hint = None
         hook_cwd = hook_input.get("cwd", "").strip() if isinstance(hook_input, dict) else ""
 

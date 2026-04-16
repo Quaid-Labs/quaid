@@ -985,8 +985,16 @@ class DocsRAG:
                         if canonical and canonical not in seen_registry_paths:
                             seen_registry_paths.add(canonical)
                             registry_paths.append(canonical)
-            except Exception:
-                pass
+            except RuntimeError:
+                # Preserve explicit failHard resolver failures raised in the
+                # per-entry resolution path above.
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "docs recall failed to load registry paths for project %r: %s",
+                    project,
+                    exc,
+                )
 
         doc_filters = self._normalize_docs_filter(docs)
         query_terms = _docs_query_terms(query)
