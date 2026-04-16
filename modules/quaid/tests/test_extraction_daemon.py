@@ -1948,6 +1948,46 @@ class TestRollingExtraction:
         assert restarted["semantic_buffer_tokens"] > 0
         assert captured == []
 
+    @pytest.mark.parametrize("signal_type", ["compaction", "timeout"])
+    def test_process_signal_no_new_content_writes_noop_flush_metric(self, monkeypatch, tmp_path, signal_type):
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"hello"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-noop", 1, str(transcript_path))
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+
+        rolling_metrics = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_rolling_metric",
+            lambda event, session_id, **data: rolling_metrics.append(
+                {"event": event, "session_id": session_id, **data}
+            ),
+        )
+
+        extraction_daemon.write_signal(
+            signal_type=signal_type,
+            session_id="sess-noop",
+            transcript_path=str(transcript_path),
+        )
+        extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+        assert extraction_daemon.read_pending_signals() == []
+        assert rolling_metrics
+        metric = rolling_metrics[-1]
+        assert metric["event"] == "rolling_flush"
+        assert metric["session_id"] == "sess-noop"
+        assert metric["signal_type"] == signal_type
+        assert metric["noop"] is True
+        assert metric["noop_reason"] == "no_new_content"
+        assert metric["final_facts_stored"] == 0
+        assert metric["final_facts_skipped"] == 0
+
     def test_check_chunk_ready_sessions_uses_semantic_buffer_not_raw_json_size(self, monkeypatch, tmp_path):
         import sys
         import types

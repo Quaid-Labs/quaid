@@ -2091,6 +2091,44 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     label = f"daemon-{signal_type}"
     rolling_mode = signal_type == "rolling"
     staged_state = read_rolling_state(session_id)
+
+    def _emit_noop_flush_metric(reason: str) -> None:
+        if signal_type not in ("compaction", "timeout"):
+            return
+        write_rolling_metric(
+            "rolling_flush",
+            session_id,
+            signal_type=signal_type,
+            signal_timestamp=signal_data.get("timestamp"),
+            noop=True,
+            noop_reason=reason,
+            staged_batches=int(staged_state.get("rolling_batches", 0) or 0),
+            staged_facts=len(staged_state.get("raw_facts", []) or []),
+            final_raw_fact_count=0,
+            final_facts_stored=0,
+            final_facts_skipped=0,
+            final_edges_created=0,
+            snippets_count=0,
+            journals_count=0,
+            project_logs_seen=0,
+            project_logs_written=0,
+            project_logs_projects_updated=0,
+            extract_wall_seconds=0.0,
+            publish_wall_seconds=0.0,
+            flush_wall_seconds=0.0,
+            extract_llm_calls=0,
+            extract_fast_calls=0,
+            extract_deep_calls=0,
+            extract_input_tokens=0,
+            extract_output_tokens=0,
+            publish_llm_calls=0,
+            publish_fast_calls=0,
+            publish_deep_calls=0,
+            publish_input_tokens=0,
+            publish_output_tokens=0,
+            signal_to_publish_seconds=None,
+        )
+
     if signal_type not in VALID_SIGNAL_TYPES:
         logger.warning("[%s] unknown signal type, skipping", label)
         mark_signal_processed(signal_data)
@@ -2481,6 +2519,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 except Exception as e:
                     logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
                                    label, session_id, e)
+            _emit_noop_flush_metric("no_new_content")
             mark_signal_processed(signal_data)
             _release_session_processing_lock(session_id, lock_fd)
             return
