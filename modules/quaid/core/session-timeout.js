@@ -195,7 +195,7 @@ class SessionTimeoutManager {
     };
     this.logDir = path.resolve(String(opts.logDir || path.join(opts.workspace, "logs", "runtime")));
     this.sessionLogDir = path.join(this.logDir, "sessions");
-    this.sessionCursorDir = path.join(opts.workspace, "data", "session-cursors");
+    this.sessionCursorDir = path.join(opts.workspace, "data", "session-timeout-cursors");
     this.staleSweepStatePath = path.join(opts.workspace, "data", "stale-sweep-state.json");
     this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");

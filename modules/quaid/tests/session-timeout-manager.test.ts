@@ -162,6 +162,50 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect(second).toBe(false);
   });
 
+  it("keeps timeout replay cursor isolated from daemon line-offset cursor files", async () => {
+    const workspace = makeWorkspace("quaid-timeout-cursor-isolation-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-isolated", [
+      { id: "u1", role: "user", content: "fact", timestamp: new Date().toISOString() },
+      { id: "a1", role: "assistant", content: "ack", timestamp: new Date().toISOString() },
+    ]);
+
+    const calls: Array<{ sessionId?: string; label?: string; messages: any[] }> = [];
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 10,
+      source,
+      extract: async (messages, sessionId, label) => {
+        calls.push({ messages, sessionId, label });
+      },
+    });
+
+    expect(await manager.extractSessionFromLog("session-isolated", "Reset")).toBe(true);
+    expect(calls).toHaveLength(1);
+
+    const timeoutCursorPath = path.join(workspace, "data", "session-timeout-cursors", "session-isolated.json");
+    expect(fs.existsSync(timeoutCursorPath)).toBe(true);
+    const timeoutCursor = JSON.parse(fs.readFileSync(timeoutCursorPath, "utf8"));
+    expect(typeof timeoutCursor.lastMessageKey).toBe("string");
+
+    // Simulate daemon extraction state write to the legacy cursor location.
+    const daemonCursorPath = path.join(workspace, "data", "session-cursors", "session-isolated.json");
+    fs.mkdirSync(path.dirname(daemonCursorPath), { recursive: true });
+    fs.writeFileSync(
+      daemonCursorPath,
+      JSON.stringify({
+        session_id: "session-isolated",
+        line_offset: 2,
+        transcript_path: "/tmp/session-isolated.jsonl",
+      }),
+      "utf8",
+    );
+
+    // Replay gate should still skip because timeout manager uses its own cursor store.
+    expect(await manager.extractSessionFromLog("session-isolated", "Reset")).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
   it("blocks fallback payload when failHard=true and source has no messages", async () => {
     const workspace = makeWorkspace("quaid-timeout-failhard-block-");
     const source = createSourceState();

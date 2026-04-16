@@ -265,7 +265,10 @@ export class SessionTimeoutManager {
 
     this.logDir = path.resolve(String(opts.logDir || path.join(opts.workspace, "logs", "runtime")));
     this.sessionLogDir = path.join(this.logDir, "sessions");
-    this.sessionCursorDir = path.join(opts.workspace, "data", "session-cursors");
+    // Keep timeout-manager replay cursors isolated from daemon line-offset cursors.
+    // Both components track different cursor shapes; sharing one file causes
+    // schema clobbering and repeated timeout/compaction rescheduling.
+    this.sessionCursorDir = path.join(opts.workspace, "data", "session-timeout-cursors");
     this.staleSweepStatePath = path.join(opts.workspace, "data", "stale-sweep-state.json");
     this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
