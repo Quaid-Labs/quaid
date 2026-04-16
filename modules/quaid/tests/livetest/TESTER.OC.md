@@ -219,7 +219,11 @@ OC creates new instances via the native agent system, not the installer:
 ```bash
 ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents add --help'
 # Use openclaw agents add to create a test agent (e.g. m13test)
+ssh REMOTE_HOST 'mkdir -p /tmp/oc-m13-workspace && source ~/.zprofile; openclaw agents add m13test --non-interactive --workspace /tmp/oc-m13-workspace'
 ```
+
+Safety: never use `~/quaid` as the M13 test workspace. `openclaw agents delete`
+prunes the agent workspace, so pointing at `~/quaid` can trash the visible Quaid home.
 
 When OC creates a new agent, Quaid's adapter should detect it and
 auto-create the instance silo. Verify:
@@ -231,6 +235,7 @@ auto-create the instance silo. Verify:
 After the test, clean up:
 ```bash
 ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test --force'
+ssh REMOTE_HOST 'trash /tmp/oc-m13-workspace 2>/dev/null || rm -rf /tmp/oc-m13-workspace'
 ```
 Note: `--force` is required in non-interactive (SSH) context. If that still fails,
 manually remove `~/.openclaw/agents/m13test` and the Quaid silo at

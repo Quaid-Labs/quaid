@@ -1844,9 +1844,13 @@ disrupts the active livetest instance.
 **Step 1 — add m13test agent:**
 
 ```bash
-ssh REMOTE_HOST 'source ~/.zprofile; \
-  openclaw agents add m13test --non-interactive --workspace ~/quaid 2>&1 | tail -5'
+ssh REMOTE_HOST 'mkdir -p /tmp/oc-m13-workspace && source ~/.zprofile; \
+  openclaw agents add m13test --non-interactive --workspace /tmp/oc-m13-workspace 2>&1 | tail -5'
 ```
+
+Use a dedicated test workspace for `m13test`. Do not point `--workspace` at
+`~/quaid`: `openclaw agents delete m13test --force` prunes the agent workspace
+and can move the entire visible Quaid home into Trash.
 
 **Step 2 — verify list_agent_instance_ids includes openclaw-m13test:**
 
@@ -1916,6 +1920,7 @@ Pass: canary returned. Fail: empty or error.
 ```bash
 ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test 2>&1 | tail -3'
 ssh REMOTE_HOST 'trash ~/quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test silo"'
+ssh REMOTE_HOST 'trash /tmp/oc-m13-workspace 2>/dev/null || rm -rf /tmp/oc-m13-workspace; echo "cleaned oc m13 workspace"'
 ```
 
 Pass:
