@@ -38,7 +38,7 @@ import tempfile
 import time
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -278,7 +278,7 @@ def _write_extraction_buffer_log(
         return
     try:
         path = _extraction_buffer_log_path()
-        timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         header = (
             f"=== {timestamp} session={session_id} phase={phase} "
             f"signal={signal_type} chars={len(text)} ===\n"
