@@ -184,8 +184,7 @@ class TestInstanceManagerBase:
             initial_instance="claude-code-proj",
         )
         mock_link_project.assert_not_called()
-        mock_sync_docs.assert_called_once()
-        assert str(mock_sync_docs.call_args.kwargs["db_path"]).endswith("claude-code-proj/data/memory.db")
+        mock_sync_docs.assert_not_called()
 
     def test_create_links_existing_quaid_project(self, tmp_path):
         from lib.instance_manager import InstanceManager
@@ -211,8 +210,7 @@ class TestInstanceManagerBase:
             initial_instance="claude-code-proj",
         )
         mock_link_project.assert_called_once_with("quaid", instance_id="claude-code-proj")
-        mock_sync_docs.assert_called_once()
-        assert str(mock_sync_docs.call_args.kwargs["db_path"]).endswith("claude-code-proj/data/memory.db")
+        mock_sync_docs.assert_not_called()
 
 
 # ---- CC InstanceManager ----
@@ -254,7 +252,6 @@ class TestClaudeCodeInstanceManager:
         session_start_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         assert "hook-session-init" in session_start_cmd
         assert "QUAID_INSTANCE='" not in session_start_cmd
-        assert "QUAID_ADAPTER_TYPE='claude-code'" in session_start_cmd
         assert 'CLAUDE_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"' in session_start_cmd
 
     def test_make_instance_overwrites_existing_instance(self, tmp_path):
@@ -297,7 +294,6 @@ class TestClaudeCodeInstanceManager:
         assert "echo keep-me" in session_start_cmds
         assert any("hook-session-init" in cmd for cmd in session_start_cmds)
         assert all("QUAID_INSTANCE='claude-code-old'" not in cmd for cmd in session_start_cmds)
-        assert any("QUAID_ADAPTER_TYPE='claude-code'" in cmd for cmd in session_start_cmds)
 
     def test_make_instance_dry_run_no_writes(self, tmp_path):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager

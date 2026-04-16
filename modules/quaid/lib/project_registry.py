@@ -31,16 +31,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from lib.project_registry_lock import registry_lock, registry_path
+
 
 def _registry_path() -> Path:
     """Resolve the global registry file path."""
-    try:
-        from lib.adapter import get_adapter
-        return get_adapter().quaid_home() / "project-registry.json"
-    except Exception:
-        home = os.environ.get("QUAID_HOME", "").strip()
-        root = Path(home).resolve() if home else Path.home() / ".quaid"
-        return root / "project-registry.json"
+    return registry_path()
 
 
 def _load() -> Dict[str, Any]:
@@ -88,31 +84,32 @@ def register(
 
     Returns the project entry.
     """
-    data = _load()
-    now = datetime.now().isoformat()
+    with registry_lock():
+        data = _load()
+        now = datetime.now().isoformat()
 
-    if name in data["projects"]:
-        entry = data["projects"][name]
-        entry["canonical_path"] = canonical_path
-        if description:
-            entry["description"] = description
-        entry["updated_at"] = now
-    else:
-        entry = {
-            "canonical_path": canonical_path,
-            "instances": [],
-            "created_at": now,
-            "description": description,
-        }
-        data["projects"][name] = entry
+        if name in data["projects"]:
+            entry = data["projects"][name]
+            entry["canonical_path"] = canonical_path
+            if description:
+                entry["description"] = description
+            entry["updated_at"] = now
+        else:
+            entry = {
+                "canonical_path": canonical_path,
+                "instances": [],
+                "created_at": now,
+                "description": description,
+            }
+            data["projects"][name] = entry
 
-    if link_current_instance:
-        instance = _adapter_name()
-        if instance not in entry.get("instances", []):
-            entry.setdefault("instances", []).append(instance)
+        if link_current_instance:
+            instance = _adapter_name()
+            if instance not in entry.get("instances", []):
+                entry.setdefault("instances", []).append(instance)
 
-    _save(data)
-    return entry
+        _save(data)
+        return entry
 
 
 def link(name: str, instance: Optional[str] = None, create_symlink: bool = False) -> bool:
@@ -124,18 +121,19 @@ def link(name: str, instance: Optional[str] = None, create_symlink: bool = False
     Returns True if the link was added, False if already linked or project
     not found.
     """
-    data = _load()
-    if name not in data["projects"]:
-        return False
+    with registry_lock():
+        data = _load()
+        if name not in data["projects"]:
+            return False
 
-    instance = instance or _adapter_name()
-    entry = data["projects"][name]
-    if instance in entry.get("instances", []):
-        return False
+        instance = instance or _adapter_name()
+        entry = data["projects"][name]
+        if instance in entry.get("instances", []):
+            return False
 
-    entry.setdefault("instances", []).append(instance)
-    entry["updated_at"] = datetime.now().isoformat()
-    _save(data)
+        entry.setdefault("instances", []).append(instance)
+        entry["updated_at"] = datetime.now().isoformat()
+        _save(data)
 
     if create_symlink:
         _create_project_symlink(name, entry["canonical_path"])
@@ -180,20 +178,21 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
     Returns True if unlinked, False if not found or not linked.
     """
-    data = _load()
-    if name not in data["projects"]:
-        return False
+    with registry_lock():
+        data = _load()
+        if name not in data["projects"]:
+            return False
 
-    instance = instance or _adapter_name()
-    entry = data["projects"][name]
-    instances = entry.get("instances", [])
-    if instance not in instances:
-        return False
+        instance = instance or _adapter_name()
+        entry = data["projects"][name]
+        instances = entry.get("instances", [])
+        if instance not in instances:
+            return False
 
-    instances.remove(instance)
-    entry["updated_at"] = datetime.now().isoformat()
-    _save(data)
-    return True
+        instances.remove(instance)
+        entry["updated_at"] = datetime.now().isoformat()
+        _save(data)
+        return True
 
 
 def lookup(name: str) -> Optional[Dict[str, Any]]:
@@ -213,41 +212,43 @@ def remove(name: str, force: bool = False) -> bool:
     If force=False and other instances are still tracking, raises ValueError.
     Returns True if removed.
     """
-    data = _load()
-    if name not in data["projects"]:
-        return False
+    with registry_lock():
+        data = _load()
+        if name not in data["projects"]:
+            return False
 
-    entry = data["projects"][name]
-    instances = entry.get("instances", [])
-    current = _adapter_name()
+        entry = data["projects"][name]
+        instances = entry.get("instances", [])
+        current = _adapter_name()
 
-    if not force and len(instances) > 1:
-        others = [i for i in instances if i != current]
-        raise ValueError(
-            f"Project '{name}' is tracked by other instances: {others}. "
-            f"Use unlink to remove from this instance, or force=True to delete globally."
-        )
+        if not force and len(instances) > 1:
+            others = [i for i in instances if i != current]
+            raise ValueError(
+                f"Project '{name}' is tracked by other instances: {others}. "
+                f"Use unlink to remove from this instance, or force=True to delete globally."
+            )
 
-    del data["projects"][name]
-    _save(data)
-    return True
+        del data["projects"][name]
+        _save(data)
+        return True
 
 
 def rename(name: str, new_name: str, canonical_path: Optional[str] = None) -> Dict[str, Any]:
     """Rename a project in the global registry while preserving metadata."""
-    data = _load()
-    if name not in data["projects"]:
-        raise KeyError(name)
-    if new_name in data["projects"] and new_name != name:
-        raise ValueError(f"Project '{new_name}' already exists.")
+    with registry_lock():
+        data = _load()
+        if name not in data["projects"]:
+            raise KeyError(name)
+        if new_name in data["projects"] and new_name != name:
+            raise ValueError(f"Project '{new_name}' already exists.")
 
-    entry = dict(data["projects"][name])
-    entry["canonical_path"] = canonical_path or entry.get("canonical_path", "")
-    entry["updated_at"] = datetime.now().isoformat()
-    del data["projects"][name]
-    data["projects"][new_name] = entry
-    _save(data)
-    return entry
+        entry = dict(data["projects"][name])
+        entry["canonical_path"] = canonical_path or entry.get("canonical_path", "")
+        entry["updated_at"] = datetime.now().isoformat()
+        del data["projects"][name]
+        data["projects"][new_name] = entry
+        _save(data)
+        return entry
 
 
 def tracking_instances(name: str) -> List[str]:

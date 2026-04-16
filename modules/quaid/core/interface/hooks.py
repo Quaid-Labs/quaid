@@ -368,6 +368,7 @@ def hook_inject(args):
         hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         return
+    _ensure_hook_instance_ready(hook_input)
 
     session_id = _extract_hook_session_id(hook_input)
     query = hook_input.get("prompt", "").strip()
@@ -758,6 +759,51 @@ def _current_adapter_id() -> str:
         return ""
 
 
+def _ensure_hook_instance_ready(hook_input: dict | None = None, *, adapter_hint: str = "") -> None:
+    """Ensure hook execution has a resolved adapter and initialized instance.
+
+    Hook hosts are path-derived on CC/CDX. If project env is missing, fall back
+    to hook cwd so helper shells and secondary hook paths initialize the same
+    silo instead of drifting into shared/global config resolution.
+    """
+    hook_input = hook_input if isinstance(hook_input, dict) else {}
+    cwd = str(hook_input.get("cwd") or "").strip() or os.getcwd()
+    hint = str(adapter_hint or "").strip().lower()
+    existing_claude = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+    existing_codex = os.environ.get("CODEX_PROJECT_DIR", "").strip()
+    wants_claude = hint == "claude-code" or (not hint and bool(existing_claude))
+    wants_codex = hint == "codex" or (not hint and bool(existing_codex))
+    prior_env = {
+        "CLAUDE_PROJECT_DIR": os.environ.get("CLAUDE_PROJECT_DIR"),
+        "CODEX_PROJECT_DIR": os.environ.get("CODEX_PROJECT_DIR"),
+    }
+
+    try:
+        if wants_claude and not existing_claude:
+            os.environ["CLAUDE_PROJECT_DIR"] = cwd
+        elif wants_codex and not existing_codex:
+            os.environ["CODEX_PROJECT_DIR"] = cwd
+
+        from lib.adapter import get_adapter
+        get_adapter()
+    except Exception as exc:
+        fail_hard = True
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+            fail_hard = is_fail_hard_enabled()
+        except Exception:
+            fail_hard = True
+        if fail_hard:
+            raise
+        print(f"[quaid][hook-init] instance bootstrap failed: {exc}", file=sys.stderr)
+    finally:
+        for key, original in prior_env.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+
 def _adapter_capability(key: str, default: Any = None) -> Any:
     try:
         from lib.adapter import get_adapter
@@ -852,6 +898,7 @@ def hook_inject_compact(args):
         hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
+    _ensure_hook_instance_ready(hook_input)
 
     cwd = hook_input.get("cwd", os.getcwd())
 
@@ -887,6 +934,7 @@ def hook_extract(args):
         hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
+    _ensure_hook_instance_ready(hook_input)
 
     session_id = hook_input.get("session_id", "") or f"unknown-{int(time.time())}-{os.getpid()}"
     transcript_path = _resolve_hook_transcript_path(
@@ -985,6 +1033,7 @@ def hook_codex_stop(args):
         hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
+    _ensure_hook_instance_ready(hook_input, adapter_hint="codex")
 
     session_id = str(hook_input.get("session_id") or "").strip()
     transcript_path = _resolve_hook_transcript_path(
@@ -1164,6 +1213,7 @@ def hook_session_init(args):
         hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
+    _ensure_hook_instance_ready(hook_input)
 
     current_session_id = _extract_hook_session_id(hook_input)
     adapter_id = _current_adapter_id()
@@ -1500,6 +1550,7 @@ def hook_subagent_start(args):
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[quaid][subagent-start] invalid JSON on stdin: {e}", file=sys.stderr)
         return
+    _ensure_hook_instance_ready(hook_input)
 
     _write_hook_trace("hook.subagent.start.received", {
         "session_id": str(hook_input.get("session_id") or "").strip(),
@@ -1557,6 +1608,7 @@ def hook_subagent_stop(args):
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[quaid][subagent-stop] invalid JSON on stdin: {e}", file=sys.stderr)
         return
+    _ensure_hook_instance_ready(hook_input)
 
     _write_hook_trace("hook.subagent.stop.received", {
         "session_id": str(hook_input.get("session_id") or "").strip(),

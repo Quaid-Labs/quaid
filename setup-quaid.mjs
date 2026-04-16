@@ -30,8 +30,6 @@ import {
   installerFallbackProviders,
 } from "./lib/install-model-defaults.mjs";
 import {
-  deepMergeMissing,
-  hydratePlatformInstanceConfigs,
   readJsonObject,
   writeJsonObject,
 } from "./lib/install-config-hydration.mjs";
@@ -5353,7 +5351,6 @@ function setupClaudeCodeHooks() {
   const envPrefix = [
     `QUAID_HOME='${WORKSPACE}'`,
     `QUAID_VISIBLE_HOME='${VISIBLE_HOME}'`,
-    "QUAID_ADAPTER_TYPE='claude-code'",
     "CLAUDE_PROJECT_DIR=\"${CLAUDE_PROJECT_DIR:-$PWD}\"",
   ].join(" ");
 
@@ -5621,6 +5618,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       contradiction: { enabled: true, timeoutMinutes: 60, minSimilarity: 0.6, maxSimilarity: 0.85 },
     },
     retrieval: {
+      fail_hard: true,
       defaultLimit: 5,
       maxLimit: 8,
       minSimilarity: 0.6,
@@ -5756,40 +5754,13 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     log.info(`Created blank shared platform config: ${sharedPlatformConfigPath}`);
   }
 
-  // Write config to the hidden instance root (QUAID_HOME/instances/<instance>/config.json).
-  // This is the authoritative instance config path; the old flat QUAID_HOME/config/
-  // path is no longer written.
-  const sharedPlatformCfg = readJsonObject(sharedPlatformConfigPath) || {};
-  const instanceConfigDefaults = Object.keys(sharedPlatformCfg).length > 0
-    ? deepMergeMissing(config, sharedPlatformCfg)
-    : config;
-
-  const instanceId = String(process.env.QUAID_INSTANCE || "").trim();
-  if (instanceId) {
-    // Explicit instance: write directly to instance config path.
-    const instanceConfigDir = hiddenInstanceDir(instanceId);
-    fs.mkdirSync(instanceConfigDir, { recursive: true });
-    writeJsonObject(path.join(instanceConfigDir, "config.json"), instanceConfigDefaults);
-    log.info(`Wrote instance config: ${instanceConfigDir}/config.json`);
-  }
-  // All platforms: write config to shared platform config so all instances
-  // inherit models, users, capture settings. Instance silos are created at
-  // runtime (folder-based for CC/CDX, gateway-managed for OC).
+  // Write runtime config to shared platform config only. Instance silos are
+  // created on first hook use and should not get install-time copies of
+  // globally tunable settings such as models, capture, or retrieval policy.
   if (!fs.existsSync(sharedPlatformConfigPath) || fs.readFileSync(sharedPlatformConfigPath, "utf8").trim() === "{}") {
     const configJson = JSON.stringify(config, null, 2) + "\n";
     fs.writeFileSync(sharedPlatformConfigPath, configJson);
     log.info(`Wrote shared platform config: ${sharedPlatformConfigPath}`);
-  }
-  if (resolvedAdapterType === "openclaw") {
-    const platformDefaults = readJsonObject(sharedPlatformConfigPath) || instanceConfigDefaults;
-    const hydrated = hydratePlatformInstanceConfigs({
-      instancesDir: HIDDEN_INSTANCES_DIR,
-      platformKey: "openclaw",
-      defaults: deepMergeMissing(config, platformDefaults),
-    });
-    if (hydrated.length > 0) {
-      log.info(`Hydrated OpenClaw instance config defaults: ${hydrated.length} instance(s)`);
-    }
   }
 }
 

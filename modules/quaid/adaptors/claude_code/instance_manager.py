@@ -195,7 +195,6 @@ class ClaudeCodeInstanceManager(InstanceManager):
         env_prefix = (
             f"QUAID_HOME='{workspace}' "
             f"QUAID_VISIBLE_HOME='{visible_home}' "
-            "QUAID_ADAPTER_TYPE='claude-code' "
             "CLAUDE_PROJECT_DIR=\"${CLAUDE_PROJECT_DIR:-$PWD}\""
         )
 

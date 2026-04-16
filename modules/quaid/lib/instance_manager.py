@@ -274,14 +274,14 @@ class InstanceManager:
             }
         except Exception:
             retrieval_defaults = {
-                "fail_hard": False,
+                "fail_hard": True,
                 "auto_inject": True,
                 "default_limit": 5,
                 "max_limit": 8,
                 "min_similarity": 0.80,
                 "max_tokens": 2000,
             }
-        retrieval_defaults["fail_hard"] = False
+        retrieval_defaults["fail_hard"] = True
         retrieval_defaults["auto_inject"] = True
         defaults = {
             "adapter": {"type": self.adapter.adapter_id()},
@@ -298,10 +298,13 @@ class InstanceManager:
                 cfg = _read_json_object(cfg_path)
                 if cfg:
                     defaults = _deep_merge_defaults(defaults, cfg)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to load shared config defaults: %s", exc)
         defaults.setdefault("adapter", {})
         defaults["adapter"]["type"] = self.adapter.adapter_id()
+        defaults.setdefault("retrieval", {})
+        defaults["retrieval"]["fail_hard"] = True
+        defaults["retrieval"]["auto_inject"] = True
         return defaults
 
     # ---- Settings / integration snippet ----

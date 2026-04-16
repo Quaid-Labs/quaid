@@ -19,8 +19,8 @@ describe("installer model defaults", () => {
     });
   });
 
-  it("defaults Codex installs to OpenAI lanes", () => {
-    expect(installerDefaultProvider("codex")).toBe("openai");
+  it("defaults Codex installs to Anthropic lanes", () => {
+    expect(installerDefaultProvider("codex")).toBe("anthropic");
   });
 
   it("derives direct-provider settings for OpenClaw model hints", () => {

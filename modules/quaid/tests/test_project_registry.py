@@ -1,6 +1,7 @@
 """Tests for core/project_registry.py — project registry CRUD."""
 
 import json
+import os
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,7 @@ from core.project_registry import (
     snapshot_all_projects,
     _load_registry,
     _save_registry,
+    _registry_lock_path,
     _registry_path,
 )
 
@@ -29,7 +31,14 @@ def mock_adapter(tmp_path):
     adapter.instance_root.return_value = tmp_path / "test-instance"
     adapter.adapter_id.return_value = "test-adapter"
 
-    with patch("lib.adapter.get_adapter", return_value=adapter):
+    with patch.dict(
+        os.environ,
+        {
+            "QUAID_HOME": str(tmp_path),
+            "QUAID_VISIBLE_HOME": str(tmp_path.with_name(tmp_path.name.lstrip("."))),
+        },
+        clear=False,
+    ), patch("lib.adapter.get_adapter", return_value=adapter):
         yield adapter, tmp_path
 
 
@@ -54,6 +63,10 @@ class TestRegistryIO:
         reg.write_text("not valid json{{{")
         result = _load_registry()
         assert result == {"projects": {}}
+
+    def test_registry_lock_path_uses_stable_sidecar(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        assert _registry_lock_path() == tmp_path / "project-registry.json.lock"
 
 
 class TestCreateProject:

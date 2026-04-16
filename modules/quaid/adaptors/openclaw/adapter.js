@@ -1642,8 +1642,8 @@ function buildFallbackMemoryConfig() {
       }
     },
     retrieval: {
-      fail_hard: false,
-      failHard: false,
+      fail_hard: true,
+      failHard: true,
       maxLimit: 8
     }
   };

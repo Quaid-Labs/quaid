@@ -30,10 +30,10 @@ describe("install daemon policy", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
-    expect(setupText).toContain('const instanceId = String(process.env.QUAID_INSTANCE || "").trim();');
-    expect(setupText).toContain("if (instanceId) {");
     expect(setupText).not.toContain("return `${platform}-main`;");
-    expect(setupText).toContain("hydratePlatformInstanceConfigs");
+    expect(setupText).toContain("Write runtime config to shared platform config only.");
+    expect(setupText).not.toContain("Wrote instance config:");
+    expect(setupText).not.toContain("hydratePlatformInstanceConfigs(");
   });
 
   it("shared-only installs defer docs registry writes until a real instance exists", () => {
@@ -43,6 +43,14 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('const resolvedInstanceId = String(process.env.QUAID_INSTANCE || "").trim();');
     expect(setupText).toContain("Skipping bundled project docs registration until the first real instance is created.");
     expect(setupText).toContain("Skipping existing project docs registration until the first real instance is created.");
+  });
+
+  it("installer keeps fail_hard enabled by default", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("fail_hard: true");
+    expect(setupText).not.toContain("fail_hard: false");
   });
 
   it("interactive installer can chain into another installable platform", () => {

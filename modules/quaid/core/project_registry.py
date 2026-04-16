@@ -6,7 +6,6 @@ source roots, and adapter instances.
 See docs/PROJECT-SYSTEM-SPEC.md#project-registry.
 """
 
-import fcntl
 import json
 import logging
 import os
@@ -16,6 +15,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from lib.project_templates import render_project_md_template
+from lib.adapter import quaid_projects_dir, quaid_tracking_dir
+from lib.project_registry_lock import registry_lock, registry_lock_path, registry_path
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +81,22 @@ def _sync_docs_registry_project(
 
 def _registry_path() -> Path:
     """Path to the project registry file."""
-    try:
-        from lib.adapter import get_adapter
-        return get_adapter().quaid_home() / "project-registry.json"
-    except Exception:
-        home = os.environ.get("QUAID_HOME", "").strip()
-        root = Path(home).resolve() if home else Path.home() / ".quaid"
-        return root / "project-registry.json"
+    return registry_path()
+
+
+def _resolve_quaid_home() -> Path:
+    home = os.environ.get("QUAID_HOME", "").strip()
+    if home:
+        return Path(home).resolve()
+    return _registry_path().parent
+
+
+def _registry_lock_path() -> Path:
+    return registry_lock_path()
+
+
+def _registry_lock():
+    return registry_lock()
 
 
 def _load_registry() -> Dict[str, Any]:
@@ -105,42 +115,29 @@ def _load_registry() -> Dict[str, Any]:
 
 
 def _save_registry(data: Dict[str, Any]) -> None:
-    """Atomically write the registry file with file locking.
+    """Atomically write the registry file.
 
-    Locking strategy: acquire an exclusive lock on the canonical file
-    (creating it if absent) so that concurrent writers are serialised
-    across the full read-modify-write cycle.  Write to a sibling .tmp
-    file, fsync, then rename over the canonical path.  The lock is held
-    until after the rename so no reader sees a half-written file and no
-    second writer can slip in between write and rename.
+    Callers that do read-modify-write updates must hold _registry_lock()
+    across the full mutation cycle so they do not race on stale reads.
     """
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = path.with_suffix(".tmp")
-    # Open (or create) the canonical file to use as the lock target.
-    # O_CREAT | O_RDWR so the fd is valid even on first run.
-    lock_fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.rename(path)
+    except OSError as e:
+        logger.error("Failed to write project registry: %s", e)
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, sort_keys=True)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-            tmp.rename(path)
-        except OSError as e:
-            logger.error("Failed to write project registry: %s", e)
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
-        finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-    finally:
-        os.close(lock_fd)
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def list_projects() -> Dict[str, Dict[str, Any]]:
@@ -179,64 +176,64 @@ def create_project(
     if not re.match(r"^[a-z0-9][a-z0-9-]*$", name):
         raise ValueError(f"Invalid project name: {name!r} (must be lowercase kebab-case)")
 
-    registry = _load_registry()
-    if name in registry["projects"]:
-        raise ValueError(f"Project already exists: {name}")
+    quaid_home = _resolve_quaid_home()
+    canonical = quaid_projects_dir(quaid_home) / name
+    tracking_base = quaid_tracking_dir(quaid_home)
 
-    from lib.adapter import get_adapter, quaid_projects_dir
-    adapter = get_adapter()
-    canonical = quaid_projects_dir(adapter.quaid_home()) / name
+    with _registry_lock():
+        registry = _load_registry()
+        if name in registry["projects"]:
+            raise ValueError(f"Project already exists: {name}")
 
-    if initial_instance is not None:
-        _current_instance = initial_instance
-    else:
-        from lib.instance import instance_id as _instance_id
-        _current_instance = _instance_id()  # raises InstanceError if unset
+        if initial_instance is not None:
+            _current_instance = initial_instance
+        else:
+            from lib.instance import instance_id as _instance_id
+            _current_instance = _instance_id()  # raises InstanceError if unset
 
-    entry = {
-        "canonical_path": str(canonical),
-        "source_root": source_root,
-        "instances": [_current_instance],
-        "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        "description": description,
-    }
+        entry = {
+            "canonical_path": str(canonical),
+            "source_root": source_root,
+            "instances": [_current_instance],
+            "created_at": datetime.now(tz=timezone.utc).isoformat(),
+            "description": description,
+        }
 
-    # Create the canonical directory structure
-    canonical.mkdir(parents=True, exist_ok=True)
-    (canonical / "docs").mkdir(exist_ok=True)
+        # Create the canonical directory structure
+        canonical.mkdir(parents=True, exist_ok=True)
+        (canonical / "docs").mkdir(exist_ok=True)
 
-    # Write initial PROJECT.md
-    project_md = canonical / "PROJECT.md"
-    if not project_md.exists():
-        project_md.write_text(
-            render_project_md_template(
-                label=name.replace("-", " ").title(),
-                description=description or f"{name} project.",
-                project_home=str(canonical),
-                source_roots=[source_root] if source_root else [],
-                exclude_patterns=[],
-            ),
-            encoding="utf-8",
-        )
-
-    # Initialize shadow git if source_root provided
-    if source_root:
-        try:
-            from core.shadow_git import ShadowGit
-            from lib.adapter import quaid_tracking_dir
-            sg = ShadowGit(
-                name,
-                Path(source_root),
-                tracking_base=quaid_tracking_dir(adapter.quaid_home()),
+        # Write initial PROJECT.md
+        project_md = canonical / "PROJECT.md"
+        if not project_md.exists():
+            project_md.write_text(
+                render_project_md_template(
+                    label=name.replace("-", " ").title(),
+                    description=description or f"{name} project.",
+                    project_home=str(canonical),
+                    source_roots=[source_root] if source_root else [],
+                    exclude_patterns=[],
+                ),
+                encoding="utf-8",
             )
-            sg.init()
-            sg.snapshot()  # Initial baseline
-            logger.info("Initialized shadow git for %s at %s", name, source_root)
-        except Exception as e:
-            logger.warning("Failed to init shadow git for %s: %s", name, e)
 
-    registry["projects"][name] = entry
-    _save_registry(registry)
+        # Initialize shadow git if source_root provided
+        if source_root:
+            try:
+                from core.shadow_git import ShadowGit
+                sg = ShadowGit(
+                    name,
+                    Path(source_root),
+                    tracking_base=tracking_base,
+                )
+                sg.init()
+                sg.snapshot()  # Initial baseline
+                logger.info("Initialized shadow git for %s at %s", name, source_root)
+            except Exception as e:
+                logger.warning("Failed to init shadow git for %s: %s", name, e)
+
+        registry["projects"][name] = entry
+        _save_registry(registry)
     try:
         _sync_docs_registry_project(
             name,
@@ -264,18 +261,19 @@ def update_project(name: str, **updates: Any) -> Dict[str, Any]:
     Raises:
         KeyError: If project not found.
     """
-    registry = _load_registry()
-    if name not in registry["projects"]:
-        raise KeyError(f"Project not found: {name}")
+    with _registry_lock():
+        registry = _load_registry()
+        if name not in registry["projects"]:
+            raise KeyError(f"Project not found: {name}")
 
-    allowed = {"source_root", "description", "instances"}
-    for key, value in updates.items():
-        if key in allowed:
-            registry["projects"][name][key] = value
+        allowed = {"source_root", "description", "instances"}
+        for key, value in updates.items():
+            if key in allowed:
+                registry["projects"][name][key] = value
 
-    _save_registry(registry)
-    try:
+        _save_registry(registry)
         entry = registry["projects"][name]
+    try:
         _sync_docs_registry_project(
             name,
             description=str(entry.get("description") or ""),
@@ -304,22 +302,23 @@ def link_project(name: str, *, instance_id: Optional[str] = None) -> Dict[str, A
     Raises:
         KeyError: If project not found.
     """
-    registry = _load_registry()
-    if name not in registry["projects"]:
-        raise KeyError(f"Project not found: {name}")
+    with _registry_lock():
+        registry = _load_registry()
+        if name not in registry["projects"]:
+            raise KeyError(f"Project not found: {name}")
 
-    if instance_id is not None:
-        instance = str(instance_id).strip()
-    else:
-        from lib.instance import instance_id as _instance_id
-        instance = _instance_id()
-    instances = registry["projects"][name].setdefault("instances", [])
-    if instance not in instances:
-        instances.append(instance)
-        registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
-        _save_registry(registry)
-        logger.info("Linked instance %s to project %s", instance, name)
-    return registry["projects"][name]
+        if instance_id is not None:
+            instance = str(instance_id).strip()
+        else:
+            from lib.instance import instance_id as _instance_id
+            instance = _instance_id()
+        instances = registry["projects"][name].setdefault("instances", [])
+        if instance not in instances:
+            instances.append(instance)
+            registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+            _save_registry(registry)
+            logger.info("Linked instance %s to project %s", instance, name)
+        return registry["projects"][name]
 
 
 def unlink_project(name: str) -> Dict[str, Any]:
@@ -337,20 +336,21 @@ def unlink_project(name: str) -> Dict[str, Any]:
     Raises:
         KeyError: If project not found.
     """
-    registry = _load_registry()
-    if name not in registry["projects"]:
-        raise KeyError(f"Project not found: {name}")
+    with _registry_lock():
+        registry = _load_registry()
+        if name not in registry["projects"]:
+            raise KeyError(f"Project not found: {name}")
 
-    from lib.instance import instance_id as _instance_id
-    instance = _instance_id()
-    instances = registry["projects"][name].get("instances", [])
-    if instance in instances:
-        instances.remove(instance)
-        registry["projects"][name]["instances"] = instances
-        registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
-        _save_registry(registry)
-        logger.info("Unlinked instance %s from project %s", instance, name)
-    return registry["projects"][name]
+        from lib.instance import instance_id as _instance_id
+        instance = _instance_id()
+        instances = registry["projects"][name].get("instances", [])
+        if instance in instances:
+            instances.remove(instance)
+            registry["projects"][name]["instances"] = instances
+            registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+            _save_registry(registry)
+            logger.info("Unlinked instance %s from project %s", instance, name)
+        return registry["projects"][name]
 
 
 def delete_project(name: str) -> None:
@@ -366,37 +366,38 @@ def delete_project(name: str) -> None:
     Raises:
         KeyError: If project not found.
     """
-    registry = _load_registry()
-    if name not in registry["projects"]:
-        raise KeyError(f"Project not found: {name}")
+    quaid_home = _resolve_quaid_home()
+    tracking_base = quaid_tracking_dir(quaid_home)
+    with _registry_lock():
+        registry = _load_registry()
+        if name not in registry["projects"]:
+            raise KeyError(f"Project not found: {name}")
 
-    entry = registry["projects"][name]
+        entry = registry["projects"][name]
 
-    # Clean up shadow git tracking
-    try:
-        from core.shadow_git import ShadowGit
-        from lib.adapter import get_adapter, quaid_tracking_dir
-        adapter = get_adapter()
-        source_root = entry.get("source_root")
-        if source_root:
-            sg = ShadowGit(
-                name,
-                Path(source_root),
-                tracking_base=quaid_tracking_dir(adapter.quaid_home()),
-            )
-            sg.destroy()
-    except Exception as e:
-        logger.warning("Failed to destroy shadow git for %s: %s", name, e)
+        # Clean up shadow git tracking
+        try:
+            from core.shadow_git import ShadowGit
+            source_root = entry.get("source_root")
+            if source_root:
+                sg = ShadowGit(
+                    name,
+                    Path(source_root),
+                    tracking_base=tracking_base,
+                )
+                sg.destroy()
+        except Exception as e:
+            logger.warning("Failed to destroy shadow git for %s: %s", name, e)
 
-    # Clean up canonical project directory
-    canonical = Path(entry.get("canonical_path", ""))
-    if canonical.is_dir():
-        import shutil
-        shutil.rmtree(canonical)
+        # Clean up canonical project directory
+        canonical = Path(entry.get("canonical_path", ""))
+        if canonical.is_dir():
+            import shutil
+            shutil.rmtree(canonical)
 
-    # Remove from registry
-    del registry["projects"][name]
-    _save_registry(registry)
+        # Remove from registry
+        del registry["projects"][name]
+        _save_registry(registry)
 
     # Clean up SQLite: project_definitions + doc_registry entries
     try:

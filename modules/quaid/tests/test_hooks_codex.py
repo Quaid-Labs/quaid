@@ -515,6 +515,7 @@ def test_codex_hook_inject_surfaces_new_pending_notice_on_same_turn(monkeypatch,
     monkeypatch.setattr("core.interface.hooks._get_owner_id", lambda: "codex-owner")
     monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
 
