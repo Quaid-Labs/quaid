@@ -2201,6 +2201,11 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
 }
 
 function _resolveOpenClawGatewayEnvInstanceId(instanceId = "") {
+  const _normalizeLabel = (value) => {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return "";
+    return raw.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  };
   const explicit = String(instanceId || "").trim();
   if (explicit) return explicit;
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
@@ -2208,13 +2213,31 @@ function _resolveOpenClawGatewayEnvInstanceId(instanceId = "") {
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw);
     const fromVars = String(parsed?.env?.vars?.QUAID_INSTANCE || "").trim();
-    if (fromVars) return fromVars;
+    if (fromVars && fromVars !== "openclaw") return fromVars;
     const fromTop = String(parsed?.env?.QUAID_INSTANCE || "").trim();
-    if (fromTop) return fromTop;
+    if (fromTop && fromTop !== "openclaw") return fromTop;
+
+    const agentsList = Array.isArray(parsed?.agents?.list) ? parsed.agents.list : [];
+    let selectedLabel = "";
+    for (const agent of agentsList) {
+      if (!agent || typeof agent !== "object") continue;
+      const id = _normalizeLabel(agent.id);
+      if (id === "main" || agent.default === true) {
+        selectedLabel = id || "main";
+        break;
+      }
+    }
+    if (!selectedLabel && agentsList.length === 1) {
+      selectedLabel = _normalizeLabel(agentsList[0]?.id);
+    }
+    if (!selectedLabel && parsed?.agents?.main && typeof parsed.agents.main === "object") {
+      selectedLabel = "main";
+    }
+    if (selectedLabel) return `openclaw-${selectedLabel}`;
   } catch (err) {
     log.warn(`Could not read OpenClaw runtime env while reconciling gateway launch agent: ${String(err)}`);
   }
-  return "openclaw";
+  return "openclaw-main";
 }
 
 function _runPlistBuddyCommand(plistPath, command) {

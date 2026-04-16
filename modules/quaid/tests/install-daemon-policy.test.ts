@@ -163,9 +163,13 @@ describe("install daemon policy", () => {
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain('function _ensureOpenClawGatewayLaunchAgentEnv(instanceId = "")');
+    expect(setupText).toContain('function _resolveOpenClawGatewayEnvInstanceId(instanceId = "")');
     expect(setupText).toContain('path.join(os.homedir(), "Library", "LaunchAgents", "ai.openclaw.gateway.plist")');
     expect(setupText).toContain('QUAID_HOME: WORKSPACE');
     expect(setupText).toContain('QUAID_INSTANCE: resolvedInstance');
+    expect(setupText).toContain('if (fromVars && fromVars !== "openclaw") return fromVars;');
+    expect(setupText).toContain('if (selectedLabel) return `openclaw-${selectedLabel}`;');
+    expect(setupText).toContain('return "openclaw-main";');
     expect(setupText).toContain('const gatewayLaunchAgentEnvReconciled = _ensureOpenClawGatewayLaunchAgentEnv(resolvedInstanceId);');
     expect(setupText).toContain('Reconciled ai.openclaw.gateway launch agent env for Quaid');
   });
