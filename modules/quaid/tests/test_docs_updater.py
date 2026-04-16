@@ -780,3 +780,72 @@ def test_save_changelog_uses_atomic_replace(tmp_path):
         with patch("datastore.docsdb.updater.os.replace", wraps=updater.os.replace) as mock_replace:
             updater._save_changelog([{"timestamp": "2026-02-26T00:00:00"}])
         assert mock_replace.call_count >= 1
+
+
+class TestCmdUpdateStaleNeverIndexed:
+    def test_indexes_registry_relative_paths_via_registry_resolver(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            rel_doc = "docs/newly-registered.md"
+            abs_doc = iroot / rel_doc
+            abs_doc.parent.mkdir(parents=True, exist_ok=True)
+            abs_doc.write_text("# Canary\n\nfresh content\n", encoding="utf-8")
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": rel_doc, "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    return iroot / path_str
+
+            indexed = []
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {str(Path(p)): False for p in paths}
+
+                def index_document(self, file_path):
+                    indexed.append(str(file_path))
+                    return 1
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+
+            count = updater.cmd_update_stale(dry_run=False, project="quaid")
+            assert count == 1
+            assert indexed == [str(abs_doc.resolve())]
+
+    def test_reindexes_registry_doc_when_timestamp_exists_but_chunks_are_missing(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc_path = iroot / "docs" / "registered.md"
+            doc_path.parent.mkdir(parents=True, exist_ok=True)
+            doc_path.write_text("# Registered\n\nstale vec/doc chunks\n", encoding="utf-8")
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": str(doc_path), "last_indexed_at": "2026-04-16T00:00:00"}]
+
+                def _resolve_path(self, path_str):
+                    return Path(path_str)
+
+            indexed = []
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {str(Path(p)): True for p in paths}
+
+                def index_document(self, file_path):
+                    indexed.append(str(file_path))
+                    return 2
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+
+            count = updater.cmd_update_stale(dry_run=False, project="quaid")
+            assert count == 1
+            assert indexed == [str(doc_path.resolve())]

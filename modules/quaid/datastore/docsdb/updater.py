@@ -1323,17 +1323,40 @@ def cmd_update_stale(
         registry = DocsRegistry()
         rag = DocsRAG()
         all_docs = registry.list_docs(project=project)
-        never_indexed = [
-            e for e in all_docs
-            if not e.get("last_indexed_at") and Path(e.get("file_path", "")).exists()
+        registry_paths: List[str] = []
+        resolved_entries: List[Tuple[Dict[str, Any], str]] = []
+        resolver = getattr(registry, "_resolve_path", None)
+        for entry in all_docs:
+            raw_path = str(entry.get("file_path") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                if callable(resolver):
+                    resolved = Path(resolver(raw_path))
+                else:
+                    p = Path(raw_path).expanduser()
+                    resolved = p if p.is_absolute() else _resolve_path(raw_path)
+                resolved = resolved.resolve()
+            except Exception:
+                continue
+            if not resolved.exists():
+                continue
+            resolved_str = str(resolved)
+            registry_paths.append(resolved_str)
+            resolved_entries.append((entry, resolved_str))
+
+        reindex_needed = rag.needs_reindex_many(registry_paths) if registry_paths else {}
+        pending_registry_docs = [
+            (entry, resolved_path)
+            for entry, resolved_path in resolved_entries
+            if (not entry.get("last_indexed_at")) or bool(reindex_needed.get(resolved_path, False))
         ]
-        never_indexable = len(never_indexed)
-        if never_indexed:
+        never_indexable = len(pending_registry_docs)
+        if pending_registry_docs:
             if dry_run:
                 print(f"\nWould index {never_indexable} never-indexed doc(s)")
             else:
-                for entry in never_indexed:
-                    fp = entry.get("file_path", "")
+                for _entry, fp in pending_registry_docs:
                     try:
                         chunks = rag.index_document(fp)
                         print(f"  Indexed: {fp} ({chunks} chunks)")
