@@ -9,8 +9,12 @@ import {
 } from "../../../lib/install-model-defaults.mjs";
 
 describe("installer model defaults", () => {
+  it("defaults OC/CDX installs to OpenAI lanes", () => {
+    expect(installerDefaultProvider("openclaw")).toBe("openai");
+    expect(installerDefaultProvider("codex")).toBe("openai");
+  });
+
   it("uses explicit-token providers for OpenClaw fallback", () => {
-    expect(installerDefaultProvider("openclaw")).toBe("anthropic");
     expect(installerFallbackProviders("openclaw")).toEqual(["anthropic", "openai"]);
     expect(installerFallbackModelDefaults("openclaw", "openai-codex")).toEqual({
       deep: "gpt-5.4",
@@ -20,12 +24,8 @@ describe("installer model defaults", () => {
     });
   });
 
-  it("defaults Codex installs to Anthropic lanes", () => {
-    expect(installerDefaultProvider("codex")).toBe("anthropic");
-  });
-
-  it("keeps installer provider on Anthropic unless explicitly overridden", () => {
-    expect(resolveInstallerProvider("openclaw", ["anthropic", "openai"])).toBe("anthropic");
+  it("keeps installer provider on OpenAI unless explicitly overridden", () => {
+    expect(resolveInstallerProvider("openclaw", ["anthropic", "openai"])).toBe("openai");
     expect(
       resolveInstallerProvider("openclaw", ["anthropic", "openai"], {
         sharedOverrideProvider: "openai",
@@ -42,5 +42,6 @@ describe("installer model defaults", () => {
     expect(deriveInstallerLlmProviderSetting("openclaw", "", "", "", true)).toBe("openai-compatible");
     expect(deriveInstallerLlmProviderSetting("openclaw", "default", "gpt-5.4", "gpt-5.4-mini", true)).toBe("openai-compatible");
     expect(deriveInstallerLlmProviderSetting("openclaw", "default", "claude-sonnet-4-5", "claude-haiku-4-5", true)).toBe("anthropic");
+    expect(deriveInstallerLlmProviderSetting("openclaw", "openai", "gpt-5.4", "gpt-5.4-mini", false)).toBe("openai");
   });
 });
