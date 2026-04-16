@@ -929,25 +929,25 @@ contamination even after DB deletion.
 Step 1 — Clear stale nodes from the DB:
 
 ```bash
-ssh REMOTE_HOST 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" OR LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
+ssh REMOTE_HOST 'DB=~/.quaid/instances/openclaw-main/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" OR LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
 ```
 
-Also search the content field — contamination facts about niece often land there:
+Also search attributes (node schema is `name` + `attributes` — there is no `content` column):
 
 ```bash
-ssh REMOTE_HOST 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(content) LIKE \"%niece%\" OR LOWER(content) LIKE \"%diana%\" OR LOWER(content) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
+ssh REMOTE_HOST 'DB=~/.quaid/instances/openclaw-main/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(attributes) LIKE \"%niece%\" OR LOWER(attributes) LIKE \"%diana%\" OR LOWER(attributes) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
 ```
 
-Delete each found node (replace `<id>` with actual IDs):
+Delete each found node (replace `<id>` with actual IDs) — the CLI command is `delete`, not `delete-node`; `--reason` is optional:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid delete-node <id>'
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.quaid/plugins/quaid/quaid delete <id> --reason "m7-contamination-cleanup"'
 ```
 
 Verify clean:
 
 ```bash
-ssh REMOTE_HOST 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" OR LOWER(name) LIKE \"%niece%\" OR LOWER(content) LIKE \"%niece%\" OR LOWER(content) LIKE \"%diana%\" OR LOWER(content) LIKE \"%alice%\";"'
+ssh REMOTE_HOST 'DB=~/.quaid/instances/openclaw-main/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" OR LOWER(name) LIKE \"%niece%\" OR LOWER(attributes) LIKE \"%niece%\" OR LOWER(attributes) LIKE \"%diana%\" OR LOWER(attributes) LIKE \"%alice%\";"'
 # Must return 0
 ```
 
@@ -966,11 +966,17 @@ which contaminates carry_facts. Send `/new` via Matrix to start a clean session:
 ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
 ```
 
-In the new session, send two facts via Matrix — do NOT say "niece":
+In the new session, send two facts via Matrix — do NOT say "niece". Frame each
+as a test-harness message so the agent doesn't narrate the inferred relationship
+(which would pre-seed "niece" as a direct stored fact and short-circuit the
+graph-traversal test). If the agent replies with "That makes Alice your niece"
+or similar, the test is contaminated — redo from the clean-room cleanup step.
+
+Prefix each seed with the test-harness framing:
 
 ```bash
-ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "My sister'\''s name is Diana."'
-ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "Diana has a daughter named Alice."'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "This is a test of the auto-inject system. Please do not manually store this or infer anything about this information; auto-extraction will handle it: My sister'\''s name is Diana."'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "This is a test of the auto-inject system. Please do not manually store this or infer anything about this information; auto-extraction will handle it: Diana has a daughter named Alice."'
 ```
 
 Then trigger `/reset` to extract those facts and start a new session:
@@ -1216,6 +1222,10 @@ ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-sen
 ssh REMOTE_HOST 'tail -40 ~/.quaid/instances/openclaw-main/logs/daemon/extraction-daemon.log 2>/dev/null | grep -i "session_end\\|compaction\\|reset\\|stored\\|facts" || echo "daemon log evidence not found"'
 
 # Step 4: Confirm the preserved transcript copy exists for the extracted session
+# (OC adapter only — OC writes session copies to logs/quaid/sessions/. CC and CDX
+# read transcripts in place from the platform-native location — ~/.claude/projects/...
+# for CC, native codex transcript for CDX — and do NOT create logs/quaid/sessions/.
+# Skip this step on CC and CDX.)
 ssh REMOTE_HOST 'ls -lt ~/.quaid/instances/openclaw-main/logs/quaid/sessions/*.jsonl 2>/dev/null | head -3 || echo "no preserved session copies found"'
 ```
 
@@ -1225,7 +1235,7 @@ Pass:
 - docs commands run successfully
 - `docs update --apply` indexes newly registered doc without `janitor --task rag`
 - daemon log shows the fresh session lifecycle extraction ran
-- preserved session copy exists under `logs/quaid/sessions/`
+- preserved session copy exists under `logs/quaid/sessions/` **(OC only)**
 
 ### M11: Snippet, Journal, and Project Log Generation
 
@@ -1717,7 +1727,7 @@ Pass: canary returned. Fail: empty or error.
 
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-quaid-m13-test \
-  ~/.openclaw/extensions/quaid/quaid project delete misc--claude-code-private-tmp-quaid-m13-test 2>&1 | tail -3 || true'
+  ~/.quaid/plugins/quaid/quaid project delete misc--claude-code-private-tmp-quaid-m13-test 2>&1 | tail -3 || true'
 ssh REMOTE_HOST 'trash /tmp/quaid-m13-test 2>/dev/null || rm -rf /tmp/quaid-m13-test; echo "cleaned project dir"'
 ssh REMOTE_HOST 'ID=claude-code-private-tmp-quaid-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned visible silo"'
 ssh REMOTE_HOST 'ID=claude-code-private-tmp-quaid-m13-test; trash ~/.quaid/instances/$ID 2>/dev/null || rm -rf ~/.quaid/instances/$ID; echo "cleaned hidden silo"'
@@ -1767,12 +1777,14 @@ print(\"Expected instance ID: codex-\" + slug)
 ```bash
 ssh REMOTE_HOST 'mkdir -p /tmp/cdx-m13-test && cd /tmp/cdx-m13-test && \
   QUAID_HOME=/Users/admin/.quaid CODEX_PROJECT_DIR=/tmp/cdx-m13-test \
-  codex --yolo -p "hello" 2>&1 | tail -10'
+  codex exec --skip-git-repo-check "hello" 2>&1 | tail -10'
 ```
 
 The auto-provision path derives QUAID_INSTANCE from CODEX_PROJECT_DIR and creates
-the silo on first hook call. If one-shot mode is unavailable, start an interactive
-CDX session from that dir, send one message, then `/exit`.
+the silo on first hook call. `codex exec --skip-git-repo-check` is the one-shot
+form current on this build; older `--yolo -p` syntax is no longer available.
+If `codex exec` is unavailable, start an interactive CDX session from that dir,
+send one message, then `/exit`.
 
 **Step 4 — verify silo auto-created:**
 
@@ -1820,7 +1832,7 @@ Pass: canary returned. Fail: empty or error.
 
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-m13-test \
-  ~/.openclaw/extensions/quaid/quaid project delete misc--codex-private-tmp-cdx-m13-test 2>&1 | tail -3 || true'
+  ~/.quaid/plugins/quaid/quaid project delete misc--codex-private-tmp-cdx-m13-test 2>&1 | tail -3 || true'
 ssh REMOTE_HOST 'trash /tmp/cdx-m13-test 2>/dev/null || rm -rf /tmp/cdx-m13-test; echo "cleaned project dir"'
 ssh REMOTE_HOST 'ID=codex-private-tmp-cdx-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned visible silo"'
 ssh REMOTE_HOST 'ID=codex-private-tmp-cdx-m13-test; trash ~/.quaid/instances/$ID 2>/dev/null || rm -rf ~/.quaid/instances/$ID; echo "cleaned hidden silo"'
@@ -1925,7 +1937,7 @@ Pass: canary returned. Fail: empty or error.
 
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-m13test \
-  ~/.openclaw/extensions/quaid/quaid project delete misc--openclaw-m13test 2>&1 | tail -3 || true'
+  ~/.quaid/plugins/quaid/quaid project delete misc--openclaw-m13test 2>&1 | tail -3 || true'
 ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test 2>&1 | tail -3'
 ssh REMOTE_HOST 'trash ~/quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test visible silo"'
 ssh REMOTE_HOST 'trash ~/.quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/.quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test hidden silo"'
@@ -2007,6 +2019,13 @@ Pass:
 - OC can retrieve the doc content through Quaid
 
 ### Phase 2: Link the same project in Claude Code and add a second doc
+
+**Ordering**: Phase 2 assumes OC's Phase 1 has landed — CC LINKS to an existing
+`cross-live-test` rather than creating fresh. If OC is blocked upstream and CC
+reaches this milestone first, CC's natural-directive create will attach to the
+visible-home project dir under its own instance registry; the coordinator
+cross-registration step below (`Cross-link docs across instances`) handles the
+multi-instance linking regardless. Lane interleaving is expected.
 
 Ask CC naturally:
 
