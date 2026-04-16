@@ -27,6 +27,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _adapter_mock():
+    adapter = MagicMock()
+    adapter._extract_hook_session_id = None
+    return adapter
+
 def _run_hook_inject(hook_input: dict, *, monkeypatch, patches: dict | None = None):
     """Drive hook_inject with a fake stdin and captured stdout/stderr.
 
@@ -125,7 +130,7 @@ def cursor_dir(tmp_path, monkeypatch):
 @pytest.fixture()
 def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     """Return a mock adapter wired into get_adapter() and get_owner_id()."""
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.adapter_id.return_value = ""
     adapter.get_session_path.return_value = None
     adapter.get_sessions_dir.return_value = str(sessions_dir)
@@ -929,7 +934,7 @@ class TestHookSessionInitRegistryAugmentation:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
 
-        adapter = MagicMock()
+        adapter = _adapter_mock()
         adapter.projects_dir.return_value = projects_dir
         adapter.identity_dir.return_value = identity_dir
         adapter.data_dir.return_value = tmp_path / "data"
@@ -1138,7 +1143,7 @@ class TestSubagentHooks:
         source = tmp_path / "child.jsonl"
         source.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
         logs_dir = tmp_path / "instances" / "pytest-runner" / "logs"
-        adapter = MagicMock()
+        adapter = _adapter_mock()
         adapter.logs_dir.return_value = logs_dir
         monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
 

@@ -12,6 +12,12 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
+def _adapter_mock():
+    adapter = MagicMock()
+    adapter._extract_hook_session_id = None
+    return adapter
+
+
 def _run_hook_session_init(hook_input: dict, *, monkeypatch):
     from core.interface import hooks
 
@@ -100,7 +106,7 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     ensure_alive_calls = []
 
     from core.interface import hooks
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.projects_dir.return_value = projects_dir
     adapter.identity_dir.return_value = identity_dir
     adapter.get_base_context_files.return_value = {}
@@ -171,7 +177,7 @@ def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypat
     (project / "TOOLS.md").write_text("# Tools\ncodex startup docs", encoding="utf-8")
 
     from core.interface import hooks
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.projects_dir.return_value = projects_dir
     adapter.identity_dir.return_value = identity_dir
     adapter.get_base_context_files.return_value = {}
@@ -222,7 +228,7 @@ def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypat
 def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path):
     from core.interface import hooks
 
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.get_pending_context.return_value = ""
     adapter.resolve_prompt_submit_signal.return_value = None
     adapter.adapter_id.return_value = "codex"
@@ -265,7 +271,7 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
 def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypatch, tmp_path):
     from core.interface import hooks
 
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.get_pending_context.return_value = ""
     adapter.resolve_prompt_submit_signal.return_value = None
     adapter.adapter_id.return_value = "codex"
@@ -317,7 +323,7 @@ def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path
         return Path(tmp_path / "signals" / "sig-unused.json")
 
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.resolve_stop_hook_signal.return_value = None
     adapter.adapter_id.return_value = "codex"
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
@@ -340,7 +346,7 @@ def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path
 def test_codex_hook_inject_promotes_recall_router_warning_to_provider_notice(monkeypatch, tmp_path):
     from core.interface import hooks
 
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.get_pending_context.return_value = ""
     adapter.resolve_prompt_submit_signal.return_value = None
     adapter.adapter_id.return_value = "codex"
@@ -404,7 +410,7 @@ def test_codex_stop_writes_session_end_signal_for_new_command(monkeypatch, tmp_p
         return Path(tmp_path / "signals" / "sig-session-end.json")
 
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.resolve_stop_hook_signal.return_value = {
         "signal_type": "session_end",
         "meta": {
@@ -454,7 +460,7 @@ def test_codex_inject_writes_session_end_signal_for_clear_command(monkeypatch, t
         return Path(tmp_path / "signals" / "sig-session-end.json")
 
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.resolve_prompt_submit_signal.return_value = {
         "signal_type": "session_end",
         "meta": {
@@ -504,7 +510,7 @@ def test_codex_deferred_notice_relay_context_is_enabled(monkeypatch):
 def test_codex_hook_inject_surfaces_new_pending_notice_on_same_turn(monkeypatch, tmp_path):
     from core.interface import hooks
 
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.get_pending_context.return_value = ""
     adapter.resolve_prompt_submit_signal.return_value = None
     adapter.adapter_id.return_value = "codex"
@@ -553,7 +559,7 @@ def test_codex_session_init_passes_full_hook_payload_to_transition_check(monkeyp
     projects_dir.mkdir()
     identity_dir.mkdir()
 
-    adapter = MagicMock()
+    adapter = _adapter_mock()
     adapter.projects_dir.return_value = projects_dir
     adapter.identity_dir.return_value = identity_dir
     adapter.get_base_context_files.return_value = {}
