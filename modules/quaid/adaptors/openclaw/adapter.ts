@@ -11,6 +11,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import {
   type DomainFilter,
@@ -69,6 +70,22 @@ function _openClawRootDir(): string {
   return path.dirname(_resolveOpenClawConfigPath());
 }
 
+function _resolveAdapterModuleRoot(): string {
+  try {
+    return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  } catch {
+    return path.resolve(process.cwd());
+  }
+}
+
+function _looksLikeQuaidRuntimeRoot(candidateRoot: string): boolean {
+  const root = _normalizeWorkspacePath(candidateRoot);
+  return (
+    fs.existsSync(path.join(root, "core", "lifecycle", "janitor.py")) &&
+    fs.existsSync(path.join(root, "datastore", "memorydb", "memory_graph.py"))
+  );
+}
+
 function _resolveWorkspace(): string {
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
@@ -83,6 +100,16 @@ function _resolveWorkspace(): string {
     const cfgPath = _resolveOpenClawConfigPath();
     if (fs.existsSync(cfgPath)) {
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const envHome = String(
+        cfg?.env?.vars?.QUAID_HOME ||
+        cfg?.env?.QUAID_HOME ||
+        cfg?.env?.vars?.QUAID_WORKSPACE ||
+        cfg?.env?.QUAID_WORKSPACE ||
+        "",
+      ).trim();
+      if (envHome) {
+        return _normalizeWorkspacePath(envHome);
+      }
       const list = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
       const mainAgent = list.find((a: any) => a?.id === "main" || a?.default === true);
       const ws = String(mainAgent?.workspace || cfg?.agents?.defaults?.workspace || "").trim();
@@ -92,6 +119,22 @@ function _resolveWorkspace(): string {
     }
   } catch (err: unknown) {
     console.error("[quaid][startup] workspace resolution failed:", (err as Error)?.message || String(err));
+  }
+
+  const hiddenHome = path.join(os.homedir(), ".quaid");
+  if (fs.existsSync(hiddenHome)) {
+    return _normalizeWorkspacePath(hiddenHome);
+  }
+  const visibleHome = path.join(os.homedir(), "quaid");
+  if (fs.existsSync(path.join(visibleHome, "instances")) || fs.existsSync(path.join(visibleHome, "shared"))) {
+    return _normalizeWorkspacePath(visibleHome);
+  }
+  const moduleRoot = _resolveAdapterModuleRoot();
+  // Extension installs commonly run without cwd/config workspace wiring.
+  // If adapter files are loaded from ~/.openclaw/extensions/quaid, default to
+  // hidden Quaid home rather than resolving to "/" or an arbitrary cwd.
+  if (moduleRoot.includes(`${path.sep}.openclaw${path.sep}extensions${path.sep}quaid`)) {
+    return _normalizeWorkspacePath(path.join(os.homedir(), ".quaid"));
   }
 
   return _normalizeWorkspacePath(process.cwd());
@@ -148,13 +191,30 @@ function _resolveQuaidInstance(): string {
   return "openclaw-main";
 }
 
-function _resolvePythonPluginRoot(): string {
-  const modulesRoot = path.join(WORKSPACE, "modules", "quaid");
-  if (fs.existsSync(modulesRoot)) {
-    return modulesRoot;
+function _resolvePythonPluginRoot(workspace = WORKSPACE, moduleRootOverride?: string): string {
+  const explicitRoot = String(process.env.QUAID_PLUGIN_ROOT || "").trim();
+  const moduleRoot = moduleRootOverride ? _normalizeWorkspacePath(moduleRootOverride) : _resolveAdapterModuleRoot();
+  const candidates = [
+    explicitRoot,
+    path.join(workspace, "modules", "quaid"),
+    path.join(workspace, "plugins", "quaid"),
+    moduleRoot,
+    path.join(_openClawRootDir(), "extensions", "quaid"),
+    path.join(_openClawRootDir(), "extensions", "quaid", "quaid"),
+  ].filter((candidate) => String(candidate || "").trim().length > 0);
+
+  for (const candidate of candidates) {
+    if (_looksLikeQuaidRuntimeRoot(candidate)) {
+      return _normalizeWorkspacePath(candidate);
+    }
   }
-  // Backward compatibility for older workspace layouts.
-  return path.join(WORKSPACE, "plugins", "quaid");
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return _normalizeWorkspacePath(candidate);
+    }
+  }
+  // Last resort: module root derived from adapter location.
+  return _normalizeWorkspacePath(moduleRoot);
 }
 const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
 function _pythonVersionOk(bin: string): boolean {
@@ -6171,6 +6231,11 @@ notify_memory_extraction(
 
 export default quaidPlugin;
 export const __test = {
+  resolveWorkspace: _resolveWorkspace,
+  resolvePythonPluginRoot: (workspace?: string, moduleRootOverride?: string) =>
+    _resolvePythonPluginRoot(workspace || WORKSPACE, moduleRootOverride),
+  resolveAdapterModuleRoot: _resolveAdapterModuleRoot,
+  looksLikeQuaidRuntimeRoot: _looksLikeQuaidRuntimeRoot,
   detectLifecycleCommandSignal: (messages: any[]) => facade.detectLifecycleSignal(messages)?.label || null,
   detectLifecycleSignal: (messages: any[]) => facade.detectLifecycleSignal(messages),
   shouldProcessLifecycleSignal: (

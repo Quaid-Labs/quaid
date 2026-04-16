@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import {
   createQuaidFacade
@@ -44,6 +45,17 @@ function _resolveOpenClawConfigPath() {
 function _openClawRootDir() {
   return path.dirname(_resolveOpenClawConfigPath());
 }
+function _resolveAdapterModuleRoot() {
+  try {
+    return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  } catch {
+    return path.resolve(process.cwd());
+  }
+}
+function _looksLikeQuaidRuntimeRoot(candidateRoot) {
+  const root = _normalizeWorkspacePath(candidateRoot);
+  return fs.existsSync(path.join(root, "core", "lifecycle", "janitor.py")) && fs.existsSync(path.join(root, "datastore", "memorydb", "memory_graph.py"));
+}
 function _resolveWorkspace() {
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
@@ -57,6 +69,12 @@ function _resolveWorkspace() {
     const cfgPath = _resolveOpenClawConfigPath();
     if (fs.existsSync(cfgPath)) {
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const envHome = String(
+        cfg?.env?.vars?.QUAID_HOME || cfg?.env?.QUAID_HOME || cfg?.env?.vars?.QUAID_WORKSPACE || cfg?.env?.QUAID_WORKSPACE || ""
+      ).trim();
+      if (envHome) {
+        return _normalizeWorkspacePath(envHome);
+      }
       const list = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
       const mainAgent = list.find((a) => a?.id === "main" || a?.default === true);
       const ws = String(mainAgent?.workspace || cfg?.agents?.defaults?.workspace || "").trim();
@@ -66,6 +84,18 @@ function _resolveWorkspace() {
     }
   } catch (err) {
     console.error("[quaid][startup] workspace resolution failed:", err?.message || String(err));
+  }
+  const hiddenHome = path.join(os.homedir(), ".quaid");
+  if (fs.existsSync(hiddenHome)) {
+    return _normalizeWorkspacePath(hiddenHome);
+  }
+  const visibleHome = path.join(os.homedir(), "quaid");
+  if (fs.existsSync(path.join(visibleHome, "instances")) || fs.existsSync(path.join(visibleHome, "shared"))) {
+    return _normalizeWorkspacePath(visibleHome);
+  }
+  const moduleRoot = _resolveAdapterModuleRoot();
+  if (moduleRoot.includes(`${path.sep}.openclaw${path.sep}extensions${path.sep}quaid`)) {
+    return _normalizeWorkspacePath(path.join(os.homedir(), ".quaid"));
   }
   return _normalizeWorkspacePath(process.cwd());
 }
@@ -110,12 +140,28 @@ function _resolveQuaidInstance() {
   }
   return "openclaw-main";
 }
-function _resolvePythonPluginRoot() {
-  const modulesRoot = path.join(WORKSPACE, "modules", "quaid");
-  if (fs.existsSync(modulesRoot)) {
-    return modulesRoot;
+function _resolvePythonPluginRoot(workspace = WORKSPACE, moduleRootOverride) {
+  const explicitRoot = String(process.env.QUAID_PLUGIN_ROOT || "").trim();
+  const moduleRoot = moduleRootOverride ? _normalizeWorkspacePath(moduleRootOverride) : _resolveAdapterModuleRoot();
+  const candidates = [
+    explicitRoot,
+    path.join(workspace, "modules", "quaid"),
+    path.join(workspace, "plugins", "quaid"),
+    moduleRoot,
+    path.join(_openClawRootDir(), "extensions", "quaid"),
+    path.join(_openClawRootDir(), "extensions", "quaid", "quaid")
+  ].filter((candidate) => String(candidate || "").trim().length > 0);
+  for (const candidate of candidates) {
+    if (_looksLikeQuaidRuntimeRoot(candidate)) {
+      return _normalizeWorkspacePath(candidate);
+    }
   }
-  return path.join(WORKSPACE, "plugins", "quaid");
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return _normalizeWorkspacePath(candidate);
+    }
+  }
+  return _normalizeWorkspacePath(moduleRoot);
 }
 const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
 function _pythonVersionOk(bin) {
@@ -5017,6 +5063,10 @@ notify_memory_extraction(
 };
 var adapter_default = quaidPlugin;
 const __test = {
+  resolveWorkspace: _resolveWorkspace,
+  resolvePythonPluginRoot: (workspace, moduleRootOverride) => _resolvePythonPluginRoot(workspace || WORKSPACE, moduleRootOverride),
+  resolveAdapterModuleRoot: _resolveAdapterModuleRoot,
+  looksLikeQuaidRuntimeRoot: _looksLikeQuaidRuntimeRoot,
   detectLifecycleCommandSignal: (messages) => facade.detectLifecycleSignal(messages)?.label || null,
   detectLifecycleSignal: (messages) => facade.detectLifecycleSignal(messages),
   shouldProcessLifecycleSignal: (sessionId, signal) => facade.shouldProcessLifecycleSignal(sessionId, signal),

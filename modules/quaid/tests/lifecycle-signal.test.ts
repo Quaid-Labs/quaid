@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { __test } from "../adaptors/openclaw/adapter.js";
@@ -773,5 +774,82 @@ describe("lifecycle signal detection", () => {
     } finally {
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
+  });
+
+  it("resolves workspace from OpenClaw config env vars when process env is unset", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-ws-env-"));
+    const hiddenHome = path.join(home, ".quaid");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.mkdirSync(hiddenHome, { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        agents: { list: [{ id: "main" }] },
+        env: { vars: { QUAID_HOME: hiddenHome } },
+      }),
+      "utf8",
+    );
+
+    const prev = {
+      HOME: process.env.HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      QUAID_HOME: process.env.QUAID_HOME,
+      QUAID_WORKSPACE: process.env.QUAID_WORKSPACE,
+    };
+    process.env.HOME = home;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    delete process.env.QUAID_HOME;
+    delete process.env.QUAID_WORKSPACE;
+    try {
+      expect(__test.resolveWorkspace()).toBe(path.resolve(hiddenHome));
+    } finally {
+      if (prev.HOME === undefined) delete process.env.HOME; else process.env.HOME = prev.HOME;
+      if (prev.OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH; else process.env.OPENCLAW_CONFIG_PATH = prev.OPENCLAW_CONFIG_PATH;
+      if (prev.QUAID_HOME === undefined) delete process.env.QUAID_HOME; else process.env.QUAID_HOME = prev.QUAID_HOME;
+      if (prev.QUAID_WORKSPACE === undefined) delete process.env.QUAID_WORKSPACE; else process.env.QUAID_WORKSPACE = prev.QUAID_WORKSPACE;
+    }
+  });
+
+  it("falls back to ~/.quaid workspace when config does not declare one", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-ws-fallback-"));
+    const hiddenHome = path.join(home, ".quaid");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.mkdirSync(hiddenHome, { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        agents: { list: [{ id: "main" }] },
+        env: { vars: { PATH: "/usr/bin:/bin" } },
+      }),
+      "utf8",
+    );
+
+    const prev = {
+      HOME: process.env.HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      QUAID_HOME: process.env.QUAID_HOME,
+      QUAID_WORKSPACE: process.env.QUAID_WORKSPACE,
+    };
+    process.env.HOME = home;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    delete process.env.QUAID_HOME;
+    delete process.env.QUAID_WORKSPACE;
+    try {
+      expect(__test.resolveWorkspace()).toBe(path.resolve(hiddenHome));
+    } finally {
+      if (prev.HOME === undefined) delete process.env.HOME; else process.env.HOME = prev.HOME;
+      if (prev.OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH; else process.env.OPENCLAW_CONFIG_PATH = prev.OPENCLAW_CONFIG_PATH;
+      if (prev.QUAID_HOME === undefined) delete process.env.QUAID_HOME; else process.env.QUAID_HOME = prev.QUAID_HOME;
+      if (prev.QUAID_WORKSPACE === undefined) delete process.env.QUAID_WORKSPACE; else process.env.QUAID_WORKSPACE = prev.QUAID_WORKSPACE;
+    }
+  });
+
+  it("falls back to adapter module root for Python runtime when workspace paths are absent", () => {
+    const bogusWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-plugin-root-"));
+    const moduleRoot = __test.resolveAdapterModuleRoot();
+    expect(__test.looksLikeQuaidRuntimeRoot(moduleRoot)).toBe(true);
+    expect(__test.resolvePythonPluginRoot(bogusWorkspace, moduleRoot)).toBe(path.resolve(moduleRoot));
   });
 });
