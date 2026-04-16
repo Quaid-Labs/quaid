@@ -492,6 +492,42 @@ class TestDocsSearchFiltering:
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_project_filter_bypasses_vec_candidate_stage(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "scoped:0",
+                    "/tmp/workspace/projects/quaid/m10-test-doc.md",
+                    0,
+                    "veiled-wintersmith-runebell",
+                    "# Canary",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
+             patch.object(rag, "_doc_vec_table_exists", return_value=True), \
+             patch("datastore.docsdb.rag.logger.warning") as warn_mock, \
+             patch.object(
+                 rag,
+                 "_get_project_paths",
+                 return_value={"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []},
+             ):
+            results = rag.search_docs("veiled-wintersmith-runebell", limit=10, project="quaid")
+
+        assert len(results) == 1
+        vec_warnings = [str(call.args[0]) for call in warn_mock.call_args_list if call.args]
+        assert not any("Doc RAG vec recall failed" in msg for msg in vec_warnings)
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.70)
     def test_search_docs_skips_context_files_even_if_indexed(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)

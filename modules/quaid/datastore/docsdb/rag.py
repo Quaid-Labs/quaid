@@ -1005,6 +1005,12 @@ class DocsRAG:
                 return []
 
             use_vec = _lib_has_vec() and self._doc_vec_table_exists(conn)
+            if use_vec and (project or doc_filters):
+                # sqlite-vec evaluates ANN k-NN before the SQL WHERE predicate.
+                # For project/docs-scoped recall, that can starve valid matches when
+                # the global top-k candidate set doesn't contain scoped rows.
+                # Prefer exact filtered scan semantics for scoped queries.
+                use_vec = False
             if use_vec:
                 try:
                     packed_query = _lib_pack_embedding(query_embedding)
