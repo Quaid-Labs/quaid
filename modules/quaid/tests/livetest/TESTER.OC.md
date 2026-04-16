@@ -134,15 +134,15 @@ ssh REMOTE_HOST 'QUAID_HOME=~/.quaid QUAID_INSTANCE=OC_INSTANCE \
 **Snippet path is in visible home, not hidden home.**
 After extraction, snippets are written to:
 ```
-~/quaid/instances/openclaw-livetest/USER.snippets.md
-~/quaid/instances/openclaw-livetest/SOUL.snippets.md
+~/quaid/instances/openclaw-main/USER.snippets.md
+~/quaid/instances/openclaw-main/SOUL.snippets.md
 ```
 Do NOT search `~/.quaid/` for snippet files — they will not be there.
 
 Verify:
 ```bash
-ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-livetest/*.snippets.md 2>/dev/null && \
-  head -20 ~/quaid/instances/openclaw-livetest/USER.snippets.md'
+ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-main/*.snippets.md 2>/dev/null && \
+  head -20 ~/quaid/instances/openclaw-main/USER.snippets.md'
 ```
 
 **Wait for the full extraction window before checking.** Sessions with

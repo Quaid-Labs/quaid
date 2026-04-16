@@ -96,7 +96,7 @@ long wait; production default is 60). Do this once per run. Restart daemons afte
 overwrite it to 1500 — instance config takes precedence over global. The installer
 writes 8000 as the default; always overwrite after M0.**
 ```bash
-for inst in openclaw-livetest openclaw-main codex-main claude-code-main; do
+for inst in openclaw-main openclaw-main codex-main claude-code-main; do
   ssh admin@$VM_IP "python3 -c '
 import json
 p = \"/Users/admin/.quaid/instances/$inst/config.json\"

@@ -206,7 +206,7 @@ yourself.
 
     ```bash
     # OC tester
-    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=openclaw-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=openclaw-main node setup-quaid.mjs \
       --dry-run --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CC tester
@@ -221,7 +221,7 @@ yourself.
     Check the plan output:
     - `platform` matches your platform (openclaw / claude-code / codex)
     - hidden Quaid home is `~/.quaid` and visible Quaid files are under `~/quaid`
-    - `instanceId` matches your silo name (openclaw-livetest / claude-code-private-tmp-cc-livetest / codex-private-tmp-cdx-livetest)
+    - `instanceId` matches your silo name (openclaw-main / claude-code-private-tmp-cc-livetest / codex-private-tmp-cdx-livetest)
     - No fatal errors
 
     If the plan looks wrong, **stop and post an ISSUE to the coordinator mailbox** before
