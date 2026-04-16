@@ -3839,14 +3839,20 @@ notify_user(${JSON.stringify(message)})
           diagnostics: recallDiagnostics,
           top_results: summarizeRecallResults(toInject),
         });
-        // Inject memories into system context rather than the human turn.
-        // System-level injection (appendSystemContext) is treated as authoritative by the
-        // model. Human-turn injection (prependContext) is treated as user-provided context
-        // and is frequently ignored for memory queries — confirmed by CC (system inject)
-        // passing where OC (prependContext inject) fails on identical memory content.
+        // Inject memories into both system and prompt-prepend context.
+        // Some OC gateway variants route before_prompt_build through hook channels that do
+        // not consistently honor appendSystemContext mutations. Mirroring to prependContext
+        // preserves memory delivery even when system-context mutation is dropped.
         appendSystemContext = appendSystemContext
           ? `${appendSystemContext}\n\n${memoriesBlock}`
           : memoriesBlock;
+        prependContextParts.push(memoriesBlock);
+        writeHookTrace("hook.before_prompt_build.injection_applied", {
+          query: query.slice(0, 80),
+          targets: ["appendSystemContext", "prependContext"],
+          block_len: memoriesBlock.length,
+          inject_count: toInject.length,
+        });
 
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
 
