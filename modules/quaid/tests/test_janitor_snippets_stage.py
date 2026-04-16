@@ -904,3 +904,63 @@ class TestRunSoulSnippetsReview:
                 assert result.get("errors", []) == [], f"Expected no errors for DISCARD, got: {result['errors']}"
         finally:
             reset_adapter()
+
+    def test_lifecycle_treats_invalid_snippet_index_as_non_fatal_when_apply_made_progress(self, monkeypatch):
+        """Out-of-range snippet decisions should not fail janitor when valid decisions were applied."""
+        handlers = {}
+
+        class _Registry:
+            def register(self, name, handler):
+                handlers[name] = handler
+
+        def _result_factory():
+            return SimpleNamespace(metrics={}, logs=[], errors=[], data={})
+
+        soul_snippets.register_lifecycle_routines(_Registry(), _result_factory)
+        run_handler = handlers["snippets"]
+        monkeypatch.setattr(
+            soul_snippets,
+            "run_soul_snippets_review",
+            lambda **_kw: {
+                "folded": 0,
+                "rewritten": 12,
+                "discarded": 61,
+                "skipped_at_limit": 0,
+                "errors": ["Invalid snippet index 53 for USER.md"],
+            },
+        )
+        ctx = SimpleNamespace(dry_run=False, parallel_map=None, options={})
+        result = run_handler(ctx)
+        assert result.errors == []
+        assert result.metrics.get("snippets_invalid_index") == 1
+        assert any("out-of-range decision" in line for line in result.logs)
+
+    def test_lifecycle_keeps_invalid_snippet_index_fatal_when_no_decisions_applied(self, monkeypatch):
+        """If every snippet decision is invalid, janitor should still fail the snippets stage."""
+        handlers = {}
+
+        class _Registry:
+            def register(self, name, handler):
+                handlers[name] = handler
+
+        def _result_factory():
+            return SimpleNamespace(metrics={}, logs=[], errors=[], data={})
+
+        soul_snippets.register_lifecycle_routines(_Registry(), _result_factory)
+        run_handler = handlers["snippets"]
+        monkeypatch.setattr(
+            soul_snippets,
+            "run_soul_snippets_review",
+            lambda **_kw: {
+                "folded": 0,
+                "rewritten": 0,
+                "discarded": 0,
+                "skipped_at_limit": 0,
+                "errors": ["Invalid snippet index 53 for USER.md"],
+            },
+        )
+        ctx = SimpleNamespace(dry_run=False, parallel_map=None, options={})
+        result = run_handler(ctx)
+        assert result.metrics.get("snippets_invalid_index") == 1
+        assert result.errors
+        assert "out-of-range" in result.errors[0]

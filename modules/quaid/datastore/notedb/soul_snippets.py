@@ -2343,8 +2343,30 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             result.metrics["snippets_rewritten"] = int(snippets_result.get("rewritten", 0))
             result.metrics["snippets_discarded"] = int(snippets_result.get("discarded", 0))
             result.metrics["snippets_skipped_at_limit"] = int(snippets_result.get("skipped_at_limit", 0))
+            applied_total = (
+                result.metrics["snippets_folded"]
+                + result.metrics["snippets_rewritten"]
+                + result.metrics["snippets_discarded"]
+            )
+            invalid_index_errors = 0
             for err in (snippets_result.get("errors") or []):
-                result.errors.append(f"Snippets review failed: {err}")
+                err_text = str(err or "")
+                if err_text.startswith("Invalid snippet index "):
+                    invalid_index_errors += 1
+                    continue
+                result.errors.append(f"Snippets review failed: {err_text}")
+            if invalid_index_errors:
+                result.metrics["snippets_invalid_index"] = invalid_index_errors
+                if applied_total > 0:
+                    result.logs.append(
+                        "Snippets review ignored "
+                        f"{invalid_index_errors} out-of-range decision(s)"
+                    )
+                else:
+                    result.errors.append(
+                        "Snippets review failed: all decisions were out-of-range "
+                        f"({invalid_index_errors} invalid index decision(s))"
+                    )
         except Exception as exc:
             if is_fail_hard_enabled():
                 raise RuntimeError("Snippets review failed") from exc
