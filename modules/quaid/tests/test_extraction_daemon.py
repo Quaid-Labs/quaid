@@ -259,6 +259,33 @@ def test_ensure_discovered_session_cursors_repairs_broken_existing_cursor(monkey
     assert data["transcript_path"] == str(transcript)
 
 
+def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch, tmp_path):
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    canonical = sessions_dir / "6aadea75-5a01-45c0-af68-017d2e58bbc8.jsonl"
+    checkpoint = sessions_dir / (
+        "6aadea75-5a01-45c0-af68-017d2e58bbc8.checkpoint."
+        "78423baa-408a-409b-89c0-3a203bbbd19d.jsonl"
+    )
+    canonical.write_text('{"role":"user","content":"fresh fact"}\n', encoding="utf-8")
+    checkpoint.write_text('{"role":"user","content":"stale checkpoint"}\n', encoding="utf-8")
+
+    class _Adapter:
+        def get_sessions_dir(self):
+            return sessions_dir
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+    assert discovered == 1
+
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+    canonical_cursor = cursor_dir / "6aadea75-5a01-45c0-af68-017d2e58bbc8.json"
+    assert canonical_cursor.exists()
+    assert list(cursor_dir.glob("unknown-*.json")) == []
+
+
 def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -4131,6 +4158,19 @@ class TestValidateSessionId:
     def test_spaces_return_fallback(self):
         result = extraction_daemon._validate_session_id("bad session id")
         assert result.startswith("unknown-")
+
+    def test_checkpoint_sidecar_session_id_normalizes_to_base(self):
+        result = extraction_daemon._validate_session_id(
+            "c9f9874a-0982-4679-9bec-52e2451fd087.checkpoint."
+            "78423baa-408a-409b-89c0-3a203bbbd19d"
+        )
+        assert result == "c9f9874a-0982-4679-9bec-52e2451fd087"
+
+    def test_invalid_session_id_fallback_is_deterministic(self):
+        bad = "bad/session/id"
+        result1 = extraction_daemon._validate_session_id(bad)
+        result2 = extraction_daemon._validate_session_id(bad)
+        assert result1 == result2
 
 
 # ---------------------------------------------------------------------------

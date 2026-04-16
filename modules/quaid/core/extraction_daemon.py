@@ -25,6 +25,7 @@ and cursor state.
 """
 
 import fcntl
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -67,6 +68,10 @@ _SIGNAL_POLL_PRIORITY = {
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+_SESSION_ID_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_DISCOVERY_ARTIFACT_MARKERS = (".checkpoint.", ".reset.")
 
 # Tracks sessions that have already had a cursor-at-end timeout signal fired.
 # Prevents repeated signals for sessions where rolling extracted all content
@@ -314,12 +319,46 @@ def _atomic_write(path: Path, content: str) -> None:
 
 def _validate_session_id(session_id: str) -> str:
     """Validate and sanitize session_id to prevent path traversal."""
-    if not session_id or not _SESSION_ID_RE.match(session_id):
-        # Generate a safe fallback (B045)
-        safe = f"unknown-{int(time.time())}-{os.getpid()}"
-        logger.warning("invalid session_id %r, using fallback: %s", session_id, safe)
-        return safe
-    return session_id
+    raw = str(session_id or "").strip()
+    if raw and _SESSION_ID_RE.match(raw):
+        return raw
+
+    # OpenClaw can emit transcript sidecar IDs like:
+    #   <session-id>.checkpoint.<uuid>
+    #   <session-id>.reset.<timestamp>
+    # Normalize these to the canonical session prefix so timeout extraction
+    # stays attributed to the live session.
+    if raw:
+        for marker in _DISCOVERY_ARTIFACT_MARKERS:
+            marker_idx = raw.find(marker)
+            if marker_idx > 0:
+                prefix = raw[:marker_idx].strip()
+                if _SESSION_ID_RE.match(prefix):
+                    logger.warning("normalized sidecar session_id %r -> %s", session_id, prefix)
+                    return prefix
+
+        uuid_match = _SESSION_ID_UUID_RE.search(raw)
+        if uuid_match:
+            normalized = uuid_match.group(0)
+            if _SESSION_ID_RE.match(normalized):
+                logger.warning("normalized uuid-bearing session_id %r -> %s", session_id, normalized)
+                return normalized
+
+    # Generate a deterministic fallback so the same malformed ID does not
+    # explode into many synthetic unknown-* sessions across idle scans.
+    digest_seed = raw or "empty"
+    safe = f"unknown-{hashlib.sha1(digest_seed.encode('utf-8', 'replace')).hexdigest()[:16]}"
+    logger.warning("invalid session_id %r, using fallback: %s", session_id, safe)
+    return safe
+
+
+def _is_discovery_artifact_transcript(transcript_path: Path) -> bool:
+    """Return True when a transcript file is a sidecar artifact, not a live session."""
+    try:
+        name = str(transcript_path.name or "").lower()
+    except Exception:
+        return False
+    return any(marker in name for marker in _DISCOVERY_ARTIFACT_MARKERS)
 
 
 # ---------------------------------------------------------------------------
@@ -1934,6 +1973,8 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
 
     discovered = 0
     for transcript_path in sessions_root.rglob("*.jsonl"):
+        if _is_discovery_artifact_transcript(transcript_path):
+            continue
         try:
             session_id = _validate_session_id(transcript_path.stem)
         except ValueError:
