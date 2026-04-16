@@ -207,6 +207,7 @@ export class SessionTimeoutManager {
   private pendingFallbackMessages: any[] | null = null;
   private pendingSessionId: string | undefined;
   private sessionCursorDir: string;
+  private legacySessionCursorDir: string;
   private staleSweepStatePath: string;
   private installStatePath: string;
   private logDir: string;
@@ -269,6 +270,7 @@ export class SessionTimeoutManager {
     // Both components track different cursor shapes; sharing one file causes
     // schema clobbering and repeated timeout/compaction rescheduling.
     this.sessionCursorDir = path.join(opts.workspace, "data", "session-timeout-cursors");
+    this.legacySessionCursorDir = path.join(opts.workspace, "data", "session-cursors");
     this.staleSweepStatePath = path.join(opts.workspace, "data", "stale-sweep-state.json");
     this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
@@ -697,13 +699,66 @@ export class SessionTimeoutManager {
     return path.join(this.sessionCursorDir, `${safeSessionId}.json`);
   }
 
+  private legacyCursorPath(sessionId: string): string {
+    const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
+    return path.join(this.legacySessionCursorDir, `${safeSessionId}.json`);
+  }
+
+  private normalizeTimeoutCursorPayload(sessionId: string, payload: any): SessionCursorPayload | null {
+    if (!payload || typeof payload !== "object") return null;
+    const hasTimeoutShape = Object.prototype.hasOwnProperty.call(payload, "sessionId")
+      || Object.prototype.hasOwnProperty.call(payload, "clearedAt")
+      || Object.prototype.hasOwnProperty.call(payload, "lastMessageKey")
+      || Object.prototype.hasOwnProperty.call(payload, "lastTimestampMs");
+    if (!hasTimeoutShape) return null;
+
+    const payloadSessionId = String(payload.sessionId || "").trim();
+    if (payloadSessionId && payloadSessionId !== sessionId) return null;
+
+    const out: SessionCursorPayload = {
+      sessionId,
+      clearedAt: typeof payload.clearedAt === "string" && payload.clearedAt.trim()
+        ? payload.clearedAt
+        : new Date().toISOString(),
+    };
+    if (typeof payload.lastMessageKey === "string" && payload.lastMessageKey.trim()) {
+      out.lastMessageKey = payload.lastMessageKey;
+    }
+    if (typeof payload.lastTimestampMs === "number" && Number.isFinite(payload.lastTimestampMs)) {
+      out.lastTimestampMs = payload.lastTimestampMs;
+    }
+    return out;
+  }
+
+  private readLegacySessionCursor(sessionId: string): SessionCursorPayload | null {
+    const legacyPath = this.legacyCursorPath(sessionId);
+    if (!fs.existsSync(legacyPath)) return null;
+    const legacyRaw = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+    const normalized = this.normalizeTimeoutCursorPayload(sessionId, legacyRaw);
+    if (!normalized) return null;
+    try {
+      fs.mkdirSync(this.sessionCursorDir, { recursive: true });
+      fs.writeFileSync(this.cursorPath(sessionId), JSON.stringify(normalized), { mode: 0o600 });
+      this.writeQuaidLog("session_cursor_migrated", sessionId, {
+        source: "legacy_session_cursors",
+      });
+    } catch (err: unknown) {
+      safeLog(this.logger, `[memory][timeout] failed migrating legacy cursor for ${sessionId}: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+    return normalized;
+  }
+
   private readSessionCursor(sessionId: string): SessionCursorPayload | null {
     try {
       const fp = this.cursorPath(sessionId);
-      if (!fs.existsSync(fp)) return null;
-      const payload = JSON.parse(fs.readFileSync(fp, "utf8")) as SessionCursorPayload;
-      if (!payload || typeof payload !== "object") return null;
-      return payload;
+      if (fs.existsSync(fp)) {
+        const payload = this.normalizeTimeoutCursorPayload(sessionId, JSON.parse(fs.readFileSync(fp, "utf8")));
+        return payload;
+      }
+      return this.readLegacySessionCursor(sessionId);
     } catch (err: unknown) {
       safeLog(this.logger, `[memory][timeout] failed reading session cursor for ${sessionId}: ${String((err as Error)?.message || err)}`);
       if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {

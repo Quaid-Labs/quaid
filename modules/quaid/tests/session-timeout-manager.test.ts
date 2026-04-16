@@ -206,6 +206,77 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("reads and migrates legacy timeout cursor files on first run", async () => {
+    const workspace = makeWorkspace("quaid-timeout-legacy-cursor-migrate-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-legacy", [
+      { id: "u1", role: "user", content: "fact", timestamp: new Date().toISOString() },
+    ]);
+
+    const legacyCursorPath = path.join(workspace, "data", "session-cursors", "session-legacy.json");
+    fs.mkdirSync(path.dirname(legacyCursorPath), { recursive: true });
+    fs.writeFileSync(
+      legacyCursorPath,
+      JSON.stringify({
+        sessionId: "session-legacy",
+        clearedAt: new Date().toISOString(),
+        lastMessageKey: "id:u1",
+      }),
+      "utf8",
+    );
+
+    const calls: Array<{ sessionId?: string; label?: string; messages: any[] }> = [];
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 10,
+      source,
+      extract: async (messages, sessionId, label) => {
+        calls.push({ messages, sessionId, label });
+      },
+    });
+
+    expect(await manager.extractSessionFromLog("session-legacy", "Reset")).toBe(false);
+    expect(calls).toHaveLength(0);
+
+    const migratedPath = path.join(workspace, "data", "session-timeout-cursors", "session-legacy.json");
+    expect(fs.existsSync(migratedPath)).toBe(true);
+    const migrated = JSON.parse(fs.readFileSync(migratedPath, "utf8"));
+    expect(migrated.lastMessageKey).toBe("id:u1");
+  });
+
+  it("ignores daemon line-offset cursor shape from legacy cursor directory", async () => {
+    const workspace = makeWorkspace("quaid-timeout-legacy-daemon-shape-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-daemon-shape", [
+      { id: "u1", role: "user", content: "fact", timestamp: new Date().toISOString() },
+    ]);
+
+    const legacyCursorPath = path.join(workspace, "data", "session-cursors", "session-daemon-shape.json");
+    fs.mkdirSync(path.dirname(legacyCursorPath), { recursive: true });
+    fs.writeFileSync(
+      legacyCursorPath,
+      JSON.stringify({
+        session_id: "session-daemon-shape",
+        line_offset: 9,
+        transcript_path: "/tmp/session-daemon-shape.jsonl",
+      }),
+      "utf8",
+    );
+
+    const calls: Array<{ sessionId?: string; label?: string; messages: any[] }> = [];
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 10,
+      source,
+      extract: async (messages, sessionId, label) => {
+        calls.push({ messages, sessionId, label });
+      },
+    });
+
+    expect(await manager.extractSessionFromLog("session-daemon-shape", "Reset")).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
   it("blocks fallback payload when failHard=true and source has no messages", async () => {
     const workspace = makeWorkspace("quaid-timeout-failhard-block-");
     const source = createSourceState();

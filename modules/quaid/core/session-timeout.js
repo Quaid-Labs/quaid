@@ -143,6 +143,7 @@ class SessionTimeoutManager {
   pendingFallbackMessages = null;
   pendingSessionId;
   sessionCursorDir;
+  legacySessionCursorDir;
   staleSweepStatePath;
   installStatePath;
   logDir;
@@ -196,6 +197,7 @@ class SessionTimeoutManager {
     this.logDir = path.resolve(String(opts.logDir || path.join(opts.workspace, "logs", "runtime")));
     this.sessionLogDir = path.join(this.logDir, "sessions");
     this.sessionCursorDir = path.join(opts.workspace, "data", "session-timeout-cursors");
+    this.legacySessionCursorDir = path.join(opts.workspace, "data", "session-cursors");
     this.staleSweepStatePath = path.join(opts.workspace, "data", "stale-sweep-state.json");
     this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
@@ -562,13 +564,56 @@ class SessionTimeoutManager {
     const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
     return path.join(this.sessionCursorDir, `${safeSessionId}.json`);
   }
+  legacyCursorPath(sessionId) {
+    const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
+    return path.join(this.legacySessionCursorDir, `${safeSessionId}.json`);
+  }
+  normalizeTimeoutCursorPayload(sessionId, payload) {
+    if (!payload || typeof payload !== "object") return null;
+    const hasTimeoutShape = Object.prototype.hasOwnProperty.call(payload, "sessionId") || Object.prototype.hasOwnProperty.call(payload, "clearedAt") || Object.prototype.hasOwnProperty.call(payload, "lastMessageKey") || Object.prototype.hasOwnProperty.call(payload, "lastTimestampMs");
+    if (!hasTimeoutShape) return null;
+    const payloadSessionId = String(payload.sessionId || "").trim();
+    if (payloadSessionId && payloadSessionId !== sessionId) return null;
+    const out = {
+      sessionId,
+      clearedAt: typeof payload.clearedAt === "string" && payload.clearedAt.trim() ? payload.clearedAt : (/* @__PURE__ */ new Date()).toISOString()
+    };
+    if (typeof payload.lastMessageKey === "string" && payload.lastMessageKey.trim()) {
+      out.lastMessageKey = payload.lastMessageKey;
+    }
+    if (typeof payload.lastTimestampMs === "number" && Number.isFinite(payload.lastTimestampMs)) {
+      out.lastTimestampMs = payload.lastTimestampMs;
+    }
+    return out;
+  }
+  readLegacySessionCursor(sessionId) {
+    const legacyPath = this.legacyCursorPath(sessionId);
+    if (!fs.existsSync(legacyPath)) return null;
+    const legacyRaw = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+    const normalized = this.normalizeTimeoutCursorPayload(sessionId, legacyRaw);
+    if (!normalized) return null;
+    try {
+      fs.mkdirSync(this.sessionCursorDir, { recursive: true });
+      fs.writeFileSync(this.cursorPath(sessionId), JSON.stringify(normalized), { mode: 384 });
+      this.writeQuaidLog("session_cursor_migrated", sessionId, {
+        source: "legacy_session_cursors"
+      });
+    } catch (err) {
+      safeLog(this.logger, `[memory][timeout] failed migrating legacy cursor for ${sessionId}: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+    return normalized;
+  }
   readSessionCursor(sessionId) {
     try {
       const fp = this.cursorPath(sessionId);
-      if (!fs.existsSync(fp)) return null;
-      const payload = JSON.parse(fs.readFileSync(fp, "utf8"));
-      if (!payload || typeof payload !== "object") return null;
-      return payload;
+      if (fs.existsSync(fp)) {
+        const payload = this.normalizeTimeoutCursorPayload(sessionId, JSON.parse(fs.readFileSync(fp, "utf8")));
+        return payload;
+      }
+      return this.readLegacySessionCursor(sessionId);
     } catch (err) {
       safeLog(this.logger, `[memory][timeout] failed reading session cursor for ${sessionId}: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
