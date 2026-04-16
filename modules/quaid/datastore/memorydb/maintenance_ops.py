@@ -42,6 +42,7 @@ from datastore.memorydb.memory_graph import (
     content_hash,
     hard_delete_node,
     store_edge_keywords,
+    resolve_owner_person,
 )
 from lib.config import get_db_path
 from lib.tokens import extract_key_tokens, estimate_tokens, is_subset_overlap_candidate
@@ -137,8 +138,26 @@ def _owner_display_name() -> str:
     return "the user"
 
 
-def _owner_full_name() -> str:
-    """Get the owner's full name from config for use in edge examples."""
+def _owner_full_name(owner_id: Optional[str] = None) -> str:
+    """Get the owner's full name for edge extraction normalization.
+
+    Priority:
+      1. Resolve from graph ownership mapping when owner_id is provided.
+      2. Resolve from config default identity.
+      3. Fallback to "the user".
+    """
+    if owner_id:
+        try:
+            owner_node = resolve_owner_person(str(owner_id).strip())
+            owner_name = str(getattr(owner_node, "name", "") or "").strip()
+            if owner_name:
+                return owner_name
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Unable to resolve owner person for owner_id={owner_id!r}"
+                ) from exc
+            logger.warning("owner resolution failed for owner_id=%s: %s", owner_id, exc)
     try:
         default = _cfg.users.default_owner
         identity = _cfg.users.identities.get(default)
@@ -2270,11 +2289,16 @@ def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
     for i, f in enumerate(facts):
         numbered.append(f'{i+1}. "{f["text"]}"')
 
-    owner_full = _owner_full_name()
+    owner_ids = [str(f.get("owner_id") or "").strip() for f in facts if str(f.get("owner_id") or "").strip()]
+    unique_owner_ids = sorted(set(owner_ids))
+    prompt_owner_id = unique_owner_ids[0] if len(unique_owner_ids) == 1 else None
+    # Only inject owner alias guidance when facts are single-owner; mixed-owner
+    # batches should avoid forcing aliases to one person.
+    owner_full_prompt = _owner_full_name(prompt_owner_id) if prompt_owner_id else "the user"
     owner_clause = (
-        f'The knowledge base belongs to {owner_full}. '
-        f'When facts reference "the user", "me", "my", "I", or "the owner", treat this as the named person "{owner_full}".'
-        if owner_full and owner_full != "the user"
+        f'The knowledge base belongs to {owner_full_prompt}. '
+        f'When facts reference "the user", "me", "my", "I", or "the owner", treat this as the named person "{owner_full_prompt}".'
+        if owner_full_prompt and owner_full_prompt != "the user"
         else ""
     )
     prompt = f"""You are building a knowledge graph from personal facts about a user's life.
@@ -2355,17 +2379,19 @@ JSON array only:"""
         if not isinstance(raw_edges, list):
             continue
 
+        fact_owner_id = str(facts[idx - 1].get("owner_id") or "").strip() or None
+        owner_full_fact = _owner_full_name(fact_owner_id)
         fact_edges = []
         for edge in raw_edges:
             if not isinstance(edge, dict):
                 continue
-            subject = _canonicalize_owner_alias(edge.get("subject") or "", owner_full)
-            obj = _canonicalize_owner_alias(edge.get("object") or "", owner_full)
+            subject = _canonicalize_owner_alias(edge.get("subject") or "", owner_full_fact)
+            obj = _canonicalize_owner_alias(edge.get("object") or "", owner_full_fact)
             relation = (edge.get("relation") or "").strip().lower().replace(" ", "_")
 
             if not subject or not obj or not relation:
                 continue
-            if _is_placeholder_entity_name(subject, owner_full) or _is_placeholder_entity_name(obj, owner_full):
+            if _is_placeholder_entity_name(subject, owner_full_fact) or _is_placeholder_entity_name(obj, owner_full_fact):
                 continue
             if subject.lower() == obj.lower():
                 continue
@@ -2405,10 +2431,12 @@ JSON array only:"""
     for idx, fact in enumerate(facts):
         if results[idx]:
             continue
+        fact_owner_id = str(fact.get("owner_id") or "").strip() or None
+        owner_full_fact = _owner_full_name(fact_owner_id)
         heuristics = _heuristic_family_edges_for_fact(
             fact_id=str(fact.get("id", "") or ""),
             fact_text=str(fact.get("text", "") or ""),
-            owner_full=owner_full,
+            owner_full=owner_full_fact,
         )
         if heuristics:
             results[idx] = heuristics
