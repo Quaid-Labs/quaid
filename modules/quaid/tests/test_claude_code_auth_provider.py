@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -155,3 +156,37 @@ def test_http_404_notifies_agent_before_raise(monkeypatch) -> None:
     assert notify.call_args.kwargs["severity"] == "error"
     assert notify.call_args.kwargs["source"] == "provider"
     assert notify.call_args.kwargs["dedupe_key"] == "cc-http-error:fast:404"
+
+
+def test_api_call_includes_cc_identity_first_for_oauth_sonnet(monkeypatch) -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="claude-sonnet-4-6",
+        fast_model="claude-haiku-4-5",
+    )
+    token = "sk-ant-oat01-test-oauth-token"
+    response_data = {
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": 10, "output_tokens": 4},
+        "model": "claude-sonnet-4-6",
+        "stop_reason": "end_turn",
+    }
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(response_data).encode()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("adaptors.claude_code.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+        provider._api_call(
+            token=token,
+            model="claude-sonnet-4-6",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            max_tokens=64,
+            timeout=30,
+        )
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Authorization") == f"Bearer {token}"
+        body = json.loads(req.data.decode())
+        assert body["model"] == "claude-sonnet-4-6"
+        assert body["system"][0]["text"] == "You are Claude Code, Anthropic's official CLI for Claude."
+        assert body["system"][1]["text"] == "sys"

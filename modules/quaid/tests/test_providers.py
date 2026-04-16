@@ -172,6 +172,37 @@ class TestAnthropicLLMProvider:
             assert body["system"][0]["text"] == "You are Claude Code, Anthropic's official CLI for Claude."
             assert body["system"][1]["text"] == "sys"
 
+    def test_llm_call_oauth_deep_lane_keeps_identity_first(self):
+        """OAuth deep lane (Sonnet/Opus class models) must keep CC identity block first."""
+        p = AnthropicLLMProvider(
+            api_key="sk-ant-oat01-test-oauth-token",
+            deep_model="claude-sonnet-4-6",
+            fast_model="claude-haiku-4-5",
+        )
+        response_data = {
+            "content": [{"type": "text", "text": "ok"}],
+            "usage": {"input_tokens": 12, "output_tokens": 6},
+            "model": "claude-sonnet-4-6",
+            "stop_reason": "end_turn",
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            p.llm_call(
+                [{"role": "system", "content": "sys-deep"}, {"role": "user", "content": "hi"}],
+                model_tier="deep",
+                max_tokens=128,
+            )
+            req = mock_open.call_args[0][0]
+            assert req.get_header("Authorization") == "Bearer sk-ant-oat01-test-oauth-token"
+            body = json.loads(req.data.decode())
+            assert body["model"] == "claude-sonnet-4-6"
+            assert body["system"][0]["text"] == "You are Claude Code, Anthropic's official CLI for Claude."
+            assert body["system"][1]["text"] == "sys-deep"
+
     def test_llm_call_raises_on_error(self):
         """API errors should propagate."""
         p = AnthropicLLMProvider(api_key="sk-test")
