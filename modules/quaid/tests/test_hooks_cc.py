@@ -138,7 +138,7 @@ def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     adapter.resolve_prompt_submit_signal.return_value = None
     adapter.instance_root.return_value = tmp_path
 
-    monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+    monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda *args, **kwargs: "")
     monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("core.interface.hooks._get_owner_id", lambda: "test-owner")
@@ -601,7 +601,7 @@ class TestHookInjectRecallResilience:
         """When recall_fast returns [], hook produces no stdout (no additionalContext)."""
         from core import extraction_daemon
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
-        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda *args, **kwargs: "")
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
         monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")

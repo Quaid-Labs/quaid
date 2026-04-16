@@ -614,7 +614,7 @@ def hook_inject(args):
             "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
         })
 
-        pending_context = _get_pending_context()
+        pending_context = _get_pending_context(session_id=session_id)
         deferred_notice_relay_context = _get_deferred_notice_relay_context()
         deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
 
@@ -690,7 +690,7 @@ def hook_inject(args):
                 fail_hard = True
             if fail_hard:
                 raise
-        pending_context = _get_pending_context()
+        pending_context = _get_pending_context(session_id=session_id)
         deferred_notice_relay_context = _get_deferred_notice_relay_context()
         deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
         fallback_context_parts = []
@@ -715,7 +715,7 @@ def hook_inject(args):
         print(f"[quaid][hook-inject] error: {e}", file=sys.stderr)
 
 
-def _get_pending_context() -> str:
+def _get_pending_context(session_id: str = "") -> str:
     """Ask the adapter for any active pending context to inject.
 
     Returns formatted context string ready for additionalContext, or empty string.
@@ -726,7 +726,10 @@ def _get_pending_context() -> str:
         from lib.adapter import get_adapter
         adapter = get_adapter()
         if hasattr(adapter, "get_pending_context"):
-            return adapter.get_pending_context() or ""
+            try:
+                return adapter.get_pending_context(session_id=session_id) or ""
+            except TypeError:
+                return adapter.get_pending_context() or ""
     except Exception:
         pass
     return ""

@@ -225,7 +225,8 @@ class QuaidAdapter(abc.ABC):
 
     @abc.abstractmethod
     def notify(self, message: str, channel_override: Optional[str] = None,
-               dry_run: bool = False, force: bool = False) -> bool:
+               dry_run: bool = False, force: bool = False,
+               session_id: Optional[str] = None) -> bool:
         """Send a notification message to the user. Returns True on success.
 
         Args:
@@ -922,7 +923,9 @@ class StandaloneAdapter(QuaidAdapter):
         return Path(env).resolve() if env else Path.home() / ".quaid"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
-               dry_run: bool = False, force: bool = False) -> bool:
+               dry_run: bool = False, force: bool = False,
+               session_id: Optional[str] = None) -> bool:
+        _ = session_id
         if os.environ.get("QUAID_DISABLE_NOTIFICATIONS") and not force:
             return True
         if dry_run:

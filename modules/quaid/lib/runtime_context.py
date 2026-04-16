@@ -128,12 +128,14 @@ def send_notification(
     channel_override: Optional[str] = None,
     dry_run: bool = False,
     force: bool = False,
+    session_id: Optional[str] = None,
 ) -> bool:
     return get_adapter().notify(
         message,
         channel_override=channel_override,
         dry_run=dry_run,
         force=force,
+        session_id=session_id,
     )
 
 

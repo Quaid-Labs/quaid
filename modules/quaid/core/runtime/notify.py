@@ -202,6 +202,7 @@ def notify_user(
     session_key: str = "",
     dry_run: bool = False,
     channel_override: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> bool:
     """Send a notification to the user (delegates to adapter).
 
@@ -210,11 +211,17 @@ def notify_user(
         session_key: Ignored (adapter manages sessions)
         dry_run: If True, print command but don't send
         channel_override: If set, send to this channel instead of the session's last channel.
+        session_id: Optional runtime session identifier for adapter-local routing.
 
     Returns:
         True if message sent successfully, False otherwise
     """
-    return _ctx_send_notification(message, channel_override=channel_override, dry_run=dry_run)
+    return _ctx_send_notification(
+        message,
+        channel_override=channel_override,
+        dry_run=dry_run,
+        session_id=session_id,
+    )
 
 
 def notify_agent(
@@ -411,6 +418,7 @@ def notify_memory_extraction(
     facts_skipped: int,
     edges_created: int,
     trigger: str = "extraction",
+    session_id: Optional[str] = None,
     details: Optional[list] = None,
     dry_run: bool = False,
     snippet_details: Optional[dict] = None,
@@ -460,7 +468,12 @@ def notify_memory_extraction(
             message = f"**[{SYSTEM_LABEL} — Memory Extraction]** ({trigger_label}): No facts found."
         else:
             message = f"**[{SYSTEM_LABEL} — Memory Extraction]** No facts found."
-        return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("extraction"))
+        return notify_user(
+            message,
+            dry_run=dry_run,
+            channel_override=_resolve_channel("extraction"),
+            session_id=session_id,
+        )
 
     full_text = _notify_full_text()
     msg_parts = [f"**[{SYSTEM_LABEL} — Memory Extraction]**", ""]
@@ -535,7 +548,12 @@ def notify_memory_extraction(
     message = "\n".join(msg_parts)
     channel = _resolve_channel("extraction")
     if len(message) <= MAX_NOTIFY_CHARS:
-        return notify_user(message, dry_run=dry_run, channel_override=channel)
+        return notify_user(
+            message,
+            dry_run=dry_run,
+            channel_override=channel,
+            session_id=session_id,
+        )
 
     # Some channels drop oversized messages; split so extraction details still arrive.
     lines = message.split("\n")
@@ -560,7 +578,12 @@ def notify_memory_extraction(
                 f"**[{SYSTEM_LABEL} — Memory Extraction (cont. {idx + 1}/{len(chunks)})]**\n\n"
                 f"{chunk}"
             )
-        if notify_user(chunk, dry_run=dry_run, channel_override=channel):
+        if notify_user(
+            chunk,
+            dry_run=dry_run,
+            channel_override=channel,
+            session_id=session_id,
+        ):
             sent_any = True
     return sent_any
 

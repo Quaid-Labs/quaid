@@ -89,7 +89,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
         return self.data_dir() / "cc-pending-notifications.jsonl"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
-               dry_run: bool = False, force: bool = False) -> bool:
+               dry_run: bool = False, force: bool = False,
+               session_id: Optional[str] = None) -> bool:
         """Write notification to pending file for next UserPromptSubmit pickup.
 
         CC has no in-terminal notification channel, so notifications are
@@ -104,7 +105,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
         try:
             pending = self._pending_notifications_path()
             pending.parent.mkdir(parents=True, exist_ok=True)
-            entry = json.dumps({"message": message, "ts": _now_iso()})
+            resolved_session_id = str(session_id or "").strip() or str(os.environ.get("QUAID_SESSION_ID", "")).strip()
+            payload = {"message": message, "ts": _now_iso()}
+            if resolved_session_id:
+                payload["session_id"] = resolved_session_id
+            entry = json.dumps(payload)
             with open(pending, "a", encoding="utf-8") as f:
                 f.write(entry + "\n")
             return True
@@ -112,7 +117,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
             print(f"[notify] Failed to queue notification: {e}", file=sys.stderr)
             return False
 
-    def get_pending_context(self, max_age_seconds: int = 3600) -> str:
+    def get_pending_context(self, max_age_seconds: int = 3600, session_id: str = "") -> str:
         """Drain pending notifications and return formatted context for injection.
 
         CC has no in-terminal notification channel, so notifications are
@@ -124,7 +129,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if not pending.is_file():
             return ""
 
+        resolved_session_id = str(session_id or "").strip()
         messages = []
+        remaining = []
         try:
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
@@ -135,15 +142,34 @@ class ClaudeCodeAdapter(QuaidAdapter):
                         continue
                     try:
                         entry = json.loads(line)
+                        if not isinstance(entry, dict):
+                            continue
                         ts = entry.get("ts", "")
                         if ts and max_age_seconds > 0:
                             entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                             if (now - entry_dt).total_seconds() > max_age_seconds:
                                 continue
-                        messages.append(entry.get("message", ""))
+                        message = str(entry.get("message", "")).strip()
+                        if not message:
+                            continue
+                        entry_session_id = str(entry.get("session_id", "")).strip()
+                        if resolved_session_id:
+                            if not entry_session_id:
+                                # Legacy unscoped notifications can leak across sessions.
+                                # Drop them once seen in a session-scoped drain.
+                                continue
+                            if entry_session_id != resolved_session_id:
+                                remaining.append(entry)
+                                continue
+                        messages.append(message)
                     except (json.JSONDecodeError, ValueError):
                         continue
-            pending.unlink(missing_ok=True)
+            if remaining:
+                with open(pending, "w", encoding="utf-8") as f:
+                    for entry in remaining:
+                        f.write(json.dumps(entry) + "\n")
+            else:
+                pending.unlink(missing_ok=True)
         except Exception as e:
             print(f"[notify] Failed to drain pending notifications: {e}", file=sys.stderr)
 

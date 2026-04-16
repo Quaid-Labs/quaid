@@ -121,6 +121,7 @@ class CodexAdapter(QuaidAdapter):
         channel_override: Optional[str] = None,
         dry_run: bool = False,
         force: bool = False,
+        session_id: Optional[str] = None,
     ) -> bool:
         _ = channel_override
         if os.environ.get("QUAID_DISABLE_NOTIFICATIONS") and not force:
@@ -131,14 +132,18 @@ class CodexAdapter(QuaidAdapter):
         try:
             pending = self._pending_notifications_path()
             pending.parent.mkdir(parents=True, exist_ok=True)
+            resolved_session_id = str(session_id or "").strip() or str(os.environ.get("QUAID_SESSION_ID", "")).strip()
+            payload = {"message": message, "ts": _now_iso()}
+            if resolved_session_id:
+                payload["session_id"] = resolved_session_id
             with open(pending, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps({"message": message, "ts": _now_iso()}) + "\n")
+                handle.write(json.dumps(payload) + "\n")
             return True
         except Exception as exc:
             print(f"[notify] Failed to queue Codex notification: {exc}", file=sys.stderr)
             return False
 
-    def get_pending_context(self, max_age_seconds: int = 3600) -> str:
+    def get_pending_context(self, max_age_seconds: int = 3600, session_id: str = "") -> str:
         pending = self._pending_notifications_path()
         if not pending.is_file():
             return ""
@@ -147,6 +152,8 @@ class CodexAdapter(QuaidAdapter):
 
             now = datetime.now(timezone.utc)
             messages = []
+            remaining = []
+            resolved_session_id = str(session_id or "").strip()
             with open(pending, "r", encoding="utf-8") as handle:
                 for line in handle:
                     line = line.strip()
@@ -154,6 +161,8 @@ class CodexAdapter(QuaidAdapter):
                         continue
                     try:
                         entry = json.loads(line)
+                        if not isinstance(entry, dict):
+                            continue
                     except json.JSONDecodeError:
                         continue
                     ts = str(entry.get("ts") or "").strip()
@@ -163,8 +172,22 @@ class CodexAdapter(QuaidAdapter):
                             continue
                     message = str(entry.get("message") or "").strip()
                     if message:
+                        entry_session_id = str(entry.get("session_id") or "").strip()
+                        if resolved_session_id:
+                            if not entry_session_id:
+                                # Legacy unscoped notifications can leak across sessions.
+                                # Drop them once seen in a session-scoped drain.
+                                continue
+                            if entry_session_id != resolved_session_id:
+                                remaining.append(entry)
+                                continue
                         messages.append(message)
-            pending.unlink(missing_ok=True)
+            if remaining:
+                with open(pending, "w", encoding="utf-8") as handle:
+                    for entry in remaining:
+                        handle.write(json.dumps(entry) + "\n")
+            else:
+                pending.unlink(missing_ok=True)
         except Exception as exc:
             print(f"[notify] Failed to drain Codex notifications: {exc}", file=sys.stderr)
             return ""

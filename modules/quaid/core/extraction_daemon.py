@@ -2903,6 +2903,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 facts_skipped=facts_skipped,
                 edges_created=edges_created,
                 trigger=signal_type,
+                session_id=session_id,
                 details=result.get("facts"),
                 snippet_details=result.get("snippets"),
             )
