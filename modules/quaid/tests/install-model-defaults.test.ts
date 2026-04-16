@@ -5,6 +5,7 @@ import {
   installerDefaultProvider,
   installerFallbackModelDefaults,
   installerFallbackProviders,
+  resolveInstallerProvider,
 } from "../../../lib/install-model-defaults.mjs";
 
 describe("installer model defaults", () => {
@@ -21,6 +22,20 @@ describe("installer model defaults", () => {
 
   it("defaults Codex installs to Anthropic lanes", () => {
     expect(installerDefaultProvider("codex")).toBe("anthropic");
+  });
+
+  it("keeps installer provider on Anthropic unless explicitly overridden", () => {
+    expect(resolveInstallerProvider("openclaw", ["anthropic", "openai"])).toBe("anthropic");
+    expect(
+      resolveInstallerProvider("openclaw", ["anthropic", "openai"], {
+        sharedOverrideProvider: "openai",
+      }),
+    ).toBe("openai");
+    expect(
+      resolveInstallerProvider("openclaw", ["anthropic", "openai"], {
+        forcedProvider: "openai",
+      }),
+    ).toBe("openai");
   });
 
   it("derives direct-provider settings for OpenClaw model hints", () => {

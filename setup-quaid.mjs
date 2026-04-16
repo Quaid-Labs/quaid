@@ -28,6 +28,7 @@ import {
   installerDefaultProvider,
   installerFallbackModelDefaults,
   installerFallbackProviders,
+  resolveInstallerProvider,
 } from "./lib/install-model-defaults.mjs";
 import {
   readJsonObject,
@@ -3303,12 +3304,6 @@ async function step3_models() {
   const adapterDefaultProvider = String(
     adapterCaps.defaultDeepProvider || adapterCaps.defaultFastProvider || ""
   ).trim().toLowerCase();
-  if (
-    adapterDefaultProvider
-    && (hostManagedLlmDefault || supportedProviders.includes(adapterDefaultProvider))
-  ) {
-    provider = adapterDefaultProvider;
-  }
 
   const providerOptions = [
     { value: "anthropic",  label: "Anthropic (Claude)", hint: "Recommended" },
@@ -3334,18 +3329,17 @@ async function step3_models() {
     if (DEBUG_SETUP) {
       log.info(C.dim(`[step3_models] shared model override ${sharedOverride ? `found at ${sharedOverride.source}` : "not found"}`));
     }
+    provider = resolveInstallerProvider(adapterType, supportedProviders, {
+      sharedOverrideProvider: sharedOverride?.provider || "",
+      forcedProvider,
+    });
     if (sharedOverride?.provider && supportedProviders.includes(sharedOverride.provider)) {
-      provider = sharedOverride.provider;
       log.info(C.dim(`Provider override from shared config: ${provider} (${sharedOverride.source})`));
     }
     if (forcedProvider && supportedProviders.includes(forcedProvider)) {
-      provider = forcedProvider;
       log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
     } else if (forcedProvider && !supportedProviders.includes(forcedProvider)) {
       log.warn(`Ignoring QUAID_INSTALL_PROVIDER=${forcedProvider} (unsupported by adapter '${adapterType}').`);
-    }
-    if (!supportedProviders.includes(provider)) {
-      provider = supportedProviders[0] || "anthropic";
     }
   }
 
