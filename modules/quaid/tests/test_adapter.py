@@ -1369,6 +1369,47 @@ class TestCodexAdapter:
             provider = adapter.get_llm_provider()
         assert isinstance(provider, AnthropicLLMProvider)
 
+    def test_get_llm_provider_uses_model_hints_when_provider_default(self, monkeypatch):
+        adapter = CodexAdapter()
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="default",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-5.4",
+                fast_reasoning="gpt-5.4-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, OpenAICodexOAuthLLMProvider)
+
+    def test_get_llm_provider_uses_shared_auth_when_provider_default(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = CodexAdapter()
+        adapter.store_shared_auth_token("codex_oauth", "tok.a.b")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="default",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="default",
+                fast_reasoning="default",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, OpenAICodexOAuthLLMProvider)
+
     def test_get_api_key_reads_codex_auth_token_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = CodexAdapter()

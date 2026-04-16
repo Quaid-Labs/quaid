@@ -661,6 +661,53 @@ class CodexAdapter(QuaidAdapter):
             },
         }
 
+    @staticmethod
+    def _infer_provider_from_models(*models: str) -> str:
+        for raw in models:
+            token = str(raw or "").strip().lower()
+            if not token or token == "default":
+                continue
+            if token.startswith("claude-"):
+                return "anthropic"
+            if re.match(r"^(gpt-|o1(?:$|[-_])|o3(?:$|[-_])|o4(?:$|[-_]))", token):
+                return "openai"
+        return ""
+
+    def _detect_shared_primary_provider(self) -> str:
+        has_anthropic = bool(self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"]))
+        has_openai = bool(self.read_shared_auth_token(["codex_oauth", "openai_api"]))
+        if has_anthropic and not has_openai:
+            return "anthropic"
+        if has_openai and not has_anthropic:
+            return "openai"
+        return ""
+
+    def _resolve_central_provider(self, configured: str, deep_model: str, fast_model: str) -> str:
+        provider = str(configured or "").strip().lower()
+        if provider and provider != "default":
+            return provider
+
+        inferred = self._infer_provider_from_models(deep_model, fast_model)
+        if inferred:
+            return inferred
+
+        detected = self._detect_shared_primary_provider()
+        if detected:
+            return detected
+
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "[fail_hard] models.llmProvider is unset/default and no central provider could be inferred "
+                "from configured models or shared auth credentials."
+            )
+
+        print(
+            "[adapter][FALLBACK] models.llmProvider is unset/default and central provider inference failed; "
+            "defaulting to anthropic because failHard is disabled.",
+            file=sys.stderr,
+        )
+        return "anthropic"
+
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from config import get_config
         from lib.providers import AnthropicLLMProvider, OpenAICodexOAuthLLMProvider
@@ -679,6 +726,11 @@ class CodexAdapter(QuaidAdapter):
             deep_provider = getattr(cfg.models, "deep_reasoning_provider", "default")
             if deep_provider and deep_provider != "default":
                 provider_id = deep_provider
+        provider_id = self._resolve_central_provider(
+            provider_id,
+            str(deep_model or ""),
+            str(fast_model or ""),
+        )
         provider_id = str(provider_id or "").strip().lower()
 
         if provider_id == "anthropic":
