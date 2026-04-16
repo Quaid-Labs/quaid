@@ -56,8 +56,8 @@ describe('Deduplication', () => {
 
   it('maintains independence across different owners', async () => {
     // Same content for different owners should be allowed
-    await memory.store('I like coffee', 'quaid')
-    const yuniCoffee = await memory.store('I like coffee', 'melina')
+    await memory.store('I like coffee', 'quaid', { privacy: 'private' })
+    const yuniCoffee = await memory.store('I like coffee', 'melina', { privacy: 'private' })
     
     expect(yuniCoffee.id).toBeDefined()
     

@@ -189,6 +189,7 @@ export class TestMemoryInterface {
     const args = [content, '--owner', owner]
     if (options.verified) args.push('--verified')
     if (options.pinned) args.push('--pinned')
+    if (options.privacy) args.push('--privacy', String(options.privacy))
     if (options.category) args.push('--category', options.category)
     if (options.confidence !== undefined) args.push('--confidence', options.confidence.toString())
     if (options.skipDedup) args.push('--skip-dedup')
@@ -213,7 +214,11 @@ export class TestMemoryInterface {
     const cfg: Record<string, unknown> = { stores: ["vector"], owner, limit, min_similarity: minSimilarity }
     const args = [query, JSON.stringify(cfg)]
     const result = await this.callPython("recall", args)
-    
+
+    if (!result || result.trim() === '' || result.trim() === 'No memories found') {
+      return []
+    }
+
     // Parse output format: "[0.84] [fact](date)[flags][C:0.5] text |ID:id|T:created|VF:vf|VU:vu|P:privacy|O:owner"
     const lines = result.trim().split('\n').filter(line => line.length > 0)
 

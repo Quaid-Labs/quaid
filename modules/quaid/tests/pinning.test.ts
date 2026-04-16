@@ -102,8 +102,8 @@ describe('Pinned Memories', () => {
   })
 
   it('pinned memories maintain owner isolation', async () => {
-    await memory.store('Quaid pinned secret', 'quaid', { pinned: true })
-    await memory.store('Melina pinned secret', 'melina', { pinned: true })
+    await memory.store('Quaid pinned secret', 'quaid', { pinned: true, privacy: 'private' })
+    await memory.store('Melina pinned secret', 'melina', { pinned: true, privacy: 'private' })
     
     const ownerResults = await memory.search('pinned secret', 'quaid')
     const yuniResults = await memory.search('pinned secret', 'melina')

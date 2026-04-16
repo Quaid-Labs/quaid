@@ -6,8 +6,8 @@ describe('Owner Isolation', () => {
 
   beforeEach(async () => {
     memory = await createTestMemory()
-    await memory.store('Quaid secret fact', 'quaid')
-    await memory.store('Melina secret fact', 'melina')
+    await memory.store('Quaid secret fact', 'quaid', { privacy: 'private' })
+    await memory.store('Melina secret fact', 'melina', { privacy: 'private' })
     await memory.store('Shared public information', 'quaid')
   })
 
@@ -19,38 +19,31 @@ describe('Owner Isolation', () => {
     const ownerResults = await memory.search('secret', 'quaid')
     const yuniResults = await memory.search('secret', 'melina')
     
-    // Quaid should only see his own secret
+    // Quaid should see his own private secret, but not Melina's private secret.
     expect(ownerResults.length).toBeGreaterThan(0)
-    for (const result of ownerResults) {
-      const owner = result.owner || result.owner_id
-      expect(owner).toBe('quaid')
-    }
+    expect(ownerResults.some((r) => (r.text || r.content || r.name).includes('Quaid secret fact'))).toBe(true)
+    expect(ownerResults.some((r) => (r.text || r.content || r.name).includes('Melina secret fact'))).toBe(false)
     
-    // Melina should only see her own secret
+    // Melina should see her own private secret, but not Quaid's private secret.
     expect(yuniResults.length).toBeGreaterThan(0)
-    for (const result of yuniResults) {
-      const owner = result.owner || result.owner_id
-      expect(owner).toBe('melina')
-    }
+    expect(yuniResults.some((r) => (r.text || r.content || r.name).includes('Melina secret fact'))).toBe(true)
+    expect(yuniResults.some((r) => (r.text || r.content || r.name).includes('Quaid secret fact'))).toBe(false)
   })
 
   it('maintains isolation with similar content', async () => {
-    await memory.store('I like coffee', 'quaid')
-    await memory.store('I like coffee too', 'melina')
+    await memory.store('I like coffee', 'quaid', { privacy: 'private' })
+    await memory.store('I like coffee too', 'melina', { privacy: 'private' })
     
     const ownerResults = await memory.search('coffee', 'quaid')
     const yuniResults = await memory.search('coffee', 'melina')
     
-    // Each owner should only see their own coffee preference
-    for (const result of ownerResults) {
-      const owner = result.owner || result.owner_id
-      expect(owner).toBe('quaid')
-    }
-    
-    for (const result of yuniResults) {
-      const owner = result.owner || result.owner_id
-      expect(owner).toBe('melina')
-    }
+    // Each owner should see their own private coffee fact, but not the other owner's private one.
+    expect(ownerResults.some((r) => (r.text || r.content || r.name).includes('I like coffee'))).toBe(true)
+    expect(ownerResults.some((r) => (r.text || r.content || r.name).includes('I like coffee too'))).toBe(false)
+    expect(yuniResults.some((r) => (r.text || r.content || r.name).includes('I like coffee too'))).toBe(true)
+    expect(yuniResults.some((r) =>
+      (r.owner || r.owner_id) === 'quaid' && (r.text || r.content || r.name) === 'I like coffee'
+    )).toBe(false)
   })
 
   it('handles owner-specific queries correctly', async () => {
@@ -114,12 +107,11 @@ describe('Owner Isolation', () => {
 
   it('handles special characters in owner names', async () => {
     const specialOwner = 'user@domain.com'
-    await memory.store('Special owner test', specialOwner)
+    await memory.store('Special owner test', specialOwner, { privacy: 'private' })
     
     const results = await memory.search('special', specialOwner)
     
     expect(results.length).toBeGreaterThan(0)
-    const owner = results[0].owner || results[0].owner_id
-    expect(owner).toBe(specialOwner)
+    expect(results.some((r) => (r.owner || r.owner_id) === specialOwner)).toBe(true)
   })
 })

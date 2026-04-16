@@ -59,17 +59,14 @@ describe('Memory Query', () => {
 
   it('only returns memories for the specified owner', async () => {
     // Store a memory for a different owner
-    const melinaStored = await memory.store('Melina secret information', 'melina')
-    await memory.store('Quaid secret task note', 'quaid')
+    const melinaStored = await memory.store('Melina secret information', 'melina', { privacy: 'private' })
+    await memory.store('Quaid secret task note', 'quaid', { privacy: 'private' })
 
     const melinaNode = await memory.getRaw(melinaStored.id)
     expect(melinaNode.owner_id).toBe('melina')
 
     const quaidResults = await memory.search('secret', 'quaid')
-    // Quaid-side search can be empty depending on ranking thresholds; if non-empty, all must remain owner-scoped.
-    for (const result of quaidResults) {
-      expect(result.owner || result.owner_id).toBe('quaid')
-    }
+    expect(quaidResults.some((r) => String(r.content || r.text || r.name || '').includes('Quaid secret task note'))).toBe(true)
     expect(quaidResults.some(r => r.id === melinaStored.id)).toBe(false)
   })
 
