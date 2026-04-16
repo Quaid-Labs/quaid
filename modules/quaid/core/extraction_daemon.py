@@ -539,6 +539,27 @@ def mark_signal_processed(signal_data: Dict[str, Any]) -> None:
         pass
 
 
+def _finalize_no_payload_signal(
+    *,
+    session_id: str,
+    transcript_path: str,
+    signal_data: Dict[str, Any],
+    lock_fd: int,
+    next_cursor_offset: Optional[int] = None,
+    clear_state: bool = False,
+    emit_noop_metric: Optional[Callable[[], None]] = None,
+) -> None:
+    """Finalize a no-payload branch consistently across short-circuit paths."""
+    if next_cursor_offset is not None:
+        write_cursor(session_id, int(next_cursor_offset), transcript_path)
+    if clear_state:
+        clear_rolling_state(session_id)
+    if callable(emit_noop_metric):
+        emit_noop_metric()
+    mark_signal_processed(signal_data)
+    _release_session_processing_lock(session_id, lock_fd)
+
+
 # ---------------------------------------------------------------------------
 # Cursors
 # ---------------------------------------------------------------------------
@@ -2554,9 +2575,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 except Exception as e:
                     logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
                                    label, session_id, e)
-            _emit_noop_flush_metric("no_new_content")
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(session_id, lock_fd)
+            _finalize_no_payload_signal(
+                session_id=session_id,
+                transcript_path=transcript_path,
+                signal_data=signal_data,
+                lock_fd=lock_fd,
+                emit_noop_metric=lambda: _emit_noop_flush_metric("no_new_content"),
+            )
             return
 
     capped_lines = len(new_lines) >= MAX_TRANSCRIPT_LINES
@@ -2639,8 +2664,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             else:
                 logger.info("[%s] session %s: empty transcript after parsing", label, session_id)
-                write_cursor(session_id, total_lines, transcript_path)
-                mark_signal_processed(signal_data)
+                _finalize_no_payload_signal(
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    signal_data=signal_data,
+                    lock_fd=lock_fd,
+                    next_cursor_offset=total_lines,
+                )
                 return
 
         if not rolling_mode and transcript_text.strip():
@@ -2668,15 +2698,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     # sync with the buffered tail (not the pre-buffer cursor offset) so
                     # later lifecycle signals do not keep replaying the same transcript.
                     next_cursor_offset = max(
-                        int(cursor_offset + len(new_lines) or 0),
+                        int(cursor_offset + len(new_lines)),
                         int(buffered_line_offset or 0),
                     )
-                    write_cursor(session_id, next_cursor_offset, transcript_path)
-                    if signal_type in ("reset", "session_end", "compaction"):
-                        # Session-closing lifecycle signals should not leave semantic-only
-                        # rolling state files behind when no payload was extractable.
-                        clear_rolling_state(session_id)
-                    mark_signal_processed(signal_data)
+                    _finalize_no_payload_signal(
+                        session_id=session_id,
+                        transcript_path=transcript_path,
+                        signal_data=signal_data,
+                        lock_fd=lock_fd,
+                        next_cursor_offset=next_cursor_offset,
+                        clear_state=signal_type in ("reset", "session_end", "compaction"),
+                    )
                     return
 
         harvestable = []

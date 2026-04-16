@@ -2033,6 +2033,78 @@ class TestRollingExtraction:
 
         assert not extraction_daemon._rolling_state_path("sess-noop-state").exists()
 
+    def test_process_signal_short_circuits_use_common_finalize_helper(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+
+        finalize_calls = []
+        real_finalize = extraction_daemon._finalize_no_payload_signal
+
+        def _spy_finalize(**kwargs):
+            finalize_calls.append(
+                {
+                    "session_id": kwargs.get("session_id"),
+                    "next_cursor_offset": kwargs.get("next_cursor_offset"),
+                    "clear_state": bool(kwargs.get("clear_state")),
+                    "has_emit_noop_metric": callable(kwargs.get("emit_noop_metric")),
+                }
+            )
+            return real_finalize(**kwargs)
+
+        monkeypatch.setattr(extraction_daemon, "_finalize_no_payload_signal", _spy_finalize)
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                _ = path
+                return "Hello"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.get_owner_id = lambda: "test-owner"
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        try:
+            no_new_content_path = tmp_path / "no-new-content.jsonl"
+            no_new_content_path.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+            extraction_daemon.write_cursor("sess-finalize-no-new", 1, str(no_new_content_path))
+            extraction_daemon.write_signal(
+                signal_type="compaction",
+                session_id="sess-finalize-no-new",
+                transcript_path=str(no_new_content_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            short_transcript_path = tmp_path / "short-transcript.jsonl"
+            short_transcript_path.write_text('{"role":"assistant","content":"Compacted"}\n', encoding="utf-8")
+            extraction_daemon.write_cursor("sess-finalize-short", 0, str(short_transcript_path))
+            extraction_daemon.write_signal(
+                signal_type="reset",
+                session_id="sess-finalize-short",
+                transcript_path=str(short_transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert len(finalize_calls) == 2
+        assert finalize_calls[0]["session_id"] == "sess-finalize-no-new"
+        assert finalize_calls[0]["next_cursor_offset"] is None
+        assert finalize_calls[0]["clear_state"] is False
+        assert finalize_calls[0]["has_emit_noop_metric"] is True
+        assert finalize_calls[1]["session_id"] == "sess-finalize-short"
+        assert finalize_calls[1]["next_cursor_offset"] == 1
+        assert finalize_calls[1]["clear_state"] is True
+        assert finalize_calls[1]["has_emit_noop_metric"] is False
+
     def test_reset_short_transcript_skip_clears_semantic_only_rolling_state(self, monkeypatch, tmp_path):
         import sys
         import types
