@@ -870,6 +870,25 @@ class TestClaudeCodeAdapter:
         assert state["status"] == "cannot_install"
         assert "requires claude" in state["reason"]
 
+    def test_pending_context_default_ttl_drops_stale_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-ttl")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"message": "fresh-note"}),
+                    json.dumps({"message": "stale-note", "ts": "2000-01-01T00:00:00Z"}),
+                ]
+            ) + "\n",
+            encoding="utf-8",
+        )
+
+        context = adapter.get_pending_context()
+        assert "fresh-note" in context
+        assert "stale-note" not in context
+
     def test_parse_session_jsonl_strips_local_command_wrapper_blocks(self, tmp_path):
         path = tmp_path / "claude-local-command.jsonl"
         path.write_text(
@@ -983,47 +1002,6 @@ class TestClaudeCodeAdapter:
         assert "Subagent/User: My sister is Diana." in transcript
         assert "Subagent/Assistant: Understood." in transcript
 
-    def test_pending_context_is_scoped_to_requested_session(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-test")
-        adapter = ClaudeCodeAdapter(home=tmp_path)
-
-        assert adapter.notify("old-session-note", session_id="sess-old")
-        assert adapter.notify("new-session-note", session_id="sess-new")
-
-        context = adapter.get_pending_context(session_id="sess-new")
-        assert "new-session-note" in context
-        assert "old-session-note" not in context
-
-        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
-        assert pending_path.exists()
-        rows = [
-            json.loads(line)
-            for line in pending_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        assert len(rows) == 1
-        assert rows[0]["session_id"] == "sess-old"
-
-    def test_pending_context_drops_legacy_unscoped_entries_for_session_scoped_reads(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-legacy")
-        adapter = ClaudeCodeAdapter(home=tmp_path)
-        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
-        pending_path.parent.mkdir(parents=True, exist_ok=True)
-        pending_path.write_text(
-            "\n".join(
-                [
-                    json.dumps({"message": "legacy-note", "ts": "2026-04-16T00:00:00Z"}),
-                    json.dumps({"message": "scoped-note", "ts": "2026-04-16T00:00:00Z", "session_id": "sess-live"}),
-                ]
-            ) + "\n",
-            encoding="utf-8",
-        )
-
-        context = adapter.get_pending_context(session_id="sess-live", max_age_seconds=0)
-        assert "scoped-note" in context
-        assert "legacy-note" not in context
-        assert not pending_path.exists()
-
 class TestCodexAdapter:
     def test_installer_provider_surface_is_direct_provider_models(self):
         adapter = CodexAdapter()
@@ -1048,33 +1026,31 @@ class TestCodexAdapter:
         assert state["status"] == "cannot_install"
         assert "requires codex" in state["reason"]
 
+    def test_pending_context_default_ttl_drops_stale_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-ttl")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"message": "fresh-note"}),
+                    json.dumps({"message": "stale-note", "ts": "2000-01-01T00:00:00Z"}),
+                ]
+            ) + "\n",
+            encoding="utf-8",
+        )
+
+        context = adapter.get_pending_context()
+        assert "fresh-note" in context
+        assert "stale-note" not in context
+
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".codex" / "sessions"
         sessions_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         adapter = CodexAdapter()
         assert adapter.get_sessions_dir() == sessions_dir
-
-    def test_pending_context_is_scoped_to_requested_session(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-test")
-        adapter = CodexAdapter(home=tmp_path)
-
-        assert adapter.notify("old-session-note", session_id="sess-old")
-        assert adapter.notify("new-session-note", session_id="sess-new")
-
-        context = adapter.get_pending_context(session_id="sess-new")
-        assert "new-session-note" in context
-        assert "old-session-note" not in context
-
-        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
-        assert pending_path.exists()
-        rows = [
-            json.loads(line)
-            for line in pending_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        assert len(rows) == 1
-        assert rows[0]["session_id"] == "sess-old"
 
     def test_get_session_path_finds_nested_rollout(self, tmp_path, monkeypatch):
         session_id = "019d4367-1794-7fc2-84f3-bb30ba99a24f"

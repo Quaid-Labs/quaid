@@ -240,7 +240,7 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
     monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
-    monkeypatch.setattr(hooks, "_get_pending_context", lambda *args, **kwargs: "")
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
 
@@ -283,7 +283,7 @@ def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypa
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
     monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
-    monkeypatch.setattr(hooks, "_get_pending_context", lambda *args, **kwargs: "")
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
 
