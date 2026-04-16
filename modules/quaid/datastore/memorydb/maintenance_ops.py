@@ -146,9 +146,10 @@ def _owner_full_name(owner_id: Optional[str] = None) -> str:
       2. Resolve from config default identity.
       3. Fallback to "the user".
     """
-    if owner_id:
+    owner_id_text = str(owner_id or "").strip()
+    if owner_id_text:
         try:
-            owner_node = resolve_owner_person(str(owner_id).strip())
+            owner_node = resolve_owner_person(owner_id_text)
             owner_name = str(getattr(owner_node, "name", "") or "").strip()
             if owner_name:
                 return owner_name
@@ -157,14 +158,54 @@ def _owner_full_name(owner_id: Optional[str] = None) -> str:
                 raise RuntimeError(
                     f"Unable to resolve owner person for owner_id={owner_id!r}"
                 ) from exc
-            logger.warning("owner resolution failed for owner_id=%s: %s", owner_id, exc)
+            logger.warning("owner resolution failed for owner_id=%s: %s", owner_id_text, exc)
+
+    # Fallback: use configured identity hints for this owner id first.
+    try:
+        identity = _cfg.users.identities.get(owner_id_text) if owner_id_text else None
+        if identity and getattr(identity, "person_node_name", ""):
+            return str(identity.person_node_name).strip()
+        if identity and getattr(identity, "speakers", None):
+            speaker = next((str(s).strip() for s in identity.speakers if str(s).strip()), "")
+            if speaker:
+                return speaker
+    except Exception:
+        pass
+
+    # Backward-compatible runtime profiles may expose top-level owner_name.
+    try:
+        owner_name = str(getattr(_cfg, "owner_name", "") or "").strip()
+        if owner_name:
+            return owner_name
+    except Exception:
+        pass
+
     try:
         default = _cfg.users.default_owner
         identity = _cfg.users.identities.get(default)
         if identity and identity.person_node_name:
             return identity.person_node_name
+        if identity and getattr(identity, "speakers", None):
+            speaker = next((str(s).strip() for s in identity.speakers if str(s).strip()), "")
+            if speaker:
+                return speaker
     except Exception:
         pass
+
+    # Last-resort fallback: if a configured owner id is slug-formatted, convert it
+    # to a display name so owner alias edges are not dropped as "the user".
+    if owner_id_text:
+        try:
+            configured_ids = {str(_cfg.users.default_owner or "").strip()}
+            configured_ids.update(str(k).strip() for k in _cfg.users.identities.keys())
+            is_configured_owner = owner_id_text in configured_ids
+        except Exception:
+            is_configured_owner = False
+        if is_configured_owner and re.fullmatch(r"[A-Za-z][A-Za-z_-]*", owner_id_text):
+            parts = [p for p in re.split(r"[-_]+", owner_id_text) if p]
+            if len(parts) >= 2 and all(part.isalpha() and len(part) > 1 for part in parts):
+                return " ".join(part.capitalize() for part in parts)
+
     return "the user"
 
 

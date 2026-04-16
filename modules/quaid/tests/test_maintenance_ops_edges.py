@@ -152,3 +152,34 @@ def test_owner_full_name_raises_when_owner_resolution_fails_and_fail_hard():
             assert False, "expected RuntimeError in fail-hard mode"
         except RuntimeError as exc:
             assert "Unable to resolve owner person" in str(exc)
+
+
+def test_owner_full_name_falls_back_to_top_level_owner_name_for_unresolved_slug():
+    fake_cfg = SimpleNamespace(
+        owner_name="Solomon Steadman",
+        users=SimpleNamespace(
+            default_owner="solomon-steadman",
+            identities={},
+        ),
+    )
+    with patch.object(maintenance_ops, "_cfg", fake_cfg), patch.object(
+        maintenance_ops, "resolve_owner_person", return_value=None
+    ):
+        out = maintenance_ops._owner_full_name("solomon-steadman")
+
+    assert out == "Solomon Steadman"
+
+
+def test_owner_full_name_falls_back_to_configured_slug_display_name_when_unresolved():
+    fake_cfg = SimpleNamespace(
+        users=SimpleNamespace(
+            default_owner="solomon-steadman",
+            identities={},
+        ),
+    )
+    with patch.object(maintenance_ops, "_cfg", fake_cfg), patch.object(
+        maintenance_ops, "resolve_owner_person", return_value=None
+    ):
+        out = maintenance_ops._owner_full_name("solomon-steadman")
+
+    assert out == "Solomon Steadman"
