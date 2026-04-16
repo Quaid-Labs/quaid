@@ -78,14 +78,14 @@ class QuaidAdapter(abc.ABC):
         r"Respond with JSON only as an array of objects:\s*\[.*",
         flags=re.DOTALL,
     )
+    _SESSION_START_MARKER_RE = re.compile(
+        r"^\s*A new session was started via /new or /reset\.[^\n]*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
     _SESSION_START_BOILERPLATE_RES = (
         re.compile(
-            r"A new session was started via /new or /reset\.[^\n]*\s*",
+            r"If runtime-provided startup context is included[^.\n]*before responding to the user\.\s*",
             flags=re.IGNORECASE,
-        ),
-        re.compile(
-            r"If runtime-provided startup context is included.*?responding to the user\.\s*",
-            flags=re.IGNORECASE | re.DOTALL,
         ),
         re.compile(
             r"Then greet the user in your configured persona, if one is provided\.\s*",
@@ -412,11 +412,18 @@ class QuaidAdapter(abc.ABC):
         if not value:
             return ""
         mutated = False
-        for pattern in self._SESSION_START_BOILERPLATE_RES:
-            next_value = pattern.sub("", value)
-            if next_value != value:
-                mutated = True
-                value = next_value
+        next_value = self._SESSION_START_MARKER_RE.sub("", value)
+        marker_stripped = next_value != value
+        if marker_stripped:
+            mutated = True
+            value = next_value
+        phrase_hits = sum(1 for pattern in self._SESSION_START_BOILERPLATE_RES if pattern.search(value))
+        if marker_stripped or phrase_hits >= 3:
+            for pattern in self._SESSION_START_BOILERPLATE_RES:
+                next_value = pattern.sub("", value)
+                if next_value != value:
+                    mutated = True
+                    value = next_value
         next_value = self._CURRENT_TIME_STATUS_RE.sub("", value)
         if next_value != value:
             mutated = True

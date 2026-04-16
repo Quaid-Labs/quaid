@@ -625,6 +625,25 @@ class TestOpenClawAdapter:
         assert "Current time:" not in transcript
         assert "User: I planted a Japanese maple last autumn." in transcript
 
+    def test_sanitize_transcript_text_keeps_single_startup_phrase_in_user_content(self):
+        adapter = OpenClawAdapter()
+        text = (
+            "Question: If runtime-provided startup context is included in the conversation, "
+            "the model should consider it before responding to the user."
+        )
+        assert adapter.sanitize_transcript_text(text) == text
+
+    def test_sanitize_transcript_text_collapses_newlines_after_startup_strip(self):
+        adapter = OpenClawAdapter()
+        text = (
+            "A new session was started via /new or /reset. Execute your Session Startup sequence now.\n\n\n"
+            "My neighbour won a regional chili cook-off last weekend.\n\n\n"
+        )
+        sanitized = adapter.sanitize_transcript_text(text)
+        assert "A new session was started via /new or /reset" not in sanitized
+        assert "\n\n\n" not in sanitized
+        assert sanitized == "My neighbour won a regional chili cook-off last weekend."
+
     def test_get_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-key")
         adapter = OpenClawAdapter()
