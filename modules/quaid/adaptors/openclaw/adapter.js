@@ -3068,6 +3068,13 @@ ${notice}` : notice;
       name: "memory-injection",
       priority: 10
     });
+    // OC gateway variants can route lifecycle hooks only through registerHook.
+    // Keep api.on registration for compatibility, but add registerHook parity so
+    // memory injection still fires when event-bus hooks are silent.
+    registerInternalHookChecked("before_agent_start", beforeAgentStartHandler, {
+      name: "memory-injection-registerHook",
+      priority: 10
+    });
     onChecked("before_agent_reply", async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
@@ -3087,6 +3094,13 @@ ${notice}` : notice;
     });
     onChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build",
+      priority: 10
+    });
+    // OC gateway variants can route prompt hooks only through registerHook.
+    // Keep api.on registration for compatibility, but add registerHook parity so
+    // auto-inject recall still runs when event-bus hooks are silent.
+    registerInternalHookChecked("before_prompt_build", beforePromptBuildHandler, {
+      name: "memory-injection-prompt-build-registerHook",
       priority: 10
     });
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");

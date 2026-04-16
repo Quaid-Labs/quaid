@@ -146,6 +146,10 @@ describe("openclaw auto-provision", () => {
       call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
     );
     expect(beforeAgentStartCall).toBeTruthy();
+    const beforeAgentStartRegisterHookCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection-registerHook"
+    );
+    expect(beforeAgentStartRegisterHookCall).toBeTruthy();
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
     await beforeAgentStartHandler(
@@ -175,6 +179,10 @@ describe("openclaw auto-provision", () => {
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
     expect(beforePromptBuildCall).toBeTruthy();
+    const beforePromptBuildRegisterHookCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build-registerHook"
+    );
+    expect(beforePromptBuildRegisterHookCall).toBeTruthy();
 
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
     const promptResult = await beforePromptBuildHandler(
