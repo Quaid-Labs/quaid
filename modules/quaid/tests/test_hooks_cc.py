@@ -1221,10 +1221,7 @@ class TestHookSessionInitRegistryAugmentation:
                 rules_dir=rules_dir,
             )
 
-        assert content is not None
-        assert "Preferred response style: concise." in content
-        assert "Pending User Snippets" not in content
-        assert "Diana started a ceramics studio this spring." not in content
+        assert content is None
 
     def test_identity_generated_environment_projection_block_is_removed(self, tmp_path, monkeypatch):
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
@@ -1256,11 +1253,7 @@ class TestHookSessionInitRegistryAugmentation:
                 rules_dir=rules_dir,
             )
 
-        assert content is not None
-        assert "Operator note: keep absolute paths in replies." in content
-        assert "This authored section should survive." in content
-        assert "Extracted Memory" not in content
-        assert "Diana has a daughter named Alice." not in content
+        assert content is None
 
     def test_identity_legacy_environment_projection_marker_is_removed(self, tmp_path, monkeypatch):
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
@@ -1287,9 +1280,32 @@ class TestHookSessionInitRegistryAugmentation:
                 rules_dir=rules_dir,
             )
 
+        assert content is None
+
+    def test_identity_authored_user_without_projection_marker_is_included(self, tmp_path, monkeypatch):
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        (identity_dir / "USER.md").write_text(
+            "\n".join(
+                [
+                    "# USER",
+                    "",
+                    "Always keep responses concise and list concrete next steps.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s5-authored-user", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
         assert content is not None
-        assert "Keep shell snippets short." in content
-        assert "Legacy projected fact should not persist in rules." not in content
+        assert "--- USER.md ---" in content
+        assert "Always keep responses concise and list concrete next steps." in content
 
     def test_no_project_docs_no_file_written(self, tmp_path, monkeypatch):
         """When projects_dir has no TOOLS/AGENTS docs, no rules file is written."""
