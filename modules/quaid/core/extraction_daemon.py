@@ -238,10 +238,25 @@ def _extraction_buffer_log_path() -> Path:
 
 def _extraction_buffer_log_enabled() -> bool:
     try:
-        from config import get_config
-        cfg = get_config()
-        livetest = getattr(cfg, "livetest", None)
-        return bool(getattr(livetest, "enable_extraction_buffer_log", False))
+        import json as _json
+
+        raw: bool = False
+        for _cp in reversed(_config_file_paths()):
+            if not _cp.exists():
+                continue
+            try:
+                _data = _json.loads(_cp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            _livetest = _data.get("livetest", {})
+            if not isinstance(_livetest, dict):
+                continue
+            _v = _livetest.get("enable_extraction_buffer_log")
+            if _v is None:
+                _v = _livetest.get("enableExtractionBufferLog")
+            if _v is not None:
+                raw = bool(_v)
+        return raw
     except Exception:
         return False
 
@@ -3176,6 +3191,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "transcript_path": transcript_path,
             "cursor_offset": int(data.get("line_offset", 0) or 0),
             "cursor_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
+            "has_cursor_size_bytes": "transcript_size_bytes" in data,
             "current_size_bytes": _transcript_size_bytes(transcript_path),
             "mtime": mtime,
         })
@@ -3185,12 +3201,13 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         transcript_path = str(row["transcript_path"])
         cursor_offset = int(row["cursor_offset"])
         cursor_size_bytes = int(row.get("cursor_size_bytes", 0) or 0)
+        has_cursor_size_bytes = bool(row.get("has_cursor_size_bytes", False))
         current_size_bytes = int(row.get("current_size_bytes", 0) or 0)
         mtime = float(row["mtime"])
 
         # Check if transcript has grown past cursor
         total_lines = count_transcript_lines(transcript_path)
-        transcript_grew_past_cursor = current_size_bytes > cursor_size_bytes
+        transcript_grew_past_cursor = has_cursor_size_bytes and current_size_bytes > cursor_size_bytes
         cursor_at_end = total_lines <= cursor_offset and not transcript_grew_past_cursor
 
         # If cursor has advanced past a previously-seen end, reset the "fired" marker
