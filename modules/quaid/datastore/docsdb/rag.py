@@ -952,14 +952,39 @@ class DocsRAG:
                 from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry()
                 reg_docs = registry.list_docs(project=project)
+                resolver = getattr(registry, "_resolve_path", None)
+                seen_registry_paths = set()
                 for d in reg_docs:
                     raw_path = str(d.get("file_path") or "").strip()
                     if not raw_path:
                         continue
+                    candidates: List[Path] = []
+                    if callable(resolver):
+                        try:
+                            candidates.append(Path(resolver(raw_path)))
+                        except Exception as exc:
+                            if is_fail_hard_enabled():
+                                raise RuntimeError(
+                                    f"Failed to resolve docs registry path: {raw_path!r}"
+                                ) from exc
+                            logger.warning(
+                                "docs recall failed to resolve registry path %r: %s",
+                                raw_path,
+                                exc,
+                            )
                     p = Path(raw_path)
                     if not p.is_absolute():
                         p = workspace / p
-                    registry_paths.append(str(p))
+                    candidates.append(p)
+                    for candidate in candidates:
+                        candidate_str = str(candidate)
+                        if candidate_str and candidate_str not in seen_registry_paths:
+                            seen_registry_paths.add(candidate_str)
+                            registry_paths.append(candidate_str)
+                        canonical = _canonical_source_path(candidate_str)
+                        if canonical and canonical not in seen_registry_paths:
+                            seen_registry_paths.add(canonical)
+                            registry_paths.append(canonical)
             except Exception:
                 pass
 

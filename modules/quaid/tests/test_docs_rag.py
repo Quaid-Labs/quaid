@@ -681,6 +681,45 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_project_filter_uses_registry_resolved_alias_path(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "alias:0",
+                    "/canonical/docs/m10-test-doc.md",
+                    0,
+                    "veiled-wintersmith-runebell",
+                    "# Canary",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        class _FakeRegistry:
+            def list_docs(self, project=None):
+                return [{"file_path": "/alias/docs/m10-test-doc.md"}]
+
+            def _resolve_path(self, path_str):
+                return Path(str(path_str).replace("/alias/", "/canonical/"))
+
+        with patch("datastore.docsdb.registry.DocsRegistry", _FakeRegistry), patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={"home_dir": "", "source_roots": []},
+        ):
+            results = rag.search_docs("veiled-wintersmith-runebell", limit=10, project="quaid")
+
+        assert len(results) == 1
+        assert results[0]["source"] == "/canonical/docs/m10-test-doc.md"
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_docs_filter_escapes_like_wildcards(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)
         db = sqlite3.connect(rag.db_path)
