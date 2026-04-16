@@ -86,6 +86,11 @@ function _looksLikeQuaidRuntimeRoot(candidateRoot: string): boolean {
   );
 }
 
+function _hasQuaidRuntimeSentinel(candidateRoot: string): boolean {
+  const root = _normalizeWorkspacePath(candidateRoot);
+  return fs.existsSync(path.join(root, "core", "lifecycle", "janitor.py"));
+}
+
 function _resolveWorkspace(): string {
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
@@ -131,10 +136,13 @@ function _resolveWorkspace(): string {
   }
   const moduleRoot = _resolveAdapterModuleRoot();
   // Extension installs commonly run without cwd/config workspace wiring.
-  // If adapter files are loaded from ~/.openclaw/extensions/quaid, default to
-  // hidden Quaid home rather than resolving to "/" or an arbitrary cwd.
+  // If adapter files are loaded from ~/.openclaw/extensions/quaid and no
+  // Quaid home exists yet, fall through to process.cwd() so first-run setup
+  // can initialize the instance instead of returning a non-existent path.
   if (moduleRoot.includes(`${path.sep}.openclaw${path.sep}extensions${path.sep}quaid`)) {
-    return _normalizeWorkspacePath(path.join(os.homedir(), ".quaid"));
+    if (fs.existsSync(hiddenHome)) {
+      return _normalizeWorkspacePath(hiddenHome);
+    }
   }
 
   return _normalizeWorkspacePath(process.cwd());
@@ -209,7 +217,7 @@ function _resolvePythonPluginRoot(workspace = WORKSPACE, moduleRootOverride?: st
     }
   }
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
+    if (_hasQuaidRuntimeSentinel(candidate)) {
       return _normalizeWorkspacePath(candidate);
     }
   }

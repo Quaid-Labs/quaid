@@ -56,6 +56,10 @@ function _looksLikeQuaidRuntimeRoot(candidateRoot) {
   const root = _normalizeWorkspacePath(candidateRoot);
   return fs.existsSync(path.join(root, "core", "lifecycle", "janitor.py")) && fs.existsSync(path.join(root, "datastore", "memorydb", "memory_graph.py"));
 }
+function _hasQuaidRuntimeSentinel(candidateRoot) {
+  const root = _normalizeWorkspacePath(candidateRoot);
+  return fs.existsSync(path.join(root, "core", "lifecycle", "janitor.py"));
+}
 function _resolveWorkspace() {
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
@@ -95,7 +99,9 @@ function _resolveWorkspace() {
   }
   const moduleRoot = _resolveAdapterModuleRoot();
   if (moduleRoot.includes(`${path.sep}.openclaw${path.sep}extensions${path.sep}quaid`)) {
-    return _normalizeWorkspacePath(path.join(os.homedir(), ".quaid"));
+    if (fs.existsSync(hiddenHome)) {
+      return _normalizeWorkspacePath(hiddenHome);
+    }
   }
   return _normalizeWorkspacePath(process.cwd());
 }
@@ -157,7 +163,7 @@ function _resolvePythonPluginRoot(workspace = WORKSPACE, moduleRootOverride) {
     }
   }
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
+    if (_hasQuaidRuntimeSentinel(candidate)) {
       return _normalizeWorkspacePath(candidate);
     }
   }

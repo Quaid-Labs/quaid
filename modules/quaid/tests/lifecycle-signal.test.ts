@@ -846,10 +846,55 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("falls back to process cwd on extension installs when ~/.quaid does not exist yet", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-ws-cwd-"));
+    const openClawConfigPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({
+        agents: { list: [{ id: "main" }] },
+        env: { vars: { PATH: "/usr/bin:/bin" } },
+      }),
+      "utf8",
+    );
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-ws-cwd-target-"));
+    const prev = {
+      HOME: process.env.HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      QUAID_HOME: process.env.QUAID_HOME,
+      QUAID_WORKSPACE: process.env.QUAID_WORKSPACE,
+      CWD: process.cwd(),
+    };
+    process.env.HOME = home;
+    process.env.OPENCLAW_CONFIG_PATH = openClawConfigPath;
+    delete process.env.QUAID_HOME;
+    delete process.env.QUAID_WORKSPACE;
+    process.chdir(cwd);
+    try {
+      const resolved = __test.resolveWorkspace();
+      expect(fs.realpathSync(resolved)).toBe(fs.realpathSync(cwd));
+    } finally {
+      process.chdir(prev.CWD);
+      if (prev.HOME === undefined) delete process.env.HOME; else process.env.HOME = prev.HOME;
+      if (prev.OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH; else process.env.OPENCLAW_CONFIG_PATH = prev.OPENCLAW_CONFIG_PATH;
+      if (prev.QUAID_HOME === undefined) delete process.env.QUAID_HOME; else process.env.QUAID_HOME = prev.QUAID_HOME;
+      if (prev.QUAID_WORKSPACE === undefined) delete process.env.QUAID_WORKSPACE; else process.env.QUAID_WORKSPACE = prev.QUAID_WORKSPACE;
+    }
+  });
+
   it("falls back to adapter module root for Python runtime when workspace paths are absent", () => {
     const bogusWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-plugin-root-"));
     const moduleRoot = __test.resolveAdapterModuleRoot();
     expect(__test.looksLikeQuaidRuntimeRoot(moduleRoot)).toBe(true);
     expect(__test.resolvePythonPluginRoot(bogusWorkspace, moduleRoot)).toBe(path.resolve(moduleRoot));
+  });
+
+  it("skips partial workspace modules/quaid roots and prefers valid adapter module root", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-plugin-partial-"));
+    fs.mkdirSync(path.join(workspace, "modules", "quaid"), { recursive: true });
+    const moduleRoot = __test.resolveAdapterModuleRoot();
+    expect(__test.looksLikeQuaidRuntimeRoot(moduleRoot)).toBe(true);
+    expect(__test.resolvePythonPluginRoot(workspace, moduleRoot)).toBe(path.resolve(moduleRoot));
   });
 });
