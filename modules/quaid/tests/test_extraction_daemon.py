@@ -2033,6 +2033,49 @@ class TestRollingExtraction:
 
         assert not extraction_daemon._rolling_state_path("sess-noop-state").exists()
 
+    def test_reset_short_transcript_skip_clears_semantic_only_rolling_state(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"assistant","content":"Compacted"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-short-reset", 0, str(transcript_path))
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                _ = path
+                return "Hello"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.get_owner_id = lambda: "test-owner"
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="reset",
+                session_id="sess-short-reset",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert extraction_daemon.read_cursor("sess-short-reset")["line_offset"] == 1
+        assert not extraction_daemon._rolling_state_path("sess-short-reset").exists()
+
     def test_check_chunk_ready_sessions_uses_semantic_buffer_not_raw_json_size(self, monkeypatch, tmp_path):
         import sys
         import types

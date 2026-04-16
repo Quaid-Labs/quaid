@@ -2663,7 +2663,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "[%s] session %s: transcript too short to extract (%d chars < %d min), skipping",
                         label, session_id, transcript_len, _MIN_EXTRACTABLE_CHARS,
                     )
-                    write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+                    # Non-rolling signals pre-buffer transcript tails into semantic_buffer.
+                    # When we skip a short metadata-only flush, keep cursor position in
+                    # sync with the buffered tail (not the pre-buffer cursor offset) so
+                    # later lifecycle signals do not keep replaying the same transcript.
+                    next_cursor_offset = max(
+                        int(cursor_offset + len(new_lines) or 0),
+                        int(buffered_line_offset or 0),
+                    )
+                    write_cursor(session_id, next_cursor_offset, transcript_path)
+                    if signal_type in ("reset", "session_end", "compaction"):
+                        # Session-closing lifecycle signals should not leave semantic-only
+                        # rolling state files behind when no payload was extractable.
+                        clear_rolling_state(session_id)
                     mark_signal_processed(signal_data)
                     return
 
