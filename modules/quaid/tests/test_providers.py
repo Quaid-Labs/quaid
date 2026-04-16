@@ -1455,6 +1455,61 @@ class TestOllamaEmbeddingsProvider:
             result = p.embed("test text")
             assert result is None
 
+    def test_embed_bypasses_proxy_for_local_ollama_when_proxy_env_present(self, monkeypatch):
+        p = OllamaEmbeddingsProvider(url="http://localhost:11434")
+        monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:8080")
+        embedding = [0.1] * 4
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"embeddings": [embedding]}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        opener = MagicMock()
+        opener.open.return_value = mock_resp
+
+        with patch("lib.providers.urllib.request.build_opener", return_value=opener) as build_opener, \
+             patch("lib.providers.urllib.request.urlopen") as urlopen:
+            result = p.embed("test text")
+
+        assert result == embedding
+        build_opener.assert_called_once()
+        opener.open.assert_called_once()
+        urlopen.assert_not_called()
+
+    def test_embed_keeps_normal_urlopen_for_nonlocal_ollama(self, monkeypatch):
+        p = OllamaEmbeddingsProvider(url="http://gpu:11434")
+        monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:8080")
+        embedding = [0.1] * 4
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"embeddings": [embedding]}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.build_opener") as build_opener, \
+             patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as urlopen:
+            result = p.embed("test text")
+
+        assert result == embedding
+        build_opener.assert_not_called()
+        urlopen.assert_called_once()
+
+    def test_embed_keeps_normal_urlopen_for_local_ollama_without_proxy_env(self, monkeypatch):
+        p = OllamaEmbeddingsProvider(url="http://localhost:11434")
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            monkeypatch.delenv(key, raising=False)
+        embedding = [0.1] * 4
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"embeddings": [embedding]}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.build_opener") as build_opener, \
+             patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as urlopen:
+            result = p.embed("test text")
+
+        assert result == embedding
+        build_opener.assert_not_called()
+        urlopen.assert_called_once()
+
     def test_embed_retries_once_on_transient_error(self):
         p = OllamaEmbeddingsProvider()
         embedding = [0.2] * 4096

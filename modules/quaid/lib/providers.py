@@ -45,6 +45,8 @@ _OPENAI_CODEX_DEFAULT_INSTRUCTIONS = (
     "You are a concise, accurate assistant. Follow the user's instructions exactly."
 )
 
+_LOCAL_OLLAMA_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
 
 def _sanitize_url_for_logs(url: str) -> str:
     """Redact credentials/query fragments from URLs before logging."""
@@ -56,6 +58,33 @@ def _sanitize_url_for_logs(url: str) -> str:
         return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
     except Exception:
         return "<invalid-url>"
+
+
+def _should_bypass_proxy_for_url(url: str) -> bool:
+    try:
+        host = str(urllib.parse.urlsplit(str(url or "")).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in _LOCAL_OLLAMA_HOSTS
+
+
+def _proxy_env_present() -> bool:
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        if str(os.environ.get(key, "")).strip():
+            return True
+    return False
+
+
+def _urlopen_with_local_proxy_bypass(req, *, timeout: float):
+    full_url = ""
+    try:
+        full_url = str(req.full_url or "")
+    except Exception:
+        full_url = ""
+    if _proxy_env_present() and _should_bypass_proxy_for_url(full_url):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 def _is_anthropic_oauth_token(token: str) -> bool:
@@ -1461,7 +1490,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     data=data,
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=120) as resp:
+                with _urlopen_with_local_proxy_bypass(req, timeout=120) as resp:
                     result = json.loads(resp.read().decode("utf-8"))
                     embeddings = result.get("embeddings", [])
                     if embeddings and embeddings[0]:
@@ -1527,7 +1556,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                         data=data,
                         headers={"Content-Type": "application/json"},
                     )
-                    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                    with _urlopen_with_local_proxy_bypass(req, timeout=timeout_s) as resp:
                         result = json.loads(resp.read().decode("utf-8"))
                         embeddings = result.get("embeddings", [])
                         if len(embeddings) != len(batch):
