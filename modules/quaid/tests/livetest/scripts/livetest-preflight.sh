@@ -255,11 +255,11 @@ upgrade_cli "codex"    "npm install -g @openai/codex@latest --prefer-offline 2>/
 if command -v openclaw &>/dev/null; then
     printf "  upgrading %-12s ... " "openclaw"
     if openclaw update --yes 2>/dev/null; then
-        ver="$(openclaw --version 2>/dev/null | tail -1 || echo "?")"
-        echo "done ($ver)"
+        # Avoid openclaw --version here; it can hang by loading plugins/watchers.
+        # We only need a non-blocking completion signal for preflight.
+        echo "done (updated)"
     else
-        ver="$(openclaw --version 2>/dev/null | tail -1 || echo "?")"
-        echo "skipped (no update command or already latest: $ver)"
+        echo "skipped (no update command or already latest)"
     fi
 else
     echo "  openclaw      ... not found, skipping"
