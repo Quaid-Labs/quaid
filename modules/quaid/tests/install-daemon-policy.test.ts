@@ -158,6 +158,18 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("OpenClaw Quaid plugin is not fully registered after install");
   });
 
+  it("OpenClaw installer reconciles launchd env for the gateway service", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain('function _ensureOpenClawGatewayLaunchAgentEnv(instanceId = "")');
+    expect(setupText).toContain('path.join(os.homedir(), "Library", "LaunchAgents", "ai.openclaw.gateway.plist")');
+    expect(setupText).toContain('QUAID_HOME: WORKSPACE');
+    expect(setupText).toContain('QUAID_INSTANCE: resolvedInstance');
+    expect(setupText).toContain('const gatewayLaunchAgentEnvReconciled = _ensureOpenClawGatewayLaunchAgentEnv(resolvedInstanceId);');
+    expect(setupText).toContain('Reconciled ai.openclaw.gateway launch agent env for Quaid');
+  });
+
   it("OpenClaw installer refreshes the extension dir from the canonical plugin tree", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

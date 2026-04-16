@@ -2200,6 +2200,107 @@ function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
   }
 }
 
+function _resolveOpenClawGatewayEnvInstanceId(instanceId = "") {
+  const explicit = String(instanceId || "").trim();
+  if (explicit) return explicit;
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const fromVars = String(parsed?.env?.vars?.QUAID_INSTANCE || "").trim();
+    if (fromVars) return fromVars;
+    const fromTop = String(parsed?.env?.QUAID_INSTANCE || "").trim();
+    if (fromTop) return fromTop;
+  } catch (err) {
+    log.warn(`Could not read OpenClaw runtime env while reconciling gateway launch agent: ${String(err)}`);
+  }
+  return "openclaw";
+}
+
+function _runPlistBuddyCommand(plistPath, command) {
+  return spawnSync("/usr/libexec/PlistBuddy", ["-c", command, plistPath], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+}
+
+function _ensureOpenClawGatewayLaunchAgentEnv(instanceId = "") {
+  if (process.platform !== "darwin") return false;
+  const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", "ai.openclaw.gateway.plist");
+  if (!fs.existsSync(plistPath)) {
+    log.warn(`OpenClaw gateway launch agent plist not found; skipping env reconcile: ${plistPath}`);
+    return false;
+  }
+
+  const resolvedInstance = _resolveOpenClawGatewayEnvInstanceId(instanceId);
+  if (!_assertInstancePrefix(resolvedInstance, "openclaw")) {
+    throw new Error(`OpenClaw gateway launch agent requires an openclaw-prefixed instance, got: ${resolvedInstance}`);
+  }
+
+  const expected = {
+    QUAID_HOME: WORKSPACE,
+    QUAID_VISIBLE_HOME: VISIBLE_HOME,
+    OPENCLAW_WORKSPACE: WORKSPACE,
+    QUAID_INSTANCE: resolvedInstance,
+  };
+
+  let changed = false;
+  const ensureEnvDict = _runPlistBuddyCommand(plistPath, "Print :EnvironmentVariables");
+  if (ensureEnvDict.status !== 0) {
+    const addDict = _runPlistBuddyCommand(plistPath, "Add :EnvironmentVariables dict");
+    if (addDict.status !== 0) {
+      const detail = String(addDict.stderr || addDict.stdout || "").trim();
+      throw new Error(`could not create EnvironmentVariables in ${plistPath}: ${detail || "unknown error"}`);
+    }
+    changed = true;
+  }
+
+  for (const [key, value] of Object.entries(expected)) {
+    const current = _runPlistBuddyCommand(plistPath, `Print :EnvironmentVariables:${key}`);
+    const currentValue = String(current.stdout || "").trim();
+    if (current.status === 0 && currentValue === value) continue;
+    let write = _runPlistBuddyCommand(plistPath, `Set :EnvironmentVariables:${key} ${JSON.stringify(value)}`);
+    if (write.status !== 0) {
+      write = _runPlistBuddyCommand(plistPath, `Add :EnvironmentVariables:${key} string ${JSON.stringify(value)}`);
+    }
+    if (write.status !== 0) {
+      const detail = String(write.stderr || write.stdout || "").trim();
+      throw new Error(`could not set EnvironmentVariables:${key} in ${plistPath}: ${detail || "unknown error"}`);
+    }
+    changed = true;
+  }
+
+  if (!changed) return false;
+
+  const guiTarget = `gui/${process.getuid()}`;
+  let reload = spawnSync("launchctl", ["bootout", guiTarget, plistPath], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (reload.status !== 0) {
+    reload = spawnSync("launchctl", ["unload", plistPath], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  }
+
+  reload = spawnSync("launchctl", ["bootstrap", guiTarget, plistPath], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (reload.status !== 0) {
+    reload = spawnSync("launchctl", ["load", plistPath], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  }
+  if (reload.status !== 0) {
+    const detail = String(reload.stderr || reload.stdout || "").trim();
+    throw new Error(`updated ${plistPath} but failed to reload ai.openclaw.gateway: ${detail || "unknown error"}`);
+  }
+  return true;
+}
+
 function _sanitizeOpenClawQuaidPluginEntry() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -4578,6 +4679,10 @@ except Exception as e:
     s.message("Waiting for OpenClaw gateway to restart and warm up...");
     if (_ensureOpenClawPluginsAllowQuaid()) {
       log.info("Ensured plugins.allow includes: quaid");
+    }
+    const gatewayLaunchAgentEnvReconciled = _ensureOpenClawGatewayLaunchAgentEnv(resolvedInstanceId);
+    if (gatewayLaunchAgentEnvReconciled) {
+      log.info("Reconciled ai.openclaw.gateway launch agent env for Quaid");
     }
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 60_000);
     s.message("Finalizing OpenClaw hook configuration...");
