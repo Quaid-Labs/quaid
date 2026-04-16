@@ -674,6 +674,8 @@ def append_project_logs(
         "entries_written": 0,
         "projects_unknown": 0,
         "projects_missing_file": 0,
+        "projects_history_only": 0,
+        "history_entries_written": 0,
     }
     if not isinstance(project_logs, dict) or not project_logs:
         return metrics
@@ -754,7 +756,36 @@ def append_project_logs(
             project_md = _resolve_project_home(defn.home_dir) / "PROJECT.md"
             if not project_md.exists():
                 metrics["projects_missing_file"] += 1
-                print(f"[project-log] missing PROJECT.md: {project_md}")
+                print(f"[project-log][warn] missing PROJECT.md: {project_md}")
+                logger.warning(
+                    "append_project_logs: missing PROJECT.md for project=%s path=%s trigger=%s",
+                    project_name,
+                    project_md,
+                    trigger,
+                )
+                # Keep append-only history alive even if PROJECT.md is missing.
+                # This prevents silent data drops when project docs are missing.
+                if not dry_run:
+                    try:
+                        history_written = _append_project_history_log(project_md, raw_entries or [])
+                        if history_written > 0:
+                            metrics["projects_history_only"] += 1
+                            metrics["history_entries_written"] += history_written
+                            print(
+                                f"[project-log] project={project_name} history_only_entries={history_written} "
+                                f"file={project_md.with_name(PROJECT_HISTORY_FILENAME)} dry_run={dry_run}"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "append_project_logs: failed PROJECT.log append for project=%s path=%s error=%s",
+                            project_name,
+                            project_md.with_name(PROJECT_HISTORY_FILENAME),
+                            e,
+                        )
+                        print(
+                            f"[project-log][warn] failed PROJECT.log append: "
+                            f"project={project_name} error={e}"
+                        )
                 continue
 
         if not dry_run:

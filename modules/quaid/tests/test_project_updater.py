@@ -446,11 +446,12 @@ class TestAppendProjectLogs:
         out = capsys.readouterr().out
         assert "[project-log] unknown project: does-not-exist" in out
 
-    def test_missing_project_md_is_reported_and_skipped(self, setup_env, capsys):
+    def test_missing_project_md_writes_history_and_warns(self, setup_env, capsys):
         from datastore.docsdb.project_updater import append_project_logs
 
         tmp_path = setup_env
         project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
         project_md.unlink()
 
         metrics = append_project_logs(
@@ -463,8 +464,13 @@ class TestAppendProjectLogs:
         assert metrics["projects_seen"] == 1
         assert metrics["projects_missing_file"] == 1
         assert metrics["projects_updated"] == 0
+        assert metrics["projects_history_only"] == 1
+        assert metrics["history_entries_written"] == 1
+        assert project_log.exists()
+        assert "missing file" in project_log.read_text(encoding="utf-8")
         out = capsys.readouterr().out
-        assert "[project-log] missing PROJECT.md:" in out
+        assert "[project-log][warn] missing PROJECT.md:" in out
+        assert "history_only_entries=1" in out
 
     def test_empty_or_invalid_payload_is_noop(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs
