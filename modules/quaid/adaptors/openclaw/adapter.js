@@ -2902,6 +2902,11 @@ notify_user(${JSON.stringify(message)})
             `For durable new work: run Step 1 above to create a named project first.`,
             `For work that belongs to an existing project: write there directly.`,
             ``,
+            `[PROJECT DOCS RETRIEVAL \u2014 MANDATORY]`,
+            `For project document questions (runbooks, docs content, code words, procedures), run docs recall before filesystem grep/cat:`,
+            `  quaid recall "<query>" '{"stores":["docs"],"project":"<project-name>"}'`,
+            `Only fall back to filesystem grep/cat if docs recall returns no relevant docs hits.`,
+            ``,
             `Always tell the user which project received the file.`
           ].join("\n");
           prependSystemContext = prependSystemContext ? `${prependSystemContext}
@@ -3076,6 +3081,13 @@ ${modelConfigNotice}` : modelConfigNotice;
         appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${memoriesBlock}` : memoriesBlock;
+        prependContextParts.push(memoriesBlock);
+        writeHookTrace("hook.before_prompt_build.injection_applied", {
+          query: query.slice(0, 80),
+          targets: ["appendSystemContext", "prependContext"],
+          block_len: memoriesBlock.length,
+          inject_count: toInject.length
+        });
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
         try {
           if (facade.shouldNotifyFeature("retrieval", "summary")) {
@@ -3120,9 +3132,6 @@ ${notice}` : notice;
       name: "memory-injection",
       priority: 10
     });
-    // OC gateway variants can route lifecycle hooks only through registerHook.
-    // Keep api.on registration for compatibility, but add registerHook parity so
-    // memory injection still fires when event-bus hooks are silent.
     registerInternalHookChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection-registerHook",
       priority: 10
@@ -3148,9 +3157,6 @@ ${notice}` : notice;
       name: "memory-injection-prompt-build",
       priority: 10
     });
-    // OC gateway variants can route prompt hooks only through registerHook.
-    // Keep api.on registration for compatibility, but add registerHook parity so
-    // auto-inject recall still runs when event-bus hooks are silent.
     registerInternalHookChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build-registerHook",
       priority: 10

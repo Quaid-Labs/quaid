@@ -3618,6 +3618,11 @@ notify_user(${JSON.stringify(message)})
             `For durable new work: run Step 1 above to create a named project first.`,
             `For work that belongs to an existing project: write there directly.`,
             ``,
+            `[PROJECT DOCS RETRIEVAL — MANDATORY]`,
+            `For project document questions (runbooks, docs content, code words, procedures), run docs recall before filesystem grep/cat:`,
+            `  quaid recall "<query>" '{"stores":["docs"],"project":"<project-name>"}'`,
+            `Only fall back to filesystem grep/cat if docs recall returns no relevant docs hits.`,
+            ``,
             `Always tell the user which project received the file.`,
           ].join("\n");
           prependSystemContext = prependSystemContext
