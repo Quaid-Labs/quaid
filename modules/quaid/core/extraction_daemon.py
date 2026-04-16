@@ -810,11 +810,46 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
 
 
 def write_rolling_state(session_id: str, state: Dict[str, Any]) -> None:
+    def _has_map_content(value: Any) -> bool:
+        data = value if isinstance(value, dict) else {}
+        for item in data.values():
+            if isinstance(item, list) and any(str(v or "").strip() for v in item):
+                return True
+            if isinstance(item, str) and item.strip():
+                return True
+        return False
+
     payload = dict(state or {})
-    payload["session_id"] = _validate_session_id(session_id)
+    normalized_session_id = _validate_session_id(session_id)
+    payload["session_id"] = normalized_session_id
     payload["transcript_path"] = str(payload.get("transcript_path", "") or "")
+
+    has_semantic_buffer = bool(str(payload.get("semantic_buffer", "") or "").strip())
+    has_semantic_tokens = int(payload.get("semantic_buffer_tokens", 0) or 0) > 0
+    has_batches = int(payload.get("rolling_batches", 0) or 0) > 0
+    has_carry_facts = bool(payload.get("carry_facts") or [])
+    has_raw_facts = bool(payload.get("raw_facts") or [])
+    has_raw_snippets = _has_map_content(payload.get("raw_snippets"))
+    has_raw_journal = _has_map_content(payload.get("raw_journal"))
+    has_raw_project_logs = _has_map_content(payload.get("raw_project_logs"))
+
+    if not any(
+        (
+            has_semantic_buffer,
+            has_semantic_tokens,
+            has_batches,
+            has_carry_facts,
+            has_raw_facts,
+            has_raw_snippets,
+            has_raw_journal,
+            has_raw_project_logs,
+        )
+    ):
+        clear_rolling_state(normalized_session_id)
+        return
+
     payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _atomic_write(_rolling_state_path(session_id), json.dumps(payload))
+    _atomic_write(_rolling_state_path(normalized_session_id), json.dumps(payload))
 
 
 def clear_rolling_state(session_id: str) -> None:

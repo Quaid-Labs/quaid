@@ -1988,6 +1988,51 @@ class TestRollingExtraction:
         assert metric["final_facts_stored"] == 0
         assert metric["final_facts_skipped"] == 0
 
+    @pytest.mark.parametrize("signal_type", ["compaction", "timeout"])
+    def test_process_signal_noop_does_not_recreate_empty_rolling_state(
+        self, monkeypatch, tmp_path, signal_type
+    ):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"assistant","content":"Compacted (17k -> 2.1k)"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-noop-state", 0, str(transcript_path))
+        extraction_daemon.clear_rolling_state("sess-noop-state")
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter:
+            def parse_session_jsonl(self, path):
+                _ = path
+                return ""
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type=signal_type,
+                session_id="sess-noop-state",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert not extraction_daemon._rolling_state_path("sess-noop-state").exists()
+
     def test_check_chunk_ready_sessions_uses_semantic_buffer_not_raw_json_size(self, monkeypatch, tmp_path):
         import sys
         import types
