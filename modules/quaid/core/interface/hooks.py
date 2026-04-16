@@ -21,6 +21,7 @@ import argparse
 import fcntl
 import glob as glob_mod
 import json
+import logging
 import os
 import re
 import select
@@ -30,6 +31,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 def _read_stdin_json() -> dict:
@@ -363,7 +366,8 @@ def _infer_docs_project_from_cwd(cwd: str) -> str | None:
         project = DocsRAG().infer_project_for_source(value)
         normalized = str(project or "").strip()
         return normalized or None
-    except Exception:
+    except Exception as exc:
+        logger.debug("docs project hint inference failed cwd=%s: %s", value, exc)
         return None
 
 
@@ -559,20 +563,20 @@ def hook_inject(args):
                 "session_field": str(hook_input.get("session_id") or "").strip() if isinstance(hook_input, dict) else "",
                 "transcript_path": str(hook_input.get("transcript_path") or "").strip() if isinstance(hook_input, dict) else "",
             })
-        docs_project_hint = _infer_docs_project_from_cwd(
-            hook_input.get("cwd", "").strip() if isinstance(hook_input, dict) else ""
-        )
+        docs_project_hint = None
+        hook_cwd = hook_input.get("cwd", "").strip() if isinstance(hook_input, dict) else ""
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             mem_future = pool.submit(
                 lambda: recall_fast(query=query, owner_id=owner, limit=10, return_meta=True)
             )
-            docs_future = pool.submit(
-                projects_search_docs,
-                query=query,
-                limit=3,
-                project=docs_project_hint,
-            )
+
+            def _run_docs_search():
+                hint = _infer_docs_project_from_cwd(hook_cwd)
+                bundle = projects_search_docs(query=query, limit=3, project=hint)
+                return bundle, hint
+
+            docs_future = pool.submit(_run_docs_search)
             try:
                 mem_result = mem_future.result()
                 if isinstance(mem_result, tuple) and len(mem_result) == 2:
@@ -585,9 +589,15 @@ def hook_inject(args):
                 memories = []
                 recall_meta = None
             try:
-                docs_bundle = docs_future.result()
+                docs_result = docs_future.result()
+                if isinstance(docs_result, tuple) and len(docs_result) == 2:
+                    docs_bundle, docs_project_hint = docs_result
+                else:
+                    docs_bundle = docs_result
+                    docs_project_hint = None
             except Exception:
                 docs_bundle = None
+                docs_project_hint = None
 
         _write_hook_trace("hook.inject.recall_done", {
             "query": query[:160],

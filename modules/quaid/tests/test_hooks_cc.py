@@ -904,6 +904,40 @@ class TestHookInjectRecallResilience:
         assert "[Quaid Project Docs: cross-live-test]" in context
         assert "Ember Glass means pager escalation level 2" in context
 
+    def test_project_docs_search_falls_back_to_unscoped_when_cwd_hint_missing(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        docs_bundle = {
+            "project": "quaid",
+            "chunks": [
+                {
+                    "content": "Release readiness notes.",
+                    "source": "/tmp/quaid/operations/release-readiness.md",
+                    "similarity": 0.91,
+                }
+            ],
+        }
+        with patch("core.interface.api.recall_fast", return_value=[]), \
+             patch("core.interface.hooks._infer_docs_project_from_cwd", return_value=None), \
+             patch("core.interface.api.projects_search_docs", return_value=docs_bundle) as docs_search_mock:
+            _out, _err = _run_hook_inject(
+                {
+                    "prompt": "What about release readiness?",
+                    "session_id": "sess-docs-no-hint",
+                    "cwd": "",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        docs_search_mock.assert_called_once_with(
+            query="What about release readiness?",
+            limit=3,
+            project=None,
+        )
+
     def test_project_docs_failure_does_not_drop_memory_context(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
