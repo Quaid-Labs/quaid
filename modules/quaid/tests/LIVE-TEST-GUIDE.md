@@ -54,7 +54,7 @@ by diverging from real behavior hides a bug instead of fixing it.
   instead of stopping for approval.
 - For capability tests, speak to the agent like a real user would. Do not
   spoon-feed function names or CLI subcommands unless the milestone is
-  explicitly testing a slash command such as `/new`, `/reset`, or `/compact`.
+  explicitly testing a slash command such as `/new`, `/clear`, `/reset`, or `/compact`.
 
 ## Reporting
 
@@ -699,7 +699,7 @@ Pass:
 Note: `quaid recall-fast` is vector-only and will not find nonsense keywords by exact match.
 Use FTS direct check (step 5) as the primary verification. `quaid recall "<natural query>"` (e.g. "what do I know about my neighbor") is also valid if recall is healthy.
 
-### M2: Extraction via `/reset`
+### M2: Extraction via session reset (`/reset` or `/clear`)
 
 Tell the agent something memorable in natural conversation. Use two prompts:
 1. A personal fact — for example:
@@ -707,7 +707,7 @@ Tell the agent something memorable in natural conversation. Use two prompts:
 2. A reflective question to guarantee snippet-worthy content for M9:
    `"What do you think is your fundamental purpose?"`
 
-Then trigger `/reset`.
+Then trigger the session reset command (`/reset` for OC/CDX, `/clear` for CC).
 
 Pass:
 - the fact is stored from the pre-reset session
@@ -1093,7 +1093,8 @@ ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-sen
 ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/reset"'
 ```
 
-For CC/CDX: prompt the agent in the active session and use `/reset`.
+For CC: prompt the agent in the active session and use `/clear`.
+For CDX: prompt the agent in the active session and use `/reset`.
 
 Check after extraction:
 
@@ -1299,7 +1300,8 @@ ssh REMOTE_HOST 'echo "=== quaid PROJECT.log ==="; tail -30 ~/quaid/projects/qua
 ```
 
 Pass: `projects/quaid/PROJECT.log` exists and has at least one timestamped
-entry from this test run — M8 includes a deliberate `/reset` to capture project
+entry from this test run — M8 includes a deliberate session reset trigger (`/reset`
+for OC/CDX, `/clear` for CC) to capture project
 context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
 
 Fail:

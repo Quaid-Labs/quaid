@@ -130,8 +130,8 @@ starting the rerun.
 
 ### Waiting after extraction triggers
 
-**Extraction is async.** After any lifecycle trigger (`/new`, `/clear`,
-`/reset`, `/compact`), the daemon must: detect the signal, read the
+**Extraction is async.** After any lifecycle trigger (`/new`, `/clear` on CC,
+`/reset` on OC/CDX, `/compact`), the daemon must: detect the signal, read the
 transcript, call the LLM for extraction, process the response, and write
 facts to the DB. This takes **30–60 seconds minimum** for short sessions,
 and **up to 3–4 minutes** for sessions with significant conversation
