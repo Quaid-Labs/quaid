@@ -866,6 +866,44 @@ class TestHookInjectRecallResilience:
         assert "Authentication uses JWTs and refresh tokens." in context
         assert "api.md" in context
 
+    def test_project_docs_search_uses_project_hint_from_hook_cwd(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        docs_bundle = {
+            "project": "cross-live-test",
+            "chunks": [
+                {
+                    "content": "The code word Ember Glass means pager escalation level 2.",
+                    "source": "/tmp/cross-live-test-src/ember-glass.md",
+                    "similarity": 0.96,
+                }
+            ],
+        }
+        with patch("core.interface.api.recall_fast", return_value=[]), \
+             patch("core.interface.hooks._infer_docs_project_from_cwd", return_value="cross-live-test"), \
+             patch("core.interface.api.projects_search_docs", return_value=docs_bundle) as docs_search_mock:
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "What is Ember Glass?",
+                    "session_id": "sess-docs-hint",
+                    "cwd": "/tmp/cross-live-test-src",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        docs_search_mock.assert_called_once_with(
+            query="What is Ember Glass?",
+            limit=3,
+            project="cross-live-test",
+        )
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid Project Docs: cross-live-test]" in context
+        assert "Ember Glass means pager escalation level 2" in context
+
     def test_project_docs_failure_does_not_drop_memory_context(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

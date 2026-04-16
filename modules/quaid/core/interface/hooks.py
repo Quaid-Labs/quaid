@@ -352,6 +352,21 @@ def _summarize_recall_meta(meta: dict | None) -> dict | None:
     }
 
 
+def _infer_docs_project_from_cwd(cwd: str) -> str | None:
+    """Best-effort project hint for docs recall based on hook cwd."""
+    value = str(cwd or "").strip()
+    if not value:
+        return None
+    try:
+        from datastore.docsdb.rag import DocsRAG
+
+        project = DocsRAG().infer_project_for_source(value)
+        normalized = str(project or "").strip()
+        return normalized or None
+    except Exception:
+        return None
+
+
 def hook_inject(args):
     """Recall memories for each user message and inject as context.
 
@@ -544,11 +559,20 @@ def hook_inject(args):
                 "session_field": str(hook_input.get("session_id") or "").strip() if isinstance(hook_input, dict) else "",
                 "transcript_path": str(hook_input.get("transcript_path") or "").strip() if isinstance(hook_input, dict) else "",
             })
+        docs_project_hint = _infer_docs_project_from_cwd(
+            hook_input.get("cwd", "").strip() if isinstance(hook_input, dict) else ""
+        )
+
         with ThreadPoolExecutor(max_workers=2) as pool:
             mem_future = pool.submit(
                 lambda: recall_fast(query=query, owner_id=owner, limit=10, return_meta=True)
             )
-            docs_future = pool.submit(projects_search_docs, query=query, limit=3)
+            docs_future = pool.submit(
+                projects_search_docs,
+                query=query,
+                limit=3,
+                project=docs_project_hint,
+            )
             try:
                 mem_result = mem_future.result()
                 if isinstance(mem_result, tuple) and len(mem_result) == 2:
@@ -575,6 +599,7 @@ def hook_inject(args):
         _write_hook_trace("hook.inject.docs_done", {
             "query": query[:160],
             "session_id": session_id,
+            "requested_project": docs_project_hint,
             "project": (docs_bundle or {}).get("project") if isinstance(docs_bundle, dict) else None,
             "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
         })
