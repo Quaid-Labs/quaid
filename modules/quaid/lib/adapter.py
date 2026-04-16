@@ -78,18 +78,38 @@ class QuaidAdapter(abc.ABC):
         r"Respond with JSON only as an array of objects:\s*\[.*",
         flags=re.DOTALL,
     )
-    _SESSION_START_BOILERPLATE_RE = re.compile(
-        r"A new session was started via /new or /reset\.\s*"
-        r"If runtime-provided startup context is included for this first turn, use it before responding to the user\.\s*"
-        r"Then greet the user in your configured persona, if one is provided\.\s*"
-        r"Be yourself - use your defined voice, mannerisms, and mood\.\s*"
-        r"Keep it to 1-3 sentences and ask what they want to do\.\s*"
-        r"If the runtime model differs from default_model in the system prompt, mention the default model\.\s*"
-        r"Do not mention internal steps, files, tools, or reasoning\.",
-        flags=re.DOTALL | re.IGNORECASE,
+    _SESSION_START_BOILERPLATE_RES = (
+        re.compile(
+            r"A new session was started via /new or /reset\.[^\n]*\s*",
+            flags=re.IGNORECASE,
+        ),
+        re.compile(
+            r"If runtime-provided startup context is included.*?responding to the user\.\s*",
+            flags=re.IGNORECASE | re.DOTALL,
+        ),
+        re.compile(
+            r"Then greet the user in your configured persona, if one is provided\.\s*",
+            flags=re.IGNORECASE,
+        ),
+        re.compile(
+            r"Be yourself\s*-\s*use your defined voice, mannerisms, and mood\.\s*",
+            flags=re.IGNORECASE,
+        ),
+        re.compile(
+            r"Keep it to 1-3 sentences and ask what they want to do\.\s*",
+            flags=re.IGNORECASE,
+        ),
+        re.compile(
+            r"If the runtime model differs from default_model in the system prompt, mention the default model\.\s*",
+            flags=re.IGNORECASE,
+        ),
+        re.compile(
+            r"Do not mention internal steps, files, tools, or reasoning\.\s*",
+            flags=re.IGNORECASE,
+        ),
     )
     _CURRENT_TIME_STATUS_RE = re.compile(
-        r"^\s*Current time:\s.*?/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+UTC\s*$",
+        r"^\s*Current time:\s.*?/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+UTC\s*$",
         flags=re.IGNORECASE | re.MULTILINE,
     )
 
@@ -391,10 +411,19 @@ class QuaidAdapter(abc.ABC):
         value = self._DEDUP_COMPARE_PROMPT_RE.sub("", value).strip()
         if not value:
             return ""
-        value = self._SESSION_START_BOILERPLATE_RE.sub("", value)
-        value = self._CURRENT_TIME_STATUS_RE.sub("", value)
-        value = re.sub(r"\n{3,}", "\n\n", value).strip()
-        return value
+        mutated = False
+        for pattern in self._SESSION_START_BOILERPLATE_RES:
+            next_value = pattern.sub("", value)
+            if next_value != value:
+                mutated = True
+                value = next_value
+        next_value = self._CURRENT_TIME_STATUS_RE.sub("", value)
+        if next_value != value:
+            mutated = True
+            value = next_value
+        if mutated:
+            value = re.sub(r"\n{3,}", "\n\n", value)
+        return value.strip()
 
     @staticmethod
     def _transcript_label(role: str, source_type: str = "") -> str:

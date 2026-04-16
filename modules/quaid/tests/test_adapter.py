@@ -573,6 +573,58 @@ class TestOpenClawAdapter:
         assert "Current time:" not in transcript
         assert "User: My morning run route takes me past the old watermill on Henley Road." in transcript
 
+    def test_parse_session_jsonl_strips_session_start_variant_line(self, tmp_path):
+        session_file = tmp_path / "oc-startup-boilerplate-variant.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "A new session was started via /new or /reset. Execute your Session Startup sequence now.\n"
+                                    "My neighbour won a regional chili cook-off last weekend."
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "A new session was started via /new or /reset" not in transcript
+        assert "User: My neighbour won a regional chili cook-off last weekend." in transcript
+
+    def test_parse_session_jsonl_strips_current_time_with_single_digit_hour(self, tmp_path):
+        session_file = tmp_path / "oc-startup-time-single-hour.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "Current time: Thursday, April 16th, 2026 - 9:46 AM (UTC) / 2026-04-16 9:46 UTC\n"
+                                    "I planted a Japanese maple last autumn."
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "Current time:" not in transcript
+        assert "User: I planted a Japanese maple last autumn." in transcript
+
     def test_get_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-key")
         adapter = OpenClawAdapter()
