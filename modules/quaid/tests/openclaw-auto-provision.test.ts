@@ -198,9 +198,6 @@ describe("openclaw auto-provision", () => {
     expect(String(promptResult?.prependSystemContext || "")).toContain(
       "quaid registry register <absolute-file-path> --project misc--openclaw-m13test",
     );
-    expect(String(promptResult?.prependSystemContext || "")).toContain(
-      `quaid recall "<query>" '{"stores":["docs"],"project":"<project-name>"}'`,
-    );
     expect(String(promptResult?.prependSystemContext || "")).not.toContain("openclaw-main");
 
     warn.mockRestore();

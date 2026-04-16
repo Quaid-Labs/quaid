@@ -1152,7 +1152,7 @@ class TestHookSessionInitRegistryAugmentation:
             "active graph relation types: neighbor_of, parent_of",
             "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
             "linked projects: quaid (/tmp/quaid); misc--cc-test (/tmp/misc)",
-            "runtime note: Preinject does not cover project or docs detail. If a query depends on these projects, files, paths, tests, bugs, or architecture docs, use project recall explicitly.",
+            "runtime note: Preinject does not cover project or docs detail. For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Only fall back to filesystem reads when docs recall returns no relevant hits.",
         ])
 
         with patch("core.runtime.system_context.build_system_context_block", return_value=runtime_block), \
@@ -1169,7 +1169,7 @@ class TestHookSessionInitRegistryAugmentation:
         assert "active domains: personal, technical" in content
         assert "active graph relation types: neighbor_of, parent_of" in content
         assert "linked projects: quaid (/tmp/quaid); misc--cc-test (/tmp/misc)" in content
-        assert "Preinject does not cover project or docs detail." in content
+        assert "run docs recall before filesystem grep/cat" in content
         assert "before domains" in content
         assert "after domains" in content
         assert "AUTO-GENERATED:DOMAIN-LIST" not in content

@@ -132,7 +132,7 @@ describe("QuaidFacade", () => {
           "active graph relation types: neighbor_of, parent_of",
           "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
           "linked projects: quaid (/tmp/workspace/projects/quaid); misc--instance-a (/tmp/workspace/projects/misc--instance-a)",
-          "runtime note: Preinject does not cover project or docs detail. If a query depends on these projects, files, paths, tests, bugs, or architecture docs, use project recall explicitly.",
+          "runtime note: Preinject does not cover project or docs detail. For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Only fall back to filesystem reads when docs recall returns no relevant hits.",
         ].join("\n");
       }
       return "{}";
@@ -156,7 +156,7 @@ describe("QuaidFacade", () => {
     expect(out).toContain("active domains: personal, technical");
     expect(out).toContain("active graph relation types: neighbor_of, parent_of");
     expect(out).toContain("linked projects: quaid (/tmp/workspace/projects/quaid); misc--instance-a (/tmp/workspace/projects/misc--instance-a)");
-    expect(out).toContain("Preinject does not cover project or docs detail.");
+    expect(out).toContain("run docs recall before filesystem grep/cat");
     expect(out).toContain("--- quaid/TOOLS.md ---");
     expect(out).toContain("before domains");
     expect(out).toContain("after domains");
