@@ -234,7 +234,11 @@ auto-create the instance silo. Verify:
 
 After the test, clean up:
 ```bash
-ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test --force'
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/openclaw-cli-safe.sh \
+  --timeout 45 \
+  --label oc-m13-delete \
+  --on-timeout "ssh REMOTE_HOST 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
+  -- ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test --force'
 ssh REMOTE_HOST 'trash /tmp/oc-m13-workspace 2>/dev/null || rm -rf /tmp/oc-m13-workspace'
 ```
 Note: `--force` is required in non-interactive (SSH) context. If that still fails,

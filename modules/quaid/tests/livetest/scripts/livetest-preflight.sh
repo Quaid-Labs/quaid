@@ -249,17 +249,76 @@ upgrade_cli() {
     fi
 }
 
+run_openclaw_safe() {
+    local timeout_s="${OPENCLAW_CLI_TIMEOUT_S:-45}"
+    local done_token="__OPENCLAW_PRECHECK_DONE__${RANDOM}${RANDOM}"
+    local tmp_out
+    tmp_out="$(mktemp -t openclaw-preflight.XXXXXX)"
+
+    (
+        set +e
+        openclaw update --yes
+        cmd_rc=$?
+        printf '%s:%s\n' "$done_token" "$cmd_rc"
+        exit 0
+    ) >"$tmp_out" 2>&1 &
+
+    local cmd_pid=$!
+    local elapsed=0
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+        if (( elapsed >= timeout_s )); then
+            local pgid
+            pgid="$(ps -o pgid= -p "$cmd_pid" 2>/dev/null | tr -d ' ' || true)"
+            if [[ -n "$pgid" ]]; then
+                kill -TERM "-$pgid" 2>/dev/null || true
+                sleep 1
+                kill -KILL "-$pgid" 2>/dev/null || true
+            fi
+            kill -TERM "$cmd_pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$cmd_pid" 2>/dev/null || true
+            pkill -f 'openclaw-update' 2>/dev/null || true
+            pkill -f 'openclaw-completion' 2>/dev/null || true
+            pkill -f 'openclaw-agent' 2>/dev/null || true
+            pkill -f 'openclaw-agents' 2>/dev/null || true
+            wait "$cmd_pid" 2>/dev/null || true
+            echo "timeout after ${timeout_s}s; cleaned stuck OpenClaw workers"
+            grep -v "^${done_token}:" "$tmp_out" | tail -3 | sed 's/^/    /' || true
+            rm -f "$tmp_out"
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$cmd_pid" 2>/dev/null || true
+
+    local done_line
+    done_line="$(grep "^${done_token}:" "$tmp_out" | tail -1 || true)"
+    if [[ -z "$done_line" ]]; then
+        echo "failed (missing completion sentinel)"
+        grep -v "^${done_token}:" "$tmp_out" | tail -3 | sed 's/^/    /' || true
+        rm -f "$tmp_out"
+        return 1
+    fi
+    local cmd_rc="${done_line##*:}"
+    if [[ "$cmd_rc" == "0" ]]; then
+        rm -f "$tmp_out"
+        return 0
+    fi
+    grep -v "^${done_token}:" "$tmp_out" | tail -3 | sed 's/^/    /' || true
+    rm -f "$tmp_out"
+    return "$cmd_rc"
+}
+
 upgrade_cli "claude"   "npm install -g @anthropic-ai/claude-code@latest --prefer-offline 2>/dev/null || npm install -g @anthropic-ai/claude-code@latest"
 upgrade_cli "codex"    "npm install -g @openai/codex@latest --prefer-offline 2>/dev/null || npm install -g @openai/codex@latest"
 # openclaw: try built-in updater, fall back to no-op if not available
 if command -v openclaw &>/dev/null; then
     printf "  upgrading %-12s ... " "openclaw"
-    if openclaw update --yes 2>/dev/null; then
-        # Avoid openclaw --version here; it can hang by loading plugins/watchers.
-        # We only need a non-blocking completion signal for preflight.
+    if run_openclaw_safe >/dev/null 2>&1; then
         echo "done (updated)"
     else
-        echo "skipped (no update command or already latest)"
+        echo "skipped/timeout (continuing)"
     fi
 else
     echo "  openclaw      ... not found, skipping"

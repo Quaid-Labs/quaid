@@ -1938,7 +1938,11 @@ Pass: canary returned. Fail: empty or error.
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-m13test \
   ~/.quaid/plugins/quaid/quaid project delete misc--openclaw-m13test 2>&1 | tail -3 || true'
-ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test 2>&1 | tail -3'
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/openclaw-cli-safe.sh \
+  --timeout 45 \
+  --label oc-m13-delete \
+  --on-timeout "ssh REMOTE_HOST 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
+  -- ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test --force 2>&1 | tail -3'
 ssh REMOTE_HOST 'trash ~/quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test visible silo"'
 ssh REMOTE_HOST 'trash ~/.quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/.quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test hidden silo"'
 ssh REMOTE_HOST 'trash /tmp/oc-m13-workspace 2>/dev/null || rm -rf /tmp/oc-m13-workspace; echo "cleaned oc m13 workspace"'
