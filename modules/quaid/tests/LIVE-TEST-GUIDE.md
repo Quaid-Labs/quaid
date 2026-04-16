@@ -140,7 +140,7 @@ is faster and safer than surgical cleanup.
 > After the CC installer completes, **also apply the chunk_tokens override**
 > (same step as the full M0 post-install — do not skip it in the parallel path):
 > ```bash
-> ssh REMOTE_HOST 'python3 -c "import json; p=\"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
+> ssh REMOTE_HOST 'python3 -c "import json; p=\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
 > ```
 
 **Uninstall the plugin first to remove registry entries:**
@@ -345,7 +345,7 @@ ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && echo 'Aut
 Also verify model config was written by the installer:
 
 ```bash
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
 ```
 
 Expected output: `{'deepReasoning': 'claude-opus-4-6', 'fastReasoning': 'claude-haiku-4-5-20251001'}`.
@@ -383,10 +383,10 @@ ssh REMOTE_HOST 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=js
 ssh REMOTE_HOST 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_HOME:\",e.get(\"QUAID_HOME\",\"MISSING\")); print(\"QUAID_INSTANCE (should be absent):\",e.get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
 ssh REMOTE_HOST 'cat /tmp/cc-livetest/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); e=d.get(\"env\",{}); print(\"QUAID_INSTANCE (per-project):\",e.get(\"QUAID_INSTANCE\",\"MISSING\"))"'
 # Expected: QUAID_HOME: /Users/USER/.quaid   and   QUAID_INSTANCE (per-project): (absent — derived from path)
-ssh REMOTE_HOST 'ls -l ~/quaid/instances/openclaw-main/identity/SOUL.md ~/.quaid/instances/claude-code-private-tmp-cc-livetest/identity/SOUL.md 2>/dev/null || true'
+ssh REMOTE_HOST 'ls -l ~/quaid/instances/openclaw-main/SOUL.md ~/quaid/instances/claude-code-private-tmp-cc-livetest/SOUL.md 2>/dev/null || true'
 ```
 
-If either instance-local `identity/SOUL.md` is missing, the installer did not
+If either instance-local `SOUL.md` is missing, the installer did not
 seed it correctly — this is a bug. Fix the installer. As a temporary unblock,
 seed from the shared project template:
 
@@ -400,8 +400,8 @@ for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
         print(f"WARNING: template missing: {src}")
         continue
     for dst_dir in (
-        Path("/Users/USER/quaid/openclaw-main/identity"),
-        Path("/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/identity"),
+        Path("/Users/USER/quaid/instances/openclaw-main"),
+        Path("/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest"),
     ):
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / fname
@@ -423,7 +423,7 @@ ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.
 # can occur due to config singleton state; direct injection is reliable)
 ssh REMOTE_HOST 'python3 -c "
 import json
-p = \"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
+p = \"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
 with open(p) as f: d = json.load(f)
 if \"quaid\" not in d[\"projects\"][\"definitions\"]:
     d[\"projects\"][\"definitions\"][\"quaid\"] = {
@@ -462,7 +462,7 @@ print(\"capture.chunk_tokens set to 1500 for openclaw-main\")
 # CC silo
 ssh REMOTE_HOST 'python3 -c "
 import json
-p = \"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
+p = \"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
 with open(p) as f: d = json.load(f)
 d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
 with open(p, \"w\") as f: json.dump(d, f, indent=2)
@@ -474,7 +474,7 @@ Verify both silos have the override:
 
 ```bash
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/openclaw-main/config/memory.json\")); print(\"OC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
 ```
 
 Expected: `OC chunk_tokens: 1500` and `CC chunk_tokens: 1500`.
@@ -770,9 +770,9 @@ Pass:
 - the timeout fact is extracted with no explicit lifecycle command
 - for Claude Code, verify `quaid daemon status` points at the correct
   instance root before idling:
-  - `instance_root: /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest`
-  - `log_file: /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/logs/daemon/extraction-daemon.log`
-  - `pid_file: /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-daemon.pid`
+  - `instance_root: /Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest`
+  - `log_file: /Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/logs/daemon/extraction-daemon.log`
+  - `pid_file: /Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-daemon.pid`
 
 Verify extraction happened (use `name` column, not `text`):
 ```bash
@@ -780,7 +780,7 @@ ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.
 # OR direct DB check:
 ssh REMOTE_HOST python3 << 'EOF'
 import sqlite3
-con = sqlite3.connect("/Users/USER/quaid/data/memory.db")
+con = sqlite3.connect("/Users/USER/.quaid/instances/openclaw-main/data/memory.db")
 rows = con.execute("SELECT name, status, created_at FROM nodes WHERE name LIKE '%canal%' OR name LIKE '%morning run%' ORDER BY created_at DESC LIMIT 5").fetchall()
 for r in rows: print(r)
 EOF
@@ -1122,7 +1122,7 @@ Before running, capture the pre-janitor artifact state:
 
 ```bash
 # Record line counts so you can verify condensation happened
-ssh REMOTE_HOST 'echo "OC SOUL.snippets:"; wc -l ~/quaid/instances/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/instances/openclaw-main/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/instances/openclaw-main/identity/SOUL.md 2>/dev/null || echo "(absent)"'
+ssh REMOTE_HOST 'echo "OC SOUL.snippets:"; wc -l ~/quaid/instances/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/instances/openclaw-main/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/instances/openclaw-main/SOUL.md 2>/dev/null || echo "(absent)"'
 ```
 
 Run:
@@ -1142,10 +1142,10 @@ After the run, verify condensation:
 
 ```bash
 # Stats: snippets_folded + snippets_rewritten + snippets_discarded should be > 0
-ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-main/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
+ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
 # Post-janitor snippet and identity state
-ssh REMOTE_HOST 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/instances/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/instances/openclaw-main/identity/SOUL.md 2>/dev/null'
-ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-main/identity/SOUL.md 2>/dev/null | head -40'
+ssh REMOTE_HOST 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/instances/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/instances/openclaw-main/SOUL.md 2>/dev/null'
+ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-main/SOUL.md 2>/dev/null | head -40'
 ```
 
 Pass:
@@ -1154,7 +1154,7 @@ Pass:
 - `janitor-stats.json` reports `success: true`
 - `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0` (snippets were reviewed)
 - `SOUL.snippets.md` or `USER.snippets.md` line count decreased or file was cleared (entries processed)
-- if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
+- if `snippets_folded > 0`, `SOUL.md` grew (folded content arrived)
 
 Fail:
 - all three snippet counters remain 0 (snippet review task did not run or had nothing to process — M2 must have produced snippet files; if they are absent, that is an M2 failure, not an M9 pass)
@@ -1469,7 +1469,7 @@ print(\"PASS: list_agent_instance_ids =\", ids)
 
 ```bash
 ssh REMOTE_HOST '
-silo="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest"
+silo="$HOME/.quaid/instances/claude-code-private-tmp-cc-livetest"
 if [ -d "$silo/data" ]; then
   echo "PASS: $silo/data exists"
 else
@@ -1482,7 +1482,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-sigdir="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-signals"
+sigdir="$HOME/.quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-signals"
 if [ -d "$sigdir" ]; then
   echo "PASS: $sigdir exists"
 else
@@ -1495,7 +1495,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-SIGNAL_DIR="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-signals"
+SIGNAL_DIR="$HOME/.quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-signals"
 if [ ! -d "$SIGNAL_DIR" ]; then
   echo "FAIL: $SIGNAL_DIR does not exist"
   exit 1
@@ -1512,7 +1512,7 @@ rm -f "$SIGNAL_FILE"
 
 ```bash
 ssh REMOTE_HOST '
-pid_file="$HOME/quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-daemon.pid"
+pid_file="$HOME/.quaid/instances/claude-code-private-tmp-cc-livetest/data/extraction-daemon.pid"
 if [ -f "$pid_file" ]; then
   pid=$(cat "$pid_file")
   if kill -0 "$pid" 2>/dev/null; then
@@ -1562,7 +1562,7 @@ print(\"PASS: list_agent_instance_ids =\", ids)
 
 ```bash
 ssh REMOTE_HOST '
-silo="$HOME/quaid/instances/codex-private-tmp-cdx-livetest"
+silo="$HOME/.quaid/instances/codex-private-tmp-cdx-livetest"
 if [ -d "$silo/data" ]; then
   echo "PASS: $silo/data exists"
 else
@@ -1575,7 +1575,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-sigdir="$HOME/quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-signals"
+sigdir="$HOME/.quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-signals"
 if [ -d "$sigdir" ]; then
   echo "PASS: $sigdir exists"
 else
@@ -1588,7 +1588,7 @@ fi
 
 ```bash
 ssh REMOTE_HOST '
-SIGNAL_DIR="$HOME/quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-signals"
+SIGNAL_DIR="$HOME/.quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-signals"
 if [ ! -d "$SIGNAL_DIR" ]; then
   echo "FAIL: $SIGNAL_DIR does not exist"
   exit 1
@@ -1605,7 +1605,7 @@ rm -f "$SIGNAL_FILE"
 
 ```bash
 ssh REMOTE_HOST '
-pid_file="$HOME/quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-daemon.pid"
+pid_file="$HOME/.quaid/instances/codex-private-tmp-cdx-livetest/data/extraction-daemon.pid"
 if [ -f "$pid_file" ]; then
   pid=$(cat "$pid_file")
   if kill -0 "$pid" 2>/dev/null; then
@@ -1716,8 +1716,11 @@ Pass: canary returned. Fail: empty or error.
 **Step 8 — cleanup:**
 
 ```bash
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-quaid-m13-test \
+  ~/.openclaw/extensions/quaid/quaid project delete misc--claude-code-private-tmp-quaid-m13-test 2>&1 | tail -3 || true'
 ssh REMOTE_HOST 'trash /tmp/quaid-m13-test 2>/dev/null || rm -rf /tmp/quaid-m13-test; echo "cleaned project dir"'
-ssh REMOTE_HOST 'ID=claude-code-private-tmp-quaid-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned silo"'
+ssh REMOTE_HOST 'ID=claude-code-private-tmp-quaid-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned visible silo"'
+ssh REMOTE_HOST 'ID=claude-code-private-tmp-quaid-m13-test; trash ~/.quaid/instances/$ID 2>/dev/null || rm -rf ~/.quaid/instances/$ID; echo "cleaned hidden silo"'
 ```
 
 Pass:
@@ -1816,8 +1819,11 @@ Pass: canary returned. Fail: empty or error.
 **Step 8 — cleanup:**
 
 ```bash
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-m13-test \
+  ~/.openclaw/extensions/quaid/quaid project delete misc--codex-private-tmp-cdx-m13-test 2>&1 | tail -3 || true'
 ssh REMOTE_HOST 'trash /tmp/cdx-m13-test 2>/dev/null || rm -rf /tmp/cdx-m13-test; echo "cleaned project dir"'
-ssh REMOTE_HOST 'ID=codex-private-tmp-cdx-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned silo"'
+ssh REMOTE_HOST 'ID=codex-private-tmp-cdx-m13-test; trash ~/quaid/instances/$ID 2>/dev/null || rm -rf ~/quaid/instances/$ID; echo "cleaned visible silo"'
+ssh REMOTE_HOST 'ID=codex-private-tmp-cdx-m13-test; trash ~/.quaid/instances/$ID 2>/dev/null || rm -rf ~/.quaid/instances/$ID; echo "cleaned hidden silo"'
 ```
 
 Pass:
@@ -1918,8 +1924,11 @@ Pass: canary returned. Fail: empty or error.
 **Step 8 — cleanup: remove test agent and silo:**
 
 ```bash
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-m13test \
+  ~/.openclaw/extensions/quaid/quaid project delete misc--openclaw-m13test 2>&1 | tail -3 || true'
 ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test 2>&1 | tail -3'
-ssh REMOTE_HOST 'trash ~/quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test silo"'
+ssh REMOTE_HOST 'trash ~/quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test visible silo"'
+ssh REMOTE_HOST 'trash ~/.quaid/instances/openclaw-m13test 2>/dev/null || rm -rf ~/.quaid/instances/openclaw-m13test; echo "cleaned openclaw-m13test hidden silo"'
 ssh REMOTE_HOST 'trash /tmp/oc-m13-workspace 2>/dev/null || rm -rf /tmp/oc-m13-workspace; echo "cleaned oc m13 workspace"'
 ```
 
@@ -2024,6 +2033,17 @@ then run `docs update --apply` on both. The daemon picks up doc changes lazily �
 run `docs update --apply` explicitly rather than waiting, and wait for it to confirm
 indexing before proceeding to Phase 3.
 
+**Before running `docs update --apply`, sanity-check project registry for orphans.**
+`docs update --apply` will recreate scaffold dirs for any project with a live registry
+entry, including leftovers from prior M13 runs where the project wasn't deleted. If
+`quaid project list` shows stale `misc--*-m13-test` entries, delete them first:
+
+```bash
+ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project list 2>&1 | grep -i m13 || echo "no m13 orphans"'
+# If any m13-test projects appear, run:
+# ssh REMOTE_HOST '... quaid project delete misc--<instance>-m13-test'
+```
+
 ```bash
 # Register OC beacon doc in CC instance
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid registry register <path-to-beacon-doc> --project cross-live-test 2>&1'
@@ -2101,10 +2121,10 @@ ssh REMOTE_HOST 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes; SEL
 ssh REMOTE_HOST 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
 ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-main/journal/'
 ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-main/USER.snippets.md 2>/dev/null'
-ssh REMOTE_HOST 'ls -lt ~/quaid/instances/openclaw-main/logs/ | head -20'
-ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-main/config/memory.json | python3 -m json.tool | head -20'
-ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-main/data/circuit-breaker.json 2>/dev/null'
-ssh REMOTE_HOST 'cat ~/quaid/instances/openclaw-main/logs/janitor/checkpoint-all.json 2>/dev/null'
+ssh REMOTE_HOST 'ls -lt ~/.quaid/instances/openclaw-main/logs/ | head -20'
+ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/config/memory.json | python3 -m json.tool | head -20'
+ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/data/circuit-breaker.json 2>/dev/null'
+ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/logs/janitor/checkpoint-all.json 2>/dev/null'
 
 # CC instance health
 ssh REMOTE_HOST 'sqlite3 ~/.quaid/instances/claude-code-private-tmp-cc-livetest/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
@@ -2115,9 +2135,9 @@ Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirector
 
 ```bash
 # OC identity
-ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-main/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh REMOTE_HOST 'for f in /Users/USER/quaid/instances/openclaw-main/{SOUL,USER,ENVIRONMENT}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 # CC identity
-ssh REMOTE_HOST 'for f in /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh REMOTE_HOST 'for f in /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/{SOUL,USER,ENVIRONMENT}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 ```
 
 Audit project docs and snippets/journals:
@@ -2128,14 +2148,14 @@ ssh REMOTE_HOST 'find /Users/USER/quaid/projects -maxdepth 3 \( -name "PROJECT.m
 # Live-test project
 ssh REMOTE_HOST 'find /Users/USER/quaid/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
 # Snippets and journals
-ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-main/SOUL.snippets.md /Users/USER/quaid/openclaw-main/USER.snippets.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/SOUL.snippets.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
-ssh REMOTE_HOST 'for f in /Users/USER/quaid/openclaw-main/journal/SOUL.journal.md /Users/USER/quaid/openclaw-main/journal/USER.journal.md /Users/USER/quaid/openclaw-main/journal/MEMORY.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/SOUL.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/USER.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+ssh REMOTE_HOST 'for f in /Users/USER/quaid/instances/openclaw-main/SOUL.snippets.md /Users/USER/quaid/instances/openclaw-main/USER.snippets.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/SOUL.snippets.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
+ssh REMOTE_HOST 'for f in /Users/USER/quaid/instances/openclaw-main/journal/SOUL.journal.md /Users/USER/quaid/instances/openclaw-main/journal/USER.journal.md /Users/USER/quaid/instances/openclaw-main/journal/MEMORY.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/SOUL.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/USER.journal.md /Users/USER/quaid/instances/claude-code-private-tmp-cc-livetest/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
 # Project logs
 ssh REMOTE_HOST 'find /Users/USER/quaid/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
 ```
 
 Pass criteria:
-- per-instance identity files (`identity/SOUL.md`, `identity/USER.md`, `identity/ENVIRONMENT.md`) are present for both OC and CC; not empty placeholders
+- per-instance identity files (`SOUL.md`, `USER.md`, `ENVIRONMENT.md`) are present for both OC and CC; not empty placeholders
 - shared quaid project docs (`projects/quaid/PROJECT.md`, `TOOLS.md`, `AGENTS.md`) exist and are readable from both OC and CC sessions
 - live-test project docs are coherent and point at correct paths
 - OC snippets (`SOUL.snippets.md`, `USER.snippets.md`) are present and building; CC snippets may be absent on first install and build naturally over time
