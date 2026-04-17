@@ -652,11 +652,19 @@ describe("lifecycle signal detection", () => {
     }
   });
 
-  it("mirrors matrix channel transcript updates into preserved copies", () => {
-    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost")).toBe(true);
-    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:worker:matrix:channel:!room:localhost")).toBe(true);
-    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:main")).toBe(false);
-    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:tui-123")).toBe(false);
+  it("mirrors transcript updates only for configured session-key prefixes", () => {
+    const cfg = {
+      adapter: {
+        capabilities: {
+          preserve_transcript_mirror_session_prefixes: ["agent:main:matrix:channel:"],
+        },
+      },
+    };
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost", cfg)).toBe(true);
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:worker:matrix:channel:!room:localhost", cfg)).toBe(false);
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:main", cfg)).toBe(false);
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:tui-123", cfg)).toBe(false);
+    expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost")).toBe(false);
   });
 
   it("exports a delayed new-key fallback window so stronger signals can win first", () => {

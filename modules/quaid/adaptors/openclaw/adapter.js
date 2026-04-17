@@ -1005,9 +1005,17 @@ function resolveSessionFileFromIndexRow(row, sessionId) {
   }
   return getOpenClawSessionFile(sessionId);
 }
-function shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey) {
+function transcriptMirrorSessionPrefixes(config = getMemoryConfig()) {
+  const raw = config?.adapter?.capabilities?.preserve_transcript_mirror_session_prefixes;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+}
+function shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey, config = getMemoryConfig()) {
   const key = String(sessionKey || "").trim().toLowerCase();
-  return /^agent:[^:]+:matrix:channel:/.test(key);
+  if (!key) return false;
+  const prefixes = transcriptMirrorSessionPrefixes(config);
+  if (!prefixes.length) return false;
+  return prefixes.some((prefix) => key.startsWith(prefix));
 }
 function sessionHasMeaningfulUserActivity(sessionId, preferredPath) {
   const sid = String(sessionId || "").trim();
@@ -2854,7 +2862,7 @@ notify_user(${JSON.stringify(message)})
     const maybeArmCompactionContextRefresh = (sessionId, source) => {
       const sid = String(sessionId || "").trim();
       if (!sid) return;
-      if (getContextRefreshStrategy(getMemoryConfig()) !== "compaction") return;
+      if (getContextRefreshStrategy(getMemoryConfig2()) !== "compaction") return;
       const wasTracked = projectDocsInjectedSessions.delete(sid);
       writeHookTrace("hook.context_refresh.compaction_armed", {
         session_id: sid,
@@ -3235,8 +3243,8 @@ ${notice}` : notice;
             rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id", {
               trustedSessionMapping: true
             });
-            if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey)) {
-              preserveSessionTranscript(sessionId, sessionFile, "transcript-update-matrix");
+            if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey, getMemoryConfig2())) {
+              preserveSessionTranscript(sessionId, sessionFile, "transcript-update-mirror");
             }
           }
           if (sessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })) {

@@ -1304,9 +1304,20 @@ function resolveSessionFileFromIndexRow(row: any, sessionId: string): string {
   return getOpenClawSessionFile(sessionId);
 }
 
-function shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey: string): boolean {
+function transcriptMirrorSessionPrefixes(config: any = getMemoryConfig()): string[] {
+  const raw = config?.adapter?.capabilities?.preserve_transcript_mirror_session_prefixes;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value: unknown) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey: string, config: any = getMemoryConfig()): boolean {
   const key = String(sessionKey || "").trim().toLowerCase();
-  return /^agent:[^:]+:matrix:channel:/.test(key);
+  if (!key) return false;
+  const prefixes = transcriptMirrorSessionPrefixes(config);
+  if (!prefixes.length) return false;
+  return prefixes.some((prefix) => key.startsWith(prefix));
 }
 
 function sessionHasMeaningfulUserActivity(sessionId: string, preferredPath?: string): boolean {
@@ -4056,8 +4067,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             rememberSessionTranscriptPath(sessionId, sessionFile, "transcript-update-resolved-session-id", {
               trustedSessionMapping: true,
             });
-            if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey)) {
-              preserveSessionTranscript(sessionId, sessionFile, "transcript-update-matrix");
+            if (shouldMirrorTranscriptUpdateToPreservedCopy(sessionKey, getMemoryConfig())) {
+              preserveSessionTranscript(sessionId, sessionFile, "transcript-update-mirror");
             }
           }
 
