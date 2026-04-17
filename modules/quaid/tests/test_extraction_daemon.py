@@ -2091,6 +2091,18 @@ class TestRollingExtraction:
         extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 
         assert extraction_daemon.read_pending_signals() == []
+        timeout_marker_path = (
+            tmp_path
+            / "instances"
+            / "rolling-inst"
+            / "data"
+            / "context-refresh-timeout"
+            / "sess-noop.json"
+        )
+        if signal_type == "timeout":
+            assert timeout_marker_path.is_file()
+        else:
+            assert not timeout_marker_path.exists()
         assert rolling_metrics
         metric = rolling_metrics[-1]
         assert metric["event"] == "rolling_flush"

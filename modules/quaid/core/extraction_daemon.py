@@ -314,6 +314,31 @@ def _install_state_path() -> Path:
     return _instance_root() / "data" / "installed-at.json"
 
 
+def _context_refresh_timeout_dir() -> Path:
+    d = _instance_root() / "data" / "context-refresh-timeout"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def write_context_refresh_timeout_marker(session_id: str) -> None:
+    """Mark that a timeout lifecycle signal completed for this session.
+
+    Turn-based context refresh consumers (for adapters without compaction hooks)
+    read and consume this marker on the next prompt to force a one-time
+    system-context refresh after idle timeout extraction.
+    """
+    sid = _validate_session_id(session_id)
+    marker_path = _context_refresh_timeout_dir() / f"{sid}.json"
+    payload = {
+        "session_id": sid,
+        "timeout_completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        _atomic_write(marker_path, json.dumps(payload))
+    except OSError as e:
+        logger.warning("timeout refresh marker write failed for %s: %s", sid, e)
+
+
 # ---------------------------------------------------------------------------
 # Atomic file writes (B004)
 # ---------------------------------------------------------------------------
@@ -569,6 +594,11 @@ def _finalize_no_payload_signal(
     emit_noop_metric: Optional[Callable[[], None]] = None,
 ) -> None:
     """Finalize a no-payload branch consistently across short-circuit paths."""
+    signal_type = str(
+        signal_data.get("type") or signal_data.get("signal_type") or ""
+    ).strip().lower()
+    if signal_type == "timeout":
+        write_context_refresh_timeout_marker(session_id)
     if next_cursor_offset is not None:
         write_cursor(session_id, int(next_cursor_offset), transcript_path)
     if clear_state:
@@ -3029,6 +3059,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             signal_type=signal_type,
             transcript_text=transcript_text,
         )
+        if signal_type == "timeout":
+            write_context_refresh_timeout_marker(session_id)
         write_cursor(session_id, total_lines, transcript_path)
         clear_rolling_state(session_id)
         if mark_harvested_fn is not None:

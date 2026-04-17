@@ -984,6 +984,29 @@ def _context_refresh_state_path() -> Path | None:
         return None
 
 
+def _context_refresh_timeout_marker_path(session_id: str) -> Path | None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    try:
+        from lib.adapter import get_adapter
+
+        return get_adapter().data_dir() / "context-refresh-timeout" / f"{sid}.json"
+    except Exception:
+        return None
+
+
+def _consume_timeout_refresh_marker(session_id: str) -> bool:
+    marker_path = _context_refresh_timeout_marker_path(session_id)
+    if marker_path is None or not isinstance(marker_path, Path) or not marker_path.is_file():
+        return False
+    try:
+        marker_path.unlink()
+    except Exception:
+        pass
+    return True
+
+
 def _load_context_refresh_state() -> Dict[str, Any]:
     path = _context_refresh_state_path()
     if path is None:
@@ -1057,6 +1080,15 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
 
     last_refresh_turn = int(entry.get("last_refresh_turn", 0) or 0)
     last_refresh_at = int(entry.get("last_refresh_at", 0) or 0)
+
+    # Idle-timeout extraction path (used by adapters without compaction hooks)
+    # writes a one-shot marker after timeout processing. Consume it on the next
+    # turn and force a context refresh regardless of turn/time guard thresholds.
+    if _consume_timeout_refresh_marker(sid):
+        entry["last_refresh_turn"] = turn_count
+        entry["last_refresh_at"] = now
+        _store_context_refresh_state(state)
+        return True
 
     # First turn after session start seeds the baseline. Refreshing immediately
     # would duplicate SessionStart context and waste tokens.
