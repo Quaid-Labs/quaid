@@ -1614,6 +1614,49 @@ def _adapter_instance_prefix(adapter_type: str) -> str:
     return normalized
 
 
+def _manifest_adapter_ids() -> List[str]:
+    """Discover adapter ids from local and installed adapter manifests."""
+    ids: List[str] = []
+    seen: set[str] = set()
+    repo_manifests = Path(__file__).resolve().parent.parent / "adaptors" / "manifests"
+    try:
+        for manifest_path in repo_manifests.glob("*.json"):
+            adapter_id = _normalize_adapter_id(manifest_path.stem)
+            if adapter_id and adapter_id not in seen:
+                seen.add(adapter_id)
+                ids.append(adapter_id)
+    except Exception:
+        pass
+    installed_adaptors = _registry_quaid_home() / "adaptors"
+    try:
+        for manifest_path in installed_adaptors.glob("*/adapter.json"):
+            adapter_id = _normalize_adapter_id(manifest_path.parent.name)
+            if adapter_id and adapter_id not in seen:
+                seen.add(adapter_id)
+                ids.append(adapter_id)
+    except Exception:
+        pass
+    return ids
+
+
+def _adapter_type_from_instance_id(instance_id: str) -> str:
+    """Infer adapter id from instance id using manifest-defined instancePrefix."""
+    token = str(instance_id or "").strip().lower()
+    if not token:
+        return ""
+    matches: List[tuple[int, str]] = []
+    for adapter_id in _manifest_adapter_ids():
+        prefix = _adapter_instance_prefix(adapter_id)
+        if not prefix:
+            continue
+        if token == prefix or token.startswith(f"{prefix}-"):
+            matches.append((len(prefix), adapter_id))
+    if not matches:
+        return ""
+    matches.sort(reverse=True)
+    return matches[0][1]
+
+
 def _auto_provision_from_env_if_needed() -> None:
     """Scaffold a default silo when QUAID_INSTANCE is set but has no config yet.
 
@@ -1622,9 +1665,10 @@ def _auto_provision_from_env_if_needed() -> None:
     automatically rather than hard-failing with 'no config found'.
 
     Adapter type is resolved from explicit adapter context (QUAID_ADAPTER_TYPE,
-    host project env, or existing layered config), not from instance-name
-    prefix inference. After this returns, _read_adapter_type_from_config()
-    will find the freshly written config and proceed normally.
+    host project env, existing layered config, or manifest-defined instance
+    prefix for already-selected QUAID_INSTANCE values). After this returns,
+    _read_adapter_type_from_config() will find the freshly written config and
+    proceed normally.
     """
     home = os.environ.get("QUAID_HOME", "").strip()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
@@ -1684,6 +1728,8 @@ def _auto_provision_from_env_if_needed() -> None:
             adapter_type = "claude-code"
         elif codex_project_dir and not claude_project_dir:
             adapter_type = "codex"
+    if not adapter_type:
+        adapter_type = _adapter_type_from_instance_id(instance) if not config_path.exists() else ""
     if not adapter_type:
         # Use layered config resolution when available (for example shared
         # platform config during OC setup). Missing config here is expected for

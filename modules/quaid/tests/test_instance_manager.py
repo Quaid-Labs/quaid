@@ -601,3 +601,26 @@ def test_auto_provision_derives_claude_code_instance_from_cwd_when_adapter_type_
     expected = f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"
     assert os.environ.get("QUAID_INSTANCE") == expected
     assert (tmp_path / "instances" / expected / "config.json").is_file()
+
+
+def test_auto_provision_infers_adapter_from_manifest_prefix_for_existing_instance_env(tmp_path, monkeypatch):
+    from lib import adapter as adapter_mod
+
+    instance_id = "openclaw-m13test"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+    monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    cfg_path = tmp_path / "instances" / instance_id / "config.json"
+    assert cfg_path.is_file()
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg.get("adapter", {}).get("type") == "openclaw"
+    assert (cfg_path.parent / "data" / "memory.db").is_file()
