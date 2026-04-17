@@ -1717,9 +1717,24 @@ function buildFallbackMemoryConfig() {
     }
   };
 }
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function deepMergeConfig(base, override) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const current = merged[key];
+    if (isPlainObject(current) && isPlainObject(value)) {
+      merged[key] = deepMergeConfig(current, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
 function createAdapterMemoryConfigResolver() {
   let memoryConfigErrorLogged = false;
-  let memoryConfigMtimeMs = -1;
+  let memoryConfigSignature = "";
   let memoryConfigPath = "";
   let memoryConfig = null;
   function memoryConfigCandidates() {
@@ -1748,30 +1763,56 @@ function createAdapterMemoryConfigResolver() {
     }
     return memoryConfigCandidates()[0];
   }
+  function existingMemoryConfigPaths() {
+    const existing = [];
+    for (const candidate of memoryConfigCandidates()) {
+      try {
+        if (fs.existsSync(candidate)) {
+          existing.push(candidate);
+        }
+      } catch {
+      }
+    }
+    return existing;
+  }
+  function computeConfigSignature(paths) {
+    const parts = [];
+    for (const configPath of paths) {
+      try {
+        const stats = fs.statSync(configPath);
+        parts.push(`${configPath}:${stats.mtimeMs}:${stats.size}`);
+      } catch {
+        parts.push(`${configPath}:missing`);
+      }
+    }
+    return parts.join("|");
+  }
   function getMemoryConfig2() {
     const configPath = resolveMemoryConfigPath();
     if (configPath !== memoryConfigPath) {
-      memoryConfigMtimeMs = -1;
+      memoryConfigSignature = "";
       memoryConfigPath = configPath;
     }
-    let mtimeMs = -1;
+    const existingPaths = existingMemoryConfigPaths();
+    const signature = computeConfigSignature(existingPaths);
+    if (memoryConfig && signature && memoryConfigSignature === signature) {
+      return memoryConfig;
+    }
     try {
-      mtimeMs = fs.statSync(configPath).mtimeMs;
-    } catch (err) {
-      const msg = String(err?.message || err || "");
-      if (!msg.includes("ENOENT")) {
-        console.warn(`[memory] memory config stat failed: ${msg}`);
+      if (!existingPaths.length) {
+        memoryConfig = buildFallbackMemoryConfig();
+        memoryConfigSignature = "";
+        return memoryConfig;
       }
-    }
-    if (memoryConfig && mtimeMs >= 0 && memoryConfigMtimeMs === mtimeMs) {
-      return memoryConfig;
-    }
-    if (memoryConfig && mtimeMs < 0) {
-      return memoryConfig;
-    }
-    try {
-      memoryConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      memoryConfigMtimeMs = mtimeMs;
+      let merged = {};
+      for (const layerPath of [...existingPaths].reverse()) {
+        const parsed = JSON.parse(fs.readFileSync(layerPath, "utf8"));
+        if (isPlainObject(parsed)) {
+          merged = deepMergeConfig(merged, parsed);
+        }
+      }
+      memoryConfig = merged;
+      memoryConfigSignature = signature;
     } catch (err) {
       if (!memoryConfigErrorLogged) {
         memoryConfigErrorLogged = true;
@@ -1779,11 +1820,11 @@ function createAdapterMemoryConfigResolver() {
       }
       if (isMissingFileError(err)) {
         memoryConfig = buildFallbackMemoryConfig();
-        memoryConfigMtimeMs = -1;
+        memoryConfigSignature = "";
         return memoryConfig;
       }
       memoryConfig = buildFallbackMemoryConfig();
-      memoryConfigMtimeMs = mtimeMs;
+      memoryConfigSignature = signature;
       if (isFailHardEnabled()) {
         throw err;
       }

@@ -2156,6 +2156,23 @@ type AdapterMemoryConfigResolver = {
   resolveMemoryConfigPath: () => string;
 };
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepMergeConfig(base: Record<string, any>, override: Record<string, any>): Record<string, any> {
+  const merged: Record<string, any> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const current = merged[key];
+    if (isPlainObject(current) && isPlainObject(value)) {
+      merged[key] = deepMergeConfig(current, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
 function buildFallbackMemoryConfig(): any {
   return {
     models: {
@@ -2183,7 +2200,7 @@ function buildFallbackMemoryConfig(): any {
 
 function createAdapterMemoryConfigResolver(): AdapterMemoryConfigResolver {
   let memoryConfigErrorLogged = false;
-  let memoryConfigMtimeMs = -1;
+  let memoryConfigSignature = "";
   let memoryConfigPath = "";
   let memoryConfig: any = null;
 
@@ -2218,30 +2235,61 @@ function createAdapterMemoryConfigResolver(): AdapterMemoryConfigResolver {
     return memoryConfigCandidates()[0];
   }
 
+  function existingMemoryConfigPaths(): string[] {
+    const existing: string[] = [];
+    for (const candidate of memoryConfigCandidates()) {
+      try {
+        if (fs.existsSync(candidate)) {
+          existing.push(candidate);
+        }
+      } catch {
+        // Ignore probe errors and continue.
+      }
+    }
+    return existing;
+  }
+
+  function computeConfigSignature(paths: string[]): string {
+    const parts: string[] = [];
+    for (const configPath of paths) {
+      try {
+        const stats = fs.statSync(configPath);
+        parts.push(`${configPath}:${stats.mtimeMs}:${stats.size}`);
+      } catch {
+        parts.push(`${configPath}:missing`);
+      }
+    }
+    return parts.join("|");
+  }
+
   function getMemoryConfig(): any {
     const configPath = resolveMemoryConfigPath();
     if (configPath !== memoryConfigPath) {
-      memoryConfigMtimeMs = -1;
+      memoryConfigSignature = "";
       memoryConfigPath = configPath;
     }
-    let mtimeMs = -1;
+    const existingPaths = existingMemoryConfigPaths();
+    const signature = computeConfigSignature(existingPaths);
+    if (memoryConfig && signature && memoryConfigSignature === signature) {
+      return memoryConfig;
+    }
+
     try {
-      mtimeMs = fs.statSync(configPath).mtimeMs;
-    } catch (err: unknown) {
-      const msg = String((err as Error)?.message || err || "");
-      if (!msg.includes("ENOENT")) {
-        console.warn(`[memory] memory config stat failed: ${msg}`);
+      if (!existingPaths.length) {
+        memoryConfig = buildFallbackMemoryConfig();
+        memoryConfigSignature = "";
+        return memoryConfig;
       }
-    }
-    if (memoryConfig && mtimeMs >= 0 && memoryConfigMtimeMs === mtimeMs) {
-      return memoryConfig;
-    }
-    if (memoryConfig && mtimeMs < 0) {
-      return memoryConfig;
-    }
-    try {
-      memoryConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      memoryConfigMtimeMs = mtimeMs;
+
+      let merged: Record<string, any> = {};
+      for (const layerPath of [...existingPaths].reverse()) {
+        const parsed = JSON.parse(fs.readFileSync(layerPath, "utf8"));
+        if (isPlainObject(parsed)) {
+          merged = deepMergeConfig(merged, parsed);
+        }
+      }
+      memoryConfig = merged;
+      memoryConfigSignature = signature;
     } catch (err: unknown) {
       if (!memoryConfigErrorLogged) {
         memoryConfigErrorLogged = true;
@@ -2249,12 +2297,12 @@ function createAdapterMemoryConfigResolver(): AdapterMemoryConfigResolver {
       }
       if (isMissingFileError(err)) {
         memoryConfig = buildFallbackMemoryConfig();
-        memoryConfigMtimeMs = -1;
+        memoryConfigSignature = "";
         return memoryConfig;
       }
       // Prevent mutual recursion with isFailHardEnabled() while preserving old behavior.
       memoryConfig = buildFallbackMemoryConfig();
-      memoryConfigMtimeMs = mtimeMs;
+      memoryConfigSignature = signature;
       if (isFailHardEnabled()) {
         throw err;
       }

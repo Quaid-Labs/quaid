@@ -7,6 +7,13 @@ import { fileURLToPath } from "node:url";
 type AdapterPlugin = {
   register: (api: any) => void;
 };
+type AdapterTestApi = {
+  shouldMirrorTranscriptUpdateToPreservedCopy: (sessionKey: string) => boolean;
+};
+type LoadedAdapter = {
+  plugin: AdapterPlugin;
+  testApi: AdapterTestApi;
+};
 
 const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
@@ -49,7 +56,7 @@ function makeFakeApi() {
   };
 }
 
-async function loadAdapterWithHomes(hiddenHome: string, visibleHome: string, openClawConfigPath: string): Promise<AdapterPlugin> {
+async function loadAdapterWithHomes(hiddenHome: string, visibleHome: string, openClawConfigPath: string): Promise<LoadedAdapter> {
   vi.stubEnv("HOME", path.dirname(hiddenHome));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
   vi.stubEnv("QUAID_HOME", hiddenHome);
@@ -57,7 +64,10 @@ async function loadAdapterWithHomes(hiddenHome: string, visibleHome: string, ope
   vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
   vi.resetModules();
   const module = await import("../adaptors/openclaw/adapter.js");
-  return module.default as AdapterPlugin;
+  return {
+    plugin: module.default as AdapterPlugin,
+    testApi: (module as any).__test as AdapterTestApi,
+  };
 }
 
 afterEach(() => {
@@ -95,7 +105,10 @@ describe("openclaw auto-provision", () => {
       plugins: { strict: false },
     });
     writeJson(path.join(hiddenHome, "shared", "config", "openclaw", "config.json"), {
-      adapter: { type: "openclaw" },
+      adapter: {
+        type: "openclaw",
+        capabilities: { preserve_transcript_mirror_session_prefixes: ["agent:main:matrix:channel:"] },
+      },
       retrieval: { failHard: false, maxLimit: 20 },
       models: {
         llmProvider: "openai-codex",
@@ -133,7 +146,7 @@ describe("openclaw auto-provision", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
+    const { plugin, testApi } = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
     const api = makeFakeApi();
     plugin.register(api as any);
 
@@ -200,6 +213,7 @@ describe("openclaw auto-provision", () => {
       "quaid registry register <absolute-file-path> --project misc--openclaw-m13test",
     );
     expect(String(promptResult?.prependSystemContext || "")).not.toContain("openclaw-main");
+    expect(testApi.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost")).toBe(true);
 
     warn.mockRestore();
     log.mockRestore();
