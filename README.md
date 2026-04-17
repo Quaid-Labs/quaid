@@ -120,6 +120,8 @@ This is vision, not a released feature.
 
 Quaid is being designed to be extensible not only at the platform-adaptor layer, but eventually at the datastore and ingest layers as well. The long-term direction is for Quaid to act as an open coordination layer for AI knowledge systems: accepting multiple datastore types and input pipelines, enforcing clear boundaries between them in core, and making those boundaries exportable and importable through modular `.ego` artifacts.
 
+This would allow Quaid to accept third-party memory solutions through the same core harness, and would make future datatypes, such as spatial telemetry for robotics, easy to plug into the architecture.
+
 This depends on stronger plugin and datastore contracts than exist today, and is part of the post-launch direction rather than a completed surface.
 
 ## Requirements
