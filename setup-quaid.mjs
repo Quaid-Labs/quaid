@@ -2629,17 +2629,15 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
         version: pluginVersion,
         installedAt,
       };
-      if (Object.prototype.hasOwnProperty.call(plugins, "installed")) {
-        if (!plugins.installed || typeof plugins.installed !== "object" || Array.isArray(plugins.installed)) {
-          plugins.installed = {};
-        }
-        plugins.installed.quaid = {
-          sourcePath: secureSourcePath,
-          installPath: extensionDir,
-          version: pluginVersion,
-          installedAt,
-        };
+      if (!plugins.installed || typeof plugins.installed !== "object" || Array.isArray(plugins.installed)) {
+        plugins.installed = {};
       }
+      plugins.installed.quaid = {
+        sourcePath: secureSourcePath,
+        installPath: extensionDir,
+        version: pluginVersion,
+        installedAt,
+      };
       fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
       fs.renameSync(tmpPath, cfgPath);
       log.info("Registered quaid plugin via direct install record write.");
