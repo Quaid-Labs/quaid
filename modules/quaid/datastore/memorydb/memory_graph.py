@@ -4893,12 +4893,12 @@ def _recall_once(
     }
     query_anchor_terms: List[str] = []
     if include_lexical_anchor_shaping:
-        planner_timeout_ms = 800
+        planner_timeout_ms = 2000
         planner_max_retries = 0
         try:
-            planner_timeout_ms = int(getattr(config_retrieval, "lexical_anchor_timeout_ms", 800) or 800)
+            planner_timeout_ms = int(getattr(config_retrieval, "lexical_anchor_timeout_ms", 2000) or 2000)
         except Exception:
-            planner_timeout_ms = 800
+            planner_timeout_ms = 2000
         try:
             planner_max_retries = int(getattr(config_retrieval, "lexical_anchor_max_retries", 0) or 0)
         except Exception:
@@ -6210,7 +6210,7 @@ def _plan_query_anchor_terms(
     query: str,
     *,
     limit: int = 4,
-    timeout_s: float = 0.8,
+    timeout_s: float = 2.0,
     max_retries: int = 0,
 ) -> Tuple[List[str], Dict[str, Any]]:
     """Plan lexical anchor terms with a tiny LLM call.
@@ -6222,7 +6222,7 @@ def _plan_query_anchor_terms(
 
     started = _time.monotonic()
     clean = " ".join(str(query or "").split()).strip()
-    timeout_s = max(0.2, min(2.0, float(timeout_s or 0.8)))
+    timeout_s = max(0.2, min(2.0, float(timeout_s or 2.0)))
     max_retries = max(0, int(max_retries or 0))
     timeout_ms = int(round(timeout_s * 1000))
     meta: Dict[str, Any] = {
