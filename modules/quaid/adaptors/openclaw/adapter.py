@@ -50,6 +50,9 @@ class OpenClawAdapter(QuaidAdapter):
     ADAPTER_CONFIG = {
         "supports_compaction_control": True,
         "platform_config_scope": "openclaw",
+        "preserve_transcript_mirror_session_prefixes": [
+            "agent:main:matrix:channel:",
+        ],
     }
 
     @classmethod

@@ -387,6 +387,11 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.filter_system_messages("hello world") is False
 
+    def test_adapter_config_defaults_include_transcript_mirror_prefixes(self):
+        prefixes = OpenClawAdapter.ADAPTER_CONFIG.get("preserve_transcript_mirror_session_prefixes")
+        assert isinstance(prefixes, list)
+        assert "agent:main:matrix:channel:" in prefixes
+
     def test_installer_install_state_reports_already_installed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda _name: None)
         cfg = tmp_path / "instances" / "openclaw-main"
