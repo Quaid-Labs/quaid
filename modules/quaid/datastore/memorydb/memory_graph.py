@@ -4252,7 +4252,8 @@ def _vector_store_recall(
         include_graph_traversal=False,
         include_co_session=False if fast_mode else True,
         include_mmr=False if fast_mode else True,
-        include_lexical_anchor_shaping=not fast_mode,
+        include_lexical_anchor_shaping=True,
+        lexical_anchor_planner_mode="deterministic" if fast_mode else "llm",
         return_meta=True,
         planned_queries=planned_queries,
         planner_meta=planner_meta,
@@ -4420,6 +4421,7 @@ def _run_recall_store_plan(
     store_runs: List[Dict[str, Any]] = []
     serial_ms = 0
     base_meta: Optional[Dict[str, Any]] = None
+    vector_meta: Optional[Dict[str, Any]] = None
     store_meta_entries: List[Tuple[str, Dict[str, Any]]] = []
     for output in outputs:
         if isinstance(output, Exception):
@@ -4439,6 +4441,8 @@ def _run_recall_store_plan(
             serial_ms += int(total_ms)
         if base_meta is None and store == "vector":
             base_meta = meta
+        if store == "vector":
+            vector_meta = meta
         store_runs.append({
             "store": store,
             "result_count": len(rows),
@@ -4462,6 +4466,30 @@ def _run_recall_store_plan(
     meta["planned_stores"] = normalized_stores
     meta["planned_project"] = planned_project
     meta["store_runs"] = store_runs
+    # Preserve lexical planner diagnostics from vector recall even when the
+    # merged/base metadata row was sourced from another store lane.
+    if isinstance(vector_meta, dict):
+        vector_lexical = vector_meta.get("lexical_anchor")
+        if isinstance(vector_lexical, dict):
+            meta["lexical_anchor"] = dict(vector_lexical)
+        if isinstance(vector_meta.get("turn_details"), list) and vector_meta.get("turn_details"):
+            vector_first = vector_meta["turn_details"][0]
+            if isinstance(vector_first, dict):
+                vector_diag = vector_first.get("diagnostics")
+                if isinstance(vector_diag, dict):
+                    lexical_diag = vector_diag.get("lexical_anchor")
+                    if isinstance(lexical_diag, dict):
+                        turn_details = meta.get("turn_details")
+                        if not isinstance(turn_details, list) or not turn_details:
+                            turn_details = [{"turn": 1}]
+                            meta["turn_details"] = turn_details
+                        first_turn = turn_details[0]
+                        if isinstance(first_turn, dict):
+                            diagnostics = first_turn.get("diagnostics")
+                            if not isinstance(diagnostics, dict):
+                                diagnostics = {}
+                                first_turn["diagnostics"] = diagnostics
+                            diagnostics["lexical_anchor"] = dict(lexical_diag)
     phases = dict(meta.get("phases_ms") or {})
     phases["store_plan_wall_ms"] = wall_ms
     phases["store_plan_serial_ms"] = serial_ms
@@ -4688,6 +4716,7 @@ def _recall_once(
     include_co_session: bool = True,
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
+    lexical_anchor_planner_mode: str = "llm",
     low_signal_retry: bool = True,
     return_meta: bool = False,
 ) -> Any:
@@ -4903,21 +4932,95 @@ def _recall_once(
             planner_max_retries = int(getattr(config_retrieval, "lexical_anchor_max_retries", 0) or 0)
         except Exception:
             planner_max_retries = 0
-        planner_timeout_s = max(0.2, min(2.0, planner_timeout_ms / 1000.0))
-        query_anchor_terms, lexical_anchor_meta = _plan_query_anchor_terms(
-            clean_query,
-            limit=4,
-            timeout_s=planner_timeout_s,
-            max_retries=planner_max_retries,
-        )
+        planner_anchor_limit = _resolve_lexical_anchor_limit(clean_query, config_retrieval)
+        planner_mode = str(lexical_anchor_planner_mode or "llm").strip().lower()
+        if planner_mode not in {"llm", "deterministic"}:
+            planner_mode = "llm"
+        if planner_mode == "deterministic":
+            explicit_terms: List[str] = []
+            explicit_seen: set[str] = set()
+            for candidate in _extract_explicit_query_anchor_terms(clean_query, limit=24):
+                norm = " ".join(str(candidate or "").split()).strip().strip(".,;:!?\"'").lower()
+                if not norm or norm in explicit_seen:
+                    continue
+                if norm in _QUERY_STOPWORDS:
+                    continue
+                explicit_seen.add(norm)
+                explicit_terms.append(norm)
+                if len(explicit_terms) >= planner_anchor_limit:
+                    break
+
+            seeded_terms: List[str] = []
+            seeded_seen: set[str] = set()
+            if explicit_terms:
+                seeded_terms = explicit_terms[:planner_anchor_limit]
+            else:
+                # Deterministic fast-path shaping is intentionally conservative:
+                # only add distinctive lexical terms when no explicit entities are
+                # available, and filter out broad question nouns that often
+                # increase false-attribution noise in preinject.
+                strict_noise = {
+                    "agent", "api", "app", "around", "city", "detail", "details",
+                    "did", "does", "family", "find", "goal", "handle", "kind",
+                    "label", "labels", "level", "live", "presentation", "project",
+                    "recipe", "school", "secret", "suggested", "target", "thing",
+                    "type", "what", "which", "who", "whose", "why", "where", "when",
+                }
+                for candidate in _extract_distinctive_query_terms(clean_query, limit=24):
+                    norm = " ".join(str(candidate or "").split()).strip().strip(".,;:!?\"'").lower()
+                    if not norm or norm in seeded_seen:
+                        continue
+                    if len(norm) < 5:
+                        continue
+                    if norm in _QUERY_STOPWORDS or norm in strict_noise:
+                        continue
+                    pieces = re.findall(r"[\w][\w._'-]*", norm, flags=re.UNICODE)
+                    normalized_pieces = [
+                        re.sub(r"(?:['’]s)$", "", piece.lower())
+                        for piece in pieces
+                    ]
+                    if pieces and all(
+                        (
+                            piece in _QUERY_STOPWORDS
+                            or piece in strict_noise
+                            or len(piece) < 3
+                        )
+                        for piece in normalized_pieces
+                    ):
+                        continue
+                    seeded_seen.add(norm)
+                    seeded_terms.append(norm)
+                    if len(seeded_terms) >= planner_anchor_limit:
+                        break
+            query_anchor_terms = seeded_terms[:planner_anchor_limit]
+            lexical_anchor_meta = {
+                "used_llm": False,
+                "bailout_reason": None,
+                "elapsed_ms": 0,
+                "timeout_ms": 0,
+                "anchor_count": len(query_anchor_terms),
+                "limit": planner_anchor_limit,
+                "anchors": list(query_anchor_terms),
+                "source": "deterministic",
+            }
+        else:
+            planner_timeout_s = max(0.2, min(2.0, planner_timeout_ms / 1000.0))
+            query_anchor_terms, lexical_anchor_meta = _plan_query_anchor_terms(
+                clean_query,
+                limit=planner_anchor_limit,
+                timeout_s=planner_timeout_s,
+                max_retries=planner_max_retries,
+            )
         _phase_ms["lexical_anchor_planner_ms"] = int(lexical_anchor_meta.get("elapsed_ms") or 0)
         logger.info(
-            "RECALL_LEXICAL_ANCHOR_PLANNER elapsed_ms=%s used_llm=%s anchor_count=%s bailout_reason=%s source=%s",
+            "RECALL_LEXICAL_ANCHOR_PLANNER elapsed_ms=%s used_llm=%s anchor_count=%s limit=%s bailout_reason=%s source=%s anchors=%s",
             lexical_anchor_meta.get("elapsed_ms"),
             lexical_anchor_meta.get("used_llm"),
             lexical_anchor_meta.get("anchor_count"),
+            lexical_anchor_meta.get("limit"),
             lexical_anchor_meta.get("bailout_reason"),
             lexical_anchor_meta.get("source"),
+            lexical_anchor_meta.get("anchors"),
         )
 
     # Apply composite scoring (search relevance + recency + frequency + intent boost)
@@ -5738,6 +5841,7 @@ def _recall_once(
                         include_co_session=include_co_session,
                         include_mmr=include_mmr,
                         include_lexical_anchor_shaping=include_lexical_anchor_shaping,
+                        lexical_anchor_planner_mode=lexical_anchor_planner_mode,
                         current_session_id=current_session_id,
                         compaction_time=compaction_time,
                         date_from=date_from,
@@ -6157,10 +6261,13 @@ _SHORT_SIGNAL_TOKENS = {"api", "app", "db", "ui", "ux", "sql", "mom", "dad", "do
 
 
 def _extract_distinctive_query_terms(query: str, *, limit: int = 8) -> List[str]:
-    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(query or "").lower())
+    tokens = re.findall(r"[\w][\w._-]*", str(query or "").lower(), flags=re.UNICODE)
     out: List[str] = []
     seen = set()
     for token in tokens:
+        token = token.strip(".,;:!?\"'“”¿¡")
+        if not token:
+            continue
         if token in seen:
             continue
         if token in _QUERY_STOPWORDS:
@@ -6181,14 +6288,18 @@ def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[
     named queries like "my dog Baxter" from being buried by hotter global
     profile/setup rows that do not mention the named entity at all.
     """
-    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9._'-]*", str(query or ""))
+    tokens = re.findall(r"[\w][\w._'-]*", str(query or ""), flags=re.UNICODE)
     out: List[str] = []
     seen = set()
     sentence_starter_noise = {
         "what", "who", "where", "when", "why", "how", "if", "tell", "list", "name",
         "do", "does", "did", "is", "are", "can", "could", "would", "should",
+        "que", "qué", "quien", "quién", "donde", "dónde", "cuando", "cuándo",
     }
     for idx, token in enumerate(tokens):
+        token = token.strip(".,;:!?\"'“”¿¡")
+        if not token:
+            continue
         lower = token.lower()
         if lower in seen:
             continue
@@ -6204,6 +6315,33 @@ def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[
         if len(out) >= limit:
             break
     return out
+
+
+def _resolve_lexical_anchor_limit(query: str, config_retrieval: Any) -> int:
+    """Resolve lexical anchor planner cap from config or query shape.
+
+    Config override:
+    - retrieval.lexical_anchor_limit > 0: use exact override (clamped 1..24)
+
+    Adaptive default:
+    - scales with explicit named-entity hints in the query
+    - scales with query length to avoid clipping multi-entity lists
+    - bounded by a safety ceiling to keep planner output manageable
+    """
+    cfg_limit = 0
+    try:
+        cfg_limit = int(getattr(config_retrieval, "lexical_anchor_limit", 0) or 0)
+    except Exception:
+        cfg_limit = 0
+    if cfg_limit > 0:
+        return max(1, min(24, cfg_limit))
+
+    clean = str(query or "")
+    explicit_count = len(_extract_explicit_query_anchor_terms(clean, limit=24))
+    token_count = len(re.findall(r"[\w][\w._'-]*", clean, flags=re.UNICODE))
+    size_hint = max(1, min(12, token_count // 4))
+    adaptive_limit = max(2, explicit_count, size_hint)
+    return min(16, adaptive_limit)
 
 
 def _plan_query_anchor_terms(
@@ -6222,6 +6360,7 @@ def _plan_query_anchor_terms(
 
     started = _time.monotonic()
     clean = " ".join(str(query or "").split()).strip()
+    limit = max(1, min(24, int(limit or 4)))
     timeout_s = max(0.2, min(2.0, float(timeout_s or 2.0)))
     max_retries = max(0, int(max_retries or 0))
     timeout_ms = int(round(timeout_s * 1000))
@@ -6231,6 +6370,8 @@ def _plan_query_anchor_terms(
         "elapsed_ms": 0,
         "timeout_ms": timeout_ms,
         "anchor_count": 0,
+        "limit": limit,
+        "anchors": [],
         "source": "none",
     }
 
@@ -6238,6 +6379,7 @@ def _plan_query_anchor_terms(
         meta["bailout_reason"] = bailout_reason
         meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
         meta["anchor_count"] = len(anchors)
+        meta["anchors"] = list(anchors)
         meta["source"] = source
         return anchors, meta
 
@@ -6254,16 +6396,37 @@ def _plan_query_anchor_terms(
         )
         return _finish([], "no_llm_clients", "none")
 
+    lexical_candidates: List[str] = []
+    lexical_seen: set[str] = set()
+    for candidate in (
+        _extract_explicit_query_anchor_terms(clean, limit=24)
+        + _extract_distinctive_query_terms(clean, limit=24)
+    ):
+        norm = " ".join(str(candidate or "").split()).strip().lower()
+        if not norm or norm in lexical_seen:
+            continue
+        lexical_seen.add(norm)
+        lexical_candidates.append(norm)
+        if len(lexical_candidates) >= 24:
+            break
+    candidate_text = ", ".join(lexical_candidates) if lexical_candidates else "(none)"
+
     prompt = (
-        "Extract lexical anchor terms from this recall query.\n"
+        "Extract high-precision lexical anchors from this recall query.\n"
         "Rules:\n"
         '- Return JSON only: {"anchors": ["..."]}\n'
-        "- Return at most 4 anchors.\n"
+        f"- Return at most {limit} anchors.\n"
         "- Keep anchors in the same language and script as the query.\n"
         "- Do not translate query content.\n"
-        "- Drop small function words and question starters.\n"
-        "- Prefer named entities and distinctive disambiguating nouns.\n"
+        "- Be strict: include only concrete entities or distinctive noun phrases likely to appear verbatim in memory text.\n"
+        "- Prefer anchors from the candidate list below.\n"
+        "- Only add anchors outside the candidate list when they appear verbatim in the query and are concrete.\n"
+        "- For list-style queries with multiple named entities, include each concrete name/phrase up to the limit.\n"
+        "- Exclude generic words (for example: name, live, current, remember, know, happened, project, work).\n"
+        "- Exclude question starters, helper verbs, and broad filler terms.\n"
+        "- If the query has no concrete disambiguating anchors, return an empty list.\n"
         "- Preserve subject/object and ownership directionality.\n\n"
+        f"Candidate anchors: {candidate_text}\n\n"
         f"Query: {clean}"
     )
 
@@ -6295,6 +6458,37 @@ def _plan_query_anchor_terms(
 
         anchors: List[str] = []
         seen = set()
+        query_lower = clean.lower()
+        candidate_set = set(lexical_candidates)
+
+        def _appears_in_query(term: str) -> bool:
+            normalized = " ".join(str(term or "").split()).strip().lower()
+            if not normalized:
+                return False
+            if normalized in query_lower:
+                return True
+            pattern = rf"(?<!\w){re.escape(normalized)}(?!\w)"
+            return bool(re.search(pattern, query_lower, flags=re.UNICODE))
+
+        def _composed_of_candidates(term: str) -> bool:
+            bridge_terms = {
+                "a", "an", "and", "de", "del", "des", "do", "dos", "da", "das",
+                "di", "du", "e", "el", "for", "in", "la", "las", "le", "les",
+                "los", "of", "on", "or", "the", "to", "with", "y",
+            }
+            pieces = [
+                re.sub(r"(?:['’]s)$", "", piece.lower())
+                for piece in re.findall(r"[\w][\w._'-]*", term, flags=re.UNICODE)
+            ]
+            pieces = [piece for piece in pieces if piece]
+            if not pieces:
+                return False
+            significant = [piece for piece in pieces if piece not in bridge_terms]
+            return bool(significant) and all(
+                piece in candidate_set or piece in bridge_terms
+                for piece in pieces
+            )
+
         for raw in anchors_raw:
             term = " ".join(str(raw or "").split()).strip().strip("\"'")
             if not term:
@@ -6306,11 +6500,105 @@ def _plan_query_anchor_terms(
                 continue
             if lower in _QUERY_STOPWORDS:
                 continue
+            # Keep the planner strict: when candidates are available, anchors must
+            # resolve to candidate tokens. For multilingual/sparse candidate sets,
+            # allow exact query spans.
+            if candidate_set:
+                if lower not in candidate_set and not _composed_of_candidates(lower):
+                    continue
+            elif not _appears_in_query(lower):
+                continue
+            pieces = re.findall(r"[\w][\w._'-]*", lower, flags=re.UNICODE)
+            if pieces and all((piece in _QUERY_STOPWORDS or len(piece) < 3) for piece in pieces):
+                continue
             seen.add(lower)
             anchors.append(lower)
             if len(anchors) >= limit:
                 break
-        return _finish(anchors, None, "llm")
+
+        # Keep a deterministic floor so English quality does not collapse while
+        # LLM lexical planning expands multilingual coverage.
+        explicit_floor: List[str] = []
+        explicit_seen: set[str] = set()
+        for candidate in _extract_explicit_query_anchor_terms(clean, limit=24):
+            norm = " ".join(str(candidate or "").split()).strip().strip(".,;:!?\"'").lower()
+            if not norm or norm in explicit_seen:
+                continue
+            explicit_seen.add(norm)
+            explicit_floor.append(norm)
+            if len(explicit_floor) >= 24:
+                break
+
+        distinctive_floor: List[str] = []
+        if len(anchors) <= 1 and len(explicit_floor) <= 1:
+            # Sparse-anchor recovery: allow one additional distinctive token
+            # when LLM output is too narrow.
+            floor_noise = {
+                "about", "going", "how", "know", "live", "now", "que", "qué", "recall",
+                "remember", "recuerdas", "tell", "when", "where", "who", "why", "what",
+            }
+            for candidate in _extract_distinctive_query_terms(clean, limit=24):
+                norm = " ".join(str(candidate or "").split()).strip().lower()
+                if not norm or norm in floor_noise or norm in explicit_seen:
+                    continue
+                distinctive_floor.append(norm)
+                break
+
+        deterministic_floor = explicit_floor + distinctive_floor
+        final_anchors: List[str] = []
+        final_seen = set()
+
+        def _is_covered_by_existing(term: str, items: List[str]) -> bool:
+            pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
+            for item in items:
+                if re.search(pattern, item, flags=re.UNICODE):
+                    return True
+            return False
+
+        for term in anchors:
+            lower = " ".join(str(term or "").split()).strip().lower()
+            if not lower or lower in final_seen:
+                continue
+            final_seen.add(lower)
+            final_anchors.append(lower)
+            if len(final_anchors) >= limit:
+                break
+
+        for term in deterministic_floor:
+            lower = " ".join(str(term or "").split()).strip().strip(".,;:!?\"'").lower()
+            if not lower or lower in final_seen:
+                continue
+            if lower in {"i", "im", "i'm", "i’m", "ive", "i've", "i’ve", "id", "i'd", "i’d", "ill", "i'll", "i’ll"}:
+                continue
+            if len(lower) < 3:
+                continue
+            if lower in _QUERY_STOPWORDS:
+                continue
+            pieces = re.findall(r"[\w][\w._'-]*", lower, flags=re.UNICODE)
+            if pieces and all((piece in _QUERY_STOPWORDS or len(piece) < 3) for piece in pieces):
+                continue
+            if _is_covered_by_existing(lower, anchors):
+                continue
+            final_seen.add(lower)
+            final_anchors.append(lower)
+            if len(final_anchors) >= limit:
+                break
+
+        if explicit_floor:
+            explicit_set = set(explicit_floor)
+            ordered: List[str] = []
+            ordered_seen = set()
+            for term in final_anchors:
+                if term in explicit_set and term not in ordered_seen:
+                    ordered_seen.add(term)
+                    ordered.append(term)
+            for term in final_anchors:
+                if term not in ordered_seen:
+                    ordered_seen.add(term)
+                    ordered.append(term)
+            final_anchors = ordered
+
+        return _finish(final_anchors[:limit], None, "llm")
     except Exception as exc:
         if _is_fail_hard_mode():
             raise RuntimeError(
@@ -6786,13 +7074,18 @@ def _compute_query_fit_multiplier(
             anchor_boost = 1.22 + min(0.16, 0.06 * (len(matched_anchor_terms) - 1))
             multiplier *= anchor_boost
         else:
-            multiplier *= 0.78
+            # Keep anchor shaping helpful without over-punishing strict planner misses.
+            # With restrictive LLM anchors, a full miss should down-rank, but not as
+            # aggressively as the legacy lexical path.
+            missing_count = max(1, len(anchor_terms))
+            anchor_miss_penalty = 0.88 if missing_count <= 1 else 0.84
+            multiplier *= anchor_miss_penalty
             source_type = str((attrs or {}).get("source_type") or "").strip().lower()
             visibility_scope = str((attrs or {}).get("visibility_scope") or "").strip().lower()
             if source_type in {"import", "tool"}:
-                multiplier *= 0.88
+                multiplier *= 0.92
             if visibility_scope in {"global_shared", "system"}:
-                multiplier *= 0.88
+                multiplier *= 0.92
 
     return max(0.35, min(1.45, multiplier))
 
@@ -6904,6 +7197,52 @@ def _build_branch_telemetry(
         "slowest_branch": slowest_branch,
         "branches": branches,
     }
+
+
+def _canonicalize_lexical_anchor_meta(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    anchors_raw = raw.get("anchors")
+    anchors = [str(x).strip() for x in anchors_raw[:24]] if isinstance(anchors_raw, list) else []
+    anchors = [a for a in anchors if a]
+    anchor_count = int(raw.get("anchor_count") or len(anchors) or 0)
+    return {
+        "used_llm": bool(raw.get("used_llm")),
+        "bailout_reason": raw.get("bailout_reason"),
+        "elapsed_ms": int(raw.get("elapsed_ms") or 0),
+        "timeout_ms": int(raw.get("timeout_ms") or 0),
+        "anchor_count": anchor_count,
+        "limit": int(raw.get("limit") or 0),
+        "anchors": anchors,
+        "source": raw.get("source"),
+    }
+
+
+def _summarize_branch_lexical_anchor(branch_metas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    for meta in branch_metas:
+        lexical = _canonicalize_lexical_anchor_meta(meta.get("lexical_anchor"))
+        if lexical is not None:
+            candidates.append(lexical)
+    if not candidates:
+        return None
+
+    # Prefer useful anchors from LLM-driven branches; otherwise pick the
+    # strongest non-empty branch and keep observability counters.
+    selected = sorted(
+        candidates,
+        key=lambda entry: (
+            1 if entry.get("used_llm") else 0,
+            int(entry.get("anchor_count") or 0),
+            -int(entry.get("elapsed_ms") or 0),
+        ),
+        reverse=True,
+    )[0]
+    out = dict(selected)
+    out["branch_count"] = len(candidates)
+    out["used_llm_branches"] = sum(1 for entry in candidates if entry.get("used_llm"))
+    out["non_empty_branches"] = sum(1 for entry in candidates if int(entry.get("anchor_count") or 0) > 0)
+    return out
 
 
 def _plan_fanout_queries(
@@ -7929,6 +8268,7 @@ def recall(
     include_co_session: bool = True,
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
+    lexical_anchor_planner_mode: str = "llm",
     return_meta: bool = False,
     planned_queries: Optional[List[str]] = None,
     planner_meta: Optional[Dict[str, Any]] = None,
@@ -8040,6 +8380,7 @@ def recall(
     deadline = None if overall_timeout_ms is None else (recall_start + (overall_timeout_ms / 1000.0))
     all_searched: List[str] = []
     all_batches: List[List[Dict[str, Any]]] = []
+    all_branch_metas: List[Dict[str, Any]] = []
     drill_log: List[Dict[str, Any]] = []
     turn_phase_details: List[Dict[str, Any]] = []
     stop_reason = "max_turns"
@@ -8080,6 +8421,7 @@ def recall(
         domain_boost=domain_boost,
         project=project,
         include_lexical_anchor_shaping=include_lexical_anchor_shaping,
+        lexical_anchor_planner_mode=lexical_anchor_planner_mode,
     )
     gate_intent = "GENERAL"
     if use_intent:
@@ -8189,6 +8531,7 @@ def recall(
             meta = _extract_recall_meta(batch)
             if meta:
                 turn1_batch_metas.append(meta)
+    all_branch_metas.extend(turn1_batch_metas)
 
     turn_elapsed = (_time.monotonic() - turn_start) * 1000
     turn1_merge_limit = max(limit * 3, 20) if turn1_post_merge_refine else (limit * 2)
@@ -8301,6 +8644,9 @@ def recall(
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
         }
+        lexical_summary = _summarize_branch_lexical_anchor(all_branch_metas)
+        if lexical_summary is not None:
+            meta["lexical_anchor"] = lexical_summary
         return _return_validated_recall(final, meta, return_meta)
 
     # --- Turn 2+: Drill loop ---
@@ -8434,6 +8780,7 @@ def recall(
                 meta = _extract_recall_meta(batch)
                 if meta:
                     drill_batch_metas.append(meta)
+        all_branch_metas.extend(drill_batch_metas)
 
         drill_merge_limit = max(limit * 3, 20) if drill_post_merge_refine else (limit * 2)
         merged = _merge_recall_batches(all_batches, limit=drill_merge_limit)
@@ -8561,6 +8908,9 @@ def recall(
         "bailout_counts": bailout_counts,
         "fanout_count": len(turn_phase_details[0]["fanout"]["queries"]) if turn_phase_details else 0,
     }
+    lexical_summary = _summarize_branch_lexical_anchor(all_branch_metas)
+    if lexical_summary is not None:
+        meta["lexical_anchor"] = lexical_summary
     if _recall_telemetry_enabled():
         meta["telemetry"] = {
             "inputs": {

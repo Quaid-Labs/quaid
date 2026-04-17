@@ -2602,6 +2602,8 @@ class TestRecallFastHookInjectContract:
             )
 
         assert captured["kwargs"]["use_routing"] is False
+        assert captured["kwargs"]["include_lexical_anchor_shaping"] is True
+        assert captured["kwargs"]["lexical_anchor_planner_mode"] == "deterministic"
 
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
@@ -2611,6 +2613,27 @@ class TestRecallFastHookInjectContract:
                 [],
                 {
                     "selected_path": "vector",
+                    "lexical_anchor": {
+                        "used_llm": True,
+                        "anchor_count": 2,
+                        "anchors": ["maya", "alice"],
+                        "elapsed_ms": 12,
+                        "source": "llm",
+                    },
+                    "turn_details": [
+                        {
+                            "turn": 1,
+                            "diagnostics": {
+                                "lexical_anchor": {
+                                    "used_llm": True,
+                                    "anchor_count": 2,
+                                    "anchors": ["maya", "alice"],
+                                    "elapsed_ms": 12,
+                                    "source": "llm",
+                                }
+                            },
+                        }
+                    ],
                     "stop_reason": "no_initial_results",
                     "counts": {
                         "initial_candidates": 0,
@@ -2682,6 +2705,9 @@ class TestRecallFastHookInjectContract:
             assert meta["bailout_counts"].get("no_initial_results", 0) == 0
         assert meta["store_runs"][0]["store"] == "vector"
         assert meta["store_runs"][1]["store"] == "graph"
+        assert meta["lexical_anchor"]["used_llm"] is True
+        assert meta["lexical_anchor"]["anchor_count"] == 2
+        assert meta["turn_details"][0]["diagnostics"]["lexical_anchor"]["anchors"] == ["maya", "alice"]
 
     def test_quality_gate_requires_query_term_overlap_for_specific_fact_queries(self):
         import datastore.memorydb.memory_graph as mg
@@ -2863,8 +2889,171 @@ class TestRecallFastHookInjectContract:
         assert meta["source"] == "llm"
         assert meta["timeout_ms"] == 500
         assert meta["anchor_count"] == 2
+        assert meta["limit"] == 4
+        assert meta["anchors"] == ["baxter", "pelota de tenis"]
         assert isinstance(meta["elapsed_ms"], int)
         assert meta["elapsed_ms"] >= 0
+
+    def test_plan_query_anchor_terms_keeps_multi_entity_queries_above_two_anchors(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": ["Yuni", "Wendy", "Quentin", "dinner"]}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "I'm going to dinner tonight with Yuni, Wendy, and Quentin.",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["yuni", "wendy", "quentin", "dinner"]
+        assert meta["anchor_count"] == 4
+
+    def test_plan_query_anchor_terms_restores_explicit_names_when_llm_omits_them(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": ["dinner"]}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "I'm going to dinner tonight with Yuni, Wendy, and Quentin.",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["yuni", "wendy", "quentin", "dinner"]
+        assert meta["anchor_count"] == 4
+
+    def test_plan_query_anchor_terms_restores_distinctive_floor_terms_when_llm_is_sparse(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": ["maya"]}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "Maya work job career",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["maya", "work"]
+        assert meta["anchor_count"] == 2
+
+    def test_plan_query_anchor_terms_drops_non_query_hallucinations(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=("{\"anchors\": [\"Maya's mom\", \"partner history\", \"where\"]}", {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "Where does Maya's mom live now?",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["maya's mom"]
+        assert meta["anchor_count"] == 1
+
+    def test_plan_query_anchor_terms_prefers_candidate_composed_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": ["work now", "maya"]}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "Where does Maya work now?",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["maya", "work"]
+        assert meta["anchor_count"] == 2
+
+    def test_extract_distinctive_query_terms_supports_unicode_tokens(self):
+        import datastore.memorydb.memory_graph as mg
+
+        terms = mg._extract_distinctive_query_terms(
+            "Iñaki diseñó el módulo de pagos para Łukasz.",
+            limit=8,
+        )
+
+        assert "iñaki" in terms
+        assert "diseñó" in terms
+        assert "łukasz" in terms
+
+    def test_resolve_lexical_anchor_limit_scales_for_long_name_lists(self):
+        import datastore.memorydb.memory_graph as mg
+        from types import SimpleNamespace
+
+        query = (
+            "Attendees: Yuni, Wendy, Quentin, Alice, Bob, Carol, Diana, Ethan, "
+            "Farah, Gabe."
+        )
+        limit = mg._resolve_lexical_anchor_limit(query, SimpleNamespace())
+        assert limit >= 10
+
+    def test_resolve_lexical_anchor_limit_respects_config_override(self):
+        import datastore.memorydb.memory_graph as mg
+        from types import SimpleNamespace
+
+        limit = mg._resolve_lexical_anchor_limit(
+            "Who are the attendees?",
+            SimpleNamespace(lexical_anchor_limit=3),
+        )
+        assert limit == 3
+
+    def test_summarize_branch_lexical_anchor_prefers_llm_non_empty_branch(self):
+        import datastore.memorydb.memory_graph as mg
+
+        summary = mg._summarize_branch_lexical_anchor([
+            {
+                "lexical_anchor": {
+                    "used_llm": False,
+                    "anchor_count": 1,
+                    "elapsed_ms": 5,
+                    "timeout_ms": 2000,
+                    "limit": 4,
+                    "anchors": ["maya"],
+                    "source": "none",
+                    "bailout_reason": "no_llm_clients",
+                }
+            },
+            {
+                "lexical_anchor": {
+                    "used_llm": True,
+                    "anchor_count": 2,
+                    "elapsed_ms": 11,
+                    "timeout_ms": 2000,
+                    "limit": 4,
+                    "anchors": ["maya", "stripe"],
+                    "source": "llm",
+                    "bailout_reason": None,
+                }
+            },
+        ])
+
+        assert summary["used_llm"] is True
+        assert summary["anchors"] == ["maya", "stripe"]
+        assert summary["anchor_count"] == 2
+        assert summary["branch_count"] == 2
+        assert summary["used_llm_branches"] == 1
+        assert summary["non_empty_branches"] == 2
+
+    def test_summarize_branch_lexical_anchor_returns_none_for_missing_data(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._summarize_branch_lexical_anchor([]) is None
+        assert mg._summarize_branch_lexical_anchor([{"counts": {"final_results": 1}}]) is None
 
     def test_recall_once_uses_planned_query_anchors_and_tracks_phase_timing(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
