@@ -54,6 +54,71 @@ echo "Latest: OC=$(npm view openclaw version) CC=$(npm view @anthropic-ai/claude
 ```
 If outdated: update the base snapshot (not the run VM). Versions must be pinned in the snapshot.
 
+### Preflight architecture: platform updates fold into base, never per-run
+
+**Principle.** Platform CLI updates (`claude`, `codex`, `openclaw`) are by far the
+slowest part of preflight — typically 60–180s for `openclaw update --yes` alone,
+and the cost grows as the base snapshot drifts further from upstream. They are
+also rare relative to dev-tree changes. Therefore: updates belong in the base
+image, NOT in per-run preflight.
+
+**Required flow (in order, no exceptions):**
+
+1. **Health checks (no writes):** local≠remote, SSH connectivity, remote brew
+   Python ≥3.10. Sub-second total, safe on every preflight.
+
+2. **Platform updates (FIRST write op).** Run `npm i -g claude@latest`,
+   `npm i -g codex@latest`, `openclaw update --yes`. Capture before/after versions.
+
+3. **If ANY update was applied: EXIT preflight cleanly with a clear instruction
+   to the coordinator.** Print the version diff and instruct the coordinator to
+   re-snapshot the base image now (the VM is in the exact post-update state we
+   want pinned). Do NOT continue into wipe/sync/install — those would dirty the
+   snapshot. The coordinator stops the VM, copies the disk over the locked base
+   image, re-locks the base, then re-runs preflight (which will now find no
+   updates pending and proceed cleanly).
+
+4. **If no updates: continue to wipe → rsync dev tree → write CC creds →
+   pre-write Quaid shared auth credential → start platform services.** This path
+   is fast (~30s total) because nothing slow remains.
+
+**Why this is right:**
+- Per-run preflight when no updates pending: ~30s instead of 10–15min.
+- Update cost is paid ONCE per platform release, not every run.
+- Snapshot model fits naturally: base = "all CLIs up-to-date, no Quaid";
+  preinstall snapshot (see "Pre-install snapshot" below) = "base + dev tree
+  synced + creds written + platforms ready"; install runs against preinstall;
+  failure restores preinstall.
+- Removes the silent-update class of bug — platform bumps become an explicit
+  re-snapshot decision, which is also when version diffs route to W2 for review.
+
+**Pre-install snapshot (inner-loop optimization on top of the above):** after
+preflight completes (clean, no updates pending) and before invoking M0 install,
+the coordinator snapshots the VM as `quaid-livetest-preinstall`. If install
+fails due to an installer bug:
+1. Route to W1 with full repro evidence (per the installer-bugs-are-P0 policy).
+2. Wait for the fix to land.
+3. Restore from `quaid-livetest-preinstall` (`tart stop quaid-livetest-run` →
+   `tart delete quaid-livetest-run` → `tart clone quaid-livetest-preinstall
+   quaid-livetest-run` → `tart run`).
+4. Re-rsync the latest dev tree (W1's fix is in the tree, not the snapshot).
+5. Re-run M0 install only.
+
+This keeps install-bug retries to ~5min instead of the full ~15min cycle. Drop
+`quaid-livetest-preinstall` once M0 succeeds across all platforms.
+
+**Implementation status (2026-04-17):** implemented in:
+- `tests/livetest/scripts/livetest-preflight.sh` (step-4 update + version-diff + early-exit)
+- `tests/livetest/scripts/livetest-refresh-base.sh` (promote run VM disk to locked base)
+- `tests/livetest/scripts/livetest-snapshot-preinstall.sh` (capture preinstall VM snapshot)
+- `tests/livetest/scripts/livetest-restore-preinstall.sh` (restore run VM + re-rsync dev tree)
+
+When preflight exits after step 4 due to applied platform updates, run:
+```bash
+tests/livetest/scripts/livetest-refresh-base.sh --config tests/livetest/livetest-config.json
+```
+then rerun preflight.
+
 ## OC Interaction
 
 OC live testing uses **Matrix DM** for all interaction — not the TUI.
@@ -281,9 +346,12 @@ done
 ```
 
 Scripts shipped with the livetest suite (relative to repo root):
-- `tests/livetest/scripts/livetest-preflight.sh` — safety checks, wipe, platform start (run before every run)
+- `tests/livetest/scripts/livetest-preflight.sh` — safety checks + platform updates; early-exits on applied updates; otherwise wipe/sync/start
 - `tests/livetest/scripts/livetest-wipe.sh` — wipe Quaid from remote (called by preflight)
 - `tests/livetest/scripts/livetest-platform-start.sh` — start platform services on remote (called by preflight)
+- `tests/livetest/scripts/livetest-refresh-base.sh` — refresh locked base VM image from updated run VM
+- `tests/livetest/scripts/livetest-snapshot-preinstall.sh` — snapshot run VM after preflight and before M0 install
+- `tests/livetest/scripts/livetest-restore-preinstall.sh` — restore run VM from preinstall snapshot and re-rsync latest dev tree
 - `tests/livetest/scripts/tmux-msg.sh` — direct pane messaging for urgent interrupts and self-tests
 - `tests/livetest/scripts/tmux-mailbox.sh` — queue-backed mailbox for routine STATUS/ISSUE traffic
 - `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
@@ -395,7 +463,7 @@ ssh REMOTE_HOST 'cd ~/quaidcode/dev && git pull --ff-only origin main'
 After any remote code update, restart the relevant runtime/daemon before
 testing so the host under test is actually running the updated code.
 
-**Run preflight (wipe + safety check + platform start):**
+**Run preflight (safety checks + platform updates + wipe/sync/start):**
 ```bash
 tests/livetest/scripts/livetest-preflight.sh
 ```
@@ -403,11 +471,33 @@ tests/livetest/scripts/livetest-preflight.sh
 The preflight script:
 1. Verifies the remote host is not this machine (hard abort if they match)
 2. Verifies SSH connectivity
-3. Wipes Quaid from the remote (all silos, hooks, sessions, extension dir)
-4. Starts the OC gateway and waits for it to be healthy
+3. Checks remote prerequisites (brew Python, etc.)
+4. Updates platform CLIs and compares before/after versions
+5. If updates were applied, exits early and instructs base-image refresh
+6. If no updates were applied, wipes Quaid from the remote
+7. Rsyncs the latest local dev tree to the remote
+8. Starts platform services and waits for health
 
 If preflight fails, do not proceed. Read the error output and fix the underlying
 cause before continuing.
+
+If preflight exits after step 4 due to applied updates:
+1. Refresh the locked base image:
+```bash
+tests/livetest/scripts/livetest-refresh-base.sh --config tests/livetest/livetest-config.json
+```
+2. Re-run preflight.
+
+Before M0 install, snapshot preinstall state:
+```bash
+tests/livetest/scripts/livetest-snapshot-preinstall.sh --config tests/livetest/livetest-config.json
+```
+
+If M0 install fails with an installer bug after that snapshot:
+```bash
+tests/livetest/scripts/livetest-restore-preinstall.sh --config tests/livetest/livetest-config.json
+```
+Then retry M0 install without re-running full preflight.
 
 For a CC-only wipe (when OC is already live mid-run):
 ```bash

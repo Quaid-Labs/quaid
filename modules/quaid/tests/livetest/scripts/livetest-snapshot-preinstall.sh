@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# livetest-snapshot-preinstall.sh — Snapshot run VM after preflight, before install
+#
+# Creates a preinstall snapshot clone from the current run VM, then restarts the
+# run VM and updates livetest-config remote.host to the fresh run IP.
+#
+# Usage:
+#   livetest-snapshot-preinstall.sh [options]
+#
+# Options:
+#   --name <name>      Run VM name (default: quaid-livetest-run)
+#   --snapshot <name>  Snapshot VM name (default: quaid-livetest-preinstall)
+#   --user <user>      VM SSH user (default: admin)
+#   --config <path>    Path to livetest-config.json
+#   --timeout <sec>    Boot/SSH timeout (default: 180)
+#   --dry-run          Print operations without executing
+#   -h, --help         Show help
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_DEFAULT="$(dirname "$SCRIPT_DIR")/livetest-config.json"
+
+RUN_NAME="quaid-livetest-run"
+SNAPSHOT_NAME="quaid-livetest-preinstall"
+SSH_USER="admin"
+CONFIG_PATH="$CONFIG_DEFAULT"
+BOOT_TIMEOUT=180
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --name) RUN_NAME="$2"; shift 2 ;;
+        --snapshot) SNAPSHOT_NAME="$2"; shift 2 ;;
+        --user) SSH_USER="$2"; shift 2 ;;
+        --config) CONFIG_PATH="$2"; shift 2 ;;
+        --timeout) BOOT_TIMEOUT="$2"; shift 2 ;;
+        --dry-run) DRY_RUN=1; shift ;;
+        -h|--help)
+            sed -n '2,/^$/{ s/^# //; s/^#//; p }' "$0"
+            exit 0
+            ;;
+        *) echo "Error: unknown option '$1'" >&2; exit 1 ;;
+    esac
+done
+
+die() { echo "Error: $*" >&2; exit 1; }
+vm_exists() { tart list 2>/dev/null | awk 'NR>1{print $2}' | grep -qx "$1" 2>/dev/null; }
+vm_state() { tart list 2>/dev/null | awk -v n="$1" '$2==n{print $NF}'; }
+vm_ip() { tart ip "$1" 2>/dev/null || true; }
+
+wait_for_ip() {
+    local name="$1" elapsed=0 ip=""
+    while [[ "$elapsed" -lt "$BOOT_TIMEOUT" ]]; do
+        ip="$(vm_ip "$name")"
+        if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+    return 1
+}
+
+wait_for_ssh() {
+    local ip="$1" elapsed=0
+    while [[ "$elapsed" -lt "$BOOT_TIMEOUT" ]]; do
+        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "${SSH_USER}@${ip}" 'echo ok' 2>/dev/null | grep -q ok; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    return 1
+}
+
+patch_config_host() {
+    local config="$1" new_host="$2"
+    python3 - "$config" "$new_host" <<'PYEOF'
+import json, sys
+path, host = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+cfg.setdefault("remote", {})["host"] = host
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PYEOF
+}
+
+echo "========================================"
+echo " livetest-snapshot-preinstall"
+echo " Run VM      : $RUN_NAME"
+echo " Snapshot VM : $SNAPSHOT_NAME"
+echo " SSH user    : $SSH_USER"
+echo " Config      : $CONFIG_PATH"
+[[ "$DRY_RUN" == "1" ]] && echo " Mode        : DRY RUN"
+echo "========================================"
+
+vm_exists "$RUN_NAME" || die "Run VM '$RUN_NAME' not found."
+[[ -f "$CONFIG_PATH" ]] || die "Config not found: $CONFIG_PATH"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry-run] would stop '$RUN_NAME' if running"
+    echo "[dry-run] would delete existing '$SNAPSHOT_NAME' if present"
+    echo "[dry-run] would clone '$RUN_NAME' -> '$SNAPSHOT_NAME'"
+    echo "[dry-run] would restart '$RUN_NAME' and patch config remote.host"
+    exit 0
+fi
+
+if [[ "$(vm_state "$RUN_NAME")" == "running" ]]; then
+    echo "Stopping run VM '$RUN_NAME'..."
+    tart stop "$RUN_NAME"
+fi
+
+if vm_exists "$SNAPSHOT_NAME"; then
+    if [[ "$(vm_state "$SNAPSHOT_NAME")" == "running" ]]; then
+        tart stop "$SNAPSHOT_NAME"
+    fi
+    tart delete "$SNAPSHOT_NAME"
+fi
+
+echo "Cloning run -> preinstall snapshot..."
+tart clone "$RUN_NAME" "$SNAPSHOT_NAME"
+
+echo "Restarting run VM..."
+tart run --no-graphics "$RUN_NAME" >/dev/null 2>&1 &
+
+echo "Waiting for run VM IP + SSH..."
+VM_IP="$(wait_for_ip "$RUN_NAME")" || die "Run VM did not get an IP within ${BOOT_TIMEOUT}s"
+wait_for_ssh "$VM_IP" || die "SSH not ready on ${SSH_USER}@${VM_IP}"
+
+patch_config_host "$CONFIG_PATH" "${SSH_USER}@${VM_IP}"
+
+echo ""
+echo "Preinstall snapshot ready: $SNAPSHOT_NAME"
+echo "Run VM back online at: ${SSH_USER}@${VM_IP}"
+echo "Config remote.host updated."

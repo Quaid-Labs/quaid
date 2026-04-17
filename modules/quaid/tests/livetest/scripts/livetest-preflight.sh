@@ -224,13 +224,64 @@ PY
     fi
 fi
 
+# --- Abort early if safety checks failed (before any write operations) ---
+echo "  checking for preflight errors (ERRORS=$ERRORS)..."
+if [[ "$ERRORS" -gt 0 ]]; then
+    echo ""
+    echo "Preflight aborted: $ERRORS check(s) failed." >&2
+    exit 1
+fi
+
 # --- Step 4: Upgrade platform CLIs ---
 echo ""
 echo "[4/8] Upgrading platform CLIs on remote to latest..."
 
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would upgrade claude, codex, openclaw to latest on $REMOTE_HOST"
+    echo "  [dry-run] would compare before/after versions and early-exit when updates are applied"
 else
+    remote_pkg_version() {
+        local pkg="$1"
+        ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; PKG_NAME='$pkg' python3 - <<'PYEOF'
+import json, os, subprocess
+pkg = os.environ.get(\"PKG_NAME\", \"\")
+try:
+    proc = subprocess.run([\"npm\", \"list\", \"-g\", pkg, \"--depth=0\", \"--json\"], capture_output=True, text=True)
+    data = json.loads(proc.stdout.strip() or \"{}\")
+    deps = data.get(\"dependencies\") or {}
+    version = (deps.get(pkg) or {}).get(\"version\") or \"\"
+    print(version or \"__MISSING__\")
+except Exception:
+    print(\"__MISSING__\")
+PYEOF" 2>/dev/null | tr -d '\r'
+    }
+
+    remote_openclaw_version() {
+        local npm_ver
+        npm_ver="$(remote_pkg_version "openclaw")"
+        if [[ "$npm_ver" != "__MISSING__" && -n "$npm_ver" ]]; then
+            echo "$npm_ver"
+            return
+        fi
+        ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo '__MISSING__'; exit 0; fi; python3 - <<'PYEOF'
+import os, re, shutil
+binary = shutil.which(\"openclaw\") or \"\"
+if not binary:
+    print(\"__MISSING__\")
+    raise SystemExit(0)
+real = os.path.realpath(binary)
+match = re.search(r\"/Cellar/openclaw/([^/]+)/\", real)
+if match:
+    print(match.group(1))
+else:
+    print(\"__UNKNOWN__\")
+PYEOF" 2>/dev/null | tr -d '\r'
+    }
+
+    BEFORE_CLAUDE="$(remote_pkg_version "@anthropic-ai/claude-code")"
+    BEFORE_CODEX="$(remote_pkg_version "@openai/codex")"
+    BEFORE_OPENCLAW="$(remote_openclaw_version)"
+
     ssh "$REMOTE_HOST" bash -s << 'REMOTE_UPGRADE'
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
@@ -240,9 +291,7 @@ upgrade_cli() {
     local name="$1" cmd="$2"
     printf "  upgrading %-12s ... " "$name"
     if output=$(eval "$cmd" 2>&1); then
-        local ver
-        ver="$($name --version 2>/dev/null | head -1 || echo "?")"
-        echo "done ($ver)"
+        echo "done"
     else
         echo "WARN: upgrade failed (continuing)"
         echo "$output" | tail -3 | sed 's/^/    /'
@@ -257,8 +306,8 @@ REMOTE_UPGRADE
     oc_output=""
     oc_rc=0
     # Guard step-4 against implicit errexit behavior inside command substitutions.
-    # Preflight must continue into wipe/sync/start even when OpenClaw update times
-    # out or fails; we classify and log that outcome here instead of aborting.
+    # Preflight must continue cleanly to diffing + classification even when OpenClaw
+    # update times out or fails.
     set +e
     oc_output="$("$SCRIPT_DIR/openclaw-cli-safe.sh" \
         --timeout "${OPENCLAW_CLI_TIMEOUT_S:-45}" \
@@ -272,7 +321,7 @@ REMOTE_UPGRADE
         if [[ "$oc_output" == *"__OPENCLAW_MISSING__"* ]]; then
             echo "not found, skipping"
         else
-            echo "done (updated)"
+            echo "done"
         fi
     else
         if [[ "$oc_rc" -eq 124 ]]; then
@@ -284,16 +333,44 @@ REMOTE_UPGRADE
             printf '%s\n' "$oc_output" | tail -3 | sed 's/^/    /'
         fi
     fi
+
+    AFTER_CLAUDE="$(remote_pkg_version "@anthropic-ai/claude-code")"
+    AFTER_CODEX="$(remote_pkg_version "@openai/codex")"
+    AFTER_OPENCLAW="$(remote_openclaw_version)"
+
+    updates_applied=0
+    [[ "$BEFORE_CLAUDE" != "$AFTER_CLAUDE" ]] && updates_applied=1
+    [[ "$BEFORE_CODEX" != "$AFTER_CODEX" ]] && updates_applied=1
+    if [[ "$BEFORE_OPENCLAW" != "$AFTER_OPENCLAW" ]]; then
+        updates_applied=1
+    else
+        oc_norm="$(printf '%s' "$oc_output" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$AFTER_OPENCLAW" == "__UNKNOWN__" \
+          && "$oc_rc" -eq 0 \
+          && "$oc_output" != *"__OPENCLAW_MISSING__"* \
+          && "$oc_norm" != *"already up to date"* \
+          && "$oc_norm" != *"already up-to-date"* \
+          && "$oc_norm" != *"already latest"* ]]; then
+            updates_applied=1
+        fi
+    fi
+
+    echo "  version diff (before -> after):"
+    echo "    claude   : $BEFORE_CLAUDE -> $AFTER_CLAUDE"
+    echo "    codex    : $BEFORE_CODEX -> $AFTER_CODEX"
+    echo "    openclaw : $BEFORE_OPENCLAW -> $AFTER_OPENCLAW"
+
+    if [[ "$updates_applied" -eq 1 ]]; then
+        echo ""
+        echo "Preflight halted after step 4 because one or more platform updates were applied."
+        echo "Refresh the locked base image from this run VM, then re-run preflight:"
+        echo "  $SCRIPT_DIR/livetest-refresh-base.sh --config $CONFIG_PATH"
+        echo ""
+        echo "After base refresh completes, run preflight again. Steps 5-8 are intentionally skipped on this pass."
+        exit 0
+    fi
 fi
 echo "  [4/8] CLI upgrade SSH session complete"
-
-# --- Abort early if safety checks failed ---
-echo "  checking for preflight errors (ERRORS=$ERRORS)..."
-if [[ "$ERRORS" -gt 0 ]]; then
-    echo ""
-    echo "Preflight aborted: $ERRORS check(s) failed." >&2
-    exit 1
-fi
 
 # --- Step 5: Wipe ---
 echo ""
