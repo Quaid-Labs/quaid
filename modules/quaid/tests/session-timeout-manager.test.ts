@@ -242,6 +242,36 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect(calls[0]).toHaveLength(1);
   });
 
+  it("does not crash timer queue when failHard blocks fallback payload", async () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-failhard-timer-");
+    const source = createSourceState();
+    const logs: string[] = [];
+
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 1,
+      failHardEnabled: true,
+      isBootstrapOnly: () => false,
+      logger: (msg: string) => logs.push(String(msg)),
+      readSessionMessages: () => [],
+      listSessionActivity: () => [],
+      extract: async () => {
+        // no-op
+      },
+    });
+
+    manager.onAgentEnd(
+      [{ role: "user", content: "remember this", timestamp: Date.now() }],
+      "session-failhard-timer",
+      { source: "transcript_update" },
+    );
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await expect((manager as any).chain).resolves.toBeUndefined();
+    expect(logs.some((line) => line.includes("[FAIL-HARD] extraction queue failed"))).toBe(true);
+  });
+
   it("recovers only sessions that became stale within the current sweep window", async () => {
     const workspace = makeWorkspace("quaid-timeout-stale-window-");
     const source = createSourceState();

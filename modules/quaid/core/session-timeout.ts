@@ -673,10 +673,9 @@ export class SessionTimeoutManager {
   }
 
   private queueExtractionFromSession(sessionId: string, fallbackMessages: any[], timeoutMinutes: number): void {
-    this.chain = this.chain
+    const work = this.chain
       .catch((err: unknown) => {
         safeLog(this.logger, `[memory][timeout] previous extraction chain error: ${String((err as Error)?.message || err)}`);
-        if (this.failHard) throw err;
       })
       .then(async () => {
         const extracted = await this.extractSessionFromSourceDirect(sessionId, "Timeout", fallbackMessages);
@@ -687,9 +686,17 @@ export class SessionTimeoutManager {
         this.writeQuaidLog("timeout_extract_done", sessionId, { timeout_minutes: timeoutMinutes });
       })
       .catch((err: unknown) => {
-        safeLog(this.logger, `[memory][timeout] extraction queue failed: ${String((err as Error)?.message || err)}`);
-        if (this.failHard) throw err;
+        const message = String((err as Error)?.message || err);
+        if (this.failHard) {
+          safeLog(
+            this.logger,
+            `[memory][timeout][FAIL-HARD] extraction queue failed (suppressed unhandled rejection): ${message}`,
+          );
+        } else {
+          safeLog(this.logger, `[memory][timeout] extraction queue failed: ${message}`);
+        }
       });
+    this.chain = work.then(() => undefined, () => undefined);
   }
 
   private cursorPath(sessionId: string): string {
