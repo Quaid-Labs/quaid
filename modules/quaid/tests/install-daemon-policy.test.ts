@@ -174,14 +174,14 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('Reconciled ai.openclaw.gateway launch agent env for Quaid');
   });
 
-  it("OpenClaw installer refreshes the extension dir from the canonical plugin tree", () => {
+  it("OpenClaw installer symlinks extension dir to the canonical plugin tree", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain("extensionDir: pluginPath");
-    expect(setupText).toContain("fs.cpSync(pluginPath, extensionDir, {");
-    expect(setupText).toContain("failed to copy canonical plugin into extension dir");
-    expect(setupText).not.toContain("fs.symlinkSync(pluginPath, extensionDir, \"dir\")");
+    expect(setupText).toContain("fs.symlinkSync(pluginPath, extensionDir, \"dir\")");
+    expect(setupText).toContain("failed to symlink canonical plugin into extension dir");
+    expect(setupText).toContain("failed to verify extension symlink target");
   });
 
   it("first install seeds the shared quaid project docs", () => {

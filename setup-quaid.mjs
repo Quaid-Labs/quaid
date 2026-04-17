@@ -2579,9 +2579,8 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   }
 
   // Keep ~/.quaid/plugins/quaid (or ~/.quaid/modules/quaid in dev) as the
-  // canonical install tree, then force-refresh the OpenClaw extension dir from
-  // that canonical copy. The current OC plugin scanner does not follow symlinked
-  // extension dirs reliably, so we must install a real directory copy here.
+  // canonical install tree, and make the OpenClaw extension path a direct
+  // symlink to that canonical location so hot-deploy updates apply in one place.
   const depsResult = ensureOpenClawExtensionDependencies({
     extensionDir: pluginPath,
     pluginDir: stagedPluginPath,
@@ -2592,13 +2591,17 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   try {
     fs.mkdirSync(path.dirname(extensionDir), { recursive: true });
     fs.rmSync(extensionDir, { recursive: true, force: true });
-    fs.cpSync(pluginPath, extensionDir, {
-      recursive: true,
-      force: true,
-      dereference: true,
-    });
+    fs.symlinkSync(pluginPath, extensionDir, "dir");
+    const linkedTarget = fs.realpathSync(extensionDir);
+    const canonicalTarget = fs.realpathSync(pluginPath);
+    if (linkedTarget !== canonicalTarget) {
+      return {
+        ok: false,
+        reason: `failed to verify extension symlink target: ${linkedTarget} != ${canonicalTarget}`,
+      };
+    }
   } catch (err) {
-    return { ok: false, reason: `failed to copy canonical plugin into extension dir: ${String(err)}` };
+    return { ok: false, reason: `failed to symlink canonical plugin into extension dir: ${String(err)}` };
   }
   {
     // sourcePath must be in the macOS secure temp dir (/var/folders/) for the OC
