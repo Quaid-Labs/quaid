@@ -1629,13 +1629,30 @@ class TestAdapterSelection:
         cfg_dir = tmp_path / "instances" / instance_id
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "config.json").write_text(
-            json.dumps({"instance": {"id": instance_id}}),
+            json.dumps({"instance": {"id": instance_id}, "adapter": {"type": "codex"}}),
             encoding="utf-8",
         )
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", instance_id)
         adapter = get_adapter()
         assert isinstance(adapter, CodexAdapter)
+
+    def test_config_missing_adapter_type_fails_loud(self, monkeypatch, tmp_path):
+        instance_id = "codex-lean"
+        cfg_dir = tmp_path / "instances" / instance_id
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text(
+            json.dumps({"instance": {"id": instance_id}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="instance config includes adapter.type"):
+            get_adapter()
 
     def test_config_claude_code_from_cwd_with_explicit_adapter_type(self, monkeypatch, tmp_path):
         project_dir = tmp_path / "cc-project"

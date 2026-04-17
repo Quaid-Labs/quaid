@@ -83,7 +83,7 @@ class TestInstanceManagerBase:
         assert (visible / "ENVIRONMENT.md").is_file()
         config = json.loads((silo / "config.json").read_text())
         assert config["instance"]["id"] == "claude-code-proj"
-        assert "adapter" not in config
+        assert config["adapter"]["type"] == "claude-code"
 
     def test_create_keeps_instance_config_minimal_and_relies_on_layering(self, tmp_path):
         from lib.instance_manager import InstanceManager
@@ -116,7 +116,7 @@ class TestInstanceManagerBase:
 
         config = json.loads((silo / "config.json").read_text())
         assert config["instance"]["id"] == "openclaw-m13test"
-        assert "adapter" not in config
+        assert config["adapter"]["type"] == "openclaw"
         assert "models" not in config
         assert "capture" not in config
         assert "plugins" not in config
@@ -151,7 +151,7 @@ class TestInstanceManagerBase:
 
         config = json.loads((silo / "config.json").read_text(encoding="utf-8"))
         assert config["instance"]["id"] == "openclaw-main"
-        assert config["adapter"]["type"] == "legacy-type"
+        assert config["adapter"]["type"] == "openclaw"
         assert config["adapter"]["capabilities"]["context_refresh_strategy"] == "turn_based"
         assert config["models"]["deepReasoning"] == "custom-deep"
         assert config["capture"]["chunk_tokens"] == 321

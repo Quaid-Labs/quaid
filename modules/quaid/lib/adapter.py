@@ -1529,7 +1529,6 @@ def _read_adapter_type_from_config() -> str:
     Accepted formats:
       {"adapter": "standalone"}
       {"adapter": {"type": "openclaw"}}
-      {"instance": {"id": "openclaw-main"}}  # inferred from config path/instance id
     """
     last_existing: Optional[Path] = None
     for cfg_path in _adapter_config_paths():
@@ -1557,37 +1556,37 @@ def _read_adapter_type_from_config() -> str:
 
         if kind:
             return kind
-        inferred = _infer_adapter_type_from_instance(cfg_path.parent.name)
-        if inferred:
-            return inferred
         continue
 
     searched = ", ".join(str(p) for p in _adapter_config_paths())
     if last_existing is None:
         raise RuntimeError(
             "No config file found for adapter selection. Create config.json "
-            "with {\"adapter\": {\"type\": \"<adapter-id>\"}} "
-            "(or provide a QUAID_INSTANCE with a known adapter prefix). "
+            "with {\"adapter\": {\"type\": \"<adapter-id>\"}}. "
             f"Searched: {searched}"
         )
     raise RuntimeError(
-        "Adapter type could not be resolved from config. "
+        "Adapter type could not be resolved from config. Ensure the selected "
+        "instance config includes adapter.type. "
         f"Searched existing configs: {searched}"
     )
 
 
-def _infer_adapter_type_from_instance(instance_id: str) -> str:
-    """Infer adapter type from QUAID_INSTANCE prefix convention.
-
-    Returns the adapter type string if recognisable, or "" if unknown.
-    """
-    if instance_id.startswith("openclaw-") or instance_id == "openclaw":
-        return "openclaw"
-    if instance_id.startswith("codex-") or instance_id == "codex":
-        return "codex"
-    if instance_id.startswith("claude-code-") or instance_id in ("claude-code", "claude_code"):
-        return "claude-code"
-    return ""
+def _adapter_instance_prefix(adapter_type: str) -> str:
+    """Resolve instance prefix from adapter manifest, fallback to adapter id."""
+    normalized = _normalize_adapter_id(adapter_type)
+    if not normalized:
+        return ""
+    try:
+        manifest = _load_adapter_manifest(normalized)
+        runtime = manifest.get("runtime")
+        if isinstance(runtime, dict):
+            prefix = str(runtime.get("instancePrefix") or "").strip().lower()
+            if prefix:
+                return prefix[:-1] if prefix.endswith("-") else prefix
+    except Exception:
+        pass
+    return normalized
 
 
 def _auto_provision_from_env_if_needed() -> None:
@@ -1597,12 +1596,16 @@ def _auto_provision_from_env_if_needed() -> None:
     (e.g. OC session start with a fresh instance name) create the silo
     automatically rather than hard-failing with 'no config found'.
 
-    The adapter type is inferred from the QUAID_INSTANCE prefix so no config
-    is needed to determine it.  After this returns, _read_adapter_type_from_config()
+    Adapter type is resolved from explicit adapter context (QUAID_ADAPTER_TYPE,
+    host project env, or existing layered config), not from instance-name
+    prefix inference. After this returns, _read_adapter_type_from_config()
     will find the freshly written config and proceed normally.
     """
     home = os.environ.get("QUAID_HOME", "").strip()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
+    claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+    codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
+    explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
 
     # When QUAID_INSTANCE is absent, derive a path-based instance from explicit
     # project env first, then from cwd when the adapter type is already known.
@@ -1611,9 +1614,6 @@ def _auto_provision_from_env_if_needed() -> None:
     if home and not instance:
         from lib.instance import instance_slug_from_project_dir
 
-        claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
-        codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
-        explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
         if claude_project_dir and codex_project_dir:
             try:
                 if Path(claude_project_dir).resolve() != Path(codex_project_dir).resolve():
@@ -1653,9 +1653,24 @@ def _auto_provision_from_env_if_needed() -> None:
     if config_path.exists() and db_path.exists():
         return  # Already initialised — nothing to do
 
-    adapter_type = _infer_adapter_type_from_instance(instance)
+    adapter_type = _normalize_adapter_id(explicit_adapter_type)
     if not adapter_type:
-        return  # Unrecognised prefix — let normal flow raise with a clear error
+        if claude_project_dir and not codex_project_dir:
+            adapter_type = "claude-code"
+        elif codex_project_dir and not claude_project_dir:
+            adapter_type = "codex"
+    if not adapter_type:
+        # Use layered config resolution when available (for example shared
+        # platform config during OC setup). Missing config here is expected for
+        # first-touch path-derived instances, so treat lookup errors as "unknown"
+        # and let the normal adapter-resolution path raise loudly.
+        try:
+            adapter_type = _normalize_adapter_id(_read_adapter_type_from_config())
+        except RuntimeError:
+            adapter_type = ""
+    if not adapter_type:
+        return
+    adapter_prefix = _adapter_instance_prefix(adapter_type)
 
     try:
         # Use InstanceManager base class for full silo scaffolding (dirs, DB,
@@ -1677,8 +1692,7 @@ def _auto_provision_from_env_if_needed() -> None:
             def adapter_id(self):  # type: ignore[override]
                 return adapter_type
             def agent_id_prefix(self):  # type: ignore[override]
-                prefix_map = {"openclaw": "openclaw", "claude-code": "claude-code", "codex": "codex"}
-                return prefix_map.get(adapter_type, adapter_type)
+                return adapter_prefix
 
         mgr = InstanceManager(_BootstrapAdapter())  # type: ignore[arg-type]
         # Do not touch project_registry while _adapter_lock is held.

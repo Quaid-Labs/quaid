@@ -136,6 +136,11 @@ class InstanceManager:
             instance_config = {}
         instance_config.setdefault("id", instance_id)
         config["instance"] = instance_config
+        adapter_config = config.get("adapter")
+        if not isinstance(adapter_config, dict):
+            adapter_config = {}
+        adapter_config["type"] = str(self.adapter.adapter_id() or "").strip()
+        config["adapter"] = adapter_config
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
         # Database
