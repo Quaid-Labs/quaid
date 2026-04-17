@@ -62,58 +62,6 @@ def test_family_heuristic_keeps_parent_stable_for_multi_child_sentence():
     assert ("Diana", "parent_of", "Bob") not in triples
 
 
-def test_family_heuristic_extracts_owner_sibling_relationship():
-    edges = maintenance_ops._heuristic_family_edges_for_fact(
-        fact_id="fact-3b",
-        fact_text="Diana is my sister.",
-        owner_full="Solomon Steadman",
-    )
-
-    triples = {(edge["subject"], edge["relation"], edge["object"]) for edge in edges}
-    assert ("Diana", "sibling_of", "Solomon Steadman") in triples
-
-
-def test_family_heuristic_owner_sibling_pattern_allows_followup_clause():
-    edges = maintenance_ops._heuristic_family_edges_for_fact(
-        fact_id="fact-3bb",
-        fact_text="Diana is my sister who lives in Seattle.",
-        owner_full="Solomon Steadman",
-    )
-
-    triples = {(edge["subject"], edge["relation"], edge["object"]) for edge in edges}
-    assert ("Diana", "sibling_of", "Solomon Steadman") in triples
-
-
-def test_family_heuristic_owner_sibling_pattern_ignores_possessive_and_hyphen_compounds():
-    owner = "Solomon Steadman"
-    samples = [
-        "Alice is my sister's friend.",
-        "Alice is my sister-in-law.",
-        "Alice is my brother-in-law.",
-        "Alice is my brother's wife.",
-    ]
-    for text in samples:
-        edges = maintenance_ops._heuristic_family_edges_for_fact(
-            fact_id="fact-3bd",
-            fact_text=text,
-            owner_full=owner,
-        )
-        triples = {(edge["subject"], edge["relation"], edge["object"]) for edge in edges}
-        assert ("Alice", "sibling_of", owner) not in triples
-
-
-def test_family_heuristic_extracts_sibling_and_child_edges_from_compound_phrase():
-    edges = maintenance_ops._heuristic_family_edges_for_fact(
-        fact_id="fact-3c",
-        fact_text="My sister Diana has a daughter named Alice.",
-        owner_full="Solomon Steadman",
-    )
-
-    triples = {(edge["subject"], edge["relation"], edge["object"]) for edge in edges}
-    assert ("Diana", "sibling_of", "Solomon Steadman") in triples
-    assert ("Diana", "parent_of", "Alice") in triples
-
-
 def test_batch_extract_edges_maps_user_alias_via_fact_owner_resolution():
     facts = [{"id": "fact-4", "text": "David is the user's brother.", "owner_id": "default"}]
     metrics = maintenance_ops.JanitorMetrics()
@@ -141,32 +89,6 @@ def test_batch_extract_edges_maps_user_alias_via_fact_owner_resolution():
     assert edge["subject"] == "David"
     assert edge["relation"] == "sibling_of"
     assert edge["object"] == "Solomon Steadman"
-
-
-def test_batch_extract_edges_augments_partial_llm_with_owner_kin_heuristics():
-    facts = [{"id": "fact-6", "text": "My sister Diana has a daughter named Alice.", "owner_id": "default"}]
-    metrics = maintenance_ops.JanitorMetrics()
-    response = (
-        '[{"fact": 1, "edges": ['
-        '{"subject":"Diana","subject_type":"Person","relation":"parent_of","object":"Alice","object_type":"Person"}'
-        ']}]',
-        0.05,
-    )
-
-    with patch.object(maintenance_ops, "call_deep_reasoning", return_value=response), patch.object(
-        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Solomon Steadman")
-    ):
-        results = maintenance_ops.batch_extract_edges(
-            facts=facts,
-            graph=object(),
-            metrics=metrics,
-            relations_list="parent_of, sibling_of, spouse_of",
-        )
-
-    assert len(results) == 1
-    triples = {(edge["subject"], edge["relation"], edge["object"]) for edge in results[0]}
-    assert ("Diana", "parent_of", "Alice") in triples
-    assert ("Diana", "sibling_of", "Solomon Steadman") in triples
 
 
 def test_batch_extract_edges_resolves_owner_once_per_fact_not_per_edge():

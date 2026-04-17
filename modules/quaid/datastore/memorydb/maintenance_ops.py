@@ -2250,65 +2250,15 @@ _HEURISTIC_POSSESSIVE_CHILD_RE = re.compile(
     (?P<child>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
     """
 )
-_HEURISTIC_OWNER_KIN_IS_RE = re.compile(
-    r"""(?x)
-    (?P<person>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
-    \s+
-    (?i:is)\s+
-    (?:(?i:my|the\s+user(?:['’]s)?|user(?:['’]s)?|the\s+owner(?:['’]s)?|owner(?:['’]s)?))
-    \s+
-    (?P<rel>(?i:sister|brother|sibling|mother|father|mom|dad|parent|wife|husband|spouse|partner|daughter|son|child))
-    (?!['’-])
-    \b
-    (?=\s*(?:[.,;!?]|$)|\s+[a-z])
-    """
-)
-_HEURISTIC_OWNER_KIN_PREFIX_RE = re.compile(
-    r"""(?x)
-    (?:(?i:my|the\s+user(?:['’]s)?|user(?:['’]s)?|the\s+owner(?:['’]s)?|owner(?:['’]s)?))
-    \s+
-    (?P<rel>(?i:sister|brother|sibling|mother|father|mom|dad|parent|wife|husband|spouse|partner|daughter|son|child))
-    \s+
-    (?:(?i:is)\s+)?
-    (?P<person>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
-    \b
-    """
-)
-
-
-def _heuristic_owner_kin_edge_triplet(
-    rel_raw: str, person_raw: str, owner_full: Optional[str]
-) -> Optional[Tuple[str, str, str]]:
-    """Map explicit owner-kin phrases into canonical edge tuples."""
-    owner = str(owner_full or "").strip()
-    if not owner or owner.lower() == "the user":
-        return None
-
-    person = str(person_raw or "").strip()
-    rel = str(rel_raw or "").strip().lower()
-    if not person or not rel:
-        return None
-
-    if rel in {"sister", "brother", "sibling"}:
-        return (person, "sibling_of", owner)
-    if rel in {"mother", "father", "mom", "dad", "parent"}:
-        return (person, "parent_of", owner)
-    if rel in {"daughter", "son", "child"}:
-        return (owner, "parent_of", person)
-    if rel in {"wife", "husband", "spouse"}:
-        return (person, "spouse_of", owner)
-    if rel == "partner":
-        return (person, "partner_of", owner)
-    return None
 
 
 def _heuristic_family_edges_for_fact(fact_id: str, fact_text: str, owner_full: Optional[str]) -> List[Dict[str, Any]]:
-    """Best-effort deterministic kinship edges for explicit family phrasing."""
+    """Best-effort family-edge fallback when LLM returns no edges."""
     text = " ".join(str(fact_text or "").strip().split())
     if not text:
         return []
 
-    candidates: List[Tuple[str, str, str]] = []
+    candidates: List[Tuple[str, str]] = []
 
     # Pattern: "... has a daughter/son/child (named) Alice"
     last_explicit_parent = ""
@@ -2320,40 +2270,20 @@ def _heuristic_family_edges_for_fact(fact_id: str, fact_text: str, owner_full: O
         elif last_explicit_parent:
             parent = last_explicit_parent
         if parent and child:
-            candidates.append((parent, "parent_of", child))
+            candidates.append((parent, child))
 
     # Pattern: "Diana's daughter Alice ..."
     for match in _HEURISTIC_POSSESSIVE_CHILD_RE.finditer(text):
         parent = str(match.group("parent") or "").strip()
         child = str(match.group("child") or "").strip()
         if parent and child:
-            candidates.append((parent, "parent_of", child))
-
-    # Pattern: "Diana is my sister."
-    for match in _HEURISTIC_OWNER_KIN_IS_RE.finditer(text):
-        triplet = _heuristic_owner_kin_edge_triplet(
-            rel_raw=str(match.group("rel") or "").strip(),
-            person_raw=str(match.group("person") or "").strip(),
-            owner_full=owner_full,
-        )
-        if triplet:
-            candidates.append(triplet)
-
-    # Pattern: "My sister Diana ..."
-    for match in _HEURISTIC_OWNER_KIN_PREFIX_RE.finditer(text):
-        triplet = _heuristic_owner_kin_edge_triplet(
-            rel_raw=str(match.group("rel") or "").strip(),
-            person_raw=str(match.group("person") or "").strip(),
-            owner_full=owner_full,
-        )
-        if triplet:
-            candidates.append(triplet)
+            candidates.append((parent, child))
 
     edges: List[Dict[str, Any]] = []
     seen = set()
-    for subject_raw, relation_raw, object_raw in candidates:
-        subject = _canonicalize_owner_alias(subject_raw, owner_full)
-        obj = _canonicalize_owner_alias(object_raw, owner_full)
+    for parent_raw, child_raw in candidates:
+        subject = _canonicalize_owner_alias(parent_raw, owner_full)
+        obj = _canonicalize_owner_alias(child_raw, owner_full)
         if not subject or not obj:
             continue
         if _is_placeholder_entity_name(subject, owner_full) or _is_placeholder_entity_name(obj, owner_full):
@@ -2361,7 +2291,7 @@ def _heuristic_family_edges_for_fact(fact_id: str, fact_text: str, owner_full: O
         if subject.lower() == obj.lower():
             continue
         subject, subject_type, relation, obj, obj_type = _normalize_edge(
-            subject, "Person", relation_raw, obj, "Person"
+            subject, "Person", "parent_of", obj, "Person"
         )
         key = (subject.lower(), relation, obj.lower())
         if key in seen:
@@ -2476,11 +2406,6 @@ JSON array only:"""
 
     # Map results back to facts by index
     results: List[List[Dict[str, Any]]] = [[] for _ in facts]
-    owner_full_by_index: List[str] = []
-    for fact in facts:
-        fact_owner_id = str(fact.get("owner_id") or "").strip() or None
-        owner_full_by_index.append(_owner_full_name(fact_owner_id))
-
     for item in parsed:
         if not isinstance(item, dict):
             continue
@@ -2492,7 +2417,8 @@ JSON array only:"""
         if not isinstance(raw_edges, list):
             continue
 
-        owner_full_fact = owner_full_by_index[idx - 1]
+        fact_owner_id = str(facts[idx - 1].get("owner_id") or "").strip() or None
+        owner_full_fact = _owner_full_name(fact_owner_id)
         fact_edges = []
         for edge in raw_edges:
             if not isinstance(edge, dict):
@@ -2538,38 +2464,20 @@ JSON array only:"""
 
         results[idx - 1] = fact_edges
 
-    # Fallback/augmentation: deterministic kinship extraction for explicit
-    # family phrasing so simple claims do not depend on LLM variability.
+    # Fallback: if LLM returns no edges for explicit family-child statements,
+    # synthesize parent_of edges deterministically.
     for idx, fact in enumerate(facts):
-        owner_full_fact = owner_full_by_index[idx]
+        if results[idx]:
+            continue
+        fact_owner_id = str(fact.get("owner_id") or "").strip() or None
+        owner_full_fact = _owner_full_name(fact_owner_id)
         heuristics = _heuristic_family_edges_for_fact(
             fact_id=str(fact.get("id", "") or ""),
             fact_text=str(fact.get("text", "") or ""),
             owner_full=owner_full_fact,
         )
-        if not heuristics:
-            continue
-        if not results[idx]:
+        if heuristics:
             results[idx] = heuristics
-            continue
-        existing_keys = {
-            (
-                str(edge.get("subject") or "").strip().lower(),
-                str(edge.get("relation") or "").strip(),
-                str(edge.get("object") or "").strip().lower(),
-            )
-            for edge in results[idx]
-        }
-        for edge in heuristics:
-            key = (
-                str(edge.get("subject") or "").strip().lower(),
-                str(edge.get("relation") or "").strip(),
-                str(edge.get("object") or "").strip().lower(),
-            )
-            if key in existing_keys:
-                continue
-            existing_keys.add(key)
-            results[idx].append(edge)
 
     return results
 
