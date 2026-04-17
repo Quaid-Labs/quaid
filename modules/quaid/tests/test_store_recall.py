@@ -2839,9 +2839,80 @@ class TestRecallFastHookInjectContract:
             node,
             node.attributes,
             intent="PROJECT",
+            include_anchor_terms=False,
         )
 
         assert mult >= 1.08
+
+    def test_plan_query_anchor_terms_reports_timing(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": ["Baxter", "pelota de tenis", "the"]}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "¿Qué recuerdas de Baxter y su pelota de tenis?",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["baxter", "pelota de tenis"]
+        assert meta["used_llm"] is True
+        assert meta["source"] == "llm"
+        assert meta["timeout_ms"] == 500
+        assert meta["anchor_count"] == 2
+        assert isinstance(meta["elapsed_ms"], int)
+        assert meta["elapsed_ms"] >= 0
+
+    def test_recall_once_uses_planned_query_anchors_and_tracks_phase_timing(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            mg.store(
+                "Baxter is a golden retriever who loves tennis balls.",
+                owner_id="quaid",
+            )
+
+        lexical_meta = {
+            "used_llm": True,
+            "bailout_reason": None,
+            "elapsed_ms": 17,
+            "timeout_ms": 800,
+            "anchor_count": 1,
+            "source": "llm",
+        }
+        captured_terms = []
+
+        def _capture_multiplier(*args, **kwargs):
+            captured_terms.append(list(kwargs.get("query_anchor_terms") or []))
+            return 1.0
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=False), \
+             patch.object(mg, "_plan_query_anchor_terms", return_value=(["baxter"], lexical_meta)), \
+             patch.object(mg, "_compute_query_fit_multiplier", side_effect=_capture_multiplier):
+            rows, meta = mg._recall_once(
+                "What do you remember about Baxter?",
+                owner_id="quaid",
+                use_routing=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                min_similarity=0.0,
+                return_meta=True,
+            )
+
+        assert rows
+        assert captured_terms
+        assert all(terms == ["baxter"] for terms in captured_terms)
+        assert meta["lexical_anchor"]["used_llm"] is True
+        assert meta["lexical_anchor"]["elapsed_ms"] == 17
+        assert meta["phases_ms"]["lexical_anchor_planner_ms"] == 17
 
     def test_query_fit_multiplier_boosts_temporal_rows_for_when_queries(self):
         import datastore.memorydb.memory_graph as mg

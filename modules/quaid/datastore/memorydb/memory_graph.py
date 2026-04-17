@@ -4252,6 +4252,7 @@ def _vector_store_recall(
         include_graph_traversal=False,
         include_co_session=False if fast_mode else True,
         include_mmr=False if fast_mode else True,
+        include_lexical_anchor_shaping=not fast_mode,
         return_meta=True,
         planned_queries=planned_queries,
         planner_meta=planner_meta,
@@ -4686,6 +4687,7 @@ def _recall_once(
     include_graph_traversal: bool = True,
     include_co_session: bool = True,
     include_mmr: bool = True,
+    include_lexical_anchor_shaping: bool = True,
     low_signal_retry: bool = True,
     return_meta: bool = False,
 ) -> Any:
@@ -4730,6 +4732,7 @@ def _recall_once(
         "intent_classification_ms": 0,
         "ollama_health_ms": 0,
         "hyde_ms": 0,
+        "lexical_anchor_planner_ms": 0,
         "search_hybrid_ms": 0,
         "fts_fallback_ms": 0,
         "raw_fts_ms": 0,
@@ -4880,6 +4883,43 @@ def _recall_once(
                 result_ids.add(node.id)
         _phase_ms["raw_fts_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
+    lexical_anchor_meta: Dict[str, Any] = {
+        "used_llm": False,
+        "bailout_reason": "lexical_anchor_shaping_disabled",
+        "elapsed_ms": 0,
+        "timeout_ms": 0,
+        "anchor_count": 0,
+        "source": "disabled",
+    }
+    query_anchor_terms: List[str] = []
+    if include_lexical_anchor_shaping:
+        planner_timeout_ms = 800
+        planner_max_retries = 0
+        try:
+            planner_timeout_ms = int(getattr(config_retrieval, "lexical_anchor_timeout_ms", 800) or 800)
+        except Exception:
+            planner_timeout_ms = 800
+        try:
+            planner_max_retries = int(getattr(config_retrieval, "lexical_anchor_max_retries", 0) or 0)
+        except Exception:
+            planner_max_retries = 0
+        planner_timeout_s = max(0.2, min(2.0, planner_timeout_ms / 1000.0))
+        query_anchor_terms, lexical_anchor_meta = _plan_query_anchor_terms(
+            clean_query,
+            limit=4,
+            timeout_s=planner_timeout_s,
+            max_retries=planner_max_retries,
+        )
+        _phase_ms["lexical_anchor_planner_ms"] = int(lexical_anchor_meta.get("elapsed_ms") or 0)
+        logger.info(
+            "RECALL_LEXICAL_ANCHOR_PLANNER elapsed_ms=%s used_llm=%s anchor_count=%s bailout_reason=%s source=%s",
+            lexical_anchor_meta.get("elapsed_ms"),
+            lexical_anchor_meta.get("used_llm"),
+            lexical_anchor_meta.get("anchor_count"),
+            lexical_anchor_meta.get("bailout_reason"),
+            lexical_anchor_meta.get("source"),
+        )
+
     # Apply composite scoring (search relevance + recency + frequency + intent boost)
     _phase_t0 = _time.monotonic()
     scored_results = []
@@ -4903,7 +4943,14 @@ def _recall_once(
             if boost_factor:
                 composite = min(composite * boost_factor, 1.0)
         composite = min(
-            composite * _compute_query_fit_multiplier(clean_query, node, _attrs, intent=intent),
+            composite * _compute_query_fit_multiplier(
+                clean_query,
+                node,
+                _attrs,
+                intent=intent,
+                include_anchor_terms=include_lexical_anchor_shaping,
+                query_anchor_terms=query_anchor_terms,
+            ),
             1.0,
         )
         scored_results.append((node, composite))
@@ -4993,7 +5040,14 @@ def _recall_once(
                 if boost_factor:
                     composite = min(composite * boost_factor, 1.0)
             composite = min(
-                composite * _compute_query_fit_multiplier(clean_query, node, _attrs, intent=intent),
+                composite * _compute_query_fit_multiplier(
+                    clean_query,
+                    node,
+                    _attrs,
+                    intent=intent,
+                    include_anchor_terms=include_lexical_anchor_shaping,
+                    query_anchor_terms=query_anchor_terms,
+                ),
                 1.0,
             )
             if composite >= min_similarity:
@@ -5056,7 +5110,14 @@ def _recall_once(
                                 if boost_factor:
                                     composite = min(composite * boost_factor, 1.0)
                             composite = min(
-                                composite * _compute_query_fit_multiplier(clean_query, node, _extra_attrs, intent=intent),
+                                composite * _compute_query_fit_multiplier(
+                                    clean_query,
+                                    node,
+                                    _extra_attrs,
+                                    intent=intent,
+                                    include_anchor_terms=include_lexical_anchor_shaping,
+                                    query_anchor_terms=query_anchor_terms,
+                                ),
                                 1.0,
                             )
                             if composite >= min_similarity:
@@ -5590,6 +5651,7 @@ def _recall_once(
             "mmr_enabled": include_mmr,
             "used_hyde": bool(_ollama_up and use_routing and _HAS_LLM_CLIENTS),
         },
+        "lexical_anchor": dict(lexical_anchor_meta),
     }
     if _recall_telemetry_enabled():
         recall_once_meta["telemetry"] = {
@@ -5615,6 +5677,13 @@ def _recall_once(
                 "prefer_fresh": prefer_fresh,
                 "ollama_healthy": bool(_ollama_up),
                 "threshold_basis": "composite_score",
+                "lexical_anchor": {
+                    "used_llm": bool(lexical_anchor_meta.get("used_llm")),
+                    "anchor_count": int(lexical_anchor_meta.get("anchor_count") or 0),
+                    "elapsed_ms": int(lexical_anchor_meta.get("elapsed_ms") or 0),
+                    "bailout_reason": lexical_anchor_meta.get("bailout_reason"),
+                    "source": lexical_anchor_meta.get("source"),
+                },
             },
             "samples": {
                 "initial_candidates": _sample_candidate_tuples(results, limit=8),
@@ -5668,6 +5737,7 @@ def _recall_once(
                         include_graph_traversal=include_graph_traversal,
                         include_co_session=include_co_session,
                         include_mmr=include_mmr,
+                        include_lexical_anchor_shaping=include_lexical_anchor_shaping,
                         current_session_id=current_session_id,
                         compaction_time=compaction_time,
                         date_from=date_from,
@@ -6136,6 +6206,124 @@ def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[
     return out
 
 
+def _plan_query_anchor_terms(
+    query: str,
+    *,
+    limit: int = 4,
+    timeout_s: float = 0.8,
+    max_retries: int = 0,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """Plan lexical anchor terms with a tiny LLM call.
+
+    This keeps lexical anchoring in the model-driven lane for multilingual
+    behavior instead of hard-coded language regex.
+    """
+    import time as _time
+
+    started = _time.monotonic()
+    clean = " ".join(str(query or "").split()).strip()
+    timeout_s = max(0.2, min(2.0, float(timeout_s or 0.8)))
+    max_retries = max(0, int(max_retries or 0))
+    timeout_ms = int(round(timeout_s * 1000))
+    meta: Dict[str, Any] = {
+        "used_llm": False,
+        "bailout_reason": None,
+        "elapsed_ms": 0,
+        "timeout_ms": timeout_ms,
+        "anchor_count": 0,
+        "source": "none",
+    }
+
+    def _finish(anchors: List[str], bailout_reason: Optional[str], source: str) -> Tuple[List[str], Dict[str, Any]]:
+        meta["bailout_reason"] = bailout_reason
+        meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
+        meta["anchor_count"] = len(anchors)
+        meta["source"] = source
+        return anchors, meta
+
+    if not clean:
+        return _finish([], "empty_query", "none")
+    if not _HAS_LLM_CLIENTS:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Lexical anchor planner unavailable while fail-hard mode is enabled "
+                "(no_llm_clients)."
+            )
+        logger.warning(
+            "Recall lexical anchor planner unavailable; proceeding without lexical anchors"
+        )
+        return _finish([], "no_llm_clients", "none")
+
+    prompt = (
+        "Extract lexical anchor terms from this recall query.\n"
+        "Rules:\n"
+        '- Return JSON only: {"anchors": ["..."]}\n'
+        "- Return at most 4 anchors.\n"
+        "- Keep anchors in the same language and script as the query.\n"
+        "- Do not translate query content.\n"
+        "- Drop small function words and question starters.\n"
+        "- Prefer named entities and distinctive disambiguating nouns.\n"
+        "- Preserve subject/object and ownership directionality.\n\n"
+        f"Query: {clean}"
+    )
+
+    try:
+        meta["used_llm"] = True
+        result, _ = call_fast_reasoning(
+            prompt=prompt,
+            max_tokens=120,
+            timeout=timeout_s,
+            system_prompt="You output compact JSON for lexical anchor extraction. No prose.",
+            max_retries=max_retries,
+        )
+        if result is None:
+            if _is_fail_hard_mode():
+                raise RuntimeError("lexical anchor planner returned no result")
+            logger.warning(
+                "Recall lexical anchor planner returned no result; proceeding without lexical anchors"
+            )
+            return _finish([], "planner_returned_none", "none")
+        parsed = parse_json_response(result)
+        anchors_raw = parsed.get("anchors") if isinstance(parsed, dict) else None
+        if not isinstance(anchors_raw, list):
+            if _is_fail_hard_mode():
+                raise RuntimeError("lexical anchor planner returned invalid JSON payload")
+            logger.warning(
+                "Recall lexical anchor planner returned invalid payload; proceeding without lexical anchors"
+            )
+            return _finish([], "invalid_payload", "none")
+
+        anchors: List[str] = []
+        seen = set()
+        for raw in anchors_raw:
+            term = " ".join(str(raw or "").split()).strip().strip("\"'")
+            if not term:
+                continue
+            lower = term.lower()
+            if lower in seen:
+                continue
+            if len(lower) < 2:
+                continue
+            if lower in _QUERY_STOPWORDS:
+                continue
+            seen.add(lower)
+            anchors.append(lower)
+            if len(anchors) >= limit:
+                break
+        return _finish(anchors, None, "llm")
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Lexical anchor planner failed while fail-hard mode is enabled "
+                f"(timeout_ms={timeout_ms}, max_retries={max_retries}, cause={type(exc).__name__}: {exc})"
+            ) from exc
+        logger.warning(
+            "Recall lexical anchor planner failed; proceeding without lexical anchors: %s",
+            exc,
+        )
+        return _finish([], "planner_exception", "none")
+
+
 def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str, Any]:
     lower = str(query or "").lower()
     query_terms = _extract_distinctive_query_terms(query)
@@ -6543,6 +6731,8 @@ def _compute_query_fit_multiplier(
     attrs: Optional[Dict[str, Any]],
     *,
     intent: str = "GENERAL",
+    include_anchor_terms: bool = True,
+    query_anchor_terms: Optional[List[str]] = None,
 ) -> float:
     # Recall shaping policy: keep this deterministic scorer language-agnostic.
     # Do not add English semantic mappings here (for example family, org-chart,
@@ -6581,7 +6771,11 @@ def _compute_query_fit_multiplier(
             bonus += requirement_bonus.get(requirement, 0.0)
     multiplier = 1.0 + min(0.24, bonus)
 
-    anchor_terms = _extract_explicit_query_anchor_terms(query)
+    anchor_terms = (
+        list(query_anchor_terms or [])
+        if query_anchor_terms is not None
+        else (_extract_explicit_query_anchor_terms(query) if include_anchor_terms else [])
+    )
     if anchor_terms:
         lower_text = text.lower()
         matched_anchor_terms = [
@@ -7734,6 +7928,7 @@ def recall(
     include_graph_traversal: bool = True,
     include_co_session: bool = True,
     include_mmr: bool = True,
+    include_lexical_anchor_shaping: bool = True,
     return_meta: bool = False,
     planned_queries: Optional[List[str]] = None,
     planner_meta: Optional[Dict[str, Any]] = None,
@@ -7884,6 +8079,7 @@ def recall(
         domain=domain,
         domain_boost=domain_boost,
         project=project,
+        include_lexical_anchor_shaping=include_lexical_anchor_shaping,
     )
     gate_intent = "GENERAL"
     if use_intent:
