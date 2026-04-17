@@ -40,7 +40,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Ensure plugin root is importable (B060)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
