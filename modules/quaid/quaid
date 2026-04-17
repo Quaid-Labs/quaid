@@ -11,7 +11,7 @@
 #   quaid docs check
 #   quaid registry list --project quaid
 #   quaid doctor
-#   quaid config [show|edit|path|set <key> <value>|set-auth <token>]
+#   quaid config  # deprecated; edit config files directly
 #   quaid auth refresh [<token>|--file <path>]
 #   quaid help
 #
@@ -432,31 +432,18 @@ PYEOF
     ;;
 
   config)
-    SUBCMD="${1:-show}"
-    shift 2>/dev/null || true
-    CONFIG_NODE="$SCRIPT_DIR/config_cli.mjs"
-    CONFIG_PY="$SCRIPT_DIR/config_cli.py"
-    case "$SUBCMD" in
-      show|edit|path)
-        if [[ -f "$CONFIG_NODE" ]]; then
-          exec node "$CONFIG_NODE" "$SUBCMD" "$@"
-        fi
-        exec "$PYTHON_BIN" "$CONFIG_PY" "$SUBCMD" "$@"
-        ;;
-      set)
-        if [[ -f "$CONFIG_NODE" ]]; then
-          exec node "$CONFIG_NODE" set "$@"
-        fi
-        exec "$PYTHON_BIN" "$CONFIG_PY" set "$@"
-        ;;
-      set-auth)
-        exec "$PYTHON_BIN" "$CONFIG_PY" set-auth "$@"
-        ;;
-      *)
-        echo "Usage: quaid config [show|edit|path|set <dotted.key> <value>|set-auth <token>] [--shared | --instance <id>]"
-        exit 1
-        ;;
-    esac
+    CONFIG_HOME_HINT="${QUAID_HOME:-$HOME/.quaid}"
+    CURRENT_INSTANCE_HINT="${QUAID_INSTANCE:-<instance-id>}"
+    echo "error: 'quaid config' is deprecated and disabled." >&2
+    echo "" >&2
+    echo "Edit layered JSON files directly (recommended with your AI agent):" >&2
+    echo "  Global defaults:    ${CONFIG_HOME_HINT}/shared/config/global/config.json" >&2
+    echo "  Platform overrides: ${CONFIG_HOME_HINT}/shared/config/<platform>/config.json" >&2
+    echo "  Instance overrides: ${CONFIG_HOME_HINT}/instances/${CURRENT_INSTANCE_HINT}/config.json" >&2
+    echo "" >&2
+    echo "For auth token storage, use: quaid auth refresh <token>" >&2
+    echo "TODO(post-launch): rewrite 'quaid config' for nested layered architecture." >&2
+    exit 2
     ;;
 
   update)
@@ -528,15 +515,13 @@ PYEOF
     echo "Config:"
     echo "  instances list       List all Quaid instances under QUAID_HOME"
     echo ""
-    echo "Config:"
-    echo "  config [show]        Show config summary (default: shared or current instance)"
-    echo "  config edit          Interactive config editor"
-    echo "  config path          Show active config file path"
-    echo "  config set k v       Set value by dotted key path"
-    echo "  config set-auth tok  Store a long-lived adapter auth token"
+    echo "Config (deprecated CLI):"
+    echo "  config               Deprecated; edit config files directly"
     echo "  auth refresh         Refresh adapter auth token from arg, file, or stdin"
-    echo "  --shared             Target machine-wide shared config (embeddings, ollama)"
-    echo "  --instance <id>      Target a specific instance's config"
+    echo "  Global config path:  \$QUAID_HOME/shared/config/global/config.json"
+    echo "  Platform path:       \$QUAID_HOME/shared/config/<platform>/config.json"
+    echo "  Instance path:       \$QUAID_HOME/instances/<instance>/config.json"
+    echo "  TODO(post-launch): rewrite 'quaid config' for layered nested architecture"
     echo ""
     echo "Run from: $SCRIPT_DIR"
     ;;

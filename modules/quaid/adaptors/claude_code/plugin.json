@@ -56,7 +56,7 @@
         "oauth_token": {
           "description": "Long-lived OAuth token from 'claude setup-token'",
           "setup_command": "claude setup-token",
-          "store_command": "quaid config set-auth <token>",
+          "store_command": "quaid auth refresh <token>",
           "required": true
         }
       },

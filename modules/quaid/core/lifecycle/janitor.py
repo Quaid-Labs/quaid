@@ -676,7 +676,7 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
         "# Janitor Pending Approval Requests",
         "",
         "These changes were held because policy is set to `ask`.",
-        "Run with `--approve` once reviewed, or switch scope to `auto` in `quaid config edit`.",
+        "Run with `--approve` once reviewed, or switch scope to `auto` in the layered config JSON files.",
         "",
     ]
     for r in reqs:
@@ -691,7 +691,7 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
             f"[Quaid] ⚠️ Janitor held `{scope}` change: {summary}\n"
             f"Review logs/janitor/pending-approval-requests.md.\n"
             f"Run `quaid janitor --apply --task {task_name} --approve` to apply,\n"
-            f"or switch this scope to auto via `quaid config edit`.",
+            f"or switch this scope to auto via the layered config JSON files.",
             kind="approval_request",
             priority="high",
         )
@@ -920,12 +920,12 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 return True
             _queue_approval_request(scope, task, summary)
             print(f"[policy] {scope}=ask, holding apply: {summary}")
-            print("[policy] Re-run with --approve, or set this scope to auto in `quaid config edit`.")
+            print("[policy] Re-run with --approve, or set this scope to auto in layered config JSON.")
             return False
         # dry_run policy
         _queue_approval_request(scope, task, summary + " (policy dry_run)")
         print(f"[policy] {scope}=dry_run, holding apply: {summary}")
-        print("[policy] Switch scope to auto/ask in `quaid config edit` when ready.")
+        print("[policy] Switch scope to auto/ask in layered config JSON when ready.")
         return False
 
     # ⚠️ LLM PROVIDER CHECK — janitor needs a working LLM provider for most tasks.
