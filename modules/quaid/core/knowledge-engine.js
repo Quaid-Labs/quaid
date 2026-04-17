@@ -176,6 +176,10 @@ Rules:
   - Preserve explicit dates/times in the cleaned query.
   - If the user asks "current/latest/now/as of", include those terms in the cleaned query.
   - Never invent dates.
+- Language fidelity:
+  - Preserve the user's language/script in the cleaned query.
+  - Do not translate user content into another language unless explicitly requested.
+  - If lexical variants are useful, keep them in the same language/script as the user query.
 - intent facet:
   - general: broad/default
   - agent_actions: prioritize records of what assistant/agent suggested or did

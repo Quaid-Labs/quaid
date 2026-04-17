@@ -6847,6 +6847,9 @@ def _plan_fanout_queries(
         "- First query: rephrase the core intent as a factual statement.\n"
         "- Additional queries: alternative angles, related entities, or broader context.\n"
         "- Keep all original names, dates, projects, and entities.\n"
+        "- Detect the message language and keep generated queries in that same language/script.\n"
+        "- Do not translate user content into another language unless explicitly requested.\n"
+        "- If you generate lexical alternatives, keep them in the same language/script as the user message.\n"
         "- Preserve subject/object roles and possession exactly; never rewrite into the opposite ownership or relation direction.\n"
         "- Do not guess a relationship subtype unless the user explicitly stated it.\n"
         "- For short focused factual questions, returning only the original query is often best.\n"
@@ -7590,6 +7593,8 @@ def _drill_plan_queries(
         "- Try different angles: related entities, temporal context, broader/narrower scope.\n"
         "- Do NOT repeat queries from the 'already searched' list.\n"
         "- Keep original names, dates, and entities.\n"
+        "- Keep follow-up queries in the same language/script as the original query.\n"
+        "- Do not translate query content into another language unless explicitly requested.\n"
         "- Prefer one precise follow-up over several vague rewrites.\n"
     )
     try:

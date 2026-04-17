@@ -2093,6 +2093,7 @@ class TestRecallTelemetry:
 
         assert queries[0] == query
         assert "Default to exactly 1 query" in captured["prompt"]
+        assert "keep generated queries in that same language/script" in captured["prompt"]
         assert meta["planner_profile"] == "aggressive"
 
     def test_plan_fanout_queries_raises_without_llm_when_failhard_enabled(self):
@@ -2154,6 +2155,12 @@ class TestRecallTelemetry:
             }
         ]
 
+        captured = {}
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return ('{"queries":[]}', {})
+
         with patch.object(
             mg,
             "parse_json_response",
@@ -2165,7 +2172,7 @@ class TestRecallTelemetry:
                 ],
                 "done": False,
             },
-        ), patch("lib.llm_clients.call_fast_reasoning", return_value=('{"queries":[]}', {})):
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
             queries, meta = mg._drill_plan_queries(
                 query,
                 current_results,
@@ -2179,6 +2186,7 @@ class TestRecallTelemetry:
             "assistant suggestions Linda birthday dinner restaurants",
             "Linda birthday dinner restaurant recommendations",
         ]
+        assert "same language/script as the original query" in captured["prompt"]
         assert meta["queries_count"] == len(queries)
         assert meta["done"] is False
 

@@ -41,6 +41,8 @@ def test_default_extraction_prompt_contains_expected_sections():
     assert "Preserve concrete anchors from the transcript whenever available" in text
     assert "This applies to ALL fact categories" in text
     assert "works_at, spouse_of, parent_of, sibling_of" in text
+    assert "LANGUAGE FIDELITY (MANDATORY)" in text
+    assert "Do not translate factual statements into another language unless explicitly requested." in text
 
 
 def test_custom_prompt_set_can_override_selected_keys():

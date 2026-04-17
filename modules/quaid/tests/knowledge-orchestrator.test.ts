@@ -419,8 +419,10 @@ describe("knowledge orchestrator", () => {
     });
 
     await engine.routeRecallPlan("what did the assistant do", true, "fast", "agent_actions");
-    const prompts = callFastRouter.mock.calls.map((c) => String(c?.[1] || ""));
-    expect(prompts.some((p) => p.includes("intent: agent_actions"))).toBe(true);
+    const userPrompts = callFastRouter.mock.calls.map((c) => String(c?.[1] || ""));
+    const systemPrompts = callFastRouter.mock.calls.map((c) => String(c?.[0] || ""));
+    expect(userPrompts.some((p) => p.includes("intent: agent_actions"))).toBe(true);
+    expect(systemPrompts.some((p) => p.includes("Language fidelity:"))).toBe(true);
   });
 
   it("exposes store registry metadata from core", () => {

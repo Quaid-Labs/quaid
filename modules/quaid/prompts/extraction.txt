@@ -69,6 +69,11 @@ QUALITY RULES:
   - prefer "Solomon Steadman has a sister named Diana" over "Solomon Steadman has a sister".
   - prefer "Quaid added retry cap 60 in providers.py" over "Quaid changed retries".
 - If both generic and specific versions are present, keep the most specific anchored version.
+- LANGUAGE FIDELITY (MANDATORY):
+  - Detect the transcript's dominant language and keep extracted fact text in that same language.
+  - Do not translate factual statements into another language unless explicitly requested.
+  - Keep named entities exactly as written in the transcript.
+  - If transcript lines mix languages, preserve each extracted fact in the source language of that line.
 - If a recommendation later paid off or was adopted, keep BOTH the original recommendation object and the later outcome as separate searchable facts when both are explicitly present.
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Add "domains" as an array of domain tags from the available domain list
