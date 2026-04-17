@@ -6104,6 +6104,38 @@ def _extract_distinctive_query_terms(query: str, *, limit: int = 8) -> List[str]
     return out
 
 
+def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[str]:
+    """Return explicit entity-like anchors from the original query text.
+
+    These anchors are intentionally conservative. They are only used to keep
+    named queries like "my dog Baxter" from being buried by hotter global
+    profile/setup rows that do not mention the named entity at all.
+    """
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9._'-]*", str(query or ""))
+    out: List[str] = []
+    seen = set()
+    sentence_starter_noise = {
+        "what", "who", "where", "when", "why", "how", "if", "tell", "list", "name",
+        "do", "does", "did", "is", "are", "can", "could", "would", "should",
+    }
+    for idx, token in enumerate(tokens):
+        lower = token.lower()
+        if lower in seen:
+            continue
+        if lower in _QUERY_STOPWORDS:
+            continue
+        if idx == 0 and lower in sentence_starter_noise:
+            continue
+        if len(lower) < 3:
+            continue
+        if token[:1].isupper():
+            seen.add(lower)
+            out.append(lower)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str, Any]:
     lower = str(query or "").lower()
     query_terms = _extract_distinctive_query_terms(query)
@@ -6524,6 +6556,7 @@ def _compute_query_fit_multiplier(
         "text": text,
         "category": node.type.lower(),
         "source_type": (attrs or {}).get("source_type"),
+        "visibility_scope": (attrs or {}).get("visibility_scope"),
     }
 
     bonus = 0.0
@@ -6546,8 +6579,28 @@ def _compute_query_fit_multiplier(
             continue
         if _row_matches_requirement(row, requirement):
             bonus += requirement_bonus.get(requirement, 0.0)
+    multiplier = 1.0 + min(0.24, bonus)
 
-    return 1.0 + min(0.24, bonus)
+    anchor_terms = _extract_explicit_query_anchor_terms(query)
+    if anchor_terms:
+        lower_text = text.lower()
+        matched_anchor_terms = [
+            term for term in anchor_terms
+            if re.search(rf"\b{re.escape(term)}\b", lower_text)
+        ]
+        if matched_anchor_terms:
+            anchor_boost = 1.22 + min(0.16, 0.06 * (len(matched_anchor_terms) - 1))
+            multiplier *= anchor_boost
+        else:
+            multiplier *= 0.78
+            source_type = str((attrs or {}).get("source_type") or "").strip().lower()
+            visibility_scope = str((attrs or {}).get("visibility_scope") or "").strip().lower()
+            if source_type in {"import", "tool"}:
+                multiplier *= 0.88
+            if visibility_scope in {"global_shared", "system"}:
+                multiplier *= 0.88
+
+    return max(0.35, min(1.45, multiplier))
 
 
 def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str = "full") -> Dict[str, Any]:
