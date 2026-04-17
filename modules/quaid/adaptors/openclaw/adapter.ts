@@ -734,6 +734,48 @@ const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are b
 const OPENCLAW_QUEUED_SESSION_START_RE =
   /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
 const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
+type LifecycleSlashAction = "new" | "reset" | "compact";
+
+function normalizeLifecycleSlashAction(text: string): LifecycleSlashAction | null {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized.startsWith("/")) return null;
+  if (normalized === "/new" || normalized.startsWith("/new ")) return "new";
+  if (normalized === "/reset" || normalized.startsWith("/reset ")) return "reset";
+  if (normalized === "/compact" || normalized.startsWith("/compact ")) return "compact";
+  return null;
+}
+
+function extractLifecycleSlashAction(raw: string): LifecycleSlashAction | null {
+  const initial = String(raw || "").trim();
+  if (!initial) return null;
+
+  const direct = normalizeLifecycleSlashAction(initial.replace(/^\[.*?\]\s*/, ""));
+  if (direct) return direct;
+
+  const scrubbed = stripOpenClawInternalContext(initial);
+  if (!scrubbed) return null;
+
+  const lines = scrubbed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    const deTimestamped = line.replace(/^\[.*?\]\s*/, "").trim();
+    const withoutRolePrefix = deTimestamped.replace(/^(?:user|assistant|system|a|u)\s*:\s*/i, "").trim();
+    const action = normalizeLifecycleSlashAction(withoutRolePrefix);
+    if (action) return action;
+  }
+
+  const lineStartMatch = scrubbed.match(
+    /(?:^|\n)\s*(?:\[[^\n]*\]\s*)?(?:user|assistant|system|a|u)?\s*:?\s*(\/(?:new|reset|compact)\b[^\n]*)/i,
+  );
+  if (lineStartMatch?.[1]) {
+    return normalizeLifecycleSlashAction(lineStartMatch[1]);
+  }
+  return null;
+}
 
 function stripOpenClawInternalContext(raw: string): string {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
@@ -4677,36 +4719,28 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             for (let i = 0; i < fresh.length; i += 1) {
               const rawText = extractSessionMessageText(fresh[i]).trim();
               if (!rawText) continue;
-              // The before_prompt_build hook prepends injected context before the
-              // user's actual message, and OC gateway prepends a [Day Date Time TZ]
-              // timestamp to every user message. To detect slash commands robustly:
-              // 1. Take the LAST non-empty line (user input is always last after injections).
-              // 2. Strip the OC timestamp prefix from that line.
-              const rawLines = rawText.split("\n").filter((l: string) => l.trim());
-              const lastLine = (rawLines[rawLines.length - 1] || "").trim();
-              const stripped = lastLine.replace(/^\[.*?\]\s*/, "").trim();
-              const text = (stripped || rawText).toLowerCase();
-              const commandKey = `${sessionId}:${priorCount + i}:${text}`;
+              const commandName = extractLifecycleSlashAction(rawText);
+              if (!commandName) {
+                continue;
+              }
+              const commandText = `/${commandName}`;
+              const commandKey = `${sessionId}:${priorCount + i}:${commandText}`;
               if (seenSessionIndexCommandKeys.has(commandKey)) {
                 continue;
               }
               let daemonType: "reset" | "compaction" | null = null;
               let lifecycleSignal: "ResetSignal" | "CompactionSignal" | null = null;
-              let commandName: "new" | "reset" | "compact" | null = null;
-              if (text === "/new" || text.startsWith("/new ")) {
+              if (commandName === "new") {
                 daemonType = "reset";
                 lifecycleSignal = "ResetSignal";
-                commandName = "new";
-              } else if (text === "/reset" || text.startsWith("/reset ")) {
+              } else if (commandName === "reset") {
                 daemonType = "reset";
                 lifecycleSignal = "ResetSignal";
-                commandName = "reset";
-              } else if (text === "/compact" || text.startsWith("/compact ")) {
+              } else if (commandName === "compact") {
                 daemonType = "compaction";
                 lifecycleSignal = "CompactionSignal";
-                commandName = "compact";
               }
-              if (!daemonType || !lifecycleSignal || !commandName) {
+              if (!daemonType || !lifecycleSignal) {
                 continue;
               }
               seenSessionIndexCommandKeys.add(commandKey);
@@ -4714,7 +4748,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 session_id: sessionId,
                 session_key: key,
                 command: commandName,
-                text: text.slice(0, 120),
+                text: commandText,
               });
               if (isInternalSessionContext({ sessionKey: key }, { sessionId }) || !isSystemEnabled("memory")) {
                 continue;
@@ -4987,17 +5021,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         // before calling hooks; without stripping, "/compact" → "[...] /compact"
         // which doesn't match the bare slash-command patterns.
         const text = rawText.replace(/^\[.*?\]\s*/, "").trim() || rawText;
-        const normalized = text.toLowerCase();
-        let commandAction: "new" | "reset" | "compact" | null = null;
+        const commandAction = extractLifecycleSlashAction(text);
         let lifecycleSignal: "ResetSignal" | "CompactionSignal" | null = null;
-        if (normalized === "/new" || normalized.startsWith("/new ")) {
-          commandAction = "new";
+        if (commandAction === "new") {
           lifecycleSignal = "ResetSignal";
-        } else if (normalized === "/reset" || normalized.startsWith("/reset ")) {
-          commandAction = "reset";
+        } else if (commandAction === "reset") {
           lifecycleSignal = "ResetSignal";
-        } else if (normalized === "/compact" || normalized.startsWith("/compact ")) {
-          commandAction = "compact";
+        } else if (commandAction === "compact") {
           lifecycleSignal = "CompactionSignal";
         }
         if (!commandAction || !lifecycleSignal) return;
@@ -6371,6 +6401,7 @@ export const __test = {
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
+  extractLifecycleSlashAction,
   getContextRefreshStrategy,
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,

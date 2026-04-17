@@ -57,6 +57,32 @@ describe("lifecycle signal detection", () => {
     expect(signal).toBe("ResetSignal");
   });
 
+  it("extracts /new from queued matrix wrapper payloads", () => {
+    const action = __test.extractLifecycleSlashAction(
+      [
+        "[Fri 2026-04-17 10:46 GMT+8] ---",
+        "Queued #1 (from Solomon Steadman)",
+        "/new",
+        "A new session was started via /new or /reset.",
+        "If runtime-provided startup context is included for this first turn, use it before responding to the user.",
+      ].join("\n"),
+    );
+    expect(action).toBe("new");
+  });
+
+  it("does not infer lifecycle command from startup boilerplate text alone", () => {
+    const action = __test.extractLifecycleSlashAction(
+      [
+        "[Queued messages while agent was busy]",
+        "---",
+        "Queued #1 (from Solomon Steadman)",
+        "A new session was started via /new or /reset.",
+        "If runtime-provided startup context is included for this first turn, use it before responding to the user.",
+      ].join("\n"),
+    );
+    expect(action).toBe(null);
+  });
+
   it("suppresses duplicate compaction signal signatures", () => {
     __test.clearLifecycleSignalHistory();
     const detail = __test.detectLifecycleSignal([
