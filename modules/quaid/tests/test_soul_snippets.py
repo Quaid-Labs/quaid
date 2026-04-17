@@ -562,6 +562,7 @@ class TestDistillation:
         telemetry_path = workspace_dir / "logs" / "soul_review_telemetry.jsonl"
         assert telemetry_path.exists()
         events = [json.loads(line) for line in telemetry_path.read_text().splitlines() if line.strip()]
+        assert any(e["task"] == "journal_distillation" and e["status"] == "file_start" for e in events)
         assert any(e["task"] == "journal_distillation" and e["status"] == "start" for e in events)
         ok_events = [e for e in events if e["task"] == "journal_distillation" and e["status"] == "ok"]
         assert len(ok_events) == 1
@@ -569,6 +570,12 @@ class TestDistillation:
         assert ok_events[0]["items"] == 1
         assert ok_events[0]["timeout_s"] == 1800.0
         assert ok_events[0]["duration_s"] == 1.5
+        assert ok_events[0]["adapter"] == "standalone"
+        assert ok_events[0]["instance"] == "pytest-runner"
+        apply_events = [e for e in events if e["task"] == "journal_distillation" and e["status"] == "apply_result"]
+        assert len(apply_events) == 1
+        assert "before_tokens" in apply_events[0]
+        assert "after_tokens" in apply_events[0]
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_apply(self, mock_opus, workspace_dir, mock_config):
@@ -1680,6 +1687,38 @@ class TestSnippetReview:
         assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
         assert isinstance(kwargs.get("max_tokens"), int)
         assert isinstance(kwargs.get("timeout"), (int, float))
+
+    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    def test_snippet_review_writes_apply_telemetry(self, mock_opus, workspace_dir, mock_config):
+        (workspace_dir / "SOUL.snippets.md").write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- I notice patterns in my responses.\n",
+            encoding="utf-8",
+        )
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n", encoding="utf-8")
+
+        mock_opus.return_value = (json.dumps({
+            "decisions": [
+                {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END", "reason": "signal"}
+            ]
+        }), 1.2)
+
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import run_soul_snippets_review
+            run_soul_snippets_review(dry_run=False)
+
+        telemetry_path = workspace_dir / "logs" / "soul_review_telemetry.jsonl"
+        events = [json.loads(line) for line in telemetry_path.read_text().splitlines() if line.strip()]
+        file_start = [e for e in events if e.get("task") == "snippet_review" and e.get("status") == "file_start"]
+        assert len(file_start) == 1
+        assert file_start[0]["adapter"] == "standalone"
+        assert file_start[0]["instance"] == "pytest-runner"
+        apply_events = [e for e in events if e.get("task") == "snippet_review" and e.get("status") == "apply_result"]
+        assert len(apply_events) == 1
+        assert apply_events[0]["folded"] == 1
+        assert "before_tokens" in apply_events[0]
+        assert "after_tokens" in apply_events[0]
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_apply_folds_into_parent(self, mock_opus, workspace_dir, mock_config):

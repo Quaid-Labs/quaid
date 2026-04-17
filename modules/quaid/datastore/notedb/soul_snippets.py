@@ -450,10 +450,38 @@ def _review_telemetry_path() -> Path:
     return _workspace_dir() / "logs" / "soul_review_telemetry.jsonl"
 
 
+def _runtime_adapter_label() -> str:
+    """Best-effort adapter id for telemetry labeling."""
+    explicit = str(os.environ.get("QUAID_ADAPTER_TYPE", "") or "").strip().lower()
+    if explicit:
+        return explicit
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+        adapter_id = str(adapter.adapter_id() or "").strip().lower()
+        if adapter_id:
+            return adapter_id
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _text_snapshot_stats(text: str) -> Dict[str, int]:
+    body = str(text or "")
+    return {
+        "chars": len(body),
+        "bytes": len(body.encode("utf-8")),
+        "lines": len(body.splitlines()),
+        "tokens": int(estimate_tokens(body)),
+    }
+
+
 def _append_review_telemetry(event: Dict[str, Any]) -> None:
     path = _review_telemetry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"ts": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")}
+    payload["adapter"] = _runtime_adapter_label()
+    payload["instance"] = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
     payload.update(event)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
@@ -1037,6 +1065,8 @@ Respond as JSON:
 
 def _normalize_distillation_result(filename: str, result: Dict[str, Any]) -> Dict[str, Any]:
     """Trim overly additive/loggy distillation outputs before applying them."""
+    raw_additions_count = len(result.get("additions", []) or [])
+    raw_edits_count = len(result.get("edits", []) or [])
     normalized: Dict[str, Any] = {
         "reasoning": str(result.get("reasoning", "") or ""),
         "additions": [],
@@ -1091,6 +1121,14 @@ def _normalize_distillation_result(filename: str, result: Dict[str, Any]) -> Dic
         if candidate and candidate not in captured_dates:
             captured_dates.append(candidate)
     normalized["captured_dates"] = captured_dates
+    normalized["_telemetry"] = {
+        "raw_additions": raw_additions_count,
+        "raw_edits": raw_edits_count,
+        "kept_additions": len(kept_additions),
+        "kept_edits": len(normalized_edits),
+        "dropped_loggy_additions": int(dropped_loggy),
+        "capped_additions": int(capped),
+    }
 
     return normalized
 
@@ -1891,9 +1929,30 @@ def run_journal_distillation(
         parent_content = read_parent_file(filename)
         if not parent_content:
             print(f"  {filename}: parent file not found, skipping")
+            _append_review_telemetry({
+                "task": "journal_distillation",
+                "status": "skip_missing_parent",
+                "file": filename,
+                "items": len(entries),
+            })
             continue
 
         project_content = read_project_generated_file(filename)
+        parent_stats = _text_snapshot_stats(parent_content)
+        project_stats = _text_snapshot_stats(project_content)
+        _append_review_telemetry({
+            "task": "journal_distillation",
+            "status": "file_start",
+            "file": filename,
+            "items": len(entries),
+            "entry_chars": sum(len(str(e.get("content", "") or "")) for e in entries),
+            "entry_tokens": sum(_entry_token_estimate(e) for e in entries),
+            "dry_run": bool(dry_run),
+            "parent_chars": parent_stats["chars"],
+            "parent_tokens": parent_stats["tokens"],
+            "project_chars": project_stats["chars"],
+            "project_tokens": project_stats["tokens"],
+        })
         context_tokens = (
             estimate_tokens(system_prompt)
             + estimate_tokens(parent_content)
@@ -2021,15 +2080,42 @@ def run_journal_distillation(
                 "max_output_tokens": max_tokens,
                 "timeout_s": llm_timeout,
                 "duration_s": float(duration or 0.0),
+                "response_chars": len(response_text),
                 "captured_dates": len(result.get("captured_dates", []) or []),
                 "additions": len(result.get("additions", []) or []),
                 "edits": len(result.get("edits", []) or []),
+                "raw_additions": int((result.get("_telemetry", {}) or {}).get("raw_additions", 0)),
+                "raw_edits": int((result.get("_telemetry", {}) or {}).get("raw_edits", 0)),
+                "kept_additions": int((result.get("_telemetry", {}) or {}).get("kept_additions", 0)),
+                "kept_edits": int((result.get("_telemetry", {}) or {}).get("kept_edits", 0)),
+                "dropped_loggy_additions": int((result.get("_telemetry", {}) or {}).get("dropped_loggy_additions", 0)),
+                "capped_additions": int((result.get("_telemetry", {}) or {}).get("capped_additions", 0)),
             })
             print(
                 f"  Deep Reasoning responded for{filename} window {window_idx}/{len(windows)} "
                 f"in {float(duration or 0.0):.1f}s"
             )
+            before_apply = read_parent_file(filename)
+            before_stats = _text_snapshot_stats(before_apply)
             stats = apply_distillation(filename, result, dry_run=dry_run)
+            after_apply = read_parent_file(filename)
+            after_stats = _text_snapshot_stats(after_apply)
+            _append_review_telemetry({
+                "task": "journal_distillation",
+                "status": "apply_result",
+                "file": filename,
+                "window": window_idx,
+                "window_count": len(windows),
+                "dry_run": bool(dry_run),
+                "additions_applied": int(stats.get("additions", 0)),
+                "edits_applied": int(stats.get("edits", 0)),
+                "recovered_edits": int(stats.get("recovered_edits", 0)),
+                "errors_count": len(stats.get("errors", []) or []),
+                "before_chars": before_stats["chars"],
+                "before_tokens": before_stats["tokens"],
+                "after_chars": after_stats["chars"],
+                "after_tokens": after_stats["tokens"],
+            })
             total_additions += stats["additions"]
             total_edits += stats["edits"]
             all_errors.extend(stats["errors"])
@@ -2142,6 +2228,19 @@ def run_soul_snippets_review(
 
         current_parent = read_parent_file(filename)
         current_project = read_project_generated_file(filename)
+        parent_stats = _text_snapshot_stats(current_parent)
+        project_stats = _text_snapshot_stats(current_project)
+        _append_review_telemetry({
+            "task": "snippet_review",
+            "status": "file_start",
+            "file": filename,
+            "items": len(payload["snippets"]),
+            "dry_run": bool(dry_run),
+            "parent_chars": parent_stats["chars"],
+            "parent_tokens": parent_stats["tokens"],
+            "project_chars": project_stats["chars"],
+            "project_tokens": project_stats["tokens"],
+        })
         context_tokens = (
             estimate_tokens(system_prompt)
             + estimate_tokens(current_parent)
@@ -2297,17 +2396,40 @@ def run_soul_snippets_review(
                 "max_output_tokens": max_tokens,
                 "timeout_s": llm_timeout,
                 "duration_s": float(duration or 0.0),
+                "response_chars": len(response_text),
                 "decisions": len(decisions),
             })
             print(
                 f"  Review model responded for {filename} window {window_label} "
                 f"in {float(duration or 0.0):.1f}s"
             )
+            before_apply = read_parent_file(filename)
+            before_stats = _text_snapshot_stats(before_apply)
             file_stats = apply_decisions(
                 decisions,
                 {filename: window_payload},
                 dry_run=dry_run,
             )
+            after_apply = read_parent_file(filename)
+            after_stats = _text_snapshot_stats(after_apply)
+            _append_review_telemetry({
+                "task": "snippet_review",
+                "status": "apply_result",
+                "file": filename,
+                "window": window_label,
+                "window_count": len(windows),
+                "dry_run": bool(dry_run),
+                "folded": int(file_stats.get("folded", 0)),
+                "rewritten": int(file_stats.get("rewritten", 0)),
+                "discarded": int(file_stats.get("discarded", 0)),
+                "preserved_pending": int(file_stats.get("preserved_pending", 0)),
+                "skipped_at_limit": int(file_stats.get("skipped_at_limit", 0)),
+                "errors_count": len(file_stats.get("errors", []) or []),
+                "before_chars": before_stats["chars"],
+                "before_tokens": before_stats["tokens"],
+                "after_chars": after_stats["chars"],
+                "after_tokens": after_stats["tokens"],
+            })
             stats["folded"] += int(file_stats.get("folded", 0))
             stats["rewritten"] += int(file_stats.get("rewritten", 0))
             stats["discarded"] += int(file_stats.get("discarded", 0))
