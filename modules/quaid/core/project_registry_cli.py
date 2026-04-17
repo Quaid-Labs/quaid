@@ -57,14 +57,20 @@ def _instance_view(entry: Dict[str, Any], live_instances: set[str]) -> Dict[str,
 def cmd_list(args):
     from core.project_registry import list_projects
     projects = list_projects()
+    names_only = bool(getattr(args, "names_only", False))
     if not projects:
-        print("No projects registered.")
+        if not names_only:
+            print("No projects registered.")
         return
     live_instances = _live_instance_ids()
     rendered = {
         name: _instance_view(entry, live_instances)
         for name, entry in projects.items()
     }
+    if names_only:
+        for name in sorted(rendered.keys()):
+            print(name)
+        return
     if args.json:
         print(json.dumps(rendered, indent=2))
         return
@@ -244,7 +250,14 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     # list
-    subparsers.add_parser("list", help="List all registered projects")
+    list_p = subparsers.add_parser("list", help="List all registered projects")
+    list_p.add_argument(
+        "--names-only",
+        "--quiet",
+        dest="names_only",
+        action="store_true",
+        help="Print one project name per line with no header/chatter",
+    )
 
     # create
     create_p = subparsers.add_parser("create", help="Create a new project")

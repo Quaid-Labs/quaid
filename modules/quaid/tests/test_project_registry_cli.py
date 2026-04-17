@@ -78,6 +78,22 @@ class TestCmdList:
         parsed = json.loads(out)
         assert "proj" in parsed
 
+    def test_names_only_outputs_one_project_per_line_without_headers(self, capsys):
+        projects = {
+            "zeta-proj": {"description": "Z", "instances": []},
+            "alpha-proj": {"description": "A", "instances": []},
+        }
+        with patch("core.project_registry.list_projects", return_value=projects):
+            cli.cmd_list(_args(names_only=True))
+        out = capsys.readouterr().out
+        assert out.splitlines() == ["alpha-proj", "zeta-proj"]
+
+    def test_names_only_empty_projects_emits_empty_stdout(self, capsys):
+        with patch("core.project_registry.list_projects", return_value={}):
+            cli.cmd_list(_args(names_only=True))
+        out = capsys.readouterr().out
+        assert out == ""
+
     def test_list_prunes_stale_instances_using_live_silos(self, capsys):
         projects = {
             "proj": {

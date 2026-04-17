@@ -331,8 +331,8 @@ def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -
     }
 
 
-def _codex_project_list_fidelity_context(hook_input: dict) -> str:
-    """Return a fidelity block when Codex is summarizing `quaid project list`."""
+def _project_list_cli_hint_context(hook_input: dict) -> str:
+    """Return a reminder to use clean project-list output mode."""
     payload = _extract_codex_tool_output_trace(hook_input, max_chars=12000)
     tool_output = str(payload.get("tool_output") or "").strip()
     if not tool_output:
@@ -341,41 +341,14 @@ def _codex_project_list_fidelity_context(hook_input: dict) -> str:
     if "quaid project list" not in tool_output.lower():
         return ""
 
-    project_lines: List[str] = []
-    seen: set[str] = set()
-    for raw_line in tool_output.splitlines():
-        line = str(raw_line or "").strip()
-        if not line:
-            continue
-        lower = line.lower()
-        if lower.startswith("[") and lower.endswith("]"):
-            continue
-        if lower.startswith("quaid project list"):
-            continue
-        if lower.startswith("quaid ") and "project list" in lower:
-            continue
-        if lower in {"projects:", "(none)", "no projects registered."}:
-            continue
-        if line in seen:
-            continue
-        seen.add(line)
-        project_lines.append(line)
+    if "--names-only" in tool_output.lower() or "--quiet" in tool_output.lower():
+        return ""
 
-    if not project_lines:
-        return (
-            "<quaid_system_message>\n"
-            "[Tool output fidelity]\n"
-            "You just ran `quaid project list`. When replying, preserve the full command output and do not omit entries.\n"
-            "</quaid_system_message>"
-        )
-
-    rendered = "\n".join(f"- {name}" for name in project_lines[:50])
     return (
         "<quaid_system_message>\n"
-        "[Tool output fidelity]\n"
-        "You just ran `quaid project list`. Include every listed project exactly once.\n"
-        "Observed output rows:\n"
-        f"{rendered}\n"
+        "[Tool output reminder]\n"
+        "For exact project-name output, run `quaid project list --names-only`.\n"
+        "That mode prints one project name per line with no headers/chatter.\n"
         "</quaid_system_message>"
     )
 
@@ -749,12 +722,11 @@ def hook_inject(args):
         if deferred_notice_hint:
             context_parts.append(deferred_notice_hint)
 
-        if bool(_adapter_capability("inject_project_list_fidelity_context", False)):
-            codex_tool_fidelity = _codex_project_list_fidelity_context(
-                hook_input if isinstance(hook_input, dict) else {}
-            )
-            if codex_tool_fidelity:
-                context_parts.append(codex_tool_fidelity)
+        project_list_hint = _project_list_cli_hint_context(
+            hook_input if isinstance(hook_input, dict) else {}
+        )
+        if project_list_hint:
+            context_parts.append(project_list_hint)
 
         if memories:
             context_parts.append(_format_memories(memories))

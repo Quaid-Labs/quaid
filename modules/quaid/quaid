@@ -496,7 +496,7 @@ PYEOF
     echo "  docs changelog       View update history"
     echo ""
     echo "Projects:"
-    echo "  project list         List registered projects"
+    echo "  project list [--names-only]  List registered projects"
     echo "  project create       Create a new project"
     echo "  project show <name>  Show project details"
     echo "  project link <name>  Add current instance to an existing project"
