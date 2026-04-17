@@ -156,6 +156,8 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const reg = _ensureOpenClawPluginRegistered(PLUGIN_DIR);");
     expect(setupText).toContain("OpenClaw add-instance install repaired a missing/stale plugin registration.");
     expect(setupText).toContain("OpenClaw Quaid plugin is not fully registered after install");
+    expect(setupText).toContain("legacyInstalledPresent");
+    expect(setupText).toContain('Object.prototype.hasOwnProperty.call(plugins, "installed")');
   });
 
   it("OpenClaw installer reconciles launchd env for the gateway service", () => {

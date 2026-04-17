@@ -2621,13 +2621,25 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
       const parsed = JSON.parse(raw);
       const plugins = parsed.plugins || (parsed.plugins = {});
       const installs = plugins.installs || (plugins.installs = {});
+      const installedAt = new Date().toISOString();
       installs.quaid = {
         source: "path",
         sourcePath: secureSourcePath,
         installPath: extensionDir,
         version: pluginVersion,
-        installedAt: new Date().toISOString(),
+        installedAt,
       };
+      if (Object.prototype.hasOwnProperty.call(plugins, "installed")) {
+        if (!plugins.installed || typeof plugins.installed !== "object" || Array.isArray(plugins.installed)) {
+          plugins.installed = {};
+        }
+        plugins.installed.quaid = {
+          sourcePath: secureSourcePath,
+          installPath: extensionDir,
+          version: pluginVersion,
+          installedAt,
+        };
+      }
       fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
       fs.renameSync(tmpPath, cfgPath);
       log.info("Registered quaid plugin via direct install record write.");
@@ -2707,12 +2719,25 @@ function _readOpenClawPluginState() {
   let pluginEnabled = false;
   let memorySlotBound = false;
   let installPath = "";
+  let legacyInstalledPresent = true;
   try {
     if (fs.existsSync(cfgPath)) {
       const parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-      pluginEnabled = !!parsed?.plugins?.entries?.quaid?.enabled;
-      memorySlotBound = String(parsed?.plugins?.slots?.memory || "").trim() === "quaid";
-      installPath = String(parsed?.plugins?.installs?.quaid?.installPath || "").trim();
+      const plugins = parsed?.plugins;
+      pluginEnabled = !!plugins?.entries?.quaid?.enabled;
+      memorySlotBound = String(plugins?.slots?.memory || "").trim() === "quaid";
+      installPath = String(plugins?.installs?.quaid?.installPath || "").trim();
+      if (!installPath) {
+        installPath = String(plugins?.installed?.quaid?.installPath || "").trim();
+      }
+      if (plugins && typeof plugins === "object" && Object.prototype.hasOwnProperty.call(plugins, "installed")) {
+        const installed = plugins.installed;
+        if (!installed || typeof installed !== "object" || Array.isArray(installed)) {
+          legacyInstalledPresent = false;
+        } else {
+          legacyInstalledPresent = !!installed.quaid;
+        }
+      }
     }
   } catch {}
   return {
@@ -2722,6 +2747,7 @@ function _readOpenClawPluginState() {
     memorySlotBound,
     installPath,
     installPathExists: !!installPath && fs.existsSync(installPath),
+    legacyInstalledPresent,
   };
 }
 
@@ -2732,6 +2758,7 @@ function _ensureOpenClawPluginRegistered(pluginPath) {
     && state.pluginEnabled
     && state.memorySlotBound
     && state.installPathExists
+    && state.legacyInstalledPresent
   ) {
     return { ok: true, reason: "", repaired: false };
   }
@@ -5118,6 +5145,7 @@ except Exception as e:
       || !pluginState.pluginEnabled
       || !pluginState.memorySlotBound
       || !pluginState.installPathExists
+      || !pluginState.legacyInstalledPresent
     ) {
       s.stop(C.red("OpenClaw plugin validation failed"));
       throw new Error(
@@ -5125,7 +5153,8 @@ except Exception as e:
         + `(extensionExists=${pluginState.extensionExists}, `
         + `pluginEnabled=${pluginState.pluginEnabled}, `
         + `memorySlotBound=${pluginState.memorySlotBound}, `
-        + `installPathExists=${pluginState.installPathExists})`
+        + `installPathExists=${pluginState.installPathExists}, `
+        + `legacyInstalledPresent=${pluginState.legacyInstalledPresent})`
       );
     }
   }
