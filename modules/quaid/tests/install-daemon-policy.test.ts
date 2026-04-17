@@ -189,6 +189,15 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("failed to provision extension directory");
   });
 
+  it("OpenClaw shared config seeds transcript mirror prefixes for lean instance layering", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("adapterCapabilities.preserve_transcript_mirror_session_prefixes");
+    expect(setupText).toContain('["agent:main:matrix:channel:"]');
+    expect(setupText).toContain("adapterConfig.capabilities = adapterCapabilities;");
+  });
+
   it("first install seeds the shared quaid project docs", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

@@ -5689,6 +5689,16 @@ async function tryBrewInstall(pkg, label) {
 
 function writeConfig(owner, models, embeddings, systems, janitorPolicies = null) {
   const resolvedAdapterType = models.adapterType || resolvedInstallerPlatform() || "standalone";
+  const adapterCapabilities = {};
+  if (resolvedAdapterType === "openclaw") {
+    // Preserve OC matrix transcript mirroring by default on fresh installs.
+    // Lean per-instance configs rely on shared platform config layering.
+    adapterCapabilities.preserve_transcript_mirror_session_prefixes = ["agent:main:matrix:channel:"];
+  }
+  const adapterConfig = { type: resolvedAdapterType };
+  if (Object.keys(adapterCapabilities).length > 0) {
+    adapterConfig.capabilities = adapterCapabilities;
+  }
   const adapterPluginId = resolvedAdapterType === "openclaw"
     ? "openclaw.adapter"
     : resolvedAdapterType === "claude-code"
@@ -5703,7 +5713,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     destructiveMemoryOps: "auto",
   };
   const config = {
-    adapter: { type: resolvedAdapterType },
+    adapter: adapterConfig,
     plugins: {
       enabled: true,
       strict: true,
