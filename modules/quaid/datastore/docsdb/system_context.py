@@ -53,9 +53,9 @@ def build_system_context_metadata(*, instance_id: str | None = None) -> dict[str
                 "value": rendered,
                 "note": (
                     "Preinject does not cover project or docs detail. "
-                    "For project document questions, run docs recall before filesystem grep/cat "
+                    "MANDATORY ORDER: For project document questions, run docs recall before filesystem grep/cat "
                     "(for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). "
-                    "Only fall back to filesystem reads when docs recall returns no relevant hits."
+                    "Only use filesystem reads if docs recall returns no relevant hits."
                 ),
                 "order": 30,
             }

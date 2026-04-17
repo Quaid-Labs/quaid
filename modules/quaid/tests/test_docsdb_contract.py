@@ -88,9 +88,9 @@ def test_build_docsdb_system_context_metadata(monkeypatch, tmp_path):
                 ),
                 "note": (
                     "Preinject does not cover project or docs detail. "
-                    "For project document questions, run docs recall before filesystem grep/cat "
+                    "MANDATORY ORDER: For project document questions, run docs recall before filesystem grep/cat "
                     "(for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). "
-                    "Only fall back to filesystem reads when docs recall returns no relevant hits."
+                    "Only use filesystem reads if docs recall returns no relevant hits."
                 ),
                 "order": 30,
             }

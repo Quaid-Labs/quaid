@@ -132,7 +132,7 @@ describe("QuaidFacade", () => {
           "active graph relation types: neighbor_of, parent_of",
           "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
           "linked projects: quaid (/tmp/workspace/projects/quaid); misc--instance-a (/tmp/workspace/projects/misc--instance-a)",
-          "runtime note: Preinject does not cover project or docs detail. For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Only fall back to filesystem reads when docs recall returns no relevant hits.",
+          "runtime note: Preinject does not cover project or docs detail. MANDATORY ORDER: For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Only use filesystem reads if docs recall returns no relevant hits.",
         ].join("\n");
       }
       return "{}";
