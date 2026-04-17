@@ -764,6 +764,14 @@ def hook_inject(args):
         baseline_agents_context = _get_quaid_agents_baseline_context()
         if baseline_agents_context:
             context_parts.append(baseline_agents_context)
+        refresh_context = _build_turn_based_refresh_context(session_id)
+        if refresh_context:
+            context_parts.append(refresh_context)
+            _write_hook_trace("hook.inject.context_refreshed", {
+                "query": query[:160],
+                "session_id": session_id,
+                "strategy": _context_refresh_strategy(),
+            })
 
         if not context_parts:
             _write_hook_trace("hook.inject.empty", {
@@ -957,6 +965,287 @@ def _adapter_capability(key: str, default: Any = None) -> Any:
         return default
 
 
+def _context_refresh_strategy() -> str:
+    raw = _adapter_capability("context_refresh_strategy", "compaction")
+    strategy = str(raw or "").strip().lower()
+    return strategy if strategy in {"compaction", "turn_based"} else "compaction"
+
+
+def _context_refresh_guard() -> Dict[str, int]:
+    raw = _adapter_capability("context_refresh_guard", {})
+    guard = raw if isinstance(raw, dict) else {}
+    min_interval_minutes = 30
+    min_turns = 50
+    try:
+        parsed = int(guard.get("min_interval_minutes", min_interval_minutes))
+        if parsed > 0:
+            min_interval_minutes = parsed
+    except Exception:
+        pass
+    try:
+        parsed = int(guard.get("min_turns", min_turns))
+        if parsed > 0:
+            min_turns = parsed
+    except Exception:
+        pass
+    return {
+        "min_interval_minutes": min_interval_minutes,
+        "min_turns": min_turns,
+    }
+
+
+def _context_refresh_state_path() -> Path | None:
+    try:
+        from lib.adapter import get_adapter
+
+        return get_adapter().data_dir() / "context-refresh-state.json"
+    except Exception:
+        return None
+
+
+def _load_context_refresh_state() -> Dict[str, Any]:
+    path = _context_refresh_state_path()
+    if path is None:
+        return {}
+    try:
+        if path.is_file():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        pass
+    return {}
+
+
+def _store_context_refresh_state(state: Dict[str, Any]) -> None:
+    path = _context_refresh_state_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _seed_turn_based_refresh_state(session_id: str) -> None:
+    if _context_refresh_strategy() != "turn_based":
+        return
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    state = _load_context_refresh_state()
+    sessions = state.setdefault("sessions", {})
+    if not isinstance(sessions, dict):
+        sessions = {}
+        state["sessions"] = sessions
+    entry = sessions.get(sid)
+    if not isinstance(entry, dict):
+        entry = {}
+        sessions[sid] = entry
+    entry.setdefault("turn_count", 0)
+    entry.setdefault("last_refresh_turn", 0)
+    entry.setdefault("last_refresh_at", int(time.time()))
+    _store_context_refresh_state(state)
+
+
+def _should_emit_turn_based_refresh(session_id: str) -> bool:
+    if _context_refresh_strategy() != "turn_based":
+        return False
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+
+    guard = _context_refresh_guard()
+    min_turns = int(guard.get("min_turns", 50))
+    min_interval_seconds = int(guard.get("min_interval_minutes", 30)) * 60
+
+    state = _load_context_refresh_state()
+    sessions = state.setdefault("sessions", {})
+    if not isinstance(sessions, dict):
+        sessions = {}
+        state["sessions"] = sessions
+    entry = sessions.get(sid)
+    if not isinstance(entry, dict):
+        entry = {}
+        sessions[sid] = entry
+
+    now = int(time.time())
+    turn_count = int(entry.get("turn_count", 0) or 0) + 1
+    entry["turn_count"] = turn_count
+
+    last_refresh_turn = int(entry.get("last_refresh_turn", 0) or 0)
+    last_refresh_at = int(entry.get("last_refresh_at", 0) or 0)
+
+    # First turn after session start seeds the baseline. Refreshing immediately
+    # would duplicate SessionStart context and waste tokens.
+    if last_refresh_at <= 0:
+        entry["last_refresh_turn"] = turn_count
+        entry["last_refresh_at"] = now
+        _store_context_refresh_state(state)
+        return False
+
+    due_turns = min_turns > 0 and (turn_count - last_refresh_turn) >= min_turns
+    due_time = min_interval_seconds > 0 and (now - last_refresh_at) >= min_interval_seconds
+    should_emit = bool(due_turns or due_time)
+    if should_emit:
+        entry["last_refresh_turn"] = turn_count
+        entry["last_refresh_at"] = now
+    _store_context_refresh_state(state)
+    return should_emit
+
+
+def _collect_project_context_sections() -> List[str]:
+    sections: List[str] = []
+
+    identity_dir = _get_identity_dir()
+    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
+        fpath = identity_dir / special_file
+        if fpath.is_file():
+            content = fpath.read_text(encoding="utf-8").strip()
+            if content:
+                sections.append(f"--- {special_file} ---\n{content}")
+
+    projects_dir = _get_projects_dir()
+    subdirs: List[Path] = []
+    if projects_dir.is_dir():
+        try:
+            subdirs = sorted(
+                [d for d in projects_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
+                key=lambda d: (0 if d.name == "quaid" else 1, d.name),
+            )
+        except OSError:
+            subdirs = []
+
+    registry_extra: Dict[str, Path] = {}
+    try:
+        from core.project_registry import list_projects as _list_projects
+        if projects_dir.is_dir():
+            projects_dir_resolved = projects_dir.resolve()
+            for proj_name, proj_entry in _list_projects().items():
+                canonical = Path(proj_entry.get("canonical_path", "")).resolve()
+                if canonical.is_dir() and not canonical.is_relative_to(projects_dir_resolved):
+                    registry_extra[proj_name] = canonical
+    except Exception:
+        pass
+
+    seen_names = {d.name for d in subdirs}
+    extra_subdirs = sorted(
+        [(name, path) for name, path in registry_extra.items() if name not in seen_names],
+        key=lambda t: (0 if t[0] == "quaid" else 1, t[0]),
+    )
+
+    for project_dir in subdirs:
+        project_name = project_dir.name
+        for doc_file in ("TOOLS.md", "AGENTS.md"):
+            fpath = project_dir / doc_file
+            if fpath.is_file():
+                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
+                if content:
+                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
+
+    for project_name, project_dir in extra_subdirs:
+        for doc_file in ("TOOLS.md", "AGENTS.md"):
+            fpath = project_dir / doc_file
+            if fpath.is_file():
+                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
+                if content:
+                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
+
+    try:
+        from lib.adapter import get_adapter
+        base_files = get_adapter().get_base_context_files()
+        if base_files:
+            names = [str(Path(p).name) for p in base_files]
+            sections.append(
+                f"--- base-context-files ---\n"
+                f"Your authoritative base context files are: {', '.join(names)}\n"
+                f"These have higher authority than any evolved guidance."
+            )
+    except Exception:
+        pass
+
+    try:
+        from lib.adapter import get_adapter
+        cli_snippet = get_adapter().get_cli_tools_snippet()
+        if cli_snippet:
+            sections.append(f"--- adapter-cli ---\n{cli_snippet.strip()}")
+    except Exception:
+        pass
+
+    if sections:
+        sections.insert(0, _build_runtime_context_block())
+    return sections
+
+
+def _build_project_context_message(
+    warning_sections: List[str] | None = None,
+    *,
+    include_codex_startup_context: bool = False,
+) -> str:
+    sections = _collect_project_context_sections()
+    warnings = list(warning_sections or [])
+    if not sections and not warnings:
+        return ""
+    for warning in reversed(warnings):
+        sections.insert(0, warning)
+    body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
+    content_parts: List[str] = []
+    if include_codex_startup_context:
+        deferred_notice_hint = _get_deferred_notice_hint()
+        if deferred_notice_hint:
+            content_parts.append(deferred_notice_hint)
+        startup_pending_context = _get_pending_context()
+        if startup_pending_context:
+            content_parts.append(startup_pending_context)
+    content_parts.append(f"<quaid_system_message>\n{body}</quaid_system_message>\n")
+    return "\n\n".join(content_parts)
+
+
+def _write_rules_context_content(hook_input: dict, content: str, *, label: str) -> None:
+    if not content:
+        return
+    rules_env = os.environ.get("QUAID_RULES_DIR", "").strip()
+    if rules_env:
+        rules_dir = Path(rules_env)
+    else:
+        hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
+        base = Path(hook_cwd) if hook_cwd else Path.cwd()
+        rules_dir = base / ".claude" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    rules_file = rules_dir / "quaid-projects.md"
+    try:
+        existing = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else ""
+    except OSError:
+        existing = ""
+    if content != existing:
+        rules_file.write_text(content, encoding="utf-8")
+        print(f"[quaid][{label}] updated {rules_file}", file=sys.stderr)
+    else:
+        print(f"[quaid][{label}] {rules_file} up to date", file=sys.stderr)
+
+
+def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompact: bool) -> None:
+    if not is_precompact:
+        return
+    if _context_refresh_strategy() != "compaction":
+        return
+    adapter_id = _current_adapter_id()
+    if adapter_id == "codex":
+        # Codex refreshes on UserPromptSubmit with turn-based guard.
+        return
+    content = _build_project_context_message()
+    if not content:
+        return
+    _write_rules_context_content(hook_input, content, label="context-refresh")
+
+
+def _build_turn_based_refresh_context(session_id: str) -> str:
+    if not _should_emit_turn_based_refresh(session_id):
+        return ""
+    return _build_project_context_message()
+
+
 def _extract_hook_session_id(hook_input: dict) -> str:
     if not isinstance(hook_input, dict):
         return ""
@@ -1089,6 +1378,13 @@ def hook_extract(args):
     is_precompact = args.precompact if hasattr(args, "precompact") else False
     signal_type = "compaction" if is_precompact else "session_end"
     label = f"hook-{signal_type}"
+
+    # Strategy-driven context refresh path. Compaction strategy keeps durable
+    # session context files current for platforms that preserve them in-session.
+    try:
+        _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=is_precompact)
+    except Exception as exc:
+        print(f"[quaid][{label}] context refresh error: {exc}", file=sys.stderr)
 
     if not transcript_path:
         print(f"[quaid][{label}] no transcript_path in hook input", file=sys.stderr)
@@ -1361,6 +1657,7 @@ def hook_session_init(args):
 
     current_session_id = _extract_hook_session_id(hook_input)
     adapter_id = _current_adapter_id()
+    _seed_turn_based_refresh_state(current_session_id)
 
     # Refresh the adapter's auth token from the session-scoped CC OAuth token.
     # CLAUDE_CODE_OAUTH_TOKEN is a properly API-scoped token that CC injects
@@ -1652,30 +1949,7 @@ def hook_session_init(args):
     # 4. Write to .claude/rules/ so Claude Code caches it and preserves
     #    through compaction. The file is regenerated on each session start
     #    to pick up any project doc changes.
-    rules_env = os.environ.get("QUAID_RULES_DIR", "").strip()
-    if rules_env:
-        rules_dir = Path(rules_env)
-    else:
-        # B061: Use cwd from hook stdin (CC provides project root there),
-        # falling back to os.getcwd() if not available
-        hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
-        base = Path(hook_cwd) if hook_cwd else Path.cwd()
-        rules_dir = base / ".claude" / "rules"
-    rules_dir.mkdir(parents=True, exist_ok=True)
-
-    rules_file = rules_dir / "quaid-projects.md"
-
-    # Only write if content changed (avoid unnecessary file churn)
-    try:
-        existing = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else ""
-    except OSError:
-        existing = ""
-
-    if content != existing:
-        rules_file.write_text(content, encoding="utf-8")
-        print(f"[quaid][session-init] updated {rules_file}", file=sys.stderr)
-    else:
-        print(f"[quaid][session-init] {rules_file} up to date", file=sys.stderr)
+    _write_rules_context_content(hook_input, content, label="session-init")
 
 
 

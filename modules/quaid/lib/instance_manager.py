@@ -281,10 +281,20 @@ class InstanceManager:
                 "min_similarity": 0.80,
                 "max_tokens": 2000,
             }
+        adapter_defaults = {}
+        try:
+            raw_adapter_defaults = getattr(type(self.adapter), "ADAPTER_CONFIG", {}) or {}
+            if isinstance(raw_adapter_defaults, dict):
+                adapter_defaults = dict(raw_adapter_defaults)
+        except Exception:
+            adapter_defaults = {}
         retrieval_defaults["fail_hard"] = True
         retrieval_defaults["auto_inject"] = True
         defaults = {
-            "adapter": {"type": self.adapter.adapter_id()},
+            "adapter": {
+                "type": self.adapter.adapter_id(),
+                "capabilities": adapter_defaults,
+            },
             "retrieval": retrieval_defaults,
         }
         try:
@@ -302,6 +312,10 @@ class InstanceManager:
             logger.warning("Failed to load shared config defaults: %s", exc)
         defaults.setdefault("adapter", {})
         defaults["adapter"]["type"] = self.adapter.adapter_id()
+        capabilities = defaults["adapter"].setdefault("capabilities", {})
+        if isinstance(capabilities, dict):
+            for key, value in adapter_defaults.items():
+                capabilities.setdefault(key, value)
         defaults.setdefault("retrieval", {})
         defaults["retrieval"]["fail_hard"] = True
         defaults["retrieval"]["auto_inject"] = True

@@ -2271,6 +2271,13 @@ function isSystemEnabled(system: "memory" | "journal" | "projects" | "workspace"
   return systems[system] !== false;
 }
 
+function getContextRefreshStrategy(config: any = getMemoryConfig()): "compaction" | "turn_based" {
+  const raw = String(config?.adapter?.capabilities?.context_refresh_strategy || "compaction")
+    .trim()
+    .toLowerCase();
+  return raw === "turn_based" ? "turn_based" : "compaction";
+}
+
 type AdapterContractDeclarations = {
   enabled: boolean;
   tools: Set<string>;
@@ -3551,6 +3558,17 @@ notify_user(${JSON.stringify(message)})
     //      gated by a Set. Belongs in before_agent_start when OC adds support.
     //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
+    const maybeArmCompactionContextRefresh = (sessionId: string, source: string) => {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return;
+      if (getContextRefreshStrategy(getMemoryConfig()) !== "compaction") return;
+      const wasTracked = projectDocsInjectedSessions.delete(sid);
+      writeHookTrace("hook.context_refresh.compaction_armed", {
+        session_id: sid,
+        source,
+        was_tracked: wasTracked,
+      });
+    };
 
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
@@ -5131,7 +5149,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           hook_session_id: sessionId || "",
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
         });
-        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx)) {
+          return;
+        }
+        maybeArmCompactionContextRefresh(sessionId, "command:compact");
+        if (!isSystemEnabled("memory")) {
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -5189,7 +5211,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return;
         }
         const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
-        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx)) {
+          return;
+        }
+        maybeArmCompactionContextRefresh(sessionId, "session:compact:before");
+        if (!isSystemEnabled("memory")) {
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -5788,6 +5814,7 @@ notify_memory_extraction(
           || (conversationMessages.length === 0 ? fallbackInteractiveSessionId : "")
           || facade.extractSessionId(messages, ctx)
           || "";
+        maybeArmCompactionContextRefresh(extractionSessionId, "before_compaction");
         writeHookTrace("hook.before_compaction.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",
@@ -6285,6 +6312,7 @@ export const __test = {
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
+  getContextRefreshStrategy,
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
   summarizeRecallDiagnostics,

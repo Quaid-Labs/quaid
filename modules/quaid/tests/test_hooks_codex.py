@@ -147,6 +147,90 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert "emitted Codex startup context" in err
 
 
+def test_codex_hook_inject_turn_based_refresh_emits_context_after_guard(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+    (identity_dir / "USER.md").write_text("Turn refresh canary: ember-cascade", encoding="utf-8")
+    (identity_dir / "SOUL.md").write_text("SOUL baseline", encoding="utf-8")
+    (identity_dir / "ENVIRONMENT.md").write_text("ENV baseline", encoding="utf-8")
+
+    project = projects_dir / "quaid"
+    project.mkdir()
+    (project / "TOOLS.md").write_text("# Tools\nrefresh toolset", encoding="utf-8")
+    (project / "AGENTS.md").write_text("# Agents\nrefresh agents", encoding="utf-8")
+
+    adapter = _adapter_mock()
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = ""
+    adapter.data_dir.return_value = tmp_path / "data"
+    adapter.instance_root.return_value = tmp_path
+    adapter.adapter_id.return_value = "codex"
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    def _capability(key, default=None):
+        if key == "context_refresh_strategy":
+            return "turn_based"
+        if key == "context_refresh_guard":
+            return {"min_turns": 2, "min_interval_minutes": 999}
+        return default
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr(hooks, "_adapter_capability", _capability)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_relay_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_quaid_agents_baseline_context", lambda: "")
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: tmp_path / "data" / "context-refresh-state.json")
+    monkeypatch.setattr("core.compatibility.notify_on_use_if_degraded", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda _sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
+
+    with patch("core.project_registry.list_projects", return_value={}):
+        _run_hook_session_init(
+            {"session_id": "codex-refresh-session", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+        )
+
+    with patch("core.interface.api.recall_fast", return_value=([], None)), \
+         patch("core.interface.api.projects_search_docs", return_value=None):
+        out1, _err1 = _run_hook_inject(
+            {
+                "prompt": "first turn",
+                "session_id": "codex-refresh-session",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+        out2, _err2 = _run_hook_inject(
+            {
+                "prompt": "second turn",
+                "session_id": "codex-refresh-session",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    assert out1.strip() == ""
+    payload = json.loads(out2)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "# Quaid Project Context" in context
+    assert "Turn refresh canary: ember-cascade" in context
+    assert "refresh toolset" in context
+
+
 def test_runtime_context_block_includes_quaid_home_and_instance_without_metadata(monkeypatch, tmp_path):
     from core.runtime import system_context
 

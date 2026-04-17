@@ -568,6 +568,61 @@ def test_hook_extract_precompact_sweeps_older_staged_payloads(
     assert by_session[old_session]["meta"]["reason"] == "precompact_sweep"
 
 
+def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_projects(
+    tmp_path, sessions_dir, mock_adapter, monkeypatch
+):
+    session_id = "sess-precompact-refresh"
+    transcript = sessions_dir / "cc-refresh" / f"{session_id}.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text('{"role":"user","content":"compact now"}\n', encoding="utf-8")
+
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    project_quaid = projects_dir / "quaid"
+    project_quaid.mkdir(parents=True, exist_ok=True)
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    (identity_dir / "USER.md").write_text("Compaction refresh canary: vellum-orchid", encoding="utf-8")
+    (identity_dir / "SOUL.md").write_text("SOUL live", encoding="utf-8")
+    (identity_dir / "ENVIRONMENT.md").write_text("ENV live", encoding="utf-8")
+    (project_quaid / "TOOLS.md").write_text("# Tools\nrefresh docs", encoding="utf-8")
+    (project_quaid / "AGENTS.md").write_text("# Agents\nrefresh agents", encoding="utf-8")
+
+    mock_adapter.adapter_id.return_value = "claude-code"
+    mock_adapter.get_session_path.return_value = None
+    mock_adapter.get_sessions_dir.return_value = str(sessions_dir)
+    mock_adapter.projects_dir.return_value = projects_dir
+    mock_adapter.identity_dir.return_value = identity_dir
+    mock_adapter.get_base_context_files.return_value = {}
+    mock_adapter.get_cli_tools_snippet.return_value = ""
+    mock_adapter.store_auth_token.return_value = tmp_path / ".auth-token"
+
+    rules_dir = tmp_path / ".claude" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    rules_file = rules_dir / "quaid-projects.md"
+    rules_file.write_text("stale rules body", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+    monkeypatch.setattr("core.interface.hooks.subprocess.Popen", lambda *a, **kw: None)
+
+    out, err = _run_hook_extract(
+        {
+            "session_id": session_id,
+            "cwd": str(tmp_path),
+            "transcript_path": str(transcript),
+        },
+        monkeypatch=monkeypatch,
+        precompact=True,
+    )
+
+    assert out == ""
+    assert "context-refresh" in err
+    content = rules_file.read_text(encoding="utf-8")
+    assert "Compaction refresh canary: vellum-orchid" in content
+    assert "refresh docs" in content
+    assert "stale rules body" not in content
+
+
 # ===========================================================================
 # hook_inject — recall resilience
 # ===========================================================================

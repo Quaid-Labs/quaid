@@ -646,4 +646,104 @@ describe("openclaw deferred notices", () => {
     error.mockRestore();
     fs.rmSync(home, { recursive: true, force: true });
   });
+
+  it("re-arms project context injection after before_compaction under default strategy", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-compaction-refresh-home-",
+      "openclaw-main",
+      "[Quaid] compaction refresh fixture",
+    );
+    fs.writeFileSync(
+      path.join(fixture.visibleHome, "projects", "quaid", "TOOLS.md"),
+      "# TOOLS\nCompaction refresh canary: amber-skyline\n",
+      "utf8",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const beforeCompactionCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforeCompactionCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const beforeCompactionHandler = beforeCompactionCall?.[1];
+    const promptCtx = {
+      sessionId: "session-compaction-refresh",
+      sessionKey: "agent:main:tui-main",
+      agentId: "main",
+      trigger: "user",
+    };
+
+    const first = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "first",
+        messages: [{ role: "user", content: "first" }],
+        sessionId: promptCtx.sessionId,
+        sessionKey: promptCtx.sessionKey,
+      },
+      promptCtx,
+    );
+    expect(combinedSystemContext(first)).toContain("Compaction refresh canary: amber-skyline");
+
+    const second = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "second",
+        messages: [{ role: "user", content: "second" }],
+        sessionId: promptCtx.sessionId,
+        sessionKey: promptCtx.sessionKey,
+      },
+      promptCtx,
+    );
+    expect(combinedSystemContext(second)).not.toContain("Compaction refresh canary: amber-skyline");
+
+    await beforeCompactionHandler(
+      {
+        messages: [],
+        sessionId: promptCtx.sessionId,
+        sessionKey: promptCtx.sessionKey,
+      },
+      {
+        sessionId: promptCtx.sessionId,
+        sessionKey: promptCtx.sessionKey,
+        agentId: "main",
+        trigger: "system",
+      },
+    );
+
+    const third = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "third",
+        messages: [{ role: "user", content: "third" }],
+        sessionId: promptCtx.sessionId,
+        sessionKey: promptCtx.sessionKey,
+      },
+      promptCtx,
+    );
+    expect(combinedSystemContext(third)).toContain("Compaction refresh canary: amber-skyline");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  });
 });

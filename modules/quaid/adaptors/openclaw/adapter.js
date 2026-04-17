@@ -1796,6 +1796,10 @@ function isSystemEnabled(system) {
   const systems = config.systems || {};
   return systems[system] !== false;
 }
+function getContextRefreshStrategy(config = getMemoryConfig()) {
+  const raw = String(config?.adapter?.capabilities?.context_refresh_strategy || "compaction").trim().toLowerCase();
+  return raw === "turn_based" ? "turn_based" : "compaction";
+}
 function loadAdapterContractDeclarations(strictMode) {
   try {
     const payload = JSON.parse(fs.readFileSync(ADAPTER_PLUGIN_MANIFEST_PATH, "utf8"));
@@ -2847,6 +2851,17 @@ notify_user(${JSON.stringify(message)})
       return { prependContext: event.prependContext };
     };
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
+    const maybeArmCompactionContextRefresh = (sessionId, source) => {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return;
+      if (getContextRefreshStrategy(getMemoryConfig()) !== "compaction") return;
+      const wasTracked = projectDocsInjectedSessions.delete(sid);
+      writeHookTrace("hook.context_refresh.compaction_armed", {
+        session_id: sid,
+        source,
+        was_tracked: wasTracked
+      });
+    };
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
@@ -4113,7 +4128,11 @@ ${notice}` : notice;
           hook_session_id: sessionId || "",
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || "")
         });
-        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx)) {
+          return;
+        }
+        maybeArmCompactionContextRefresh(sessionId, "command:compact");
+        if (!isSystemEnabled2("memory")) {
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -4171,7 +4190,11 @@ ${notice}` : notice;
           return;
         }
         const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
-        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx)) {
+          return;
+        }
+        maybeArmCompactionContextRefresh(sessionId, "session:compact:before");
+        if (!isSystemEnabled2("memory")) {
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -4675,6 +4698,7 @@ notify_memory_extraction(
         const conversationMessages = facade.filterConversationMessages(messages);
         const fallbackInteractiveSessionId = currentInteractiveSession?.sessionId || "";
         const extractionSessionId = sessionId || (conversationMessages.length === 0 ? fallbackInteractiveSessionId : "") || facade.extractSessionId(messages, ctx) || "";
+        maybeArmCompactionContextRefresh(extractionSessionId, "before_compaction");
         writeHookTrace("hook.before_compaction.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",
@@ -5102,6 +5126,7 @@ const __test = {
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
   isAutoInjectEnabled,
+  getContextRefreshStrategy,
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
   summarizeRecallDiagnostics,

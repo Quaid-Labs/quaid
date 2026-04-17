@@ -27,6 +27,11 @@ class CodexAdapter(QuaidAdapter):
 
     ADAPTER_CONFIG = {
         "deferred_notice_relay": True,
+        "context_refresh_strategy": "turn_based",
+        "context_refresh_guard": {
+            "min_interval_minutes": 30,
+            "min_turns": 50,
+        },
     }
 
     _HOOK_STATUS_LINE_RE = re.compile(
