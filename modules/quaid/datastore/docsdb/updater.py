@@ -36,6 +36,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -133,6 +134,53 @@ def _queue_delayed_notification(message: str, kind: str, priority: str, source: 
         )
     except Exception:
         logger.warning("Failed queuing delayed notification", extra={"source": source, "kind": kind})
+
+
+def _docs_index_timeout_seconds() -> float:
+    raw = str(os.environ.get("QUAID_DOCS_INDEX_TIMEOUT_SECONDS", "120") or "").strip()
+    if not raw:
+        return 120.0
+    try:
+        parsed = float(raw)
+    except ValueError:
+        logger.warning("Invalid QUAID_DOCS_INDEX_TIMEOUT_SECONDS=%r; using default 120s", raw)
+        return 120.0
+    if parsed <= 0:
+        logger.warning("Non-positive QUAID_DOCS_INDEX_TIMEOUT_SECONDS=%r; using minimum 1s", raw)
+        return 1.0
+    return parsed
+
+
+def _index_doc_with_timeout(rag: Any, file_path: str, timeout_seconds: float) -> int:
+    """Run rag.index_document with a hard wall-clock timeout.
+
+    Uses a daemon thread so caller can recover from rare C-level hangs in SQLite
+    close/checkpoint or Ollama HTTP I/O without wedging the entire CLI process.
+    """
+    timeout_s = max(1.0, float(timeout_seconds))
+    result: Dict[str, Any] = {}
+    error: Dict[str, BaseException] = {}
+    done = threading.Event()
+
+    def _worker() -> None:
+        try:
+            result["chunks"] = int(rag.index_document(file_path) or 0)
+        except BaseException as exc:
+            error["exc"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(
+        target=_worker,
+        name="quaid-docs-index",
+        daemon=True,
+    )
+    thread.start()
+    if not done.wait(timeout_s):
+        raise TimeoutError(f"docs index timed out after {timeout_s:.1f}s for {file_path}")
+    if "exc" in error:
+        raise error["exc"]
+    return int(result.get("chunks", 0) or 0)
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -1380,11 +1428,31 @@ def cmd_update_stale(
             if dry_run:
                 print(f"\nWould index {never_indexable} never-indexed doc(s)")
             else:
+                index_timeout_s = _docs_index_timeout_seconds()
                 for _entry, fp in pending_registry_docs:
                     try:
-                        chunks = rag.index_document(fp)
+                        chunks = _index_doc_with_timeout(rag, fp, index_timeout_s)
                         print(f"  Indexed: {fp} ({chunks} chunks)")
                         newly_indexed += 1
+                    except TimeoutError as exc:
+                        message = (
+                            f"docs update index timeout for {fp} after {index_timeout_s:.1f}s; "
+                            "aborting remaining registry indexing for this run"
+                        )
+                        logger.warning("%s: %s", message, exc)
+                        try:
+                            notify_agent(
+                                message,
+                                severity="error" if is_fail_hard_enabled() else "warning",
+                                source="docs_update_index_timeout",
+                                dedupe_key=f"docs-update-timeout:{fp}",
+                            )
+                        except Exception:
+                            pass
+                        if is_fail_hard_enabled():
+                            raise RuntimeError(message) from exc
+                        print(f"  WARN: {message}")
+                        break
                     except Exception as e:
                         logger.warning("failed to index %s: %s", fp, e)
                 if newly_indexed:

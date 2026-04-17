@@ -908,3 +908,77 @@ class TestCmdUpdateStaleNeverIndexed:
 
             with pytest.raises(RuntimeError, match="Failed to resolve docs registry path"):
                 updater.cmd_update_stale(dry_run=False, project="quaid")
+
+    def test_update_stale_warns_and_stops_when_registry_index_times_out(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc_path = iroot / "docs" / "hung.md"
+            doc_path.parent.mkdir(parents=True, exist_ok=True)
+            doc_path.write_text("# Hung\n", encoding="utf-8")
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": str(doc_path), "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    return Path(path_str)
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {str(Path(p)): True for p in paths}
+
+            notices = []
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+            monkeypatch.setattr(
+                updater,
+                "_index_doc_with_timeout",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("simulated hang")),
+            )
+            monkeypatch.setattr(
+                updater,
+                "notify_agent",
+                lambda message, **kwargs: notices.append((message, kwargs)) or True,
+            )
+
+            count = updater.cmd_update_stale(dry_run=False, project="quaid")
+            assert count == 0
+            assert notices
+            assert "index timeout" in notices[0][0]
+            assert notices[0][1]["severity"] == "warning"
+
+    def test_update_stale_raises_when_registry_index_times_out_under_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc_path = iroot / "docs" / "hung-hard.md"
+            doc_path.parent.mkdir(parents=True, exist_ok=True)
+            doc_path.write_text("# Hung Hard\n", encoding="utf-8")
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": str(doc_path), "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    return Path(path_str)
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {str(Path(p)): True for p in paths}
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+            monkeypatch.setattr(
+                updater,
+                "_index_doc_with_timeout",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("simulated hang")),
+            )
+            monkeypatch.setattr(updater, "notify_agent", lambda *args, **kwargs: True)
+
+            with pytest.raises(RuntimeError, match="docs update index timeout"):
+                updater.cmd_update_stale(dry_run=False, project="quaid")
