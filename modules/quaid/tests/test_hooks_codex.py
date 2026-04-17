@@ -15,6 +15,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 def _adapter_mock():
     adapter = MagicMock()
     adapter._extract_hook_session_id = None
+    adapter.adapter_id.return_value = "codex"
+    codex_capabilities = {
+        "inject_tool_output_trace": True,
+        "inject_project_list_fidelity_context": True,
+        "context_refresh_strategy": "turn_based",
+        "context_refresh_guard": {"min_interval_minutes": 30, "min_turns": 50},
+        "session_lookup_glob_template": "rollout-*{session_id}.jsonl",
+        "session_pending_path_template": "{date_prefix}/rollout-pending-{session_id}.jsonl",
+        "session_pending_default_root": "~/.codex/sessions",
+        "session_fallback_path_template": "",
+        "session_start_output_mode": "additional_context",
+        "session_start_include_pending_context": True,
+        "platform_config_scope": "codex",
+        "supports_compaction_control": False,
+    }
+
+    def _get_capability(key, default=None):
+        return codex_capabilities.get(key, default)
+
+    adapter.get_capability.side_effect = _get_capability
     return adapter
 
 
@@ -144,7 +164,7 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert "codex startup docs" in context
     assert ensure_alive_calls == [True]
     assert not (tmp_path / ".claude" / "rules" / "quaid-projects.md").exists()
-    assert "emitted Codex startup context" in err
+    assert "emitted startup additionalContext" in err
 
 
 def test_codex_hook_inject_turn_based_refresh_emits_context_after_guard(monkeypatch, tmp_path):

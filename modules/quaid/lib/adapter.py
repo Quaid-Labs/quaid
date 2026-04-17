@@ -911,6 +911,9 @@ class StandaloneAdapter(QuaidAdapter):
     - Filtering: no platform messages to filter
     - LLM: AnthropicLLMProvider (direct API with key from .env)
     """
+    ADAPTER_CONFIG = {
+        "platform_config_scope": "standalone",
+    }
 
     def __init__(self, home: Optional[Path] = None):
         self._home = home

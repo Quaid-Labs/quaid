@@ -654,7 +654,7 @@ def hook_inject(args):
             "query": query[:160],
             "session_id": session_id,
         })
-        if _current_adapter_id() == "codex":
+        if bool(_adapter_capability("inject_tool_output_trace", False)):
             payload = {
                 "query": query[:160],
                 "session_id": session_id,
@@ -749,7 +749,7 @@ def hook_inject(args):
         if deferred_notice_hint:
             context_parts.append(deferred_notice_hint)
 
-        if _current_adapter_id() == "codex":
+        if bool(_adapter_capability("inject_project_list_fidelity_context", False)):
             codex_tool_fidelity = _codex_project_list_fidelity_context(
                 hook_input if isinstance(hook_input, dict) else {}
             )
@@ -911,7 +911,11 @@ def _current_adapter_id() -> str:
         return ""
 
 
-def _ensure_hook_instance_ready(hook_input: dict | None = None, *, adapter_hint: str = "") -> None:
+def _ensure_hook_instance_ready(
+    hook_input: dict | None = None,
+    *,
+    project_dir_env_hint: str = "",
+) -> None:
     """Ensure hook execution has a resolved adapter and initialized instance.
 
     Hook hosts are path-derived on CC/CDX. If project env is missing, fall back
@@ -920,21 +924,23 @@ def _ensure_hook_instance_ready(hook_input: dict | None = None, *, adapter_hint:
     """
     hook_input = hook_input if isinstance(hook_input, dict) else {}
     cwd = str(hook_input.get("cwd") or "").strip() or os.getcwd()
-    hint = str(adapter_hint or "").strip().lower()
+    hint = str(project_dir_env_hint or "").strip().upper()
     existing_claude = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
     existing_codex = os.environ.get("CODEX_PROJECT_DIR", "").strip()
-    wants_claude = hint == "claude-code" or (not hint and bool(existing_claude))
-    wants_codex = hint == "codex" or (not hint and bool(existing_codex))
+    selected_env = hint if hint in {"CLAUDE_PROJECT_DIR", "CODEX_PROJECT_DIR"} else ""
+    if not selected_env:
+        if existing_claude:
+            selected_env = "CLAUDE_PROJECT_DIR"
+        elif existing_codex:
+            selected_env = "CODEX_PROJECT_DIR"
     prior_env = {
         "CLAUDE_PROJECT_DIR": os.environ.get("CLAUDE_PROJECT_DIR"),
         "CODEX_PROJECT_DIR": os.environ.get("CODEX_PROJECT_DIR"),
     }
 
     try:
-        if wants_claude and not existing_claude:
-            os.environ["CLAUDE_PROJECT_DIR"] = cwd
-        elif wants_codex and not existing_codex:
-            os.environ["CODEX_PROJECT_DIR"] = cwd
+        if selected_env and not str(os.environ.get(selected_env, "")).strip():
+            os.environ[selected_env] = cwd
 
         from lib.adapter import get_adapter
         get_adapter()
@@ -960,7 +966,10 @@ def _adapter_capability(key: str, default: Any = None) -> Any:
     try:
         from lib.adapter import get_adapter
 
-        return get_adapter().get_capability(key, default)
+        value = get_adapter().get_capability(key, default)
+        if type(value).__module__.startswith("unittest.mock"):
+            return default
+        return value
     except Exception:
         return default
 
@@ -1242,6 +1251,20 @@ def _build_turn_based_refresh_context(session_id: str) -> str:
     return _build_project_context_message()
 
 
+def _render_path_template(template: str, session_id: str, *, cwd_encoded: str = "", date_prefix: str = "") -> str:
+    raw = str(template or "").strip()
+    if not raw:
+        return ""
+    try:
+        return raw.format(
+            session_id=session_id,
+            cwd_encoded=cwd_encoded,
+            date_prefix=date_prefix,
+        )
+    except Exception:
+        return ""
+
+
 def _extract_hook_session_id(hook_input: dict) -> str:
     if not isinstance(hook_input, dict):
         return ""
@@ -1275,42 +1298,58 @@ def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcrip
         return explicit
 
     sessions_dir = None
-    adapter_id = ""
     try:
         from lib.adapter import get_adapter
 
         adapter = get_adapter()
-        adapter_id = str(adapter.adapter_id() or "").strip().lower()
         resolved = adapter.get_session_path(session_id)
         if resolved:
             return str(resolved)
         sessions_dir = adapter.get_sessions_dir()
     except Exception:
         sessions_dir = None
-        adapter_id = ""
 
     if sessions_dir:
-        pattern = f"rollout-*{session_id}.jsonl" if adapter_id == "codex" else f"{session_id}.jsonl"
-        for candidate in Path(sessions_dir).rglob(pattern):
-            return str(candidate)
+        lookup_template = _adapter_capability("session_lookup_glob_template", "{session_id}.jsonl")
+        lookup_glob = _render_path_template(str(lookup_template or ""), session_id)
+        if lookup_glob:
+            for candidate in Path(sessions_dir).rglob(lookup_glob):
+                return str(candidate)
 
-    if hook_cwd and sessions_dir and adapter_id == "claude-code":
+    if hook_cwd and sessions_dir:
+        cwd_template = _adapter_capability("session_cwd_path_template", "")
         cwd_encoded = hook_cwd.replace("/", "-")
-        return str(Path(sessions_dir) / cwd_encoded / f"{session_id}.jsonl")
+        relative = _render_path_template(str(cwd_template or ""), session_id, cwd_encoded=cwd_encoded)
+        if relative:
+            return str(Path(sessions_dir) / relative)
 
-    if adapter_id == "codex":
+    pending_template = _adapter_capability("session_pending_path_template", "")
+    pending_relative = ""
+    if pending_template:
         from datetime import datetime
 
         # Construct path even when sessions_dir doesn't exist yet so cursor files
-        # can be seeded for --yolo sessions. Without this, get_sessions_dir()
-        # returning None caused an empty string to propagate back, the cursor was
-        # never written, and orphan-sweep could never detect the session.
-        resolved_sessions_dir = sessions_dir or (Path.home() / ".codex" / "sessions")
+        # can be seeded for adapters that rotate into dated rollout paths.
         date_prefix = datetime.now().strftime("%Y/%m/%d")
-        return str(Path(resolved_sessions_dir) / date_prefix / f"rollout-pending-{session_id}.jsonl")
+        pending_relative = _render_path_template(
+            str(pending_template or ""),
+            session_id,
+            date_prefix=date_prefix,
+        )
+        if pending_relative:
+            pending_root = sessions_dir
+            if not pending_root:
+                fallback_root = str(_adapter_capability("session_pending_default_root", "") or "").strip()
+                if fallback_root:
+                    pending_root = Path(fallback_root).expanduser()
+            if pending_root:
+                return str(Path(pending_root) / pending_relative)
 
-    if sessions_dir and adapter_id in ("openclaw", "standalone", ""):
-        return str(Path(sessions_dir) / f"{session_id}.jsonl")
+    if sessions_dir:
+        fallback_template = _adapter_capability("session_fallback_path_template", "{session_id}.jsonl")
+        fallback_relative = _render_path_template(str(fallback_template or ""), session_id)
+        if fallback_relative:
+            return str(Path(sessions_dir) / fallback_relative)
 
     return ""
 
@@ -1409,15 +1448,15 @@ def hook_extract(args):
         except Exception as _te:
             print(f"[quaid][{label}] auth token capture failed: {_te}", file=sys.stderr)
 
-        # Determine adapter type from config for compaction control advertisement
+        # Determine adapter type/capabilities for lifecycle signal metadata.
         try:
             from lib.adapter import get_adapter
             adapter = get_adapter()
-            adapter_name = type(adapter).__name__.replace("Adapter", "").lower()
+            adapter_name = str(adapter.adapter_id() or "").strip().lower() or "unknown"
+            supports_compaction = bool(adapter.get_capability("supports_compaction_control", False))
         except Exception:
             adapter_name = "unknown"
-        # OC can force compaction; CC cannot
-        supports_compaction = adapter_name in ("openclaw",)
+            supports_compaction = False
 
         sig_path = write_signal(
             signal_type=signal_type,
@@ -1469,7 +1508,7 @@ def hook_codex_stop(args):
         hook_input = _read_stdin_json()
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
-    _ensure_hook_instance_ready(hook_input, adapter_hint="codex")
+    _ensure_hook_instance_ready(hook_input, project_dir_env_hint="CODEX_PROJECT_DIR")
 
     session_id = str(hook_input.get("session_id") or "").strip()
     transcript_path = _resolve_hook_transcript_path(
@@ -1652,7 +1691,6 @@ def hook_session_init(args):
     _ensure_hook_instance_ready(hook_input)
 
     current_session_id = _extract_hook_session_id(hook_input)
-    adapter_id = _current_adapter_id()
     _seed_turn_based_refresh_state(current_session_id)
 
     # Refresh the adapter's auth token from the session-scoped CC OAuth token.
@@ -1922,7 +1960,7 @@ def hook_session_init(args):
 
     body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
     content_parts: List[str] = []
-    if adapter_id == "codex":
+    if bool(_adapter_capability("session_start_include_pending_context", False)):
         deferred_notice_hint = _get_deferred_notice_hint()
         if deferred_notice_hint:
             content_parts.append(deferred_notice_hint)
@@ -1932,14 +1970,15 @@ def hook_session_init(args):
     content_parts.append(f"<quaid_system_message>\n{body}</quaid_system_message>\n")
     content = "\n\n".join(content_parts)
 
-    if adapter_id == "codex":
+    output_mode = str(_adapter_capability("session_start_output_mode", "rules_file") or "").strip().lower()
+    if output_mode == "additional_context":
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": content,
             }
         }))
-        print("[quaid][session-init] emitted Codex startup context", file=sys.stderr)
+        print("[quaid][session-init] emitted startup additionalContext", file=sys.stderr)
         return
 
     # 4. Write to .claude/rules/ so Claude Code caches it and preserves

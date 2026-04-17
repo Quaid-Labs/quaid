@@ -47,6 +47,10 @@ class OpenClawAdapter(QuaidAdapter):
         "anthropic-claude-code": "anthropic",
     }
     _NON_ROUTABLE_NOTIFY_CHANNELS = {"webchat"}
+    ADAPTER_CONFIG = {
+        "supports_compaction_control": True,
+        "platform_config_scope": "openclaw",
+    }
 
     @classmethod
     def installer_adapter_id(cls) -> str:

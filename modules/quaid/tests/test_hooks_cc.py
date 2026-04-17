@@ -30,6 +30,34 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 def _adapter_mock():
     adapter = MagicMock()
     adapter._extract_hook_session_id = None
+
+    def _get_capability(key, default=None):
+        adapter_id = str(adapter.adapter_id.return_value or "").strip().lower()
+        capabilities = {
+            "claude-code": {
+                "deferred_notice_relay": True,
+                "session_cwd_path_template": "{cwd_encoded}/{session_id}.jsonl",
+                "platform_config_scope": "claude-code",
+            },
+            "codex": {
+                "deferred_notice_relay": True,
+                "session_lookup_glob_template": "rollout-*{session_id}.jsonl",
+                "session_pending_path_template": "{date_prefix}/rollout-pending-{session_id}.jsonl",
+                "session_pending_default_root": "~/.codex/sessions",
+                "session_fallback_path_template": "",
+                "platform_config_scope": "codex",
+            },
+            "openclaw": {
+                "supports_compaction_control": True,
+                "platform_config_scope": "openclaw",
+            },
+            "standalone": {
+                "platform_config_scope": "standalone",
+            },
+        }
+        return capabilities.get(adapter_id, {}).get(key, default)
+
+    adapter.get_capability.side_effect = _get_capability
     return adapter
 
 def _run_hook_inject(hook_input: dict, *, monkeypatch, patches: dict | None = None):

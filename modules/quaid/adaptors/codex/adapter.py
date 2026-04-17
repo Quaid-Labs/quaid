@@ -27,11 +27,20 @@ class CodexAdapter(QuaidAdapter):
 
     ADAPTER_CONFIG = {
         "deferred_notice_relay": True,
+        "inject_tool_output_trace": True,
+        "inject_project_list_fidelity_context": True,
         "context_refresh_strategy": "turn_based",
         "context_refresh_guard": {
             "min_interval_minutes": 30,
             "min_turns": 50,
         },
+        "session_lookup_glob_template": "rollout-*{session_id}.jsonl",
+        "session_pending_path_template": "{date_prefix}/rollout-pending-{session_id}.jsonl",
+        "session_pending_default_root": "~/.codex/sessions",
+        "session_fallback_path_template": "",
+        "session_start_output_mode": "additional_context",
+        "session_start_include_pending_context": True,
+        "platform_config_scope": "codex",
     }
 
     _HOOK_STATUS_LINE_RE = re.compile(

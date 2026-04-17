@@ -116,16 +116,35 @@ def _instance_root() -> Path:
 def _config_file_paths() -> List[Path]:
     """Return config files that affect this instance, highest priority first."""
     instance = _instance_id()
-    platform = instance.split("-", 1)[0] if "-" in instance else instance
-    if instance.startswith("claude-code-") or instance == "claude-code":
-        platform = "claude-code"
-    elif instance.startswith("openclaw-") or instance == "openclaw":
-        platform = "openclaw"
-    elif instance.startswith("codex-") or instance == "codex":
-        platform = "codex"
-    elif instance.startswith("standalone-") or instance == "standalone":
-        platform = "standalone"
     home = _quaid_home()
+    platform = ""
+    try:
+        from lib.adapter import get_adapter
+
+        adapter = get_adapter()
+        platform = str(adapter.get_capability("platform_config_scope", "") or "").strip()
+    except Exception:
+        platform = ""
+
+    if not platform:
+        config_root = home / "shared" / "config"
+        try:
+            candidates = [
+                path.name
+                for path in config_root.iterdir()
+                if path.is_dir() and path.name != "global"
+            ]
+        except OSError:
+            candidates = []
+        matches = [
+            name for name in candidates
+            if instance == name or instance.startswith(f"{name}-")
+        ]
+        if matches:
+            platform = max(matches, key=len)
+    if not platform:
+        platform = instance.split("-", 1)[0] if "-" in instance else instance
+
     return [
         _instance_root() / "config.json",
         home / "shared" / "config" / platform / "config.json",
@@ -3272,8 +3291,8 @@ def _get_compact_on_timeout(default: bool = True) -> bool:
 def _adapter_supports_compaction_control() -> bool:
     try:
         from lib.adapter import get_adapter
-        adapter_name = type(get_adapter()).__name__.replace("Adapter", "").lower()
-        return adapter_name in ("openclaw",)
+        adapter = get_adapter()
+        return bool(adapter.get_capability("supports_compaction_control", False))
     except Exception:
         return False
 
