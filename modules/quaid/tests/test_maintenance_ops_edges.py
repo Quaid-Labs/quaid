@@ -73,6 +73,35 @@ def test_family_heuristic_extracts_owner_sibling_relationship():
     assert ("Diana", "sibling_of", "Solomon Steadman") in triples
 
 
+def test_family_heuristic_owner_sibling_pattern_allows_followup_clause():
+    edges = maintenance_ops._heuristic_family_edges_for_fact(
+        fact_id="fact-3bb",
+        fact_text="Diana is my sister who lives in Seattle.",
+        owner_full="Solomon Steadman",
+    )
+
+    triples = {(edge["subject"], edge["relation"], edge["object"]) for edge in edges}
+    assert ("Diana", "sibling_of", "Solomon Steadman") in triples
+
+
+def test_family_heuristic_owner_sibling_pattern_ignores_possessive_and_hyphen_compounds():
+    owner = "Solomon Steadman"
+    samples = [
+        "Alice is my sister's friend.",
+        "Alice is my sister-in-law.",
+        "Alice is my brother-in-law.",
+        "Alice is my brother's wife.",
+    ]
+    for text in samples:
+        edges = maintenance_ops._heuristic_family_edges_for_fact(
+            fact_id="fact-3bd",
+            fact_text=text,
+            owner_full=owner,
+        )
+        triples = {(edge["subject"], edge["relation"], edge["object"]) for edge in edges}
+        assert ("Alice", "sibling_of", owner) not in triples
+
+
 def test_family_heuristic_extracts_sibling_and_child_edges_from_compound_phrase():
     edges = maintenance_ops._heuristic_family_edges_for_fact(
         fact_id="fact-3c",

@@ -2258,7 +2258,9 @@ _HEURISTIC_OWNER_KIN_IS_RE = re.compile(
     (?:(?i:my|the\s+user(?:['’]s)?|user(?:['’]s)?|the\s+owner(?:['’]s)?|owner(?:['’]s)?))
     \s+
     (?P<rel>(?i:sister|brother|sibling|mother|father|mom|dad|parent|wife|husband|spouse|partner|daughter|son|child))
+    (?!['’-])
     \b
+    (?=\s*(?:[.,;!?]|$)|\s+[a-z])
     """
 )
 _HEURISTIC_OWNER_KIN_PREFIX_RE = re.compile(
