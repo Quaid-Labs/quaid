@@ -1624,6 +1624,19 @@ class TestAdapterSelection:
         adapter = get_adapter()
         assert isinstance(adapter, CodexAdapter)
 
+    def test_config_codex_from_lean_instance_config(self, monkeypatch, tmp_path):
+        instance_id = "codex-lean"
+        cfg_dir = tmp_path / "instances" / instance_id
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text(
+            json.dumps({"instance": {"id": instance_id}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        adapter = get_adapter()
+        assert isinstance(adapter, CodexAdapter)
+
     def test_config_claude_code_from_cwd_with_explicit_adapter_type(self, monkeypatch, tmp_path):
         project_dir = tmp_path / "cc-project"
         project_dir.mkdir()

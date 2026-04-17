@@ -82,9 +82,10 @@ class TestInstanceManagerBase:
         assert (visible / "USER.md").is_file()
         assert (visible / "ENVIRONMENT.md").is_file()
         config = json.loads((silo / "config.json").read_text())
-        assert config["adapter"]["type"] == adapter.adapter_id()
+        assert config["instance"]["id"] == "claude-code-proj"
+        assert "adapter" not in config
 
-    def test_create_folds_shared_platform_defaults_into_silo_config(self, tmp_path):
+    def test_create_keeps_instance_config_minimal_and_relies_on_layering(self, tmp_path):
         from lib.instance_manager import InstanceManager
         adapter = MagicMock()
         adapter.agent_id_prefix.return_value = "openclaw"
@@ -114,13 +115,46 @@ class TestInstanceManagerBase:
             silo = mgr.create("m13test")
 
         config = json.loads((silo / "config.json").read_text())
-        assert config["adapter"]["type"] == "openclaw"
-        assert config["models"]["deepReasoning"] == "gpt-5.4"
-        assert config["models"]["fastReasoning"] == "gpt-5.4-mini"
-        assert config["capture"]["chunk_tokens"] == 500
-        assert config["plugins"]["strict"] is True
-        assert config["notifications"]["level"] == "normal"
-        assert config["retrieval"]["auto_inject"] is True
+        assert config["instance"]["id"] == "openclaw-m13test"
+        assert "adapter" not in config
+        assert "models" not in config
+        assert "capture" not in config
+        assert "plugins" not in config
+        assert "notifications" not in config
+        assert "retrieval" not in config
+
+    def test_init_silo_preserves_existing_instance_overrides(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "openclaw"
+        adapter.adapter_id.return_value = "openclaw"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "openclaw-main"
+        mgr = InstanceManager(adapter)
+
+        silo = tmp_path / "instances" / "openclaw-main"
+        silo.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "visible" / "projects" / "quaid").mkdir(parents=True, exist_ok=True)
+        existing = {
+            "adapter": {"type": "legacy-type", "capabilities": {"context_refresh_strategy": "turn_based"}},
+            "models": {"deepReasoning": "custom-deep"},
+            "capture": {"chunk_tokens": 321},
+        }
+        (silo / "config.json").write_text(json.dumps(existing), encoding="utf-8")
+
+        with patch("core.project_registry.get_project"), \
+             patch("core.project_registry.create_project"), \
+             patch("core.project_registry.link_project"), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            mgr._init_silo(silo, "openclaw-main")
+
+        config = json.loads((silo / "config.json").read_text(encoding="utf-8"))
+        assert config["instance"]["id"] == "openclaw-main"
+        assert config["adapter"]["type"] == "legacy-type"
+        assert config["adapter"]["capabilities"]["context_refresh_strategy"] == "turn_based"
+        assert config["models"]["deepReasoning"] == "custom-deep"
+        assert config["capture"]["chunk_tokens"] == 321
 
     def test_create_raises_if_exists(self, tmp_path):
         from lib.instance_manager import InstanceManager

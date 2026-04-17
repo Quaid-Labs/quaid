@@ -5,6 +5,7 @@ import os
 import sys
 import io
 import queue
+import time
 import urllib.error
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -24,6 +25,7 @@ from lib.providers import (
     TestLLMProvider,
     OllamaEmbeddingsProvider,
     MockEmbeddingsProvider,
+    _read_response_body_with_deadline,
 )
 from adaptors.openclaw.providers import GatewayLLMProvider, OpenClawGatewayLLMProvider
 from adaptors.codex.providers import CodexLLMProvider, _CodexAppServerManager
@@ -1641,6 +1643,37 @@ class TestOllamaEmbeddingsProvider:
              patch("lib.providers.is_fail_hard_enabled", return_value=True):
             with pytest.raises(RuntimeError, match="failHard is enabled"):
                 p.embed_many(["first", "second"])
+
+    def test_embed_many_emits_progress_telemetry_logs(self):
+        p = OllamaEmbeddingsProvider()
+        embeddings = [[0.1] * 4, [0.2] * 4]
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"embeddings": embeddings}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp), \
+             patch("lib.providers.logger.info") as log_info:
+            result = p.embed_many(["first", "second"])
+
+        assert result == embeddings
+        log_messages = [str(call.args[0]) for call in log_info.call_args_list]
+        assert any("ollama.embed.req" in msg for msg in log_messages)
+        assert any("ollama.embed.headers" in msg for msg in log_messages)
+        assert any("ollama.embed.body_read" in msg for msg in log_messages)
+        assert any("ollama.embed.parsed" in msg for msg in log_messages)
+
+
+def test_read_response_body_with_deadline_raises_after_deadline():
+    class _StreamingResp:
+        fp = None
+
+        def read(self):
+            time.sleep(2.0)
+            return b"x"
+
+    with pytest.raises(TimeoutError, match="exceeded deadline"):
+        _read_response_body_with_deadline(_StreamingResp(), read_timeout_s=1.0)
 
 
 # ---------------------------------------------------------------------------

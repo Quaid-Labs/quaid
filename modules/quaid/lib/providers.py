@@ -24,6 +24,7 @@ import os
 import platform
 import re
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -85,6 +86,47 @@ def _urlopen_with_local_proxy_bypass(req, *, timeout: float):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         return opener.open(req, timeout=timeout)
     return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _set_response_socket_timeout(resp, timeout_s: float) -> None:
+    """Best-effort socket timeout update for urllib responses."""
+    try:
+        timeout = max(0.1, float(timeout_s))
+    except Exception:
+        timeout = 0.1
+    try:
+        sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+        if sock is not None and hasattr(sock, "settimeout"):
+            sock.settimeout(timeout)
+    except Exception:
+        return
+
+
+def _read_response_body_with_deadline(resp, *, read_timeout_s: float, chunk_size: int = 65536) -> bytes:
+    """Read response body with a hard deadline across the full body read."""
+    del chunk_size  # reserved for future chunked read implementation
+    timeout = max(1.0, float(read_timeout_s or 0))
+    _set_response_socket_timeout(resp, timeout)
+
+    holder = {"data": None, "error": None}
+
+    def _reader() -> None:
+        try:
+            holder["data"] = resp.read()
+        except BaseException as exc:  # noqa: BLE001
+            holder["error"] = exc
+
+    reader = threading.Thread(target=_reader, daemon=True)
+    reader.start()
+    reader.join(timeout)
+    if reader.is_alive():
+        raise TimeoutError(f"Ollama response body read exceeded deadline ({timeout:.1f}s)")
+    if holder["error"] is not None:
+        raise holder["error"]  # type: ignore[misc]
+    body = holder["data"]
+    if body is None:
+        return b""
+    return bytes(body)
 
 
 def _is_anthropic_oauth_token(token: str) -> bool:
@@ -1478,11 +1520,15 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
     def embed(self, text):
         retries = 1
         last_error = None
+        call_started = time.monotonic()
+        timeout_s = 120.0
         for attempt in range(retries + 1):
+            request_started = time.monotonic()
             try:
+                text_value = str(text or "")
                 data = json.dumps({
                     "model": self._model,
-                    "input": text,
+                    "input": text_value,
                     "keep_alive": -1,
                 }).encode("utf-8")
                 req = urllib.request.Request(
@@ -1490,9 +1536,35 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     data=data,
                     headers={"Content-Type": "application/json"},
                 )
-                with _urlopen_with_local_proxy_bypass(req, timeout=120) as resp:
-                    result = json.loads(resp.read().decode("utf-8"))
+                logger.info(
+                    "ollama.embed.req batch_size=%d model=%s total_chars=%d timeout=%.1f attempt=%d",
+                    1,
+                    self._model,
+                    len(text_value),
+                    timeout_s,
+                    attempt + 1,
+                )
+                with _urlopen_with_local_proxy_bypass(req, timeout=timeout_s) as resp:
+                    logger.info(
+                        "ollama.embed.headers received batch_size=%d elapsed_ms=%d",
+                        1,
+                        int((time.monotonic() - request_started) * 1000),
+                    )
+                    body_bytes = _read_response_body_with_deadline(resp, read_timeout_s=timeout_s)
+                    logger.info(
+                        "ollama.embed.body_read batch_size=%d body_len=%d elapsed_ms=%d",
+                        1,
+                        len(body_bytes),
+                        int((time.monotonic() - request_started) * 1000),
+                    )
+                    result = json.loads(body_bytes.decode("utf-8"))
                     embeddings = result.get("embeddings", [])
+                    logger.info(
+                        "ollama.embed.parsed batch_size=%d embeddings_count=%d elapsed_ms=%d",
+                        1,
+                        len(embeddings) if isinstance(embeddings, list) else 0,
+                        int((time.monotonic() - request_started) * 1000),
+                    )
                     if embeddings and embeddings[0]:
                         return embeddings[0]
                     return None
@@ -1507,6 +1579,12 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                 break
         if last_error is not None:
             e = last_error
+            logger.error(
+                "ollama.embed.fail batch_size=%d total_elapsed_ms=%d error=%s",
+                1,
+                int((time.monotonic() - call_started) * 1000),
+                e,
+            )
             logger.error(
                 "Ollama embeddings call failed provider=ollama model=%s url=%s text_len=%d error=%s",
                 self._model,
@@ -1541,10 +1619,14 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
 
         retries = 1
         retryable_errors = (urllib.error.URLError, TimeoutError, OSError, ConnectionError)
+        call_started = time.monotonic()
 
         def _request_batch(batch: List[str]) -> List[Optional[List[float]]]:
             batch_error = None
+            batch_chars = sum(len(str(item or "")) for item in batch)
+            batch_started = time.monotonic()
             for attempt in range(retries + 1):
+                request_started = time.monotonic()
                 try:
                     data = json.dumps({
                         "model": self._model,
@@ -1556,9 +1638,35 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                         data=data,
                         headers={"Content-Type": "application/json"},
                     )
+                    logger.info(
+                        "ollama.embed.req batch_size=%d model=%s total_chars=%d timeout=%.1f attempt=%d",
+                        len(batch),
+                        self._model,
+                        batch_chars,
+                        timeout_s,
+                        attempt + 1,
+                    )
                     with _urlopen_with_local_proxy_bypass(req, timeout=timeout_s) as resp:
-                        result = json.loads(resp.read().decode("utf-8"))
+                        logger.info(
+                            "ollama.embed.headers received batch_size=%d elapsed_ms=%d",
+                            len(batch),
+                            int((time.monotonic() - request_started) * 1000),
+                        )
+                        body_bytes = _read_response_body_with_deadline(resp, read_timeout_s=timeout_s)
+                        logger.info(
+                            "ollama.embed.body_read batch_size=%d body_len=%d elapsed_ms=%d",
+                            len(batch),
+                            len(body_bytes),
+                            int((time.monotonic() - request_started) * 1000),
+                        )
+                        result = json.loads(body_bytes.decode("utf-8"))
                         embeddings = result.get("embeddings", [])
+                        logger.info(
+                            "ollama.embed.parsed batch_size=%d embeddings_count=%d elapsed_ms=%d",
+                            len(batch),
+                            len(embeddings) if isinstance(embeddings, list) else 0,
+                            int((time.monotonic() - request_started) * 1000),
+                        )
                         if len(embeddings) != len(batch):
                             raise RuntimeError(
                                 f"Ollama embeddings batch returned {len(embeddings)} vectors for {len(batch)} inputs"
@@ -1578,8 +1686,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
             if len(batch) > 1 and isinstance(batch_error, retryable_errors):
                 split_at = max(1, len(batch) // 2)
                 logger.warning(
-                    "Ollama embeddings batch timed out; retrying with smaller batches model=%s batch_len=%d split_at=%d error=%s",
-                    self._model,
+                    "ollama.embed.split batch_len=%d split_at=%d reason=%s",
                     len(batch),
                     split_at,
                     batch_error,
@@ -1587,6 +1694,12 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                 left = _request_batch(batch[:split_at])
                 right = _request_batch(batch[split_at:])
                 return left + right
+            logger.error(
+                "ollama.embed.fail batch_size=%d total_elapsed_ms=%d error=%s",
+                len(batch),
+                int((time.monotonic() - batch_started) * 1000),
+                batch_error,
+            )
             raise batch_error
 
         all_embeddings: List[Optional[List[float]]] = []
@@ -1602,11 +1715,12 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         if last_error is not None:
             e = last_error
             logger.error(
-                "Ollama embeddings batch call failed provider=ollama model=%s url=%s items=%d batch_size=%d error=%s",
+                "Ollama embeddings batch call failed provider=ollama model=%s url=%s items=%d batch_size=%d total_elapsed_ms=%d error=%s",
                 self._model,
                 _sanitize_url_for_logs(self._url),
                 len(items),
                 batch_size,
+                int((time.monotonic() - call_started) * 1000),
                 e,
             )
             if is_fail_hard_enabled():

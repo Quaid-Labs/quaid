@@ -1529,6 +1529,7 @@ def _read_adapter_type_from_config() -> str:
     Accepted formats:
       {"adapter": "standalone"}
       {"adapter": {"type": "openclaw"}}
+      {"instance": {"id": "openclaw-main"}}  # inferred from config path/instance id
     """
     last_existing: Optional[Path] = None
     for cfg_path in _adapter_config_paths():
@@ -1556,13 +1557,17 @@ def _read_adapter_type_from_config() -> str:
 
         if kind:
             return kind
+        inferred = _infer_adapter_type_from_instance(cfg_path.parent.name)
+        if inferred:
+            return inferred
         continue
 
     searched = ", ".join(str(p) for p in _adapter_config_paths())
     if last_existing is None:
         raise RuntimeError(
             "No config file found for adapter selection. Create config.json "
-            "with {\"adapter\": {\"type\": \"<adapter-id>\"}}. "
+            "with {\"adapter\": {\"type\": \"<adapter-id>\"}} "
+            "(or provide a QUAID_INSTANCE with a known adapter prefix). "
             f"Searched: {searched}"
         )
     raise RuntimeError(

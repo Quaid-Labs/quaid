@@ -19,27 +19,12 @@ import sqlite3
 import shutil
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from lib.adapter import QuaidAdapter
-
-
-def _deep_merge_defaults(defaults: dict, existing: dict) -> dict:
-    """Return existing with any missing keys filled in from defaults.
-
-    Merges recursively for nested dicts. Never clobbers an existing value —
-    only fills in gaps.
-    """
-    result = dict(defaults)
-    for key, value in existing.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge_defaults(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 def _read_json_object(path: Path) -> dict:
@@ -141,19 +126,17 @@ class InstanceManager:
         visible_root.mkdir(parents=True, exist_ok=True)
         (visible_root / "journal").mkdir(parents=True, exist_ok=True)
 
-        # Config — fold defaults into existing config (fill missing keys without
-        # clobbering values that were written by the installer or a prior run).
+        # Config — keep instance config lean. Only persist instance-specific
+        # keys here and rely on shared platform/global config layering at read
+        # time for default values.
         config_path = silo_root / "config.json"
-        existing: dict = {}
-        if config_path.exists():
-            try:
-                existing = json.loads(config_path.read_text(encoding="utf-8"))
-                if not isinstance(existing, dict):
-                    existing = {}
-            except Exception:
-                existing = {}
-        merged = _deep_merge_defaults(self._default_config(), existing)
-        config_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        config = _read_json_object(config_path)
+        instance_config = config.get("instance")
+        if not isinstance(instance_config, dict):
+            instance_config = {}
+        instance_config.setdefault("id", instance_id)
+        config["instance"] = instance_config
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
         # Database
         db_path = silo_root / "data" / "memory.db"
@@ -255,71 +238,6 @@ class InstanceManager:
             canonical=project_dir,
             db_path=(self.adapter.instance_root().parent / instance_id / "data" / "memory.db"),
         )
-
-    def _default_config(self) -> dict:
-        """Return a complete default config skeleton.
-
-        All retrieval keys are included so the TypeScript adapter's preflight
-        checks pass even if the silo was created before a full config was written.
-        Values here are the canonical defaults — they will be folded in only where
-        the actual config has a gap (see _deep_merge_defaults).
-        """
-        try:
-            import dataclasses
-            from config import RetrievalConfig
-            retrieval_defaults = {
-                f.name: f.default
-                for f in dataclasses.fields(RetrievalConfig)
-                if f.default is not dataclasses.MISSING
-            }
-        except Exception:
-            retrieval_defaults = {
-                "fail_hard": True,
-                "auto_inject": True,
-                "default_limit": 5,
-                "max_limit": 8,
-                "min_similarity": 0.80,
-                "max_tokens": 2000,
-            }
-        adapter_defaults = {}
-        try:
-            raw_adapter_defaults = getattr(type(self.adapter), "ADAPTER_CONFIG", {}) or {}
-            if isinstance(raw_adapter_defaults, dict):
-                adapter_defaults = dict(raw_adapter_defaults)
-        except Exception:
-            adapter_defaults = {}
-        retrieval_defaults["fail_hard"] = True
-        retrieval_defaults["auto_inject"] = True
-        defaults = {
-            "adapter": {
-                "type": self.adapter.adapter_id(),
-                "capabilities": adapter_defaults,
-            },
-            "retrieval": retrieval_defaults,
-        }
-        try:
-            home = self.adapter.quaid_home()
-            adapter_id = str(self.adapter.adapter_id() or "").strip()
-            shared_defaults = [
-                home / "shared" / "config" / "global" / "config.json",
-                home / "shared" / "config" / adapter_id / "config.json",
-            ]
-            for cfg_path in shared_defaults:
-                cfg = _read_json_object(cfg_path)
-                if cfg:
-                    defaults = _deep_merge_defaults(defaults, cfg)
-        except Exception as exc:
-            logger.warning("Failed to load shared config defaults: %s", exc)
-        defaults.setdefault("adapter", {})
-        defaults["adapter"]["type"] = self.adapter.adapter_id()
-        capabilities = defaults["adapter"].setdefault("capabilities", {})
-        if isinstance(capabilities, dict):
-            for key, value in adapter_defaults.items():
-                capabilities.setdefault(key, value)
-        defaults.setdefault("retrieval", {})
-        defaults["retrieval"]["fail_hard"] = True
-        defaults["retrieval"]["auto_inject"] = True
-        return defaults
 
     # ---- Settings / integration snippet ----
 

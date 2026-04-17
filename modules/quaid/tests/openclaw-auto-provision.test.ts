@@ -164,11 +164,12 @@ describe("openclaw auto-provision", () => {
     expect(fs.existsSync(targetSoulPath)).toBe(true);
     expect(fs.existsSync(path.join(visibleHome, "instances", "openclaw-m13test", "journal"))).toBe(true);
     const targetConfig = JSON.parse(fs.readFileSync(targetConfigPath, "utf8"));
-    expect(targetConfig.models.deepReasoning).toBe("gpt-5.1-codex");
-    expect(targetConfig.models.fastReasoning).toBe("gpt-5.1-codex-mini");
-    expect(targetConfig.capture.chunk_tokens).toBe(500);
-    expect(targetConfig.plugins.enabled).toBe(true);
-    expect(targetConfig.notifications.level).toBe("normal");
+    expect(targetConfig.instance?.id).toBe("openclaw-m13test");
+    expect(targetConfig.adapter).toBeUndefined();
+    expect(targetConfig.models).toBeUndefined();
+    expect(targetConfig.capture).toBeUndefined();
+    expect(targetConfig.plugins).toBeUndefined();
+    expect(targetConfig.notifications).toBeUndefined();
     expect(
       childProcessState.daemonStartCalls.some(
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
