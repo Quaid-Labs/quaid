@@ -1230,10 +1230,6 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
         return
     if _context_refresh_strategy() != "compaction":
         return
-    adapter_id = _current_adapter_id()
-    if adapter_id == "codex":
-        # Codex refreshes on UserPromptSubmit with turn-based guard.
-        return
     content = _build_project_context_message()
     if not content:
         return
