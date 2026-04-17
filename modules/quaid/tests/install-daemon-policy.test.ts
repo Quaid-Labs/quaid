@@ -158,7 +158,10 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("OpenClaw Quaid plugin is not fully registered after install");
     expect(setupText).toContain("pluginListCheckOk");
     expect(setupText).toContain("pluginListed");
-    expect(setupText).toContain("runCliWithTimeout(cli, [\"plugins\", \"list\"], 20_000)");
+    expect(setupText).toContain("const listAttempts = 3;");
+    expect(setupText).toContain("const listTimeoutMs = 60_000;");
+    expect(setupText).toContain("if (listRes.status === 0 || discovered)");
+    expect(setupText).toContain("_sleepMs(listRetryDelayMs)");
   });
 
   it("OpenClaw installer reconciles launchd env for the gateway service", () => {

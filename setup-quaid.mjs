@@ -1777,6 +1777,16 @@ function runCliWithTimeout(bin, args, timeoutMs = 30_000) {
   });
 }
 
+function _sleepMs(ms) {
+  const waitMs = Number.isFinite(ms) ? Math.max(0, Math.floor(ms)) : 0;
+  if (waitMs <= 0) return;
+  runCliWithTimeout(
+    process.execPath,
+    ["-e", `setTimeout(() => process.exit(0), ${waitMs});`],
+    waitMs + 2_000,
+  );
+}
+
 function renderCliFailure(res, timeoutMs = null) {
   const sig = String(res?.signal || "");
   if (sig === "SIGTERM" || sig === "SIGKILL") {
@@ -2712,12 +2722,22 @@ function _readOpenClawPluginState() {
     }
   } catch {}
   if (cli) {
-    try {
-      const listRes = runCliWithTimeout(cli, ["plugins", "list"], 20_000);
-      const listText = `${_safeTrim(listRes.stdout)}\n${_safeTrim(listRes.stderr)}`.trim().toLowerCase();
-      pluginListCheckOk = listRes.status === 0;
-      pluginListed = pluginListCheckOk && /(^|\s)quaid(\s|$)/m.test(listText);
-    } catch {}
+    const listAttempts = 3;
+    const listTimeoutMs = 60_000;
+    const listRetryDelayMs = 5_000;
+    for (let attempt = 1; attempt <= listAttempts; attempt += 1) {
+      try {
+        const listRes = runCliWithTimeout(cli, ["plugins", "list"], listTimeoutMs);
+        const listText = `${_safeTrim(listRes.stdout)}\n${_safeTrim(listRes.stderr)}`.trim().toLowerCase();
+        const discovered = /(^|[^a-z0-9_-])quaid([^a-z0-9_-]|$)/m.test(listText);
+        if (listRes.status === 0 || discovered) {
+          pluginListCheckOk = true;
+          pluginListed = discovered;
+          break;
+        }
+      } catch {}
+      if (attempt < listAttempts) _sleepMs(listRetryDelayMs);
+    }
   }
   return {
     extensionDir,
