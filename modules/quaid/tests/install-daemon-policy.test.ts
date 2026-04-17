@@ -31,9 +31,24 @@ describe("install daemon policy", () => {
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).not.toContain("return `${platform}-main`;");
-    expect(setupText).toContain("Write runtime config to shared platform config only.");
+    expect(setupText).toContain("Write runtime platform overrides to shared platform config only.");
     expect(setupText).not.toContain("Wrote instance config:");
     expect(setupText).not.toContain("hydratePlatformInstanceConfigs(");
+  });
+
+  it("installer keeps shared platform config thin while global config is exhaustive", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("const baseGlobalConfig = JSON.parse(JSON.stringify(config));");
+    expect(setupText).toContain("delete baseGlobalConfig.adapter;");
+    expect(setupText).toContain("delete baseGlobalConfig.plugins.slots.adapter;");
+    expect(setupText).toContain("const mergedGlobalConfig = deepMergeMissing(baseGlobalConfig, existingGlobalConfig);");
+    expect(setupText).toContain("const platformConfig = _deepDiffOverrides(sharedGlobalCfg, config) || {};");
+    expect(setupText).toContain("platformConfig.adapter = adapterConfig;");
+    expect(setupText).toContain("platformPlugins.slots.adapter = adapterPluginId;");
+    expect(setupText).toContain("Wrote shared platform override config:");
+    expect(setupText).not.toContain("fs.writeFileSync(sharedPlatformConfigPath, configJson);");
   });
 
   it("shared-only installs defer docs registry writes until a real instance exists", () => {

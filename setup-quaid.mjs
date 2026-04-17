@@ -31,6 +31,7 @@ import {
   resolveInstallerProvider,
 } from "./lib/install-model-defaults.mjs";
 import {
+  deepMergeMissing,
   readJsonObject,
   writeJsonObject,
 } from "./lib/install-config-hydration.mjs";
@@ -5687,6 +5688,39 @@ async function tryBrewInstall(pkg, label) {
   }
 }
 
+function _isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function _deepDiffOverrides(base, target) {
+  if (Array.isArray(target)) {
+    if (!Array.isArray(base)) return target;
+    const sameLength = base.length === target.length;
+    if (!sameLength) return target;
+    for (let i = 0; i < target.length; i += 1) {
+      const left = base[i];
+      const right = target[i];
+      if (_isPlainObject(right) || Array.isArray(right)) {
+        const nested = _deepDiffOverrides(left, right);
+        if (nested !== undefined) return target;
+      } else if (left !== right) {
+        return target;
+      }
+    }
+    return undefined;
+  }
+  if (_isPlainObject(target)) {
+    if (!_isPlainObject(base)) return target;
+    const out = {};
+    for (const [key, value] of Object.entries(target)) {
+      const nested = _deepDiffOverrides(base[key], value);
+      if (nested !== undefined) out[key] = nested;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+  return base === target ? undefined : target;
+}
+
 function writeConfig(owner, models, embeddings, systems, janitorPolicies = null) {
   const resolvedAdapterType = models.adapterType || resolvedInstallerPlatform() || "standalone";
   const adapterCapabilities = {};
@@ -5895,8 +5929,8 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     },
   };
 
-  // Write ollama/embeddings config to shared/global (fallback layer), and
-  // always create a blank per-platform shared config file.
+  // Write exhaustive defaults to shared/global (fallback layer), and keep
+  // shared/platform config thin with only platform-specific overrides.
   const platformKey = resolvedInstallerPlatform();
   const sharedGlobalConfigDir = path.join(WORKSPACE, "shared", "config", "global");
   const sharedGlobalConfigPath = path.join(sharedGlobalConfigDir, "config.json");
@@ -5907,27 +5941,45 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     embeddingModel: embeddings.embedModel,
     embeddingDim: embeddings.embedDim,
   };
-  let sharedGlobalCfg = readJsonObject(sharedGlobalConfigPath) || {};
-  if (!sharedGlobalCfg.ollama) {
-    sharedGlobalCfg.ollama = ollamaBlock;
-    writeJsonObject(sharedGlobalConfigPath, sharedGlobalCfg);
-    log.info(`Wrote embeddings config to shared global fallback: ${sharedGlobalConfigPath}`);
-  } else {
-    log.info(C.dim(`Shared global embeddings config already exists — skipping (${sharedGlobalConfigPath})`));
+  const baseGlobalConfig = JSON.parse(JSON.stringify(config));
+  delete baseGlobalConfig.adapter;
+  if (_isPlainObject(baseGlobalConfig.plugins) && _isPlainObject(baseGlobalConfig.plugins.slots)) {
+    delete baseGlobalConfig.plugins.slots.adapter;
   }
+  baseGlobalConfig.ollama = ollamaBlock;
+
+  const existingGlobalConfig = readJsonObject(sharedGlobalConfigPath) || {};
+  const mergedGlobalConfig = deepMergeMissing(baseGlobalConfig, existingGlobalConfig);
+  if (JSON.stringify(existingGlobalConfig) !== JSON.stringify(mergedGlobalConfig)) {
+    writeJsonObject(sharedGlobalConfigPath, mergedGlobalConfig);
+    log.info(`Updated shared global base config: ${sharedGlobalConfigPath}`);
+  } else {
+    log.info(C.dim(`Shared global base config already contains installer defaults (${sharedGlobalConfigPath})`));
+  }
+
+  let sharedGlobalCfg = mergedGlobalConfig;
   if (!fs.existsSync(sharedPlatformConfigPath)) {
     fs.mkdirSync(sharedPlatformConfigDir, { recursive: true });
     fs.writeFileSync(sharedPlatformConfigPath, "{}\n");
     log.info(`Created blank shared platform config: ${sharedPlatformConfigPath}`);
   }
 
-  // Write runtime config to shared platform config only. Instance silos are
-  // created on first hook use and should not get install-time copies of
-  // globally tunable settings such as models, capture, or retrieval policy.
+  // Keep platform config thin. Write only deltas from shared/global plus the
+  // adapter identity + adapter plugin slot required for platform resolution.
+  const platformConfig = _deepDiffOverrides(sharedGlobalCfg, config) || {};
+  platformConfig.adapter = adapterConfig;
+  const platformPlugins = _isPlainObject(platformConfig.plugins) ? platformConfig.plugins : {};
+  platformPlugins.slots = _isPlainObject(platformPlugins.slots) ? platformPlugins.slots : {};
+  platformPlugins.slots.adapter = adapterPluginId;
+  platformConfig.plugins = platformPlugins;
+  const platformConfigJson = JSON.stringify(platformConfig, null, 2) + "\n";
+
+  // Write runtime platform overrides to shared platform config only. Instance
+  // silos are created on first hook use and should not get install-time copies
+  // of globally tunable settings.
   if (!fs.existsSync(sharedPlatformConfigPath) || fs.readFileSync(sharedPlatformConfigPath, "utf8").trim() === "{}") {
-    const configJson = JSON.stringify(config, null, 2) + "\n";
-    fs.writeFileSync(sharedPlatformConfigPath, configJson);
-    log.info(`Wrote shared platform config: ${sharedPlatformConfigPath}`);
+    fs.writeFileSync(sharedPlatformConfigPath, platformConfigJson);
+    log.info(`Wrote shared platform override config: ${sharedPlatformConfigPath}`);
   }
 }
 
