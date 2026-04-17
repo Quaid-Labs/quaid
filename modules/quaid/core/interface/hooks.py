@@ -331,6 +331,55 @@ def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -
     }
 
 
+def _codex_project_list_fidelity_context(hook_input: dict) -> str:
+    """Return a fidelity block when Codex is summarizing `quaid project list`."""
+    payload = _extract_codex_tool_output_trace(hook_input, max_chars=12000)
+    tool_output = str(payload.get("tool_output") or "").strip()
+    if not tool_output:
+        return ""
+
+    if "quaid project list" not in tool_output.lower():
+        return ""
+
+    project_lines: List[str] = []
+    seen: set[str] = set()
+    for raw_line in tool_output.splitlines():
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if lower.startswith("[") and lower.endswith("]"):
+            continue
+        if lower.startswith("quaid project list"):
+            continue
+        if lower.startswith("quaid ") and "project list" in lower:
+            continue
+        if lower in {"projects:", "(none)", "no projects registered."}:
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        project_lines.append(line)
+
+    if not project_lines:
+        return (
+            "<quaid_system_message>\n"
+            "[Tool output fidelity]\n"
+            "You just ran `quaid project list`. When replying, preserve the full command output and do not omit entries.\n"
+            "</quaid_system_message>"
+        )
+
+    rendered = "\n".join(f"- {name}" for name in project_lines[:50])
+    return (
+        "<quaid_system_message>\n"
+        "[Tool output fidelity]\n"
+        "You just ran `quaid project list`. Include every listed project exactly once.\n"
+        "Observed output rows:\n"
+        f"{rendered}\n"
+        "</quaid_system_message>"
+    )
+
+
 def _summarize_recall_results(memories: List[Dict], limit: int = 5) -> List[Dict]:
     out: List[Dict] = []
     for mem in list(memories or [])[: max(1, limit)]:
@@ -699,6 +748,13 @@ def hook_inject(args):
 
         if deferred_notice_hint:
             context_parts.append(deferred_notice_hint)
+
+        if _current_adapter_id() == "codex":
+            codex_tool_fidelity = _codex_project_list_fidelity_context(
+                hook_input if isinstance(hook_input, dict) else {}
+            )
+            if codex_tool_fidelity:
+                context_parts.append(codex_tool_fidelity)
 
         if memories:
             context_parts.append(_format_memories(memories))

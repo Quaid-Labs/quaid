@@ -990,6 +990,10 @@ class DocsRAG:
                 # per-entry resolution path above.
                 raise
             except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError(
+                        f"Failed to load docs registry paths for project {project!r}"
+                    ) from exc
                 logger.warning(
                     "docs recall failed to load registry paths for project %r: %s",
                     project,

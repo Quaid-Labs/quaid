@@ -514,6 +514,7 @@ class TestDocsSearchFiltering:
 
         with patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
              patch.object(rag, "_doc_vec_table_exists", return_value=True), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
              patch("datastore.docsdb.rag.logger.warning") as warn_mock, \
              patch.object(
                  rag,
@@ -752,6 +753,24 @@ class TestDocsSearchFiltering:
 
         assert len(results) == 1
         assert results[0]["source"] == "/canonical/docs/m10-test-doc.md"
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True)
+    def test_search_docs_project_filter_raises_when_registry_paths_fail_under_failhard(self, _failhard, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+
+        class _BrokenRegistry:
+            def list_docs(self, project=None):
+                raise RuntimeError("registry unavailable")
+
+        with patch("datastore.docsdb.registry.DocsRegistry", _BrokenRegistry), \
+             patch.object(
+                 rag,
+                 "_get_project_paths",
+                 return_value={"home_dir": "", "source_roots": []},
+             ):
+            with pytest.raises(RuntimeError, match="registry unavailable|Failed to load docs registry paths"):
+                rag.search_docs("veiled-wintersmith-runebell", limit=10, project="quaid")
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])

@@ -831,15 +831,6 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
 
 
 def write_rolling_state(session_id: str, state: Dict[str, Any]) -> None:
-    def _has_map_content(value: Any) -> bool:
-        data = value if isinstance(value, dict) else {}
-        for item in data.values():
-            if isinstance(item, list) and any(str(v or "").strip() for v in item):
-                return True
-            if isinstance(item, str) and item.strip():
-                return True
-        return False
-
     payload = dict(state or {})
     normalized_session_id = _validate_session_id(session_id)
     payload["session_id"] = normalized_session_id
@@ -848,11 +839,11 @@ def write_rolling_state(session_id: str, state: Dict[str, Any]) -> None:
     has_semantic_buffer = bool(str(payload.get("semantic_buffer", "") or "").strip())
     has_semantic_tokens = int(payload.get("semantic_buffer_tokens", 0) or 0) > 0
     has_batches = int(payload.get("rolling_batches", 0) or 0) > 0
-    has_carry_facts = bool(payload.get("carry_facts") or [])
-    has_raw_facts = bool(payload.get("raw_facts") or [])
-    has_raw_snippets = _has_map_content(payload.get("raw_snippets"))
-    has_raw_journal = _has_map_content(payload.get("raw_journal"))
-    has_raw_project_logs = _has_map_content(payload.get("raw_project_logs"))
+    has_carry_facts = _has_text_payload(payload.get("carry_facts"))
+    has_raw_facts = _has_text_payload(payload.get("raw_facts"))
+    has_raw_snippets = _has_text_payload(payload.get("raw_snippets"))
+    has_raw_journal = _has_text_payload(payload.get("raw_journal"))
+    has_raw_project_logs = _has_text_payload(payload.get("raw_project_logs"))
 
     if not any(
         (
@@ -1251,12 +1242,23 @@ def merge_staged_payloads(state: Dict[str, Any], payload_result: Dict[str, Any])
     return merged
 
 
+def _has_text_payload(value: Any) -> bool:
+    """Return True when a payload container has meaningful text content."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_text_payload(nested) for nested in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_text_payload(nested) for nested in value)
+    return False
+
+
 def staged_state_has_payload(state: Dict[str, Any]) -> bool:
     return bool(
-        (state.get("raw_facts") or [])
-        or any(v for v in (state.get("raw_snippets") or {}).values())
-        or any(v for v in (state.get("raw_journal") or {}).values())
-        or any(v for v in (state.get("raw_project_logs") or {}).values())
+        _has_text_payload(state.get("raw_facts"))
+        or _has_text_payload(state.get("raw_snippets"))
+        or _has_text_payload(state.get("raw_journal"))
+        or _has_text_payload(state.get("raw_project_logs"))
     )
 
 
@@ -2324,6 +2326,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 pass
     except Exception:
         pass
+
+    if not transcript_path or not os.path.isfile(transcript_path):
+        for _fallback_source, _fallback_path in (
+            ("cursor", str(cursor_data.get("transcript_path") or "").strip()),
+            ("rolling_state", str(staged_state.get("transcript_path") or "").strip()),
+        ):
+            if _fallback_path and os.path.isfile(_fallback_path):
+                transcript_path = _fallback_path
+                logger.info(
+                    "[%s] transcript path missing/invalid; using %s fallback: %s",
+                    label,
+                    _fallback_source,
+                    transcript_path,
+                )
+                break
 
     if not transcript_path or not os.path.isfile(transcript_path):
         # OC /new renames the session file to .jsonl.reset.<timestamp> — check for that backup.

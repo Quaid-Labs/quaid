@@ -17,10 +17,41 @@ import argparse
 import json
 import os
 import sys
+from typing import Any, Dict, List
 
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _live_instance_ids() -> set[str]:
+    """Best-effort current instance IDs from on-disk silos."""
+    try:
+        from lib.instance import list_instances
+        return set(str(name or "").strip() for name in list_instances() if str(name or "").strip())
+    except Exception:
+        return set()
+
+
+def _dedupe_instances(instances: Any) -> List[str]:
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for raw in list(instances or []):
+        name = str(raw or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered
+
+
+def _instance_view(entry: Dict[str, Any], live_instances: set[str]) -> Dict[str, Any]:
+    rendered = dict(entry or {})
+    raw_instances = _dedupe_instances(rendered.get("instances", []))
+    if live_instances:
+        raw_instances = [name for name in raw_instances if name in live_instances]
+    rendered["instances"] = raw_instances
+    return rendered
 
 
 def cmd_list(args):
@@ -29,10 +60,15 @@ def cmd_list(args):
     if not projects:
         print("No projects registered.")
         return
+    live_instances = _live_instance_ids()
+    rendered = {
+        name: _instance_view(entry, live_instances)
+        for name, entry in projects.items()
+    }
     if args.json:
-        print(json.dumps(projects, indent=2))
+        print(json.dumps(rendered, indent=2))
         return
-    for name, entry in sorted(projects.items()):
+    for name, entry in sorted(rendered.items()):
         src = entry.get("source_root") or "(no source root)"
         desc = entry.get("description", "")
         print(f"  {name}: {desc}")
@@ -62,7 +98,12 @@ def cmd_show(args):
     if not project:
         print(f"Project not found: {args.name}", file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({args.name: project}, indent=2))
+    print(
+        json.dumps(
+            {args.name: _instance_view(project, _live_instance_ids())},
+            indent=2,
+        )
+    )
 
 
 def cmd_update(args):

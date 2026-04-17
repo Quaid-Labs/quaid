@@ -2014,6 +2014,28 @@ class TestNotifyEdgeCases:
             cmd = mock_run.call_args[0][0]
             assert "--account" not in cmd
 
+    def test_notify_uses_env_with_homebrew_path_for_cli_runtime(self, monkeypatch):
+        """notify subprocess env should include Homebrew path for node-backed CLI."""
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="matrix", target="!room:localhost", account_id="default",
+            session_key="agent:main:main"
+        )
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+            result = adapter.notify("test")
+
+        assert result is True
+        call_env = mock_run.call_args.kwargs.get("env", {})
+        call_path = str(call_env.get("PATH") or "")
+        assert call_path.startswith("/opt/homebrew/bin")
+        assert "/usr/bin" in call_path
+
 
 class TestSessionsEdgeCases:
     def test_corrupt_sessions_json(self, monkeypatch, tmp_path):

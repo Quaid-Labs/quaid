@@ -302,6 +302,119 @@ def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp
     assert not stale_file.exists()
 
 
+def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+    rolling_dir.mkdir(parents=True, exist_ok=True)
+
+    extraction_daemon.write_rolling_state(
+        "sess-empty-struct",
+        {
+            "session_id": "sess-empty-struct",
+            "transcript_path": "",
+            "carry_facts": [{}],
+            "raw_facts": [{}],
+            "raw_snippets": {"USER.md": [{}]},
+            "raw_journal": {"journal": [{}]},
+            "raw_project_logs": {"proj": [{}]},
+            "rolling_batches": 0,
+            "semantic_buffer": "",
+            "semantic_buffer_tokens": 0,
+        },
+    )
+
+    assert not extraction_daemon._rolling_state_path("sess-empty-struct").exists()
+
+
+def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+
+    transcript_path = tmp_path / "fallback.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"user","content":"I always park near the stone arch by the river before work."}\n'
+            '{"role":"assistant","content":"Noted. I will remember the stone arch parking detail."}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_cursor",
+        lambda _sid: {
+            "line_offset": 0,
+            "transcript_path": str(transcript_path),
+            "internal": False,
+            "transcript_size_bytes": transcript_path.stat().st_size,
+        },
+    )
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+
+    captured = {}
+
+    class _Adapter:
+        def parse_session_jsonl(self, path):
+            return (
+                "User: I always park near the stone arch by the river before work.\n"
+                "Assistant: Noted. I will remember the stone arch parking detail."
+            )
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    try:
+        def _fake_extract_from_transcript(transcript, **kwargs):
+            captured["transcript"] = transcript
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [],
+                "facts": [],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", _fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda *_args, **_kwargs: {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "facts": [],
+                "snippets_updated": 0,
+                "journal_updated": 0,
+                "project_logs_updated": 0,
+                "project_logs_projects_updated": 0,
+                "project_logs_seen": 0,
+            },
+        )
+
+        extraction_daemon.process_signal(
+            {
+                "session_id": "sess-missing-transcript",
+                "type": "session_end",
+                "transcript_path": "",
+                "_signal_path": str(tmp_path / "sig.json"),
+            }
+        )
+    finally:
+        reset_adapter()
+
+    assert "stone arch" in captured.get("transcript", "")
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")

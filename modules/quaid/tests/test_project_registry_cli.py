@@ -49,7 +49,8 @@ class TestCmdList:
                 "instances": ["claude-code"],
             }
         }
-        with patch("core.project_registry.list_projects", return_value=projects):
+        with patch("core.project_registry.list_projects", return_value=projects), \
+             patch("core.project_registry_cli._live_instance_ids", return_value={"claude-code"}):
             cli.cmd_list(_args())
         out = capsys.readouterr().out
         assert "my-proj" in out
@@ -76,6 +77,20 @@ class TestCmdList:
         out = capsys.readouterr().out
         parsed = json.loads(out)
         assert "proj" in parsed
+
+    def test_list_prunes_stale_instances_using_live_silos(self, capsys):
+        projects = {
+            "proj": {
+                "description": "d",
+                "instances": ["alive-instance", "stale-instance"],
+            }
+        }
+        with patch("core.project_registry.list_projects", return_value=projects), \
+             patch("core.project_registry_cli._live_instance_ids", return_value={"alive-instance"}):
+            cli.cmd_list(_args())
+        out = capsys.readouterr().out
+        assert "alive-instance" in out
+        assert "stale-instance" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +144,15 @@ class TestCmdShow:
         out = capsys.readouterr().out
         parsed = json.loads(out)
         assert parsed["my-proj"]["description"] == "Shown"
+
+    def test_show_prunes_stale_instances_using_live_silos(self, capsys):
+        project = {"description": "Shown", "instances": ["alive-instance", "stale-instance"]}
+        with patch("core.project_registry.get_project", return_value=project), \
+             patch("core.project_registry_cli._live_instance_ids", return_value={"alive-instance"}):
+            cli.cmd_show(_args(name="my-proj"))
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["my-proj"]["instances"] == ["alive-instance"]
 
     def test_not_found_exits_with_one(self, capsys):
         with patch("core.project_registry.get_project", return_value=None):

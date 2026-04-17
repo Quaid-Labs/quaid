@@ -188,6 +188,29 @@ class OpenClawAdapter(QuaidAdapter):
                 return candidate
         return None
 
+    def _notify_subprocess_env(self) -> dict:
+        """Build a notification subprocess env with a resilient PATH.
+
+        Some launchd/service contexts omit Homebrew paths, which makes the
+        OpenClaw CLI fail with `env: node: No such file or directory` even
+        though `openclaw` itself is resolved.
+        """
+        env = os.environ.copy()
+        path_entries = []
+        for candidate in (
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            str(Path.home() / ".local" / "bin"),
+        ):
+            if candidate and candidate not in path_entries:
+                path_entries.append(candidate)
+        existing_path = str(env.get("PATH") or "").strip()
+        for part in [p for p in existing_path.split(":") if p]:
+            if part not in path_entries:
+                path_entries.append(part)
+        env["PATH"] = ":".join(path_entries)
+        return env
+
     def adapter_id(self) -> str:
         return "openclaw"
 
@@ -327,7 +350,13 @@ class OpenClawAdapter(QuaidAdapter):
             if dry_run:
                 print(f"[notify] Would run: {' '.join(cmd)}")
                 return True
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=self._notify_subprocess_env(),
+            )
             if result.returncode == 0:
                 print(f"[notify] Sent to {channel}:{info.target}")
                 return True

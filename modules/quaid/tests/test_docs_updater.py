@@ -849,3 +849,62 @@ class TestCmdUpdateStaleNeverIndexed:
             count = updater.cmd_update_stale(dry_run=False, project="quaid")
             assert count == 1
             assert indexed == [str(doc_path.resolve())]
+
+    def test_update_stale_notifies_agent_on_unresolved_registry_path(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": "docs/missing.md", "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    raise RuntimeError("broken resolver")
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {}
+
+                def index_document(self, file_path):
+                    raise AssertionError("index_document should not run for unresolved path")
+
+            notices = []
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+            monkeypatch.setattr(
+                updater,
+                "notify_agent",
+                lambda message, **kwargs: notices.append((message, kwargs)) or True,
+            )
+
+            count = updater.cmd_update_stale(dry_run=False, project="quaid")
+            assert count == 0
+            assert notices
+            assert "unresolved registry path" in notices[0][0]
+            assert notices[0][1]["severity"] == "warning"
+
+    def test_update_stale_raises_on_unresolved_registry_path_when_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": "docs/missing.md", "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    raise RuntimeError("broken resolver")
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {}
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+            monkeypatch.setattr(updater, "notify_agent", lambda *args, **kwargs: True)
+
+            with pytest.raises(RuntimeError, match="Failed to resolve docs registry path"):
+                updater.cmd_update_stale(dry_run=False, project="quaid")

@@ -43,8 +43,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import get_config
+from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_clients import call_deep_reasoning, call_fast_reasoning
-from lib.runtime_context import get_workspace_dir, queue_deferred_notice
+from lib.runtime_context import get_workspace_dir, notify_agent, queue_deferred_notice
 logger = logging.getLogger(__name__)
 
 def _workspace() -> Path:
@@ -1338,11 +1339,29 @@ def cmd_update_stale(
                     resolved = p if p.is_absolute() else _resolve_path(raw_path)
                 resolved = resolved.resolve()
             except Exception as exc:
+                fail_hard = is_fail_hard_enabled()
+                notice = (
+                    "Docs update skipped an unresolved registry path. "
+                    f"path={raw_path!r} reason={exc}"
+                )
                 logger.warning(
                     "docs update skipped unresolved registry path %r: %s",
                     raw_path,
                     exc,
                 )
+                try:
+                    notify_agent(
+                        notice,
+                        severity="error" if fail_hard else "warning",
+                        source="docs_update_registry_resolve",
+                        dedupe_key=f"docs-update-resolve:{raw_path}",
+                    )
+                except Exception:
+                    pass
+                if fail_hard:
+                    raise RuntimeError(
+                        f"Failed to resolve docs registry path during update-stale: {raw_path!r}"
+                    ) from exc
                 continue
             if not resolved.exists():
                 continue
@@ -1371,6 +1390,8 @@ def cmd_update_stale(
                 if newly_indexed:
                     print(f"\nIndexed {newly_indexed} never-indexed doc(s)")
     except Exception as e:
+        if is_fail_hard_enabled():
+            raise
         logger.warning("never-indexed doc scan failed: %s", e)
 
     if not stale and not updated and not newly_indexed and not never_indexable:
