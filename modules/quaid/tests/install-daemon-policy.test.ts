@@ -156,9 +156,9 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const reg = _ensureOpenClawPluginRegistered(PLUGIN_DIR);");
     expect(setupText).toContain("OpenClaw add-instance install repaired a missing/stale plugin registration.");
     expect(setupText).toContain("OpenClaw Quaid plugin is not fully registered after install");
-    expect(setupText).toContain("legacyInstalledPresent");
-    expect(setupText).toContain("plugins.installed = {};");
-    expect(setupText).toContain("plugins.installed.quaid = {");
+    expect(setupText).toContain("pluginListCheckOk");
+    expect(setupText).toContain("pluginListed");
+    expect(setupText).toContain("runCliWithTimeout(cli, [\"plugins\", \"list\"], 20_000)");
   });
 
   it("OpenClaw installer reconciles launchd env for the gateway service", () => {
@@ -177,14 +177,13 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('Reconciled ai.openclaw.gateway launch agent env for Quaid');
   });
 
-  it("OpenClaw installer symlinks extension dir to the canonical plugin tree", () => {
+  it("OpenClaw installer writes a real extension directory for discovery", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
-    expect(setupText).toContain("extensionDir: pluginPath");
-    expect(setupText).toContain("fs.symlinkSync(pluginPath, extensionDir, \"dir\")");
-    expect(setupText).toContain("failed to symlink canonical plugin into extension dir");
-    expect(setupText).toContain("failed to verify extension symlink target");
+    expect(setupText).toContain("Dirent.isDirectory() and does not follow");
+    expect(setupText).toContain("fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, dereference: true })");
+    expect(setupText).toContain("failed to provision extension directory");
   });
 
   it("first install seeds the shared quaid project docs", () => {

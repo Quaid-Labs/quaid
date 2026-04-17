@@ -2578,30 +2578,21 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     if (unmanaged) removeStaleExtensionDir();
   }
 
-  // Keep ~/.quaid/plugins/quaid (or ~/.quaid/modules/quaid in dev) as the
-  // canonical install tree, and make the OpenClaw extension path a direct
-  // symlink to that canonical location so hot-deploy updates apply in one place.
+  // OpenClaw plugin discovery reads Dirent.isDirectory() and does not follow
+  // symlinked extension directories. Keep a real directory at extensionDir.
+  try {
+    fs.mkdirSync(path.dirname(extensionDir), { recursive: true });
+    fs.rmSync(extensionDir, { recursive: true, force: true });
+    fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, dereference: true });
+  } catch (err) {
+    return { ok: false, reason: `failed to provision extension directory: ${String(err)}` };
+  }
   const depsResult = ensureOpenClawExtensionDependencies({
-    extensionDir: pluginPath,
+    extensionDir,
     pluginDir: stagedPluginPath,
   });
   if (!depsResult.ok) {
     return { ok: false, reason: `failed to provision plugin dependencies: ${depsResult.reason}` };
-  }
-  try {
-    fs.mkdirSync(path.dirname(extensionDir), { recursive: true });
-    fs.rmSync(extensionDir, { recursive: true, force: true });
-    fs.symlinkSync(pluginPath, extensionDir, "dir");
-    const linkedTarget = fs.realpathSync(extensionDir);
-    const canonicalTarget = fs.realpathSync(pluginPath);
-    if (linkedTarget !== canonicalTarget) {
-      return {
-        ok: false,
-        reason: `failed to verify extension symlink target: ${linkedTarget} != ${canonicalTarget}`,
-      };
-    }
-  } catch (err) {
-    return { ok: false, reason: `failed to symlink canonical plugin into extension dir: ${String(err)}` };
   }
   {
     // sourcePath must be in the macOS secure temp dir (/var/folders/) for the OC
@@ -2624,15 +2615,6 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
       const installedAt = new Date().toISOString();
       installs.quaid = {
         source: "path",
-        sourcePath: secureSourcePath,
-        installPath: extensionDir,
-        version: pluginVersion,
-        installedAt,
-      };
-      if (!plugins.installed || typeof plugins.installed !== "object" || Array.isArray(plugins.installed)) {
-        plugins.installed = {};
-      }
-      plugins.installed.quaid = {
         sourcePath: secureSourcePath,
         installPath: extensionDir,
         version: pluginVersion,
@@ -2714,10 +2696,12 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 function _readOpenClawPluginState() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
+  const cli = canRun("openclaw") ? "openclaw" : "";
   let pluginEnabled = false;
   let memorySlotBound = false;
   let installPath = "";
-  let legacyInstalledPresent = true;
+  let pluginListed = false;
+  let pluginListCheckOk = false;
   try {
     if (fs.existsSync(cfgPath)) {
       const parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
@@ -2725,19 +2709,16 @@ function _readOpenClawPluginState() {
       pluginEnabled = !!plugins?.entries?.quaid?.enabled;
       memorySlotBound = String(plugins?.slots?.memory || "").trim() === "quaid";
       installPath = String(plugins?.installs?.quaid?.installPath || "").trim();
-      if (!installPath) {
-        installPath = String(plugins?.installed?.quaid?.installPath || "").trim();
-      }
-      if (plugins && typeof plugins === "object" && Object.prototype.hasOwnProperty.call(plugins, "installed")) {
-        const installed = plugins.installed;
-        if (!installed || typeof installed !== "object" || Array.isArray(installed)) {
-          legacyInstalledPresent = false;
-        } else {
-          legacyInstalledPresent = !!installed.quaid;
-        }
-      }
     }
   } catch {}
+  if (cli) {
+    try {
+      const listRes = runCliWithTimeout(cli, ["plugins", "list"], 20_000);
+      const listText = `${_safeTrim(listRes.stdout)}\n${_safeTrim(listRes.stderr)}`.trim().toLowerCase();
+      pluginListCheckOk = listRes.status === 0;
+      pluginListed = pluginListCheckOk && /(^|\s)quaid(\s|$)/m.test(listText);
+    } catch {}
+  }
   return {
     extensionDir,
     extensionExists: fs.existsSync(extensionDir),
@@ -2745,7 +2726,8 @@ function _readOpenClawPluginState() {
     memorySlotBound,
     installPath,
     installPathExists: !!installPath && fs.existsSync(installPath),
-    legacyInstalledPresent,
+    pluginListCheckOk,
+    pluginListed,
   };
 }
 
@@ -2756,7 +2738,8 @@ function _ensureOpenClawPluginRegistered(pluginPath) {
     && state.pluginEnabled
     && state.memorySlotBound
     && state.installPathExists
-    && state.legacyInstalledPresent
+    && state.pluginListCheckOk
+    && state.pluginListed
   ) {
     return { ok: true, reason: "", repaired: false };
   }
@@ -5143,7 +5126,8 @@ except Exception as e:
       || !pluginState.pluginEnabled
       || !pluginState.memorySlotBound
       || !pluginState.installPathExists
-      || !pluginState.legacyInstalledPresent
+      || !pluginState.pluginListCheckOk
+      || !pluginState.pluginListed
     ) {
       s.stop(C.red("OpenClaw plugin validation failed"));
       throw new Error(
@@ -5152,7 +5136,8 @@ except Exception as e:
         + `pluginEnabled=${pluginState.pluginEnabled}, `
         + `memorySlotBound=${pluginState.memorySlotBound}, `
         + `installPathExists=${pluginState.installPathExists}, `
-        + `legacyInstalledPresent=${pluginState.legacyInstalledPresent})`
+        + `pluginListCheckOk=${pluginState.pluginListCheckOk}, `
+        + `pluginListed=${pluginState.pluginListed})`
       );
     }
   }
