@@ -51,6 +51,16 @@ describe("install daemon policy", () => {
     expect(setupText).not.toContain("fs.writeFileSync(sharedPlatformConfigPath, configJson);");
   });
 
+  it("installer seeds janitor checkpoint time for fresh instance installs", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function _seedJanitorInstallCheckpoint(instanceId = \"\")");
+    expect(setupText).toContain("_seedJanitorInstallCheckpoint(resolvedInstanceId);");
+    expect(setupText).toContain("last_completed_at: nowIso");
+    expect(setupText).toContain("Seeded janitor health checkpoint:");
+  });
+
   it("shared-only installs defer docs registry writes until a real instance exists", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

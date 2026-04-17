@@ -635,6 +635,33 @@ function hiddenInstanceInstallStatePath(instanceId = "") {
   return path.join(hiddenInstanceDataDir(instanceId), "installed-at.json");
 }
 
+function _seedJanitorInstallCheckpoint(instanceId = "") {
+  const resolved = String(instanceId || "").trim();
+  if (!resolved) return;
+  try {
+    const checkpointPath = path.join(hiddenInstanceLogsDir(resolved), "janitor", "checkpoint-all.json");
+    fs.mkdirSync(path.dirname(checkpointPath), { recursive: true });
+    const existing = readJsonObject(checkpointPath) || {};
+    const status = String(existing?.status || "").trim().toLowerCase();
+    const completedAt = String(existing?.last_completed_at || "").trim();
+    if (status === "running" || completedAt) return;
+    const nowIso = new Date().toISOString();
+    const seeded = {
+      ...existing,
+      task: String(existing?.task || "all"),
+      started_at: String(existing?.started_at || nowIso),
+      heartbeat_at: nowIso,
+      last_completed_at: nowIso,
+      status: "completed",
+      install_seeded: true,
+    };
+    writeJsonObject(checkpointPath, seeded);
+    log.info(`Seeded janitor health checkpoint: ${checkpointPath}`);
+  } catch (err) {
+    log.warn(`Could not seed janitor health checkpoint: ${String(err?.message || err)}`);
+  }
+}
+
 function runtimePendingInstallMigrationPath() {
   return path.join(RUNTIME_DIR, "pending-install-migration.json");
 }
@@ -4489,6 +4516,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       fs.mkdirSync(instanceJournalDir, { recursive: true });
       log.info(`Created journal directory: ${instanceJournalDir}`);
     }
+    _seedJanitorInstallCheckpoint(resolvedInstanceId);
     // Create misc project dir in projects/misc--{instanceId}/.
     // Lives as a real tracked project — all registry tooling works automatically.
     for (const bucket of [`misc--${resolvedInstanceId}`]) {

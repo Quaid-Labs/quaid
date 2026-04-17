@@ -81,6 +81,12 @@ class TestInstanceManagerBase:
         assert (visible / "SOUL.md").is_file()
         assert (visible / "USER.md").is_file()
         assert (visible / "ENVIRONMENT.md").is_file()
+        checkpoint = silo / "logs" / "janitor" / "checkpoint-all.json"
+        assert checkpoint.is_file()
+        checkpoint_data = json.loads(checkpoint.read_text(encoding="utf-8"))
+        assert checkpoint_data.get("task") == "all"
+        assert checkpoint_data.get("status") == "completed"
+        assert checkpoint_data.get("last_completed_at")
         config = json.loads((silo / "config.json").read_text())
         assert config["instance"]["id"] == "claude-code-proj"
         assert config["adapter"]["type"] == "claude-code"
@@ -155,6 +161,40 @@ class TestInstanceManagerBase:
         assert config["adapter"]["capabilities"]["context_refresh_strategy"] == "turn_based"
         assert config["models"]["deepReasoning"] == "custom-deep"
         assert config["capture"]["chunk_tokens"] == 321
+
+    def test_init_silo_does_not_override_running_janitor_checkpoint(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "openclaw"
+        adapter.adapter_id.return_value = "openclaw"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "openclaw-main"
+        mgr = InstanceManager(adapter)
+
+        silo = tmp_path / "instances" / "openclaw-main"
+        checkpoint = silo / "logs" / "janitor" / "checkpoint-all.json"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text(
+            json.dumps(
+                {
+                    "task": "all",
+                    "status": "running",
+                    "started_at": "2026-01-01T00:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("core.project_registry.get_project"), \
+             patch("core.project_registry.create_project"), \
+             patch("core.project_registry.link_project"), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            mgr._init_silo(silo, "openclaw-main")
+
+        checkpoint_data = json.loads(checkpoint.read_text(encoding="utf-8"))
+        assert checkpoint_data["status"] == "running"
+        assert "last_completed_at" not in checkpoint_data
 
     def test_create_raises_if_exists(self, tmp_path):
         from lib.instance_manager import InstanceManager

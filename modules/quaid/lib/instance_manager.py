@@ -18,6 +18,7 @@ import os
 import sqlite3
 import shutil
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,30 @@ def _read_json_object(path: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _seed_janitor_checkpoint(logs_root: Path) -> None:
+    """Seed janitor health checkpoint for fresh silos.
+
+    Fresh installs should not warn that janitor "never completed successfully"
+    before the first scheduler cycle has a chance to run.
+    """
+    checkpoint_path = logs_root / "janitor" / "checkpoint-all.json"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    state = _read_json_object(checkpoint_path) if checkpoint_path.exists() else {}
+    status = str(state.get("status") or "").strip().lower()
+    if status == "running":
+        return
+    if str(state.get("last_completed_at") or "").strip():
+        return
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    state["task"] = str(state.get("task") or "all")
+    state["started_at"] = str(state.get("started_at") or now_iso)
+    state["heartbeat_at"] = now_iso
+    state["last_completed_at"] = now_iso
+    state["status"] = "completed"
+    state["install_seeded"] = True
+    checkpoint_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
 def _is_temp_path(path: Path) -> bool:
@@ -123,6 +148,7 @@ class InstanceManager:
         silo_root.mkdir(parents=True, exist_ok=True)
         for subdir in ("data", "logs"):
             (silo_root / subdir).mkdir(parents=True, exist_ok=True)
+        _seed_janitor_checkpoint(silo_root / "logs")
         visible_root.mkdir(parents=True, exist_ok=True)
         (visible_root / "journal").mkdir(parents=True, exist_ok=True)
 
