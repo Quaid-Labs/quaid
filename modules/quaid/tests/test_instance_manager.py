@@ -196,6 +196,79 @@ class TestInstanceManagerBase:
         assert checkpoint_data["status"] == "running"
         assert "last_completed_at" not in checkpoint_data
 
+    def test_init_silo_does_not_override_failed_janitor_checkpoint(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "openclaw"
+        adapter.adapter_id.return_value = "openclaw"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "openclaw-main"
+        mgr = InstanceManager(adapter)
+
+        silo = tmp_path / "instances" / "openclaw-main"
+        checkpoint = silo / "logs" / "janitor" / "checkpoint-all.json"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text(
+            json.dumps(
+                {
+                    "task": "all",
+                    "status": "failed",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "heartbeat_at": "2026-01-01T00:30:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("core.project_registry.get_project"), \
+             patch("core.project_registry.create_project"), \
+             patch("core.project_registry.link_project"), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            mgr._init_silo(silo, "openclaw-main")
+
+        checkpoint_data = json.loads(checkpoint.read_text(encoding="utf-8"))
+        assert checkpoint_data["status"] == "failed"
+        assert "last_completed_at" not in checkpoint_data
+
+    def test_init_silo_skips_reseed_when_install_seeded_checkpoint_exists(self, tmp_path):
+        from lib.instance_manager import InstanceManager
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "openclaw"
+        adapter.adapter_id.return_value = "openclaw"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "openclaw-main"
+        mgr = InstanceManager(adapter)
+
+        silo = tmp_path / "instances" / "openclaw-main"
+        checkpoint = silo / "logs" / "janitor" / "checkpoint-all.json"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text(
+            json.dumps(
+                {
+                    "task": "all",
+                    "status": "completed",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "heartbeat_at": "2026-01-01T00:30:00Z",
+                    "last_completed_at": "2026-01-01T00:30:00Z",
+                    "install_seeded": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("core.project_registry.get_project"), \
+             patch("core.project_registry.create_project"), \
+             patch("core.project_registry.link_project"), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            mgr._init_silo(silo, "openclaw-main")
+
+        checkpoint_data = json.loads(checkpoint.read_text(encoding="utf-8"))
+        assert checkpoint_data["status"] == "completed"
+        assert checkpoint_data["install_seeded"] is True
+        assert checkpoint_data["last_completed_at"] == "2026-01-01T00:30:00Z"
+
     def test_create_raises_if_exists(self, tmp_path):
         from lib.instance_manager import InstanceManager
         adapter = MagicMock()

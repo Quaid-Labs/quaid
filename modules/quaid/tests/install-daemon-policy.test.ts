@@ -57,6 +57,8 @@ describe("install daemon policy", () => {
 
     expect(setupText).toContain("function _seedJanitorInstallCheckpoint(instanceId = \"\")");
     expect(setupText).toContain("_seedJanitorInstallCheckpoint(resolvedInstanceId);");
+    expect(setupText).toContain("const installSeeded = Boolean(existing?.install_seeded);");
+    expect(setupText).toContain("if (status && status !== \"completed\") return;");
     expect(setupText).toContain("last_completed_at: nowIso");
     expect(setupText).toContain("Seeded janitor health checkpoint:");
   });

@@ -46,7 +46,12 @@ def _seed_janitor_checkpoint(logs_root: Path) -> None:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     state = _read_json_object(checkpoint_path) if checkpoint_path.exists() else {}
     status = str(state.get("status") or "").strip().lower()
+    install_seeded = bool(state.get("install_seeded"))
     if status == "running":
+        return
+    if install_seeded:
+        return
+    if status and status != "completed":
         return
     if str(state.get("last_completed_at") or "").strip():
         return

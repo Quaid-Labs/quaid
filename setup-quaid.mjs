@@ -643,8 +643,10 @@ function _seedJanitorInstallCheckpoint(instanceId = "") {
     fs.mkdirSync(path.dirname(checkpointPath), { recursive: true });
     const existing = readJsonObject(checkpointPath) || {};
     const status = String(existing?.status || "").trim().toLowerCase();
+    const installSeeded = Boolean(existing?.install_seeded);
     const completedAt = String(existing?.last_completed_at || "").trim();
-    if (status === "running" || completedAt) return;
+    if (status === "running" || installSeeded || completedAt) return;
+    if (status && status !== "completed") return;
     const nowIso = new Date().toISOString();
     const seeded = {
       ...existing,
