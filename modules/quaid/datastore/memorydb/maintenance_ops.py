@@ -2236,81 +2236,6 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
 EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 
 
-_HEURISTIC_CHILD_PHRASE_RE = re.compile(
-    r"""(?x)
-    (?:(?P<parent>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})\s+)?
-    (?i:\bhas\s+(?:a|an)\s+(?:\w+\s+)?(?:daughter|son|child)\b(?:\s+named)?\s+)
-    (?P<child>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
-    """
-)
-_HEURISTIC_POSSESSIVE_CHILD_RE = re.compile(
-    r"""(?x)
-    (?P<parent>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
-    ['’]s\s+(?i:(?:daughter|son|child)\b(?:\s+is)?\s+)
-    (?P<child>[A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})
-    """
-)
-
-
-def _heuristic_family_edges_for_fact(fact_id: str, fact_text: str, owner_full: Optional[str]) -> List[Dict[str, Any]]:
-    """Best-effort family-edge fallback when LLM returns no edges."""
-    text = " ".join(str(fact_text or "").strip().split())
-    if not text:
-        return []
-
-    candidates: List[Tuple[str, str]] = []
-
-    # Pattern: "... has a daughter/son/child (named) Alice"
-    last_explicit_parent = ""
-    for match in _HEURISTIC_CHILD_PHRASE_RE.finditer(text):
-        child = str(match.group("child") or "").strip()
-        parent = str(match.group("parent") or "").strip()
-        if parent:
-            last_explicit_parent = parent
-        elif last_explicit_parent:
-            parent = last_explicit_parent
-        if parent and child:
-            candidates.append((parent, child))
-
-    # Pattern: "Diana's daughter Alice ..."
-    for match in _HEURISTIC_POSSESSIVE_CHILD_RE.finditer(text):
-        parent = str(match.group("parent") or "").strip()
-        child = str(match.group("child") or "").strip()
-        if parent and child:
-            candidates.append((parent, child))
-
-    edges: List[Dict[str, Any]] = []
-    seen = set()
-    for parent_raw, child_raw in candidates:
-        subject = _canonicalize_owner_alias(parent_raw, owner_full)
-        obj = _canonicalize_owner_alias(child_raw, owner_full)
-        if not subject or not obj:
-            continue
-        if _is_placeholder_entity_name(subject, owner_full) or _is_placeholder_entity_name(obj, owner_full):
-            continue
-        if subject.lower() == obj.lower():
-            continue
-        subject, subject_type, relation, obj, obj_type = _normalize_edge(
-            subject, "Person", "parent_of", obj, "Person"
-        )
-        key = (subject.lower(), relation, obj.lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        edges.append(
-            {
-                "fact_id": fact_id,
-                "fact_text": fact_text,
-                "subject": subject,
-                "subject_type": subject_type,
-                "relation": relation,
-                "object": obj,
-                "object_type": obj_type,
-            }
-        )
-    return edges
-
-
 def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
                         metrics: JanitorMetrics,
                         relations_list: str = "") -> List[List[Dict[str, Any]]]:
@@ -2463,21 +2388,6 @@ JSON array only:"""
             fact_edges.append(fact_edge)
 
         results[idx - 1] = fact_edges
-
-    # Fallback: if LLM returns no edges for explicit family-child statements,
-    # synthesize parent_of edges deterministically.
-    for idx, fact in enumerate(facts):
-        if results[idx]:
-            continue
-        fact_owner_id = str(fact.get("owner_id") or "").strip() or None
-        owner_full_fact = _owner_full_name(fact_owner_id)
-        heuristics = _heuristic_family_edges_for_fact(
-            fact_id=str(fact.get("id", "") or ""),
-            fact_text=str(fact.get("text", "") or ""),
-            owner_full=owner_full_fact,
-        )
-        if heuristics:
-            results[idx] = heuristics
 
     return results
 
