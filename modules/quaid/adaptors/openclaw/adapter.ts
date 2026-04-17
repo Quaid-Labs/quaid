@@ -732,7 +732,7 @@ type LastUserMessageQuery = { text: string; seenAtMs: number } | null;
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 const OPENCLAW_QUEUED_SESSION_START_RE =
-  /\n*---\s*\n?Queued\s*#\d+\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
+  /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
 const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
 
 function stripOpenClawInternalContext(raw: string): string {
@@ -759,6 +759,14 @@ function scrubAutoInjectQuery(raw: string): string {
     .replace(/^---\s*/m, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function isQueuedSessionStartupWrapper(raw: string): boolean {
+  const text = String(raw || "");
+  if (!text) return false;
+  if (OPENCLAW_QUEUED_SESSION_START_RE.test(text)) return true;
+  return /\[Queued messages while agent was busy\]/i.test(text)
+    && /A new session was started via \/new or \/reset\./i.test(text);
 }
 
 function selectAutoInjectQuery(
@@ -813,6 +821,9 @@ function selectAutoInjectQuery(
   const scrubbed = scrubAutoInjectQuery(rawPrompt);
   if (scrubbed.length >= 3) {
     return { query: scrubbed.slice(0, 500), source: "rawPrompt_scrubbed", rawPrompt };
+  }
+  if (isQueuedSessionStartupWrapper(rawPrompt)) {
+    return { query: "", source: "rawPrompt_scrubbed", rawPrompt };
   }
 
   const jsonExtracted = extractFromOCPromptJson(rawPrompt);

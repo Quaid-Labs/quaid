@@ -420,6 +420,26 @@ describe("lifecycle signal detection", () => {
     expect(selected.source).toBe("rawPrompt_scrubbed");
   });
 
+  it("strips queued startup wrapper variants that include sender metadata", () => {
+    const selected = __test.selectAutoInjectQuery(
+      {
+        prompt: [
+          "[Queued messages while agent was busy]",
+          "",
+          "---",
+          "Queued #1 (from quaid-test-bot)",
+          "A new session was started via /new or /reset. If runtime-provided startup context is included for this first turn, use it before responding to the user.",
+          "Current time: Friday, April 17th, 2026 - 2:51 AM (UTC) / 2026-04-17 02:51 UTC",
+        ].join("\n"),
+        messages: [],
+      },
+      null,
+      1_000,
+    );
+    expect(selected.query).toBe("");
+    expect(selected.source).toBe("rawPrompt_scrubbed");
+  });
+
   it("uses the instance silo db path for adapter python calls", () => {
     expect(__test.resolveAdapterMemoryDbPath(
       "/tmp/quaid-home",
