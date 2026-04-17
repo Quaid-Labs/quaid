@@ -44,6 +44,10 @@ tart stop quaid-livetest-base
 chmod -w ~/.tart/vms/quaid-livetest-base/disk.img
 ```
 
+If Matrix account metadata needs changes for a run (for example setting
+`@quaid-test-bot:localhost` displayname), do it as a one-off manual update
+while the base VM is unlocked.
+
 ### Platform version checks
 
 Before starting a run, verify platform versions are current:
@@ -831,10 +835,11 @@ done
 
 ---
 
-## Step 4 — Run M1–M15 (Parallel)
+## Step 4 — Run M1–M16 (Parallel)
 
 Send start signals to all three tester windows after M0 passes on all platforms.
-All three run simultaneously. The run is not complete until all three reach M15 PASS.
+All three run simultaneously. The run is not complete until all three reach M16 PASS.
+M16 runs immediately after M15 on each platform.
 
 For full milestone definitions, see `tests/LIVE-TEST-GUIDE.md`.
 
@@ -899,7 +904,7 @@ If you can imagine a code change that would fix it — write it.
 
 ## Step 5 — XP (Cross-Platform Project Linking)
 
-Run after all three platforms reach M15 PASS. Full procedure in
+Run after all three platforms reach M16 PASS. Full procedure in
 `tests/LIVE-TEST-GUIDE.md` under "Cross-Platform Project Linking Test."
 
 XP tests that all three platforms can share a project and recall each other's docs.
@@ -964,7 +969,7 @@ Once targeted validation is complete and commits are staged:
 
 ## Post-Test Examination (after all milestones, before end-of-run report)
 
-Run this after all platforms have completed their milestone suites (M1–M15 + XP).
+Run this after all platforms have completed their milestone suites (M1–M16 + XP).
 This catches system information leaking into user-visible logs and outputs.
 
 **Spawn Sonnet subagents** (one per platform, in parallel) to audit the buffered

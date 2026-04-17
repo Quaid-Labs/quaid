@@ -42,6 +42,7 @@ Quaid also provides a direct operational CLI, but this page focuses on host inte
 | Core recall/store pipeline | Yes | Yes | Yes | Same core memory engine and datastore paths. |
 | Hook-based auto extraction | Yes | Yes | Yes | Codex extraction runs from `Stop` hook (`hook-codex-stop`); OC/CC use daemon signal flow. |
 | Compaction extraction trigger | Yes (`before_compaction`) | Yes (`PreCompact`) | No | Codex currently has no pre-compaction extraction hook. |
+| System-context refresh trigger | Yes (`/compact`) | Yes (`/compact`) | Timeout (no compact hook) | Long-lived sessions need to re-pull system-context markdown when projects/identity files evolve. OC/CC refresh on compaction. Codex has no compaction hook, so its refresh fires on the daemon idle-timeout path instead — meaning Codex sessions only see system-context updates after `inactivityTimeoutMinutes` elapses (default 60). |
 | **Compaction control (wait for extraction before compact)** | **Yes** | **No** | **No** | OC sets `supports_compaction_control=True`; CC/Codex are async or post-turn extraction flows. |
 | Timeout-based extraction path | Yes | Yes | No | Codex uses synchronous stop-hook extraction rather than daemon timeout sweeps. |
 | Adapter-owned auth token required for Quaid LLM calls | Yes | Yes | Yes | OC uses `~/.quaid/adaptors/openclaw/.auth-token`, CC uses `~/.quaid/adaptors/claude-code/.auth-token`, CDX uses `~/.quaid/adaptors/codex/.auth-token`. |
