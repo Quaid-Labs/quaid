@@ -240,6 +240,17 @@ if [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would upgrade claude, codex, openclaw to latest on $REMOTE_HOST"
     echo "  [dry-run] would compare before/after versions and early-exit when updates are applied"
 else
+    local_npm_latest_version() {
+        local pkg="$1"
+        local latest
+        latest="$(npm view "$pkg" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+        if [[ -z "$latest" ]]; then
+            echo "__UNKNOWN__"
+        else
+            echo "$latest"
+        fi
+    }
+
     remote_pkg_version() {
         local pkg="$1"
         ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; PKG_NAME='$pkg' python3 - <<'PYEOF'
@@ -281,56 +292,81 @@ PYEOF" 2>/dev/null | tr -d '\r'
     BEFORE_CLAUDE="$(remote_pkg_version "@anthropic-ai/claude-code")"
     BEFORE_CODEX="$(remote_pkg_version "@openai/codex")"
     BEFORE_OPENCLAW="$(remote_openclaw_version)"
+    LATEST_CLAUDE="$(local_npm_latest_version "@anthropic-ai/claude-code")"
+    LATEST_CODEX="$(local_npm_latest_version "@openai/codex")"
+    LATEST_OPENCLAW="$(local_npm_latest_version "openclaw")"
 
-    ssh "$REMOTE_HOST" bash -s << 'REMOTE_UPGRADE'
-set -euo pipefail
-export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
-eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)" 2>/dev/null || true
+    upgrade_remote_npm_cli() {
+        local label="$1"
+        local package_name="$2"
+        local before_version="$3"
+        local latest_version="$4"
+        local should_update=1
 
-upgrade_cli() {
-    local name="$1" cmd="$2"
-    printf "  upgrading %-12s ... " "$name"
-    if output=$(eval "$cmd" 2>&1); then
-        echo "done"
-    else
-        echo "WARN: upgrade failed (continuing)"
-        echo "$output" | tail -3 | sed 's/^/    /'
-    fi
-}
-
-upgrade_cli "claude"   "npm install -g @anthropic-ai/claude-code@latest --prefer-offline 2>/dev/null || npm install -g @anthropic-ai/claude-code@latest"
-upgrade_cli "codex"    "npm install -g @openai/codex@latest --prefer-offline 2>/dev/null || npm install -g @openai/codex@latest"
-REMOTE_UPGRADE
-
-    printf "  upgrading %-12s ... " "openclaw"
-    oc_output=""
-    oc_rc=0
-    # Guard step-4 against implicit errexit behavior inside command substitutions.
-    # Preflight must continue cleanly to diffing + classification even when OpenClaw
-    # update times out or fails.
-    set +e
-    oc_output="$("$SCRIPT_DIR/openclaw-cli-safe.sh" \
-        --timeout "${OPENCLAW_CLI_TIMEOUT_S:-45}" \
-        --label "openclaw-preflight-update" \
-        --on-timeout "ssh \"$REMOTE_HOST\" 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
-        -- ssh "$REMOTE_HOST" 'set -euo pipefail; export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"; eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo "__OPENCLAW_MISSING__"; exit 0; fi; openclaw update --yes' 2>&1)"
-    oc_rc=$?
-    set -e
-
-    if [[ "$oc_rc" -eq 0 ]]; then
-        if [[ "$oc_output" == *"__OPENCLAW_MISSING__"* ]]; then
-            echo "not found, skipping"
-        else
-            echo "done"
+        if [[ "$before_version" != "__MISSING__" && "$latest_version" != "__UNKNOWN__" && "$before_version" == "$latest_version" ]]; then
+            should_update=0
         fi
-    else
-        if [[ "$oc_rc" -eq 124 ]]; then
-            echo "skipped/timeout (continuing)"
-        elif [[ "$oc_output" == *"__OPENCLAW_MISSING__"* ]]; then
-            echo "not found, skipping"
+
+        if [[ "$should_update" -eq 0 ]]; then
+            echo "  ${label} already at ${before_version} (latest), skipping update"
+            return
+        fi
+
+        printf "  upgrading %-12s ... " "${label}"
+        update_output=""
+        if update_output="$(ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; npm install -g ${package_name}@latest --prefer-offline 2>/dev/null || npm install -g ${package_name}@latest" 2>&1)"; then
+            echo "done"
         else
             echo "WARN: upgrade failed (continuing)"
-            printf '%s\n' "$oc_output" | tail -3 | sed 's/^/    /'
+            printf '%s\n' "$update_output" | tail -3 | sed 's/^/    /'
+        fi
+    }
+
+    upgrade_remote_npm_cli "claude" "@anthropic-ai/claude-code" "$BEFORE_CLAUDE" "$LATEST_CLAUDE"
+    upgrade_remote_npm_cli "codex" "@openai/codex" "$BEFORE_CODEX" "$LATEST_CODEX"
+
+    oc_output=""
+    oc_rc=0
+    should_update_openclaw=1
+    if [[ "$BEFORE_OPENCLAW" == "__MISSING__" ]]; then
+        should_update_openclaw=0
+    elif [[ "$BEFORE_OPENCLAW" != "__UNKNOWN__" && "$LATEST_OPENCLAW" != "__UNKNOWN__" && "$BEFORE_OPENCLAW" == "$LATEST_OPENCLAW" ]]; then
+        should_update_openclaw=0
+    fi
+
+    if [[ "$BEFORE_OPENCLAW" == "__MISSING__" ]]; then
+        echo "  openclaw not found, skipping update"
+    elif [[ "$should_update_openclaw" -eq 0 ]]; then
+        echo "  openclaw already at ${BEFORE_OPENCLAW} (latest), skipping update"
+    else
+        printf "  upgrading %-12s ... " "openclaw"
+        # Guard step-4 against implicit errexit behavior inside command substitutions.
+        # Preflight must continue cleanly to diffing + classification even when OpenClaw
+        # update times out or fails.
+        set +e
+        oc_output="$("$SCRIPT_DIR/openclaw-cli-safe.sh" \
+            --timeout "${OPENCLAW_CLI_TIMEOUT_S:-45}" \
+            --label "openclaw-preflight-update" \
+            --on-timeout "ssh \"$REMOTE_HOST\" 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
+            -- ssh "$REMOTE_HOST" 'set -euo pipefail; export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"; eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo "__OPENCLAW_MISSING__"; exit 0; fi; openclaw update --yes' 2>&1)"
+        oc_rc=$?
+        set -e
+
+        if [[ "$oc_rc" -eq 0 ]]; then
+            if [[ "$oc_output" == *"__OPENCLAW_MISSING__"* ]]; then
+                echo "not found, skipping"
+            else
+                echo "done"
+            fi
+        else
+            if [[ "$oc_rc" -eq 124 ]]; then
+                echo "skipped/timeout (continuing)"
+            elif [[ "$oc_output" == *"__OPENCLAW_MISSING__"* ]]; then
+                echo "not found, skipping"
+            else
+                echo "WARN: upgrade failed (continuing)"
+                printf '%s\n' "$oc_output" | tail -3 | sed 's/^/    /'
+            fi
         fi
     fi
 
