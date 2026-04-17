@@ -604,6 +604,75 @@ class TestOpenClawAdapter:
         assert "A new session was started via /new or /reset" not in transcript
         assert "User: My neighbour won a regional chili cook-off last weekend." in transcript
 
+    def test_parse_session_jsonl_strips_queued_session_wrapper_lines(self, tmp_path):
+        session_file = tmp_path / "oc-queued-wrapper.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "[Queued messages while agent was busy]\n"
+                                    "---\n"
+                                    "Queued #1 (from Solomon Steadman)\n"
+                                    "A new session was started via /new or /reset.\n"
+                                    "If runtime-provided startup context is included for this first turn, use it before responding to the user.\n"
+                                    "My neighbour Marisol won the Willow Basin chili cook-off."
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "Queued #1" not in transcript
+        assert "[Queued messages while agent was busy]" not in transcript
+        assert "A new session was started via /new or /reset" not in transcript
+        assert "User: My neighbour Marisol won the Willow Basin chili cook-off." in transcript
+
+    def test_parse_session_jsonl_filters_quaid_meta_banner_message(self, tmp_path):
+        session_file = tmp_path / "oc-quaid-meta-banner.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "**[Quaid]** 💾 **Compaction extraction summary:**\n\n"
+                                    "- 3 facts stored\n"
+                                    "- 0 skipped"
+                                ),
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "Tell me about the watermill ledger.",
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+        assert "Compaction extraction summary" not in transcript
+        assert "facts stored" not in transcript
+        assert "User: Tell me about the watermill ledger." in transcript
+
     def test_parse_session_jsonl_strips_current_time_with_single_digit_hour(self, tmp_path):
         session_file = tmp_path / "oc-startup-time-single-hour.jsonl"
         session_file.write_text(

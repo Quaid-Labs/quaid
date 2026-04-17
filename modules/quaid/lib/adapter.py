@@ -112,6 +112,19 @@ class QuaidAdapter(abc.ABC):
         r"^\s*Current time:\s.*?/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+UTC\s*$",
         flags=re.IGNORECASE | re.MULTILINE,
     )
+    _QUEUED_SESSION_WRAPPER_LINE_RES = (
+        re.compile(r"^\s*\[Queued messages while agent was busy\]\s*$", flags=re.IGNORECASE | re.MULTILINE),
+        re.compile(r"^\s*---\s*$", flags=re.MULTILINE),
+        re.compile(r"^\s*Queued\s*#\d+(?:\s*\([^)]+\))?\s*$", flags=re.IGNORECASE | re.MULTILINE),
+    )
+    _QUAID_META_PREFIX_RE = re.compile(
+        r"^\s*(?:•\s*)?(?:\*{1,2}\s*)?\[Quaid(?:[^\]]*)\](?:\*{1,2})?\s*(?:[:—-]\s*)?",
+        flags=re.IGNORECASE,
+    )
+    _QUAID_NOTICE_LINE_RE = re.compile(
+        r"^\s*Quaid notices?:",
+        flags=re.IGNORECASE,
+    )
 
     # ---- Paths ----
 
@@ -385,6 +398,13 @@ class QuaidAdapter(abc.ABC):
 
     def should_filter_transcript_message(self, text: str) -> bool:
         """Adapter-specific transcript noise filtering."""
+        value = str(text or "").strip()
+        if not value:
+            return True
+        if self._QUAID_META_PREFIX_RE.match(value):
+            return True
+        if self._QUAID_NOTICE_LINE_RE.match(value):
+            return True
         return self.filter_system_messages(text)
 
     @classmethod
@@ -428,6 +448,11 @@ class QuaidAdapter(abc.ABC):
         if next_value != value:
             mutated = True
             value = next_value
+        for pattern in self._QUEUED_SESSION_WRAPPER_LINE_RES:
+            next_value = pattern.sub("", value)
+            if next_value != value:
+                mutated = True
+                value = next_value
         if mutated:
             value = re.sub(r"\n{3,}", "\n\n", value)
         return value.strip()
