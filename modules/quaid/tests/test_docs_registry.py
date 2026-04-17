@@ -552,6 +552,35 @@ class TestDeleteProject:
         assert result["dir_deleted"] is True
         assert not (tmp_path / "projects" / "test-project").exists()
 
+    def test_delete_project_clears_docs_rag_chunks(self, setup_env):
+        tmp_path = setup_env
+        r = _get_registry()
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(exist_ok=True)
+        target_doc = docs_dir / "linger.md"
+        target_doc.write_text("# Linger\nremoved project content", encoding="utf-8")
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_md.write_text("# Test Project\n", encoding="utf-8")
+
+        r.register("docs/linger.md", project="test-project")
+
+        def _trash_side_effect(cmd, **kwargs):
+            target = Path(cmd[1])
+            if target.exists():
+                import shutil
+                shutil.rmtree(target)
+            return None
+
+        with patch("datastore.docsdb.registry.subprocess.run") as mock_run, \
+             patch("datastore.docsdb.rag.DocsRAG.remove_chunks_for_path", return_value=1) as mock_remove:
+            mock_run.side_effect = _trash_side_effect
+            result = r.delete_project("test-project")
+
+        assert result["rag_chunks_deleted"] == 2
+        removed_paths = {args[0] for args, _kwargs in mock_remove.call_args_list}
+        assert "docs/linger.md" in removed_paths
+        assert str(project_md.resolve()) in removed_paths
+
 
 class TestMoveFile:
     def test_reassigns_project_in_registry(self, setup_env):

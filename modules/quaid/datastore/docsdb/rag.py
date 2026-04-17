@@ -717,6 +717,39 @@ class DocsRAG:
 
         return chunks_created
 
+    def remove_chunks_for_path(self, file_path: str) -> int:
+        """Remove indexed chunks for a source file path (raw + canonical aliases)."""
+        raw_path = str(file_path or "").strip()
+        canonical_file_path = _canonical_source_path(raw_path)
+        source_variants: List[str] = []
+        for candidate in (raw_path, canonical_file_path):
+            if candidate and candidate not in source_variants:
+                source_variants.append(candidate)
+        if not source_variants:
+            return 0
+
+        removed = 0
+        with _lib_get_connection(self.db_path) as conn:
+            placeholders = ",".join("?" for _ in source_variants)
+            old_chunk_ids = [row[0] for row in conn.execute(
+                f"SELECT id FROM doc_chunks WHERE source_file IN ({placeholders})",
+                tuple(source_variants),
+            ).fetchall()]
+            if not old_chunk_ids:
+                return 0
+            removed = len(old_chunk_ids)
+            conn.execute(
+                f"DELETE FROM doc_chunks WHERE source_file IN ({placeholders})",
+                tuple(source_variants),
+            )
+            if _lib_has_vec() and self._doc_vec_table_exists(conn):
+                conn.executemany(
+                    "DELETE FROM vec_doc_chunks WHERE chunk_id = ?",
+                    [(chunk_id,) for chunk_id in old_chunk_ids],
+                )
+        logger.info("[docs] Removed %s indexed chunk(s) for %s", removed, source_variants[0])
+        return removed
+
     def _extract_section_header(self, chunk_text: str) -> Optional[str]:
         """Extract the first header from a chunk."""
         lines = chunk_text.split('\n')

@@ -1281,6 +1281,35 @@ class DocsRegistry:
         if not has_config and not has_docs:
             raise ValueError(f"Project '{project_name}' does not exist.")
 
+        # Clean docs RAG chunks for all project paths before registry state transition.
+        # This prevents deleted project content from continuing to inject via recall.
+        rag_chunk_deleted = 0
+        rag_paths: list[str] = []
+        for state in ("active", "archived"):
+            for row in self.list_docs(project=project_name, state=state):
+                path_val = str(row.get("file_path") or "").strip()
+                if path_val:
+                    rag_paths.append(path_val)
+        defn = cfg.projects.definitions.get(project_name)
+        if defn:
+            rag_paths.append(str(self._resolve_path(defn.home_dir) / "PROJECT.md"))
+        seen_paths: set[str] = set()
+        unique_rag_paths: list[str] = []
+        for candidate in rag_paths:
+            key = str(candidate).strip()
+            if not key or key in seen_paths:
+                continue
+            seen_paths.add(key)
+            unique_rag_paths.append(key)
+        if unique_rag_paths:
+            try:
+                from datastore.docsdb.rag import DocsRAG
+                rag = DocsRAG(self.db_path)
+                for candidate in unique_rag_paths:
+                    rag_chunk_deleted += int(rag.remove_chunks_for_path(candidate) or 0)
+            except Exception as e:
+                logger.warning("Docs RAG cleanup skipped for project '%s': %s", project_name, e)
+
         # 1. Bulk delete registry entries
         with get_connection(self.db_path) as conn:
             cursor = conn.execute(
@@ -1326,8 +1355,11 @@ class DocsRegistry:
         except Exception as e:
             logger.debug("Global project registry delete skipped: %s", e)
 
-        result = {"deleted": deleted, "dir_deleted": dir_deleted}
-        print(f"Deleted project '{project_name}': {deleted} docs removed, dir_deleted={dir_deleted}")
+        result = {"deleted": deleted, "dir_deleted": dir_deleted, "rag_chunks_deleted": rag_chunk_deleted}
+        print(
+            f"Deleted project '{project_name}': {deleted} docs removed, "
+            f"rag_chunks_deleted={rag_chunk_deleted}, dir_deleted={dir_deleted}"
+        )
         return result
 
     def move_file(self, file_path: str, to_project: str) -> Dict[str, Any]:

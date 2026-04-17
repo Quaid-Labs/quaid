@@ -292,6 +292,33 @@ class TestIndexDocument:
         assert rows == [(str(real_file.resolve()), 1)]
         assert ids == [f"{real_file.resolve()}:0"]
 
+    def test_remove_chunks_for_path_clears_alias_rows(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        real_file = tmp_path / "projects" / "quaid" / "PROJECT.md"
+        real_file.parent.mkdir(parents=True, exist_ok=True)
+        real_file.write_text("# Project\n", encoding="utf-8")
+        alias_projects = tmp_path / "instances" / "benchrunner" / "projects"
+        alias_projects.parent.mkdir(parents=True, exist_ok=True)
+        alias_projects.symlink_to(tmp_path / "projects", target_is_directory=True)
+        alias_file = alias_projects / "quaid" / "PROJECT.md"
+
+        with sqlite3.connect(rag.db_path) as conn:
+            conn.executemany(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding) VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("real:0", str(real_file.resolve()), 0, "real", b"x"),
+                    ("alias:0", str(alias_file), 0, "alias", b"y"),
+                ],
+            )
+            conn.commit()
+
+        removed = rag.remove_chunks_for_path(str(alias_file))
+        assert removed == 2
+
+        with sqlite3.connect(rag.db_path) as conn:
+            remaining = conn.execute("SELECT id FROM doc_chunks ORDER BY id").fetchall()
+        assert remaining == []
+
 
 class TestReindexAll:
     """Tests for DocsRAG.reindex_all()."""
