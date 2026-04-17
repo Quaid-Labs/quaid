@@ -2244,6 +2244,11 @@ def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
     Returns a list parallel to `facts` — each entry is a list of edge dicts
     (may be empty if the fact has no relationships). Supports multiple edges
     per fact to handle compound relationship sentences.
+
+    Contract: lexical mapping/routing belongs to the LLM planner+prompt path,
+    not deterministic regex in Python fallback code. If extraction misses
+    relationship phrasing, refine the prompt/planner instructions instead of
+    adding language-specific regex heuristics here.
     """
     if not facts:
         return []
@@ -2405,6 +2410,10 @@ def backfill_edges(
     (source_fact_id IS NULL or no edges reference this node) and runs
     batch_extract_edges on them so the LLM gets a second chance to create
     missed graph connections.
+
+    Policy note: this backfill stays LLM-only for lexical relationship parsing.
+    Do not add regex or language-specific fallback extraction here; prompt/planner
+    refinement is the approved path when recall quality misses appear.
 
     Returns counts: found, edges_created, errors.
     """

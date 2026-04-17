@@ -25,6 +25,8 @@ def test_batch_extract_edges_returns_empty_when_llm_returns_no_edges():
         )
 
     assert len(results) == 1
+    # Policy contract: no deterministic lexical/regex fallback in maintenance_ops.
+    # Empty LLM edge output must remain empty; quality fixes go to prompt/planner.
     assert len(results[0]) == 0
 
 
