@@ -807,7 +807,7 @@ class TestDocsSearchFiltering:
 
         with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
              patch(
-                 "core.project_registry.list_projects",
+                 "lib.project_registry.list_all",
                  return_value={
                      "quaid": {"instances": ["cc-main"]},
                      "cross-live-test": {"instances": []},
@@ -857,7 +857,7 @@ class TestDocsSearchFiltering:
 
         with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
              patch(
-                 "core.project_registry.list_projects",
+                 "lib.project_registry.list_all",
                  return_value={
                      "quaid": {"instances": ["cc-main"]},
                      "cross-live-test": {"instances": []},

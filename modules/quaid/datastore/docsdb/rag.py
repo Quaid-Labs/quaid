@@ -1339,19 +1339,14 @@ class DocsRAG:
         linked_set = {str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()}
         project_rows: Dict[str, Any] = {}
         try:
-            from core.project_registry import list_projects as _list_projects
+            from lib.project_registry import list_all as _list_projects
 
             project_rows = _list_projects() or {}
         except Exception:
-            try:
-                from lib.project_registry import list_all as _list_projects  # fallback for legacy/test paths
-
-                project_rows = _list_projects() or {}
-            except Exception:
-                # Keep scope-hint behavior available even when registry metadata is
-                # unavailable; inferred source-project labels can still surface likely
-                # unlinked candidates for a scoped miss.
-                project_rows = {}
+            # Keep scope-hint behavior available even when registry metadata is
+            # unavailable; inferred source-project labels can still surface likely
+            # unlinked candidates for a scoped miss.
+            project_rows = {}
 
         all_projects = [
             str(name or "").strip()
