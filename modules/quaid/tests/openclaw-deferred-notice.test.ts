@@ -40,6 +40,25 @@ function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function removeTempDir(dir: string): void {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error: any) {
+      const code = String(error?.code || "");
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code) || attempt === 4) {
+        throw error;
+      }
+      sleepSync(25 * (attempt + 1));
+    }
+  }
+}
+
 function makeFakeApi() {
   return {
     on: vi.fn(() => {}),
@@ -186,7 +205,7 @@ describe("openclaw deferred notices", () => {
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
-    fs.rmSync(fixture.home, { recursive: true, force: true });
+    removeTempDir(fixture.home);
   });
 
   it("drains deferred notices into system context during prompt-build", async () => {
@@ -227,7 +246,7 @@ describe("openclaw deferred notices", () => {
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
-    fs.rmSync(fixture.home, { recursive: true, force: true });
+    removeTempDir(fixture.home);
   });
 
   it("drains deferred notices during prompt-build even when auto-inject is disabled", async () => {
@@ -340,7 +359,7 @@ describe("openclaw deferred notices", () => {
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
-    fs.rmSync(home, { recursive: true, force: true });
+    removeTempDir(home);
   });
 
   it("uses the install-bound main instance for deferred notice drain paths", async () => {
@@ -438,7 +457,7 @@ describe("openclaw deferred notices", () => {
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
-    fs.rmSync(home, { recursive: true, force: true });
+    removeTempDir(home);
   });
 
   it("recovers a stale delayed-requests lock before draining", async () => {
@@ -541,7 +560,7 @@ describe("openclaw deferred notices", () => {
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
-    fs.rmSync(home, { recursive: true, force: true });
+    removeTempDir(home);
   });
 
   it("surfaces changed invalid model config as same-turn provider context", async () => {
@@ -644,7 +663,7 @@ describe("openclaw deferred notices", () => {
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
-    fs.rmSync(home, { recursive: true, force: true });
+    removeTempDir(home);
   });
 
   it("re-arms project context injection after before_compaction under default strategy", async () => {
@@ -744,6 +763,6 @@ describe("openclaw deferred notices", () => {
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
-    fs.rmSync(fixture.home, { recursive: true, force: true });
+    removeTempDir(fixture.home);
   });
 });
