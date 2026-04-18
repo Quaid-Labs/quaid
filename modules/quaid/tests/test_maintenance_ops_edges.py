@@ -260,30 +260,30 @@ def test_owner_full_name_raises_when_owner_resolution_fails_and_fail_hard():
 
 def test_owner_full_name_falls_back_to_top_level_owner_name_for_unresolved_slug():
     fake_cfg = SimpleNamespace(
-        owner_name="Solomon Steadman",
+        owner_name="Casey River",
         users=SimpleNamespace(
-            default_owner="solomon-steadman",
+            default_owner="casey-river",
             identities={},
         ),
     )
     with patch.object(maintenance_ops, "_cfg", fake_cfg), patch.object(
         maintenance_ops, "resolve_owner_person", return_value=None
     ):
-        out = maintenance_ops._owner_full_name("solomon-steadman")
+        out = maintenance_ops._owner_full_name("casey-river")
 
-    assert out == "Solomon Steadman"
+    assert out == "Casey River"
 
 
 def test_owner_full_name_falls_back_to_configured_slug_display_name_when_unresolved():
     fake_cfg = SimpleNamespace(
         users=SimpleNamespace(
-            default_owner="solomon-steadman",
+            default_owner="casey-river",
             identities={},
         ),
     )
     with patch.object(maintenance_ops, "_cfg", fake_cfg), patch.object(
         maintenance_ops, "resolve_owner_person", return_value=None
     ):
-        out = maintenance_ops._owner_full_name("solomon-steadman")
+        out = maintenance_ops._owner_full_name("casey-river")
 
-    assert out == "Solomon Steadman"
+    assert out == "Casey River"
