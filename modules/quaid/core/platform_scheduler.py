@@ -18,6 +18,7 @@ Protocol (newline-delimited JSON):
 On client disconnect: held slots are reclaimed, queued requests dropped.
 """
 
+import errno
 import json
 import logging
 import os
@@ -46,6 +47,33 @@ def _sock_path(quaid_home: Path, platform: str) -> Path:
 
 def _pid_path(quaid_home: Path, platform: str) -> Path:
     return _shared_run_dir(quaid_home) / f"{platform}-scheduler.pid"
+
+
+def _connect_scheduler_socket(quaid_home: Path, platform: str, *, timeout_s: float = 2.0) -> socket.socket:
+    """Connect to the scheduler, waiting through bind-before-listen startup races."""
+    sock_path = str(_sock_path(quaid_home, platform))
+    deadline = time.monotonic() + max(0.05, float(timeout_s))
+    while True:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(sock_path)
+            return sock
+        except OSError as exc:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            if exc.errno not in (errno.ENOENT, errno.ECONNREFUSED):
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+        except Exception:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            raise
 
 
 # ---- Server ----------------------------------------------------------------
@@ -145,8 +173,15 @@ class PlatformSchedulerServer:
         conn_id = id(conn_obj.conn)
         with self._lock:
             self._connections.pop(conn_id, None)
-            # Remove queued requests from this connection
-            self._queue = [(cid, n, ev) for cid, n, ev in self._queue if cid != conn_id]
+            # Remove queued requests from this connection and wake their
+            # waiting acquire threads so disconnects do not leak waiters.
+            kept_queue = []
+            for cid, n, event in self._queue:
+                if cid == conn_id:
+                    event.set()
+                else:
+                    kept_queue.append((cid, n, event))
+            self._queue = kept_queue
             # Reclaim held slots
             self._used -= conn_obj.held
             self._used = max(0, self._used)
@@ -251,6 +286,23 @@ class PlatformSchedulerServer:
             sock_path.unlink(missing_ok=True)
             logger.info("platform scheduler stopped platform=%s", self._platform)
 
+    def stop(self) -> None:
+        """Request shutdown for an in-process scheduler server."""
+        self._running = False
+        sock_path = _sock_path(self._home, self._platform)
+        # Wake select()/accept() if the server is blocked waiting for clients.
+        try:
+            wake = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            wake.connect(str(sock_path))
+            wake.close()
+        except OSError:
+            pass
+        try:
+            if self._server_sock is not None:
+                self._server_sock.close()
+        except OSError:
+            pass
+
 
 # ---- Client ----------------------------------------------------------------
 
@@ -269,9 +321,7 @@ class PlatformSchedulerClient:
         self._lock = threading.Lock()
 
     def _connect(self) -> socket.socket:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect(str(_sock_path(self._home, self._platform)))
-        return sock
+        return _connect_scheduler_socket(self._home, self._platform)
 
     def _send(self, sock: socket.socket, msg: dict) -> dict:
         sock.sendall((json.dumps(msg) + "\n").encode())
@@ -382,12 +432,10 @@ def ensure_scheduler_alive(quaid_home: Path, platform: str, total_slots: int = _
             fd.close()
             return pid
         child_pid = start_scheduler(quaid_home, platform, total_slots)
-        # Brief wait for socket to appear
-        sock_path = _sock_path(quaid_home, platform)
-        for _ in range(20):
-            if sock_path.exists():
-                break
-            time.sleep(0.1)
+        # The socket path appears at bind() before listen(); require a real
+        # connection so immediate clients do not fail open without slot gating.
+        ready_sock = _connect_scheduler_socket(quaid_home, platform, timeout_s=5.0)
+        ready_sock.close()
         fcntl.flock(fd, fcntl.LOCK_UN)
         fd.close()
         lock_path.unlink(missing_ok=True)

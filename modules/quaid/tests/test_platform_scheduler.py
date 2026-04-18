@@ -1,6 +1,7 @@
 """Unit tests for PlatformSchedulerServer, client, and shared project lock."""
 import json
 import os
+import shutil
 import socket
 import tempfile
 import threading
@@ -19,17 +20,37 @@ def _short_tmp() -> Path:
 # ---- PlatformSchedulerServer ----
 
 class TestPlatformSchedulerServer:
+    @pytest.fixture(autouse=True)
+    def _cleanup_servers(self):
+        self._servers = []
+        self._bases = []
+        yield
+        for server, thread in reversed(self._servers):
+            server.stop()
+            thread.join(timeout=2.0)
+        for base in reversed(self._bases):
+            shutil.rmtree(base, ignore_errors=True)
+
     def _start_server(self, base, slots=4):
         from core.platform_scheduler import PlatformSchedulerServer
         server = PlatformSchedulerServer(base, "tp", total_slots=slots)
         t = threading.Thread(target=server.run, daemon=True)
         t.start()
-        # Wait for socket
+        self._servers.append((server, t))
+        self._bases.append(base)
+        # Wait until the socket accepts connections. The AF_UNIX path appears
+        # at bind() before listen(), so path existence alone is not readiness.
         sock_path = base / "shared" / "run" / "tp-scheduler.sock"
         for _ in range(50):
-            if sock_path.exists():
+            try:
+                probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                probe.connect(str(sock_path))
+                probe.close()
                 break
-            time.sleep(0.05)
+            except OSError:
+                time.sleep(0.05)
+        else:
+            pytest.fail(f"scheduler socket did not become ready: {sock_path}")
         return server, sock_path
 
     def _client_sock(self, sock_path):
