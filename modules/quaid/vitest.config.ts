@@ -23,8 +23,9 @@ export default defineConfig({
       TEST_DB_PATH: '/tmp/test-memory.db',
       MEMORY_DB_PATH: '/tmp/test-memory.db'
     },
-    // Mock embeddings avoid Ollama calls — 10s is generous buffer
-    testTimeout: 10000,
-    hookTimeout: 10000
+    // Python-backed memory tests spawn subprocesses; loaded CI runners can
+    // legitimately exceed 10s per test even with mock embeddings enabled.
+    testTimeout: 30000,
+    hookTimeout: 30000
   }
 })
