@@ -479,9 +479,11 @@ A second paragraph continues the discussion about document processing. It emphas
       
       const stats = await rag.stats()
       
-      // We have 4 test fixture files (including empty one)
-      expect(stats.total_files).toBeGreaterThanOrEqual(3)
-      expect(stats.total_files).toBeLessThanOrEqual(5)
+      // Fixture set has 5 markdown files, but the empty file may produce no
+      // chunks and therefore not contribute to doc_chunks-backed stats.
+      // Reindex may also include docs from doc_registry entries in the active
+      // instance, so avoid a brittle global upper bound.
+      expect(stats.total_files).toBeGreaterThanOrEqual(4)
     })
 
     it('returns correct chunk count', async () => {
