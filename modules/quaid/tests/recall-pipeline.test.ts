@@ -15,8 +15,8 @@ describe('Recall Pipeline', () => {
 
   describe('Limit Parameter', () => {
     it('respects limit parameter in search', async () => {
-      // Store several memories (skipDedup to avoid dedup overhead, increase timeout for embedding calls)
-      for (let i = 0; i < 10; i++) {
+      // Five records are enough to prove limit=3 truncates without paying for ten subprocess-backed stores.
+      for (let i = 0; i < 5; i++) {
         await memory.store(`Fact number ${i} about testing`, 'quaid', { skipDedup: true })
       }
 
@@ -25,7 +25,7 @@ describe('Recall Pipeline', () => {
 
       const unlimited = await memory.search('testing', 'quaid', 20)
       expect(unlimited.length).toBeGreaterThan(3)
-    }, 90000) // 90s timeout for 10 sequential stores (each spawns Python subprocess + embedding)
+    }, 90000) // Loaded CI can still spend >60s in subprocess-backed store/search setup.
 
     it('returns all results when limit exceeds available', async () => {
       await memory.store('Only fact about cats', 'quaid')
