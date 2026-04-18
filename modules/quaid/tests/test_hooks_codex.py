@@ -17,6 +17,7 @@ def _adapter_mock():
     adapter._extract_hook_session_id = None
     adapter.adapter_id.return_value = "codex"
     codex_capabilities = {
+        "deferred_notice_relay": True,
         "inject_tool_output_trace": True,
         "context_refresh_strategy": "turn_based",
         "context_refresh_guard": {"min_interval_minutes": 30, "min_turns": 50},
@@ -478,6 +479,55 @@ def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypa
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
+    queued = []
+
+    with patch(
+        "core.interface.api.recall_fast",
+        side_effect=RuntimeError(
+            "Quaid could not access its fast language model provider: codex gateway HTTP 404 model=invalid-model-xyzzy"
+        ),
+    ), patch("core.interface.api.projects_search_docs", return_value=None), \
+         patch("lib.runtime_context.queue_deferred_notice", side_effect=lambda *a, **k: queued.append((a, k)) or True), \
+         pytest.raises(RuntimeError, match="language model provider"):
+        _run_hook_inject(
+            {
+                "prompt": "What do you know about Maya?",
+                "session_id": "sess-codex-provider-failhard",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    assert queued, "provider failHard path should queue a deferred provider notice"
+    args, kwargs = queued[-1]
+    assert "[Quaid error] [provider]" in str(args[0])
+    assert kwargs.get("kind") == "provider"
+    assert kwargs.get("priority") == "high"
+    assert kwargs.get("source") == "provider"
+
+
+def test_codex_provider_failure_queues_and_relays_on_next_successful_turn(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+    adapter.instance_root.return_value = tmp_path
+    adapter.data_dir.return_value = tmp_path / "data"
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
 
     with patch(
         "core.interface.api.recall_fast",
@@ -489,11 +539,28 @@ def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypa
         _run_hook_inject(
             {
                 "prompt": "What do you know about Maya?",
-                "session_id": "sess-codex-provider-failhard",
+                "session_id": "sess-codex-provider-failhard-relay",
                 "cwd": str(tmp_path),
             },
             monkeypatch=monkeypatch,
         )
+
+    with patch("core.interface.api.recall_fast", return_value=([], None)), \
+         patch("core.interface.api.projects_search_docs", return_value=None):
+        out, _err = _run_hook_inject(
+            {
+                "prompt": "hello on next turn",
+                "session_id": "sess-codex-provider-failhard-relay",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "drained deferred notices" in context
+    assert "[Quaid error] [provider]" in context
+    assert "Error type: RuntimeError" in context
 
 
 def test_codex_hook_inject_traces_raw_tool_output_when_present(monkeypatch, tmp_path):

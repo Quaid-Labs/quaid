@@ -237,6 +237,28 @@ def _is_provider_failure(exc: Exception) -> bool:
     )
 
 
+def _queue_provider_failure_notice(exc: Exception) -> None:
+    """Queue provider failures for next-turn relay across hook adapters.
+
+    CC and CDX can hard-fail in UserPromptSubmit on provider/model errors, which
+    means the failing turn may not render additionalContext. Queueing a deferred
+    provider notice here ensures the next successful hook turn can relay a
+    visible provider alert instead of staying silent.
+    """
+    try:
+        from lib.runtime_context import queue_deferred_notice
+
+        queue_deferred_notice(
+            f"[Quaid error] [provider] {_safe_agent_error(exc)}",
+            kind="provider",
+            priority="high",
+            source="provider",
+            dedupe_key=f"hook-provider:{type(exc).__name__}:{str(exc).strip()}",
+        )
+    except Exception as notice_exc:
+        logger.warning("Failed queueing provider failure notice for hook relay: %s", notice_exc)
+
+
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     if doc_file != "TOOLS.md":
         return content
@@ -785,6 +807,7 @@ def hook_inject(args):
 
     except (RuntimeError, Exception) as e:
         if _is_provider_failure(e):
+            _queue_provider_failure_notice(e)
             try:
                 from lib.fail_policy import is_fail_hard_enabled
 

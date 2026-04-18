@@ -771,6 +771,46 @@ class TestHookInjectRecallResilience:
 
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
         monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        queued = []
+
+        with patch(
+            "core.interface.api.recall_fast",
+            side_effect=RuntimeError(
+                "Quaid could not access its fast language model provider: claude-code-oauth HTTP 404 model=invalid-model-xyzzy"
+            ),
+        ), patch("lib.runtime_context.queue_deferred_notice", side_effect=lambda *a, **k: queued.append((a, k)) or True), \
+             pytest.raises(RuntimeError, match="language model provider"):
+            _run_hook_inject(
+                {
+                    "prompt": "What do you know about Maya?",
+                    "session_id": "sess-provider-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert queued, "provider failHard path should queue a deferred provider notice"
+        args, kwargs = queued[-1]
+        assert "[Quaid error] [provider]" in str(args[0])
+        assert kwargs.get("kind") == "provider"
+        assert kwargs.get("priority") == "high"
+        assert kwargs.get("source") == "provider"
+
+    def test_recall_fast_provider_failure_relays_on_next_successful_turn_after_fail_hard(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.instance_root.return_value = tmp_path
+        mock_adapter.data_dir.return_value = tmp_path / "data"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
 
         with patch(
             "core.interface.api.recall_fast",
@@ -781,11 +821,27 @@ class TestHookInjectRecallResilience:
             _run_hook_inject(
                 {
                     "prompt": "What do you know about Maya?",
-                    "session_id": "sess-provider-failhard",
+                    "session_id": "sess-provider-failhard-relay",
                     "cwd": "/Users/x",
                 },
                 monkeypatch=monkeypatch,
             )
+
+        with patch("core.interface.api.recall_fast", return_value=([], None)):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "hello on next turn",
+                    "session_id": "sess-provider-failhard-relay",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "drained deferred notices" in context
+        assert "[Quaid error] [provider]" in context
+        assert "Error type: RuntimeError" in context
 
     def test_deferred_notice_hint_is_injected_without_draining(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
