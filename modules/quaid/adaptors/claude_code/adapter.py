@@ -23,6 +23,15 @@ from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_slug_from_project_dir
 
 
+def _trace_m15(event: str, **fields) -> None:
+    try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(event, **fields)
+    except Exception:
+        pass
+
+
 class ClaudeCodeAdapter(QuaidAdapter):
     ADAPTER_CONFIG = {
         "deferred_notice_relay": True,
@@ -109,8 +118,16 @@ class ClaudeCodeAdapter(QuaidAdapter):
             entry = json.dumps({"message": message, "ts": _now_iso()})
             with open(pending, "a", encoding="utf-8") as f:
                 f.write(entry + "\n")
+            _trace_m15(
+                "adapter.claude_code.notify.write",
+                path=str(pending),
+                force=force,
+                message=message,
+                size=pending.stat().st_size if pending.exists() else None,
+            )
             return True
         except Exception as e:
+            _trace_m15("adapter.claude_code.notify.error", message=message, error=str(e))
             print(f"[notify] Failed to queue notification: {e}", file=sys.stderr)
             return False
 
@@ -124,14 +141,19 @@ class ClaudeCodeAdapter(QuaidAdapter):
         """
         pending = self._pending_notifications_path()
         if not pending.is_file():
+            _trace_m15("adapter.claude_code.pending.missing", path=str(pending))
             return ""
 
         messages = []
         try:
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
+            total_lines = 0
+            expired = 0
+            malformed = 0
             with open(pending, "r", encoding="utf-8") as f:
                 for line in f:
+                    total_lines += 1
                     line = line.strip()
                     if not line:
                         continue
@@ -141,19 +163,39 @@ class ClaudeCodeAdapter(QuaidAdapter):
                         if ts and max_age_seconds > 0:
                             entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                             if (now - entry_dt).total_seconds() > max_age_seconds:
+                                expired += 1
                                 continue
                         messages.append(entry.get("message", ""))
                     except (json.JSONDecodeError, ValueError):
+                        malformed += 1
                         continue
             pending.unlink(missing_ok=True)
+            _trace_m15(
+                "adapter.claude_code.pending.drain",
+                path=str(pending),
+                total_lines=total_lines,
+                messages_count=len([m for m in messages if m]),
+                expired=expired,
+                malformed=malformed,
+                unlinked=True,
+                messages=[m for m in messages if m],
+            )
         except Exception as e:
+            _trace_m15("adapter.claude_code.pending.error", path=str(pending), error=str(e))
             print(f"[notify] Failed to drain pending notifications: {e}", file=sys.stderr)
 
         notes = [m for m in messages if m]
         if not notes:
+            _trace_m15("adapter.claude_code.pending.empty_after_filter", path=str(pending))
             return ""
 
         body = "\n".join(f"• {n}" for n in notes)
+        _trace_m15(
+            "adapter.claude_code.pending.context",
+            path=str(pending),
+            messages_count=len(notes),
+            context_preview=body[:1000],
+        )
         return (
             "The following are pending notifications for the user — please relay them in your response:\n\n"
             f"<quaid_system_message>\n{body}\n</quaid_system_message>"

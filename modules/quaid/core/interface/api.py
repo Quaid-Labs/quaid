@@ -192,21 +192,72 @@ def recall_fast(
     Use this for the hook-inject hot path. For deliberate recall (user-initiated
     search), use recall() which has full graph traversal and reranking.
     """
+    try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(
+            "api.recall_fast.entry",
+            query=query,
+            owner_id=owner_id,
+            limit=limit,
+            return_meta=return_meta,
+            word_count=len(query.strip().split()),
+        )
+    except Exception:
+        pass
     if len(query.strip().split()) < 3:
         logger.debug("[api.recall_fast] query too short (%d words), returning empty", len(query.strip().split()))
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15(
+                "api.recall_fast.short_query_skip",
+                query=query,
+                word_count=len(query.strip().split()),
+            )
+        except Exception:
+            pass
         return ([], None) if return_meta else []
 
-    return _memory().recall_fast(
-        query=query,
-        owner_id=owner_id,
-        limit=limit,
-        min_similarity=min_similarity,
-        debug=debug,
-        domain=domain,
-        domain_boost=domain_boost,
-        timeout_ms=timeout_ms,
-        return_meta=return_meta,
-    )
+    try:
+        result = _memory().recall_fast(
+            query=query,
+            owner_id=owner_id,
+            limit=limit,
+            min_similarity=min_similarity,
+            debug=debug,
+            domain=domain,
+            domain_boost=domain_boost,
+            timeout_ms=timeout_ms,
+            return_meta=return_meta,
+        )
+        try:
+            from lib.m15_trace import trace_m15
+
+            rows = result[0] if return_meta and isinstance(result, tuple) else result
+            meta = result[1] if return_meta and isinstance(result, tuple) and len(result) > 1 else None
+            trace_m15(
+                "api.recall_fast.exit",
+                result_count=len(rows or []) if isinstance(rows, list) else None,
+                has_meta=meta is not None,
+                stop_reason=(meta or {}).get("stop_reason") if isinstance(meta, dict) else None,
+                planner=(meta or {}).get("planner") if isinstance(meta, dict) else None,
+            )
+        except Exception:
+            pass
+        return result
+    except Exception as exc:
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15(
+                "api.recall_fast.exception",
+                exc_type=type(exc).__name__,
+                error=str(exc),
+            )
+        except Exception:
+            pass
+        raise
 
 
 def search(

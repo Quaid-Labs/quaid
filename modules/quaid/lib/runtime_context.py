@@ -28,6 +28,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _trace_m15(event: str, **fields) -> None:
+    try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(event, **fields)
+    except Exception:
+        pass
+
+
 def get_adapter_instance() -> "QuaidAdapter":
     return get_adapter()
 
@@ -89,10 +98,24 @@ def get_bootstrap_markdown_globs() -> List[str]:
 
 
 def get_llm_provider(model_tier: Optional[str] = None) -> "LLMProvider":
+    _trace_m15("runtime_context.get_llm_provider.entry", model_tier=model_tier)
     try:
-        return get_adapter().get_llm_provider(model_tier=model_tier)
+        provider = get_adapter().get_llm_provider(model_tier=model_tier)
+        _trace_m15(
+            "runtime_context.get_llm_provider.ok",
+            model_tier=model_tier,
+            provider=provider.__class__.__name__,
+        )
+        return provider
     except Exception as exc:
         tier = str(model_tier or "default").strip() or "default"
+        _trace_m15(
+            "runtime_context.get_llm_provider.error",
+            model_tier=model_tier,
+            tier=tier,
+            exc_type=type(exc).__name__,
+            error=str(exc),
+        )
         try:
             _queue_deferred_notice(
                 f"Quaid could not access its {tier} language model provider: {exc}",

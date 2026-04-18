@@ -35,6 +35,15 @@ from prompt_sets import get_prompt
 logger = logging.getLogger(__name__)
 
 
+def _trace_m15(event: str, **fields) -> None:
+    try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(event, **fields)
+    except Exception:
+        pass
+
+
 class ProviderUnavailableError(Exception):
     """Raised when the LLM provider is confirmed unavailable after retries.
 
@@ -519,6 +528,7 @@ def call_llm(system_prompt: str, user_message: str,
     Used by subprocess tests to avoid hitting real providers.
     """
     if os.environ.get("QUAID_DISABLE_LLM"):
+        _trace_m15("llm.call.disabled", model=model, model_tier=model_tier)
         return (None, 0.0)
 
     _load_model_config()
@@ -526,6 +536,16 @@ def call_llm(system_prompt: str, user_message: str,
         model = _deep_reasoning_model
 
     resolved_tier = model_tier if model_tier in ("deep", "fast") else _resolve_tier(model)
+    _trace_m15(
+        "llm.call.entry",
+        requested_model=model,
+        resolved_tier=resolved_tier,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        max_retries=max_retries,
+        prompt_preview=user_message[:1000],
+        system_preview=system_prompt[:500],
+    )
 
     # Cap max_tokens to API limits
     try:
@@ -571,6 +591,12 @@ def call_llm(system_prompt: str, user_message: str,
 
     llm = get_llm_provider(model_tier=resolved_tier)
     provider_name = llm.__class__.__name__
+    _trace_m15(
+        "llm.provider.resolved",
+        provider=provider_name,
+        requested_model=model,
+        resolved_tier=resolved_tier,
+    )
 
     start_time = time.time()
     deadline = None
@@ -595,6 +621,14 @@ def call_llm(system_prompt: str, user_message: str,
                     call_timeout = deadline - time.time()
                     if call_timeout <= 0:
                         raise TimeoutError("LLM deadline exhausted while waiting for worker slot")
+                _trace_m15(
+                    "llm.provider.call_attempt",
+                    provider=provider_name,
+                    requested_model=model,
+                    resolved_tier=resolved_tier,
+                    attempt=attempt + 1,
+                    call_timeout=call_timeout,
+                )
                 result = llm.llm_call(messages, resolved_tier, max_tokens, call_timeout)
             _track_usage(result)
             _append_usage_event(
@@ -630,9 +664,30 @@ def call_llm(system_prompt: str, user_message: str,
                 "error_code": "",
                 "key_fp": _key_fp(),
             })
+            _trace_m15(
+                "llm.provider.call_ok",
+                provider=provider_name,
+                requested_model=model,
+                returned_model=result.model,
+                resolved_tier=resolved_tier,
+                attempt=attempt + 1,
+                duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
+                response_preview=(result.text or "")[:1000],
+            )
             return result.text, result.duration
         except Exception as e:
             last_error = e
+            _trace_m15(
+                "llm.provider.call_error",
+                provider=provider_name,
+                requested_model=model,
+                resolved_tier=resolved_tier,
+                attempt=attempt + 1,
+                exc_type=type(e).__name__,
+                error=str(e),
+                http_code=getattr(e, "code", None),
+                rate_limits=_rate_limit_headers(e),
+            )
             _append_trace({
                 "status": "error",
                 "provider": provider_name,
@@ -680,6 +735,15 @@ def call_llm(system_prompt: str, user_message: str,
 
     duration = time.time() - start_time
     logger.error("[llm_clients] LLM error: %s", last_error)
+    _trace_m15(
+        "llm.call.final_error",
+        provider=provider_name,
+        requested_model=model,
+        resolved_tier=resolved_tier,
+        duration_ms=int(duration * 1000),
+        exc_type=type(last_error).__name__ if last_error is not None else None,
+        error=str(last_error),
+    )
 
     # Determine if this is a confirmed provider outage (retryable HTTP codes
     # exhausted) vs. a bug or config error in our code.
@@ -690,6 +754,13 @@ def call_llm(system_prompt: str, user_message: str,
         _is_provider_outage = last_error.code in _RETRYABLE_HTTP_CODES
 
     if _is_provider_outage:
+        _trace_m15(
+            "llm.notice.provider_outage",
+            provider=provider_name,
+            requested_model=model,
+            resolved_tier=resolved_tier,
+            fail_hard=is_fail_hard_enabled(),
+        )
         notify_agent(
             (
                 f"Quaid could not reach its {resolved_tier} provider "
@@ -717,6 +788,14 @@ def call_llm(system_prompt: str, user_message: str,
         ) from last_error
 
     if is_fail_hard_enabled():
+        _trace_m15(
+            "llm.call.raise_failhard",
+            provider=provider_name,
+            requested_model=model,
+            resolved_tier=resolved_tier,
+            exc_type=type(last_error).__name__ if last_error is not None else None,
+            error=str(last_error),
+        )
         err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
         raise RuntimeError(
             "LLM call failed after retries while failHard is enabled "
@@ -746,6 +825,14 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
     """
     _load_model_config()
     effective_system_prompt = get_prompt("llm.json_only") if system_prompt is None else system_prompt
+    _trace_m15(
+        "llm.call_fast_reasoning.entry",
+        model=_fast_reasoning_model,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        max_retries=max_retries,
+        prompt_preview=prompt[:1000],
+    )
     return call_llm(
         system_prompt=effective_system_prompt,
         user_message=prompt,

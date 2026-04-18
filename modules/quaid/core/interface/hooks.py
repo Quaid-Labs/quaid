@@ -256,26 +256,75 @@ def _queue_provider_failure_notice(exc: Exception) -> None:
     """
     message = _provider_failure_notice_message(exc)
     try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(
+            "provider_notice.queue.start",
+            message=message,
+            exc_type=type(exc).__name__,
+            exc=str(exc),
+        )
+    except Exception:
+        pass
+    try:
         from lib.adapter import get_adapter
 
         adapter = get_adapter()
         notify = getattr(adapter, "notify", None)
-        if callable(notify) and bool(notify(message, force=True)):
-            return
+        if callable(notify):
+            ok = bool(notify(message, force=True))
+            try:
+                from lib.m15_trace import trace_m15
+
+                trace_m15(
+                    "provider_notice.adapter_notify",
+                    ok=ok,
+                    adapter=str(adapter.adapter_id() if hasattr(adapter, "adapter_id") else ""),
+                )
+            except Exception:
+                pass
+            if ok:
+                return
+        else:
+            try:
+                from lib.m15_trace import trace_m15
+
+                trace_m15("provider_notice.adapter_notify_missing")
+            except Exception:
+                pass
     except Exception as notice_exc:
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15("provider_notice.adapter_notify_error", error=str(notice_exc))
+        except Exception:
+            pass
         logger.warning("Failed queueing provider access error as adapter notice: %s", notice_exc)
     try:
         from lib.runtime_context import queue_deferred_notice
 
-        queue_deferred_notice(
+        queued = queue_deferred_notice(
             message,
             kind="provider",
             priority="high",
             source="provider",
             dedupe_key=f"hook-provider:{type(exc).__name__}:{str(exc).strip()}",
         )
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15("provider_notice.deferred_queue", queued=queued)
+        except Exception:
+            pass
     except Exception as notice_exc:
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15("provider_notice.deferred_queue_error", error=str(notice_exc))
+        except Exception:
+            pass
         logger.warning("Failed queueing provider failure notice for hook relay: %s", notice_exc)
+        return
 
 
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
@@ -521,6 +570,20 @@ def hook_inject(args):
     query = hook_input.get("prompt", "").strip()
     if not query:
         return
+    try:
+        from lib.m15_trace import activate_m15_trace_for_prompt, m15_trace_path, trace_m15
+
+        activate_m15_trace_for_prompt(query)
+        trace_m15(
+            "hook_inject.entry",
+            prompt=query,
+            session_id=session_id,
+            cwd=hook_input.get("cwd", "") if isinstance(hook_input, dict) else "",
+            hook_input_keys=sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
+            trace_file=m15_trace_path(),
+        )
+    except Exception:
+        pass
     direct_notices: List[str] = []
 
     try:
@@ -528,6 +591,17 @@ def hook_inject(args):
         from lib.adapter import get_adapter
 
         adapter = get_adapter()
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15(
+                "hook_inject.adapter",
+                adapter=adapter.adapter_id(),
+                deferred_notice_relay=_adapter_capability("deferred_notice_relay", False),
+                inject_tool_output_trace=_adapter_capability("inject_tool_output_trace", False),
+            )
+        except Exception:
+            pass
         # CDX: detect session transitions (/new, /clear) via session_id change.
         # CDX CLI intercepts lifecycle commands before the hook fires, so the
         # command text never reaches the hook payload or the transcript.  The
@@ -678,10 +752,23 @@ def hook_inject(args):
         memories = []
         recall_meta = None
         docs_bundle = None
+        docs_project_hint = None
+        hook_cwd = hook_input.get("cwd", "").strip() if isinstance(hook_input, dict) else ""
         _write_hook_trace("hook.inject.start", {
             "query": query[:160],
             "session_id": session_id,
         })
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15(
+                "hook_inject.recall_submit",
+                query=query,
+                owner=owner,
+                hook_cwd=hook_cwd,
+            )
+        except Exception:
+            pass
         if bool(_adapter_capability("inject_tool_output_trace", False)):
             payload = {
                 "query": query[:160],
@@ -693,8 +780,6 @@ def hook_inject(args):
             }
             payload.update(_extract_codex_tool_output_trace(hook_input if isinstance(hook_input, dict) else {}))
             _write_hook_trace("hook.inject.codex_payload", payload)
-        docs_project_hint = None
-        hook_cwd = hook_input.get("cwd", "").strip() if isinstance(hook_input, dict) else ""
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             mem_future = pool.submit(
@@ -747,6 +832,19 @@ def hook_inject(args):
         pending_context = _get_pending_context()
         deferred_notice_relay_context = _get_deferred_notice_relay_context()
         deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15(
+                "hook_inject.notice_context",
+                pending_context_len=len(pending_context or ""),
+                deferred_relay_len=len(deferred_notice_relay_context or ""),
+                deferred_hint_len=len(deferred_notice_hint or ""),
+                pending_context_preview=(pending_context or "")[:500],
+                deferred_relay_preview=(deferred_notice_relay_context or "")[:500],
+            )
+        except Exception:
+            pass
 
         context_parts = []
 
@@ -817,6 +915,21 @@ def hook_inject(args):
             "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
             "context_len": len(context),
         })
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15(
+                "hook_inject.context_output",
+                recall_count=len(memories or []),
+                docs_count=len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
+                context_len=len(context),
+                has_pending_context=bool(pending_context),
+                has_deferred_relay=bool(deferred_notice_relay_context),
+                has_deferred_hint=bool(deferred_notice_hint),
+                context_preview=context[:1000],
+            )
+        except Exception:
+            pass
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
@@ -826,6 +939,17 @@ def hook_inject(args):
 
     except (RuntimeError, Exception) as e:
         provider_failure = _is_provider_failure(e)
+        try:
+            from lib.m15_trace import trace_m15
+
+            trace_m15(
+                "hook_inject.exception",
+                provider_failure=provider_failure,
+                exc_type=type(e).__name__,
+                error=str(e),
+            )
+        except Exception:
+            pass
         if provider_failure:
             try:
                 from lib.fail_policy import is_fail_hard_enabled
@@ -861,6 +985,20 @@ def hook_inject(args):
         if deferred_notice_hint:
             fallback_context_parts.append(deferred_notice_hint)
         if fallback_context_parts:
+            try:
+                from lib.m15_trace import trace_m15
+
+                trace_m15(
+                    "hook_inject.fallback_context_output",
+                    provider_failure=provider_failure,
+                    pending_context_len=len(pending_context or ""),
+                    deferred_relay_len=len(deferred_notice_relay_context or ""),
+                    deferred_hint_len=len(deferred_notice_hint or ""),
+                    context_len=len("\n\n".join(fallback_context_parts)),
+                    context_preview=("\n\n".join(fallback_context_parts))[:1000],
+                )
+            except Exception:
+                pass
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",

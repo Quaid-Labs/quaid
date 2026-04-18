@@ -89,6 +89,15 @@ from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_log
 logger = logging.getLogger(__name__)
 
 
+def _trace_m15(event: str, **fields: Any) -> None:
+    try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(event, **fields)
+    except Exception:
+        pass
+
+
 def _ensure_visible_identity_stubs() -> List[str]:
     """Ensure visible identity markdown exists for the active instance."""
     try:
@@ -7333,6 +7342,14 @@ def _plan_fanout_queries(
         timeout_s = max(0.1, float(timeout_s))
     except Exception:
         timeout_s = _RECALL_PLANNER_TIMEOUT_CAP_S
+    _trace_m15(
+        "planner.fanout.entry",
+        query=query,
+        max_queries=max_queries,
+        timeout_s=timeout_s,
+        planner_profile=planner_profile,
+        return_meta=return_meta,
+    )
     meta = {
         "query": query,
         "timeout_ms": round(timeout_s * 1000),
@@ -7354,6 +7371,14 @@ def _plan_fanout_queries(
         meta["queries_count"] = len(out)
         meta["bailout_reason"] = bailout_reason
         meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
+        _trace_m15(
+            "planner.fanout.finish",
+            query=clean,
+            output_queries=out,
+            bailout_reason=bailout_reason,
+            meta=meta,
+            called_fast_reasoning=bool(meta.get("used_llm")),
+        )
         if return_meta:
             return out, meta
         return out
@@ -7379,6 +7404,17 @@ def _plan_fanout_queries(
                 or "timed out" in detail_lc
                 or "timeout" in detail_lc
             )
+        )
+        _trace_m15(
+            "planner.fanout.fallback_or_raise",
+            query=clean,
+            bailout_reason=bailout_reason,
+            message=message,
+            exc_type=type(exc).__name__ if exc is not None else None,
+            error=str(exc) if exc is not None else "",
+            timeout_like=timeout_like,
+            fail_hard=fail_hard,
+            meta=meta,
         )
         if timeout_like:
             # The fast fanout planner is a best-effort query-expansion gate.
@@ -7408,6 +7444,15 @@ def _plan_fanout_queries(
     clean = " ".join((query or "").split())
     default_stores, default_project = _infer_recall_store_defaults(clean)
     profile = _estimate_fanout_profile(clean, max_queries=max_queries, planner_profile=planner_profile)
+    _trace_m15(
+        "planner.fanout.classification",
+        query=clean,
+        default_stores=default_stores,
+        default_project=default_project,
+        profile=profile,
+        low_information=_is_low_information_message(clean),
+        clean_len=len(clean),
+    )
     meta["query_shape"] = str(profile["shape"])
     meta["fanout_budget"] = int(profile["fanout_budget"])
     meta["token_count"] = int(profile["token_count"])
@@ -7418,12 +7463,16 @@ def _plan_fanout_queries(
     meta["planned_project"] = default_project
     max_queries = max(1, int(profile["fanout_budget"]))
     if not clean:
+        _trace_m15("planner.fanout.short_circuit", query=clean, reason="empty_query")
         return _finish([], "empty_query")
     if _is_low_information_message(clean):
+        _trace_m15("planner.fanout.short_circuit", query=clean, reason="low_information_message")
         return _finish([], "low_information_message")
     if len(clean) < 10:
+        _trace_m15("planner.fanout.short_circuit", query=clean, reason="too_short", clean_len=len(clean))
         return _finish([clean], "too_short")
     if planner_profile == "off":
+        _trace_m15("planner.fanout.short_circuit", query=clean, reason="planner_disabled")
         return _finish([clean], "planner_disabled")
     planned_default_stores = list(_planner_store_plan(default_stores))
     short_broad_exact_query = (
@@ -7433,6 +7482,13 @@ def _plan_fanout_queries(
         and default_project is None
     )
     if short_broad_exact_query:
+        _trace_m15(
+            "planner.fanout.short_circuit",
+            query=clean,
+            reason="short_broad_exact_query",
+            profile=profile,
+            planned_default_stores=planned_default_stores,
+        )
         return _finish([clean], "preserve_short_exact_query")
     short_causal_lookup = (
         int(profile["token_count"]) <= 12
@@ -7469,8 +7525,19 @@ def _plan_fanout_queries(
     )
     store_plan_only = planner_profile == "full" and preserve_exact_query
     if preserve_exact_query and not store_plan_only:
+        _trace_m15(
+            "planner.fanout.short_circuit",
+            query=clean,
+            reason="preserve_short_exact_query",
+            profile=profile,
+            exact_short_query=exact_short_query,
+            short_causal_lookup=short_causal_lookup,
+            planned_default_stores=planned_default_stores,
+            default_project=default_project,
+        )
         return _finish([clean], "preserve_short_exact_query")
     if store_plan_only and not _HAS_LLM_CLIENTS:
+        _trace_m15("planner.fanout.short_circuit", query=clean, reason="store_plan_only_no_llm_clients")
         return _finish([clean], "preserve_short_exact_query")
     if not _HAS_LLM_CLIENTS:
         return _planner_fallback_or_raise(
@@ -7521,6 +7588,14 @@ def _plan_fanout_queries(
     try:
         from lib.llm_clients import call_fast_reasoning
         meta["used_llm"] = True
+        _trace_m15(
+            "planner.fanout.call_fast_reasoning",
+            query=clean,
+            timeout_s=timeout_s,
+            max_queries=max_queries,
+            planner_profile=planner_profile,
+            prompt_preview=prompt[:1000],
+        )
         result, _ = call_fast_reasoning(
             prompt=prompt,
             max_tokens=200,
@@ -7529,11 +7604,19 @@ def _plan_fanout_queries(
             max_retries=max(0, int(max_retries or 0)),
         )
         if result is None:
+            _trace_m15("planner.fanout.call_fast_reasoning_none", query=clean)
             return _planner_fallback_or_raise(
                 "planner_exception_fallback",
                 "planner returned no result",
             )
         parsed = parse_json_response(result)
+        _trace_m15(
+            "planner.fanout.llm_result",
+            query=clean,
+            raw_result=result,
+            parsed_type=type(parsed).__name__,
+            parsed=parsed if isinstance(parsed, dict) else None,
+        )
         queries = parsed.get("queries") if isinstance(parsed, dict) else None
         if isinstance(parsed, dict):
             planned_stores = _planner_store_plan(parsed.get("stores")) or planned_default_stores
@@ -7857,6 +7940,15 @@ def recall_fast(
     """Pre-injection recall: thin wrapper over recall() with single-pass settings."""
     import time as _time
 
+    _trace_m15(
+        "memory_graph.recall_fast.entry",
+        query=query,
+        owner_id=owner_id,
+        limit=limit,
+        planner_profile=planner_profile,
+        return_meta=return_meta,
+        timeout_ms=timeout_ms,
+    )
     if not query or not query.strip():
         meta = {
             "mode": "fast",
@@ -7873,6 +7965,7 @@ def recall_fast(
                 "no_llm_clients": 0,
             },
         }
+        _trace_m15("memory_graph.recall_fast.short_circuit", query=query, reason="empty_query", meta=meta)
         return ([], meta) if return_meta else []
     if _is_low_information_message(query):
         meta = {
@@ -7890,6 +7983,7 @@ def recall_fast(
                 "no_llm_clients": 0,
             },
         }
+        _trace_m15("memory_graph.recall_fast.short_circuit", query=query, reason="initial_low_information", meta=meta)
         return ([], meta) if return_meta else []
 
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
@@ -7905,12 +7999,25 @@ def recall_fast(
             max_retries=0,
         )
         planned_queries, planner_meta = planned if isinstance(planned, tuple) and len(planned) == 2 else ([query], {})
+        _trace_m15(
+            "memory_graph.recall_fast.planned",
+            query=query,
+            planned_queries=planned_queries,
+            planner_meta=planner_meta,
+        )
     except Exception as exc:
         # If the LLM planner was actually invoked and failed, this is a real
         # planner failure. Under failHard, raise immediately — no soft fallback.
         # Pre-LLM structured bailouts (too_short, preserve_short_exact_query,
         # no_entities) are returned as values, not raised, so they never reach here.
         if planner_profile != "off" and _is_fail_hard_mode():
+            _trace_m15(
+                "memory_graph.recall_fast.planner_exception_raise",
+                query=query,
+                planner_profile=planner_profile,
+                exc_type=type(exc).__name__,
+                error=str(exc),
+            )
             raise RuntimeError(
                 f"Recall fanout planner failed while failHard is enabled "
                 f"(profile={planner_profile}, elapsed_ms={round((_time.monotonic() - planner_started) * 1000)}): {exc}"
@@ -7936,6 +8043,14 @@ def recall_fast(
             "fallback_detail": str(exc)[:240],
         }
         planned_queries = [query]
+        _trace_m15(
+            "memory_graph.recall_fast.planner_exception_fallback",
+            query=query,
+            planner_meta=planner_meta,
+            planned_queries=planned_queries,
+            exc_type=type(exc).__name__,
+            error=str(exc),
+        )
     planned_stores = _planner_store_plan((planner_meta or {}).get("planned_stores") or ["vector"])
     planned_project = (planner_meta or {}).get("planned_project") or project
 
@@ -7999,6 +8114,12 @@ def recall_fast(
     )
 
     if should_fast_drill and fast_drill_enabled:
+        _trace_m15(
+            "memory_graph.recall_fast.fast_drill_considered",
+            query=query,
+            fast_drill_reasons=fast_drill_reasons,
+            preserved_exact_fast_path=str((planner_meta or {}).get("bailout_reason") or "") == "preserve_short_exact_query",
+        )
         preserved_exact_fast_path = str((planner_meta or {}).get("bailout_reason") or "") == "preserve_short_exact_query"
         drill_queries = _build_fast_drill_fallback_queries(
             query,
@@ -8031,6 +8152,12 @@ def recall_fast(
             }
         else:
             drill_budget_s = 1.2
+            _trace_m15(
+                "memory_graph.recall_fast.drill_planner_call",
+                query=query,
+                drill_budget_s=drill_budget_s,
+                rows_count=len(rows or []),
+            )
             planned_drill = _drill_plan_queries(
                 query,
                 rows,
@@ -8138,6 +8265,12 @@ def recall_fast(
                 limit=effective_limit,
             )
     _attach_recall_meta(rows, meta)
+    _trace_m15(
+        "memory_graph.recall_fast.exit",
+        query=query,
+        rows_count=len(rows or []),
+        meta=meta,
+    )
     return (rows, meta) if return_meta else rows
 
 

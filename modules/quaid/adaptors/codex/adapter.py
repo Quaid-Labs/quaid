@@ -17,6 +17,15 @@ from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_id, instance_slug_from_project_dir
 
 
+def _trace_m15(event: str, **fields) -> None:
+    try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(event, **fields)
+    except Exception:
+        pass
+
+
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
@@ -146,44 +155,77 @@ class CodexAdapter(QuaidAdapter):
             pending.parent.mkdir(parents=True, exist_ok=True)
             with open(pending, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"message": message, "ts": _now_iso()}) + "\n")
+            _trace_m15(
+                "adapter.codex.notify.write",
+                path=str(pending),
+                force=force,
+                message=message,
+                size=pending.stat().st_size if pending.exists() else None,
+            )
             return True
         except Exception as exc:
+            _trace_m15("adapter.codex.notify.error", message=message, error=str(exc))
             print(f"[notify] Failed to queue Codex notification: {exc}", file=sys.stderr)
             return False
 
     def get_pending_context(self, max_age_seconds: int = 300) -> str:
         pending = self._pending_notifications_path()
         if not pending.is_file():
+            _trace_m15("adapter.codex.pending.missing", path=str(pending))
             return ""
         try:
             from datetime import datetime, timezone
 
             now = datetime.now(timezone.utc)
             messages = []
+            total_lines = 0
+            expired = 0
+            malformed = 0
             with open(pending, "r", encoding="utf-8") as handle:
                 for line in handle:
+                    total_lines += 1
                     line = line.strip()
                     if not line:
                         continue
                     try:
                         entry = json.loads(line)
                     except json.JSONDecodeError:
+                        malformed += 1
                         continue
                     ts = str(entry.get("ts") or "").strip()
                     if ts and max_age_seconds > 0:
                         entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         if (now - entry_dt).total_seconds() > max_age_seconds:
+                            expired += 1
                             continue
                     message = str(entry.get("message") or "").strip()
                     if message:
                         messages.append(message)
             pending.unlink(missing_ok=True)
+            _trace_m15(
+                "adapter.codex.pending.drain",
+                path=str(pending),
+                total_lines=total_lines,
+                messages_count=len(messages),
+                expired=expired,
+                malformed=malformed,
+                unlinked=True,
+                messages=messages,
+            )
         except Exception as exc:
+            _trace_m15("adapter.codex.pending.error", path=str(pending), error=str(exc))
             print(f"[notify] Failed to drain Codex notifications: {exc}", file=sys.stderr)
             return ""
         if not messages:
+            _trace_m15("adapter.codex.pending.empty_after_filter", path=str(pending))
             return ""
         body = "\n".join(f"• {message}" for message in messages)
+        _trace_m15(
+            "adapter.codex.pending.context",
+            path=str(pending),
+            messages_count=len(messages),
+            context_preview=body[:1000],
+        )
         return (
             "The following are pending notifications for the user — please relay them in your response:\n\n"
             f"<quaid_system_message>\n{body}\n</quaid_system_message>"

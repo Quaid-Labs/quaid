@@ -19,6 +19,15 @@ _STATE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _MAX_DEFERRED_NOTICES = 500
 
 
+def _trace_m15(event: str, **fields: Any) -> None:
+    try:
+        from lib.m15_trace import trace_m15
+
+        trace_m15(event, **fields)
+    except Exception:
+        pass
+
+
 def _normalize_severity(value: str) -> str:
     token = str(value or "").strip().lower()
     if token in {"info", "warning", "error"}:
@@ -197,9 +206,20 @@ def notify_agent(
             logger.warning("Failed evaluating agent notice dedupe key=%s: %s", dedupe_token, exc)
 
     formatted = _format_notice(text, severity=severity, source=source)
+    _trace_m15(
+        "agent_notice.notify.start",
+        severity=severity,
+        source=source,
+        dedupe_key=dedupe_token,
+        ttl_seconds=ttl_seconds,
+        force=force,
+        dry_run=dry_run,
+        message=formatted,
+    )
 
     def _fallback_to_deferred() -> bool:
         if dry_run:
+            _trace_m15("agent_notice.notify.deferred_fallback_skipped_dry_run")
             return False
         severity_token = _normalize_severity(severity)
         priority = "normal"
@@ -208,15 +228,23 @@ def notify_agent(
         elif severity_token == "info":
             priority = "low"
         try:
-            return queue_deferred_notice(
+            queued = queue_deferred_notice(
                 formatted,
                 kind="agent_notice",
                 priority=priority,
                 source=str(source or "agent_notice").strip() or "agent_notice",
                 dedupe_key=f"notify-fallback:{dedupe_token}" if dedupe_token else None,
             )
+            _trace_m15(
+                "agent_notice.notify.deferred_fallback",
+                queued=queued,
+                priority=priority,
+                dedupe_key=f"notify-fallback:{dedupe_token}" if dedupe_token else None,
+            )
+            return queued
         except Exception as deferred_exc:
             logger.warning("Failed queueing deferred fallback for agent notice: %s", deferred_exc)
+            _trace_m15("agent_notice.notify.deferred_fallback_error", error=str(deferred_exc))
             return False
 
     try:
@@ -228,11 +256,17 @@ def notify_agent(
                 force=force,
             )
         )
+        _trace_m15(
+            "agent_notice.notify.adapter_result",
+            ok=ok,
+            adapter=str(adapter.adapter_id() if hasattr(adapter, "adapter_id") else ""),
+        )
         if not ok:
             logger.warning("Agent notice delivery returned False; queueing deferred fallback.")
             return _fallback_to_deferred()
     except Exception as exc:
         logger.warning("Failed delivering agent notice: %s", exc)
+        _trace_m15("agent_notice.notify.adapter_error", error=str(exc))
         return _fallback_to_deferred()
 
     if ok and dedupe_token and ttl_seconds > 0 and not dry_run and state_path is not None:
@@ -263,6 +297,15 @@ def queue_deferred_notice(
     request_id = _request_id(notice_kind, text)
     dedupe_token = str(dedupe_key or request_id).strip() or request_id
     path = _deferred_path()
+    _trace_m15(
+        "deferred_notice.queue.start",
+        path=str(path),
+        kind=notice_kind,
+        priority=notice_priority,
+        source=notice_source,
+        dedupe_key=dedupe_token,
+        message=text,
+    )
 
     with _file_lock(_deferred_lock_path(path)):
         payload = _read_json(path, {"version": 1, "requests": []})
@@ -276,6 +319,12 @@ def queue_deferred_notice(
             if item.get("status") != "pending":
                 continue
             if str(item.get("dedupe_key") or item.get("id") or "").strip() == dedupe_token:
+                _trace_m15(
+                    "deferred_notice.queue.deduped",
+                    path=str(path),
+                    dedupe_key=dedupe_token,
+                    existing_id=str(item.get("id") or ""),
+                )
                 return False
 
         requests.append(
@@ -291,6 +340,17 @@ def queue_deferred_notice(
             }
         )
         _write_json(path, {"version": 1, "requests": _trim_deferred_notices(requests)})
+        _trace_m15(
+            "deferred_notice.queue.inserted",
+            path=str(path),
+            id=request_id,
+            dedupe_key=dedupe_token,
+            pending_count=sum(
+                1
+                for item in requests
+                if isinstance(item, dict) and str(item.get("status") or "pending").strip().lower() == "pending"
+            ),
+        )
         return True
 
 
@@ -318,12 +378,21 @@ def list_deferred_notices(
             continue
         notices.append(dict(item))
 
-    return _sort_deferred_notices(notices)[: max(1, min(int(limit), 500))]
+    out = _sort_deferred_notices(notices)[: max(1, min(int(limit), 500))]
+    _trace_m15(
+        "deferred_notice.list",
+        path=str(path),
+        status=normalized_status,
+        limit=limit,
+        count=len(out),
+    )
+    return out
 
 
 def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
     path = _deferred_path()
     drained: list[dict[str, Any]] = []
+    _trace_m15("deferred_notice.drain.start", path=str(path), limit=limit)
 
     with _file_lock(_deferred_lock_path(path)):
         payload = _read_json(path, {"version": 1, "requests": []})
@@ -342,6 +411,7 @@ def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
             if str(item.get("id") or "")
         }
         if not target_ids:
+            _trace_m15("deferred_notice.drain.empty", path=str(path), pending_count=len(pending))
             return []
 
         drained_at = _now_iso()
@@ -362,7 +432,14 @@ def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
         updated.sort(key=lambda item: str(item.get("created_at") or ""))
         _write_json(path, {"version": 1, "requests": _trim_deferred_notices(updated)})
 
-    return _sort_deferred_notices(drained)
+    out = _sort_deferred_notices(drained)
+    _trace_m15(
+        "deferred_notice.drain.delivered",
+        path=str(path),
+        count=len(out),
+        ids=[str(item.get("id") or "") for item in out],
+    )
+    return out
 
 
 def get_deferred_notice_status(
