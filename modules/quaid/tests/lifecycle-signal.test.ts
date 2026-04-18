@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { __test } from "../adaptors/openclaw/adapter.js";
 
 describe("lifecycle signal detection", () => {
@@ -326,8 +326,11 @@ describe("lifecycle signal detection", () => {
     }
   });
 
-  it("trusts explicit transcript-update session mappings for physical OC filenames", () => {
+  it("trusts explicit transcript-update session mappings for physical OC filenames", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-map-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
     const sessionsDir = path.join(baseDir, "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
     const sid = "8fe2f1ee";
@@ -338,19 +341,39 @@ describe("lifecycle signal detection", () => {
       "utf8",
     );
 
-    const remembered = __test.rememberSessionTranscriptPath(
-      sid,
-      sessionFile,
-      "transcript-update-resolved-session-id",
-      { trustedSessionMapping: true },
-    );
+    try {
+      fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+      fs.writeFileSync(
+        openClawConfigPath,
+        JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+        "utf8",
+      );
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-livetest");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
 
-    expect(remembered).toBe(true);
-    const sigPath = __test.writeDaemonSignal(sid, "compaction", { source: "timeout_extract" });
-    expect(sigPath).toBeTruthy();
-    const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
-    expect(payload.transcript_path).toBe(sessionFile);
-    try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+      const remembered = isolatedTest.rememberSessionTranscriptPath(
+        sid,
+        sessionFile,
+        "transcript-update-resolved-session-id",
+        { trustedSessionMapping: true },
+      );
+
+      expect(remembered).toBe(true);
+      const sigPath = isolatedTest.writeDaemonSignal(sid, "compaction", { source: "timeout_extract" });
+      expect(sigPath).toBeTruthy();
+      expect(String(sigPath)).toContain(`${path.sep}.quaid${path.sep}instances${path.sep}openclaw-livetest${path.sep}`);
+      const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+      expect(payload.transcript_path).toBe(sessionFile);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
   });
 
   it("distinguishes Quaid event logs from preserved conversation transcripts", () => {
