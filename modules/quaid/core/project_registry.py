@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import tempfile
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -96,6 +97,172 @@ def _registry_lock_path() -> Path:
 
 def _registry_lock():
     return registry_lock()
+
+
+def _visible_home_from_hidden(quaid_home: Path) -> Path:
+    raw = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
+    if raw:
+        return Path(raw).resolve()
+    if quaid_home.name.startswith(".") and len(quaid_home.name) > 1:
+        return quaid_home.with_name(quaid_home.name[1:])
+    return quaid_home
+
+
+def _safe_remove_project_dir(path: Path, allowed_roots: List[Path]) -> bool:
+    """Best-effort guarded recursive delete for project directories."""
+    try:
+        resolved = path.resolve()
+    except Exception:
+        resolved = Path(os.path.realpath(str(path)))
+
+    allowed = False
+    for root in allowed_roots:
+        try:
+            root_resolved = root.resolve()
+        except Exception:
+            root_resolved = Path(os.path.realpath(str(root)))
+        if resolved == root_resolved or str(resolved).startswith(str(root_resolved) + os.sep):
+            allowed = True
+            break
+    if not allowed:
+        logger.warning("Refusing to delete project dir outside allowed roots: %s", resolved)
+        return False
+    if not resolved.exists():
+        return False
+    if not resolved.is_dir():
+        logger.warning("Refusing to delete non-directory project path: %s", resolved)
+        return False
+    shutil.rmtree(resolved)
+    return True
+
+
+def _is_path_for_deleted_project(raw_path: str, *, project_name: str, canonical: Optional[Path]) -> bool:
+    text = str(raw_path or "").strip()
+    if not text:
+        return False
+    if f"/{project_name}/" in text or text.endswith(f"/{project_name}") or text.endswith(f"/{project_name}/PROJECT.md"):
+        return True
+    if canonical is not None:
+        try:
+            c = canonical.resolve()
+        except Exception:
+            c = Path(os.path.realpath(str(canonical)))
+        p = Path(text)
+        if not p.is_absolute():
+            return False
+        try:
+            r = p.resolve()
+        except Exception:
+            r = Path(os.path.realpath(str(p)))
+        if r == c or str(r).startswith(str(c) + os.sep):
+            return True
+    return False
+
+
+def _cleanup_pending_project_review_entries(
+    *,
+    quaid_home: Path,
+    project_name: str,
+    canonical: Optional[Path],
+) -> int:
+    """Remove stale pending-project-review entries for a deleted project."""
+    instances_dir = quaid_home / "instances"
+    if not instances_dir.is_dir():
+        return 0
+    removed = 0
+    for child in sorted(instances_dir.iterdir()):
+        queue_path = child / "logs" / "janitor" / "pending-project-review.json"
+        if not queue_path.is_file():
+            continue
+        try:
+            raw = json.loads(queue_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to parse pending project review queue %s: %s", queue_path, exc)
+            continue
+        if not isinstance(raw, list):
+            continue
+
+        keep: List[Any] = []
+        before = len(raw)
+        for entry in raw:
+            if not isinstance(entry, dict):
+                keep.append(entry)
+                continue
+            hint = str(entry.get("project_hint") or "").strip()
+            source_file = str(entry.get("source_file") or "").strip()
+            if hint == project_name or _is_path_for_deleted_project(source_file, project_name=project_name, canonical=canonical):
+                removed += 1
+                continue
+            keep.append(entry)
+        if len(keep) == before:
+            continue
+        if keep:
+            queue_path.write_text(json.dumps(keep, indent=2) + "\n", encoding="utf-8")
+        else:
+            queue_path.unlink(missing_ok=True)
+    return removed
+
+
+def _cleanup_staged_project_events(
+    *,
+    quaid_home: Path,
+    visible_home: Path,
+    project_name: str,
+    canonical: Optional[Path],
+) -> int:
+    """Remove queued/failed staging events for a deleted project."""
+    staging_dirs: List[Path] = [
+        visible_home / "projects" / "staging",
+        visible_home / "projects" / "staging" / "failed",
+    ]
+
+    instances_dir = quaid_home / "instances"
+    if instances_dir.is_dir():
+        for child in sorted(instances_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            staging_dirs.extend(
+                [
+                    child / "projects" / "staging",
+                    child / "projects" / "staging" / "failed",
+                ]
+            )
+
+    seen_dirs: set[str] = set()
+    removed = 0
+    for staging_dir in staging_dirs:
+        try:
+            key = str(staging_dir.resolve())
+        except Exception:
+            key = str(staging_dir)
+        if key in seen_dirs:
+            continue
+        seen_dirs.add(key)
+        if not staging_dir.is_dir():
+            continue
+        for event_file in sorted(staging_dir.glob("*.json")):
+            try:
+                event = json.loads(event_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(event, dict):
+                continue
+            project_hint = str(event.get("project_hint") or event.get("project") or "").strip()
+            if project_hint == project_name:
+                event_file.unlink(missing_ok=True)
+                removed += 1
+                continue
+            files_touched = event.get("files_touched") or []
+            if isinstance(files_touched, list):
+                should_remove = False
+                for raw_path in files_touched:
+                    if _is_path_for_deleted_project(str(raw_path or ""), project_name=project_name, canonical=canonical):
+                        should_remove = True
+                        break
+                if should_remove:
+                    event_file.unlink(missing_ok=True)
+                    removed += 1
+    return removed
 
 
 def _load_registry() -> Dict[str, Any]:
@@ -365,13 +532,19 @@ def delete_project(name: str) -> None:
         KeyError: If project not found.
     """
     quaid_home = _resolve_quaid_home()
+    visible_home = _visible_home_from_hidden(quaid_home)
     tracking_base = quaid_tracking_dir(quaid_home)
+    entry: Dict[str, Any]
+    canonical_path: Optional[Path] = None
     with _registry_lock():
         registry = _load_registry()
         if name not in registry["projects"]:
             raise KeyError(f"Project not found: {name}")
 
         entry = registry["projects"][name]
+        raw_canonical = str(entry.get("canonical_path") or "").strip()
+        if raw_canonical:
+            canonical_path = Path(raw_canonical)
 
         # Clean up shadow git tracking
         try:
@@ -387,11 +560,28 @@ def delete_project(name: str) -> None:
         except Exception as e:
             logger.warning("Failed to destroy shadow git for %s: %s", name, e)
 
-        # Clean up canonical project directory
-        canonical = Path(entry.get("canonical_path", ""))
-        if canonical.is_dir():
-            import shutil
-            shutil.rmtree(canonical)
+        # Clean up project directories (canonical + standard fallbacks).
+        allowed_roots = [
+            visible_home / "projects",
+            quaid_home / "projects",
+        ]
+        candidate_dirs: List[Path] = [visible_home / "projects" / name, quaid_home / "projects" / name]
+        if canonical_path is not None:
+            candidate_dirs.insert(0, canonical_path)
+
+        seen_dirs: set[str] = set()
+        for candidate in candidate_dirs:
+            try:
+                key = str(candidate.resolve())
+            except Exception:
+                key = str(candidate)
+            if key in seen_dirs:
+                continue
+            seen_dirs.add(key)
+            try:
+                _safe_remove_project_dir(candidate, allowed_roots)
+            except Exception as e:
+                logger.warning("Failed to remove project directory for %s (%s): %s", name, candidate, e)
 
         # Remove from registry
         del registry["projects"][name]
@@ -427,6 +617,29 @@ def delete_project(name: str) -> None:
                 rag.remove_chunks_for_path(key)
     except Exception as e:
         logger.warning("Failed to clean up DB entries for project %s: %s", name, e)
+
+    # Clean up stale pending review hints and queued project events.
+    try:
+        removed_hints = _cleanup_pending_project_review_entries(
+            quaid_home=quaid_home,
+            project_name=name,
+            canonical=canonical_path,
+        )
+        removed_events = _cleanup_staged_project_events(
+            quaid_home=quaid_home,
+            visible_home=visible_home,
+            project_name=name,
+            canonical=canonical_path,
+        )
+        if removed_hints or removed_events:
+            logger.info(
+                "Project delete cleanup for %s removed %d pending hints and %d staged events",
+                name,
+                removed_hints,
+                removed_events,
+            )
+    except Exception as e:
+        logger.warning("Failed post-delete queue cleanup for project %s: %s", name, e)
 
     logger.info("Deleted project: %s", name)
 

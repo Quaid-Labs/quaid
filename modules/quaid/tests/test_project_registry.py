@@ -175,6 +175,64 @@ class TestDeleteProject:
         # User's files untouched
         assert (src / "a.py").is_file()
 
+    def test_cleans_pending_project_review_entries(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        create_project("my-app")
+
+        queue_path = tmp_path / "instances" / "test-instance" / "logs" / "janitor" / "pending-project-review.json"
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "section": "App Notes",
+                        "project_hint": "my-app",
+                        "source_file": str(tmp_path / "projects" / "my-app" / "README.md"),
+                    },
+                    {
+                        "section": "Other Notes",
+                        "project_hint": "other-app",
+                        "source_file": str(tmp_path / "projects" / "other-app" / "README.md"),
+                    },
+                ]
+            )
+        )
+
+        delete_project("my-app")
+
+        kept = json.loads(queue_path.read_text(encoding="utf-8"))
+        assert len(kept) == 1
+        assert kept[0]["project_hint"] == "other-app"
+
+    def test_cleans_staged_project_events(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        create_project("my-app")
+
+        visible_staging = tmp_path.with_name(tmp_path.name.lstrip(".")) / "projects" / "staging"
+        failed_staging = visible_staging / "failed"
+        visible_staging.mkdir(parents=True, exist_ok=True)
+        failed_staging.mkdir(parents=True, exist_ok=True)
+
+        target_event = {
+            "project_hint": "my-app",
+            "files_touched": [str(tmp_path.with_name(tmp_path.name.lstrip(".")) / "projects" / "my-app" / "PROJECT.md")],
+            "summary": "target",
+        }
+        keep_event = {
+            "project_hint": "other-app",
+            "files_touched": [str(tmp_path.with_name(tmp_path.name.lstrip(".")) / "projects" / "other-app" / "PROJECT.md")],
+            "summary": "keep",
+        }
+        (visible_staging / "1-compact.json").write_text(json.dumps(target_event), encoding="utf-8")
+        (failed_staging / "2-compact.json").write_text(json.dumps(target_event), encoding="utf-8")
+        (visible_staging / "3-compact.json").write_text(json.dumps(keep_event), encoding="utf-8")
+
+        delete_project("my-app")
+
+        assert not (visible_staging / "1-compact.json").exists()
+        assert not (failed_staging / "2-compact.json").exists()
+        assert (visible_staging / "3-compact.json").exists()
+
 
 class TestListAndQuery:
     def test_list_projects(self, mock_adapter):
