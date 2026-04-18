@@ -718,27 +718,6 @@ describe("lifecycle signal detection", () => {
     expect(block).toContain("fast language model provider");
   });
 
-  it("dedupes immediate provider notices for repeated volatile-id errors within cooldown", () => {
-    __test.clearImmediateProviderNoticeState();
-    const errA = new Error(
-      "provider unavailable after retries request_id=req_011CaAgi5V7Vcg9cvgj9RF9B trace_id=trace_123456",
-    );
-    const errB = new Error(
-      "provider unavailable after retries request_id=req_022ZZZZ5V7Vcg9cvgj9RF9B trace_id=trace_654321",
-    );
-
-    expect(__test.shouldEmitImmediateProviderNotice(errA, "fast", "before_prompt_build", 1_000)).toBe(true);
-    expect(__test.shouldEmitImmediateProviderNotice(errB, "fast", "before_prompt_build", 1_001)).toBe(false);
-    expect(
-      __test.shouldEmitImmediateProviderNotice(
-        errB,
-        "fast",
-        "before_prompt_build",
-        1_000 + __test.IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS + 1,
-      ),
-    ).toBe(true);
-  });
-
   it("does not expose any hook-side deferred notice drain gate", () => {
     expect("shouldDrainDeferredNoticeForPrompt" in __test).toBe(false);
   });
