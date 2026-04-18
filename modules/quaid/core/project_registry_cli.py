@@ -9,6 +9,8 @@ Usage:
     python3 project_registry_cli.py delete <name>
     python3 project_registry_cli.py rename <old_name> <new_name>
     python3 project_registry_cli.py archive <name> [--yes]
+    python3 project_registry_cli.py status <name>
+    python3 project_registry_cli.py diff <name> [--stat|--full]
     python3 project_registry_cli.py snapshot [<name>]
     python3 project_registry_cli.py sync
 """
@@ -201,6 +203,32 @@ def cmd_archive(args):
         sys.exit(1)
 
 
+def cmd_status(args):
+    from core.project_docs import project_status, format_status
+    try:
+        status = project_status(args.name)
+        if args.json:
+            print(json.dumps(status, indent=2))
+        else:
+            print(format_status(status))
+    except (ValueError, KeyError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_diff(args):
+    from core.project_docs import project_diff, format_diff
+    try:
+        diff = project_diff(args.name, full=bool(getattr(args, "full", False)))
+        if args.json:
+            print(json.dumps(diff, indent=2))
+        else:
+            print(format_diff(diff))
+    except (ValueError, KeyError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_snapshot(args):
     if args.name:
         from core.project_registry import get_project
@@ -297,6 +325,16 @@ def main():
     archive_p.add_argument("name", help="Project name")
     archive_p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 
+    # status
+    status_p = subparsers.add_parser("status", help="Show project docs freshness/status")
+    status_p.add_argument("name", help="Project name")
+
+    # diff
+    diff_p = subparsers.add_parser("diff", help="Show pending project docs update diff")
+    diff_p.add_argument("name", help="Project name")
+    diff_p.add_argument("--stat", action="store_true", help="Show compact diff/stat output")
+    diff_p.add_argument("--full", action="store_true", help="Show full git diff")
+
     # snapshot
     snap_p = subparsers.add_parser("snapshot", help="Take shadow git snapshot(s)")
     snap_p.add_argument("name", nargs="?", help="Project name (all if omitted)")
@@ -314,6 +352,8 @@ def main():
         "delete": cmd_delete,
         "rename": cmd_rename,
         "archive": cmd_archive,
+        "status": cmd_status,
+        "diff": cmd_diff,
         "snapshot": cmd_snapshot,
     }
 

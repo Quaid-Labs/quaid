@@ -16,14 +16,16 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Project docs that can be auto-updated from code diffs
-_UPDATABLE_DOCS = {"TOOLS.md", "AGENTS.md"}
+# Root-level project docs that can be auto-updated from source diffs/logs.
+# PROJECT.log remains append-only and must never be edited by this path.
+_UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
 
 
 def update_project_docs(
     snapshots: List[Dict[str, Any]],
     extraction_result: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
+    force_project: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Update project docs based on shadow git diffs and extraction context.
 
@@ -52,7 +54,7 @@ def update_project_docs(
         "errors": 0,
     }
 
-    if not snapshots:
+    if not snapshots and not force_project:
         return metrics
 
     # Get project logs from extraction result if available
@@ -60,12 +62,22 @@ def update_project_docs(
     if extraction_result:
         project_logs = extraction_result.get("project_logs", {})
 
-    for snapshot in snapshots:
-        project_name = snapshot["project"]
+    snapshots_by_project = {
+        str(snapshot.get("project") or "").strip(): snapshot
+        for snapshot in snapshots
+        if str(snapshot.get("project") or "").strip()
+    }
+    project_names = list(snapshots_by_project.keys())
+    if force_project and force_project not in project_names:
+        project_names.append(force_project)
+
+    for project_name in project_names:
+        snapshot = snapshots_by_project.get(project_name, {})
         diff_text = snapshot.get("diff", "")
         changes = snapshot.get("changes", [])
+        project_log = project_logs.get(project_name, [])
 
-        if not diff_text and not changes:
+        if not diff_text and not changes and not project_log:
             continue
 
         metrics["projects_checked"] += 1
@@ -85,8 +97,6 @@ def update_project_docs(
             metrics["trivial_skipped"] += 1
             continue
 
-        # Find updatable docs for this project
-        project_log = project_logs.get(project_name, [])
         _update_project(
             project_name, diff_text, changes, project_log,
             classification, dry_run, metrics,
@@ -122,11 +132,18 @@ def _update_project(
     if not canonical.is_dir():
         return
 
-    # Find which docs exist for this project
+    # Find which docs exist for this project. The updater may edit the
+    # project-facing docs surface, but PROJECT.log is append-only and excluded.
     docs_to_update = []
-    for doc_name in _UPDATABLE_DOCS:
+    for doc_name in _UPDATABLE_ROOT_DOCS:
         doc_path = canonical / doc_name
         if doc_path.is_file():
+            docs_to_update.append(doc_path)
+    docs_dir = canonical / "docs"
+    if docs_dir.is_dir():
+        for doc_path in sorted(docs_dir.rglob("*.md")):
+            if doc_path.name == "PROJECT.log":
+                continue
             docs_to_update.append(doc_path)
 
     if not docs_to_update:

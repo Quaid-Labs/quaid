@@ -85,10 +85,6 @@ def test_rag_lifecycle_runs_and_returns_metrics(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "docs_registry", docs_registry_mod)
     monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _Registry)
 
-    project_updater_mod = ModuleType("project_updater")
-    project_updater_mod.process_all_events = lambda: {"processed": 2}
-    monkeypatch.setitem(sys.modules, "project_updater", project_updater_mod)
-
     (tmp_path / "docs" / "a.md").write_text("# a\n")
     (tmp_path / "projects" / "demo" / "b.md").write_text("# b\n")
 
@@ -97,7 +93,6 @@ def test_rag_lifecycle_runs_and_returns_metrics(monkeypatch, tmp_path):
     result = registry.run("rag", ctx)
 
     assert result.errors == []
-    assert result.metrics["project_events_processed"] == 2
     assert result.metrics["project_files_discovered"] == 2
     assert result.metrics["rag_files_indexed"] == 3  # docs + project dir + registry pass
     assert result.metrics["rag_chunks_created"] == 9

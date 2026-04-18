@@ -1552,25 +1552,6 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 result.logs.append("Skipping RAG reindex (dry-run)")
                 return result
 
-            if cfg.projects.enabled and not dry_run:
-                try:
-                    updater_mod = sys.modules.get("project_updater")
-                    if updater_mod is not None and hasattr(updater_mod, "process_all_events"):
-                        process_all_events = updater_mod.process_all_events
-                    else:
-                        from datastore.docsdb.project_updater import process_all_events
-
-                    result.logs.append("Processing queued project events...")
-                    event_result = process_all_events()
-                    processed = int(event_result.get("processed", 0))
-                    result.metrics["project_events_processed"] = processed
-                    if processed > 0:
-                        result.logs.append(f"  Processed {processed} event(s)")
-                except Exception as exc:
-                    result.errors.append(f"Project event processing failed: {exc}")
-            elif cfg.projects.enabled and dry_run:
-                result.logs.append("Skipping project event processing (dry-run)")
-
             if cfg.projects.enabled:
                 try:
                     registry_mod = sys.modules.get("docs_registry")

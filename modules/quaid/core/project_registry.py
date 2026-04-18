@@ -645,6 +645,26 @@ def delete_project(name: str) -> None:
                 e,
             )
 
+    # Project docs workers are supervisor-owned. Deleting a project must stop
+    # the worker and remove queued force-update state so deleted projects do
+    # not resurrect on the next supervisor tick.
+    try:
+        from core import project_docs
+
+        project_docs.stop_worker(name)
+        for path in (
+            project_docs.request_path(name),
+            project_docs.state_path(name),
+            project_docs.worker_heartbeat_path(name),
+            project_docs.worker_pid_path(name),
+        ):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception as e:
+        logger.warning("Failed to clean up project docs worker state for %s: %s", name, e)
+
     # Clean up shared docs DB: project definitions, registry rows, and RAG chunks.
     try:
         from lib.database import get_connection

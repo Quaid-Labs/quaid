@@ -325,6 +325,48 @@ class ShadowGit:
             return None
         return result.stdout if result.stdout.strip() else None
 
+    def pending_changes(self) -> List[FileChange]:
+        """Return uncommitted work-tree changes without mutating the shadow repo."""
+        if not self.initialized:
+            self.init()
+        if not self.work_tree.is_dir():
+            return []
+        status = self._git("status", "--porcelain", check=False)
+        if status.returncode != 0 or not status.stdout.strip():
+            return []
+        changes: List[FileChange] = []
+        for line in status.stdout.splitlines():
+            if not line.strip():
+                continue
+            code = line[:2].strip() or "?"
+            rest = line[3:].strip() if len(line) > 3 else ""
+            if not rest:
+                continue
+            if " -> " in rest:
+                old_path, new_path = rest.split(" -> ", 1)
+                changes.append(FileChange(status="R", path=new_path.strip(), old_path=old_path.strip()))
+            else:
+                changes.append(FileChange(status=code[0] if code else "?", path=rest))
+        return changes
+
+    def pending_diff(self, *, full: bool = False) -> Optional[str]:
+        """Return a non-mutating diff for current work-tree changes.
+
+        Untracked files do not have a git patch until staged, so they are
+        represented in the status list by pending_changes().
+        """
+        if not self.initialized:
+            self.init()
+        if not self.work_tree.is_dir():
+            return None
+        args = ["diff", "--find-renames"]
+        if not full:
+            args.append("--stat")
+        result = self._git(*args, check=False)
+        if result.returncode != 0:
+            return None
+        return result.stdout if result.stdout.strip() else None
+
     def get_tracked_files(self) -> List[str]:
         """List all currently tracked files."""
         if not self.initialized:

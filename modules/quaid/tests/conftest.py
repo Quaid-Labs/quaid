@@ -26,6 +26,7 @@ if not os.environ.get("QUAID_VISIBLE_HOME"):
     os.environ["QUAID_VISIBLE_HOME"] = str(_DEFAULT_VISIBLE_HOME)
 if not os.environ.get("QUAID_INSTANCE"):
     os.environ["QUAID_INSTANCE"] = _DEFAULT_INSTANCE
+os.environ.setdefault("QUAID_SUPERVISOR_DISABLE", "1")
 
 # Instance-aware config: QUAID_HOME/instances/<instance>/config.json
 _instance_cfg = _DEFAULT_TEST_HOME / "instances" / _DEFAULT_INSTANCE / "config.json"

@@ -243,3 +243,27 @@ Live VM canary:
 8. Docs update naturally, without benchmark-authored hints.
 9. `PROJECT.log` is unchanged by updater.
 10. Docs recall answers from updated project docs.
+
+## Implementation Log
+
+### 2026-04-19 Slice A: Supervisor-Owned Force Update Primitive
+
+Implemented direction:
+- Hidden project-docs operational state lives under `QUAID_HOME/data/project-docs/`.
+- `quaid docs update <project>` queues an async force-update request and ensures the project-docs supervisor is alive.
+- `quaid project status <project>` reports freshness from hidden state, pending source changes, pending `PROJECT.log` bytes, and worker/supervisor PIDs.
+- `quaid project diff <project> [--stat|--full]` reports pending shadow-git changes plus pending `PROJECT.log` entries since the cursor.
+- `quaid-supervisor` now owns project-docs workers; workers own their domain tick and run project updates under a per-project lock.
+- Project deletion stops/removes docs worker state and pending force requests.
+- Legacy staged project event processing was removed from extraction, janitor/RAG maintenance, the e2e pressure probe, and the project updater CLI.
+- `PROJECT.log` append-only extraction logging remains intact and is now consumed by the docs worker cursor rather than staged events.
+
+Validation notes:
+- Focused project/docs, registry, extraction, hook, and daemon tests pass locally.
+- Boundary check passes.
+- Test harness sets `QUAID_SUPERVISOR_DISABLE=1` so tests do not spawn supervisor workers against the dev registry.
+
+Open next slices:
+- Improve the worker apply planner so edits are more selective across `PROJECT.md`, `TOOLS.md`, `AGENTS.md`, and `docs/**`.
+- Add live VM acceptance: source change -> status stale -> diff shows source/log delta -> `docs update` queue -> worker apply -> docs recall surfaces updated fact.
+- Move existing instance daemon lifecycle under the supervisor after project-doc workers are validated.

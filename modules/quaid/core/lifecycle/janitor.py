@@ -1529,7 +1529,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print(f"  {err}")
                 metrics.add_error(err)
 
-            applied_changes["project_events_processed"] = lifecycle_result.metrics.get("project_events_processed", 0)
             applied_changes["project_files_discovered"] = lifecycle_result.metrics.get("project_files_discovered", 0)
             applied_changes["rag_files_indexed"] = lifecycle_result.metrics.get("rag_files_indexed", 0)
             applied_changes["rag_chunks_created"] = lifecycle_result.metrics.get("rag_chunks_created", 0)

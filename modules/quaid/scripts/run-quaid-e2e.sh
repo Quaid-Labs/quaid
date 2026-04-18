@@ -2621,29 +2621,23 @@ try:
 except Exception:
     project_defs = {}
 if isinstance(project_defs, dict) and project_defs:
-    staging_dir = os.path.join(ws, "projects", "staging")
-    os.makedirs(staging_dir, exist_ok=True)
-    evt_path = os.path.join(staging_dir, f"{int(time.time() * 1000)}-e2e-resilience-project.json")
-    evt_payload = {
-        "project_hint": "quaid",
-        "files_touched": ["projects/quaid/README.md", "modules/quaid/datastore/docsdb/project_updater.py"],
-        "summary": "Resilience matrix queued project updater event.",
-        "trigger": "compact",
-        "session_id": f"quaid-e2e-resilience-project-{uuid.uuid4().hex[:8]}",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    }
-    with open(evt_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(evt_payload, indent=2))
-
     updater_env = dict(os.environ)
     updater_py_path = updater_env.get("PYTHONPATH", "")
     updater_env["PYTHONPATH"] = "modules/quaid" + (f":{updater_py_path}" if updater_py_path else "")
     updater_env["QUAID_HOME"] = ws
     updater_env["OPENCLAW_WORKSPACE"] = ws
     updater_env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
-    updater_script = os.path.join(ws, "modules", "quaid", "datastore", "docsdb", "project_updater.py")
-    updater_probe = subprocess.Popen(
-        ["python3", updater_script, "process-all"],
+    project_name = "quaid" if "quaid" in project_defs else sorted(project_defs.keys())[0]
+    queue_probe = subprocess.Popen(
+        [
+            "python3",
+            "-c",
+            (
+                "import json;"
+                "from core.project_docs import request_update;"
+                f"print(json.dumps(request_update({project_name!r}, reason='e2e-resilience', requested_by='e2e')))"
+            ),
+        ],
         cwd=ws,
         env=updater_env,
         stdout=subprocess.PIPE,
@@ -2656,34 +2650,26 @@ if isinstance(project_defs, dict) and project_defs:
     ]:
         out = run_agent_for(sid, msg)
         if not out:
-            updater_probe.kill()
+            queue_probe.kill()
             raise SystemExit(f"[e2e] ERROR: empty output during project-updater pressure probe sid={sid}")
 
     try:
-        u_out, u_err = updater_probe.communicate(timeout=180)
+        u_out, u_err = queue_probe.communicate(timeout=60)
     except subprocess.TimeoutExpired:
-        updater_probe.kill()
-        raise SystemExit("[e2e] ERROR: project-updater pressure probe timed out")
-    if updater_probe.returncode != 0:
+        queue_probe.kill()
+        raise SystemExit("[e2e] ERROR: project docs request probe timed out")
+    if queue_probe.returncode != 0:
         raise SystemExit(
-            "[e2e] ERROR: project-updater pressure probe failed\n"
+            "[e2e] ERROR: project docs request probe failed\n"
             f"{(u_out or '')[-600:]}\n{(u_err or '')[-600:]}"
         )
     parsed = _parse_last_json_blob(u_out or "")
     if not isinstance(parsed, dict):
-        raise SystemExit("[e2e] ERROR: could not parse project-updater process-all result JSON")
-    if int(parsed.get("processed", 0) or 0) < 1:
-        raise SystemExit(
-            "[e2e] ERROR: project-updater pressure probe did not process queued event "
-            f"(result={parsed})"
-        )
-    if int(parsed.get("errors", 0) or 0) > 0:
-        raise SystemExit(
-            "[e2e] ERROR: project-updater pressure probe reported errors "
-            f"(result={parsed})"
-        )
+        raise SystemExit("[e2e] ERROR: could not parse project docs request result JSON")
+    if parsed.get("project") != project_name or not parsed.get("request_id"):
+        raise SystemExit(f"[e2e] ERROR: project docs request did not persist correctly (result={parsed})")
 else:
-    print("[e2e] WARN: skipping project-updater pressure probe (no projects.definitions configured).")
+    print("[e2e] WARN: skipping project docs request probe (no projects.definitions configured).")
 
 cleanup_env = dict(os.environ)
 cleanup_py_path = cleanup_env.get("PYTHONPATH", "")

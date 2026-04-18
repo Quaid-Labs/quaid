@@ -296,3 +296,41 @@ class TestCmdDelete:
             with pytest.raises(SystemExit) as exc_info:
                 cli.cmd_delete(_args(name="ghost"))
         assert exc_info.value.code == 1
+
+
+class TestCmdStatus:
+    def test_status_prints_project_docs_status(self, capsys):
+        status = {"project": "proj", "status": "fresh"}
+        with patch("core.project_docs.project_status", return_value=status), \
+             patch("core.project_docs.format_status", return_value="Project: proj\nStatus: fresh"):
+            cli.cmd_status(_args(name="proj"))
+        out = capsys.readouterr().out
+        assert "Status: fresh" in out
+
+    def test_status_json(self, capsys):
+        with patch("core.project_docs.project_status", return_value={"project": "proj", "status": "stale"}):
+            cli.cmd_status(_args(name="proj", json=True))
+        parsed = json.loads(capsys.readouterr().out)
+        assert parsed["status"] == "stale"
+
+    def test_status_not_found_exits(self, capsys):
+        with patch("core.project_docs.project_status", side_effect=KeyError("not found")):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_status(_args(name="ghost"))
+        assert exc_info.value.code == 1
+
+
+class TestCmdDiff:
+    def test_diff_prints_project_docs_diff(self, capsys):
+        diff = {"project": "proj", "change_count": 1, "changes": []}
+        with patch("core.project_docs.project_diff", return_value=diff) as m, \
+             patch("core.project_docs.format_diff", return_value="Source changes: 1"):
+            cli.cmd_diff(_args(name="proj", full=False))
+        m.assert_called_once_with("proj", full=False)
+        assert "Source changes: 1" in capsys.readouterr().out
+
+    def test_diff_full_flag(self, capsys):
+        with patch("core.project_docs.project_diff", return_value={"project": "proj"}) as m, \
+             patch("core.project_docs.format_diff", return_value="ok"):
+            cli.cmd_diff(_args(name="proj", full=True))
+        m.assert_called_once_with("proj", full=True)

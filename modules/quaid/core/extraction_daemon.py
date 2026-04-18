@@ -3387,23 +3387,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             unclassified_empty_payloads=int(flush_payload.get("unclassified_empty_payloads", 0) or 0),
         )
 
-        try:
-            from core.project_registry import snapshot_all_projects
-            snapshots = snapshot_all_projects()
-            for snap in snapshots:
-                logger.info("[%s] shadow snapshot %s: %d changes", label, snap["project"], len(snap["changes"]))
-        except Exception as e:
-            logger.warning("[%s] post-extraction shadow git error: %s", label, e)
-
-        if snapshots:
-            try:
-                from core.docs_updater_hook import update_project_docs
-                doc_metrics = update_project_docs(snapshots, extraction_result=result)
-                if doc_metrics.get("docs_updated", 0):
-                    logger.info("[%s] docs updated: %s", label, doc_metrics)
-            except Exception as e:
-                logger.warning("[%s] post-extraction docs update error: %s", label, e)
-
     except Exception as e:
         should_write_flush_error = (
             not rolling_mode
@@ -4182,6 +4165,12 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 
 def ensure_alive() -> int:
     """Ensure the daemon is running. Start it if not. Returns PID."""
+    if os.environ.get("QUAID_SUPERVISOR_DISABLE", "").strip() != "1":
+        try:
+            from core.project_docs import ensure_supervisor_alive
+            ensure_supervisor_alive()
+        except Exception as exc:
+            logger.warning("project docs supervisor ensure_alive failed: %s", exc)
     pid = read_pid()
     if pid is not None:
         return pid

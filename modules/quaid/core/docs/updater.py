@@ -18,8 +18,14 @@ def append_project_logs(project_logs: dict[str, list[str]], trigger: str = "Comp
     return _append_project_logs(project_logs, trigger=trigger, dry_run=dry_run)
 
 
+def update_registered_docs(project: str | None = None, dry_run: bool = False) -> int:
+    """Update/reindex registered docs, optionally scoped to one project."""
+    return _updater.cmd_update_stale(dry_run=dry_run, project=project)
+
+
 __all__ = [
     "check_staleness",
     "cmd_update_from_transcript",
     "append_project_logs",
+    "update_registered_docs",
 ]
