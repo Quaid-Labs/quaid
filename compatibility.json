@@ -2,7 +2,7 @@
   "kill_switch": false,
   "kill_message": null,
   "schema_version": 1,
-  "updated_at": "2026-04-15",
+  "updated_at": "2026-04-18",
   "latest_quaid": "0.3.0-alpha",
   "update_message": null,
   "matrix": [
@@ -64,6 +64,39 @@
       "fix": "",
       "validated_sha": "dec9e97eba952a74977501bf32992a353e7c76e8",
       "validated_at": "2026-04-08T15:08:51.568Z"
+    },
+    {
+      "host": "openclaw",
+      "host_range": "2026.4.15",
+      "quaid_range": "0.3.0-alpha",
+      "status": "compatible",
+      "notes": "Run 110 clear",
+      "message": "",
+      "fix": "",
+      "validated_sha": "95ebb4941773de24f01d5a8b741cab20a38c69b1",
+      "validated_at": "2026-04-18T10:39:36.302Z"
+    },
+    {
+      "host": "claude-code",
+      "host_range": "2.1.114",
+      "quaid_range": "0.3.0-alpha",
+      "status": "compatible",
+      "notes": "Run 110 clear",
+      "message": "",
+      "fix": "",
+      "validated_sha": "95ebb4941773de24f01d5a8b741cab20a38c69b1",
+      "validated_at": "2026-04-18T10:39:43.264Z"
+    },
+    {
+      "host": "codex",
+      "host_range": "0.120.0",
+      "quaid_range": "0.3.0-alpha",
+      "status": "compatible",
+      "notes": "Run 110 clear",
+      "message": "",
+      "fix": "",
+      "validated_sha": "95ebb4941773de24f01d5a8b741cab20a38c69b1",
+      "validated_at": "2026-04-18T10:39:43.459Z"
     }
   ]
 }
