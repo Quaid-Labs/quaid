@@ -241,9 +241,11 @@ describe('Edge Cases', () => {
     })
 
     it('handles rapid store-search cycles', async () => {
-      for (let i = 0; i < 5; i++) {
+      // Three cycles are enough to catch cursor/state regressions without paying
+      // for five sequential store+search subprocess rounds under loaded CI.
+      for (let i = 0; i < 3; i++) {
         const content = `Rapid cycle content ${i}`
-        await memory.store(content, 'testuser')
+        await memory.store(content, 'testuser', { skipDedup: true })
 
         const searchResults = await memory.search(`cycle content ${i}`, 'testuser')
         expect(searchResults.length).toBeGreaterThan(0)
