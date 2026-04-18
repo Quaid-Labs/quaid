@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quaid Live Test Dashboard</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #111a2e;
+      --panel-2: #16233f;
+      --line: #26395f;
+      --text: #e8eefc;
+      --muted: #98a9cb;
+      --good: #1f9d55;
+      --bad: #d64545;
+      --warn: #c08a13;
+      --run: #2d8cff;
+      --skip: #6d7ea2;
+      --empty: #33496f;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(1000px 500px at 20% -10%, #1b2c4f 0%, transparent 60%),
+        radial-gradient(800px 400px at 100% 0%, #223f67 0%, transparent 60%),
+        var(--bg);
+      color: var(--text);
+      font: 14px/1.5 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      min-height: 100vh;
+      padding: 28px;
+    }
+
+    .wrap {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+        var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+    }
+
+    .header {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, rgba(45, 140, 255, 0.12), rgba(31, 157, 85, 0.08));
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0.2px;
+    }
+
+    .meta {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 10px;
+      background: rgba(0, 0, 0, 0.12);
+    }
+
+    .table-wrap {
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+    }
+
+    th:last-child,
+    td:last-child {
+      border-right: none;
+    }
+
+    th {
+      background: var(--panel-2);
+      text-align: left;
+      font-size: 12px;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: #c9d8f7;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    .milestone-col {
+      min-width: 170px;
+      font-weight: 600;
+      color: #d7e4ff;
+    }
+
+    .status {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.35px;
+      margin-right: 8px;
+      margin-bottom: 4px;
+      border: 1px solid transparent;
+    }
+
+    .status-pass { background: rgba(31, 157, 85, 0.18); color: #8df0b9; border-color: rgba(31, 157, 85, 0.5); }
+    .status-fail { background: rgba(214, 69, 69, 0.2); color: #ffb0b0; border-color: rgba(214, 69, 69, 0.55); }
+    .status-blocked { background: rgba(192, 138, 19, 0.22); color: #ffd17e; border-color: rgba(192, 138, 19, 0.6); }
+    .status-running { background: rgba(45, 140, 255, 0.2); color: #b9dcff; border-color: rgba(45, 140, 255, 0.58); }
+    .status-skip { background: rgba(109, 126, 162, 0.25); color: #d5deef; border-color: rgba(109, 126, 162, 0.6); }
+    .status-empty { background: rgba(51, 73, 111, 0.23); color: #b8c9e6; border-color: rgba(51, 73, 111, 0.62); }
+
+    .cell-detail {
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+    }
+
+    .notes {
+      padding: 18px 20px 20px;
+    }
+
+    .notes h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      letter-spacing: 0.2px;
+    }
+
+    .notes pre {
+      margin: 0;
+      color: #d8e5ff;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.55 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+      min-height: 90px;
+    }
+
+    .error {
+      color: #ffb0b0;
+      background: rgba(214, 69, 69, 0.16);
+      border: 1px solid rgba(214, 69, 69, 0.45);
+      border-radius: 10px;
+      padding: 12px;
+      margin: 16px 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="panel">
+      <div class="header">
+        <h1 id="run-title">Quaid Live Test Run</h1>
+        <div class="meta">
+          <span class="pill" id="summary-pill">No data yet</span>
+          <span class="pill" id="refresh-pill">Waiting for current_run.log</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="run-table">
+          <thead id="table-head"></thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div id="table-error" class="error" style="display:none;"></div>
+    </section>
+
+    <section class="panel notes">
+      <h2>Run Notes</h2>
+      <pre id="notes-body">No notes yet.</pre>
+    </section>
+  </div>
+
+  <script>
+    const LOG_FILE = "current_run.log";
+    const REFRESH_MS = 2500;
+    let lastFingerprint = "";
+
+    function parseCsvLine(line) {
+      const out = [];
+      let cur = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i += 1) {
+        const ch = line[i];
+        if (ch === "\"") {
+          const next = line[i + 1];
+          if (inQuotes && next === "\"") {
+            cur += "\"";
+            i += 1;
+            continue;
+          }
+          inQuotes = !inQuotes;
+          continue;
+        }
+        if (ch === "," && !inQuotes) {
+          out.push(cur);
+          cur = "";
+          continue;
+        }
+        cur += ch;
+      }
+      out.push(cur);
+      return out;
+    }
+
+    function classifyCell(text) {
+      const value = String(text || "").trim();
+      const low = value.toLowerCase();
+      if (!value) return { klass: "status-empty", label: "EMPTY", detail: "" };
+      if (low.includes("pass")) return { klass: "status-pass", label: "PASS", detail: value };
+      if (low.includes("blocked")) return { klass: "status-blocked", label: "BLOCKED", detail: value };
+      if (low.includes("fail") || low.includes("error") || low.includes("pwn")) {
+        return { klass: "status-fail", label: "FAIL", detail: value };
+      }
+      if (low.includes("running") || low.includes("in progress") || low.includes("active")) {
+        return { klass: "status-running", label: "RUNNING", detail: value };
+      }
+      if (low.includes("skip")) return { klass: "status-skip", label: "SKIP", detail: value };
+      return { klass: "status-empty", label: "NOTE", detail: value };
+    }
+
+    function milestoneSortKey(label, index) {
+      const text = String(label || "").trim();
+      const m = text.match(/^m(\d+)\b/i);
+      if (m) return [0, Number(m[1]), index];
+      if (/^xp\b/i.test(text)) return [1, 0, index];
+      return [2, index, index];
+    }
+
+    function splitBodyAndNotes(lines) {
+      const body = [];
+      const notes = [];
+      let inNotes = false;
+      for (const raw of lines) {
+        const t = raw.trim();
+        if (!inNotes && /^(---+|notes:|\[notes\]|##\s*notes)$/i.test(t)) {
+          inNotes = true;
+          continue;
+        }
+        if (inNotes) notes.push(raw);
+        else body.push(raw);
+      }
+      return { body, notes };
+    }
+
+    function parseWideCsv(bodyLines) {
+      const content = bodyLines.filter((line) => String(line || "").trim() && !String(line || "").trim().startsWith("#"));
+      if (!content.length) {
+        return {
+          milestoneLabel: "Milestone",
+          columns: [],
+          milestones: [],
+          cells: new Map(),
+        };
+      }
+      const header = parseCsvLine(content[0]).map((c) => String(c || "").trim());
+      if (header.length < 2) {
+        return {
+          milestoneLabel: "Milestone",
+          columns: [],
+          milestones: [],
+          cells: new Map(),
+        };
+      }
+
+      const milestoneLabel = header[0] || "Milestone";
+      const columns = header.slice(1).filter(Boolean);
+      const milestoneOrder = [];
+      const rowByMilestone = new Map();
+
+      for (const line of content.slice(1)) {
+        const row = parseCsvLine(line);
+        const milestone = String(row[0] || "").trim();
+        if (!milestone) continue;
+        if (!rowByMilestone.has(milestone)) milestoneOrder.push(milestone);
+        rowByMilestone.set(milestone, row);
+      }
+
+      const milestones = milestoneOrder
+        .map((name, idx) => ({ name, idx }))
+        .sort((a, b) => {
+          const ka = milestoneSortKey(a.name, a.idx);
+          const kb = milestoneSortKey(b.name, b.idx);
+          for (let i = 0; i < ka.length; i += 1) {
+            if (ka[i] < kb[i]) return -1;
+            if (ka[i] > kb[i]) return 1;
+          }
+          return 0;
+        })
+        .map((x) => x.name);
+
+      const cells = new Map();
+      for (const milestone of milestones) {
+        const row = rowByMilestone.get(milestone) || [];
+        columns.forEach((col, i) => {
+          const value = String(row[i + 1] || "").trim();
+          cells.set(`${milestone}|||${col}`, value);
+        });
+      }
+
+      return { milestoneLabel, columns, milestones, cells };
+    }
+
+    function parseTallCsv(bodyLines) {
+      const content = bodyLines.filter((line) => String(line || "").trim() && !String(line || "").trim().startsWith("#"));
+      const columns = [];
+      const milestones = [];
+      const cells = new Map();
+      const seenCols = new Set();
+      const seenMilestones = new Set();
+
+      for (const line of content.slice(1)) {
+        const row = parseCsvLine(line);
+        if (row.length < 3) continue;
+        const platform = String(row[0] || "").trim();
+        const milestone = String(row[1] || "").trim();
+        const status = String(row[2] || "").trim();
+        const detail = String(row.slice(3).join(",") || "").trim();
+        if (!platform || !milestone) continue;
+        if (!seenCols.has(platform)) {
+          seenCols.add(platform);
+          columns.push(platform);
+        }
+        if (!seenMilestones.has(milestone)) {
+          seenMilestones.add(milestone);
+          milestones.push(milestone);
+        }
+        const text = [status, detail].filter(Boolean).join(" - ").trim();
+        cells.set(`${milestone}|||${platform}`, text);
+      }
+
+      const sortedMilestones = milestones
+        .map((name, idx) => ({ name, idx }))
+        .sort((a, b) => {
+          const ka = milestoneSortKey(a.name, a.idx);
+          const kb = milestoneSortKey(b.name, b.idx);
+          for (let i = 0; i < ka.length; i += 1) {
+            if (ka[i] < kb[i]) return -1;
+            if (ka[i] > kb[i]) return 1;
+          }
+          return 0;
+        })
+        .map((x) => x.name);
+
+      return {
+        milestoneLabel: "Milestone",
+        columns,
+        milestones: sortedMilestones,
+        cells,
+      };
+    }
+
+    function parseLog(rawText) {
+      const lines = String(rawText || "").replace(/\r\n/g, "\n").split("\n");
+      let i = 0;
+      while (i < lines.length && !lines[i].trim()) i += 1;
+      const title = i < lines.length ? lines[i].trim() : "Quaid Live Test Run";
+      const { body, notes } = splitBodyAndNotes(lines.slice(i + 1));
+
+      const dataLines = body.filter((line) => String(line || "").trim() && !String(line || "").trim().startsWith("#"));
+      let parsed = { milestoneLabel: "Milestone", columns: [], milestones: [], cells: new Map() };
+      if (dataLines.length > 0) {
+        const header = parseCsvLine(dataLines[0]).map((c) => String(c || "").trim().toLowerCase());
+        if (header[0] === "platform" && header[1] === "milestone") {
+          parsed = parseTallCsv(body);
+        } else {
+          parsed = parseWideCsv(body);
+        }
+      }
+
+      return {
+        title,
+        ...parsed,
+        notes: notes.join("\n").trim(),
+      };
+    }
+
+    function renderTable(state) {
+      const head = document.getElementById("table-head");
+      const body = document.getElementById("table-body");
+      head.innerHTML = "";
+      body.innerHTML = "";
+
+      const trh = document.createElement("tr");
+      const first = document.createElement("th");
+      first.textContent = state.milestoneLabel || "Milestone";
+      first.className = "milestone-col";
+      trh.appendChild(first);
+      state.columns.forEach((col) => {
+        const th = document.createElement("th");
+        th.textContent = col;
+        trh.appendChild(th);
+      });
+      head.appendChild(trh);
+
+      state.milestones.forEach((milestone) => {
+        const tr = document.createElement("tr");
+        const mt = document.createElement("td");
+        mt.textContent = milestone;
+        mt.className = "milestone-col";
+        tr.appendChild(mt);
+
+        state.columns.forEach((col) => {
+          const cellValue = state.cells.get(`${milestone}|||${col}`) || "";
+          const td = document.createElement("td");
+          const info = classifyCell(cellValue);
+          const badge = document.createElement("span");
+          badge.className = `status ${info.klass}`;
+          badge.textContent = info.label;
+          td.appendChild(badge);
+          if (info.detail) {
+            const detail = document.createElement("div");
+            detail.className = "cell-detail";
+            detail.textContent = info.detail;
+            td.appendChild(detail);
+          }
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+    }
+
+    function setError(message) {
+      const box = document.getElementById("table-error");
+      box.style.display = "block";
+      box.textContent = message;
+    }
+
+    function clearError() {
+      const box = document.getElementById("table-error");
+      box.style.display = "none";
+      box.textContent = "";
+    }
+
+    function render(state) {
+      document.getElementById("run-title").textContent = state.title || "Quaid Live Test Run";
+      document.getElementById("summary-pill").textContent =
+        `Columns: ${state.columns.length} | Milestones: ${state.milestones.length}`;
+      document.getElementById("refresh-pill").textContent =
+        `Last refresh: ${new Date().toLocaleTimeString()}`;
+      document.getElementById("notes-body").textContent =
+        state.notes || "No notes yet.";
+      renderTable(state);
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch(`${LOG_FILE}?t=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`Could not read ${LOG_FILE} (${res.status})`);
+        }
+        const text = await res.text();
+        const fingerprint = `${text.length}:${text.slice(0, 120)}:${text.slice(-120)}`;
+        if (fingerprint === lastFingerprint) {
+          document.getElementById("refresh-pill").textContent =
+            `Last refresh: ${new Date().toLocaleTimeString()} (no changes)`;
+          clearError();
+          return;
+        }
+        const state = parseLog(text);
+        render(state);
+        clearError();
+        lastFingerprint = fingerprint;
+      } catch (err) {
+        setError(String(err && err.message ? err.message : err));
+      }
+    }
+
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  </script>
+</body>
+</html>

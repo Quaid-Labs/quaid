@@ -188,6 +188,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-preflight.sh` | **Run before every run.** Verifies remote ≠ local, checks SSH, wipes the remote, starts platform services. Hard-aborts if the remote host matches the local machine. |
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
+| `livetest-dashboard.sh` | Serve a local live-test dashboard at `dashboard.html`, reading `current_run.log` (title + CSV matrix + notes). |
 | `tmux-msg.sh` | Direct pane message delivery. Use for urgent interrupts, self-tests, and one-off nudges. |
 | `tmux-mailbox.sh` | Queue-backed mailbox for routine STATUS/ISSUE traffic. The first unread item is delivered inline when a queue goes from empty to non-empty; the coordinator then uses `reply` or `done` to acknowledge the current item and pull the next one. Mailbox data lives in `tests/livetest/scripts/.tmux-mailbox/` and is gitignored. |
 | `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. The active coordinator starts and owns one per tester at run start. Do not route these through window `5` / `claude-looper`. |
@@ -195,6 +196,56 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 
 All scripts that touch the remote accept `--dry-run` to print SSH commands without
 executing them, and `--config <path>` to override the default config location.
+
+---
+
+## Live Dashboard
+
+Use the lightweight dashboard to monitor run progress from `current_run.log`.
+
+Start it:
+
+```bash
+cd ~/quaidcode/dev/modules/quaid
+tests/livetest/scripts/livetest-dashboard.sh
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765/dashboard.html
+```
+
+Dashboard data file:
+- `tests/livetest/current_run.log` (gitignored by the repo-wide `*.log` rule)
+
+Expected log format:
+- First non-empty line: run title (for example `Run 110 - Frozen Validation`)
+- Then a CSV matrix:
+  - First column = milestone label
+  - Remaining columns = platform columns (dynamic N columns from CSV header)
+- Optional notes section starts at a line matching one of:
+  - `---`
+  - `Notes:`
+  - `[notes]`
+  - `## Notes`
+
+Example:
+
+```text
+Run 110 - Frozen Validation
+milestone,OC,CC,CDX
+M0,PASS,PASS,PASS
+M1,PASS,IN_PROGRESS,RUNNING
+XP,,,
+---
+Notes:
+- M10 blocked on docs update timeout in CC
+- Waiting for W6 review on fix commit abc123
+```
+
+An example seed file is provided at:
+- `tests/livetest/current_run.log.example`
 
 ---
 
