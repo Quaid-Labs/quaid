@@ -24,8 +24,8 @@ export default defineConfig({
       MEMORY_DB_PATH: '/tmp/test-memory.db'
     },
     // Python-backed memory tests spawn subprocesses; loaded CI runners can
-    // legitimately exceed 10s per test even with mock embeddings enabled.
-    testTimeout: 30000,
-    hookTimeout: 30000
+    // exceed 30s per test or setup hook while live-test VMs are active.
+    testTimeout: 60000,
+    hookTimeout: 60000
   }
 })
