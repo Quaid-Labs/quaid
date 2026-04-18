@@ -28,17 +28,17 @@ After install, start here:
 
 ## Benchmarks
 
-Quaid's benchmark program is **AgentLife**, maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
+**Headline result: Quaid beats Anthropic agents answering from full context on long-form AgentLife lanes while using about one-fifth of the evaluation tokens.**
 
-**Headline result: on the long-form AgentLife lanes, Quaid matches or beats the Full Context baseline while using about one-fifth of the evaluation tokens.**
+When developing Quaid we found that current public benchmarks were simple Q&A and did not appropriately cover a true agentic lifecycle, so were insufficient to measure this type of project, this is why we built AgentLife. The AgentLife benchmark is maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
 
-Context-window baselines like Full Context are included here as short-horizon upper bounds, not as the target operating model. The question is not "can memory beat raw transcript in every short horizon case," but whether a persistent system can stay competitive while surviving resets, controlling cost growth, and preserving continuity across sessions.
+One of the primary goal posts we measure Quaid against is Full Context (Sonnet). This gives us the measure of how well an agent does answering a question when the entire chat history is inside the context window. It should be noted that if a new session is made, this score drops to 0% whereas Quaid will retain its accuracy.
 
 Terminology:
 - `AgentLife-S`: clean core AgentLife lane
 - `AgentLife-L`: long/noisy lane with filler sessions
 - `AgentLife-L OBD`: `AgentLife-L` compressed into one operational day, simulates a power user
-- `Full Context`: full-context baseline without a memory system
+- `Full Context (Sonnet)`: full-context baseline without a memory system
 - `Tokens`: minimum eval tokens to answer all 283 benchmark questions
 
 Headline launch summary:
