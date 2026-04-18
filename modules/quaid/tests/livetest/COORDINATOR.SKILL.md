@@ -53,7 +53,7 @@ while the base VM is unlocked.
 Before starting a run, verify platform versions are current:
 ```bash
 ssh admin@$VM_IP 'source ~/.zprofile
-echo "Installed: OC=$(openclaw --version) CC=$(claude --version | head -1) CDX=$(codex --version | head -1)"
+echo "Installed: OC=$(command -v openclaw) CC=$(claude --version | head -1) CDX=$(codex --version | head -1)"
 echo "Latest: OC=$(npm view openclaw version) CC=$(npm view @anthropic-ai/claude-code version) CDX=$(npm view @openai/codex version)"'
 ```
 If outdated: update the base snapshot (not the run VM). Versions must be pinned in the snapshot.
@@ -149,37 +149,66 @@ not a condition to work around with manual signals.
 
 ## Post-first-M0: Global Livetest Config
 
-After the first M0 clears, inject test-specific config overrides:
+After the first M0 clears, inject test-specific config overrides — **GLOBAL ONLY,
+no per-platform or per-instance writes. MERGE — never overwrite — the global
+config file**:
+
+The installer wrote `shared/config/global/config.json` during M0 with the
+exhaustive defaults (models, retrieval, decay, janitor, capture, etc.).
+Overwriting that file with a `>` redirect WIPES those defaults — leaving the
+runtime resolver unable to find `models.deepReasoning` etc., and the next
+inject hook fails with `RuntimeError: No model configured for tier deep`.
+
+Use a deep-merge that keeps the installer defaults and only adjusts the
+livetest deltas:
+
 ```bash
-ssh admin@$VM_IP 'mkdir -p ~/.quaid/shared/config/global && \
-  echo "{\"livetest\":{\"enableExtractionBufferLog\":true},\"capture\":{\"chunk_tokens\":1500,\"inactivityTimeoutMinutes\":1}}" \
-  > ~/.quaid/shared/config/global/config.json'
+ssh admin@$VM_IP 'python3 << "PYEOF"
+import json, os
+p = os.path.expanduser("~/.quaid/shared/config/global/config.json")
+existing = json.load(open(p)) if os.path.exists(p) else {}
+overrides = {
+    "livetest": {"enableExtractionBufferLog": True},
+    "capture": {"chunk_tokens": 500, "inactivityTimeoutMinutes": 1}
+}
+def merge(b, o):
+    r = json.loads(json.dumps(b))
+    for k, v in o.items():
+        r[k] = merge(r.get(k, {}), v) if isinstance(v, dict) and isinstance(r.get(k), dict) else v
+    return r
+json.dump(merge(existing, overrides), open(p, "w"), indent=2)
+print("merged global config:", p)
+PYEOF
+'
 ```
-This sets: extraction buffer logging (for sanitizer audits), chunk_tokens=1500
+
+This sets: extraction buffer logging (for sanitizer audits), chunk_tokens=500
 (the livetest standard; triggers rolling extraction in normal test sessions;
 production default is 8000), and inactivityTimeoutMinutes=1 (so idle extraction
 fires within ~1 min, enabling M4 and other idle-dependent milestones without a
 long wait; production default is 60). Do this once per run. Restart daemons after.
 
-**Also: if any instance config has its own `capture.chunk_tokens` override,
-overwrite it to 1500 — instance config takes precedence over global. The installer
-writes 8000 as the default; always overwrite after M0.**
-```bash
-for inst in openclaw-main openclaw-main codex-main claude-code-main; do
-  ssh admin@$VM_IP "python3 -c '
-import json
-p = \"/Users/admin/.quaid/instances/$inst/config.json\"
-try:
-    d = json.load(open(p))
-    d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
-    d.setdefault(\"capture\", {})[\"inactivityTimeoutMinutes\"] = 1
-    json.dump(d, open(p, \"w\"), indent=2)
-    print(\"updated:\", p)
-except: pass
-'"
-done
-```
-Restart all daemons after writing.
+**Do NOT loop these writes per-platform or per-instance.** Since a0989f00e (thin
+platform configs) + 02fcd81b1 (lean instance bootstrap) + d9b964573 (JS-side
+layered resolution) landed, the resolver chain `instance > platform > global`
+correctly inherits unset keys from the global layer. A single write to
+`shared/config/global/config.json` propagates to OC, CC, and CDX automatically.
+
+If chunk_tokens or inactivityTimeoutMinutes don't appear to take effect during
+M3 (rolling) or M4 (timeout) milestones — instances behaving as if production
+defaults (8000 / 60) are still in force — that's the layered-resolver
+regression. The run is unfrozen pending fix:
+
+1. **Per-instance config overwriting global.** Inspect
+   `~/.quaid/instances/<name>/config.json` — should be lean
+   (`{instance.id, adapter.type, ...}`); if it inlines `capture` defaults,
+   route to W1 to keep the bootstrap write thin.
+2. **Per-platform config overwriting global.** Inspect
+   `~/.quaid/shared/config/<platform>/config.json` — should be thin (only
+   platform-specific overrides). If bloated, route to W1 — the installer
+   should write thin platform overrides only.
+
+Fix the regression, deploy, then boot a fresh frozen run.
 
 **Important for testers interpreting rolling thresholds:** the rolling buffer
 counts POST-SANITIZATION transcript content (raw user prompts + agent responses
@@ -768,22 +797,19 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
    ssh REMOTE_HOST 'find ~/quaid -maxdepth 4 | sort'
    Expected directories/files (at minimum):
    - ~/quaid/projects/
-   - ~/quaid/instances/INSTANCE/
-   - ~/quaid/instances/INSTANCE/journal/
-   - ~/quaid/instances/INSTANCE/SOUL.md
-   - ~/quaid/instances/INSTANCE/USER.md
-   - ~/quaid/instances/INSTANCE/ENVIRONMENT.md
+   - ~/quaid/dev/
+   - ~/quaid/projects/quaid/
 
 4. Verify instance config landed in the right place:
-   ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/config.json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"models:\", d.get(\"models\",{})); print(\"capture:\", d.get(\"capture\",{}))"'
-   Expected: models.fastReasoning and capture section present.
+   ssh REMOTE_HOST 'cat ~/.quaid/instances/INSTANCE/config.json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"instance.id:\", d.get(\"instance\",{}).get(\"id\")); print(\"adapter.type:\", d.get(\"adapter\",{}).get(\"type\")); print(\"models:\", d.get(\"models\",{}))"'
+   Expected: `instance.id` and `adapter.type` present. `models` may be present by adapter, but platform/global defaults must remain layered (no inlined capture/retrieval/system defaults).
 
 5. Verify shared platform config exists:
    ssh REMOTE_HOST 'ls -la ~/.quaid/shared/config/PLATFORM/ 2>&1'
    Expected: config.json exists.
 
 6. Platform-specific checks:
-   - OC: verify ~/.openclaw/extensions/quaid/ is a symlink or copy pointing to ~/.quaid/modules/quaid/
+   - OC: verify ~/.openclaw/extensions/quaid/ is a real directory copy containing the Quaid plugin files (not a symlink)
    - CC: verify ~/.claude/settings.json has Quaid hooks registered
    - CDX: verify ~/.codex/hooks.json has Quaid hooks registered
 
@@ -815,23 +841,15 @@ with open(p) as f: d = json.load(f)
 models = d.get('models', {})
 print('$INSTANCE', 'fast=', models.get('fastReasoning'), 'deep=', models.get('deepReasoning'))
 assert models.get('fastReasoning') in ('gpt-5.4-mini', 'claude-haiku-4-5')
-assert models.get('deepReasoning') in ('gpt-5.4', 'claude-sonnet-4-5')
+assert models.get('deepReasoning') in ('gpt-5.4', 'claude-sonnet-4-6')
 \""
 done
 ```
 
-**Set live-test chunk_tokens** (lowers extraction threshold for short test turns):
-```bash
-for INSTANCE in OC_INSTANCE CC_INSTANCE CDX_INSTANCE; do
-  ssh REMOTE_HOST "python3 -c \"
-import json; p = 'WORKSPACE/instances/$INSTANCE/config.json'
-with open(p) as f: d = json.load(f)
-d.setdefault('capture', {})['chunk_tokens'] = 1500
-with open(p, 'w') as f: json.dump(d, f, indent=2)
-print('chunk_tokens=1500 for $INSTANCE')
-\""
-done
-```
+**Set live-test `chunk_tokens` and `inactivityTimeoutMinutes` GLOBAL ONLY** —
+see "Post-first-M0: Global Livetest Config" above. Do NOT loop per instance.
+Layered resolver (instance > platform > global) propagates the global write to
+all instances post-a0989f00e + 02fcd81b1.
 
 ---
 
@@ -1005,7 +1023,7 @@ logs or extraction output. Flag any of the following:
    Examples: "You are performing offline memory extraction", "Extract personal
    facts from the following transcript".
 5. **Configuration dumps** — raw JSON config objects, model names with provider
-   prefixes (e.g. "anthropic/claude-sonnet-4-5"), gateway URLs, port numbers.
+   prefixes (e.g. "anthropic/claude-sonnet-4-6"), gateway URLs, port numbers.
 6. **Other agent/system metadata** — coordinator messages, tmux pane addresses,
    tester instructions, run numbers, or any content that reveals the test harness.
 

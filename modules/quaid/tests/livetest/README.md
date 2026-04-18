@@ -116,7 +116,7 @@ The remote host needs:
    | `remote.workspace` | Quaid workspace root on the remote. Use an absolute path, not `~` shorthand. |
    | `owner_name` | Your name — written into the Quaid identity files at install time |
    | `tester.cli` | Command used to start tester agents (default `codex --yolo`) |
-   | `tester.model` | Model for tester agents (default `gpt-5.1-codex-mini`) |
+| `tester.model` | Model for tester agents (default `gpt-5.4-mini`) |
    | `tester.effort` | Reasoning effort for tester agents (default `medium`) |
    | `platforms.cc.auth_token_file` | Path to a file containing your Anthropic API token (plain text, no newline). Required for the CC daemon's LLM calls. |
    | `tmux.layout` | Must be `split-panes` for the canonical live-test topology |
@@ -250,9 +250,9 @@ The status JSON is the first place to check for drops (`state`, `stop_reason`,
 3. The run loop:
    - **M0** — Wipes the remote, tells each platform to self-install Quaid from
      the main-branch AI install guide, verifies install quality.
-   - **M1–M13** — Testers run the milestone suite on all three platforms in
+   - **M1–M16** — Testers run the milestone suite on all three platforms in
      parallel (after M0 passes).
-   - **XP** — Cross-platform project linking test (after all platforms reach M13).
+   - **XP** — Cross-platform project linking test (after all platforms reach M10).
    - **Commit check** — If any commits were made during the run, the loop repeats.
      The run is only complete when a full suite passes with zero new commits.
 
@@ -280,7 +280,10 @@ Full milestone definitions are in `tests/LIVE-TEST-GUIDE.md`.
 | M10 | Docs registration and RAG search |
 | M11 | Doc update pipeline |
 | M12 | Cross-session recall stability |
-| M13 | Full-suite smoke (store → compact → recall → graph) |
+| M13 | Distillation and identity-file quality checks |
+| M14 | Docs-first guidance and retrieval behavior |
+| M15 | Failure-signal quality (provider/router warning hygiene) |
+| M16 | System-context refresh on lifecycle events |
 | XP | Cross-platform project linking and shared doc recall |
 
 ---

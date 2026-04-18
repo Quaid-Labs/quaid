@@ -43,7 +43,7 @@ Then boot and verify:
 tart run --no-graphics quaid-livetest-base &
 # wait ~30s
 VM_IP=$(tart ip quaid-livetest-base)
-ssh admin@$VM_IP 'openclaw --version; codex --version; claude --version'
+ssh admin@$VM_IP 'command -v openclaw; codex --version; claude --version'
 ```
 
 ### Option B: Build from Sequoia OCI image (clean slate)
@@ -114,7 +114,7 @@ mkdir -p ~/.quaid ~/quaid
 
 **6. Verify**
 ```bash
-openclaw --version
+command -v openclaw
 codex --version
 claude --version
 openclaw status   # should show authenticated

@@ -1,7 +1,7 @@
 # Auxiliary Live Tests
 
 Short, targeted tests (5–15 min each) that can be run on-demand to validate specific behaviors
-without a full M0–M13 suite. Each test is independent — you can run any subset.
+without a full M0–M16 suite. Each test is independent — you can run any subset.
 
 These are not replacements for the full suite. They target edge cases discovered during live
 test runs that don't have unit test coverage and are hard to trigger in normal usage.

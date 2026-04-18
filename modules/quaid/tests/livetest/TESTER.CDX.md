@@ -159,7 +159,16 @@ session-timeout manager. So M4 still applies to CDX, but the expected signal is
 **CDX M4 procedure:**
 1. Set `capture.inactivityTimeoutMinutes` to `1` and restart the CDX daemon:
    ```bash
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+   ssh REMOTE_HOST 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path("WORKSPACE/CDX_INSTANCE/config.json")
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 1
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print("CDX_INSTANCE inactivityTimeoutMinutes=1")
+PY'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
    ```
 2. Start a fresh visible CDX session, state one memorable fact, then let the
@@ -169,7 +178,16 @@ session-timeout manager. So M4 still applies to CDX, but the expected signal is
    - the fact is stored in DB / FTS
 4. Restore the timeout and restart the daemon again:
    ```bash
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+   ssh REMOTE_HOST 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path("WORKSPACE/CDX_INSTANCE/config.json")
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 60
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print("CDX_INSTANCE inactivityTimeoutMinutes=60")
+PY'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
    ```
 
@@ -256,9 +274,17 @@ restart the daemon:
 
 ```bash
 ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; \
-  QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-livetest \
-  quaid config set capture.inactivityTimeoutMinutes 1 && \
-  QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-livetest \
+  python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path.home() / \".quaid\" / \"shared\" / \"config\" / \"global\" / \"config.json\"
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault(\"capture\", {})[\"inactivityTimeoutMinutes\"] = 1
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print(\"capture.inactivityTimeoutMinutes=1 in global config\")
+PY
+  && QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-livetest \
   quaid daemon stop && sleep 2 && \
   QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-livetest \
   quaid daemon start'
@@ -270,7 +296,7 @@ ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; \
    context is loaded.
 2. From the coordinator side (do NOT ask the agent to do this), append a unique
    canary to the system-context markdown that the CDX system-context loader
-   reads (e.g., `~/quaid/instances/codex-private-tmp-cdx-livetest/SOUL.md` —
+   reads (e.g., `~/.quaid/instances/codex-private-tmp-cdx-livetest/SOUL.md` —
    pick the file that the platform's system-context injection actually
    includes). Same canary text as the main M16 procedure ("The office plant
    is named Bartholomew. It is a fiddle-leaf fig.").

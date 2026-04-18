@@ -1,7 +1,7 @@
 # Adapter Boundary Leakage Remediation
 
 Date: 2026-03-05
-Branch: canary
+Branch: main
 Scope: Full remediation of bidirectional adapter boundary leakage identified by audit (`18 findings`).
 
 ## Why this work was done

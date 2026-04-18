@@ -302,28 +302,27 @@ quaid config edit
 quaid config edit --shared
 quaid config edit --instance claude-code
 
-# Set a single key by dotted path (auto-coerces: int/float/bool/JSON/string)
-quaid config set retrieval.fail_hard false
-quaid config set models.llmProvider claude-code
-quaid config set ollama.embeddingModel nomic-embed-text --shared
-quaid config set capture.inactivityTimeoutMinutes 30 --instance claude-code
+# Set a single key by editing JSON directly (recommended)
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path.home() / ".quaid" / "instances" / "claude-code" / "config.json"
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 30
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print(f"updated {p}")
+PY
 
 # Store a long-lived auth token for the active adapter
 quaid config set-auth <token>
 ```
 
-### `config set` value coercion rules
+### Direct JSON edit notes
 
-Values are coerced by `parse_literal()`:
-
-| Input | Result type |
-|---|---|
-| `true` / `false` | bool |
-| Integer string, e.g. `30` | int |
-| Float string, e.g. `0.85` | float |
-| JSON object or array, e.g. `{"a":1}` | dict / list |
-| `null` | None |
-| Anything else | str |
+- Edit only the layer you intend to override (instance > platform > global).
+- Nested objects should be merged, not replaced wholesale.
+- Keep defaults in global/platform layers; avoid inlining full default trees into instance config.
 
 ### `config show` summary fields
 

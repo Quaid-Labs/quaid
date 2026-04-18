@@ -1353,8 +1353,17 @@ quaid config edit                          # Edit current instance config ($EDIT
 quaid config edit --shared                 # Edit shared config (embeddings, Ollama URL)
 quaid config edit --instance <id>          # Edit a specific instance's config
 quaid config path                          # Show active config file path
-quaid config set <dotted.key> <value>      # Set a key in current instance config
-quaid config set <dotted.key> <value> --shared   # Set a key in shared config
+# For scripted updates, edit JSON directly (instance > platform > global layering)
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path.home() / ".quaid" / "instances" / "<id>" / "config.json"
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 30
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print(f"updated {p}")
+PY
 ```
 
 ### 4.3 Config Sections
@@ -1441,11 +1450,11 @@ Default embedding model is **nomic-embed-text** (768-dim). Other models can be s
     "fastReasoning": "default",
     "deepReasoning": "default",
     "fastReasoningModelClasses": {
-      "openai": "gpt-5.1-codex-mini",
+      "openai": "gpt-5-mini",
       "anthropic": "claude-haiku-4-5"
     },
     "deepReasoningModelClasses": {
-      "openai": "gpt-5.3-codex",
+      "openai": "gpt-5",
       "anthropic": "claude-sonnet-4-6"
     }
   }

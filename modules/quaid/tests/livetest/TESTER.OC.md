@@ -131,18 +131,18 @@ ssh REMOTE_HOST 'QUAID_HOME=~/.quaid QUAID_INSTANCE=OC_INSTANCE \
 
 ### M2 — Snippets and Persona
 
-**Snippet path is in visible home, not hidden home.**
+**Snippet path is in hidden home (`~/.quaid`), not visible home (`~/quaid`).**
 After extraction, snippets are written to:
 ```
-~/quaid/instances/openclaw-main/USER.snippets.md
-~/quaid/instances/openclaw-main/SOUL.snippets.md
+~/.quaid/instances/openclaw-main/USER.snippets.md
+~/.quaid/instances/openclaw-main/SOUL.snippets.md
 ```
-Do NOT search `~/.quaid/` for snippet files — they will not be there.
+Do NOT search `~/quaid/instances/` for snippet files — they will not be there.
 
 Verify:
 ```bash
-ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-main/*.snippets.md 2>/dev/null && \
-  head -20 ~/quaid/instances/openclaw-main/USER.snippets.md'
+ssh REMOTE_HOST 'ls ~/.quaid/instances/openclaw-main/*.snippets.md 2>/dev/null && \
+  head -20 ~/.quaid/instances/openclaw-main/USER.snippets.md'
 ```
 
 **Wait for the full extraction window before checking.** Sessions with
@@ -176,8 +176,16 @@ OC is the only platform with both. Procedure:
 
 1. Set timeout to 1 minute and restart the gateway:
    ```bash
-   ssh REMOTE_HOST 'QUAID_HOME=~/.quaid QUAID_INSTANCE=OC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+   ssh REMOTE_HOST 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path.home() / ".quaid" / "instances" / "OC_INSTANCE" / "config.json"
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 1
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print("OC_INSTANCE inactivityTimeoutMinutes=1")
+PY'
    ssh REMOTE_HOST 'pkill -f openclaw-gateway; sleep 2; \
      nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &'
    ssh REMOTE_HOST 'for i in $(seq 1 30); do \
@@ -195,8 +203,16 @@ OC is the only platform with both. Procedure:
 
 4. Restore and restart:
    ```bash
-   ssh REMOTE_HOST 'QUAID_HOME=~/.quaid QUAID_INSTANCE=OC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+   ssh REMOTE_HOST 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path.home() / ".quaid" / "instances" / "OC_INSTANCE" / "config.json"
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 60
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print("OC_INSTANCE inactivityTimeoutMinutes=60")
+PY'
    # Restart gateway again.
    ```
 
@@ -228,8 +244,7 @@ prunes the agent workspace, so pointing at `~/quaid` can trash the visible Quaid
 When OC creates a new agent, Quaid's adapter should detect it and
 auto-create the instance silo. Verify:
 1. New silo exists at `~/.quaid/instances/openclaw-m13test/`
-2. Visible instance at `~/quaid/instances/openclaw-m13test/`
-3. Store a canary fact via the new agent, verify it does NOT appear
+2. Store a canary fact via the new agent, verify it does NOT appear
    from the livetest instance
 
 After the test, clean up:

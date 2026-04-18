@@ -2,7 +2,7 @@
 
 ## Problem
 
-Everything currently shares one `QUAID_HOME` (`~/quaid/`). One config, one
+Everything currently shares one `QUAID_HOME` (`~/.quaid/`). One config, one
 DB, one daemon. Switching adapters requires restart and risks silent data
 corruption (daemon caches adapter, parses wrong transcript format).
 

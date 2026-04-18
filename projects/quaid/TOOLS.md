@@ -17,7 +17,7 @@ quaid recall "query" '{"stores": ["docs"], "project": "quaid"}'  # docs only
 quaid store "text"                      # manual memory insertion
 quaid get-node <id>
 quaid get-edges <id>
-quaid delete-node <id>
+quaid delete <id>             # delete node by id
 quaid stats
 ```
 
@@ -90,7 +90,7 @@ quaid registry list [--project <name>]
 ## Projects
 
 ```bash
-quaid project list
+quaid project list [--names-only]
 quaid project create <name> [--description "..."] [--source-root /path]
 quaid project show <name>
 quaid project update <name> [--description "..."] [--source-root /path]  # update existing project fields
@@ -132,11 +132,17 @@ quaid notify --deferred-drain                 # fetch buffered notices when a hu
 ## Config & Instances
 
 ```bash
-quaid config show
-quaid config edit [--shared | --instance <id>]
-quaid config set <dotted.key> <value> [--shared]
+quaid config show                    # print layered resolved config
+quaid config edit [--shared]         # open layered JSON file in $EDITOR (global, platform, or instance)
 quaid instances list [--json]
 ```
+
+**Note:** `quaid config set` was deprecated in favor of direct JSON edits of the layered config files
+(`~/.quaid/shared/config/global/config.json`, `~/.quaid/shared/config/<platform>/config.json`,
+`~/.quaid/instances/<instance>/config.json`). Edit the file layer that matches your scope — the
+resolver layers instance → platform → global. For scripted changes use a python one-liner
+(`python3 -c "import json,os; p=os.path.expanduser('...'); c=json.load(open(p)); c['key']='value'; json.dump(c, open(p,'w'), indent=2)"`)
+or `jq`.
 
 **Cross-instance search:** Override `QUAID_INSTANCE` at call time to read another instance's memory (both instances must share `QUAID_HOME`):
 ```bash

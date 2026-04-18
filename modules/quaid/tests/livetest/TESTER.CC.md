@@ -11,10 +11,10 @@ After M0 install, start the CC interaction pane:
 ```bash
 tmux respawn-pane -k -t livetest:CC 'zsh -il'
 tmux send-keys -t livetest:CC "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CC "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions --model claude-sonnet-4-5" Enter
+tmux send-keys -t livetest:CC "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions --model claude-sonnet-4-6" Enter
 ```
 
-**MANDATORY — always pass `--model claude-sonnet-4-5` as a launch flag.**
+**MANDATORY — always pass `--model claude-sonnet-4-6` as a launch flag.**
 Do NOT use the in-session `/model` picker after launch. The `/model` command
 writes `<command-name>/model</command-name>` + `local-command-stdout` blocks
 into the session transcript before any real user turn arrives. The daemon's
@@ -69,8 +69,16 @@ supports forced compaction).
 
 1. Set timeout to 1 minute and restart the daemon:
    ```bash
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+   ssh REMOTE_HOST 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path("WORKSPACE/CC_INSTANCE/config.json")
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 1
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print("CC_INSTANCE inactivityTimeoutMinutes=1")
+PY'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
      ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
      QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
@@ -89,8 +97,16 @@ supports forced compaction).
 
 4. Restore and restart:
    ```bash
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+   ssh REMOTE_HOST 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path("WORKSPACE/CC_INSTANCE/config.json")
+d = json.loads(p.read_text()) if p.exists() else {}
+d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 60
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+print("CC_INSTANCE inactivityTimeoutMinutes=60")
+PY'
    ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
      ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
      QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
@@ -184,7 +200,7 @@ See dedicated section above. CC gets timeout extraction (no compaction). PASS
 with note on the no-compaction behaviour.
 
 ### M8 — Project CRUD
-CC is launched with `--model claude-sonnet-4-5` (see Launch section above). Do NOT
+CC is launched with `--model claude-sonnet-4-6` (see Launch section above). Do NOT
 use `/model` in-session — it writes model-switch metadata into the transcript before
 the first real user turn, which freezes the cursor and silently skips extraction.
 Sonnet is already active from launch; no model switch needed for M8.
