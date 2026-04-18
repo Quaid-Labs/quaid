@@ -1724,6 +1724,21 @@ function getDatastoreStatsSync() {
     return null;
   }
 }
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function deepMergeConfig(base, override) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const current = merged[key];
+    if (isPlainObject(current) && isPlainObject(value)) {
+      merged[key] = deepMergeConfig(current, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
 function buildFallbackMemoryConfig() {
   return {
     models: {
@@ -1747,21 +1762,6 @@ function buildFallbackMemoryConfig() {
       maxLimit: 8
     }
   };
-}
-function isPlainObject(value) {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-function deepMergeConfig(base, override) {
-  const merged = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    const current = merged[key];
-    if (isPlainObject(current) && isPlainObject(value)) {
-      merged[key] = deepMergeConfig(current, value);
-      continue;
-    }
-    merged[key] = value;
-  }
-  return merged;
 }
 function createAdapterMemoryConfigResolver() {
   let memoryConfigErrorLogged = false;
