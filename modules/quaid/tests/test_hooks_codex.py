@@ -456,12 +456,11 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert "[Quaid error]" in context
     assert "[provider]" in context
-    assert "Error type: RuntimeError" in context
-    assert "invalid-model-xyzzy" not in context
+    assert "invalid-model-xyzzy" in context
     assert "hook-inject" in err
 
 
-def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypatch, tmp_path):
+def test_codex_hook_inject_still_surfaces_provider_error_when_fail_hard_enabled(monkeypatch, tmp_path):
     from core.interface import hooks
 
     adapter = _adapter_mock()
@@ -487,9 +486,8 @@ def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypa
             "Quaid could not access its fast language model provider: codex gateway HTTP 404 model=invalid-model-xyzzy"
         ),
     ), patch("core.interface.api.projects_search_docs", return_value=None), \
-         patch("lib.runtime_context.queue_deferred_notice", side_effect=lambda *a, **k: queued.append((a, k)) or True), \
-         pytest.raises(RuntimeError, match="language model provider"):
-        _run_hook_inject(
+         patch("lib.runtime_context.queue_deferred_notice", side_effect=lambda *a, **k: queued.append((a, k)) or True):
+        out, _err = _run_hook_inject(
             {
                 "prompt": "What do you know about Maya?",
                 "session_id": "sess-codex-provider-failhard",
@@ -504,6 +502,10 @@ def test_codex_hook_inject_raises_provider_error_when_fail_hard_enabled(monkeypa
     assert kwargs.get("kind") == "provider"
     assert kwargs.get("priority") == "high"
     assert kwargs.get("source") == "provider"
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid error] [provider]" in context
+    assert "invalid-model-xyzzy" in context
 
 
 def test_codex_provider_failure_queues_and_relays_on_next_successful_turn(monkeypatch, tmp_path):
@@ -534,9 +536,8 @@ def test_codex_provider_failure_queues_and_relays_on_next_successful_turn(monkey
         side_effect=RuntimeError(
             "Quaid could not access its fast language model provider: codex gateway HTTP 404 model=invalid-model-xyzzy"
         ),
-    ), patch("core.interface.api.projects_search_docs", return_value=None), \
-         pytest.raises(RuntimeError, match="language model provider"):
-        _run_hook_inject(
+    ), patch("core.interface.api.projects_search_docs", return_value=None):
+        out1, _err1 = _run_hook_inject(
             {
                 "prompt": "What do you know about Maya?",
                 "session_id": "sess-codex-provider-failhard-relay",
@@ -544,6 +545,10 @@ def test_codex_provider_failure_queues_and_relays_on_next_successful_turn(monkey
             },
             monkeypatch=monkeypatch,
         )
+    payload1 = json.loads(out1)
+    context1 = payload1["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid error] [provider]" in context1
+    assert "invalid-model-xyzzy" in context1
 
     with patch("core.interface.api.recall_fast", return_value=([], None)), \
          patch("core.interface.api.projects_search_docs", return_value=None):
@@ -560,7 +565,7 @@ def test_codex_provider_failure_queues_and_relays_on_next_successful_turn(monkey
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert "drained deferred notices" in context
     assert "[Quaid error] [provider]" in context
-    assert "Error type: RuntimeError" in context
+    assert "invalid-model-xyzzy" in context
 
 
 def test_codex_hook_inject_traces_raw_tool_output_when_present(monkeypatch, tmp_path):

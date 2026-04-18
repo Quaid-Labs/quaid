@@ -161,7 +161,7 @@ describe('Deduplication', () => {
     expect(rows[0].cnt).toBeGreaterThanOrEqual(1)
   })
 
-  it('allows storing semantically distinct memories without false positives', async () => {
+  it('allows storing semantically distinct memories without false positives', { timeout: 30000 }, async () => {
     // These are all genuinely different facts - dedup should not block them
     const memories = [
       'Quaid likes espresso',

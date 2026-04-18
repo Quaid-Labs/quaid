@@ -760,11 +760,10 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid error]" in context
         assert "[provider]" in context
-        assert "Error type: RuntimeError" in context
-        assert "invalid-model-xyzzy" not in context
+        assert "invalid-model-xyzzy" in context
         assert "hook-inject" in err
 
-    def test_recall_fast_provider_exception_raises_when_fail_hard_enabled(
+    def test_recall_fast_provider_exception_still_surfaces_notice_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -778,9 +777,8 @@ class TestHookInjectRecallResilience:
             side_effect=RuntimeError(
                 "Quaid could not access its fast language model provider: claude-code-oauth HTTP 404 model=invalid-model-xyzzy"
             ),
-        ), patch("lib.runtime_context.queue_deferred_notice", side_effect=lambda *a, **k: queued.append((a, k)) or True), \
-             pytest.raises(RuntimeError, match="language model provider"):
-            _run_hook_inject(
+        ), patch("lib.runtime_context.queue_deferred_notice", side_effect=lambda *a, **k: queued.append((a, k)) or True):
+            out, _err = _run_hook_inject(
                 {
                     "prompt": "What do you know about Maya?",
                     "session_id": "sess-provider-failhard",
@@ -795,6 +793,10 @@ class TestHookInjectRecallResilience:
         assert kwargs.get("kind") == "provider"
         assert kwargs.get("priority") == "high"
         assert kwargs.get("source") == "provider"
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid error] [provider]" in context
+        assert "invalid-model-xyzzy" in context
 
     def test_recall_fast_provider_failure_relays_on_next_successful_turn_after_fail_hard(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -817,8 +819,8 @@ class TestHookInjectRecallResilience:
             side_effect=RuntimeError(
                 "Quaid could not access its fast language model provider: claude-code-oauth HTTP 404 model=invalid-model-xyzzy"
             ),
-        ), pytest.raises(RuntimeError, match="language model provider"):
-            _run_hook_inject(
+        ):
+            out1, _err1 = _run_hook_inject(
                 {
                     "prompt": "What do you know about Maya?",
                     "session_id": "sess-provider-failhard-relay",
@@ -826,6 +828,10 @@ class TestHookInjectRecallResilience:
                 },
                 monkeypatch=monkeypatch,
             )
+        payload1 = json.loads(out1)
+        context1 = payload1["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid error] [provider]" in context1
+        assert "invalid-model-xyzzy" in context1
 
         with patch("core.interface.api.recall_fast", return_value=([], None)):
             out, _err = _run_hook_inject(
@@ -841,7 +847,7 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "drained deferred notices" in context
         assert "[Quaid error] [provider]" in context
-        assert "Error type: RuntimeError" in context
+        assert "invalid-model-xyzzy" in context
 
     def test_deferred_notice_hint_is_injected_without_draining(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

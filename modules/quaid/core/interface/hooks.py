@@ -237,6 +237,15 @@ def _is_provider_failure(exc: Exception) -> bool:
     )
 
 
+def _provider_failure_notice_message(exc: Exception) -> str:
+    text = re.sub(r"\s+", " ", str(exc or "").strip())
+    if not text:
+        text = _safe_agent_error(exc)
+    if text.lower().startswith("[quaid error] [provider]"):
+        return text
+    return f"[Quaid error] [provider] {text}"
+
+
 def _queue_provider_failure_notice(exc: Exception) -> None:
     """Queue provider failures for next-turn relay across hook adapters.
 
@@ -249,7 +258,7 @@ def _queue_provider_failure_notice(exc: Exception) -> None:
         from lib.runtime_context import queue_deferred_notice
 
         queue_deferred_notice(
-            f"[Quaid error] [provider] {_safe_agent_error(exc)}",
+            _provider_failure_notice_message(exc),
             kind="provider",
             priority="high",
             source="provider",
@@ -806,7 +815,8 @@ def hook_inject(args):
         }))
 
     except (RuntimeError, Exception) as e:
-        if _is_provider_failure(e):
+        provider_failure = _is_provider_failure(e)
+        if provider_failure:
             _queue_provider_failure_notice(e)
             try:
                 from lib.fail_policy import is_fail_hard_enabled
@@ -815,15 +825,24 @@ def hook_inject(args):
             except Exception:
                 fail_hard = True
             if fail_hard:
-                raise
+                logger.error(
+                    "[hook-inject] provider failure surfaced inline while failHard is enabled"
+                )
         pending_context = _get_pending_context()
-        deferred_notice_relay_context = _get_deferred_notice_relay_context()
-        deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
+        if provider_failure:
+            # Keep provider failures literal and immediate on failing turns.
+            # Deferred notice drain can paraphrase; leave queued copy for
+            # subsequent successful turns.
+            deferred_notice_relay_context = ""
+            deferred_notice_hint = ""
+        else:
+            deferred_notice_relay_context = _get_deferred_notice_relay_context()
+            deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
         fallback_context_parts = []
-        if _is_provider_failure(e):
+        if provider_failure:
             # Provider/LLM failure — surface to agent so they can inform the user
             fallback_context_parts.append(
-                f"<quaid_system_message>[Quaid error] [provider] {_safe_agent_error(e)}</quaid_system_message>"
+                f"<quaid_system_message>{_provider_failure_notice_message(e)}</quaid_system_message>"
             )
         if pending_context:
             fallback_context_parts.append(pending_context)
