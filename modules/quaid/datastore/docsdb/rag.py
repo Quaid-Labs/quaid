@@ -86,6 +86,13 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
         from lib.instance import instance_id as _instance_id
         from lib.project_registry import list_all as _list_projects
 
+        try:
+            from datastore.docsdb.registry import DocsRegistry
+
+            DocsRegistry(seed_projects=False).reconcile_global_project_registry()
+        except Exception:
+            pass
+
         current_instance = _instance_id()
         linked: List[str] = []
         for project_name, entry in (_list_projects() or {}).items():

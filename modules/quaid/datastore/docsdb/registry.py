@@ -279,10 +279,11 @@ def _populate_project_md_sections(
 class DocsRegistry:
     """Document registry with CRUD, path resolution, and project operations."""
 
-    def __init__(self, db_path: Path = None):
+    def __init__(self, db_path: Path = None, *, seed_projects: bool = True):
         self.db_path = Path(db_path).expanduser() if db_path is not None else _get_default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._config = None
+        self._seed_projects = bool(seed_projects)
         self._shared_scope_enabled = (
             db_path is None and not str(os.environ.get("MEMORY_DB_PATH", "")).strip()
         )
@@ -410,7 +411,8 @@ class DocsRegistry:
             self._ensure_project_definitions_table(conn)
 
         # Seed from JSON on first run (empty table)
-        self._seed_projects_from_json()
+        if self._seed_projects:
+            self._seed_projects_from_json()
 
     def _seed_projects_from_json(self):
         """Seed project_definitions table from config/config.json on first run.
@@ -471,6 +473,7 @@ class DocsRegistry:
         """Load a single project definition from DB."""
         from config import ProjectDefinition
         with get_connection(self.db_path) as conn:
+            self._ensure_project_definitions_table(conn)
             row = conn.execute(
                 "SELECT * FROM project_definitions WHERE name = ? AND state = 'active'",
                 (name,)
@@ -492,6 +495,7 @@ class DocsRegistry:
         """Load all active project definitions from DB."""
         from config import ProjectDefinition
         with get_connection(self.db_path) as conn:
+            self._ensure_project_definitions_table(conn)
             rows = conn.execute(
                 "SELECT * FROM project_definitions WHERE state = 'active'"
             ).fetchall()
@@ -540,6 +544,7 @@ class DocsRegistry:
                 ))
 
         _run_locked_write_with_retry(_write, op_name=f"save_project_definition({name})")
+        self._ensure_global_project_entry(name, defn=defn)
 
     def delete_project_definition(self, name: str):
         """Soft-delete a project definition (set state to 'deleted')."""
@@ -548,6 +553,191 @@ class DocsRegistry:
                 "UPDATE project_definitions SET state = 'deleted', updated_at = datetime('now') WHERE name = ?",
                 (name,)
             )
+
+    def _syncable_project_name(self, project: Optional[str]) -> Optional[str]:
+        name = str(project or "").strip()
+        if not name or name == "default":
+            return None
+        _validate_project_name(name)
+        return name
+
+    def _source_root_from_sources(self, source_files: Optional[List[str]]) -> Optional[str]:
+        paths: List[str] = []
+        for raw in source_files or []:
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            try:
+                resolved = self._resolve_path(value).resolve(strict=False)
+            except TypeError:
+                resolved = self._resolve_path(value).resolve()
+            except Exception:
+                resolved = Path(value).expanduser()
+            if resolved.exists() and resolved.is_file():
+                resolved = resolved.parent
+            elif not resolved.exists() and resolved.suffix:
+                resolved = resolved.parent
+            paths.append(str(resolved))
+        if not paths:
+            return None
+        try:
+            return os.path.commonpath(paths)
+        except ValueError:
+            return paths[0]
+
+    def _canonical_path_from_doc_path(self, name: str, file_path: Optional[str]) -> Optional[Path]:
+        if not file_path:
+            return None
+        try:
+            resolved = self._resolve_path(str(file_path)).resolve(strict=False)
+        except TypeError:
+            resolved = self._resolve_path(str(file_path)).resolve()
+        except Exception:
+            return None
+        projects_root = (_visible_home() / "projects").resolve()
+        try:
+            rel = resolved.relative_to(projects_root)
+        except ValueError:
+            return None
+        if rel.parts and rel.parts[0] == name:
+            return projects_root / name
+        return None
+
+    def _ensure_project_scaffold(
+        self,
+        name: str,
+        canonical: Path,
+        *,
+        description: str,
+        source_root: Optional[str],
+        write_project_md: bool,
+    ) -> None:
+        canonical.mkdir(parents=True, exist_ok=True)
+        (canonical / "docs").mkdir(exist_ok=True)
+        project_md = canonical / "PROJECT.md"
+        if write_project_md and not project_md.exists():
+            project_md.write_text(
+                render_project_md_template(
+                    label=name.replace("-", " ").replace("_", " ").title(),
+                    description=description or f"{name} project.",
+                    project_home=str(canonical),
+                    source_roots=[source_root] if source_root else [],
+                    exclude_patterns=[],
+                ),
+                encoding="utf-8",
+            )
+
+    def _ensure_global_project_entry(
+        self,
+        project: Optional[str],
+        *,
+        file_path: Optional[str] = None,
+        source_files: Optional[List[str]] = None,
+        defn: Optional[Any] = None,
+        create_scaffold: bool = True,
+    ) -> bool:
+        """Keep docs registry project labels backed by the canonical project registry."""
+        name = self._syncable_project_name(project)
+        if not name:
+            return False
+
+        if defn is None:
+            try:
+                defn = self.get_project_definition(name)
+            except Exception:
+                defn = None
+
+        canonical: Optional[Path] = None
+        description = f"{name} project."
+        source_root: Optional[str] = None
+        if defn is not None:
+            description = str(getattr(defn, "description", "") or description)
+            roots = list(getattr(defn, "source_roots", []) or [])
+            source_root = str(roots[0]) if roots else None
+            home_dir = str(getattr(defn, "home_dir", "") or "").strip()
+            if home_dir:
+                canonical = self._resolve_path(home_dir).resolve()
+
+        if canonical is None:
+            canonical = self._canonical_path_from_doc_path(name, file_path)
+        if source_root is None:
+            source_root = self._source_root_from_sources(source_files)
+        if canonical is None:
+            canonical = (_visible_home() / "projects" / name).resolve()
+
+        if create_scaffold:
+            project_dir_existed = canonical.exists()
+            self._ensure_project_scaffold(
+                name,
+                canonical,
+                description=description,
+                source_root=source_root,
+                write_project_md=not project_dir_existed,
+            )
+        elif not canonical.exists():
+            return False
+
+        try:
+            from lib.project_registry import register as global_register
+
+            global_register(
+                name=name,
+                canonical_path=str(canonical),
+                description=description,
+                source_root=source_root,
+                link_current_instance=True,
+            )
+            return True
+        except Exception as exc:
+            raise RuntimeError(f"Failed to sync docs project {name!r} into project registry: {exc}") from exc
+
+    def reconcile_global_project_registry(self) -> Dict[str, Any]:
+        """Promote active docs-registry project metadata into the canonical registry.
+
+        This is an invariant repair, not a compatibility layer: docs rows with a
+        project label must not leave `quaid project list/show` blind to that
+        project.
+        """
+        self.ensure_table()
+        synced: List[str] = []
+        seen: set[str] = set()
+
+        for name, defn in sorted((self.get_all_project_definitions() or {}).items()):
+            if self._ensure_global_project_entry(name, defn=defn):
+                synced.append(str(name))
+                seen.add(str(name))
+
+        with get_connection(self.db_path) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'doc_registry'"
+            ).fetchone()
+            if not exists:
+                return {"synced": len(synced), "projects": sorted(set(synced))}
+            rows = conn.execute(
+                """
+                SELECT project, MIN(file_path) AS file_path
+                FROM doc_registry
+                WHERE state = 'active'
+                  AND project IS NOT NULL
+                  AND TRIM(project) != ''
+                  AND project != 'default'
+                GROUP BY project
+                """
+            ).fetchall()
+
+        for row in rows:
+            name = str(row["project"] or "").strip()
+            if not name or name in seen:
+                continue
+            doc_path = str(row["file_path"] or "").strip()
+            canonical = self._canonical_path_from_doc_path(name, doc_path)
+            if canonical is None or not canonical.exists():
+                continue
+            if self._ensure_global_project_entry(name, file_path=doc_path, create_scaffold=False):
+                synced.append(name)
+                seen.add(name)
+
+        return {"synced": len(synced), "projects": sorted(set(synced))}
 
     # ========================================================================
     # CRUD
@@ -586,6 +776,7 @@ class DocsRegistry:
                 "Quaid only tracks durable file paths that persist across reboots. "
                 "Move the file to a permanent location first."
             )
+        self._ensure_global_project_entry(project, file_path=file_path, source_files=source_files)
         with get_connection(self.db_path) as conn:
             conn.execute("""
                 INSERT INTO doc_registry

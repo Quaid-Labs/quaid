@@ -278,6 +278,29 @@ W6 bug-bash on `e3efe312a` found launch-blocking concurrency and data-loss risks
 - Worker pid writes are atomic and tied to heartbeat writes.
 - Supervisor checks heartbeat staleness and resets stuck `updating` state to queued/error for retry.
 - Lock contention preserves force-update requests instead of allowing a caller to observe a false successful/fresh state.
+
+### 2026-04-19 Slice C: Docs/Project Registry Invariant
+
+Benchmark evidence showed `recipe-app` docs rows in the docs registry while the
+canonical project registry could not list or show `recipe-app`. That is an
+invalid state: docs recall and docs list must not invent a project label that
+the project system cannot link, status, update, or delete.
+
+Implemented direction:
+- Docs registry project definitions and project-scoped docs registrations now
+  sync the canonical project registry as part of registration.
+- Canonical `quaid project list/show` reconciles active docs-registry project
+  metadata before reading the registry, repairing pre-existing rows created by
+  older paths.
+- Docs RAG linked-project scope performs the same reconciliation before
+  deciding which projects are linked to the active instance.
+- Direct docs rows are only reconciled when the visible project home exists;
+  arbitrary stale rows are not enough to resurrect a deleted project.
+
+Validation notes:
+- Added regression coverage for direct docs registration and existing
+  docs-registry rows promoting `recipe-app` into canonical project registry.
+- Focused docs/project/RAG suite passes locally.
 - `PROJECT.log` read/stat failures now raise and do not advance the hidden cursor.
 - Project docs registry sync moved behind the `core.docs.updater` wrapper to preserve layer boundaries.
 - After docs apply, the worker registers newly visible project docs, unregisters project-doc files deleted by updater apply, refreshes PROJECT.md registry sections, reindexes registered docs, and queues a deferred project-doc update notice.

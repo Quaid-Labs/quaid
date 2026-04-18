@@ -350,14 +350,43 @@ def _save_registry(data: Dict[str, Any]) -> None:
         raise
 
 
+_DOCS_REGISTRY_RECONCILING = False
+
+
+def _reconcile_docs_registry_projects() -> None:
+    """Repair docs-registry project rows that predate canonical registry writes."""
+    global _DOCS_REGISTRY_RECONCILING
+    if _DOCS_REGISTRY_RECONCILING:
+        return
+    _DOCS_REGISTRY_RECONCILING = True
+    try:
+        from datastore.docsdb.registry import DocsRegistry
+
+        DocsRegistry(seed_projects=False).reconcile_global_project_registry()
+    except Exception as exc:
+        logger.warning("Docs/project registry reconciliation skipped: %s", exc)
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+        except Exception:
+            fail_hard = False
+        else:
+            fail_hard = bool(is_fail_hard_enabled())
+        if fail_hard:
+            raise
+    finally:
+        _DOCS_REGISTRY_RECONCILING = False
+
+
 def list_projects() -> Dict[str, Dict[str, Any]]:
     """Return all registered projects."""
+    _reconcile_docs_registry_projects()
     return _load_registry().get("projects", {})
 
 
 def get_project(name: str) -> Optional[Dict[str, Any]]:
     """Get a single project by name, or None if not found."""
-    return list_projects().get(name)
+    _reconcile_docs_registry_projects()
+    return _load_registry().get("projects", {}).get(name)
 
 
 def create_project(

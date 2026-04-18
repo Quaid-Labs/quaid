@@ -76,6 +76,7 @@ def register(
     canonical_path: str,
     description: str = "",
     link_current_instance: bool = True,
+    source_root: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Register or update a project in the global registry.
 
@@ -93,10 +94,13 @@ def register(
             entry["canonical_path"] = canonical_path
             if description:
                 entry["description"] = description
+            if source_root is not None:
+                entry["source_root"] = source_root
             entry["updated_at"] = now
         else:
             entry = {
                 "canonical_path": canonical_path,
+                "source_root": source_root,
                 "instances": [],
                 "created_at": now,
                 "description": description,
