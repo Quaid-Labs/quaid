@@ -6,7 +6,9 @@ datastore, and ingestor code does not import adapter internals directly.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -26,6 +28,25 @@ if TYPE_CHECKING:
     from lib.providers import LLMProvider
 
 logger = logging.getLogger(__name__)
+
+_PROVIDER_NOTICE_DEDUPE_TTL_SECONDS = 900
+_VOLATILE_PROVIDER_ERROR_PATTERNS = (
+    re.compile(r"\b(?:request|req|response|resp|trace)[_-]?id\s*[:=]\s*[a-z0-9._:-]+\b", flags=re.IGNORECASE),
+    re.compile(r"\b[0-9a-f]{12,}\b", flags=re.IGNORECASE),
+    re.compile(r"\b\d{6,}\b"),
+)
+
+
+def _provider_notice_dedupe_key(exc: Exception, tier: str) -> str:
+    message = str(exc or "").strip().lower()
+    canonical = message
+    for pattern in _VOLATILE_PROVIDER_ERROR_PATTERNS:
+        canonical = pattern.sub("<id>", canonical)
+    canonical = re.sub(r"\s+", " ", canonical).strip()
+    if not canonical:
+        canonical = type(exc).__name__.lower()
+    fingerprint = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:16]
+    return f"llm-provider:{tier}:{type(exc).__name__}:{fingerprint}"
 
 
 def get_adapter_instance() -> "QuaidAdapter":
@@ -99,7 +120,8 @@ def get_llm_provider(model_tier: Optional[str] = None) -> "LLMProvider":
                 kind="provider",
                 priority="high",
                 source="provider",
-                dedupe_key=f"llm-provider:{tier}:{type(exc).__name__}:{str(exc).strip()}",
+                dedupe_key=_provider_notice_dedupe_key(exc, tier),
+                ttl_seconds=_PROVIDER_NOTICE_DEDUPE_TTL_SECONDS,
             )
         except Exception as notice_exc:
             logger.warning("Failed queuing provider access error as deferred notice: %s", notice_exc)

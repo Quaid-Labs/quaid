@@ -142,6 +142,30 @@ def test_completed_request_not_deduped(clean_adapter):
     assert len(_read_requests(clean_adapter)) == 2
 
 
+def test_recently_delivered_request_respects_ttl_dedupe(clean_adapter):
+    queue_deferred_notice("provider down", kind="provider", dedupe_key="provider:fast", ttl_seconds=900)
+    drained = drain_deferred_notices(limit=10)
+    assert len(drained) == 1
+
+    second = queue_deferred_notice("provider down", kind="provider", dedupe_key="provider:fast", ttl_seconds=900)
+    assert second is False
+    assert len(_read_requests(clean_adapter)) == 1
+
+
+def test_ttl_dedupe_expires_after_window(clean_adapter):
+    queue_deferred_notice("provider down", kind="provider", dedupe_key="provider:fast", ttl_seconds=1)
+    drain_deferred_notices(limit=10)
+
+    path = _notes_path(clean_adapter)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["requests"][0]["delivered_at"] = "2000-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    second = queue_deferred_notice("provider down", kind="provider", dedupe_key="provider:fast", ttl_seconds=1)
+    assert second is True
+    assert len(_read_requests(clean_adapter)) == 2
+
+
 # ---------------------------------------------------------------------------
 # Recovery from malformed/corrupt file
 # ---------------------------------------------------------------------------
