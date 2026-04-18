@@ -7,11 +7,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from core.project_registry import (
+    clear_misc_auto_create_disabled,
     create_project,
     delete_project,
     get_project,
+    is_misc_auto_create_disabled,
     link_project,
     list_projects,
+    mark_misc_auto_create_disabled,
     unlink_project,
     update_project,
     projects_with_source_root,
@@ -232,6 +235,31 @@ class TestDeleteProject:
         assert not (visible_staging / "1-compact.json").exists()
         assert not (failed_staging / "2-compact.json").exists()
         assert (visible_staging / "3-compact.json").exists()
+
+    def test_delete_misc_project_sets_auto_create_tombstone(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        instance_id = "claude-code-private-tmp-m13"
+        with patch("lib.instance.instance_id", return_value=instance_id), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            create_project(f"misc--{instance_id}", description="scratch")
+        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is False
+
+        delete_project(f"misc--{instance_id}")
+
+        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is True
+
+    def test_recreate_misc_project_clears_auto_create_tombstone(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        instance_id = "claude-code-private-tmp-m13"
+        marker = mark_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
+        assert marker.is_file()
+
+        with patch("lib.instance.instance_id", return_value=instance_id), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            create_project(f"misc--{instance_id}", description="scratch", initial_instance=instance_id)
+
+        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is False
+        clear_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
 
 
 class TestListAndQuery:

@@ -136,6 +136,50 @@ def _safe_remove_project_dir(path: Path, allowed_roots: List[Path]) -> bool:
     return True
 
 
+def _misc_project_instance_id(project_name: str) -> Optional[str]:
+    name = str(project_name or "").strip()
+    if not name.startswith("misc--"):
+        return None
+    instance = name.removeprefix("misc--").strip()
+    return instance or None
+
+
+def _misc_auto_create_tombstone_path(quaid_home: Path, instance_id: str) -> Path:
+    return quaid_home / "instances" / str(instance_id).strip() / "data" / "project-bootstrap" / "skip-auto-misc-project"
+
+
+def mark_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> Path:
+    home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
+    marker = _misc_auto_create_tombstone_path(home, instance_id)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "instance_id": str(instance_id).strip(),
+                "disabled_at": datetime.now(tz=timezone.utc).isoformat(),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return marker
+
+
+def clear_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> None:
+    home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
+    marker = _misc_auto_create_tombstone_path(home, instance_id)
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def is_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> bool:
+    home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
+    marker = _misc_auto_create_tombstone_path(home, instance_id)
+    return marker.is_file()
+
+
 def _is_path_for_deleted_project(raw_path: str, *, project_name: str, canonical: Optional[Path]) -> bool:
     text = str(raw_path or "").strip()
     if not text:
@@ -399,6 +443,9 @@ def create_project(
 
         registry["projects"][name] = entry
         _save_registry(registry)
+        misc_instance = _misc_project_instance_id(name)
+        if misc_instance:
+            clear_misc_auto_create_disabled(misc_instance, quaid_home=quaid_home)
     try:
         _sync_docs_registry_project(
             name,
@@ -586,6 +633,17 @@ def delete_project(name: str) -> None:
         # Remove from registry
         del registry["projects"][name]
         _save_registry(registry)
+    misc_instance = _misc_project_instance_id(name)
+    if misc_instance:
+        try:
+            mark_misc_auto_create_disabled(misc_instance, quaid_home=quaid_home)
+        except Exception as e:
+            logger.warning(
+                "Failed to persist misc auto-create tombstone for %s (%s): %s",
+                name,
+                misc_instance,
+                e,
+            )
 
     # Clean up shared docs DB: project definitions, registry rows, and RAG chunks.
     try:

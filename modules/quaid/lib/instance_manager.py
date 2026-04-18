@@ -215,8 +215,21 @@ class InstanceManager:
         self._ensure_shared_quaid_project(instance_id)
         misc_name = f"misc--{instance_id}"
         misc_desc = "Scratch pad for ephemeral and temporary files."
-        from core.project_registry import create_project as _cp, get_project as _gp, link_project as _lp, _sync_docs_registry_project
+        from core.project_registry import (
+            create_project as _cp,
+            get_project as _gp,
+            is_misc_auto_create_disabled as _misc_deleted,
+            link_project as _lp,
+            _sync_docs_registry_project,
+        )
         if not _gp(misc_name):
+            if _misc_deleted(instance_id, quaid_home=self.adapter.quaid_home()):
+                logger.info(
+                    "Skipping auto-create for deleted misc project %s (instance=%s)",
+                    misc_name,
+                    instance_id,
+                )
+                return
             try:
                 _cp(misc_name, description=misc_desc, initial_instance=instance_id)
             except ValueError:

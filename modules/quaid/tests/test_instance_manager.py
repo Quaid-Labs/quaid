@@ -359,6 +359,33 @@ class TestInstanceManagerBase:
         mock_link_project.assert_called_once_with("quaid", instance_id="claude-code-proj")
         mock_sync_docs.assert_not_called()
 
+    def test_ensure_registered_projects_respects_deleted_misc_tombstone(self, tmp_path):
+        from core.project_registry import mark_misc_auto_create_disabled
+        from lib.instance_manager import InstanceManager
+
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.adapter_id.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
+        mgr = InstanceManager(adapter)
+
+        instance_id = "claude-code-proj"
+        mark_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
+
+        with patch.object(mgr, "_ensure_shared_quaid_project") as mock_shared, \
+             patch("core.project_registry.get_project", return_value=None), \
+             patch("core.project_registry.create_project") as mock_create_project, \
+             patch("core.project_registry.link_project") as mock_link_project, \
+             patch("core.project_registry._sync_docs_registry_project") as mock_sync_docs:
+            mgr.ensure_registered_projects(instance_id)
+
+        mock_shared.assert_called_once_with(instance_id)
+        mock_create_project.assert_not_called()
+        mock_link_project.assert_not_called()
+        mock_sync_docs.assert_not_called()
+
 
 # ---- CC InstanceManager ----
 
