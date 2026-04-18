@@ -31,7 +31,7 @@ REGRESSION_MARK = "pytestmark = pytest.mark.regression"
 
 @dataclass
 class Result:
-    file: Path
+    target: str
     rc: int
     duration_s: float
     status: str
@@ -67,6 +67,31 @@ def gather_files(mode: str) -> list[Path]:
     return out
 
 
+def expand_targets(files: list[Path], mode: str) -> list[str]:
+    """Return pytest targets, splitting proven-safe heavy files by class."""
+    targets: list[str] = []
+    for file_path in files:
+        rel = file_path.relative_to(ROOT).as_posix()
+        if (
+            mode == "regression"
+            and file_path.name == "test_golden_recall.py"
+            and os.environ.get("QUAID_PYTEST_SPLIT_GOLDEN_RECALL", "1") != "0"
+        ):
+            # Separate subprocesses keep unittest.mock patches, environment, and
+            # temp DBs isolated while allowing the slow golden recall groups to
+            # run in parallel under the existing regression worker pool.
+            targets.extend(
+                [
+                    f"{rel}::TestGoldenRecall",
+                    f"{rel}::TestRecallMetrics",
+                    f"{rel}::TestAdversarialRecall",
+                ]
+            )
+            continue
+        targets.append(rel)
+    return targets
+
+
 def cleanup_stale_tmp_dirs(base: Path, older_than_hours: int = 24) -> None:
     """Best-effort cleanup of stale per-run temp directories."""
     if not base.exists():
@@ -84,13 +109,12 @@ def cleanup_stale_tmp_dirs(base: Path, older_than_hours: int = 24) -> None:
 
 
 def run_one(
-    file_path: Path,
+    target: str,
     timeout_s: int,
     marker_expr: str | None = None,
     tmpdir: Path | None = None,
     unit_sandbox_root: Path | None = None,
 ) -> Result:
-    rel = file_path.relative_to(ROOT)
     cmd = [
         sys.executable,
         "-m",
@@ -103,7 +127,7 @@ def run_one(
     ]
     if marker_expr:
         cmd.extend(["-m", marker_expr])
-    cmd.append(str(rel))
+    cmd.append(target)
     t0 = time.time()
     env = os.environ.copy()
     if tmpdir is not None:
@@ -136,14 +160,14 @@ def run_one(
     )
     pytest_pattern = (
         "pytest -q -o addopts= -o faulthandler_timeout=45 "
-        f"{rel}"
+        f"{target}"
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout_s)
         out = (stdout or "") + ("\n" + stderr if stderr else "")
         status = "PASS" if proc.returncode == 0 else "FAIL"
         rc = proc.returncode if proc.returncode is not None else 1
-        return Result(file_path, rc, time.time() - t0, status, out)
+        return Result(target, rc, time.time() - t0, status, out)
     except subprocess.TimeoutExpired:
         # Terminate whole process group first, then force-kill if needed.
         try:
@@ -173,7 +197,7 @@ def run_one(
             time.sleep(0.2)
             subprocess.run(["pkill", "-KILL", "-f", pytest_pattern], check=False)
         out = (stdout or "") + ("\n" + stderr if stderr else "")
-        return Result(file_path, 124, time.time() - t0, "TIMEOUT", out)
+        return Result(target, 124, time.time() - t0, "TIMEOUT", out)
 
 
 def main() -> int:
@@ -198,7 +222,8 @@ def main() -> int:
     args = parser.parse_args()
 
     files = gather_files(args.mode)
-    if not files:
+    targets = expand_targets(files, args.mode)
+    if not targets:
         print(f"[pytest:{args.mode}] no files found")
         return 0
 
@@ -212,7 +237,7 @@ def main() -> int:
             unit_sandbox_root = run_tmpdir / "unit-sandbox"
             unit_sandbox_root.mkdir(parents=True, exist_ok=True)
 
-    print(f"[pytest:{args.mode}] files={len(files)} workers={args.workers} timeout={args.timeout}s")
+    print(f"[pytest:{args.mode}] files={len(files)} targets={len(targets)} workers={args.workers} timeout={args.timeout}s")
     if unit_sandbox_root is not None:
         print(f"[pytest:{args.mode}] unit sandbox: {unit_sandbox_root}")
 
@@ -221,19 +246,18 @@ def main() -> int:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
             marker_expr = "adapter_openclaw" if args.mode == "adapter_openclaw" else None
             fut_map = {
-                ex.submit(run_one, f, args.timeout, marker_expr, run_tmpdir, unit_sandbox_root): f
-                for f in files
+                ex.submit(run_one, target, args.timeout, marker_expr, run_tmpdir, unit_sandbox_root): target
+                for target in targets
             }
             for fut in concurrent.futures.as_completed(fut_map):
                 res = fut.result()
                 results.append(res)
-                rel = res.file.relative_to(ROOT)
-                print(f"[{res.status:7}] {rel} ({res.duration_s:.1f}s)")
+                print(f"[{res.status:7}] {res.target} ({res.duration_s:.1f}s)")
     finally:
         if run_tmpdir is not None:
             shutil.rmtree(run_tmpdir, ignore_errors=True)
 
-    results.sort(key=lambda r: str(r.file))
+    results.sort(key=lambda r: r.target)
     failed = [r for r in results if r.rc != 0]
 
     total_time = sum(r.duration_s for r in results)
@@ -244,9 +268,8 @@ def main() -> int:
     if failed:
         print("\nFailed files diagnostics:")
         for r in failed:
-            rel = r.file.relative_to(ROOT)
             tail = "\n".join((r.output or "").strip().splitlines()[-40:])
-            print(f"\n--- {rel} [{r.status}] ---\n{tail}\n")
+            print(f"\n--- {r.target} [{r.status}] ---\n{tail}\n")
         return 1
 
     return 0

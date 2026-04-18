@@ -4,6 +4,7 @@ Tests a known set of facts against expected queries to catch recall regressions.
 Track Recall@5 across changes -- if this drops, something is wrong.
 """
 import os
+import shutil
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -101,10 +102,10 @@ GOLDEN_FACTS = [
 # Fixture: build graph with golden facts
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def golden_graph(tmp_path):
-    """Create a graph with golden facts for testing recall quality."""
-    db_file = tmp_path / "golden.db"
+@pytest.fixture(scope="session")
+def golden_seed_db(tmp_path_factory):
+    """Build the immutable golden corpus once; tests copy it for isolation."""
+    db_file = tmp_path_factory.mktemp("golden-recall-seed") / "golden.db"
     with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
         for text, category, owner in GOLDEN_FACTS:
@@ -116,6 +117,22 @@ def golden_graph(tmp_path):
                 confidence=0.8,
             )
             graph.add_node(node)
+        # Ensure WAL contents are folded into the seed before file-copy fixtures.
+        with graph._get_conn() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return db_file
+
+
+@pytest.fixture
+def golden_graph(tmp_path, golden_seed_db):
+    """Create an isolated graph copy with golden facts for each test."""
+    db_file = tmp_path / "golden.db"
+    shutil.copy2(golden_seed_db, db_file)
+    for suffix in ("-wal", "-shm"):
+        sibling = golden_seed_db.with_name(golden_seed_db.name + suffix)
+        if sibling.exists():
+            shutil.copy2(sibling, db_file.with_name(db_file.name + suffix))
+    graph = MemoryGraph(db_path=db_file)
     return graph, db_file
 
 
