@@ -1,0 +1,245 @@
+# Project Docs Supervisor Plan
+
+Status: active design plan
+Owner: W1 runtime/project-system
+Last updated: 2026-04-19
+
+## Why This Exists
+
+Project CRUD and registry behavior exists, but automatic project documentation updates are not currently functional enough for launch. The previous project-doc updater path was deprecated and never rebuilt into the current project architecture. This is a core Quaid pillar, so the fix is launch-critical rather than post-launch polish.
+
+The new project-docs updater should be built in the same direction as the broader Quaid supervisor architecture instead of patching the old event-queue updater.
+
+## Architecture Direction
+
+The Quaid supervisor is the root runtime owner.
+
+Near-term process tree:
+
+```text
+quaid-supervisor
+  +- project-docs-worker <project-a>
+  +- project-docs-worker <project-b>
+  +- project-docs-worker <project-c>
+  +- existing instance daemons still partly legacy-managed during transition
+```
+
+Long-term process tree:
+
+```text
+quaid-supervisor
+  +- instance-daemon <instance-a>
+  +- instance-daemon <instance-b>
+  +- project-docs-worker <project-a>
+  +- project-docs-worker <project-b>
+  +- janitor worker / scheduler
+  +- other runtime daemons
+```
+
+If the supervisor is stopped, Quaid runtime should stop. Workers should also watchdog supervisor liveness so they exit if the supervisor disappears unexpectedly.
+
+## Tick Ownership Decision
+
+Use a hybrid model:
+
+- Supervisor owns lifecycle, process ownership, registration, liveness checks, and wake orchestration.
+- Each daemon/worker owns its own domain tick and job logic.
+
+Supervisor should not run project-doc freshness logic directly. The project-docs worker owns:
+
+- shadow-git snapshot cadence
+- PROJECT.log cursor checks
+- quiet-window decisions
+- force-update request handling
+- docs update execution
+- status/cursor advancement
+
+Supervisor owns:
+
+- starting missing project-doc workers
+- restarting crashed workers
+- stopping workers for deleted/disabled projects
+- recording child process state
+- optionally nudging/waking a worker after CLI requests
+- ensuring workers are grouped under supervisor ownership
+
+This avoids putting business logic in the supervisor and avoids a single scheduler becoming the bottleneck or failure domain for all project work.
+
+## `ensure_alive` Direction
+
+Current `ensure_alive` calls mostly mean "make sure this instance daemon is up." During the transition they should mean:
+
+1. Ensure the main supervisor is up.
+2. Ensure the relevant runtime component or instance is registered or alive.
+3. If the component is supervisor-owned, ask the supervisor to instantiate/ensure it.
+4. If the component has not been migrated yet, keep the existing legacy instance-daemon ensure path as a transitional implementation detail.
+
+Future meaning:
+
+- Ensure the supervisor is up and this instance/component is registered inside it.
+- Supervisor owns instantiation and process lifecycle.
+
+For project docs workers, there should be no legacy direct ownership path: the supervisor owns them from the first implementation.
+
+## Source Of Truth
+
+Project docs update decisions derive from durable state, not event queues.
+
+- Project definitions identify projects, source roots, visible project home, and linked instances.
+- Shadow git records source/project input changes.
+- PROJECT.log is append-only chronology written by extraction/logging paths.
+- Project-docs cursor/status metadata records what docs were last updated against.
+
+Do not put updater cursor state inside the visible project tree. Cursor/status/request metadata belongs in shared hidden Quaid state, preferably shared SQLite if a clean migration path exists, otherwise atomic JSON under `QUAID_HOME/data/project-docs/`.
+
+## CLI Semantics
+
+Canonical commands:
+
+```bash
+quaid docs update <project>          # async force request; worker owns the update
+quaid project status <project>       # freshness/status/worker/cursor summary
+quaid project diff <project>         # compact source divergence since docs cursor
+quaid project diff <project> --stat  # stat-only view
+quaid project diff <project> --full  # explicit full diff escape hatch
+```
+
+`quaid docs update <project>` must not run a separate updater path in the CLI. It sets a force-update request. The supervisor-owned project-docs worker observes that request on its next tick or wake and owns the update.
+
+The CLI may print request/status information, for example:
+
+```text
+Docs update requested for recipe-app.
+Worker: running
+Request id: <id>
+Check: quaid project status recipe-app
+```
+
+## Removed/Rejected Concepts
+
+Because Quaid is prelaunch, no compatibility layer is required for the deprecated project-doc updater model.
+
+Remove or do not preserve:
+
+- legacy staged project events as docs-update drivers
+- `doc-health` naming
+- `request-docs` semantics
+- dirty docs queues/state
+- benchmark-only quiet/update environment knobs
+- event processor direct LLM docs writes
+
+Legacy project events should be torn out, not kept as compatibility inputs.
+
+## Editable And Protected Surfaces
+
+Docs updater may edit:
+
+- `PROJECT.md`
+- `TOOLS.md`
+- `AGENTS.md`
+- `docs/**`
+
+Docs updater must not edit:
+
+- `PROJECT.log`
+
+`PROJECT.log` is append-only. The updater reads it through a cursor and advances that cursor only after successful docs apply.
+
+## Update Flow
+
+Project-docs worker update job:
+
+1. Acquire project update lock.
+2. Resolve project definition/source roots/project home.
+3. Snapshot source roots into shadow git if needed.
+4. Select immutable shadow commit for this update.
+5. Read source diff from docs cursor commit to selected commit.
+6. Read PROJECT.log slice from stored cursor to selected offset.
+7. Read `PROJECT.md`, `TOOLS.md`, `AGENTS.md`, and docs inventory.
+8. Planner LLM emits scoped doc tasks.
+9. Draft pass creates scoped edits per doc or doc group.
+10. Final pass reviews all proposed edits together.
+11. Apply accepted changes atomically.
+12. Update registry/RAG for changed docs.
+13. Advance cursor/status only after successful apply.
+
+V1 can run low/no parallelism as long as the structure is planner -> scoped draft -> final review -> apply.
+
+## Due Conditions
+
+Worker should update when one of these is true:
+
+- force-update request exists
+- shadow HEAD differs from cursor and selected HEAD has been stable for quiet window
+- PROJECT.log advanced past cursor and has been stable for quiet window
+- registered project repo reaches a meaningful commit boundary and is otherwise safe to update
+
+Docs output must not reset source quiet windows or self-trigger circular updates.
+
+## Registry And Delete Invariants
+
+- Source deletion must not silently unregister docs.
+- Missing registered docs outside docs-updater apply are stale/anomaly state.
+- Only docs-updater apply transaction or project delete transaction may unregister/archive docs.
+- Project delete must stop/remove project-docs worker state.
+- Deleted/disabled projects must not be resurrected by legacy staged events; legacy staged events should be removed.
+
+## Implementation Milestones
+
+### Milestone 1: State, Requests, Status, Diff, Legacy Removal
+
+- Add hidden project-docs cursor/status/request metadata.
+- Add project update lock.
+- Add `quaid project status <project>`.
+- Add `quaid project diff <project> [--stat|--full]`.
+- Add `quaid docs update <project>` as async force-request writer.
+- Remove legacy project-event docs updater driver.
+
+### Milestone 2: Supervisor-Owned Docs Workers
+
+- Add minimal supervisor process.
+- Supervisor owns project-docs worker subprocesses.
+- Worker ticks independently and handles force requests/freshness.
+- Supervisor starts, restarts, and stops docs workers based on registered projects.
+
+### Milestone 3: Docs Update Execution
+
+- Worker executes planner -> draft -> final -> apply.
+- Protect `PROJECT.log`.
+- Advance cursor only on successful apply.
+- Update docs registry/RAG after accepted changes.
+
+### Milestone 4: Supervisor Integration With Existing `ensure_alive`
+
+- Existing ensure_alive paths also ensure supervisor is up.
+- Instance-daemon ownership can remain transitional until migrated.
+- Future work migrates all daemons under supervisor ownership.
+
+### Milestone 5: Registry/Delete Hardening
+
+- Audit unregister/delete paths.
+- Enforce source-deletion and missing-doc invariants.
+- Ensure project delete stops docs worker and clears worker state.
+
+## Validation Plan
+
+For implementation commits:
+
+1. Local focused tests.
+2. W6 code review.
+3. Revise on real findings.
+4. W8 static validation after W6 approval.
+5. W4 live VM validation after W6 approval.
+
+Live VM canary:
+
+1. Create/link/register project with source root.
+2. Start supervisor/docs worker.
+3. Change source with durable project fact/API/command.
+4. `quaid project status <project>` reports stale.
+5. `quaid project diff <project>` shows changed source.
+6. `quaid docs update <project>` records force request.
+7. Worker processes request and status becomes updating/current.
+8. Docs update naturally, without benchmark-authored hints.
+9. `PROJECT.log` is unchanged by updater.
+10. Docs recall answers from updated project docs.
