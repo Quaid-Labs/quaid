@@ -90,8 +90,10 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
             from datastore.docsdb.registry import DocsRegistry
 
             DocsRegistry(seed_projects=False).reconcile_global_project_registry()
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Failed to reconcile docs/project registry before linked-project scoping.") from exc
+            logger.warning("docs/project registry reconciliation skipped before linked-project scoping: %s", exc)
 
         current_instance = _instance_id()
         linked: List[str] = []

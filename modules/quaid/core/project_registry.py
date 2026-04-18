@@ -11,6 +11,7 @@ import logging
 import os
 import tempfile
 import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -351,30 +352,32 @@ def _save_registry(data: Dict[str, Any]) -> None:
 
 
 _DOCS_REGISTRY_RECONCILING = False
+_DOCS_REGISTRY_RECONCILE_LOCK = threading.RLock()
 
 
 def _reconcile_docs_registry_projects() -> None:
     """Repair docs-registry project rows that predate canonical registry writes."""
     global _DOCS_REGISTRY_RECONCILING
-    if _DOCS_REGISTRY_RECONCILING:
-        return
-    _DOCS_REGISTRY_RECONCILING = True
-    try:
-        from datastore.docsdb.registry import DocsRegistry
-
-        DocsRegistry(seed_projects=False).reconcile_global_project_registry()
-    except Exception as exc:
-        logger.warning("Docs/project registry reconciliation skipped: %s", exc)
+    with _DOCS_REGISTRY_RECONCILE_LOCK:
+        if _DOCS_REGISTRY_RECONCILING:
+            return
+        _DOCS_REGISTRY_RECONCILING = True
         try:
-            from lib.fail_policy import is_fail_hard_enabled
-        except Exception:
-            fail_hard = False
-        else:
-            fail_hard = bool(is_fail_hard_enabled())
-        if fail_hard:
-            raise
-    finally:
-        _DOCS_REGISTRY_RECONCILING = False
+            from datastore.docsdb.registry import DocsRegistry
+
+            DocsRegistry(seed_projects=False).reconcile_global_project_registry()
+        except Exception as exc:
+            logger.warning("Docs/project registry reconciliation skipped: %s", exc)
+            try:
+                from lib.fail_policy import is_fail_hard_enabled
+            except Exception:
+                fail_hard = False
+            else:
+                fail_hard = bool(is_fail_hard_enabled())
+            if fail_hard:
+                raise
+        finally:
+            _DOCS_REGISTRY_RECONCILING = False
 
 
 def list_projects() -> Dict[str, Dict[str, Any]]:
