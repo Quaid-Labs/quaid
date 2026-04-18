@@ -432,6 +432,18 @@ PYEOF
     ;;
 
   config)
+    CONFIG_SUBCMD="${1:-}"
+    case "$CONFIG_SUBCMD" in
+      path)
+        shift 2>/dev/null || true
+        exec "$PYTHON_BIN" "$SCRIPT_DIR/config_cli.py" path "$@"
+        ;;
+      set-auth)
+        shift 2>/dev/null || true
+        exec "$PYTHON_BIN" "$SCRIPT_DIR/config_cli.py" set-auth "$@"
+        ;;
+    esac
+
     CONFIG_HOME_HINT="${QUAID_HOME:-$HOME/.quaid}"
     CURRENT_INSTANCE_HINT="${QUAID_INSTANCE:-<instance-id>}"
     echo "error: 'quaid config' is deprecated and disabled." >&2

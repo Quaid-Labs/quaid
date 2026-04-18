@@ -1337,21 +1337,29 @@ class DocsRAG:
         limit: int = 3,
     ) -> List[Dict[str, Any]]:
         linked_set = {str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()}
+        project_rows: Dict[str, Any] = {}
         try:
-            from lib.project_registry import list_all as _list_projects
+            from core.project_registry import list_projects as _list_projects
 
-            all_projects = [
-                str(name or "").strip()
-                for name in (_list_projects() or {}).keys()
-                if str(name or "").strip()
-            ]
+            project_rows = _list_projects() or {}
         except Exception:
-            return []
+            try:
+                from lib.project_registry import list_all as _list_projects  # fallback for legacy/test paths
+
+                project_rows = _list_projects() or {}
+            except Exception:
+                # Keep scope-hint behavior available even when registry metadata is
+                # unavailable; inferred source-project labels can still surface likely
+                # unlinked candidates for a scoped miss.
+                project_rows = {}
+
+        all_projects = [
+            str(name or "").strip()
+            for name in project_rows.keys()
+            if str(name or "").strip()
+        ]
 
         candidate_projects = [name for name in all_projects if name not in linked_set]
-        if not candidate_projects:
-            return []
-
         candidate_set = set(candidate_projects)
         query_lower = str(query or "").lower()
         name_matches: set[str] = set()
@@ -1406,7 +1414,9 @@ class DocsRAG:
             if inferred_project is None:
                 inferred_project = self.infer_project_for_source(source_file)
                 source_project_cache[source_file] = inferred_project
-            if not inferred_project or inferred_project not in candidate_set:
+            if not inferred_project:
+                continue
+            if inferred_project in linked_set:
                 continue
 
             if use_vec:

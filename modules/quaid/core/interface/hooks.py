@@ -912,12 +912,12 @@ def _ensure_hook_instance_ready(
     cwd = str(hook_input.get("cwd") or "").strip() or os.getcwd()
     hint = str(project_dir_env_hint or "").strip().upper()
     existing_claude = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
-    existing_codex = os.environ.get("CODEX_PROJECT_DIR", "").strip()
+    existing_secondary = os.environ.get("CODEX_PROJECT_DIR", "").strip()
     selected_env = hint if hint in {"CLAUDE_PROJECT_DIR", "CODEX_PROJECT_DIR"} else ""
     if not selected_env:
         if existing_claude:
             selected_env = "CLAUDE_PROJECT_DIR"
-        elif existing_codex:
+        elif existing_secondary:
             selected_env = "CODEX_PROJECT_DIR"
     prior_env = {
         "CLAUDE_PROJECT_DIR": os.environ.get("CLAUDE_PROJECT_DIR"),
@@ -1208,7 +1208,7 @@ def _collect_project_context_sections() -> List[str]:
 def _build_project_context_message(
     warning_sections: List[str] | None = None,
     *,
-    include_codex_startup_context: bool = False,
+    include_startup_pending_context: bool = False,
 ) -> str:
     sections = _collect_project_context_sections()
     warnings = list(warning_sections or [])
@@ -1218,7 +1218,7 @@ def _build_project_context_message(
         sections.insert(0, warning)
     body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
     content_parts: List[str] = []
-    if include_codex_startup_context:
+    if include_startup_pending_context:
         deferred_notice_hint = _get_deferred_notice_hint()
         if deferred_notice_hint:
             content_parts.append(deferred_notice_hint)
