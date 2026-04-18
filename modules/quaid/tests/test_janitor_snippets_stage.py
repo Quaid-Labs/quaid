@@ -484,6 +484,8 @@ class TestCheckpointBehavior:
             assert final["status"] == "failed", (
                 f"Expected final checkpoint status='failed', got: {final['status']}"
             )
+            assert final.get("last_failed_at"), "Expected failed checkpoints to include last_failed_at"
+            assert "last_completed_at" not in final
 
     def test_checkpoint_final_status_completed_when_no_errors(self, monkeypatch, tmp_path):
         """When no errors occur, the final checkpoint status is 'completed'."""
@@ -530,6 +532,7 @@ class TestCheckpointBehavior:
             assert final["status"] == "completed", (
                 f"Expected final checkpoint status='completed', got: {final['status']}"
             )
+            assert final.get("last_completed_at"), "Expected completed checkpoints to include last_completed_at"
 
 
 # ---------------------------------------------------------------------------

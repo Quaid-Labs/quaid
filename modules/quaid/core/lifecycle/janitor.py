@@ -862,11 +862,16 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task != "all" or dry_run:
             return
         with checkpoint_lock:
-            checkpoint_state["heartbeat_at"] = datetime.now().isoformat()
+            now_iso = datetime.now().isoformat()
+            checkpoint_state["heartbeat_at"] = now_iso
             if stage:
                 checkpoint_state["current_stage"] = stage
             if status:
                 checkpoint_state["status"] = status
+                if status == "completed":
+                    checkpoint_state["last_completed_at"] = now_iso
+                elif status == "failed":
+                    checkpoint_state["last_failed_at"] = now_iso
             if completed and stage:
                 done = checkpoint_state.setdefault("completed_stages", [])
                 if stage not in done:
