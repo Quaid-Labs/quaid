@@ -538,18 +538,22 @@ describe("lifecycle signal detection", () => {
 
   it("prefers the richer reset backup candidate over a tiny previous session stub", () => {
     const dir = fs.mkdtempSync(path.join(process.cwd(), "tmp-lifecycle-"));
-    const tiny = path.join(dir, "prev.jsonl");
-    const backup = path.join(dir, "prev.jsonl.reset.123");
-    fs.writeFileSync(tiny, "{}\n");
-    fs.writeFileSync(backup, "User: My sister is Diana\nAssistant: Noted\n");
-    expect(
-      __test.resolveLifecycleTranscriptPath("reset", {
-        context: {
-          previousSessionEntry: { sessionFile: tiny },
-          sessionEntry: { sessionFile: path.join(dir, "current.jsonl") },
-        },
-      }, {}),
-    ).toBe(backup);
+    try {
+      const tiny = path.join(dir, "prev.jsonl");
+      const backup = path.join(dir, "prev.jsonl.reset.123");
+      fs.writeFileSync(tiny, "{}\n");
+      fs.writeFileSync(backup, "User: My sister is Diana\nAssistant: Noted\n");
+      expect(
+        __test.resolveLifecycleTranscriptPath("reset", {
+          context: {
+            previousSessionEntry: { sessionFile: tiny },
+            sessionEntry: { sessionFile: path.join(dir, "current.jsonl") },
+          },
+        }, {}),
+      ).toBe(backup);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("summarizes recall diagnostics for hook tracing", () => {

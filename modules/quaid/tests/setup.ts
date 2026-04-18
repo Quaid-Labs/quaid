@@ -1,14 +1,17 @@
 import { unlink } from 'fs/promises'
 import { spawn } from 'node:child_process'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE
-  || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
+const CREATED_TEST_HOME = !process.env.QUAID_HOME
+const TEST_QUAID_HOME = process.env.QUAID_HOME
+  || fs.mkdtempSync(path.join(os.tmpdir(), 'quaid-vitest-home-'))
 const VISIBLE_HOME = process.env.QUAID_VISIBLE_HOME
   || (() => {
-    const resolved = path.resolve(WORKSPACE)
+    const resolved = path.resolve(TEST_QUAID_HOME)
     const base = path.basename(resolved)
     if (base.startsWith(".") && base.length > 1) {
       return path.join(path.dirname(resolved), base.slice(1))
@@ -16,6 +19,17 @@ const VISIBLE_HOME = process.env.QUAID_VISIBLE_HOME
     return resolved
   })()
 const TEST_INSTANCE = process.env.QUAID_INSTANCE || 'pytest-runner'
+
+if (CREATED_TEST_HOME) {
+  process.on('exit', () => {
+    try {
+      fs.rmSync(TEST_QUAID_HOME, { recursive: true, force: true })
+    } catch {
+      // Best effort: the OS temp cleaner can handle leftovers after hard exits.
+    }
+  })
+}
+
 const PYTHON_SCRIPT = (() => {
   const modernPath = path.join(WORKSPACE, "modules/quaid/datastore/memorydb/memory_graph.py")
   if (fs.existsSync(modernPath)) return modernPath
@@ -26,7 +40,7 @@ const PYTHON_MODULE_ROOT = path.resolve(path.dirname(PYTHON_SCRIPT), "../..")
 function ensureAdapterConfig(): void {
   const payload = JSON.stringify({ adapter: { type: "standalone" } }, null, 2)
   // Instance-aware config path
-  const instanceCfgPath = path.join(WORKSPACE, "instances", TEST_INSTANCE, "config.json")
+  const instanceCfgPath = path.join(TEST_QUAID_HOME, "instances", TEST_INSTANCE, "config.json")
   try {
     if (!fs.existsSync(instanceCfgPath)) {
       fs.mkdirSync(path.dirname(instanceCfgPath), { recursive: true })
@@ -36,7 +50,7 @@ function ensureAdapterConfig(): void {
     // Best effort
   }
   // Legacy flat config (backward compat)
-  const cfgPath = path.join(WORKSPACE, "config", "config.json")
+  const cfgPath = path.join(TEST_QUAID_HOME, "config", "config.json")
   try {
     if (!fs.existsSync(cfgPath)) {
       fs.mkdirSync(path.dirname(cfgPath), { recursive: true })
@@ -66,7 +80,7 @@ export class TestMemoryInterface {
           MEMORY_DB_PATH: this.dbPath,
           MOCK_EMBEDDINGS: "1",
           QUAID_DISABLE_LLM: "1",
-          QUAID_HOME: WORKSPACE,
+          QUAID_HOME: TEST_QUAID_HOME,
           QUAID_VISIBLE_HOME: VISIBLE_HOME,
           QUAID_INSTANCE: TEST_INSTANCE,
           OPENCLAW_WORKSPACE: WORKSPACE,

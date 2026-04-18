@@ -579,6 +579,7 @@ def test_hook_extract_precompact_sweeps_older_staged_payloads(
     out, err = _run_hook_extract(
         {
             "session_id": current_session,
+            "cwd": str(tmp_path),
             "transcript_path": str(current_transcript),
         },
         monkeypatch=monkeypatch,
