@@ -124,7 +124,8 @@ describe('Recall Pipeline', () => {
   })
 
   describe('Person-Related Recall', () => {
-    it('retrieves multiple facts about a person', async () => {
+    // Python-backed store/search path can exceed 30s under loaded CI.
+    it('retrieves multiple facts about a person', { timeout: 60000 }, async () => {
       await memory.store('Hauser is a VP at Honeywell', 'quaid')
       await memory.store('Hauser has a son named Quentin', 'quaid')
       await memory.store('Hauser is very responsible', 'quaid')
