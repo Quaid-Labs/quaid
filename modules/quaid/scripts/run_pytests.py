@@ -73,6 +73,38 @@ def expand_targets(files: list[Path], mode: str) -> list[str]:
     for file_path in files:
         rel = file_path.relative_to(ROOT).as_posix()
         if (
+            mode == "unit"
+            and file_path.name == "test_store_recall.py"
+            and os.environ.get("QUAID_PYTEST_SPLIT_STORE_RECALL", "1") != "0"
+        ):
+            # The recall unit file is intentionally broad and slow when run as
+            # one subprocess. Split by stable classes so the prepush timeout
+            # remains a real hung-test guard instead of a suite-size limit.
+            targets.extend(
+                [
+                    f"{rel}::test_print_recall_results_emits_empty_message",
+                    f"{rel}::test_print_recall_results_handles_docs_rows_without_id",
+                    f"{rel}::TestStoreValidation",
+                    f"{rel}::TestStoreBasic",
+                    f"{rel}::TestRecallBasic",
+                    f"{rel}::TestStoreDedup",
+                    f"{rel}::TestInjectionBlocklist",
+                    f"{rel}::TestStoreKeywords",
+                    f"{rel}::TestGatewayRecoveryScan",
+                    f"{rel}::TestTimestampOverride",
+                    f"{rel}::TestRecallTelemetry",
+                    f"{rel}::TestRecallFastHookInjectContract",
+                    f"{rel}::TestNormalizeDomainFilter",
+                    f"{rel}::TestNormalizeDomainBoost",
+                    f"{rel}::TestDomainBoostRecallIntegration",
+                    f"{rel}::TestDomainFilterAllTrue",
+                    f"{rel}::TestDomainFilterTaggedPlusUnscoped",
+                    f"{rel}::TestScoreThreshold",
+                    f"{rel}::TestRecallLimitEdgeCases",
+                ]
+            )
+            continue
+        if (
             mode == "regression"
             and file_path.name == "test_golden_recall.py"
             and os.environ.get("QUAID_PYTEST_SPLIT_GOLDEN_RECALL", "1") != "0"
