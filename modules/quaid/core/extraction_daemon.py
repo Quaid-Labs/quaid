@@ -588,7 +588,9 @@ def _finalize_no_payload_signal(
     session_id: str,
     transcript_path: str,
     signal_data: Dict[str, Any],
+    lock_owner_key: str,
     lock_fd: int,
+    cursor_key: Optional[str] = None,
     next_cursor_offset: Optional[int] = None,
     clear_state: bool = False,
     emit_noop_metric: Optional[Callable[[], None]] = None,
@@ -600,45 +602,106 @@ def _finalize_no_payload_signal(
     if signal_type == "timeout":
         write_context_refresh_timeout_marker(session_id)
     if next_cursor_offset is not None:
-        write_cursor(session_id, int(next_cursor_offset), transcript_path)
+        write_cursor(
+            session_id,
+            int(next_cursor_offset),
+            transcript_path,
+            source_key=cursor_key,
+        )
     if clear_state:
         clear_rolling_state(session_id)
     if callable(emit_noop_metric):
         emit_noop_metric()
     mark_signal_processed(signal_data)
-    _release_session_processing_lock(session_id, lock_fd)
+    _release_session_processing_lock(lock_owner_key, lock_fd)
 
 
 # ---------------------------------------------------------------------------
 # Cursors
 # ---------------------------------------------------------------------------
 
-def read_cursor(session_id: str) -> Dict[str, Any]:
-    """Read extraction cursor for a session. Returns dict with line_offset and transcript_path."""
-    session_id = _validate_session_id(session_id)
-    cursor_file = _cursor_dir() / f"{session_id}.json"
+def _cursor_storage_key(session_id: str, source_key: Optional[str] = None) -> str:
+    """Return the on-disk cursor key for this session/source."""
+    sid = _validate_session_id(session_id)
+    raw = str(source_key or "").strip()
+    if not raw:
+        return sid
+    if _SESSION_ID_RE.match(raw):
+        return raw
+    digest = hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:32]
+    return f"source-{digest}"
+
+
+def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, Any]:
+    defaults = {
+        "line_offset": 0,
+        "transcript_path": "",
+        "internal": False,
+        "transcript_size_bytes": 0,
+        "cursor_key": cursor_file.stem,
+    }
     if not cursor_file.is_file():
-        return {
-            "line_offset": 0,
-            "transcript_path": "",
-            "internal": False,
-            "transcript_size_bytes": 0,
-        }
+        return defaults
     try:
         data = json.loads(cursor_file.read_text(encoding="utf-8"))
+        cursor_key = str(data.get("cursor_key") or cursor_file.stem or "").strip()
+        if not _SESSION_ID_RE.match(cursor_key):
+            cursor_key = _cursor_storage_key(fallback_session_id, cursor_key)
         return {
             "line_offset": int(data.get("line_offset", 0)),
             "transcript_path": data.get("transcript_path", ""),
             "internal": bool(data.get("internal", False)),
             "transcript_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
+            "cursor_key": cursor_key or cursor_file.stem,
         }
     except (json.JSONDecodeError, ValueError, OSError):
-        return {
-            "line_offset": 0,
-            "transcript_path": "",
-            "internal": False,
-            "transcript_size_bytes": 0,
-        }
+        return defaults
+
+
+def _find_cursor_file_for_session(session_id: str) -> Optional[Path]:
+    """Find the newest cursor file that belongs to this session id."""
+    cursor_dir = _cursor_dir()
+    newest_path: Optional[Path] = None
+    newest_mtime: float = -1.0
+    for candidate in cursor_dir.glob("*.json"):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if str(data.get("session_id") or "").strip() != session_id:
+            continue
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        if mtime >= newest_mtime:
+            newest_path = candidate
+            newest_mtime = mtime
+    return newest_path
+
+
+def read_cursor(session_id: str, *, source_key: Optional[str] = None) -> Dict[str, Any]:
+    """Read extraction cursor for a session. Returns dict with line_offset and transcript_path."""
+    session_id = _validate_session_id(session_id)
+    resolved_key = _cursor_storage_key(session_id, source_key)
+    cursor_dir = _cursor_dir()
+    preferred_path = cursor_dir / f"{resolved_key}.json"
+    state = _read_cursor_file(preferred_path, session_id)
+    if preferred_path.is_file():
+        return state
+    # Backward-compat alias: fall back to legacy per-session cursor filename.
+    legacy_path = cursor_dir / f"{session_id}.json"
+    if legacy_path == preferred_path:
+        discovered = _find_cursor_file_for_session(session_id)
+        if discovered and discovered != preferred_path:
+            return _read_cursor_file(discovered, session_id)
+        return state
+    if legacy_path.is_file():
+        return _read_cursor_file(legacy_path, session_id)
+    discovered = _find_cursor_file_for_session(session_id)
+    if discovered:
+        return _read_cursor_file(discovered, session_id)
+    return state
 
 
 def _transcript_size_bytes(transcript_path: str) -> int:
@@ -648,12 +711,22 @@ def _transcript_size_bytes(transcript_path: str) -> int:
         return 0
 
 
-def write_cursor(session_id: str, line_offset: int, transcript_path: str, *, internal: bool = False) -> None:
+def write_cursor(
+    session_id: str,
+    line_offset: int,
+    transcript_path: str,
+    *,
+    internal: bool = False,
+    source_key: Optional[str] = None,
+) -> None:
     """Write extraction cursor after processing."""
     session_id = _validate_session_id(session_id)
-    cursor_file = _cursor_dir() / f"{session_id}.json"
+    cursor_key = _cursor_storage_key(session_id, source_key)
+    cursor_dir = _cursor_dir()
+    cursor_file = cursor_dir / f"{cursor_key}.json"
     payload = {
         "session_id": session_id,
+        "cursor_key": cursor_key,
         "line_offset": line_offset,
         "transcript_path": transcript_path,
         "internal": bool(internal),
@@ -664,6 +737,85 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str, *, int
         _atomic_write(cursor_file, json.dumps(payload))
     except OSError as e:
         logger.error("cursor write failed for %s: %s", session_id, e)
+        return
+    # Migration cleanup: when writing source-keyed cursors, retire stale legacy
+    # per-session cursor file to avoid duplicate timeout scans.
+    legacy_file = cursor_dir / f"{session_id}.json"
+    if legacy_file != cursor_file:
+        try:
+            if legacy_file.exists():
+                legacy_file.unlink()
+        except OSError:
+            pass
+
+
+def _canonicalize_transcript_source_path(transcript_path: str) -> str:
+    """Normalize transcript path variants that represent the same source."""
+    raw = str(transcript_path or "").strip()
+    if not raw:
+        return ""
+    expanded = os.path.abspath(os.path.expanduser(raw))
+    lower = expanded.lower()
+    for marker in (".jsonl.reset.", ".checkpoint."):
+        idx = lower.find(marker)
+        if idx > 0:
+            expanded = expanded[:idx] + ".jsonl"
+            break
+    return expanded
+
+
+def _signal_source_identity(
+    session_id: str,
+    transcript_path: str,
+    *,
+    cursor_data: Optional[Dict[str, Any]] = None,
+    staged_state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Return a stable source identity string used for lock/cursor keying."""
+    candidates: List[str] = [str(transcript_path or "").strip()]
+    if isinstance(cursor_data, dict):
+        candidates.append(str(cursor_data.get("transcript_path") or "").strip())
+    if isinstance(staged_state, dict):
+        candidates.append(str(staged_state.get("transcript_path") or "").strip())
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        name = os.path.basename(candidate)
+        uuid_match = _SESSION_ID_UUID_RE.search(name)
+        if uuid_match:
+            return f"uuid:{uuid_match.group(0).lower()}"
+        canonical_path = _canonicalize_transcript_source_path(candidate)
+        if canonical_path:
+            return f"path:{canonical_path}"
+    return f"session:{_validate_session_id(session_id)}"
+
+
+def _signal_source_cursor_key(
+    session_id: str,
+    transcript_path: str,
+    *,
+    cursor_data: Optional[Dict[str, Any]] = None,
+    staged_state: Optional[Dict[str, Any]] = None,
+) -> str:
+    identity = _signal_source_identity(
+        session_id,
+        transcript_path,
+        cursor_data=cursor_data,
+        staged_state=staged_state,
+    )
+    digest = hashlib.sha1(identity.encode("utf-8", "replace")).hexdigest()[:32]
+    return f"source-{digest}"
+
+
+def _read_cursor_with_source_compat(session_id: str, source_key: Optional[str]) -> Dict[str, Any]:
+    """Read a source-aware cursor while tolerating patched one-arg test doubles."""
+    if source_key:
+        try:
+            return read_cursor(session_id, source_key=source_key)
+        except TypeError:
+            pass
+    return read_cursor(session_id)
 
 
 def _deferred_extraction_dir() -> Path:
@@ -2086,23 +2238,28 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
             session_id = _validate_session_id(transcript_path.stem)
         except ValueError:
             continue
-        cursor_file = _cursor_dir() / f"{session_id}.json"
+        source_cursor_key = _signal_source_cursor_key(session_id, str(transcript_path))
+        cursor_file = _cursor_dir() / f"{source_cursor_key}.json"
+        legacy_cursor_file = _cursor_dir() / f"{session_id}.json"
         if not transcript_path.is_file():
             continue
-        if cursor_file.exists():
-            try:
-                cursor_data = json.loads(cursor_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                cursor_data = {}
+        if cursor_file.exists() or legacy_cursor_file.exists():
+            cursor_data = read_cursor(session_id, source_key=source_cursor_key)
             existing_path = str(cursor_data.get("transcript_path") or "").strip()
             if existing_path and os.path.isfile(existing_path):
                 continue
             line_offset = int(cursor_data.get("line_offset", 0) or 0)
             internal = bool(cursor_data.get("internal", False))
-            write_cursor(session_id, line_offset, str(transcript_path), internal=internal)
+            write_cursor(
+                session_id,
+                line_offset,
+                str(transcript_path),
+                internal=internal,
+                source_key=source_cursor_key,
+            )
             discovered += 1
             continue
-        write_cursor(session_id, 0, str(transcript_path))
+        write_cursor(session_id, 0, str(transcript_path), source_key=source_cursor_key)
         discovered += 1
     return discovered
 
@@ -2128,7 +2285,12 @@ def _is_internal_transcript_session(
         return False
 
 
-def _advance_internal_session_cursor_to_end(session_id: str, transcript_path: str) -> None:
+def _advance_internal_session_cursor_to_end(
+    session_id: str,
+    transcript_path: str,
+    *,
+    cursor_key: Optional[str] = None,
+) -> None:
     """Mark an internal session fully consumed by advancing its cursor to EOF."""
     total_lines = 0
     try:
@@ -2136,7 +2298,13 @@ def _advance_internal_session_cursor_to_end(session_id: str, transcript_path: st
             total_lines = count_transcript_lines(transcript_path)
     except OSError:
         total_lines = 0
-    write_cursor(session_id, total_lines, transcript_path, internal=True)
+    write_cursor(
+        session_id,
+        total_lines,
+        transcript_path,
+        internal=True,
+        source_key=cursor_key,
+    )
     clear_rolling_state(session_id)
     _cursor_end_timeout_fired.add(session_id)
 
@@ -2146,6 +2314,7 @@ def _reconcile_internal_cursor_state(
     transcript_path: str,
     *,
     cursor_data: Optional[Dict[str, Any]] = None,
+    cursor_key: Optional[str] = None,
     adapter=None,
 ) -> str:
     """Return internal-session handling state for the current transcript.
@@ -2156,7 +2325,7 @@ def _reconcile_internal_cursor_state(
     - "unfrozen": transcript gained non-internal content past a frozen cursor.
     - "not_internal": transcript is not internal and cursor was not frozen.
     """
-    state = cursor_data or read_cursor(session_id)
+    state = cursor_data or _read_cursor_with_source_compat(session_id, cursor_key)
     cursor_offset = int(state.get("line_offset", 0) or 0)
     cursor_internal = bool(state.get("internal", False))
 
@@ -2171,11 +2340,21 @@ def _reconcile_internal_cursor_state(
         return "frozen"
 
     if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
-        _advance_internal_session_cursor_to_end(session_id, transcript_path)
+        _advance_internal_session_cursor_to_end(
+            session_id,
+            transcript_path,
+            cursor_key=cursor_key,
+        )
         return "advanced"
 
     if cursor_internal:
-        write_cursor(session_id, cursor_offset, transcript_path, internal=False)
+        write_cursor(
+            session_id,
+            cursor_offset,
+            transcript_path,
+            internal=False,
+            source_key=cursor_key,
+        )
         return "unfrozen"
 
     return "not_internal"
@@ -2241,10 +2420,20 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         mark_signal_processed(signal_data)
         return
 
-    lock_fd = _acquire_session_processing_lock(session_id)
+    lock_owner_key = _signal_source_cursor_key(
+        session_id,
+        transcript_path,
+        staged_state=staged_state,
+    )
+    lock_fd = _acquire_session_processing_lock(lock_owner_key)
 
     if lock_fd is None:
-        logger.info("[%s] session %s already has an active extraction; preserving signal for retry", label, session_id)
+        logger.info(
+            "[%s] session %s already has an active extraction (source lock=%s); preserving signal for retry",
+            label,
+            session_id,
+            lock_owner_key,
+        )
         # Dedup: if another signal for this session already exists in the queue,
         # mark this one processed to prevent unbounded pile-up when orphan scan
         # generates multiple redundant signals while a lock is held.
@@ -2277,7 +2466,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if is_registered_subagent(session_id):
             logger.info("[%s] session %s: registered subagent, skipping standalone extraction", label, session_id)
             mark_signal_processed(signal_data)
-            _release_session_processing_lock(session_id, lock_fd)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
             return
     except Exception:
         pass
@@ -2289,22 +2478,23 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         adapter = None
 
-    cursor_data = read_cursor(session_id)
+    cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
     internal_state = _reconcile_internal_cursor_state(
         session_id,
         transcript_path,
         cursor_data=cursor_data,
+        cursor_key=lock_owner_key,
         adapter=adapter,
     )
     if internal_state == "frozen":
         logger.info("[%s] session %s: cursor marked internal with no new content, skipping signal", label, session_id)
         mark_signal_processed(signal_data)
-        _release_session_processing_lock(session_id, lock_fd)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
         return
     if internal_state == "advanced":
         logger.info("[%s] session %s: internal maintenance transcript, advancing cursor to EOF", label, session_id)
         mark_signal_processed(signal_data)
-        _release_session_processing_lock(session_id, lock_fd)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
         return
     if internal_state == "unfrozen":
         logger.info(
@@ -2312,14 +2502,14 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             label,
             session_id,
         )
-        cursor_data = read_cursor(session_id)
+        cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
 
     try:
         is_subagent_session_fn = getattr(adapter, "is_subagent_session", None) if adapter is not None else None
         if callable(is_subagent_session_fn) and is_subagent_session_fn(session_id, Path(transcript_path)):
             logger.info("[%s] session %s: adapter-marked subagent, skipping standalone extraction", label, session_id)
             mark_signal_processed(signal_data)
-            _release_session_processing_lock(session_id, lock_fd)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
             return
     except Exception:
         pass
@@ -2343,7 +2533,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                             "found; will retry after rolling extraction completes (FIFO)",
                             label, session_id,
                         )
-                        _release_session_processing_lock(session_id, lock_fd)
+                        _release_session_processing_lock(lock_owner_key, lock_fd)
                         return  # preserve signal on disk; retry next poll cycle
                 except (json.JSONDecodeError, OSError):
                     pass
@@ -2405,7 +2595,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if not _reset_found:
             logger.warning("[%s] transcript not found: %s", label, transcript_path)
             mark_signal_processed(signal_data)
-            _release_session_processing_lock(session_id, lock_fd)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
             return
 
     cursor_offset = int(cursor_data["line_offset"] or 0)
@@ -2417,7 +2607,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     # offset at the end of a successful extraction (line ~1860).
     if not cursor_transcript and transcript_path:
         try:
-            write_cursor(session_id, cursor_offset, transcript_path)
+            write_cursor(
+                session_id,
+                cursor_offset,
+                transcript_path,
+                source_key=lock_owner_key,
+            )
         except Exception:
             pass
 
@@ -2477,7 +2672,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path, cursor_offset,
             )
             mark_signal_processed(signal_data)
-            _release_session_processing_lock(session_id, lock_fd)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
             return
         elif _is_reset_rename:
             # Reset signal on a renamed backup — this IS the /reset extraction.
@@ -2542,7 +2737,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path, cursor_offset,
             )
             mark_signal_processed(signal_data)
-            _release_session_processing_lock(session_id, lock_fd)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
             return
         elif _is_cursor_on_backup_to_plain:
             # cursor_offset == 0: no prior extraction — proceed normally.
@@ -2645,7 +2840,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 session_id=session_id,
                 transcript_path=transcript_path,
                 signal_data=signal_data,
+                lock_owner_key=lock_owner_key,
                 lock_fd=lock_fd,
+                cursor_key=lock_owner_key,
                 emit_noop_metric=lambda: _emit_noop_flush_metric("no_new_content"),
             )
             return
@@ -2734,7 +2931,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     session_id=session_id,
                     transcript_path=transcript_path,
                     signal_data=signal_data,
+                    lock_owner_key=lock_owner_key,
                     lock_fd=lock_fd,
+                    cursor_key=lock_owner_key,
                     next_cursor_offset=total_lines,
                 )
                 return
@@ -2771,7 +2970,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         session_id=session_id,
                         transcript_path=transcript_path,
                         signal_data=signal_data,
+                        lock_owner_key=lock_owner_key,
                         lock_fd=lock_fd,
+                        cursor_key=lock_owner_key,
                         next_cursor_offset=next_cursor_offset,
                         clear_state=signal_type in ("reset", "session_end", "compaction"),
                     )
@@ -2874,7 +3075,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 staged_state["buffered_line_offset"] = buffered_line_offset
                 staged_state["processed_line_offset"] = buffered_line_offset
                 write_rolling_state(session_id, staged_state)
-                write_cursor(session_id, buffered_line_offset, transcript_path)
+                write_cursor(
+                    session_id,
+                    buffered_line_offset,
+                    transcript_path,
+                    source_key=lock_owner_key,
+                )
                 mark_signal_processed(signal_data)
                 return
             staged_state = _stage_semantic_buffer_payload(
@@ -2890,7 +3096,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 chunk_budget=chunk_budget,
                 chunk_line_budget=chunk_line_budget,
             )
-            write_cursor(session_id, buffered_line_offset, transcript_path)
+            write_cursor(
+                session_id,
+                buffered_line_offset,
+                transcript_path,
+                source_key=lock_owner_key,
+            )
             mark_signal_processed(signal_data)
             if buffered_line_offset > cursor_offset and total_lines > buffered_line_offset:
                 remaining_tokens = estimate_unextracted_tokens(
@@ -3061,7 +3272,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         )
         if signal_type == "timeout":
             write_context_refresh_timeout_marker(session_id)
-        write_cursor(session_id, total_lines, transcript_path)
+        write_cursor(
+            session_id,
+            total_lines,
+            transcript_path,
+            source_key=lock_owner_key,
+        )
         clear_rolling_state(session_id)
         if mark_harvested_fn is not None:
             try:
@@ -3224,7 +3440,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         logger.error("[%s] session %s: extraction failed (signal preserved for retry): %s",
                      label, session_id, e, exc_info=True)
     finally:
-        _release_session_processing_lock(session_id, lock_fd)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
         if tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -3383,6 +3599,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             session_id,
             transcript_path,
             cursor_data=data,
+            cursor_key=str(data.get("cursor_key") or "").strip() or None,
             adapter=adapter,
         )
         if internal_state == "frozen":
@@ -3567,6 +3784,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             session_id,
             transcript_path,
             cursor_data=data,
+            cursor_key=str(data.get("cursor_key") or "").strip() or None,
             adapter=adapter,
         )
         if internal_state == "frozen":

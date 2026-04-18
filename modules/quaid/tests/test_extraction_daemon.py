@@ -254,9 +254,11 @@ def test_ensure_discovered_session_cursors_repairs_broken_existing_cursor(monkey
 
     repaired = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
     assert repaired == 1
-    data = json.loads(broken.read_text(encoding="utf-8"))
-    assert data["line_offset"] == 1
-    assert data["transcript_path"] == str(transcript)
+    source_key = extraction_daemon._signal_source_cursor_key("sess-cc", str(transcript))
+    migrated = extraction_daemon.read_cursor("sess-cc", source_key=source_key)
+    assert migrated["line_offset"] == 1
+    assert migrated["transcript_path"] == str(transcript)
+    assert not broken.exists()
 
 
 def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch, tmp_path):
@@ -280,9 +282,16 @@ def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch
     discovered = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
     assert discovered == 1
 
+    source_key = extraction_daemon._signal_source_cursor_key(
+        "6aadea75-5a01-45c0-af68-017d2e58bbc8",
+        str(canonical),
+    )
+    canonical_cursor = extraction_daemon.read_cursor(
+        "6aadea75-5a01-45c0-af68-017d2e58bbc8",
+        source_key=source_key,
+    )
+    assert canonical_cursor["transcript_path"] == str(canonical)
     cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
-    canonical_cursor = cursor_dir / "6aadea75-5a01-45c0-af68-017d2e58bbc8.json"
-    assert canonical_cursor.exists()
     assert list(cursor_dir.glob("unknown-*.json")) == []
 
 
@@ -1683,6 +1692,102 @@ class TestSignalRoundTrip:
         )
 
         assert marked == []
+
+    def test_process_signal_serializes_shared_source_across_session_ids(self, monkeypatch, tmp_path):
+        from ingest import extract as extract_mod
+        from lib.adapter import reset_adapter, set_adapter
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        shared_uuid = "12345678-1234-1234-1234-1234567890ab"
+        transcript_path = tmp_path / f"rollout-20260418-{shared_uuid}.jsonl"
+        transcript_path.write_text(
+            (
+                '{"role":"user","content":"I keep an emergency brass key under the west porch planter."}\n'
+                '{"role":"assistant","content":"Understood. I will remember the brass key location detail."}\n'
+            ),
+            encoding="utf-8",
+        )
+
+        class _Adapter:
+            def parse_session_jsonl(self, _path):
+                return (
+                    "User: I keep an emergency brass key under the west porch planter.\n"
+                    "Assistant: Understood. I will remember the brass key location detail."
+                )
+
+            def is_subagent_session(self, _session_id, _transcript_path=None):
+                return False
+
+        extract_calls = []
+
+        def _fake_extract_from_transcript(transcript, **kwargs):
+            assert "brass key" in transcript
+            extract_calls.append(kwargs.get("session_id"))
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [],
+                "facts": [],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", _fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda *_args, **_kwargs: {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "facts": [],
+                "edges_created": 0,
+                "snippets": {},
+                "journal": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+        monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+        monkeypatch.setattr(extraction_daemon, "_tmp_dir", lambda: tmp_path)
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda _sid: False
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        sys.modules["core.subagent_registry"] = fake_registry
+        set_adapter(_Adapter())
+        try:
+            extraction_daemon.process_signal(
+                {
+                    "session_id": "codex-main-session",
+                    "type": "session_end",
+                    "transcript_path": str(transcript_path),
+                    "_signal_path": str(tmp_path / "sig1.json"),
+                }
+            )
+            extraction_daemon.process_signal(
+                {
+                    "session_id": "codex-rollout-mirror",
+                    "type": "timeout",
+                    "transcript_path": str(transcript_path),
+                    "_signal_path": str(tmp_path / "sig2.json"),
+                }
+            )
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            reset_adapter()
+
+        assert extract_calls == ["codex-main-session"]
 
     def test_read_pending_signals_ignores_corrupt_json(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
