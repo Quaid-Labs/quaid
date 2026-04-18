@@ -16,9 +16,20 @@ def test_only_daemon_calls_run_extract_from_transcript():
     allowed_runtime_callers = {
         repo_root / "core" / "extraction_daemon.py",
     }
+    ignored_dirs = {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tmp",
+        "__pycache__",
+        "node_modules",
+    }
     violations: list[str] = []
 
     for py_file in repo_root.rglob("*.py"):
+        if any(part in ignored_dirs for part in py_file.relative_to(repo_root).parts):
+            continue
         if "/tests/" in py_file.as_posix():
             continue
         if py_file.name == "__init__.py":
@@ -58,4 +69,3 @@ def test_only_daemon_calls_run_extract_from_transcript():
         "run_extract_from_transcript.\n"
         + "\n".join(sorted(violations))
     )
-

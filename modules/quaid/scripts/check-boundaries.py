@@ -52,6 +52,23 @@ PY_DYNAMIC_IMPORT_RE = re.compile(
     r"""__import__\(\s*['"]([a-zA-Z_][\w\.]*)['"]|importlib\.import_module\(\s*['"]([a-zA-Z_][\w\.]*)['"]"""
 )
 TS_IMPORT_RE = re.compile(r"^\s*import(?:.+from\s+)?[\"']([^\"']+)[\"']")
+IGNORED_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tmp",
+    "__pycache__",
+    "node_modules",
+}
+
+
+def is_generated_or_external_path(path: Path) -> bool:
+    try:
+        rel = path.relative_to(ROOT)
+    except ValueError:
+        return True
+    return any(part in IGNORED_DIRS or part.startswith(".tmp") for part in rel.parts)
 
 
 def subsystem_for(path: Path) -> str | None:
@@ -139,8 +156,7 @@ def main() -> int:
         if p.is_file()
         and p.suffix in {".py", ".ts", ".js", ".mjs"}
         and "tests" not in p.parts
-        and "__pycache__" not in p.parts
-        and "node_modules" not in p.parts
+        and not is_generated_or_external_path(p)
     ]
     violations: list[str] = []
     skipped_outside_subsystems: list[str] = []

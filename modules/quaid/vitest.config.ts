@@ -20,8 +20,8 @@ export default defineConfig({
     },
     // Use separate test database
     env: {
-      TEST_DB_PATH: '/tmp/test-memory.db',
-      MEMORY_DB_PATH: '/tmp/test-memory.db'
+      TEST_DB_PATH: process.env.TEST_DB_PATH || '/tmp/test-memory.db',
+      MEMORY_DB_PATH: process.env.MEMORY_DB_PATH || process.env.TEST_DB_PATH || '/tmp/test-memory.db'
     },
     // Python-backed memory tests spawn subprocesses; loaded CI runners can
     // exceed 30s per test or setup hook while live-test VMs are active.
