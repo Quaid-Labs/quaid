@@ -840,6 +840,12 @@ class TestDocsRegistryGc:
         """GC on empty registry returns clean result."""
         registry = self._make_registry(tmp_path, monkeypatch)
 
+        # Instance bootstrap may pre-register valid docs entries; clear them to
+        # test truly-empty GC behavior deterministically.
+        from lib.database import get_connection
+        with get_connection(registry.db_path) as conn:
+            conn.execute("DELETE FROM doc_registry")
+
         result = registry.gc(dry_run=True)
         assert len(result["removed"]) == 0
         assert result["kept"] == 0

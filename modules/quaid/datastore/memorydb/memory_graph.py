@@ -10367,6 +10367,71 @@ def create_edge(
         ).fetchone()
         return row is not None
 
+    def _insert_edge_row(
+        conn: sqlite3.Connection,
+        *,
+        source_id: str,
+        target_id: str,
+        rel: str,
+        src_fact_id: Optional[str],
+    ) -> str:
+        edge = Edge.create(
+            source_id=source_id,
+            target_id=target_id,
+            relation=rel,
+            source_fact_id=src_fact_id,
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO edges
+            (id, source_id, target_id, relation, attributes, weight,
+             valid_from, valid_until, created_at, source_fact_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                edge.id, edge.source_id, edge.target_id, edge.relation,
+                json.dumps(edge.attributes),
+                edge.weight,
+                edge.valid_from, edge.valid_until,
+                edge.created_at or datetime.now().isoformat(),
+                edge.source_fact_id,
+            ),
+        )
+        return edge.id
+
+    def _collect_partner_ids(conn: sqlite3.Connection, person_id: str) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT
+                CASE
+                    WHEN source_id = ? THEN target_id
+                    ELSE source_id
+                END AS partner_id
+            FROM edges
+            WHERE relation IN ('spouse_of', 'partner_of')
+              AND (source_id = ? OR target_id = ?)
+            """,
+            (person_id, person_id, person_id),
+        ).fetchall()
+        partner_ids: List[str] = []
+        for row in rows:
+            partner_id = str(row["partner_id"] or "").strip()
+            if partner_id and partner_id not in partner_ids and partner_id != person_id:
+                partner_ids.append(partner_id)
+        return partner_ids
+
+    def _collect_children_ids(conn: sqlite3.Connection, parent_id: str) -> List[str]:
+        rows = conn.execute(
+            "SELECT target_id FROM edges WHERE relation = 'parent_of' AND source_id = ?",
+            (parent_id,),
+        ).fetchall()
+        child_ids: List[str] = []
+        for row in rows:
+            child_id = str(row["target_id"] or "").strip()
+            if child_id and child_id not in child_ids and child_id != parent_id:
+                child_ids.append(child_id)
+        return child_ids
+
     conn_ctx = nullcontext(_conn) if _conn is not None else graph._get_conn()
     with conn_ctx as conn:
         # Find or create subject entity
@@ -10405,35 +10470,53 @@ def create_edge(
 
         # Create edge in same transaction as any new entities.
         p0 = time.perf_counter() if telemetry_enabled else 0.0
-        edge = Edge.create(
+        edge_id = _insert_edge_row(
+            conn,
             source_id=subject.id,
             target_id=obj.id,
-            relation=relation,
-            source_fact_id=source_fact_id
+            rel=relation,
+            src_fact_id=source_fact_id,
         )
-        conn.execute("""
-            INSERT OR REPLACE INTO edges
-            (id, source_id, target_id, relation, attributes, weight,
-            valid_from, valid_until, created_at, source_fact_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            edge.id, edge.source_id, edge.target_id, edge.relation,
-            json.dumps(edge.attributes),
-            edge.weight,
-            edge.valid_from, edge.valid_until,
-            edge.created_at or datetime.now().isoformat(),
-            edge.source_fact_id,
-        ))
         _mark_phase("insert_edge", p0)
 
+        inferred_edges_created = 0
+
+        def _ensure_parent_edge(parent_id: str, child_id: str) -> None:
+            nonlocal inferred_edges_created
+            if not parent_id or not child_id or parent_id == child_id:
+                return
+            if _edge_exists(conn, parent_id, child_id, "parent_of"):
+                return
+            _insert_edge_row(
+                conn,
+                source_id=parent_id,
+                target_id=child_id,
+                rel="parent_of",
+                src_fact_id=source_fact_id,
+            )
+            inferred_edges_created += 1
+
+        p0 = time.perf_counter() if telemetry_enabled else 0.0
+        if relation == "parent_of":
+            for partner_id in _collect_partner_ids(conn, subject.id):
+                _ensure_parent_edge(partner_id, obj.id)
+        elif relation in {"spouse_of", "partner_of"}:
+            for child_id in _collect_children_ids(conn, subject.id):
+                _ensure_parent_edge(obj.id, child_id)
+            for child_id in _collect_children_ids(conn, obj.id):
+                _ensure_parent_edge(subject.id, child_id)
+        _mark_phase("infer_coparent_edges", p0)
+
         result = {
-            "edge_id": edge.id,
+            "edge_id": edge_id,
             "status": "created",
             "subject_id": subject.id,
             "object_id": obj.id,
             "subject_created": subject_created,
             "object_created": object_created,
         }
+        if inferred_edges_created:
+            result["inferred_edges_created"] = inferred_edges_created
         if telemetry_enabled:
             total_ms = round((time.perf_counter() - edge_t0) * 1000.0, 2)
             result["timing_ms"] = {"total": total_ms, **phase_ms}
