@@ -36,9 +36,12 @@ describe("openclaw postinstall hook", () => {
       ...process.env,
       HOME: home,
       QUAID_HOME: hiddenHome,
+      // Keep postinstall deterministic in tests: skip discovering a real
+      // host OpenClaw binary by narrowing PATH to core system bins only.
+      PATH: "/usr/bin:/bin",
     };
 
-    const res = spawnSync("node", [script.pathname], { env, encoding: "utf8" });
+    const res = spawnSync(process.execPath, [script.pathname], { env, encoding: "utf8" });
     expect(res.status).toBe(0);
 
     const cfg = JSON.parse(fs.readFileSync(path.join(home, ".openclaw", "exec-approvals.json"), "utf8"));
