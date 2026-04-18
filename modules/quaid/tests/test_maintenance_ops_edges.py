@@ -1,5 +1,6 @@
 import os
 import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -113,6 +114,110 @@ def test_batch_extract_edges_resolves_owner_once_per_fact_not_per_edge():
     assert resolve_owner.call_count == 2
     assert len(results) == 1
     assert len(results[0]) == 2
+
+
+def test_batch_extract_edges_prompt_includes_indirect_kinship_guardrails():
+    facts = [{"id": "fact-6", "text": "Alice is Solomon Steadman's niece"}]
+    metrics = maintenance_ops.JanitorMetrics()
+    captured = {}
+
+    def _fake_call(prompt: str, max_tokens: int, timeout: float):
+        captured["prompt"] = prompt
+        return ('[{"fact": 1, "edges": []}]', 0.05)
+
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=_fake_call):
+        maintenance_ops.batch_extract_edges(
+            facts=facts,
+            graph=object(),
+            metrics=metrics,
+            relations_list="parent_of, sibling_of, spouse_of, family_of",
+        )
+
+    prompt = captured.get("prompt", "")
+    assert "indirect kinship" in prompt.lower()
+    assert "do NOT convert them to parent_of" in prompt
+    assert "use family_of" in prompt
+    assert "do NOT infer hidden intermediate hops" in prompt
+
+
+def test_review_pending_prompt_includes_indirect_kinship_guardrails():
+    captured = {}
+
+    class _DummyResult:
+        def __init__(self, rows=None):
+            self._rows = rows or []
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql)
+            if "SELECT COUNT(*) FROM nodes WHERE status = 'pending'" in text:
+                return _DummyResult(rows=[(1,)])
+            if "SELECT id, type, name, created_at" in text and "FROM nodes" in text:
+                return _DummyResult(
+                    rows=[
+                        {
+                            "id": "mem-1",
+                            "type": "Fact",
+                            "name": "Alice is Solomon Steadman's niece",
+                            "created_at": "2026-04-18T00:00:00",
+                            "verified": 0,
+                            "confidence": 0.8,
+                            "source": "unit-test",
+                            "session_id": "sess-1",
+                            "speaker": "user",
+                        }
+                    ]
+                )
+            if "SELECT name, status, source, speaker, attributes FROM nodes WHERE id = ?" in text:
+                return _DummyResult(
+                    rows=[
+                        {
+                            "name": "Alice is Solomon Steadman's niece",
+                            "status": "pending",
+                            "source": "unit-test",
+                            "speaker": "user",
+                            "attributes": "{}",
+                        }
+                    ]
+                )
+            return _DummyResult(rows=[])
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    def _fake_call(user_message=None, system_prompt=None, max_tokens=None, **kwargs):
+        captured["system_prompt"] = system_prompt
+        return '[{"id":"mem-1","action":"KEEP"}]', 0.05
+
+    fake_cfg = SimpleNamespace(
+        models=SimpleNamespace(max_output=lambda tier: 1024),
+        core=SimpleNamespace(
+            parallel=SimpleNamespace(enabled=False, llm_workers=1, task_workers={})
+        ),
+    )
+    with patch.object(maintenance_ops, "_cfg", fake_cfg), patch.object(
+        maintenance_ops, "_owner_display_name", return_value="Solomon"
+    ), patch.object(
+        maintenance_ops, "_owner_full_name", return_value="Solomon Steadman"
+    ), patch.object(
+        maintenance_ops, "call_deep_reasoning", side_effect=_fake_call
+    ):
+        out = maintenance_ops.review_pending_memories(_Graph(), dry_run=True, max_items=1)
+
+    assert out["total_reviewed"] == 1
+    prompt = captured.get("system_prompt", "")
+    assert "indirect kinship" in prompt.lower()
+    assert "do NOT emit parent_of" in prompt
+    assert "use family_of" in prompt
+    assert "do NOT infer hidden intermediate hops" in prompt
 
 
 def test_owner_full_name_logs_when_owner_resolution_fails_and_not_fail_hard():

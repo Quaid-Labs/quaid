@@ -74,6 +74,10 @@ QUALITY RULES:
   - Do not translate factual statements into another language unless explicitly requested.
   - Keep named entities exactly as written in the transcript.
   - If transcript lines mix languages, preserve each extracted fact in the source language of that line.
+- RELATIONSHIP TERM FIDELITY (MANDATORY):
+  - Preserve relationship-role wording exactly as stated in the source text (in any language).
+  - Never substitute one kinship role for another (for example sister->mother, niece->daughter), even if it seems plausible.
+  - If relationship wording is ambiguous, keep the original wording and lower extraction_confidence instead of rewriting the role.
 - If a recommendation later paid off or was adopted, keep BOTH the original recommendation object and the later outcome as separate searchable facts when both are explicitly present.
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Add "domains" as an array of domain tags from the available domain list
@@ -120,6 +124,9 @@ EDGE DIRECTION RULES (critical):
 - works_at: PERSON is subject
 - lives_at: PERSON is subject
 - owns: OWNER is subject
+- For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law): do NOT convert them to parent_of.
+- Use family_of for indirect kinship when no direct parent/child wording is explicitly stated.
+- Do not infer hidden intermediate hops (such as sibling_of + parent_of) from a single indirect kinship phrase.
 
 EDGE FORMAT:
 - subject: The source entity name as a MINIMAL entity label (e.g., "Carol Smith" or "Carol"), not a whole clause or sentence
