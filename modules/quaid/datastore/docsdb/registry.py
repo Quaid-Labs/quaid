@@ -330,6 +330,24 @@ class DocsRegistry:
         logger.warning("Invalid type for %s (expected list, got %s); using default", field_name, type(value).__name__)
         return fallback
 
+    def _ensure_project_definitions_table(self, conn) -> None:
+        """Create project_definitions table if it doesn't exist."""
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_definitions (
+                name TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                home_dir TEXT NOT NULL,
+                source_roots TEXT DEFAULT '[]',
+                auto_index INTEGER DEFAULT 1,
+                patterns TEXT DEFAULT '["*.md"]',
+                exclude TEXT DEFAULT '["*.db","*.log","*.pyc","__pycache__/"]',
+                description TEXT DEFAULT '',
+                state TEXT DEFAULT 'active' CHECK(state IN ('active', 'archived', 'deleted')),
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
     def ensure_table(self):
         """Create doc_registry table if it doesn't exist."""
         def _ensure_column(conn, table: str, column: str, definition: str) -> None:
@@ -389,21 +407,7 @@ class DocsRegistry:
             """)
 
             # Project definitions table — DB is source of truth (replaces JSON)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS project_definitions (
-                    name TEXT PRIMARY KEY,
-                    label TEXT NOT NULL,
-                    home_dir TEXT NOT NULL,
-                    source_roots TEXT DEFAULT '[]',
-                    auto_index INTEGER DEFAULT 1,
-                    patterns TEXT DEFAULT '["*.md"]',
-                    exclude TEXT DEFAULT '["*.db","*.log","*.pyc","__pycache__/"]',
-                    description TEXT DEFAULT '',
-                    state TEXT DEFAULT 'active' CHECK(state IN ('active', 'archived', 'deleted')),
-                    created_at TEXT DEFAULT (datetime('now')),
-                    updated_at TEXT DEFAULT (datetime('now'))
-                )
-            """)
+            self._ensure_project_definitions_table(conn)
 
         # Seed from JSON on first run (empty table)
         self._seed_projects_from_json()
@@ -413,6 +417,9 @@ class DocsRegistry:
         Only seeds when the table is empty (avoids re-reading JSON on every instantiation).
         """
         with get_connection(self.db_path) as conn:
+            # In-memory and test overrides can hand us a fresh connection even when
+            # ensure_table() ran on a prior connection; guarantee table presence.
+            self._ensure_project_definitions_table(conn)
             # Skip if table already has rows (not first run)
             row = conn.execute("SELECT COUNT(*) FROM project_definitions").fetchone()
             if row[0] > 0:
