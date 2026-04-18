@@ -1337,25 +1337,22 @@ class DocsRAG:
         limit: int = 3,
     ) -> List[Dict[str, Any]]:
         linked_set = {str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()}
-        project_rows: Dict[str, Any] = {}
+        all_projects: List[str] = []
         try:
             from lib.project_registry import list_all as _list_projects
 
-            project_rows = _list_projects() or {}
+            all_projects = [
+                str(name or "").strip()
+                for name in (_list_projects() or {}).keys()
+                if str(name or "").strip()
+            ]
         except Exception:
             # Keep scope-hint behavior available even when registry metadata is
             # unavailable; inferred source-project labels can still surface likely
             # unlinked candidates for a scoped miss.
-            project_rows = {}
-
-        all_projects = [
-            str(name or "").strip()
-            for name in project_rows.keys()
-            if str(name or "").strip()
-        ]
+            all_projects = []
 
         candidate_projects = [name for name in all_projects if name not in linked_set]
-        candidate_set = set(candidate_projects)
         query_lower = str(query or "").lower()
         name_matches: set[str] = set()
         for name in candidate_projects:
