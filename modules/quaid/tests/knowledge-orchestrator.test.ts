@@ -78,6 +78,45 @@ describe("knowledge orchestrator", () => {
     expect(out[0].text).toContain("[RECALL ROUTER WARNING]");
   });
 
+  it("throttles repeated router fallback warning notices per reasoning tier", async () => {
+    const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
+      if (opts.stores?.includes("graph")) {
+        return [{ text: "graph-hit", category: "graph", similarity: 0.72, via: "graph" }];
+      }
+      return [{ text: "fallback-hit", category: "fact", similarity: 0.81, via: "vector" }];
+    });
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ retrieval: { failHard: false, routerWarningCooldownMinutes: 15 } }),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      recallMemory,
+    });
+
+    const first = await engine.recall("Tell me about family relationships", 5, {
+      datastores: [],
+      expandGraph: true,
+      graphDepth: 1,
+      domain: { personal: true },
+      reasoning: "fast",
+      failOpen: true,
+    });
+    const second = await engine.recall("Tell me about family relationships", 5, {
+      datastores: [],
+      expandGraph: true,
+      graphDepth: 1,
+      domain: { personal: true },
+      reasoning: "fast",
+      failOpen: true,
+    });
+
+    expect(first.some((row) => row.text.includes("[RECALL ROUTER WARNING]"))).toBe(true);
+    expect(second.some((row) => row.text.includes("[RECALL ROUTER WARNING]"))).toBe(false);
+    expect(second.some((row) => row.text.includes("fallback-hit"))).toBe(true);
+  });
+
   it("rejects invalid datastore arrays from router plan", async () => {
     const callFastRouter = vi
       .fn(async () => '{"query":"one","datastores":["not_real"]}')

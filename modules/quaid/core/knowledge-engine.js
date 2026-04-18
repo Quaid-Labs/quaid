@@ -6,6 +6,7 @@ import {
 } from "./knowledge-stores.js";
 function createKnowledgeEngine(deps) {
   const _vectorStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical"]);
+  const _routerWarningLastByTier = /* @__PURE__ */ new Map();
   function storeOption(opts, store, key) {
     return opts.datastoreOptions?.[store]?.[key];
   }
@@ -67,6 +68,27 @@ function createKnowledgeEngine(deps) {
     } catch (err) {
       console.warn(`[memory][recall-router] failed to read failHard config; defaulting to true: ${String(err?.message || err)}`);
     }
+    return true;
+  }
+  function routerWarningCooldownMs() {
+    try {
+      const cfg = deps.getMemoryConfig?.() || {};
+      const retrieval = cfg?.retrieval || {};
+      const minutesRaw = retrieval.routerWarningCooldownMinutes ?? retrieval.router_warning_cooldown_minutes ?? 15;
+      const minutes = Number(minutesRaw);
+      if (!Number.isFinite(minutes) || minutes <= 0) return 15 * 60 * 1e3;
+      return Math.max(1, Math.round(minutes)) * 60 * 1e3;
+    } catch {
+      return 15 * 60 * 1e3;
+    }
+  }
+  function shouldEmitRouterWarning(tier) {
+    const key = String(tier || "fast").trim().toLowerCase() || "fast";
+    const now = Date.now();
+    const cooldownMs = routerWarningCooldownMs();
+    const lastAt = _routerWarningLastByTier.get(key) || 0;
+    if (now - lastAt < cooldownMs) return false;
+    _routerWarningLastByTier.set(key, now);
     return true;
   }
   async function routeWithRepair(router, systemPrompt, userPrompt, validate, label) {
@@ -381,6 +403,7 @@ intent: ${intent}`;
       if (opts.failOpen && !failHard) {
         const reason = err?.message || String(err);
         const fallbackDatastores = normalizeKnowledgeDatastores(void 0, opts.expandGraph);
+        const tier = String(opts.reasoning || "fast");
         console.error(
           `[memory][recall-router][FAIL-OPEN] Router prepass failed; using deterministic default recall plan. reason="${reason}" datastores=${fallbackDatastores.join(",")}`
         );
@@ -388,13 +411,16 @@ intent: ${intent}`;
           ...opts,
           datastores: fallbackDatastores
         });
-        const warning = {
-          text: `[RECALL ROUTER WARNING] Fast prepass failed and fallback recall plan was used. Reason: ${reason}. Consider upgrading the fast model if this repeats.`,
-          category: "system_notice",
-          similarity: 1,
-          via: "vector"
-        };
-        return sanitizeRecallResults([warning, ...fallbackResults]).slice(0, limit);
+        if (shouldEmitRouterWarning(tier)) {
+          const warning = {
+            text: `[RECALL ROUTER WARNING] Fast prepass failed and fallback recall plan was used. Reason: ${reason}. Consider upgrading the fast model if this repeats.`,
+            category: "system_notice",
+            similarity: 1,
+            via: "vector"
+          };
+          return sanitizeRecallResults([warning, ...fallbackResults]).slice(0, limit);
+        }
+        return sanitizeRecallResults(fallbackResults).slice(0, limit);
       }
       if (opts.failOpen && failHard) {
         const reason = err?.message || String(err);
