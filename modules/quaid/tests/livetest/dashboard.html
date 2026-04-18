@@ -260,6 +260,7 @@
       if (low.includes("running") || low.includes("in progress") || low.includes("active")) {
         return { klass: "status-running", label: "RUNNING", detail: value };
       }
+      if (low.includes("pending")) return { klass: "status-skip", label: "PENDING", detail: value };
       if (low.includes("skip")) return { klass: "status-skip", label: "SKIP", detail: value };
       return { klass: "status-empty", label: "NOTE", detail: value };
     }
