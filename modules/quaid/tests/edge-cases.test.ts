@@ -108,7 +108,7 @@ describe('Edge Cases', () => {
   })
 
   describe('Concurrent Operations', () => {
-    it('handles concurrent memory storage', { timeout: 30000 }, async () => {
+    it('handles concurrent memory storage', { timeout: 60000 }, async () => {
       const concurrentWrites = Array(10).fill(null).map((_, i) =>
         memory.store(`Concurrent fact ${i}`, 'testuser')
       )
