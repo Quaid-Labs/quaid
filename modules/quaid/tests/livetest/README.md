@@ -189,6 +189,8 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
 | `livetest-dashboard.sh` | Serve a local live-test dashboard at `dashboard.html`, reading `current_run.log` (title + CSV matrix + notes). |
+| `livetest-dashboard-autostart-install.sh` | Install/load a user LaunchAgent so dashboard starts automatically on login/system start (macOS). |
+| `livetest-dashboard-autostart-uninstall.sh` | Unload/remove the dashboard LaunchAgent (macOS). |
 | `tmux-msg.sh` | Direct pane message delivery. Use for urgent interrupts, self-tests, and one-off nudges. |
 | `tmux-mailbox.sh` | Queue-backed mailbox for routine STATUS/ISSUE traffic. The first unread item is delivered inline when a queue goes from empty to non-empty; the coordinator then uses `reply` or `done` to acknowledge the current item and pull the next one. Mailbox data lives in `tests/livetest/scripts/.tmux-mailbox/` and is gitignored. |
 | `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. The active coordinator starts and owns one per tester at run start. Do not route these through window `5` / `claude-looper`. |
@@ -213,7 +215,7 @@ tests/livetest/scripts/livetest-dashboard.sh
 Open:
 
 ```text
-http://127.0.0.1:8765/dashboard.html
+http://127.0.0.1:8766/dashboard.html
 ```
 
 Dashboard data file:
@@ -246,6 +248,20 @@ Notes:
 
 An example seed file is provided at:
 - `tests/livetest/current_run.log.example`
+
+Autostart on macOS (user LaunchAgent):
+
+```bash
+cd ~/quaidcode/dev/modules/quaid
+tests/livetest/scripts/livetest-dashboard-autostart-install.sh --port 8766
+```
+
+Remove autostart:
+
+```bash
+cd ~/quaidcode/dev/modules/quaid
+tests/livetest/scripts/livetest-dashboard-autostart-uninstall.sh
+```
 
 ---
 
