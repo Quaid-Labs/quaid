@@ -446,6 +446,58 @@ class TestAppendProjectLogs:
         out = capsys.readouterr().out
         assert "[project-log] unknown project: does-not-exist" in out
 
+    def test_unknown_project_reroutes_to_quaid_project_log_when_available(self, setup_env, capsys):
+        from config import ProjectDefinition
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        registry = _get_registry()
+        quaid_dir = tmp_path / "projects" / "quaid"
+        quaid_dir.mkdir(parents=True, exist_ok=True)
+        quaid_md = quaid_dir / "PROJECT.md"
+        quaid_log = quaid_dir / "PROJECT.log"
+        quaid_md.write_text(
+            render_project_md_template(
+                label="Quaid",
+                description="Quaid meta project.",
+                project_home=str(quaid_dir),
+                source_roots=[str(tmp_path / "src")],
+                exclude_patterns=["*.log", "*.db"],
+            ),
+            encoding="utf-8",
+        )
+        registry.save_project_definition(
+            "quaid",
+            ProjectDefinition(
+                label="Quaid",
+                home_dir="projects/quaid/",
+                source_roots=[str(tmp_path / "src")],
+                auto_index=True,
+                patterns=["*.md"],
+                exclude=["*.log", "*.db", "__pycache__/"],
+                description="Quaid meta project.",
+                state="active",
+            ),
+        )
+
+        metrics = append_project_logs(
+            {"does-not-exist": ["Session 1: should reroute"]},
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        assert metrics["projects_seen"] == 1
+        assert metrics["projects_unknown"] == 1
+        assert metrics["projects_updated"] == 1
+        assert metrics["entries_written"] == 1
+        content = quaid_md.read_text(encoding="utf-8")
+        assert "[from deleted/unknown project does-not-exist] should reroute" in content
+        history = quaid_log.read_text(encoding="utf-8")
+        assert "[from deleted/unknown project does-not-exist] should reroute" in history
+        out = capsys.readouterr().out
+        assert "rerouting 1 entries to quaid" in out
+
     def test_missing_project_md_writes_history_and_warns(self, setup_env, capsys):
         from datastore.docsdb.project_updater import append_project_logs
 

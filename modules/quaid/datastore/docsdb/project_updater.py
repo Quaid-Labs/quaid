@@ -713,6 +713,8 @@ def append_project_logs(
         metrics["entries_seen"] += len(entries)
         if not entries:
             continue
+        entries_for_write = list(entries)
+        history_entries = list(raw_entries or [])
 
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
@@ -746,8 +748,30 @@ def append_project_logs(
                 print(f"[project-log] registry miss, using filesystem fallback: {project_md}")
             else:
                 metrics["projects_unknown"] += 1
-                print(f"[project-log] unknown project: {project_name}")
-                continue
+                reroute_name = "quaid"
+                reroute_defn = cfg.projects.definitions.get(reroute_name)
+                if not reroute_defn:
+                    reroute_defn = registry.get_project_definition(reroute_name)
+                reroute_md: Optional[Path] = None
+                if reroute_defn:
+                    candidate_md = _resolve_project_home(reroute_defn.home_dir) / "PROJECT.md"
+                    if candidate_md.exists():
+                        reroute_md = candidate_md
+                if reroute_md is None:
+                    print(f"[project-log] unknown project: {project_name}")
+                    continue
+                prefix = f"[from deleted/unknown project {project_name}] "
+                entries_for_write = [f"{prefix}{entry}" for entry in entries]
+                history_entries = [
+                    f"{prefix}{normalized}"
+                    for normalized in (_normalize_log_entry(entry) for entry in (raw_entries or []))
+                    if normalized
+                ]
+                project_md = reroute_md
+                print(
+                    f"[project-log] unknown project: {project_name}; "
+                    f"rerouting {len(entries_for_write)} entries to {reroute_name}"
+                )
         else:
             project_md = _resolve_project_home(defn.home_dir) / "PROJECT.md"
             if not project_md.exists():
@@ -763,7 +787,7 @@ def append_project_logs(
                 # This prevents silent data drops when project docs are missing.
                 if not dry_run:
                     try:
-                        history_written = _append_project_history_log(project_md, raw_entries or [])
+                        history_written = _append_project_history_log(project_md, history_entries)
                         if history_written > 0:
                             metrics["projects_history_only"] += 1
                             metrics["history_entries_written"] += history_written
@@ -785,9 +809,9 @@ def append_project_logs(
                 continue
 
         if not dry_run:
-            _append_project_history_log(project_md, raw_entries or [])
+            _append_project_history_log(project_md, history_entries)
 
-        lines = [f"- {today} [{trigger}] {entry}" for entry in entries]
+        lines = [f"- {today} [{trigger}] {entry}" for entry in entries_for_write]
         content = project_md.read_text(encoding="utf-8")
         if marker_begin in content and marker_end in content:
             pattern = re.compile(
