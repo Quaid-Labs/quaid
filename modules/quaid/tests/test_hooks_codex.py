@@ -479,14 +479,14 @@ def test_codex_hook_inject_still_surfaces_provider_error_when_fail_hard_enabled(
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
     queued = []
+    adapter.notify.side_effect = lambda message, **kwargs: queued.append((message, kwargs)) or True
 
     with patch(
         "core.interface.api.recall_fast",
         side_effect=RuntimeError(
             "Quaid could not access its fast language model provider: codex gateway HTTP 404 model=invalid-model-xyzzy"
         ),
-    ), patch("core.interface.api.projects_search_docs", return_value=None), \
-         patch("lib.runtime_context.queue_deferred_notice", side_effect=lambda *a, **k: queued.append((a, k)) or True):
+    ), patch("core.interface.api.projects_search_docs", return_value=None):
         out, _err = _run_hook_inject(
             {
                 "prompt": "What do you know about Maya?",
@@ -496,12 +496,10 @@ def test_codex_hook_inject_still_surfaces_provider_error_when_fail_hard_enabled(
             monkeypatch=monkeypatch,
         )
 
-    assert queued, "provider failHard path should queue a deferred provider notice"
-    args, kwargs = queued[-1]
-    assert "[Quaid error] [provider]" in str(args[0])
-    assert kwargs.get("kind") == "provider"
-    assert kwargs.get("priority") == "high"
-    assert kwargs.get("source") == "provider"
+    assert queued, "provider failHard path should queue a pending provider notice"
+    message, kwargs = queued[-1]
+    assert "[Quaid error] [provider]" in message
+    assert kwargs.get("force") is True
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert "[Quaid error] [provider]" in context
@@ -525,11 +523,29 @@ def test_codex_provider_failure_queues_and_relays_on_next_successful_turn(monkey
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
     monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
-    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
+    pending_notices = []
+
+    def _queue_pending(message, **_kwargs):
+        pending_notices.append(str(message))
+        return True
+
+    def _drain_pending():
+        if not pending_notices:
+            return ""
+        messages = list(pending_notices)
+        pending_notices.clear()
+        body = "\n".join(f"• {message}" for message in messages)
+        return (
+            "The following are pending notifications for the user — please relay them in your response:\n\n"
+            f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+        )
+
+    adapter.notify.side_effect = _queue_pending
+    adapter.get_pending_context.side_effect = _drain_pending
 
     with patch(
         "core.interface.api.recall_fast",
@@ -563,7 +579,6 @@ def test_codex_provider_failure_queues_and_relays_on_next_successful_turn(monkey
 
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
-    assert "drained deferred notices" in context
     assert "[Quaid error] [provider]" in context
     assert "invalid-model-xyzzy" in context
 

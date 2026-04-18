@@ -249,16 +249,26 @@ def _provider_failure_notice_message(exc: Exception) -> str:
 def _queue_provider_failure_notice(exc: Exception) -> None:
     """Queue provider failures for next-turn relay across hook adapters.
 
-    CC and CDX can hard-fail in UserPromptSubmit on provider/model errors, which
-    means the failing turn may not render additionalContext. Queueing a deferred
-    provider notice here ensures the next successful hook turn can relay a
-    visible provider alert instead of staying silent.
+    CC/CDX surface pending adapter notifications on every UserPromptSubmit,
+    even on turns where recall itself does not fail. Prefer that visible
+    per-adapter channel and fall back to the deferred queue only if adapter
+    notification delivery fails.
     """
+    message = _provider_failure_notice_message(exc)
+    try:
+        from lib.adapter import get_adapter
+
+        adapter = get_adapter()
+        notify = getattr(adapter, "notify", None)
+        if callable(notify) and bool(notify(message, force=True)):
+            return
+    except Exception as notice_exc:
+        logger.warning("Failed queueing provider access error as adapter notice: %s", notice_exc)
     try:
         from lib.runtime_context import queue_deferred_notice
 
         queue_deferred_notice(
-            _provider_failure_notice_message(exc),
+            message,
             kind="provider",
             priority="high",
             source="provider",
@@ -817,7 +827,6 @@ def hook_inject(args):
     except (RuntimeError, Exception) as e:
         provider_failure = _is_provider_failure(e)
         if provider_failure:
-            _queue_provider_failure_notice(e)
             try:
                 from lib.fail_policy import is_fail_hard_enabled
 
@@ -830,6 +839,7 @@ def hook_inject(args):
                 )
         pending_context = _get_pending_context()
         if provider_failure:
+            _queue_provider_failure_notice(e)
             # Keep provider failures literal and immediate on failing turns.
             # Deferred notice drain can paraphrase; leave queued copy for
             # subsequent successful turns.
