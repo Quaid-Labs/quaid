@@ -124,6 +124,14 @@
       color: #d7e4ff;
     }
 
+    .milestone-caption {
+      margin-top: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
     .status {
       display: inline-flex;
       border-radius: 999px;
@@ -190,7 +198,7 @@
         <h1 id="run-title">Quaid Live Test Run</h1>
         <div class="meta">
           <span class="pill" id="summary-pill">No data yet</span>
-          <span class="pill" id="refresh-pill">Waiting for current_run.log</span>
+          <span class="pill" id="refresh-pill">Waiting for dashboard.log</span>
         </div>
       </div>
       <div class="table-wrap">
@@ -209,7 +217,7 @@
   </div>
 
   <script>
-    const LOG_FILE = "current_run.log";
+    const LOG_FILES = ["dashboard.log", "current_run.log"];
     const REFRESH_MS = 2500;
     let lastFingerprint = "";
 
@@ -262,6 +270,37 @@
       if (m) return [0, Number(m[1]), index];
       if (/^xp\b/i.test(text)) return [1, 0, index];
       return [2, index, index];
+    }
+
+    const MILESTONE_CAPTIONS = {
+      M0: "Install + smoke verify",
+      M1: "/new extraction check",
+      M2: "/reset or /clear extraction",
+      M3: "/compact extraction path",
+      M4: "Idle-timeout extraction",
+      M5: "Auto-inject behavior",
+      M6: "Deliberate recall behavior",
+      M7: "Graph traversal validation",
+      M8: "Project CRUD flow",
+      M9: "Janitor maintenance pass",
+      M10: "Docs, health, and session CLI",
+      M11: "Snippet, journal, project-log generation",
+      M12: "Multi-agent silo verification",
+      M13: "Multi-instance silo verification",
+      M14: "Docs-first guidance + retrieval behavior",
+      M15: "Failure-signal quality checks",
+      M16: "Context refresh lifecycle",
+      XP: "Cross-platform linking",
+    };
+
+    function milestoneCaption(label) {
+      const text = String(label || "").trim();
+      if (!text) return "";
+      if (/^xp\b/i.test(text)) return MILESTONE_CAPTIONS.XP;
+      const m = text.match(/^m(\d+)\b/i);
+      if (!m) return "";
+      const key = `M${Number(m[1])}`;
+      return MILESTONE_CAPTIONS[key] || "";
     }
 
     function splitBodyAndNotes(lines) {
@@ -433,8 +472,17 @@
       state.milestones.forEach((milestone) => {
         const tr = document.createElement("tr");
         const mt = document.createElement("td");
-        mt.textContent = milestone;
         mt.className = "milestone-col";
+        const name = document.createElement("div");
+        name.textContent = milestone;
+        mt.appendChild(name);
+        const captionText = milestoneCaption(milestone);
+        if (captionText) {
+          const caption = document.createElement("div");
+          caption.className = "milestone-caption";
+          caption.textContent = captionText;
+          mt.appendChild(caption);
+        }
         tr.appendChild(mt);
 
         state.columns.forEach((col) => {
@@ -480,22 +528,33 @@
       renderTable(state);
     }
 
+    async function fetchLogText() {
+      let lastErr = "";
+      for (const logFile of LOG_FILES) {
+        const res = await fetch(`${logFile}?t=${Date.now()}`, { cache: "no-store" });
+        if (res.ok) {
+          const text = await res.text();
+          return { text, logFile };
+        }
+        lastErr = `${logFile} (${res.status})`;
+      }
+      throw new Error(`Could not read any dashboard log file: ${lastErr}`);
+    }
+
     async function refresh() {
       try {
-        const res = await fetch(`${LOG_FILE}?t=${Date.now()}`, { cache: "no-store" });
-        if (!res.ok) {
-          throw new Error(`Could not read ${LOG_FILE} (${res.status})`);
-        }
-        const text = await res.text();
+        const { text, logFile } = await fetchLogText();
         const fingerprint = `${text.length}:${text.slice(0, 120)}:${text.slice(-120)}`;
         if (fingerprint === lastFingerprint) {
           document.getElementById("refresh-pill").textContent =
-            `Last refresh: ${new Date().toLocaleTimeString()} (no changes)`;
+            `Last refresh: ${new Date().toLocaleTimeString()} (no changes, ${logFile})`;
           clearError();
           return;
         }
         const state = parseLog(text);
         render(state);
+        document.getElementById("refresh-pill").textContent =
+          `Last refresh: ${new Date().toLocaleTimeString()} (${logFile})`;
         clearError();
         lastFingerprint = fingerprint;
       } catch (err) {

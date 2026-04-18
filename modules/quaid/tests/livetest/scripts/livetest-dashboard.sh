@@ -13,7 +13,7 @@ livetest-dashboard.sh
 Serve the lightweight live-test dashboard.
 
 Usage:
-  tests/livetest/scripts/livetest-dashboard.sh [--host 0.0.0.0] [--port 8765]
+  tests/livetest/scripts/livetest-dashboard.sh [--host 0.0.0.0] [--port 8766]
 
 Environment overrides:
   HOST=0.0.0.0
@@ -75,19 +75,29 @@ if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-LOG_PATH="$LIVETEST_DIR/current_run.log"
-EXAMPLE_PATH="$LIVETEST_DIR/current_run.log.example"
+DASHBOARD_LOG_PATH="$LIVETEST_DIR/dashboard.log"
+DASHBOARD_TEMPLATE_PATH="$LIVETEST_DIR/dashboard_template.log"
+LEGACY_LOG_PATH="$LIVETEST_DIR/current_run.log"
+LEGACY_TEMPLATE_PATH="$LIVETEST_DIR/current_run.log.example"
 PYTHON_BIN="$(_resolve_python_bin)"
 export QUAID_PYTHON_BIN="$PYTHON_BIN"
 
-if [[ ! -f "$LOG_PATH" && -f "$EXAMPLE_PATH" ]]; then
-  cp "$EXAMPLE_PATH" "$LOG_PATH"
-  echo "[dashboard] created $LOG_PATH from example"
+if [[ ! -f "$DASHBOARD_LOG_PATH" ]]; then
+  if [[ -f "$LEGACY_LOG_PATH" ]]; then
+    cp "$LEGACY_LOG_PATH" "$DASHBOARD_LOG_PATH"
+    echo "[dashboard] created $DASHBOARD_LOG_PATH from legacy $LEGACY_LOG_PATH"
+  elif [[ -f "$DASHBOARD_TEMPLATE_PATH" ]]; then
+    cp "$DASHBOARD_TEMPLATE_PATH" "$DASHBOARD_LOG_PATH"
+    echo "[dashboard] created $DASHBOARD_LOG_PATH from template $DASHBOARD_TEMPLATE_PATH"
+  elif [[ -f "$LEGACY_TEMPLATE_PATH" ]]; then
+    cp "$LEGACY_TEMPLATE_PATH" "$DASHBOARD_LOG_PATH"
+    echo "[dashboard] created $DASHBOARD_LOG_PATH from legacy template $LEGACY_TEMPLATE_PATH"
+  fi
 fi
 
 echo "[dashboard] serving: $LIVETEST_DIR"
 echo "[dashboard] URL: http://$HOST:$PORT/dashboard.html"
-echo "[dashboard] data file: $LOG_PATH"
+echo "[dashboard] data file: $DASHBOARD_LOG_PATH"
 echo "[dashboard] python: $PYTHON_BIN"
 
 exec "$PYTHON_BIN" -m http.server "$PORT" --bind "$HOST" --directory "$LIVETEST_DIR"

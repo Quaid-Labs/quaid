@@ -188,7 +188,8 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-preflight.sh` | **Run before every run.** Verifies remote ≠ local, checks SSH, wipes the remote, starts platform services. Hard-aborts if the remote host matches the local machine. |
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
-| `livetest-dashboard.sh` | Serve a local live-test dashboard at `dashboard.html`, reading `current_run.log` (title + CSV matrix + notes). |
+| `livetest-dashboard.sh` | Serve a local live-test dashboard at `dashboard.html`, reading `dashboard.log` (title + CSV matrix + notes). |
+| `livetest-dashboard-new-run.sh` | Create/reset `dashboard.log` from `dashboard_template.log` for a new run. |
 | `livetest-dashboard-autostart-install.sh` | Install/load a user LaunchAgent so dashboard starts automatically on login/system start (macOS). |
 | `livetest-dashboard-autostart-uninstall.sh` | Unload/remove the dashboard LaunchAgent (macOS). |
 | `tmux-msg.sh` | Direct pane message delivery. Use for urgent interrupts, self-tests, and one-off nudges. |
@@ -203,7 +204,7 @@ executing them, and `--config <path>` to override the default config location.
 
 ## Live Dashboard
 
-Use the lightweight dashboard to monitor run progress from `current_run.log`.
+Use the lightweight dashboard to monitor run progress from `dashboard.log`.
 
 Start it:
 
@@ -218,8 +219,9 @@ Open:
 http://127.0.0.1:8766/dashboard.html
 ```
 
-Dashboard data file:
-- `tests/livetest/current_run.log` (gitignored by the repo-wide `*.log` rule)
+Dashboard data files:
+- `tests/livetest/dashboard.log` (active run file, gitignored)
+- `tests/livetest/dashboard_template.log` (template copied for each new run)
 
 Expected log format:
 - First non-empty line: run title (for example `Run 110 - Frozen Validation`)
@@ -232,22 +234,52 @@ Expected log format:
   - `[notes]`
   - `## Notes`
 
+Start a fresh run file from the template:
+
+```bash
+cd ~/quaidcode/dev/modules/quaid
+tests/livetest/scripts/livetest-dashboard-new-run.sh --force --title "Run 110 - Frozen Validation"
+```
+
+CSV format:
+- Header must be `milestone,<platform1>,<platform2>,...`
+- Use one row per milestone
+- Current default template includes `M1` through `M16`
+- Dashboard UI shows short built-in captions for `M1`-`M16`
+- Optional `#` comment lines are ignored (template uses these for milestone hints)
+- Status text is freeform (`PASS`, `FAIL`, `RUNNING`, `BLOCKED`, etc.)
+- Notes go after `---` in freeform text
+
 Example:
 
 ```text
-Run 110 - Frozen Validation
+Run XXX - Frozen Validation
 milestone,OC,CC,CDX
-M0,PASS,PASS,PASS
 M1,PASS,IN_PROGRESS,RUNNING
-XP,,,
+M2,,,
+M3,BLOCKED - waiting on provider fix,PASS,PASS
+M4,,,
+M5,,,
+M6,,,
+M7,,,
+M8,,,
+M9,,,
+M10,,,
+M11,,,
+M12,,,
+M13,,,
+M14,,,
+M15,,,
+M16,,,
 ---
 Notes:
 - M10 blocked on docs update timeout in CC
 - Waiting for W6 review on fix commit abc123
 ```
 
-An example seed file is provided at:
-- `tests/livetest/current_run.log.example`
+Template files:
+- `tests/livetest/dashboard_template.log` (primary)
+- `tests/livetest/current_run.log.example` (legacy compatibility)
 
 Autostart on macOS (user LaunchAgent):
 
