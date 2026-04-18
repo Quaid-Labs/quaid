@@ -124,18 +124,6 @@ def _request_id(kind: str, message: str) -> str:
     return f"{kind}-{token}"
 
 
-def _parse_notice_timestamp(raw: Any) -> float:
-    text = str(raw or "").strip()
-    if not text:
-        return 0.0
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        return float(datetime.fromisoformat(text).timestamp())
-    except Exception:
-        return 0.0
-
-
 def _priority_rank(priority: str) -> int:
     token = str(priority or "").strip().lower()
     if token == "high":
@@ -264,7 +252,6 @@ def queue_deferred_notice(
     priority: str = "normal",
     source: str = "quaid",
     dedupe_key: Optional[str] = None,
-    ttl_seconds: int = 0,
 ) -> bool:
     text = str(message or "").strip()
     if not text:
@@ -276,8 +263,6 @@ def queue_deferred_notice(
     request_id = _request_id(notice_kind, text)
     dedupe_token = str(dedupe_key or request_id).strip() or request_id
     path = _deferred_path()
-    ttl = max(0, int(ttl_seconds or 0))
-    now = time.time()
 
     with _file_lock(_deferred_lock_path(path)):
         payload = _read_json(path, {"version": 1, "requests": []})
@@ -292,17 +277,6 @@ def queue_deferred_notice(
                 continue
             if str(item.get("dedupe_key") or item.get("id") or "").strip() == dedupe_token:
                 return False
-
-        if ttl > 0:
-            cutoff = now - ttl
-            for item in requests:
-                if not isinstance(item, dict):
-                    continue
-                if str(item.get("dedupe_key") or item.get("id") or "").strip() != dedupe_token:
-                    continue
-                ts = _parse_notice_timestamp(item.get("delivered_at") or item.get("created_at"))
-                if ts and ts >= cutoff:
-                    return False
 
         requests.append(
             {

@@ -83,20 +83,3 @@ def test_get_deferred_notice_status_passes_through_options():
 
     mock_status.assert_called_once_with(limit=7, include_items=True)
     assert payload["pending_count"] == 1
-
-
-def test_provider_notice_dedupe_key_ignores_volatile_request_ids():
-    from lib import runtime_context
-
-    err_a = RuntimeError(
-        "provider unavailable after retries request_id=req_abc123456789 trace_id=trace_111111"
-    )
-    err_b = RuntimeError(
-        "provider unavailable after retries request_id=req_def987654321 trace_id=trace_222222"
-    )
-
-    key_a = runtime_context._provider_notice_dedupe_key(err_a, "fast")
-    key_b = runtime_context._provider_notice_dedupe_key(err_b, "fast")
-
-    assert key_a == key_b
-    assert key_a.startswith("llm-provider:fast:RuntimeError:")
