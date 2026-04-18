@@ -178,7 +178,7 @@ describe("openclaw auto-provision", () => {
     expect(fs.existsSync(path.join(visibleHome, "instances", "openclaw-m13test", "journal"))).toBe(true);
     const targetConfig = JSON.parse(fs.readFileSync(targetConfigPath, "utf8"));
     expect(targetConfig.instance?.id).toBe("openclaw-m13test");
-    expect(targetConfig.adapter).toBeUndefined();
+    expect(targetConfig.adapter).toEqual({ type: "openclaw" });
     expect(targetConfig.models).toBeUndefined();
     expect(targetConfig.capture).toBeUndefined();
     expect(targetConfig.plugins).toBeUndefined();

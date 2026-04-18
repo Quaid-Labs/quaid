@@ -84,7 +84,7 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
     """
     try:
         from lib.instance import instance_id as _instance_id
-        from core.project_registry import list_projects as _list_projects
+        from lib.project_registry import list_all as _list_projects
 
         current_instance = _instance_id()
         linked: List[str] = []
@@ -898,7 +898,7 @@ class DocsRAG:
             source_path = Path(str(source_file))
 
         try:
-            from core.project_registry import list_projects as _list_projects
+            from lib.project_registry import list_all as _list_projects
 
             best_match = None
             best_prefix_len = -1
@@ -1304,7 +1304,7 @@ class DocsRAG:
             pass
 
         try:
-            from core.project_registry import get_project as _get_project
+            from lib.project_registry import lookup as _get_project
 
             entry = _get_project(project) or {}
             canonical_path = str(entry.get("canonical_path") or "").strip()
@@ -1338,7 +1338,7 @@ class DocsRAG:
     ) -> List[Dict[str, Any]]:
         linked_set = {str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()}
         try:
-            from core.project_registry import list_projects as _list_projects
+            from lib.project_registry import list_all as _list_projects
 
             all_projects = [
                 str(name or "").strip()

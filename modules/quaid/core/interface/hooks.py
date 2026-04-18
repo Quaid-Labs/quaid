@@ -434,11 +434,25 @@ def _infer_docs_project_from_cwd(cwd: str) -> str | None:
     if not value:
         return None
     try:
-        from datastore.docsdb.rag import DocsRAG
+        from core.project_registry import list_projects as _list_projects
 
-        project = DocsRAG().infer_project_for_source(value)
-        normalized = str(project or "").strip()
-        return normalized or None
+        source_path = Path(value).resolve()
+        best_match = None
+        best_prefix_len = -1
+        for project_name, entry in (_list_projects() or {}).items():
+            canonical_path = str((entry or {}).get("canonical_path") or "").strip()
+            if not canonical_path:
+                continue
+            try:
+                candidate = Path(canonical_path).resolve()
+            except Exception:
+                candidate = Path(canonical_path)
+            prefix = str(candidate)
+            if str(source_path) == prefix or str(source_path).startswith(prefix + os.sep):
+                if len(prefix) > best_prefix_len:
+                    best_prefix_len = len(prefix)
+                    best_match = str(project_name).strip()
+        return best_match or None
     except Exception as exc:
         logger.debug("docs project hint inference failed cwd=%s: %s", value, exc)
         return None
