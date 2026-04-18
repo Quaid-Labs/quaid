@@ -85,6 +85,90 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["status"] == "fresh"
     assert state["project_log_offset"] == project_log.stat().st_size
     assert state["last_indexed_docs"] == 2
+    assert state["last_registry_sync"]["project_md_refreshed"] in (0, 1)
+
+
+def test_execute_update_once_preserves_force_request_when_locked(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+
+    with project_docs.project_update_lock("demo", blocking=True) as acquired:
+        assert acquired is True
+        result = project_docs.execute_update_once("demo", request=request)
+
+    assert result["status"] == "locked"
+    assert result["request_retained"] is True
+    assert project_docs.read_update_request("demo")["request_id"] == request["request_id"]
+    assert project_docs.read_state("demo")["status"] == "queued"
+
+
+def test_project_log_read_failure_raises_without_advancing_cursor(project_env):
+    _tmp_path, _src, entry = project_env
+    from core import project_docs
+
+    project_log = Path(entry["canonical_path"]) / "PROJECT.log"
+    project_log.write_text("- important entry\n", encoding="utf-8")
+    project_docs.write_state("demo", {"project_log_offset": 0})
+    real_open = Path.open
+
+    def flaky_open(self, *args, **kwargs):
+        if self == project_log:
+            raise OSError("synthetic read failure")
+        return real_open(self, *args, **kwargs)
+
+    with patch.object(Path, "open", flaky_open):
+        with pytest.raises(RuntimeError, match="failed to read PROJECT.log"):
+            project_docs.execute_update_once("demo")
+
+    assert project_docs.read_state("demo")["project_log_offset"] == 0
+
+
+def test_sync_project_docs_registry_registers_new_docs_and_removes_deleted_docs(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from datastore.docsdb.registry import DocsRegistry
+
+    registry = DocsRegistry()
+    project_dir = Path(_entry["canonical_path"])
+    docs_dir = project_dir / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    (docs_dir / "new.md").write_text("# New Doc\n", encoding="utf-8")
+    registry.register("projects/demo/docs/old.md", project="demo", registered_by="pytest")
+
+    result = project_docs.sync_project_docs_registry("demo", _entry)
+
+    assert result["registered"] >= 1
+    assert result["unregistered"] == 1
+    assert registry.get("projects/demo/docs/new.md") is not None
+    assert registry.get("projects/demo/docs/old.md") is None
+
+
+def test_pid_identity_rejects_unrelated_process(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs._write_pid_record(
+        project_docs.supervisor_pid_path(),
+        role=project_docs.SUPERVISOR_ROLE,
+        pid=os.getpid(),
+        token="pytest",
+    )
+
+    assert project_docs.read_supervisor_pid() is None
+
+
+def test_worker_heartbeat_writes_atomic_json_pid_record(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs.write_worker_heartbeat("demo", {"status": "idle"})
+
+    pid_data = json.loads(project_docs.worker_pid_path("demo").read_text(encoding="utf-8"))
+    assert pid_data["pid"] == os.getpid()
+    assert pid_data["role"] == project_docs.WORKER_ROLE
+    assert pid_data["project"] == "demo"
 
 
 def test_delete_project_removes_project_docs_worker_state(project_env):

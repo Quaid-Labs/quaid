@@ -198,13 +198,14 @@ Uses the Ebbinghaus forgetting curve with access-scaled half-life:
 
 Enhanced from simple reindex to include project management:
 
-**7a: Process queued project events** — runs `project_updater.process_all_events()` to handle any events from compact/reset that weren't processed in background.
+Project docs updates are owned by the supervisor/worker pipeline. Janitor no
+longer drains staged project-event JSON files.
 
-**7b: Auto-discover for autoIndex projects** — scans each project's `homeDir` for new files matching `patterns` (respects `exclude`), registers them in the doc_registry.
+**7a: Auto-discover for autoIndex projects** — scans each project's `homeDir` for new files matching `patterns` (respects `exclude`), registers them in the doc_registry.
 
-**7c: Sync PROJECT.md External Files** — parses PROJECT.md "External Files" sections and creates registry entries for declared external files.
+**7b: Sync PROJECT.md External Files** — parses PROJECT.md "External Files" sections and creates registry entries for declared external files.
 
-**7d: RAG reindex (three passes):**
+**7c: RAG reindex (three passes):**
 1. **docs/ directory pass** — reindexes `cfg.rag.docs_dir` (the workspace `docs/` directory).
 2. **Project directory pass** — reindexes each project's `homeDir` for projects with `autoIndex: true`.
 3. **doc_registry pass** (added in commit `dedf2c47`) — enumerates all files registered via `DocsRegistry().list_docs()` and indexes any that need reindex. This covers external registered files (e.g. `/tmp/*.md`, files outside the workspace) that neither of the directory scans would reach.

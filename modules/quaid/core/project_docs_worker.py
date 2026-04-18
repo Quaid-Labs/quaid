@@ -31,8 +31,8 @@ def _supervisor_alive() -> bool:
     try:
         pid = int(raw)
     except Exception:
-        return True
-    return project_docs._pid_alive(pid)  # process-liveness helper; intentionally shared
+        return False
+    return project_docs.read_supervisor_pid() == pid
 
 
 def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[float] = None) -> int:
@@ -49,12 +49,14 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
     while not _STOP:
         if not _supervisor_alive():
             project_docs.merge_state(name, {"status": "stopped", "last_error": "supervisor exited"})
+            project_docs.clear_worker_pid_for_current_process(name)
             return 0
         try:
             request = project_docs.read_update_request(name)
             status = project_docs.project_status(name)
             stale = status.get("status") == "stale"
             if request or stale:
+                project_docs.write_worker_heartbeat(name, {"status": "updating"})
                 result = project_docs.execute_update_once(name, request=request)
                 project_docs.write_worker_heartbeat(name, {"status": "idle", "last_result": result})
             else:
@@ -62,14 +64,19 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
         except KeyError:
             # Project was deleted; supervisor will stop/remove this worker.
             project_docs.write_worker_heartbeat(name, {"status": "stopped", "reason": "project_deleted"})
+            project_docs.clear_worker_pid_for_current_process(name)
             return 0
         except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("Project docs worker tick failed for %s", name)
             project_docs.merge_state(name, {"status": "error", "last_error": str(exc), "last_failed_at": project_docs.utc_now()})
             project_docs.write_worker_heartbeat(name, {"status": "error", "last_error": str(exc)})
         if once:
+            project_docs.clear_worker_pid_for_current_process(name)
             return 0
         time.sleep(interval)
     project_docs.write_worker_heartbeat(name, {"status": "stopped"})
+    project_docs.clear_worker_pid_for_current_process(name)
     return 0
 
 

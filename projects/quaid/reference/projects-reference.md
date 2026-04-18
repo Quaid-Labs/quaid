@@ -142,9 +142,12 @@ QUAID_HOME/
       logs/                      # Runtime and janitor logs
       tracking/
         <name>/                  # Shadow git bare repo (git_dir)
-      projects/staging/
-        *.json                   # Queued updater events
-        failed/                  # Events that could not be processed
+    data/
+      project-docs/
+        requests/<name>.json      # Force-update requests
+        state/<name>.json         # Hidden docs cursors/status
+        workers/<name>.*          # Worker pid/heartbeat/logs
+        supervisor/               # Supervisor pid/log
 ```
 
 ```
@@ -616,58 +619,50 @@ what to add by inspecting the project directory structure.
 
 ---
 
-## 6. Project Updater
+## 6. Project Docs Supervisor
 
-**Location:** `datastore/docsdb/project_updater.py`
+**Location:** `core/project_docs.py`, `core/project_docs_supervisor.py`,
+`core/project_docs_worker.py`, with append-only PROJECT.log helpers in
+`datastore/docsdb/project_updater.py`.
 
-**Purpose:** Background processor that updates stale docs based on extraction events
-and source file changes. Spawned as a subprocess by compact/reset hooks.
+**Purpose:** Supervisor-owned project documentation maintenance. Extraction writes
+durable project observations to `PROJECT.log`; workers compare shadow-git source
+changes and `PROJECT.log` cursor deltas, update visible project docs, sync the
+docs registry, and reindex registered docs.
 
-### 6.1 Event Model
+### 6.1 Request and Cursor Model
 
-Events are written as JSON files to `QUAID_HOME/instances/<instance>/projects/staging/*.json`
-by the plugin. Each event has:
+`quaid docs update <project>` writes a force-update request to
+`QUAID_HOME/data/project-docs/requests/<project>.json` and ensures the supervisor
+is alive. The command is async by default; `--wait` waits for that request to
+finish.
 
-```json
-{
-  "project_hint": "project-name",
-  "files_touched": ["path/to/file.py", "..."],
-  "summary": "Extraction session summary text",
-  "trigger": "compact",
-  "timestamp": "2026-03-13T..."
-}
-```
+Hidden state lives outside the visible project tree:
 
-### 6.2 `process_event(event_path)`
+- `data/project-docs/state/<project>.json` — status, last request, shadow commit,
+  and `PROJECT.log` byte cursor.
+- `data/project-docs/locks/<project>.lock` — per-project update lock.
+- `data/project-docs/workers/<project>.pid` and `.heartbeat.json` — worker
+  identity and liveness.
+- `data/project-docs/supervisor/supervisor.pid` — supervisor identity.
 
-```python
-def process_event(event_path: str) -> Dict:
-```
+### 6.2 Apply Flow
 
-Steps:
+1. Worker observes a force request, source diff, or PROJECT.log cursor delta.
+2. Worker takes the per-project lock.
+3. Worker snapshots shadow git, reads `PROJECT.log` from the hidden cursor, and
+   builds update context.
+4. Docs updater may edit `PROJECT.md`, `TOOLS.md`, `AGENTS.md`, and `docs/**/*.md`.
+   `PROJECT.log` is append-only and never edited by the updater.
+5. After apply, the worker auto-discovers new visible project docs, unregisters
+   docs deleted by the updater apply, refreshes managed PROJECT.md registry
+   sections, reindexes the project's registered docs, and advances cursors.
 
-1. Read and parse event JSON.
-2. Resolve project via `_resolve_project()`: tries `project_hint` first (config lookup),
-   then walks `files_touched` through `DocsRegistry.find_project_for_path()`.
-   On failure: moves event to `staging/failed/` for manual triage.
-3. Read `PROJECT.md` from the resolved project dir.
-4. Run `_check_registry_staleness()`: compare mtime of each `auto_update=1` doc against
-   its `source_files`. Returns list of `{doc_path, stale_sources, doc_mtime}`.
-5. Call `_apply_updates()` to refresh stale docs using Opus.
-6. Refresh `PROJECT.md` file-list section via `_refresh_file_list()`.
-7. Queue user notification via `lib.delayed_requests.queue_delayed_request()`.
-8. Delete event file.
+The old staged project event queue, `process_event`, `process_all_events`,
+`doc-health`, `request-docs`, and dirty-queue semantics were removed prelaunch.
+There is no compatibility layer.
 
-### 6.3 `process_all_events()`
-
-```python
-def process_all_events() -> Dict:
-```
-
-Processes all `staging/*.json` files in chronological order (sorted by filename).
-Failed events move to `staging/failed/`. Caps `failed/` at 20 entries.
-
-### 6.4 Gating Cascade: mtime → rule-based → Haiku → Opus
+### 6.3 Gating Cascade: mtime → rule-based → Haiku → Opus
 
 The updater applies a cost-escalating decision cascade before calling an expensive LLM:
 
@@ -679,30 +674,7 @@ The updater applies a cost-escalating decision cascade before calling an expensi
 
 This gate prevents unnecessary Opus calls when the doc is still accurate.
 
-### 6.5 `evaluate_doc_health(project_name, dry_run=False)`
-
-```python
-def evaluate_doc_health(project_name: str, dry_run: bool = False) -> Dict:
-```
-
-One deep LLM call that analyzes `PROJECT.md`, registered docs, recent `PROJECT.log`
-entries, and source roots. Returns three decision lists:
-
-- `create`: suggested new docs (must go in `docs/` subdir).
-- `update`: existing docs needing refresh.
-- `archive`: obsolete docs to soft-delete.
-
-In non-dry-run mode: scaffolds new doc files, registers them, and calls
-`registry.unregister()` on archive decisions. Does NOT auto-apply `update` decisions —
-those remain in the return value for caller action.
-
-Called by `quaid updater doc-health <project>`. Not called on every extraction event.
-
-New docs suggested by the LLM must be placed under the `docs/` subdirectory. The prompt
-enforces this as a rule (`"docs/architecture.md"`, not `"architecture.md"`).
-Auto-created docs are scaffolded with an `<!-- Auto-created by project updater -->` comment.
-
-### 6.6 `append_project_logs(project_logs, trigger, date_str, dry_run)`
+### 6.4 `append_project_logs(project_logs, trigger, date_str, dry_run)`
 
 ```python
 def append_project_logs(
@@ -745,14 +717,14 @@ projects/<name>/
 2. The recent window is bounded by a **token budget** (config:
    `projects.logTokenBudget`, default: 4000 tokens). Never split an entry.
 3. Entries beyond the token budget are moved to `log/YYYY-MM.log` archives.
-4. Keep `PROJECT.log` as the "recent" window the janitor/docs-updater reads.
+4. Keep `PROJECT.log` as the "recent" window the supervisor-owned docs worker reads.
 5. Archives are append-only — once written, never modified.
 6. If the file overflows before janitor can distill, the janitor chunks it for
    processing — **no truncation**.
 
 **Implementation:** `core/log_rotation.py`, `rotate_log_file()`. Called from the janitor
 after distillation (Task 6 in `janitor.py`), not from the daemon loop. The
-`evaluate_doc_health()` function only needs the recent log.
+the docs worker only needs the recent log cursor range.
 
 **Historical log RAG indexing:** Historical project logs are indexed with metadata
 marking them as historical:
@@ -905,12 +877,15 @@ cd <quaid_module_root> && python3 datastore/docsdb/rag.py reindex --all
 ```
 Scans `docs/` dir, top-level workspace `.md` files, and all `doc_registry` entries.
 
-#### Evaluate doc health
+#### Force project docs update
 ```bash
-quaid updater doc-health <project>
-quaid updater doc-health <project> --dry-run
+quaid docs update <project>
+quaid docs update <project> --wait
+quaid project status <project>
+quaid project diff <project> [--full]
 ```
-Deep LLM analysis producing create/update/archive decision lists.
+Queues a supervisor-owned project docs update. The worker applies source/log
+changes, syncs registry entries for visible project docs, and reindexes docs.
 
 ### 7.3 Global Registry (`quaid global-registry`)
 
@@ -1058,9 +1033,9 @@ itself is never in-place trimmed.
 because each writer creates its own `.tmp` and they never contend on the same fd.
 This was a fixed bug — always lock the canonical path.
 
-**`evaluate_doc_health` placement constraint:** New docs suggested by the LLM must
-be placed under the `docs/` subdirectory. The prompt enforces this.
-Auto-created docs are scaffolded with an `<!-- Auto-created by project updater -->` comment.
+**Docs updater placement constraint:** New visible docs authored during an update
+must be placed under the project `docs/` subdirectory. The worker auto-discovers
+and registers Markdown files under the visible project docs tree after apply.
 
 **Shadow git performance on large repos:** If a user's project has 100k+ files,
 `git status` might be slow. Mitigations: aggressive ignore patterns, enabling

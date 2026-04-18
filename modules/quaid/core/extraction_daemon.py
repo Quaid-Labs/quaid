@@ -4171,6 +4171,14 @@ def ensure_alive() -> int:
             ensure_supervisor_alive()
         except Exception as exc:
             logger.warning("project docs supervisor ensure_alive failed: %s", exc)
+            try:
+                from lib.fail_policy import is_fail_hard_enabled
+            except Exception:
+                fail_hard = False
+            else:
+                fail_hard = bool(is_fail_hard_enabled())
+            if fail_hard:
+                raise
     pid = read_pid()
     if pid is not None:
         return pid

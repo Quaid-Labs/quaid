@@ -4,7 +4,8 @@
 - `datastore/docsdb/rag.py` — indexing, chunking, search (`DocsRAG`)
 - `datastore/docsdb/registry.py` — doc and project registry (`DocsRegistry`)
 - `datastore/docsdb/updater.py` — staleness detection and doc auto-update
-- `datastore/docsdb/project_updater.py` — event-driven Opus-based project doc refresh
+- `core/project_docs.py` + `core/project_docs_supervisor.py` — supervisor-owned project docs refresh
+- `datastore/docsdb/project_updater.py` — append-only PROJECT.log and PROJECT.md registry-section helpers
 
 ---
 
@@ -18,7 +19,7 @@ The docs system has four tightly integrated components:
 | Project definitions | `DocsRegistry` | `project_definitions` (SQLite) | Canonical project config (seeded from instance `config.json`, then DB is source of truth) |
 | RAG indexer | `DocsRAG` | `doc_chunks` + `vec_doc_chunks` (SQLite + sqlite-vec) | Chunks files, batches embeddings, serves bounded semantic search |
 | Staleness detector / updater | `updater.py` | `logs/docs-update-log.json` | Detects when source code has drifted ahead of docs, calls Opus to rewrite |
-| Project event processor | `project_updater.py` | `projects/<staging_dir>/` | Processes compact/reset event files, calls `update_doc_from_diffs`, refreshes PROJECT.md |
+| Project docs worker | `core/project_docs*.py` | `data/project-docs/` | Processes shadow-git and PROJECT.log deltas, updates visible project docs, syncs registry |
 
 All components share a single SQLite database at `QUAID_HOME/instances/<instance>/data/memory.db`
 (path from `lib/config.get_db_path()`). Packed chunk embeddings are stored in
@@ -141,9 +142,10 @@ The janitor performs three distinct passes:
 3. **Pass 3 — `doc_registry` external files:** Enumerates all entries via `DocsRegistry().list_docs()`. For each entry whose `file_path` resolves to a real file, janitor batches them through `rag.needs_reindex_many()` and indexes only the stale subset. This covers files registered outside the scanned directories (e.g., source code files linked via `quaid registry register`). **Double-counting guard:** Passes 1 and 2 each append their scanned directory to a `scanned_dirs` list. Pass 3 resolves each registry path to an absolute path and skips it if it starts with any entry in `scanned_dirs`. This prevents files that live inside an already-scanned project directory from being re-counted in pass 3.
 
 Pre-pass: before the three indexing passes, janitor also:
-- Calls `process_all_events()` (project_updater) to drain the event queue.
 - Calls `docs_registry.auto_discover(proj_name)` for each project with `auto_index=True`.
 - Calls `docs_registry.sync_external_files(proj_name)` for each project.
+
+Project-doc workers, not janitor, own source/log-driven documentation updates.
 
 **Step 4: batched staleness checks**
 
@@ -341,31 +343,39 @@ After repeated updates, docs can grow bloated. `updater.py` tracks cleanup state
 
 ---
 
-## 10. Project Event Processing
+## 10. Project Docs Supervisor
 
-The `project_updater.py` module handles asynchronous project doc updates triggered by compact/reset hooks.
+Project docs updates are owned by the project-docs supervisor, not by compact/reset
+event JSON files. Extraction appends durable bullets to `PROJECT.log`; the
+supervisor-owned worker reads `PROJECT.log` through a hidden cursor, compares the
+linked source tree through shadow git, applies doc edits, syncs the docs registry,
+and advances cursors only after apply succeeds.
 
-**Event flow:**
+**Update flow:**
 
-1. Compact/reset hook writes a JSON event file to `projects/<staging_dir>/` (path from `config.projects.staging_dir`).
-2. Event JSON fields: `project_hint`, `files_touched`, `summary`, `trigger`.
-3. During janitor RAG maintenance pass, `process_all_events()` is called.
-4. `process_event(event_path)` resolves the project, checks registry staleness via `_check_registry_staleness()`, then calls `_apply_updates()`.
-5. `_apply_updates()` calls `update_doc_from_diffs()` for each stale doc. Falls back to `update_doc_from_transcript()` if no git diffs.
-6. After updates: `_refresh_file_list()` regenerates the "In This Directory" and "External Files" sections of PROJECT.md.
-7. Event file is deleted on success; moved to `staging_dir/failed/` on error (capped at 20 entries).
+1. `quaid docs update <project>` writes a hidden force-update request under
+   `QUAID_HOME/data/project-docs/requests/` and ensures the supervisor is alive.
+2. The supervisor owns one worker per active project. Workers own their own tick
+   loop and take a per-project update lock before applying changes.
+3. The worker reads pending shadow-git changes plus `PROJECT.log` entries since
+   the hidden cursor.
+4. The docs updater may edit `PROJECT.md`, `TOOLS.md`, `AGENTS.md`, and
+   `docs/**/*.md`. `PROJECT.log` is append-only and must not be edited.
+5. After apply, the worker auto-discovers new visible project docs, unregisters
+   docs deleted by updater apply, reindexes registered docs, then advances the
+   hidden shadow/log cursors.
 
-**`evaluate_doc_health(project_name, dry_run)`** — deeper LLM-driven doc audit:
-- Makes one `tier="deep"` LLM call with PROJECT.md, registered docs list, recent PROJECT.log entries, and source roots.
-- Returns `create` / `update` / `archive` decision arrays.
-- If not dry_run: scaffolds new doc files, registers them, soft-deletes archived docs.
-- Called via `quaid updater doc-health <project> [--dry-run]`, not on every event.
+The old `doc-health`, `request-docs`, dirty queue, and staged project-event
+processor paths were removed prelaunch. Missing registered docs are an anomaly
+unless the docs updater apply transaction or project deletion performs the
+removal.
 
 **`append_project_logs(project_logs, trigger, date_str, dry_run)`** — appends compact/reset bullets to per-project files:
 - Writes timestamped entries to `PROJECT.log` (append-only history file).
 - Also writes dated `- YYYY-MM-DD [Trigger] entry` lines into the `<!-- BEGIN:PROJECT_LOG --> ... <!-- END:PROJECT_LOG -->` block in PROJECT.md.
 
-**Watchdog:** `process-event` CLI path wraps execution in `_run_with_watchdog()` using POSIX `SIGALRM`. Timeout configurable via `QUAID_PROJECT_UPDATER_WATCHDOG_SECONDS` (default 900s).
+Worker liveness is supervised with PID identity checks, per-project locks, and
+heartbeat staleness. A stale worker is stopped and restarted by the supervisor.
 
 ---
 
@@ -377,12 +387,12 @@ The `project_updater.py` module handles asynchronous project doc updates trigger
 | Pass 1 | `docs/` directory | `cfg.rag.docs_dir` |
 | Pass 2 | Workspace root `*.md` files | Each project's `home_dir` |
 | Pass 3 | `doc_registry` entries | `doc_registry` entries |
-| Pre-pass | None | `process_all_events()`, `auto_discover()`, `sync_external_files()` |
+| Pre-pass | None | project-doc worker auto-discovery + registry sync after docs apply |
 | Force flag | `--all` forces reindex of unchanged files | No force; always mtime-gated |
 | Dry-run | Not supported | Supported via `ctx.dry_run`; skips all indexing |
 | Approval | Not required | Requires `--approve` if `janitor.applyMode=ask` |
 
-Both paths use `DocsRAG.needs_reindex()` for change detection (except `reindex --all` which bypasses it). Both call the same `DocsRAG.index_document()` and produce identical chunk rows. The janitor path additionally processes project events and auto-discovers files before indexing.
+Both paths use `DocsRAG.needs_reindex()` for change detection (except `reindex --all` which bypasses it). Both call the same `DocsRAG.index_document()` and produce identical chunk rows. Project-doc workers additionally sync visible project docs before indexing.
 
 ---
 
@@ -419,14 +429,12 @@ quaid docs cleanup-check                             # Which docs have update/gr
 quaid docs cleanup --apply                           # Clean all bloated docs via Opus
 quaid docs cleanup <doc_path> --apply                # Clean specific doc
 
-# --- Project doc health ---
-quaid updater doc-health <project> --dry-run         # Preview create/update/archive decisions
-quaid updater doc-health <project>                   # Apply decisions (scaffold, archive)
-
-# --- Project event queue ---
-python3 datastore/docsdb/project_updater.py check
-python3 datastore/docsdb/project_updater.py process-all
-python3 datastore/docsdb/project_updater.py refresh-project-md <project_name>
+# --- Project docs supervisor ---
+quaid docs update <project>                          # Queue async force update
+quaid docs update <project> --wait                   # Queue and wait for apply
+quaid project status <project>                       # Fresh/stale, worker, cursor state
+quaid project diff <project> [--full]                # Pending source/log delta
+quaid supervisor status|ensure|stop
 
 # --- Changelog ---
 quaid docs changelog                                 # Recent doc update history

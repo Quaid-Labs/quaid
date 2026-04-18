@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import logging
 import os
 import re
 import signal
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -26,6 +28,11 @@ from lib.runtime_context import get_quaid_home
 
 _PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PROJECT_LOG = "PROJECT.log"
+UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
+SUPERVISOR_ROLE = "project-docs-supervisor"
+WORKER_ROLE = "project-docs-worker"
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -58,6 +65,12 @@ def _lock_dir() -> Path:
 
 def _worker_dir() -> Path:
     return project_docs_root() / "workers"
+
+
+def _spawn_lock_path(kind: str, project: Optional[str] = None) -> Path:
+    if project:
+        return _safe_path(_lock_dir(), project, f".{kind}.spawn.lock")
+    return _lock_dir() / f"{kind}.spawn.lock"
 
 
 def _safe_path(base: Path, project: str, suffix: str) -> Path:
@@ -97,12 +110,29 @@ def supervisor_log_path() -> Path:
     return supervisor_dir() / "supervisor.log"
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return False
+
+
 def _read_json(path: Path, default: Any) -> Any:
     try:
         if not path.is_file():
             return default
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as exc:
+        logger.error("Corrupt project-docs JSON: %s: %s", path, exc)
+        if _fail_hard_enabled():
+            raise
+        return default
+    except OSError as exc:
+        logger.error("Failed reading project-docs JSON: %s: %s", path, exc)
+        if _fail_hard_enabled():
+            raise
         return default
 
 
@@ -123,6 +153,24 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
         except Exception:
             pass
         raise
+
+
+@contextlib.contextmanager
+def _exclusive_file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def read_state(project: str) -> Dict[str, Any]:
@@ -187,13 +235,114 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def read_pid(path: Path) -> Optional[int]:
+def _read_pid_record(path: Path) -> Optional[Dict[str, Any]]:
     try:
+        if not path.is_file():
+            return None
         raw = path.read_text(encoding="utf-8").strip()
-        pid = int(raw)
-    except Exception:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("pid file must contain a JSON object")
+        pid = int(data.get("pid") or 0)
+        if pid <= 0:
+            raise ValueError("pid file has invalid pid")
+        data["pid"] = pid
+        return data
+    except json.JSONDecodeError as exc:
+        logger.warning("Corrupt project-docs pid file ignored: %s: %s", path, exc)
         return None
+    except Exception as exc:
+        logger.warning("Invalid project-docs pid file ignored: %s: %s", path, exc)
+        return None
+
+
+def _process_command(pid: int) -> str:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode != 0:
+            return ""
+        return (result.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _pid_record_matches(record: Dict[str, Any], *, role: str, project: Optional[str] = None) -> bool:
+    pid = int(record.get("pid") or 0)
+    if not _pid_alive(pid):
+        return False
+    if record.get("role") != role:
+        return False
+    if project is not None and record.get("project") != validate_project_name(project):
+        return False
+    command = _process_command(pid)
+    if role == SUPERVISOR_ROLE:
+        return "project_docs_supervisor.py" in command and " run" in f" {command}"
+    if role == WORKER_ROLE:
+        name = validate_project_name(project or str(record.get("project") or ""))
+        return "project_docs_worker.py" in command and f" {name}" in f" {command}"
+    return False
+
+
+def _read_valid_pid(path: Path, *, role: str, project: Optional[str] = None) -> Optional[int]:
+    record = _read_pid_record(path)
+    if not record:
+        return None
+    if _pid_record_matches(record, role=role, project=project):
+        return int(record["pid"])
+    return None
+
+
+def _write_pid_record(path: Path, *, role: str, pid: int, token: str, project: Optional[str] = None) -> None:
+    payload: Dict[str, Any] = {
+        "pid": int(pid),
+        "role": role,
+        "token": token,
+        "started_at": utc_now(),
+    }
+    if project is not None:
+        payload["project"] = validate_project_name(project)
+    _atomic_write_json(path, payload)
+
+
+def read_pid(path: Path) -> Optional[int]:
+    """Return a live PID from a pid file without trusting it for kill/spawn decisions.
+
+    Role-specific callers should use read_supervisor_pid/read_worker_pid so PID
+    recycling cannot make Quaid trust or kill an unrelated process.
+    """
+    record = _read_pid_record(path)
+    if not record:
+        return None
+    pid = int(record.get("pid") or 0)
     return pid if _pid_alive(pid) else None
+
+
+def read_supervisor_pid() -> Optional[int]:
+    return _read_valid_pid(supervisor_pid_path(), role=SUPERVISOR_ROLE)
+
+
+def read_worker_pid(project: str) -> Optional[int]:
+    name = validate_project_name(project)
+    return _read_valid_pid(worker_pid_path(name), role=WORKER_ROLE, project=name)
+
+
+def write_supervisor_pid(token: str) -> None:
+    _write_pid_record(supervisor_pid_path(), role=SUPERVISOR_ROLE, pid=os.getpid(), token=token)
+
+
+def clear_supervisor_pid_for_current_process() -> None:
+    token = os.environ.get("QUAID_SUPERVISOR_TOKEN", "").strip() or None
+    _unlink_pid_record_if_matches(supervisor_pid_path(), pid=os.getpid(), token=token)
+
+
+def clear_worker_pid_for_current_process(project: str) -> None:
+    token = os.environ.get("QUAID_PROJECT_DOCS_WORKER_TOKEN", "").strip() or None
+    _unlink_pid_record_if_matches(worker_pid_path(project), pid=os.getpid(), token=token)
 
 
 def get_project_entry(project: str) -> Dict[str, Any]:
@@ -246,6 +395,20 @@ def clear_update_request(project: str, request_id: Optional[str] = None) -> None
         pass
 
 
+def wait_for_request(project: str, request_id: str, *, timeout_seconds: float = 300.0) -> Dict[str, Any]:
+    name = validate_project_name(project)
+    deadline = time.time() + max(0.1, float(timeout_seconds))
+    while time.time() < deadline:
+        state = read_state(name)
+        if state.get("last_request_id") == request_id:
+            return state
+        req = read_update_request(name)
+        if not req or req.get("request_id") != request_id:
+            return state
+        time.sleep(0.25)
+    raise TimeoutError(f"Timed out waiting for project docs update request {request_id}")
+
+
 def _shadow_git(project: str, entry: Dict[str, Any]):
     from core.shadow_git import ShadowGit
 
@@ -279,8 +442,9 @@ def _read_project_log_since(entry: Dict[str, Any], offset: int) -> Tuple[List[st
         text = data.decode("utf-8", errors="replace")
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         return lines, safe_offset, size
-    except Exception:
-        return [], 0, 0
+    except Exception as exc:
+        logger.exception("Failed reading PROJECT.log for project docs update: %s", log_path)
+        raise RuntimeError(f"failed to read PROJECT.log at {log_path}: {exc}") from exc
 
 
 def _current_project_log_size(entry: Dict[str, Any]) -> int:
@@ -289,8 +453,9 @@ def _current_project_log_size(entry: Dict[str, Any]) -> int:
         return 0
     try:
         return int(log_path.stat().st_size)
-    except Exception:
-        return 0
+    except Exception as exc:
+        logger.exception("Failed stat for PROJECT.log: %s", log_path)
+        raise RuntimeError(f"failed to stat PROJECT.log at {log_path}: {exc}") from exc
 
 
 def pending_source_changes(project: str, entry: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -298,14 +463,15 @@ def pending_source_changes(project: str, entry: Optional[Dict[str, Any]] = None)
     entry = entry or get_project_entry(name)
     sg = _shadow_git(name, entry)
     if sg is None:
-        return []
+        raise RuntimeError(f"Project {name} has no source_root for shadow-git tracking")
     try:
         return [
             {"status": c.status, "path": c.path, "old_path": c.old_path}
             for c in sg.pending_changes()
         ]
     except Exception as exc:
-        return [{"status": "?", "path": f"shadow-git-error: {exc}", "old_path": None}]
+        logger.exception("Failed reading pending source changes for project %s", name)
+        raise RuntimeError(f"failed to read pending source changes for {name}: {exc}") from exc
 
 
 def project_status(project: str) -> Dict[str, Any]:
@@ -313,19 +479,29 @@ def project_status(project: str) -> Dict[str, Any]:
     entry = get_project_entry(name)
     state = read_state(name)
     req = read_update_request(name)
-    worker_pid = read_pid(worker_pid_path(name))
-    supervisor_pid = read_pid(supervisor_pid_path())
-    changes = pending_source_changes(name, entry)
+    worker_pid = read_worker_pid(name)
+    supervisor_pid = read_supervisor_pid()
+    source_error = None
+    try:
+        changes = pending_source_changes(name, entry)
+    except RuntimeError as exc:
+        logger.warning("Project docs status source check failed for %s: %s", name, exc)
+        changes = []
+        source_error = str(exc)
     log_offset = int(state.get("project_log_offset") or 0)
     log_size = _current_project_log_size(entry)
     log_pending = max(0, log_size - min(log_offset, log_size))
     stale = bool(req) or bool(changes) or log_pending > 0
+    status_value = "stale" if stale else "fresh"
+    if source_error and not stale:
+        status_value = "error"
     return {
         "project": name,
         "registered": True,
-        "status": "stale" if stale else "fresh",
+        "status": status_value,
         "source_root": entry.get("source_root"),
         "canonical_path": entry.get("canonical_path"),
+        "source_error": source_error,
         "pending_request": req,
         "pending_source_changes": changes,
         "pending_source_change_count": len(changes),
@@ -348,7 +524,8 @@ def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
         try:
             diff_text = sg.pending_diff(full=full) or ""
         except Exception as exc:
-            diff_text = f"shadow-git diff failed: {exc}"
+            logger.exception("Failed reading pending source diff for project %s", name)
+            raise RuntimeError(f"failed to read pending source diff for {name}: {exc}") from exc
     state = read_state(name)
     log_offset = int(state.get("project_log_offset") or 0)
     log_lines, _, log_size = _read_project_log_since(entry, log_offset)
@@ -385,6 +562,53 @@ def snapshot_project(project: str, entry: Optional[Dict[str, Any]] = None) -> Op
     }
 
 
+def sync_project_docs_registry(project: str, entry: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
+    """Register new visible docs and unregister docs deleted by updater apply.
+
+    This is intentionally owned by the project-docs apply transaction. Source
+    deletion alone must not unregister docs; only visible docs missing from the
+    project docs tree after an updater apply are removed.
+    """
+    name = validate_project_name(project)
+    entry = entry or get_project_entry(name)
+    from core.docs import updater as docs_updater
+
+    canonical_raw = str(entry.get("canonical_path") or "").strip()
+    try:
+        return docs_updater.sync_project_visible_docs(
+            name,
+            canonical_raw,
+            root_docs=UPDATABLE_ROOT_DOCS,
+            protected_names={PROJECT_LOG},
+        )
+    except Exception as exc:
+        logger.warning("Project docs registry sync failed for %s: %s", name, exc)
+        raise
+
+
+def _notify_project_docs_update(project: str, result: Dict[str, Any]) -> None:
+    try:
+        from lib.runtime_context import queue_deferred_notice
+
+        metrics = result.get("metrics") or {}
+        registry_sync = result.get("registry_sync") or {}
+        message = (
+            f"Project docs update completed for {project}: "
+            f"docs_updated={int(metrics.get('docs_updated') or 0)}, "
+            f"docs_registered={int(registry_sync.get('registered') or 0)}, "
+            f"docs_unregistered={int(registry_sync.get('unregistered') or 0)}, "
+            f"indexed_docs={int(result.get('indexed_docs') or 0)}"
+        )
+        queue_deferred_notice(
+            message,
+            kind="project_doc_update",
+            priority="info",
+            source="project-docs-worker",
+        )
+    except Exception:
+        logger.warning("Failed to queue project docs update notice for %s", project)
+
+
 def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = None, dry_run: bool = False) -> Dict[str, Any]:
     """Run one project-doc update under the project lock.
 
@@ -399,23 +623,33 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
     request_id = str((request or {}).get("request_id") or "") or None
     with project_update_lock(name, blocking=False) as acquired:
         if not acquired:
-            return {"project": name, "status": "locked", "updated_docs": 0, "errors": 0}
+            if request_id:
+                merge_state(
+                    name,
+                    {
+                        "status": "queued",
+                        "pending_request_id": request_id,
+                        "last_error": "update lock busy; request retained",
+                    },
+                )
+            return {"project": name, "status": "locked", "request_id": request_id, "request_retained": bool(request_id)}
         started = utc_now()
         merge_state(name, {"status": "updating", "last_started_at": started, "last_error": None})
-        state = read_state(name)
-        log_offset = int(state.get("project_log_offset") or 0)
-        log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset)
-        snapshot = snapshot_project(name, entry)
-        snapshots = [snapshot] if snapshot else []
-        metrics: Dict[str, Any] = {
-            "projects_checked": 0,
-            "docs_updated": 0,
-            "docs_skipped": 0,
-            "trivial_skipped": 0,
-            "errors": 0,
-        }
-        index_count = 0
         try:
+            state = read_state(name)
+            log_offset = int(state.get("project_log_offset") or 0)
+            log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset)
+            snapshot = snapshot_project(name, entry)
+            snapshots = [snapshot] if snapshot else []
+            metrics: Dict[str, Any] = {
+                "projects_checked": 0,
+                "docs_updated": 0,
+                "docs_skipped": 0,
+                "trivial_skipped": 0,
+                "errors": 0,
+            }
+            registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
+            index_count = 0
             from core.docs_updater_hook import update_project_docs
             from core.docs import updater as docs_updater
 
@@ -427,9 +661,12 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                     force_project=name,
                 )
             if not dry_run:
+                registry_sync = sync_project_docs_registry(name, entry)
                 try:
                     index_count = int(docs_updater.update_registered_docs(project=name, dry_run=False) or 0)
                 except Exception as exc:
+                    if _fail_hard_enabled():
+                        raise
                     metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1
                     metrics["index_error"] = str(exc)
             completed = utc_now()
@@ -438,6 +675,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "last_completed_at": completed,
                 "last_request_id": request_id,
                 "last_metrics": metrics,
+                "last_registry_sync": registry_sync,
                 "last_indexed_docs": index_count,
                 "project_log_offset": log_size,
             }
@@ -450,15 +688,19 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             merge_state(name, next_state)
             if request_id and not dry_run:
                 clear_update_request(name, request_id=request_id)
-            return {
+            result = {
                 "project": name,
                 "status": next_state["status"],
                 "request_id": request_id,
                 "snapshot": snapshot,
                 "project_log_entries": len(log_entries),
                 "metrics": metrics,
+                "registry_sync": registry_sync,
                 "indexed_docs": index_count,
             }
+            if not dry_run and next_state["status"] == "fresh":
+                _notify_project_docs_update(name, result)
+            return result
         except Exception as exc:
             merge_state(
                 name,
@@ -477,96 +719,223 @@ def write_worker_heartbeat(project: str, payload: Optional[Dict[str, Any]] = Non
     if payload:
         data.update(payload)
     _atomic_write_json(worker_heartbeat_path(project), data)
-    worker_pid_path(project).parent.mkdir(parents=True, exist_ok=True)
-    worker_pid_path(project).write_text(f"{os.getpid()}\n", encoding="utf-8")
+    token = os.environ.get("QUAID_PROJECT_DOCS_WORKER_TOKEN", "").strip()
+    _write_pid_record(worker_pid_path(project), role=WORKER_ROLE, pid=os.getpid(), token=token, project=project)
+
+
+def read_worker_heartbeat(project: str) -> Dict[str, Any]:
+    data = _read_json(worker_heartbeat_path(project), {})
+    return data if isinstance(data, dict) else {}
+
+
+def _parse_iso_ts(value: Any) -> Optional[float]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        return datetime.fromisoformat(raw).timestamp()
+    except Exception:
+        return None
+
+
+def worker_stale_after_seconds(interval_seconds: Optional[float] = None) -> float:
+    raw = os.environ.get("QUAID_PROJECT_DOCS_WORKER_STALE_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(5.0, float(raw))
+        except ValueError:
+            logger.warning("Invalid QUAID_PROJECT_DOCS_WORKER_STALE_SECONDS=%r; using default", raw)
+    base = float(interval_seconds or os.environ.get("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5") or 5)
+    return max(900.0, base * 12.0)
+
+
+def _worker_heartbeat_stale(project: str, *, stale_after_seconds: float) -> bool:
+    heartbeat = read_worker_heartbeat(project)
+    ts = _parse_iso_ts(heartbeat.get("heartbeat_at"))
+    if ts is None:
+        return True
+    return (time.time() - ts) > stale_after_seconds
+
+
+def reap_stale_worker(project: str, *, stale_after_seconds: float) -> bool:
+    name = validate_project_name(project)
+    state = read_state(name)
+    pid = read_worker_pid(name)
+    stale = _worker_heartbeat_stale(name, stale_after_seconds=stale_after_seconds)
+    if pid is not None and not stale:
+        return False
+    if pid is not None and stale:
+        logger.warning("Project docs worker heartbeat stale for %s; restarting pid=%s", name, pid)
+        stop_worker(name)
+    if state.get("status") == "updating":
+        merge_state(
+            name,
+            {
+                "status": "queued",
+                "last_error": "worker stopped or heartbeat stale during update; retry queued",
+                "last_failed_at": utc_now(),
+            },
+        )
+    return stale or pid is None
+
+
+def _wait_for_pid(
+    path: Path,
+    *,
+    expected_pid: int,
+    role: str,
+    project: Optional[str] = None,
+    proc: Optional[subprocess.Popen] = None,
+    timeout_seconds: float = 5.0,
+) -> int:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        pid = _read_valid_pid(path, role=role, project=project)
+        if pid == expected_pid:
+            return pid
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(f"{role} exited before writing pid file rc={proc.returncode}")
+        time.sleep(0.05)
+    raise TimeoutError(f"{role} did not write a valid pid file for pid {expected_pid}")
+
+
+def _unlink_pid_record_if_matches(path: Path, *, pid: int, token: Optional[str] = None) -> None:
+    record = _read_pid_record(path)
+    if not record or int(record.get("pid") or 0) != int(pid):
+        return
+    if token is not None and record.get("token") != token:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def ensure_supervisor_alive() -> int:
-    pid = read_pid(supervisor_pid_path())
+    pid = read_supervisor_pid()
     if pid is not None:
         return pid
     return start_supervisor()
 
 
 def start_supervisor() -> int:
-    supervisor_dir().mkdir(parents=True, exist_ok=True)
-    log_path = supervisor_log_path()
-    script = Path(__file__).parent / "project_docs_supervisor.py"
-    env = dict(os.environ)
-    env.setdefault("QUAID_SUPERVISOR_INTERVAL_SECONDS", "5")
-    with log_path.open("ab") as log_fh:
-        proc = subprocess.Popen(
-            [sys.executable, str(script), "run"],
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=log_fh,
-            start_new_session=True,
-            env=env,
-        )
-    supervisor_pid_path().write_text(f"{proc.pid}\n", encoding="utf-8")
-    return int(proc.pid)
+    with _exclusive_file_lock(_spawn_lock_path("supervisor")):
+        existing = read_supervisor_pid()
+        if existing is not None:
+            return existing
+        supervisor_dir().mkdir(parents=True, exist_ok=True)
+        log_path = supervisor_log_path()
+        script = Path(__file__).parent / "project_docs_supervisor.py"
+        env = dict(os.environ)
+        env.setdefault("QUAID_SUPERVISOR_INTERVAL_SECONDS", "5")
+        env["QUAID_SUPERVISOR_TOKEN"] = uuid.uuid4().hex
+        with log_path.open("ab") as log_fh:
+            proc = subprocess.Popen(
+                [sys.executable, str(script), "run"],
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=log_fh,
+                start_new_session=True,
+                env=env,
+            )
+        try:
+            return _wait_for_pid(
+                supervisor_pid_path(),
+                expected_pid=int(proc.pid),
+                role=SUPERVISOR_ROLE,
+                proc=proc,
+            )
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            raise
 
 
 def stop_supervisor() -> bool:
-    pid = read_pid(supervisor_pid_path())
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, signal.SIGTERM)
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            if not _pid_alive(pid):
-                break
-            time.sleep(0.1)
-        if _pid_alive(pid):
-            os.kill(pid, signal.SIGKILL)
-        if _worker_dir().is_dir():
-            for pid_file in sorted(_worker_dir().glob("*.pid")):
-                project = pid_file.stem
-                try:
-                    stop_worker(project)
-                except Exception:
-                    pass
-        return True
-    finally:
+    with _exclusive_file_lock(_spawn_lock_path("supervisor")):
+        record = _read_pid_record(supervisor_pid_path())
+        pid = int((record or {}).get("pid") or 0)
+        if not record:
+            return False
+        if not _pid_record_matches(record, role=SUPERVISOR_ROLE):
+            _unlink_pid_record_if_matches(supervisor_pid_path(), pid=pid, token=record.get("token"))
+            return False
         try:
-            supervisor_pid_path().unlink(missing_ok=True)
-        except OSError:
-            pass
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                if not _pid_alive(pid):
+                    break
+                time.sleep(0.1)
+            if _pid_alive(pid):
+                os.kill(pid, signal.SIGKILL)
+            if _worker_dir().is_dir():
+                for pid_file in sorted(_worker_dir().glob("*.pid")):
+                    project = pid_file.stem
+                    try:
+                        stop_worker(project)
+                    except Exception:
+                        logger.exception("Failed stopping project docs worker for %s", project)
+            return True
+        finally:
+            if not _pid_alive(pid):
+                _unlink_pid_record_if_matches(supervisor_pid_path(), pid=pid, token=record.get("token"))
 
 
 def start_worker(project: str) -> int:
     name = validate_project_name(project)
-    existing = read_pid(worker_pid_path(name))
-    if existing is not None:
-        return existing
-    _worker_dir().mkdir(parents=True, exist_ok=True)
-    log_path = _worker_dir() / f"{name}.log"
-    script = Path(__file__).parent / "project_docs_worker.py"
-    env = dict(os.environ)
-    env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
-    supervisor_pid = read_pid(supervisor_pid_path())
-    if supervisor_pid:
-        env["QUAID_SUPERVISOR_PID"] = str(supervisor_pid)
-    with log_path.open("ab") as log_fh:
-        proc = subprocess.Popen(
-            [sys.executable, str(script), "run", name],
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=log_fh,
-            start_new_session=False,
-            env=env,
-        )
-    worker_pid_path(name).write_text(f"{proc.pid}\n", encoding="utf-8")
-    return int(proc.pid)
+    with _exclusive_file_lock(_spawn_lock_path("worker", name)):
+        existing = read_worker_pid(name)
+        if existing is not None:
+            return existing
+        _worker_dir().mkdir(parents=True, exist_ok=True)
+        log_path = _worker_dir() / f"{name}.log"
+        script = Path(__file__).parent / "project_docs_worker.py"
+        env = dict(os.environ)
+        env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
+        env["QUAID_PROJECT_DOCS_WORKER_TOKEN"] = uuid.uuid4().hex
+        supervisor_pid = read_supervisor_pid()
+        if supervisor_pid:
+            env["QUAID_SUPERVISOR_PID"] = str(supervisor_pid)
+        with log_path.open("ab") as log_fh:
+            proc = subprocess.Popen(
+                [sys.executable, str(script), "run", name],
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=log_fh,
+                start_new_session=False,
+                env=env,
+            )
+        try:
+            return _wait_for_pid(
+                worker_pid_path(name),
+                expected_pid=int(proc.pid),
+                role=WORKER_ROLE,
+                project=name,
+                proc=proc,
+            )
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            raise
 
 
 def stop_worker(project: str) -> bool:
     name = validate_project_name(project)
-    pid = read_pid(worker_pid_path(name))
-    if pid is None:
-        return False
-    try:
+    with _exclusive_file_lock(_spawn_lock_path("worker", name)):
+        record = _read_pid_record(worker_pid_path(name))
+        pid = int((record or {}).get("pid") or 0)
+        if not record:
+            return False
+        if not _pid_record_matches(record, role=WORKER_ROLE, project=name):
+            _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
+            return False
         if pid != os.getpid():
             os.kill(pid, signal.SIGTERM)
             deadline = time.time() + 2.0
@@ -576,12 +945,9 @@ def stop_worker(project: str) -> bool:
                 time.sleep(0.1)
             if _pid_alive(pid):
                 os.kill(pid, signal.SIGKILL)
+        if not _pid_alive(pid):
+            _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
         return True
-    finally:
-        try:
-            worker_pid_path(name).unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def format_status(status: Dict[str, Any]) -> str:
@@ -589,6 +955,8 @@ def format_status(status: Dict[str, Any]) -> str:
     if status.get("source_root"):
         lines.append(f"Source root: {status['source_root']}")
     lines.append(f"Pending source changes: {status.get('pending_source_change_count', 0)}")
+    if status.get("source_error"):
+        lines.append(f"Source tracking error: {status.get('source_error')}")
     lines.append(f"Pending PROJECT.log bytes: {status.get('project_log_bytes_pending', 0)}")
     if status.get("pending_request"):
         req = status["pending_request"]

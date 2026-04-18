@@ -115,7 +115,9 @@ quaid global-registry list    # cross-instance project list
 quaid janitor --task all --dry-run
 quaid janitor --task all --apply              # add --approve when applyMode=ask
 quaid doctor
-quaid updater doc-health <project> [--dry-run]
+quaid docs update <project>                   # queue supervisor-owned project docs refresh
+quaid project status <project>                # inspect freshness, worker, and cursor state
+quaid project diff <project> [--full]         # inspect pending source/log delta
 quaid notify --deferred-status                # inspect buffered janitor/update notices
 quaid notify --deferred-drain                 # fetch buffered notices when a human user is present
 ```

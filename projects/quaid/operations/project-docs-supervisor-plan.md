@@ -267,3 +267,34 @@ Open next slices:
 - Improve the worker apply planner so edits are more selective across `PROJECT.md`, `TOOLS.md`, `AGENTS.md`, and `docs/**`.
 - Add live VM acceptance: source change -> status stale -> diff shows source/log delta -> `docs update` queue -> worker apply -> docs recall surfaces updated fact.
 - Move existing instance daemon lifecycle under the supervisor after project-doc workers are validated.
+
+### 2026-04-19 Slice B: W6 Blocker Hardening
+
+W6 bug-bash on `e3efe312a` found launch-blocking concurrency and data-loss risks. Revision direction implemented locally before W4/W8 handoff:
+
+- Supervisor and worker spawn paths now run under file-lock guarded critical sections.
+- PID files are JSON identity records with role/project/token metadata; bare `os.kill(pid, 0)` is no longer trusted for supervisor/worker identity.
+- Stop paths validate identity before signaling or unlinking pid files, reducing PID-recycle risk.
+- Worker pid writes are atomic and tied to heartbeat writes.
+- Supervisor checks heartbeat staleness and resets stuck `updating` state to queued/error for retry.
+- Lock contention preserves force-update requests instead of allowing a caller to observe a false successful/fresh state.
+- `PROJECT.log` read/stat failures now raise and do not advance the hidden cursor.
+- Project docs registry sync moved behind the `core.docs.updater` wrapper to preserve layer boundaries.
+- After docs apply, the worker registers newly visible project docs, unregisters project-doc files deleted by updater apply, refreshes PROJECT.md registry sections, reindexes registered docs, and queues a deferred project-doc update notice.
+- `quaid docs update <project>` remains async by default per operator direction, but now supports `--wait` and surfaces the previous error state.
+- Stale `doc-health` / staged project-event instructions were removed or reframed in tracked project docs.
+
+Validation after this revision:
+
+- `python3 -m py_compile` on changed Python runtime files passed.
+- Targeted `ruff` on changed runtime/test files passed.
+- `python3 scripts/check-boundaries.py` passed.
+- `tests/test_project_docs.py` passed: 9 tests.
+- Impacted Python suite passed: 452 tests across project docs/updater/registry, docs hook, extraction, daemon, and CC/CDX hook coverage.
+- CLI smoke covered `project create`, async `docs update --wait`, `project status`, and `supervisor stop`; no supervisor/worker process leak after stop.
+
+Still before W4/W8:
+
+- Commit this revision separately on top of `e3efe312a`.
+- Send revised SHA back to W6 for targeted re-review, with concurrency/data-loss findings called out explicitly.
+- Only after W6 approval, request W4 live VM validation and W8 static validation in parallel.

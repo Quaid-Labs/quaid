@@ -460,8 +460,9 @@ are written:
 ### Step 12: Project logs
 
 `project_logs` from Opus output are appended to `projects/<name>/PROJECT.log` via
-`core.docs.updater.append_project_logs()`. Project events are also emitted to
-`projects/staging/` as JSON for the doc updater.
+`core.docs.updater.append_project_logs()`. The project-doc worker reads this
+append-only log through a hidden cursor; extraction no longer emits staged JSON
+events for docs updates.
 
 ### Step 13: Cursor advance and carryover
 

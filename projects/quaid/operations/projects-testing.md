@@ -478,19 +478,21 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 
 ---
 
-### Test 6: Compact triggers project event
+### Test 6: Project docs update request
 
-**What it tests:** Event emission on `/compact`
+**What it tests:** Supervisor-owned project docs update request and hidden state
 
-**Then say:**
-> /compact
+**Run:**
+```bash
+quaid docs update quaid
+quaid project status quaid
+quaid project diff quaid --stat
+```
 
 **Expected:**
-1. Agent indicates project/doc processing in background.
-2. Event staging path reflects processing state:
-```bash
-ls -la "$QUAID_VISIBLE_HOME/projects/staging/"
-```
+1. `docs update` queues a request and reports the supervisor PID.
+2. `project status` shows freshness, worker PID, hidden cursor state, and any prior error.
+3. `project diff` shows pending source/PROJECT.log changes without using staged event JSON.
 
 ---
 

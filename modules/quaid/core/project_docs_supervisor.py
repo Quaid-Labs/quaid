@@ -28,12 +28,6 @@ def _handle_stop(_signum, _frame) -> None:
     _STOP = True
 
 
-def _write_pid() -> None:
-    path = project_docs.supervisor_pid_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{os.getpid()}\n", encoding="utf-8")
-
-
 def run_supervisor(*, once: bool = False, interval_seconds: float | None = None) -> int:
     interval = interval_seconds
     if interval is None:
@@ -42,13 +36,16 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
         except Exception:
             interval = 5.0
     interval = max(0.5, float(interval))
-    _write_pid()
+    token = os.environ.get("QUAID_SUPERVISOR_TOKEN", "").strip()
+    project_docs.write_supervisor_pid(token)
     known_workers: Dict[str, int] = {}
     while not _STOP:
         projects = list_projects()
         live = set(projects.keys())
+        stale_after = project_docs.worker_stale_after_seconds(interval)
         for project in sorted(live):
             try:
+                project_docs.reap_stale_worker(project, stale_after_seconds=stale_after)
                 pid = project_docs.start_worker(project)
                 known_workers[project] = pid
             except Exception as exc:
@@ -69,10 +66,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             project_docs.stop_worker(project)
         except Exception:
             pass
-    try:
-        project_docs.supervisor_pid_path().unlink(missing_ok=True)
-    except OSError:
-        pass
+    project_docs.clear_supervisor_pid_for_current_process()
     return 0
 
 
