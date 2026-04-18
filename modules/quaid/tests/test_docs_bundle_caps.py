@@ -141,3 +141,26 @@ class TestValidateDocsBundleForAdaptiveCheck:
     def test_bundle_with_chunks_is_non_empty(self):
         b = _bundle("some text")
         assert len(_validate_docs_bundle(b).get("chunks", [])) == 1
+
+
+class TestDocsBundleScopeHints:
+    def test_empty_bundle_with_unlinked_project_hint_emits_prompt_row(self):
+        bundle = {
+            "chunks": [],
+            "telemetry": {
+                "scope_hint": {
+                    "type": "unlinked_project_candidates",
+                    "candidates": [
+                        {"project": "cross-live-test", "score": 0.87},
+                        {"project": "quaid-live-cli", "score": 0.79},
+                    ],
+                }
+            },
+        }
+
+        rows = _docs_bundle_to_rows(bundle, limit=10)
+
+        assert len(rows) == 1
+        assert rows[0]["category"] == "docs_scope_hint"
+        assert "cross-live-test" in rows[0]["text"]
+        assert "quaid project link <name>" in rows[0]["text"]

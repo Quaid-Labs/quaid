@@ -299,6 +299,7 @@ class DocsRAG:
         self._shared_scope_enabled = (
             db_path is None and not str(os.environ.get("MEMORY_DB_PATH", "")).strip()
         )
+        self._last_scope_hint: Optional[Dict[str, Any]] = None
         self._ensure_schema()
         if self._shared_scope_enabled:
             try:
@@ -1004,6 +1005,7 @@ class DocsRAG:
                      Uses doc_registry + project homeDir for filtering.
             docs: Optional list of doc filters (basename, relative path, or path fragment).
         """
+        self._last_scope_hint = None
         query_embedding = _lib_get_embedding(query)
         if not query_embedding:
             if is_fail_hard_enabled():
@@ -1101,25 +1103,42 @@ class DocsRAG:
                     exc,
                 )
 
+        linked_projects: List[str] = []
+        scope_resolved = False
+        if self._shared_scope_enabled and not doc_filters:
+            linked_projects, scope_resolved = _linked_projects_for_current_instance()
+
+        scope_forced_empty = False
         if project:
+            if scope_resolved and project not in set(linked_projects):
+                scope_forced_empty = True
             project_scope_token = project
             project_paths = self._get_project_paths(project)
             seen_registry_paths: set[str] = set()
             _add_scope_paths_for_project(project, seen_registry_paths, include_project_roots=False)
-        elif self._shared_scope_enabled and not doc_filters:
-            linked_projects, resolved_scope = _linked_projects_for_current_instance()
-            if resolved_scope:
-                if not linked_projects:
-                    return []
+        elif scope_resolved:
+            if not linked_projects:
+                scope_forced_empty = True
+            else:
                 project_scope_token = "__instance_linked_scope__"
                 seen_registry_paths: set[str] = set()
                 for project_name in linked_projects:
                     _add_scope_paths_for_project(project_name, seen_registry_paths, include_project_roots=True)
                 if not registry_paths:
-                    return []
+                    scope_forced_empty = True
 
         results = []
         with _lib_get_connection(self.db_path) as conn:
+            if scope_forced_empty:
+                self._set_scope_hint_for_unlinked_candidates(
+                    conn=conn,
+                    query=query,
+                    query_embedding=query_embedding,
+                    linked_projects=linked_projects,
+                    requested_project=project,
+                )
+                return []
+
             where, params, empty = self._build_doc_filter_sql(
                 project=project_scope_token,
                 project_paths=project_paths,
@@ -1129,6 +1148,14 @@ class DocsRAG:
                 source_expr="dc.source_file",
             )
             if empty:
+                if project_scope_token == "__instance_linked_scope__":
+                    self._set_scope_hint_for_unlinked_candidates(
+                        conn=conn,
+                        query=query,
+                        query_embedding=query_embedding,
+                        linked_projects=linked_projects,
+                        requested_project=project,
+                    )
                 return []
 
             use_vec = _lib_has_vec() and self._doc_vec_table_exists(conn)
@@ -1210,7 +1237,17 @@ class DocsRAG:
 
         # Sort by similarity and limit
         results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:limit]
+        limited_results = results[:limit]
+        if not limited_results and project_scope_token == "__instance_linked_scope__":
+            with _lib_get_connection(self.db_path) as conn:
+                self._set_scope_hint_for_unlinked_candidates(
+                    conn=conn,
+                    query=query,
+                    query_embedding=query_embedding,
+                    linked_projects=linked_projects,
+                    requested_project=project,
+                )
+        return limited_results
 
     def search_docs_bundle(
         self,
@@ -1234,8 +1271,9 @@ class DocsRAG:
             "project": inferred_project,
             "project_md": self.load_project_md(inferred_project),
         }
+        telemetry: Dict[str, Any] = {}
         if _docs_recall_telemetry_enabled():
-            bundle["telemetry"] = {
+            telemetry.update({
                 "query": query,
                 "requested_project": project,
                 "resolved_project": inferred_project,
@@ -1244,7 +1282,11 @@ class DocsRAG:
                 "project_md_attached": bool(bundle["project_md"]),
                 "sources": [chunk.get("source") for chunk in chunks[:5]],
                 "top_similarity": chunks[0].get("similarity") if chunks else None,
-            }
+            })
+        if isinstance(self._last_scope_hint, dict):
+            telemetry["scope_hint"] = dict(self._last_scope_hint)
+        if telemetry:
+            bundle["telemetry"] = telemetry
         return bundle
 
     def _get_project_paths(self, project: str) -> dict:
@@ -1275,6 +1317,192 @@ class DocsRAG:
             pass
 
         return {"home_dir": "", "source_roots": []}
+
+    def _row_value(self, row: Any, key: str, index: int) -> Any:
+        try:
+            return row[key]
+        except Exception:
+            try:
+                return row[index]
+            except Exception:
+                return None
+
+    def _suggest_unlinked_projects(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        query: str,
+        query_embedding: List[float],
+        linked_projects: List[str],
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        linked_set = {str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()}
+        try:
+            from core.project_registry import list_projects as _list_projects
+
+            all_projects = [
+                str(name or "").strip()
+                for name in (_list_projects() or {}).keys()
+                if str(name or "").strip()
+            ]
+        except Exception:
+            return []
+
+        candidate_projects = [name for name in all_projects if name not in linked_set]
+        if not candidate_projects:
+            return []
+
+        candidate_set = set(candidate_projects)
+        query_lower = str(query or "").lower()
+        name_matches: set[str] = set()
+        for name in candidate_projects:
+            lowered = name.lower()
+            if lowered and lowered in query_lower:
+                name_matches.add(name)
+                continue
+            alias = lowered.replace("-", " ").replace("_", " ")
+            if alias and alias in query_lower:
+                name_matches.add(name)
+
+        scores: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        source_project_cache: Dict[str, Optional[str]] = {}
+        use_vec = _lib_has_vec() and self._doc_vec_table_exists(conn)
+        rows: List[Any] = []
+
+        if use_vec:
+            try:
+                packed_query = _lib_pack_embedding(query_embedding)
+                candidate_limit = max(96, limit * 40)
+                rows = conn.execute(
+                    """
+                    SELECT dc.source_file AS source_file, knn.distance AS vec_distance
+                    FROM (
+                        SELECT chunk_id, distance
+                        FROM vec_doc_chunks
+                        WHERE embedding MATCH ? AND k = ?
+                    ) knn
+                    JOIN doc_chunks dc ON dc.id = knn.chunk_id
+                    ORDER BY knn.distance
+                    """,
+                    (packed_query, candidate_limit),
+                ).fetchall()
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError(
+                        "Scoped docs miss fallback failed in vec candidate stage while failHard is enabled."
+                    ) from exc
+                logger.warning("Scoped docs miss fallback vec stage failed; using row scan: %s", exc)
+                use_vec = False
+
+        if not use_vec:
+            rows = conn.execute("SELECT source_file, embedding FROM doc_chunks").fetchall()
+
+        for row in rows:
+            source_file = str(self._row_value(row, "source_file", 0) or "").strip()
+            if not source_file:
+                continue
+            inferred_project = source_project_cache.get(source_file)
+            if inferred_project is None:
+                inferred_project = self.infer_project_for_source(source_file)
+                source_project_cache[source_file] = inferred_project
+            if not inferred_project or inferred_project not in candidate_set:
+                continue
+
+            if use_vec:
+                distance = self._row_value(row, "vec_distance", 1)
+                similarity = max(-1.0, min(1.0, 1.0 - float(distance if distance is not None else 1.0)))
+            else:
+                chunk_embedding = _lib_unpack_embedding(self._row_value(row, "embedding", 1))
+                similarity = _lib_cosine_similarity(query_embedding, chunk_embedding)
+
+            base_score = float(similarity or 0.0)
+            if inferred_project in name_matches:
+                base_score += 0.08
+            prior = scores.get(inferred_project, -1.0)
+            if base_score > prior:
+                scores[inferred_project] = base_score
+            counts[inferred_project] = counts.get(inferred_project, 0) + 1
+
+        if not scores and name_matches:
+            for name in sorted(name_matches):
+                scores[name] = 0.51
+                counts[name] = 0
+
+        if not scores:
+            return []
+
+        min_score = 0.56
+        out: List[Dict[str, Any]] = []
+        for project_name, score in scores.items():
+            matched = project_name in name_matches
+            if score < min_score and not matched:
+                continue
+            out.append(
+                {
+                    "project": project_name,
+                    "score": round(float(score), 3),
+                    "matched_query_name": bool(matched),
+                    "match_count": int(counts.get(project_name, 0)),
+                }
+            )
+
+        out.sort(
+            key=lambda item: (
+                1 if item.get("matched_query_name") else 0,
+                float(item.get("score") or 0.0),
+                int(item.get("match_count") or 0),
+                str(item.get("project") or ""),
+            ),
+            reverse=True,
+        )
+        return out[: max(1, int(limit))]
+
+    def _set_scope_hint_for_unlinked_candidates(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        query: str,
+        query_embedding: List[float],
+        linked_projects: List[str],
+        requested_project: Optional[str] = None,
+    ) -> None:
+        try:
+            suggestions = self._suggest_unlinked_projects(
+                conn=conn,
+                query=query,
+                query_embedding=query_embedding,
+                linked_projects=linked_projects,
+                limit=3,
+            )
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "Failed to compute unlinked project scope hints while failHard is enabled."
+                ) from exc
+            logger.warning("Failed to compute unlinked project scope hints: %s", exc)
+            self._last_scope_hint = None
+            return
+        if not suggestions:
+            self._last_scope_hint = None
+            return
+        project_names = [str(item.get("project") or "").strip() for item in suggestions if str(item.get("project") or "").strip()]
+        if not project_names:
+            self._last_scope_hint = None
+            return
+        self._last_scope_hint = {
+            "type": "unlinked_project_candidates",
+            "message": (
+                "No docs matched inside currently linked projects. "
+                "Likely unlinked project candidates were found. "
+                "Ask the user whether to link one before falling back to filesystem grep."
+            ),
+            "requested_project": str(requested_project or "").strip() or None,
+            "linked_projects": sorted(
+                str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()
+            ),
+            "candidates": suggestions,
+        }
 
     def stats(self) -> Dict:
         """Get indexing statistics."""

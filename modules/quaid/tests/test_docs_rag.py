@@ -782,6 +782,98 @@ class TestDocsSearchFiltering:
         assert results[0]["source"] == "/canonical/docs/m10-test-doc.md"
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_bundle_adds_scope_hint_for_unlinked_candidates_on_scoped_miss(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "unlinked:0",
+                    "/tmp/workspace/projects/cross-live-test/PROJECT.md",
+                    0,
+                    "north pier beacon maintenance notes",
+                    "# Notes",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
+             patch(
+                 "core.project_registry.list_projects",
+                 return_value={
+                     "quaid": {"instances": ["cc-main"]},
+                     "cross-live-test": {"instances": []},
+                 },
+             ), \
+             patch.object(
+                 rag,
+                 "_get_project_paths",
+                 return_value={"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []},
+             ), \
+             patch.object(rag, "infer_project_for_source", return_value="cross-live-test"):
+            bundle = rag.search_docs_bundle("north pier beacon", limit=5)
+
+        assert bundle["chunks"] == []
+        hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
+        assert hint.get("type") == "unlinked_project_candidates"
+        assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_bundle_blocks_explicit_unlinked_project_and_returns_scope_hint(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "unlinked:0",
+                    "/tmp/workspace/projects/cross-live-test/PROJECT.md",
+                    0,
+                    "north pier beacon maintenance notes",
+                    "# Notes",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        def _project_paths(name: str):
+            if name == "cross-live-test":
+                return {"home_dir": "/tmp/workspace/projects/cross-live-test", "source_roots": []}
+            return {"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []}
+
+        with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
+             patch(
+                 "core.project_registry.list_projects",
+                 return_value={
+                     "quaid": {"instances": ["cc-main"]},
+                     "cross-live-test": {"instances": []},
+                 },
+             ), \
+             patch.object(rag, "_get_project_paths", side_effect=_project_paths), \
+             patch.object(rag, "infer_project_for_source", return_value="cross-live-test"):
+            bundle = rag.search_docs_bundle("north pier beacon", limit=5, project="cross-live-test")
+
+        assert bundle["chunks"] == []
+        hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
+        assert hint.get("type") == "unlinked_project_candidates"
+        assert hint.get("requested_project") == "cross-live-test"
+        assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True)
     def test_search_docs_project_filter_raises_when_registry_paths_fail_under_failhard(self, _failhard, _embed, tmp_path):
         rag = _make_rag(tmp_path)

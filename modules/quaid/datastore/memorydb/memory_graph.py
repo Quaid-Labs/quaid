@@ -4192,6 +4192,34 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
         consumed_chars += len(text)
         if consumed_chars >= total_char_budget:
             break
+
+    # If scoped docs recall missed entirely but discovered plausible matches in
+    # unlinked projects, emit a compact row so the agent can ask the user to
+    # link explicitly before filesystem fallback.
+    if not out:
+        telemetry = docs.get("telemetry") if isinstance(docs.get("telemetry"), dict) else {}
+        scope_hint = telemetry.get("scope_hint") if isinstance(telemetry, dict) else None
+        if isinstance(scope_hint, dict) and str(scope_hint.get("type") or "") == "unlinked_project_candidates":
+            candidates = scope_hint.get("candidates")
+            if isinstance(candidates, list):
+                names = [
+                    str(item.get("project") or "").strip()
+                    for item in candidates
+                    if isinstance(item, dict) and str(item.get("project") or "").strip()
+                ]
+                if names:
+                    out.append(
+                        {
+                            "text": (
+                                "[docs] scoped miss: likely matches may exist in unlinked project(s): "
+                                f"{', '.join(names)}. Ask the user whether to link one "
+                                "(quaid project link <name>) before filesystem grep/cat."
+                            ),
+                            "similarity": 0.0,
+                            "category": "docs_scope_hint",
+                            "source_type": "docs",
+                        }
+                    )
     return out
 
 
@@ -4524,6 +4552,11 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
     docs = _validate_docs_bundle(bundle)
     chunks = docs["chunks"]
     project_md = docs.get("project_md")
+    scope_hint = None
+    if isinstance(docs.get("telemetry"), dict):
+        candidate_hint = docs["telemetry"].get("scope_hint")
+        if isinstance(candidate_hint, dict):
+            scope_hint = candidate_hint
     workspace_prefix = ""
     try:
         workspace_prefix = str(get_workspace_dir()) + "/"
@@ -4547,6 +4580,20 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
         print(project_md[:1000])
         if len(project_md) > 1000:
             print("  ... (truncated)")
+    if not chunks and isinstance(scope_hint, dict) and str(scope_hint.get("type") or "") == "unlinked_project_candidates":
+        candidates = scope_hint.get("candidates")
+        names: List[str] = []
+        if isinstance(candidates, list):
+            names = [
+                str(item.get("project") or "").strip()
+                for item in candidates
+                if isinstance(item, dict) and str(item.get("project") or "").strip()
+            ]
+        if names:
+            print("\n=== Documentation Scope Hint ===")
+            print("No docs hits were found inside linked projects.")
+            print(f"Likely unlinked project candidates: {', '.join(names)}")
+            print("Ask the user whether Quaid should link one, then retry docs recall.")
 
 
 def _normalize_domain_tag(value: Optional[str]) -> Optional[str]:

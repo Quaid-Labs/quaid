@@ -72,6 +72,7 @@ Recommended framing:
 3. Retrieval quality uplift for relationship/family queries (fact + graph parallel composition).
 4. Cloud embeddings option (lower setup friction).
 5. Graph/config UX surfaces (visualizer + dashboard).
+6. Project-link hygiene: add an automated stale-link cleanup path that can suggest/perform unlink for projects an instance no longer queries over a sustained window (with explicit opt-in guardrails).
 
 ## Contributor Call
 
