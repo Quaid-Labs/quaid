@@ -2552,7 +2552,7 @@ function markPromptModelConfigChecked(): void {
   promptModelConfigErrorRaw = "";
 }
 
-async function validatePromptModelConfigIfChanged(agentLabel: string): Promise<string> {
+async function validatePromptModelConfigIfChanged(): Promise<string> {
   const fingerprint = currentPromptModelConfigFingerprint();
   if (!fingerprint) {
     return "";
@@ -2561,13 +2561,7 @@ async function validatePromptModelConfigIfChanged(agentLabel: string): Promise<s
     if (!promptModelConfigNotice || !promptModelConfigErrorRaw) {
       return "";
     }
-    const emitted = shouldEmitImmediateProviderNotice(
-      promptModelConfigErrorRaw,
-      "fast",
-      "before_prompt_build",
-      Date.now(),
-      getInstanceId(agentLabel),
-    );
+    const emitted = shouldEmitImmediateProviderNotice(promptModelConfigErrorRaw, "fast", "before_prompt_build");
     writeHookTrace("hook.before_prompt_build.model_config_cached", { emitted });
     return emitted ? promptModelConfigNotice : "";
   }
@@ -2586,13 +2580,7 @@ async function validatePromptModelConfigIfChanged(agentLabel: string): Promise<s
     writeHookTrace("hook.before_prompt_build.model_config_validated", {});
   } catch (err: unknown) {
     promptModelConfigErrorRaw = String((err as Error)?.message || err || "").trim();
-    const emitted = shouldEmitImmediateProviderNotice(
-      promptModelConfigErrorRaw,
-      "fast",
-      "before_prompt_build",
-      Date.now(),
-      getInstanceId(agentLabel),
-    );
+    const emitted = shouldEmitImmediateProviderNotice(promptModelConfigErrorRaw, "fast", "before_prompt_build");
     promptModelConfigNotice = emitted ? buildImmediateProviderNotice(err, "fast") : "";
     writeHookTrace("hook.before_prompt_build.model_config_error", {
       emitted,
@@ -3016,80 +3004,21 @@ function canonicalizeImmediateProviderError(rawError: unknown): string {
   return canonical.slice(0, 512);
 }
 
-function immediateProviderNoticeStatePath(instanceId: string = _QUAID_INSTANCE): string {
-  const normalized = String(instanceId || "").trim();
-  return normalized
-    ? path.join(WORKSPACE, "instances", normalized, ".runtime", "notes", "provider-notice-state.json")
-    : path.join(WORKSPACE, ".runtime", "notes", "provider-notice-state.json");
-}
-
-function loadImmediateProviderNoticeState(statePath: string): Record<string, number> {
-  try {
-    if (!fs.existsSync(statePath)) {
-      return {};
-    }
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    const raw = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed.notices && typeof parsed.notices === "object" ? parsed.notices : parsed)
-      : {};
-    const state: Record<string, number> = {};
-    for (const [key, value] of Object.entries(raw || {})) {
-      const ts = Number(value);
-      if (!Number.isFinite(ts) || ts <= 0) {
-        continue;
-      }
-      state[String(key)] = ts;
-    }
-    return state;
-  } catch {
-    return {};
-  }
-}
-
-function storeImmediateProviderNoticeState(statePath: string, state: Record<string, number>): void {
-  try {
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
-    fs.writeFileSync(
-      tmpPath,
-      JSON.stringify({ version: 1, notices: state }, null, 2),
-      { encoding: "utf8", mode: 0o600 },
-    );
-    fs.renameSync(tmpPath, statePath);
-  } catch {}
-}
-
 function shouldEmitImmediateProviderNotice(
   rawError: unknown,
   tier: ModelTier = "fast",
   source: string = "before_prompt_build",
   nowMs: number = Date.now(),
-  instanceId: string = _QUAID_INSTANCE,
-  persist: boolean = true,
 ): boolean {
   const canonical = canonicalizeImmediateProviderError(rawError);
   const key = `${source}:${tier}:${canonical}`;
-  const scopedKey = `${instanceId}:${key}`;
-  const statePath = immediateProviderNoticeStatePath(instanceId);
-  const persistedState = persist ? loadImmediateProviderNoticeState(statePath) : {};
-  const persistedLastAt = Number(persistedState[key] || 0);
-  const inMemoryLastAt = Number(_IMMEDIATE_PROVIDER_NOTICE_STATE.get(scopedKey) || 0);
-  const lastAt = Math.max(persistedLastAt, inMemoryLastAt);
+  const lastAt = Number(_IMMEDIATE_PROVIDER_NOTICE_STATE.get(key) || 0);
   if (lastAt > 0 && nowMs - lastAt < IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS) {
     return false;
   }
-  _IMMEDIATE_PROVIDER_NOTICE_STATE.set(scopedKey, nowMs);
-  if (persist) {
-    persistedState[key] = nowMs;
-    for (const [noticeKey, ts] of Object.entries(persistedState)) {
-      if (!Number.isFinite(ts) || nowMs - Number(ts) >= IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS) {
-        delete persistedState[noticeKey];
-      }
-    }
-    storeImmediateProviderNoticeState(statePath, persistedState);
-  }
+  _IMMEDIATE_PROVIDER_NOTICE_STATE.set(key, nowMs);
   if (_IMMEDIATE_PROVIDER_NOTICE_STATE.size > 512) {
-    for (const [entryKey, ts] of Array.from(_IMMEDIATE_PROVIDER_NOTICE_STATE.entries())) {
+    for (const [entryKey, ts] of _IMMEDIATE_PROVIDER_NOTICE_STATE.entries()) {
       if (nowMs - ts >= IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS) {
         _IMMEDIATE_PROVIDER_NOTICE_STATE.delete(entryKey);
       }
@@ -4002,7 +3931,7 @@ notify_user(${JSON.stringify(message)})
         let allMemories: any[];
         let recallDiagnostics: Record<string, unknown> | null = null;
         try {
-          const modelConfigNotice = await validatePromptModelConfigIfChanged(promptAgentLabel);
+          const modelConfigNotice = await validatePromptModelConfigIfChanged();
           if (modelConfigNotice) {
             prependContextParts.push(modelConfigNotice);
             appendSystemContext = appendSystemContext
@@ -4142,13 +4071,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         console.error("[quaid] Auto-injection error:", error);
         if (isImmediateProviderFailure(error)) {
           const rawError = String((error as Error)?.message || error || "");
-          const emitted = shouldEmitImmediateProviderNotice(
-            rawError,
-            "fast",
-            "before_prompt_build",
-            Date.now(),
-            getInstanceId(promptAgentLabel),
-          );
+          const emitted = shouldEmitImmediateProviderNotice(rawError, "fast", "before_prompt_build");
           if (emitted) {
             const notice = buildImmediateProviderNotice(error, "fast");
             appendSystemContext = appendSystemContext
