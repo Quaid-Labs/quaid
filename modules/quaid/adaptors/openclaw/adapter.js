@@ -1724,6 +1724,21 @@ function getDatastoreStatsSync() {
     return null;
   }
 }
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function deepMergeConfig(base, override) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const current = merged[key];
+    if (isPlainObject(current) && isPlainObject(value)) {
+      merged[key] = deepMergeConfig(current, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
 function buildFallbackMemoryConfig() {
   return {
     models: {
@@ -1747,21 +1762,6 @@ function buildFallbackMemoryConfig() {
       maxLimit: 8
     }
   };
-}
-function isPlainObject(value) {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-function deepMergeConfig(base, override) {
-  const merged = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    const current = merged[key];
-    if (isPlainObject(current) && isPlainObject(value)) {
-      merged[key] = deepMergeConfig(current, value);
-      continue;
-    }
-    merged[key] = value;
-  }
-  return merged;
 }
 function createAdapterMemoryConfigResolver() {
   let memoryConfigErrorLogged = false;
@@ -2008,6 +2008,7 @@ const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35e3;
 const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8e3);
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
+let promptModelConfigErrorRaw = "";
 function currentPromptModelConfigFingerprint() {
   try {
     const models = getMemoryConfig()?.models || {};
@@ -2025,6 +2026,7 @@ function currentPromptModelConfigFingerprint() {
 function markPromptModelConfigChecked() {
   promptModelConfigFingerprint = currentPromptModelConfigFingerprint();
   promptModelConfigNotice = "";
+  promptModelConfigErrorRaw = "";
 }
 async function validatePromptModelConfigIfChanged() {
   const fingerprint = currentPromptModelConfigFingerprint();
@@ -2032,10 +2034,16 @@ async function validatePromptModelConfigIfChanged() {
     return "";
   }
   if (fingerprint === promptModelConfigFingerprint) {
-    return promptModelConfigNotice;
+    if (!promptModelConfigNotice || !promptModelConfigErrorRaw) {
+      return "";
+    }
+    const emitted = shouldEmitImmediateProviderNotice(promptModelConfigErrorRaw, "fast", "before_prompt_build");
+    writeHookTrace("hook.before_prompt_build.model_config_cached", { emitted });
+    return emitted ? promptModelConfigNotice : "";
   }
   promptModelConfigFingerprint = fingerprint;
   promptModelConfigNotice = "";
+  promptModelConfigErrorRaw = "";
   try {
     await callConfiguredLLM(
       "You are a Quaid model configuration health check. Reply with OK only.",
@@ -2046,9 +2054,12 @@ async function validatePromptModelConfigIfChanged() {
     );
     writeHookTrace("hook.before_prompt_build.model_config_validated", {});
   } catch (err) {
-    promptModelConfigNotice = buildImmediateProviderNotice(err, "fast");
+    promptModelConfigErrorRaw = String(err?.message || err || "").trim();
+    const emitted = shouldEmitImmediateProviderNotice(promptModelConfigErrorRaw, "fast", "before_prompt_build");
+    promptModelConfigNotice = emitted ? buildImmediateProviderNotice(err, "fast") : "";
     writeHookTrace("hook.before_prompt_build.model_config_error", {
-      error: String(err?.message || err).slice(0, 240)
+      emitted,
+      error: promptModelConfigErrorRaw.slice(0, 240)
     });
   }
   return promptModelConfigNotice;
@@ -2384,6 +2395,44 @@ function _getGatewayToken() {
 function isImmediateProviderFailure(err) {
   const text = String(err?.message || err || "").toLowerCase();
   return text.includes("language model provider") || text.includes("check fastreasoning/deepreasoning") || text.includes("provider unavailable after") || text.includes("llm proxy error") || text.includes("[quaid][llm]") && text.includes("model=");
+}
+const IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS = 15 * 60 * 1e3;
+const _IMMEDIATE_PROVIDER_NOTICE_STATE = /* @__PURE__ */ new Map();
+const _VOLATILE_PROVIDER_NOTICE_PATTERNS = [
+  /\b(?:request|req|response|resp|trace)[_-]?id\s*[:=]\s*[a-z0-9._:-]+\b/gi,
+  /\b[0-9a-f]{12,}\b/gi,
+  /\b\d{6,}\b/g
+];
+function canonicalizeImmediateProviderError(rawError) {
+  let canonical = String(rawError || "").toLowerCase();
+  for (const pattern of _VOLATILE_PROVIDER_NOTICE_PATTERNS) {
+    canonical = canonical.replace(pattern, "<id>");
+  }
+  canonical = canonical.replace(/\s+/g, " ").trim();
+  if (!canonical) {
+    return "unknown-provider-error";
+  }
+  return canonical.slice(0, 512);
+}
+function shouldEmitImmediateProviderNotice(rawError, tier = "fast", source = "before_prompt_build", nowMs = Date.now()) {
+  const canonical = canonicalizeImmediateProviderError(rawError);
+  const key = `${source}:${tier}:${canonical}`;
+  const lastAt = Number(_IMMEDIATE_PROVIDER_NOTICE_STATE.get(key) || 0);
+  if (lastAt > 0 && nowMs - lastAt < IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS) {
+    return false;
+  }
+  _IMMEDIATE_PROVIDER_NOTICE_STATE.set(key, nowMs);
+  if (_IMMEDIATE_PROVIDER_NOTICE_STATE.size > 512) {
+    for (const [entryKey, ts] of _IMMEDIATE_PROVIDER_NOTICE_STATE.entries()) {
+      if (nowMs - ts >= IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS) {
+        _IMMEDIATE_PROVIDER_NOTICE_STATE.delete(entryKey);
+      }
+    }
+  }
+  return true;
+}
+function clearImmediateProviderNoticeState() {
+  _IMMEDIATE_PROVIDER_NOTICE_STATE.clear();
 }
 function buildImmediateProviderNotice(err, tier = "fast") {
   const raw = String(err?.message || err || "").replace(/\s+/g, " ").trim();
@@ -3215,12 +3264,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
         if (isImmediateProviderFailure(error)) {
-          const notice = buildImmediateProviderNotice(error, "fast");
-          appendSystemContext = appendSystemContext ? `${appendSystemContext}
+          const rawError = String(error?.message || error || "");
+          const emitted = shouldEmitImmediateProviderNotice(rawError, "fast", "before_prompt_build");
+          if (emitted) {
+            const notice = buildImmediateProviderNotice(error, "fast");
+            appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${notice}` : notice;
+          }
           writeHookTrace("hook.before_prompt_build.provider_error", {
-            error: String(error?.message || error).slice(0, 240)
+            emitted,
+            error: rawError.slice(0, 240)
           });
         }
       }
@@ -5210,6 +5264,9 @@ const __test = {
   isSubagentSessionKeyLike,
   listRecentResetBackupSessions,
   isImmediateProviderFailure,
+  shouldEmitImmediateProviderNotice,
+  clearImmediateProviderNoticeState,
+  IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS,
   buildImmediateProviderNotice,
   buildExecCompletedHeartbeatOverride,
   buildExecCompletedHeartbeatVisibleReply,

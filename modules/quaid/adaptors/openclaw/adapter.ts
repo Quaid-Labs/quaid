@@ -2529,6 +2529,7 @@ const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35_000;
 const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8_000);
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
+let promptModelConfigErrorRaw = "";
 
 function currentPromptModelConfigFingerprint(): string {
   try {
@@ -2548,6 +2549,7 @@ function currentPromptModelConfigFingerprint(): string {
 function markPromptModelConfigChecked(): void {
   promptModelConfigFingerprint = currentPromptModelConfigFingerprint();
   promptModelConfigNotice = "";
+  promptModelConfigErrorRaw = "";
 }
 
 async function validatePromptModelConfigIfChanged(): Promise<string> {
@@ -2556,11 +2558,17 @@ async function validatePromptModelConfigIfChanged(): Promise<string> {
     return "";
   }
   if (fingerprint === promptModelConfigFingerprint) {
-    return promptModelConfigNotice;
+    if (!promptModelConfigNotice || !promptModelConfigErrorRaw) {
+      return "";
+    }
+    const emitted = shouldEmitImmediateProviderNotice(promptModelConfigErrorRaw, "fast", "before_prompt_build");
+    writeHookTrace("hook.before_prompt_build.model_config_cached", { emitted });
+    return emitted ? promptModelConfigNotice : "";
   }
 
   promptModelConfigFingerprint = fingerprint;
   promptModelConfigNotice = "";
+  promptModelConfigErrorRaw = "";
   try {
     await callConfiguredLLM(
       "You are a Quaid model configuration health check. Reply with OK only.",
@@ -2571,9 +2579,12 @@ async function validatePromptModelConfigIfChanged(): Promise<string> {
     );
     writeHookTrace("hook.before_prompt_build.model_config_validated", {});
   } catch (err: unknown) {
-    promptModelConfigNotice = buildImmediateProviderNotice(err, "fast");
+    promptModelConfigErrorRaw = String((err as Error)?.message || err || "").trim();
+    const emitted = shouldEmitImmediateProviderNotice(promptModelConfigErrorRaw, "fast", "before_prompt_build");
+    promptModelConfigNotice = emitted ? buildImmediateProviderNotice(err, "fast") : "";
     writeHookTrace("hook.before_prompt_build.model_config_error", {
-      error: String((err as Error)?.message || err).slice(0, 240),
+      emitted,
+      error: promptModelConfigErrorRaw.slice(0, 240),
     });
   }
   return promptModelConfigNotice;
@@ -2971,6 +2982,53 @@ function isImmediateProviderFailure(err: unknown): boolean {
     || text.includes("llm proxy error")
     || (text.includes("[quaid][llm]") && text.includes("model="))
   );
+}
+
+const IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS = 15 * 60 * 1000;
+const _IMMEDIATE_PROVIDER_NOTICE_STATE = new Map<string, number>();
+const _VOLATILE_PROVIDER_NOTICE_PATTERNS = [
+  /\b(?:request|req|response|resp|trace)[_-]?id\s*[:=]\s*[a-z0-9._:-]+\b/gi,
+  /\b[0-9a-f]{12,}\b/gi,
+  /\b\d{6,}\b/g,
+];
+
+function canonicalizeImmediateProviderError(rawError: unknown): string {
+  let canonical = String((rawError as any) || "").toLowerCase();
+  for (const pattern of _VOLATILE_PROVIDER_NOTICE_PATTERNS) {
+    canonical = canonical.replace(pattern, "<id>");
+  }
+  canonical = canonical.replace(/\s+/g, " ").trim();
+  if (!canonical) {
+    return "unknown-provider-error";
+  }
+  return canonical.slice(0, 512);
+}
+
+function shouldEmitImmediateProviderNotice(
+  rawError: unknown,
+  tier: ModelTier = "fast",
+  source: string = "before_prompt_build",
+  nowMs: number = Date.now(),
+): boolean {
+  const canonical = canonicalizeImmediateProviderError(rawError);
+  const key = `${source}:${tier}:${canonical}`;
+  const lastAt = Number(_IMMEDIATE_PROVIDER_NOTICE_STATE.get(key) || 0);
+  if (lastAt > 0 && nowMs - lastAt < IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS) {
+    return false;
+  }
+  _IMMEDIATE_PROVIDER_NOTICE_STATE.set(key, nowMs);
+  if (_IMMEDIATE_PROVIDER_NOTICE_STATE.size > 512) {
+    for (const [entryKey, ts] of _IMMEDIATE_PROVIDER_NOTICE_STATE.entries()) {
+      if (nowMs - ts >= IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS) {
+        _IMMEDIATE_PROVIDER_NOTICE_STATE.delete(entryKey);
+      }
+    }
+  }
+  return true;
+}
+
+function clearImmediateProviderNoticeState(): void {
+  _IMMEDIATE_PROVIDER_NOTICE_STATE.clear();
 }
 
 function buildImmediateProviderNotice(err: unknown, tier: ModelTier = "fast"): string {
@@ -4012,12 +4070,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error: unknown) {
         console.error("[quaid] Auto-injection error:", error);
         if (isImmediateProviderFailure(error)) {
-          const notice = buildImmediateProviderNotice(error, "fast");
-          appendSystemContext = appendSystemContext
-            ? `${appendSystemContext}\n\n${notice}`
-            : notice;
+          const rawError = String((error as Error)?.message || error || "");
+          const emitted = shouldEmitImmediateProviderNotice(rawError, "fast", "before_prompt_build");
+          if (emitted) {
+            const notice = buildImmediateProviderNotice(error, "fast");
+            appendSystemContext = appendSystemContext
+              ? `${appendSystemContext}\n\n${notice}`
+              : notice;
+          }
           writeHookTrace("hook.before_prompt_build.provider_error", {
-            error: String((error as Error)?.message || error).slice(0, 240),
+            emitted,
+            error: rawError.slice(0, 240),
           });
         }
       }
@@ -6412,6 +6475,9 @@ export const __test = {
   isSubagentSessionKeyLike,
   listRecentResetBackupSessions,
   isImmediateProviderFailure,
+  shouldEmitImmediateProviderNotice,
+  clearImmediateProviderNoticeState,
+  IMMEDIATE_PROVIDER_NOTICE_COOLDOWN_MS,
   buildImmediateProviderNotice,
   buildExecCompletedHeartbeatOverride,
   buildExecCompletedHeartbeatVisibleReply,
