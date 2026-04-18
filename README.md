@@ -67,11 +67,22 @@ Use these canonical links:
 
 ## How Quaid Is Different
 
+### Three knowledge systems and one maintenance lifecycle
+
+Quaid is built around these four components. When you load Quaid, this is the model to expect:
+
+- **Knowledge system 1: Personal memory graph**  
+  Conversation-derived facts and relationships, stored for recall across resets and session boundaries.
+- **Knowledge system 2: Identity files (`SOUL.md`, `USER.md`, `ENVIRONMENT.md`)**  
+  Long-lived identity and operating context that evolves through controlled distillation instead of ad hoc prompt drift.
+- **Knowledge system 3: Project knowledge (`PROJECT.md`, docs registry, docs RAG)**  
+  Project-scoped context and documentation kept separate from personal memory so work context stays structured and shareable.
+- **Maintenance lifecycle: Janitor**  
+  Scheduled maintenance that reviews, deduplicates, rewrites, and decays stale knowledge so the three systems stay coherent over time.
+
 - **Local-first by default:** memory graph, embeddings, and maintenance run on your machine.
 - **Cross-platform and multi-agent:** per-instance silos keep personal memory separate by default, while the project space can stay shared across agents and hosts.
 - **You own the data:** SQLite DBs, identity files, and project docs stay inspectable and portable.
-- **Three knowledge areas:** facts, core personality, and project knowledge are treated differently instead of flattened into one store.
-- **Lifecycle maintenance, not just storage:** nightly janitor pipeline continuously reviews, deduplicates, and decays stale knowledge.
 - **Dual learning evolution system:** fast updates plus slower journal distillation for long-term synthesis.
 - **Project system with shadow git:** project knowledge is tracked through a shadow git-backed docs pipeline instead of being dumped into personal memory.
 - **Tested for scale and cost:** long-horizon benchmark and live study data show the system stays practical as history grows, while bounded recall and compaction reduce token spend.
