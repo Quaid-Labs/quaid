@@ -270,6 +270,8 @@
       const text = String(label || "").trim();
       const m = text.match(/^m(\d+)\b/i);
       if (m) return [0, Number(m[1]), index];
+      const xp = text.match(/^xp(?:\s*[-_:]?\s*)?(\d+)\b/i);
+      if (xp) return [1, Number(xp[1]), index];
       if (/^xp\b/i.test(text)) return [1, 0, index];
       return [2, index, index];
     }
@@ -293,11 +295,19 @@
       M15: "Failure-signal quality checks",
       M16: "Context refresh lifecycle",
       XP: "Cross-platform linking",
+      XP1: "Cross-platform link setup",
+      XP2: "Cross-platform shared recall",
+      XP3: "Cross-platform unlink/cleanup",
     };
 
     function milestoneCaption(label) {
       const text = String(label || "").trim();
       if (!text) return "";
+      const xp = text.match(/^xp(?:\s*[-_:]?\s*)?(\d+)\b/i);
+      if (xp) {
+        const key = `XP${Number(xp[1])}`;
+        return MILESTONE_CAPTIONS[key] || MILESTONE_CAPTIONS.XP;
+      }
       if (/^xp\b/i.test(text)) return MILESTONE_CAPTIONS.XP;
       const m = text.match(/^m(\d+)\b/i);
       if (!m) return "";
@@ -530,6 +540,17 @@
       renderTable(state);
     }
 
+    function renderWithPreservedScroll(state) {
+      const sx = window.scrollX;
+      const sy = window.scrollY;
+      render(state);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.scrollTo(sx, sy);
+        });
+      });
+    }
+
     async function fetchLogText() {
       let lastErr = "";
       for (const logFile of LOG_FILES) {
@@ -544,6 +565,10 @@
     }
 
     async function refresh() {
+      if (document.visibilityState !== "visible") {
+        document.getElementById("refresh-pill").textContent = "Paused while tab hidden";
+        return;
+      }
       try {
         const { text, logFile } = await fetchLogText();
         const fingerprint = `${text.length}:${text.slice(0, 120)}:${text.slice(-120)}`;
@@ -554,7 +579,7 @@
           return;
         }
         const state = parseLog(text);
-        render(state);
+        renderWithPreservedScroll(state);
         document.getElementById("refresh-pill").textContent =
           `Last refresh: ${new Date().toLocaleTimeString()} (${logFile})`;
         clearError();
@@ -564,8 +589,20 @@
       }
     }
 
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        refresh();
+      } else {
+        document.getElementById("refresh-pill").textContent = "Paused while tab hidden";
+      }
+    });
+
     refresh();
-    setInterval(refresh, REFRESH_MS);
+    setInterval(() => {
+      if (document.visibilityState === "visible") {
+        refresh();
+      }
+    }, REFRESH_MS);
   </script>
 </body>
 </html>

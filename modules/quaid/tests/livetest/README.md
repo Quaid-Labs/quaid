@@ -244,8 +244,8 @@ tests/livetest/scripts/livetest-dashboard-new-run.sh --force --title "Run 110 - 
 CSV format:
 - Header must be `milestone,<platform1>,<platform2>,...`
 - Use one row per milestone
-- Current default template includes `M1` through `M16`
-- Dashboard UI shows short built-in captions for `M1`-`M16`
+- Current default template includes `M1`-`M16` plus `XP1`-`XP3`
+- Dashboard UI shows short built-in captions for `M1`-`M16` and `XP1`-`XP3`
 - Optional `#` comment lines are ignored (template uses these for milestone hints)
 - Status text is freeform (`PASS`, `FAIL`, `RUNNING`, `BLOCKED`, etc.)
 - Notes go after `---` in freeform text
@@ -271,6 +271,9 @@ M13,,,
 M14,,,
 M15,,,
 M16,,,
+XP1,,,
+XP2,,,
+XP3,,,
 ---
 Notes:
 - M10 blocked on docs update timeout in CC
