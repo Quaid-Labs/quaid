@@ -116,7 +116,7 @@ def test_batch_extract_edges_resolves_owner_once_per_fact_not_per_edge():
     assert len(results[0]) == 2
 
 
-def test_batch_extract_edges_prompt_includes_indirect_kinship_guardrails():
+def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
     facts = [{"id": "fact-6", "text": "Alice is Solomon Steadman's niece"}]
     metrics = maintenance_ops.JanitorMetrics()
     captured = {}
@@ -134,13 +134,14 @@ def test_batch_extract_edges_prompt_includes_indirect_kinship_guardrails():
         )
 
     prompt = captured.get("prompt", "")
-    assert "indirect kinship" in prompt.lower()
-    assert "do NOT convert them to parent_of" in prompt
-    assert "use family_of" in prompt
-    assert "do NOT infer hidden intermediate hops" in prompt
+    assert "RELATIONSHIP ROLE FIDELITY (MANDATORY)" in prompt
+    assert "Do not rewrite one relationship role into a different role family" in prompt
+    assert "organizational structure terms" in prompt
+    assert "preserve direction exactly as stated" in prompt
+    assert "Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated" in prompt
 
 
-def test_review_pending_prompt_includes_indirect_kinship_guardrails():
+def test_review_pending_prompt_includes_domain_neutral_role_guardrails():
     captured = {}
 
     class _DummyResult:
@@ -214,10 +215,12 @@ def test_review_pending_prompt_includes_indirect_kinship_guardrails():
 
     assert out["total_reviewed"] == 1
     prompt = captured.get("system_prompt", "")
-    assert "indirect kinship" in prompt.lower()
+    assert "RELATIONSHIP ROLE FIDELITY (MANDATORY)" in prompt
+    assert "Do not rewrite one relationship role into a different role family" in prompt
     assert "do NOT emit parent_of" in prompt
-    assert "use family_of" in prompt
-    assert "do NOT infer hidden intermediate hops" in prompt
+    assert "organizational structure terms" in prompt
+    assert "preserve direction exactly as stated" in prompt
+    assert "Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated" in prompt
 
 
 def test_owner_full_name_logs_when_owner_resolution_fails_and_not_fail_hard():

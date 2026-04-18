@@ -2284,8 +2284,11 @@ DIRECTION RULES — follow these strictly:
 - For symmetric relations (spouse_of, sibling_of, friend_of, etc.): put entity names in alphabetical order
 - NEVER use child_of, son_of, daughter_of, mother_of, father_of — use parent_of instead
 - NEVER use owned_by, managed_by — use owns, manages instead
-- For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law and equivalents in other languages), do NOT convert them to parent_of.
-- When only indirect kinship is explicit, use family_of and do NOT infer hidden intermediate hops.
+- RELATIONSHIP ROLE FIDELITY (MANDATORY):
+  - Do not rewrite one relationship role into a different role family just to fit a common relation.
+  - For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law and equivalents in other languages), do NOT convert them to parent_of.
+  - For organizational structure terms (for example manager, report, lead), preserve direction exactly as stated.
+  - Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated in the fact.
 - Extract only the MOST SPECIFIC relationship. "Carol is Alice's mother" = parent_of, NOT family_of
 
 Only create a NEW relation type if absolutely none of the above fit. New types must be:
@@ -3187,8 +3190,11 @@ EDGE DIRECTION RULES:
 - sibling_of: alphabetical order (symmetric)
 - spouse_of: alphabetical order (symmetric)
 - has_pet: OWNER is subject. "{owner} has a dog named Y" → {owner} --has_pet--> Y
-- For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law), do NOT emit parent_of.
-- When only indirect kinship is explicit, use family_of and do NOT infer hidden intermediate hops.
+- RELATIONSHIP ROLE FIDELITY (MANDATORY):
+  - Do not rewrite one relationship role into a different role family just to fit a common relation.
+  - For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law), do NOT emit parent_of.
+  - For organizational structure terms (for example manager, report, lead), preserve direction exactly as stated.
+  - Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated in the fact.
 
 Only include edges when the fact describes a relationship between named entities.
 Do not include edges for facts that don't describe relationships (preferences, events, etc.).

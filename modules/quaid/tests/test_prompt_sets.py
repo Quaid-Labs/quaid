@@ -43,10 +43,11 @@ def test_default_extraction_prompt_contains_expected_sections():
     assert "works_at, spouse_of, parent_of, sibling_of" in text
     assert "LANGUAGE FIDELITY (MANDATORY)" in text
     assert "Do not translate factual statements into another language unless explicitly requested." in text
-    assert "RELATIONSHIP TERM FIDELITY (MANDATORY)" in text
-    assert "Never substitute one kinship role for another" in text
-    assert "For indirect kinship terms" in text
-    assert "do NOT convert them to parent_of" in text
+    assert "RELATIONSHIP ROLE FIDELITY (MANDATORY)" in text
+    assert "Never substitute one relationship role for another" in text
+    assert "manager->employee" in text
+    assert "ROLE/DIRECTION FIDELITY (MANDATORY)" in text
+    assert "preserve direction exactly as stated" in text
 
 
 def test_custom_prompt_set_can_override_selected_keys():
