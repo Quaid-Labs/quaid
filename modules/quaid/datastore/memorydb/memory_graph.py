@@ -4921,6 +4921,7 @@ def _recall_once(
         "source": "disabled",
     }
     query_anchor_terms: List[str] = []
+    allow_anchor_miss_penalty = bool(include_lexical_anchor_shaping)
     if include_lexical_anchor_shaping:
         planner_timeout_ms = 2000
         planner_max_retries = 0
@@ -4937,6 +4938,11 @@ def _recall_once(
         if planner_mode not in {"llm", "deterministic"}:
             planner_mode = "llm"
         if planner_mode == "deterministic":
+            explicit_anchor_set = {
+                term.lower()
+                for term in _extract_explicit_query_anchor_terms(clean_query, limit=24)
+                if term
+            }
             explicit_terms: List[str] = []
             explicit_seen: set[str] = set()
             for candidate in _extract_explicit_query_anchor_terms(clean_query, limit=24):
@@ -4993,6 +4999,13 @@ def _recall_once(
                     if len(seeded_terms) >= planner_anchor_limit:
                         break
             query_anchor_terms = seeded_terms[:planner_anchor_limit]
+            has_explicit_anchor_match = any(
+                term.lower() in explicit_anchor_set for term in query_anchor_terms
+            )
+            # Deterministic fast-path shaping can still boost explicit anchors, but
+            # when no explicit anchor exists it must not demote misses. This keeps
+            # sparse/non-English fast queries from falling below lexical-off behavior.
+            allow_anchor_miss_penalty = has_explicit_anchor_match
             lexical_anchor_meta = {
                 "used_llm": False,
                 "bailout_reason": None,
@@ -5002,6 +5015,7 @@ def _recall_once(
                 "limit": planner_anchor_limit,
                 "anchors": list(query_anchor_terms),
                 "source": "deterministic",
+                "miss_penalty_enabled": allow_anchor_miss_penalty,
             }
         else:
             planner_timeout_s = max(0.2, min(2.0, planner_timeout_ms / 1000.0))
@@ -5011,15 +5025,18 @@ def _recall_once(
                 timeout_s=planner_timeout_s,
                 max_retries=planner_max_retries,
             )
+            allow_anchor_miss_penalty = bool(query_anchor_terms)
+            lexical_anchor_meta["miss_penalty_enabled"] = allow_anchor_miss_penalty
         _phase_ms["lexical_anchor_planner_ms"] = int(lexical_anchor_meta.get("elapsed_ms") or 0)
         logger.info(
-            "RECALL_LEXICAL_ANCHOR_PLANNER elapsed_ms=%s used_llm=%s anchor_count=%s limit=%s bailout_reason=%s source=%s anchors=%s",
+            "RECALL_LEXICAL_ANCHOR_PLANNER elapsed_ms=%s used_llm=%s anchor_count=%s limit=%s bailout_reason=%s source=%s miss_penalty_enabled=%s anchors=%s",
             lexical_anchor_meta.get("elapsed_ms"),
             lexical_anchor_meta.get("used_llm"),
             lexical_anchor_meta.get("anchor_count"),
             lexical_anchor_meta.get("limit"),
             lexical_anchor_meta.get("bailout_reason"),
             lexical_anchor_meta.get("source"),
+            lexical_anchor_meta.get("miss_penalty_enabled"),
             lexical_anchor_meta.get("anchors"),
         )
 
@@ -5053,6 +5070,7 @@ def _recall_once(
                 intent=intent,
                 include_anchor_terms=include_lexical_anchor_shaping,
                 query_anchor_terms=query_anchor_terms,
+                allow_anchor_miss_penalty=allow_anchor_miss_penalty,
             ),
             1.0,
         )
@@ -5150,6 +5168,7 @@ def _recall_once(
                     intent=intent,
                     include_anchor_terms=include_lexical_anchor_shaping,
                     query_anchor_terms=query_anchor_terms,
+                    allow_anchor_miss_penalty=allow_anchor_miss_penalty,
                 ),
                 1.0,
             )
@@ -5220,6 +5239,7 @@ def _recall_once(
                                     intent=intent,
                                     include_anchor_terms=include_lexical_anchor_shaping,
                                     query_anchor_terms=query_anchor_terms,
+                                    allow_anchor_miss_penalty=allow_anchor_miss_penalty,
                                 ),
                                 1.0,
                             )
@@ -7021,6 +7041,7 @@ def _compute_query_fit_multiplier(
     intent: str = "GENERAL",
     include_anchor_terms: bool = True,
     query_anchor_terms: Optional[List[str]] = None,
+    allow_anchor_miss_penalty: bool = True,
 ) -> float:
     # Recall shaping policy: keep this deterministic scorer language-agnostic.
     # Do not add English semantic mappings here (for example family, org-chart,
@@ -7073,7 +7094,7 @@ def _compute_query_fit_multiplier(
         if matched_anchor_terms:
             anchor_boost = 1.22 + min(0.16, 0.06 * (len(matched_anchor_terms) - 1))
             multiplier *= anchor_boost
-        else:
+        elif allow_anchor_miss_penalty:
             # Keep anchor shaping helpful without over-punishing strict planner misses.
             # With restrictive LLM anchors, a full miss should down-rank, but not as
             # aggressively as the legacy lexical path.

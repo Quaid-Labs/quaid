@@ -2870,6 +2870,45 @@ class TestRecallFastHookInjectContract:
 
         assert mult >= 1.08
 
+    def test_query_fit_multiplier_can_disable_anchor_miss_penalty(self):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node(
+            id="n-anchor",
+            type="Fact",
+            name="Mara won the local cook-off with smoked brisket.",
+            attributes={},
+        )
+
+        baseline = mg._compute_query_fit_multiplier(
+            "What do you remember about my neighbour?",
+            node,
+            node.attributes,
+            intent="GENERAL",
+            include_anchor_terms=False,
+        )
+        no_penalty = mg._compute_query_fit_multiplier(
+            "What do you remember about my neighbour?",
+            node,
+            node.attributes,
+            intent="GENERAL",
+            include_anchor_terms=True,
+            query_anchor_terms=["vecina"],
+            allow_anchor_miss_penalty=False,
+        )
+        with_penalty = mg._compute_query_fit_multiplier(
+            "What do you remember about my neighbour?",
+            node,
+            node.attributes,
+            intent="GENERAL",
+            include_anchor_terms=True,
+            query_anchor_terms=["vecina"],
+            allow_anchor_miss_penalty=True,
+        )
+
+        assert no_penalty == baseline
+        assert with_penalty < no_penalty
+
     def test_plan_query_anchor_terms_reports_timing(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3102,6 +3141,86 @@ class TestRecallFastHookInjectContract:
         assert meta["lexical_anchor"]["used_llm"] is True
         assert meta["lexical_anchor"]["elapsed_ms"] == 17
         assert meta["phases_ms"]["lexical_anchor_planner_ms"] == 17
+
+    def test_recall_once_disables_fast_anchor_miss_penalty_without_explicit_anchor(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            mg.store(
+                "Mi vecina Mara ganó el concurso regional de chili.",
+                owner_id="quaid",
+            )
+
+        captured_penalty_flags = []
+
+        def _capture_multiplier(*args, **kwargs):
+            captured_penalty_flags.append(bool(kwargs.get("allow_anchor_miss_penalty")))
+            return 1.0
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=False), \
+             patch.object(mg, "_compute_query_fit_multiplier", side_effect=_capture_multiplier):
+            rows, meta = mg._recall_once(
+                "¿Qué recuerdas de mi vecina?",
+                owner_id="quaid",
+                use_routing=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=True,
+                lexical_anchor_planner_mode="deterministic",
+                min_similarity=0.0,
+                return_meta=True,
+            )
+
+        assert rows
+        assert captured_penalty_flags
+        assert all(flag is False for flag in captured_penalty_flags)
+        assert meta["lexical_anchor"]["source"] == "deterministic"
+        assert meta["lexical_anchor"]["miss_penalty_enabled"] is False
+
+    def test_recall_once_keeps_fast_anchor_miss_penalty_for_explicit_anchor(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            mg.store(
+                "Baxter is a golden retriever who loves tennis balls.",
+                owner_id="quaid",
+            )
+
+        captured_penalty_flags = []
+
+        def _capture_multiplier(*args, **kwargs):
+            captured_penalty_flags.append(bool(kwargs.get("allow_anchor_miss_penalty")))
+            return 1.0
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=False), \
+             patch.object(mg, "_compute_query_fit_multiplier", side_effect=_capture_multiplier):
+            rows, meta = mg._recall_once(
+                "What do you remember about Baxter?",
+                owner_id="quaid",
+                use_routing=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=True,
+                lexical_anchor_planner_mode="deterministic",
+                min_similarity=0.0,
+                return_meta=True,
+            )
+
+        assert rows
+        assert captured_penalty_flags
+        assert all(flag is True for flag in captured_penalty_flags)
+        assert meta["lexical_anchor"]["source"] == "deterministic"
+        assert meta["lexical_anchor"]["miss_penalty_enabled"] is True
 
     def test_query_fit_multiplier_boosts_temporal_rows_for_when_queries(self):
         import datastore.memorydb.memory_graph as mg
