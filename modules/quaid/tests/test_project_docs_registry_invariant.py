@@ -102,3 +102,43 @@ def test_project_list_reconciles_existing_docs_registry_project_rows(project_reg
     assert projects["recipe-app"]["canonical_path"] == str(project_dir)
     assert projects["recipe-app"]["source_root"] == str(source_root)
     assert "benchrunner" in projects["recipe-app"]["instances"]
+
+
+def test_project_show_reconciles_doc_registry_only_external_project(project_registry_env):
+    from core.project_registry import get_project
+    from datastore.docsdb.registry import DocsRegistry
+    from lib.database import get_connection
+
+    visible_home = project_registry_env["visible_home"]
+    external_root = visible_home / "external-source" / "recipe-app"
+    external_doc = external_root / "README.md"
+    external_root.mkdir(parents=True)
+    external_doc.write_text("# Recipe App\n", encoding="utf-8")
+    project_dir = visible_home / "projects" / "recipe-app"
+
+    registry = DocsRegistry()
+    with get_connection(registry.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO doc_registry (file_path, project, asset_type, title, description, state, registered_by)
+            VALUES (?, ?, 'doc', ?, ?, 'active', 'legacy-fixture')
+            """,
+            (
+                str(external_doc),
+                "recipe-app",
+                "Recipe App README",
+                "Orphan test row",
+            ),
+        )
+
+    entry = get_project("recipe-app")
+
+    assert entry is not None
+    assert entry["canonical_path"] == str(project_dir)
+    assert entry["source_root"] == str(external_doc.parent)
+    assert "benchrunner" in entry["instances"]
+    defn = registry.get_project_definition("recipe-app")
+    assert defn is not None
+    assert defn.home_dir == "projects/recipe-app/"
+    assert defn.source_roots == [str(external_doc.parent)]
+    assert (project_dir / "PROJECT.md").is_file()

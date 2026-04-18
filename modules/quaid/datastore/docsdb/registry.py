@@ -513,8 +513,7 @@ class DocsRegistry:
                 )
             return result
 
-    def save_project_definition(self, name: str, defn):
-        """Upsert a project definition to DB."""
+    def _write_project_definition_row(self, name: str, defn) -> None:
         def _write():
             with get_connection(self.db_path) as conn:
                 conn.execute("""
@@ -544,6 +543,10 @@ class DocsRegistry:
                 ))
 
         _run_locked_write_with_retry(_write, op_name=f"save_project_definition({name})")
+
+    def save_project_definition(self, name: str, defn):
+        """Upsert a project definition to DB."""
+        self._write_project_definition_row(name, defn)
         self._ensure_global_project_entry(name, defn=defn)
 
     def delete_project_definition(self, name: str):
@@ -561,9 +564,9 @@ class DocsRegistry:
         _validate_project_name(name)
         return name
 
-    def _source_root_from_sources(self, source_files: Optional[List[str]]) -> Optional[str]:
+    def _source_root_from_paths(self, paths_in: Optional[List[str]]) -> Optional[str]:
         paths: List[str] = []
-        for raw in source_files or []:
+        for raw in paths_in or []:
             value = str(raw or "").strip()
             if not value:
                 continue
@@ -584,6 +587,9 @@ class DocsRegistry:
             return os.path.commonpath(paths)
         except ValueError:
             return paths[0]
+
+    def _source_root_from_sources(self, source_files: Optional[List[str]]) -> Optional[str]:
+        return self._source_root_from_paths(source_files)
 
     def _canonical_path_from_doc_path(self, name: str, file_path: Optional[str]) -> Optional[Path]:
         if not file_path:
@@ -627,6 +633,38 @@ class DocsRegistry:
                 encoding="utf-8",
             )
 
+    def _home_dir_for_project_definition(self, canonical: Path) -> str:
+        try:
+            rel = canonical.resolve().relative_to(_visible_home().resolve())
+            value = str(rel)
+        except ValueError:
+            value = str(canonical)
+        return value.rstrip("/") + "/"
+
+    def _ensure_docs_project_definition(
+        self,
+        name: str,
+        *,
+        canonical: Path,
+        description: str,
+        source_root: Optional[str],
+    ) -> None:
+        from config import ProjectDefinition
+
+        if self.get_project_definition(name) is not None:
+            return
+        defn = ProjectDefinition(
+            label=name.replace("-", " ").replace("_", " ").title(),
+            home_dir=self._home_dir_for_project_definition(canonical),
+            source_roots=[source_root] if source_root else [],
+            auto_index=True,
+            patterns=["*.md"],
+            exclude=["*.db", "*.log", "*.pyc", "__pycache__/"],
+            description=description or f"{name} project.",
+            state="active",
+        )
+        self._write_project_definition_row(name, defn)
+
     def _ensure_global_project_entry(
         self,
         project: Optional[str],
@@ -664,6 +702,8 @@ class DocsRegistry:
             source_root = self._source_root_from_sources(source_files)
         if canonical is None:
             canonical = (_visible_home() / "projects" / name).resolve()
+            if source_root is None:
+                source_root = self._source_root_from_paths([file_path] if file_path else None)
 
         if create_scaffold:
             project_dir_existed = canonical.exists()
@@ -676,6 +716,13 @@ class DocsRegistry:
             )
         elif not canonical.exists():
             return False
+        if defn is None:
+            self._ensure_docs_project_definition(
+                name,
+                canonical=canonical,
+                description=description,
+                source_root=source_root,
+            )
 
         try:
             from lib.project_registry import register as global_register
@@ -707,6 +754,7 @@ class DocsRegistry:
                 synced.append(str(name))
                 seen.add(str(name))
 
+        orphan_paths_by_project: Dict[str, List[str]] = {}
         with get_connection(self.db_path) as conn:
             exists = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'doc_registry'"
@@ -715,25 +763,32 @@ class DocsRegistry:
                 return {"synced": len(synced), "projects": sorted(set(synced))}
             rows = conn.execute(
                 """
-                SELECT project, MIN(file_path) AS file_path
+                SELECT project, file_path, source_files
                 FROM doc_registry
                 WHERE state = 'active'
                   AND project IS NOT NULL
                   AND TRIM(project) != ''
                   AND project != 'default'
-                GROUP BY project
                 """
             ).fetchall()
+            for row in rows:
+                name = str(row["project"] or "").strip()
+                if not name or name in seen:
+                    continue
+                paths = orphan_paths_by_project.setdefault(name, [])
+                raw_path = str(row["file_path"] or "").strip()
+                if raw_path:
+                    paths.append(raw_path)
+                try:
+                    source_paths = json.loads(row["source_files"] or "[]")
+                except (TypeError, ValueError):
+                    source_paths = []
+                if isinstance(source_paths, list):
+                    paths.extend(str(p or "").strip() for p in source_paths if str(p or "").strip())
 
-        for row in rows:
-            name = str(row["project"] or "").strip()
-            if not name or name in seen:
-                continue
-            doc_path = str(row["file_path"] or "").strip()
-            canonical = self._canonical_path_from_doc_path(name, doc_path)
-            if canonical is None or not canonical.exists():
-                continue
-            if self._ensure_global_project_entry(name, file_path=doc_path, create_scaffold=False):
+        for name, paths in sorted(orphan_paths_by_project.items()):
+            doc_path = paths[0] if paths else None
+            if self._ensure_global_project_entry(name, file_path=doc_path, source_files=paths):
                 synced.append(name)
                 seen.add(name)
 
