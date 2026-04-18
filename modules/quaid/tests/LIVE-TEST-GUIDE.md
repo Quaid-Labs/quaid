@@ -140,7 +140,7 @@ is faster and safer than surgical cleanup.
 > After the CC installer completes, **also apply the chunk_tokens override**
 > (same step as the full M0 post-install — do not skip it in the parallel path):
 > ```bash
-> ssh REMOTE_HOST 'python3 -c "import json; p=\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
+> ssh REMOTE_HOST 'python3 -c "import json; p=\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config.json\"; d=json.load(open(p)); d.setdefault(\"capture\",{})[\"chunk_tokens\"]=1500; json.dump(d,open(p,\"w\"),indent=2); print(\"CC chunk_tokens:\", d[\"capture\"][\"chunk_tokens\"])"'
 > ```
 
 **Uninstall the plugin first to remove registry entries:**
@@ -345,7 +345,7 @@ ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && echo 'Aut
 Also verify model config was written by the installer:
 
 ```bash
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(d.get(\"models\", {}))"'
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config.json\")); print(d.get(\"models\", {}))"'
 ```
 
 Expected output: `{'deepReasoning': 'claude-opus-4-6', 'fastReasoning': 'claude-haiku-4-5-20251001'}`.
@@ -423,7 +423,7 @@ ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.
 # can occur due to config singleton state; direct injection is reliable)
 ssh REMOTE_HOST 'python3 -c "
 import json
-p = \"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
+p = \"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config.json\"
 with open(p) as f: d = json.load(f)
 if \"quaid\" not in d[\"projects\"][\"definitions\"]:
     d[\"projects\"][\"definitions\"][\"quaid\"] = {
@@ -452,7 +452,7 @@ else:
 # OC silo
 ssh REMOTE_HOST 'python3 -c "
 import json
-p = \"/Users/USER/.quaid/instances/openclaw-main/config/memory.json\"
+p = \"/Users/USER/.quaid/instances/openclaw-main/config.json\"
 with open(p) as f: d = json.load(f)
 d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
 with open(p, \"w\") as f: json.dump(d, f, indent=2)
@@ -462,7 +462,7 @@ print(\"capture.chunk_tokens set to 1500 for openclaw-main\")
 # CC silo
 ssh REMOTE_HOST 'python3 -c "
 import json
-p = \"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\"
+p = \"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config.json\"
 with open(p) as f: d = json.load(f)
 d.setdefault(\"capture\", {})[\"chunk_tokens\"] = 1500
 with open(p, \"w\") as f: json.dump(d, f, indent=2)
@@ -473,8 +473,8 @@ print(\"capture.chunk_tokens set to 1500 for claude-code-private-tmp-cc-livetest
 Verify both silos have the override:
 
 ```bash
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/openclaw-main/config/memory.json\")); print(\"OC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config/memory.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/openclaw-main/config.json\")); print(\"OC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/Users/USER/.quaid/instances/claude-code-private-tmp-cc-livetest/config.json\")); print(\"CC chunk_tokens:\", d.get(\"capture\",{}).get(\"chunk_tokens\",\"NOT SET\"))"'
 ```
 
 Expected: `OC chunk_tokens: 1500` and `CC chunk_tokens: 1500`.
@@ -2213,7 +2213,7 @@ ssh REMOTE_HOST 'sqlite3 ~/.quaid/instances/openclaw-main/data/memory.db "SELECT
 ssh REMOTE_HOST 'ls ~/.quaid/instances/openclaw-main/journal/'
 ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/USER.snippets.md 2>/dev/null'
 ssh REMOTE_HOST 'ls -lt ~/.quaid/instances/openclaw-main/logs/ | head -20'
-ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/config/memory.json | python3 -m json.tool | head -20'
+ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/config.json | python3 -m json.tool | head -20'
 ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/data/circuit-breaker.json 2>/dev/null'
 ssh REMOTE_HOST 'cat ~/.quaid/instances/openclaw-main/logs/janitor/checkpoint-all.json 2>/dev/null'
 
