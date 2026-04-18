@@ -1,6 +1,13 @@
 """Shared library for quaid plugin."""
 
-from .config import get_db_path, get_archive_db_path, get_ollama_url, get_embedding_model, get_embedding_dim
+from .config import (
+    get_db_path,
+    get_archive_db_path,
+    get_docs_db_path,
+    get_ollama_url,
+    get_embedding_model,
+    get_embedding_dim,
+)
 from .database import get_connection
 from .embeddings import get_embedding, pack_embedding, unpack_embedding
 from .similarity import cosine_similarity
@@ -10,6 +17,7 @@ __all__ = [
     # Config
     "get_db_path",
     "get_archive_db_path",
+    "get_docs_db_path",
     "get_ollama_url",
     "get_embedding_model",
     "get_embedding_dim",

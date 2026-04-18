@@ -60,6 +60,37 @@ def get_archive_db_path() -> Path:
     return p if p.is_absolute() else _workspace_root() / p
 
 
+def get_docs_db_path() -> Path:
+    """Get the shared docs database path.
+
+    Docs RAG/index state is shared across instances to avoid per-instance
+    reindex churn. Relative paths resolve from QUAID_HOME.
+    """
+    env_path = os.environ.get("DOCS_DB_PATH")
+    if env_path:
+        return Path(env_path).expanduser()
+
+    # Test/override compatibility: when memory DB is explicitly redirected,
+    # keep docs DB co-located unless DOCS_DB_PATH is also set.
+    memory_override = os.environ.get("MEMORY_DB_PATH")
+    if memory_override:
+        return Path(memory_override).expanduser()
+
+    cfg = _get_cfg()
+    raw = str(getattr(getattr(cfg, "database", None), "docs_path", "") or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        if p.is_absolute():
+            return p
+        from lib.instance import quaid_home as _quaid_home
+
+        return _quaid_home() / p
+
+    from lib.instance import quaid_home as _quaid_home
+
+    return _quaid_home() / "shared" / "data" / "docs.db"
+
+
 def get_ollama_url() -> str:
     """Get the Ollama API URL.
 

@@ -26,11 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from config import get_config
-from datastore.docsdb.registry import (
-    DocsRegistry,
-    _managed_project_sections,
-    _populate_project_md_sections,
-)
+import datastore.docsdb.registry as docs_registry
 from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
 from lib.project_templates import (
     EXTERNAL_FILES_BEGIN,
@@ -141,7 +137,7 @@ def process_event(event_path: str) -> Dict:
     print(f"  Files touched: {len(files_touched)}")
     print(f"  Summary: {summary}")
 
-    registry = DocsRegistry()
+    registry = docs_registry.DocsRegistry()
     try:
         cfg = get_config()
     except Exception as e:
@@ -285,7 +281,7 @@ def refresh_project_md(project_name: str) -> bool:
         print(f"Project '{project_name}' not found in config")
         return False
 
-    registry = DocsRegistry()
+    registry = docs_registry.DocsRegistry()
     _refresh_file_list(registry, project_name, cfg)
     return True
 
@@ -295,7 +291,7 @@ def refresh_project_md(project_name: str) -> bool:
 # ============================================================================
 
 def _resolve_project(
-    registry: DocsRegistry,
+    registry,
     project_hint: Optional[str],
     files_touched: List[str],
 ) -> Optional[str]:
@@ -316,7 +312,7 @@ def _resolve_project(
 
 
 def _check_registry_staleness(
-    registry: DocsRegistry,
+    registry,
     project_name: str,
 ) -> List[Dict]:
     """Check which docs in a project are stale (source newer than doc)."""
@@ -347,7 +343,7 @@ def _check_registry_staleness(
 
 
 def _apply_updates(
-    registry: DocsRegistry,
+    registry,
     project_name: str,
     project_md_content: str,
     summary: str,
@@ -441,7 +437,7 @@ def evaluate_doc_health(
         result["error"] = f"Project '{project_name}' not found"
         return result
 
-    registry = DocsRegistry()
+    registry = docs_registry.DocsRegistry()
     project_dir = _resolve_path(defn.home_dir)
     project_md_path = project_dir / "PROJECT.md"
 
@@ -579,7 +575,7 @@ Respond with JSON only, no markdown fences."""
     return result
 
 
-def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
+def _refresh_file_list(registry, project_name: str, cfg) -> None:
     """Refresh registry-backed navigation sections of PROJECT.md."""
     defn = cfg.projects.definitions.get(project_name)
     if not defn:
@@ -590,10 +586,10 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
         return
 
     content = project_md_path.read_text(encoding="utf-8")
-    sections = _managed_project_sections(registry, project_name, defn)
+    sections = docs_registry._managed_project_sections(registry, project_name, defn)
     has_markers = has_registry_managed_markers(content)
     if has_markers:
-        content = _populate_project_md_sections(
+        content = docs_registry._populate_project_md_sections(
             content,
             project_home_body=sections["project_home"],
             source_roots_body=sections["source_roots"],
@@ -609,7 +605,7 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
             source_roots=[str(registry._resolve_path(root)) for root in (defn.source_roots or [])],
             exclude_patterns=defn.exclude or [],
         )
-        rebuilt = _populate_project_md_sections(
+        rebuilt = docs_registry._populate_project_md_sections(
             rebuilt,
             project_home_body=sections["project_home"],
             source_roots_body=sections["source_roots"],
@@ -681,7 +677,7 @@ def append_project_logs(
         return metrics
 
     cfg = get_config()
-    registry = DocsRegistry()
+    registry = docs_registry.DocsRegistry()
     today = date_str or datetime.now().strftime("%Y-%m-%d")
     marker_begin = PROJECT_LOG_BEGIN
     marker_end = PROJECT_LOG_END
@@ -731,7 +727,7 @@ def append_project_logs(
                 fresh_cfg = _reload_cfg()
                 defn = fresh_cfg.projects.definitions.get(project_name)
                 if not defn:
-                    defn = DocsRegistry().get_project_definition(project_name)
+                    defn = docs_registry.DocsRegistry().get_project_definition(project_name)
             except Exception:
                 pass
         if not defn:

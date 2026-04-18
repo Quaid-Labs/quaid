@@ -34,7 +34,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from lib.config import get_db_path
+from lib.config import get_docs_db_path
 from lib.database import get_connection
 from lib.project_templates import (
     EXTERNAL_FILES_BEGIN,
@@ -117,7 +117,7 @@ def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None
 
 def _get_default_db_path() -> Path:
     """Get DB path lazily (respects env vars set after import)."""
-    return get_db_path()
+    return get_docs_db_path()
 
 
 def _format_bullets(items: List[str], *, empty: str) -> str:
@@ -280,10 +280,23 @@ class DocsRegistry:
     """Document registry with CRUD, path resolution, and project operations."""
 
     def __init__(self, db_path: Path = None):
-        self.db_path = db_path or _get_default_db_path()
+        self.db_path = Path(db_path).expanduser() if db_path is not None else _get_default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._config = None
+        self._shared_scope_enabled = (
+            db_path is None and not str(os.environ.get("MEMORY_DB_PATH", "")).strip()
+        )
         self.ensure_table()
+        if self._shared_scope_enabled:
+            try:
+                from datastore.docsdb.db_migration import migrate_legacy_docs_tables
+
+                migrate_legacy_docs_tables(
+                    self.db_path,
+                    tables=("project_definitions", "doc_registry"),
+                )
+            except Exception as exc:
+                logger.warning("DocsRegistry legacy docs-table merge skipped: %s", exc)
 
     def _get_config(self):
         """Lazy-load config to avoid circular imports."""

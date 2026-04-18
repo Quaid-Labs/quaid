@@ -1747,8 +1747,8 @@ def _compute_staleness_score(commits_behind: int, lines_changed: int, days_stale
 
 def _get_audit_db_path() -> str:
     """Get path for the audit log database."""
-    from lib.config import get_db_path
-    return get_db_path()
+    from lib.config import get_docs_db_path
+    return get_docs_db_path()
 
 
 def _ensure_audit_table():

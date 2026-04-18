@@ -36,7 +36,6 @@ def _sync_docs_registry_project(
     description: str,
     source_root: Optional[str],
     canonical: Path,
-    db_path: Optional[Path] = None,
 ) -> None:
     """Mirror project metadata into the docs-registry source of truth."""
     if _is_temp_canonical_path(canonical):
@@ -49,7 +48,7 @@ def _sync_docs_registry_project(
     from config import ProjectDefinition
     from datastore.docsdb.registry import DocsRegistry
 
-    registry = DocsRegistry(db_path=db_path)
+    registry = DocsRegistry()
     existing = registry.get_project_definition(name)
     label = existing.label if existing else name.replace("-", " ").title()
     patterns = list(existing.patterns) if existing and existing.patterns else ["*.md"]
@@ -398,13 +397,34 @@ def delete_project(name: str) -> None:
         del registry["projects"][name]
         _save_registry(registry)
 
-    # Clean up SQLite: project_definitions + doc_registry entries
+    # Clean up shared docs DB: project definitions, registry rows, and RAG chunks.
     try:
         from lib.database import get_connection
-        from lib.config import get_db_path
-        with get_connection(get_db_path()) as conn:
+        from lib.config import get_docs_db_path
+        from datastore.docsdb.rag import DocsRAG
+
+        docs_db_path = get_docs_db_path()
+        chunk_paths: List[str] = []
+        with get_connection(docs_db_path) as conn:
+            rows = conn.execute(
+                "SELECT file_path FROM doc_registry WHERE project = ?",
+                (name,),
+            ).fetchall()
+            chunk_paths.extend(str(r[0] or "").strip() for r in rows if str(r[0] or "").strip())
             conn.execute("DELETE FROM project_definitions WHERE name = ?", (name,))
             conn.execute("DELETE FROM doc_registry WHERE project = ?", (name,))
+        canonical = str(entry.get("canonical_path") or "").strip()
+        if canonical:
+            chunk_paths.append(str(Path(canonical) / "PROJECT.md"))
+        if chunk_paths:
+            rag = DocsRAG(db_path=docs_db_path)
+            seen: set[str] = set()
+            for file_path in chunk_paths:
+                key = str(file_path or "").strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                rag.remove_chunks_for_path(key)
     except Exception as e:
         logger.warning("Failed to clean up DB entries for project %s: %s", name, e)
 

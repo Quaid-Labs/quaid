@@ -236,7 +236,6 @@ class InstanceManager:
             description=misc_desc,
             source_root=None,
             canonical=misc_canonical,
-            db_path=(self.adapter.quaid_home() / "instances" / instance_id / "data" / "memory.db"),
         )
 
     def _ensure_shared_quaid_project(self, instance_id: str) -> None:
@@ -272,7 +271,6 @@ class InstanceManager:
             description=desc,
             source_root=None,
             canonical=project_dir,
-            db_path=(self.adapter.instance_root().parent / instance_id / "data" / "memory.db"),
         )
 
     # ---- Settings / integration snippet ----

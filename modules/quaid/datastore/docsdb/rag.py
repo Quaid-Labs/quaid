@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Dict, Optional, Tuple
 
-from lib.config import get_db_path
+from lib.config import get_docs_db_path
 from lib.database import get_connection as _lib_get_connection, has_vec as _lib_has_vec
 from lib.embeddings import (
     get_embedding as _lib_get_embedding,
@@ -31,7 +31,8 @@ from lib.runtime_context import get_visible_quaid_home, get_workspace_dir
 logger = logging.getLogger(__name__)
 
 # Configuration — resolved from config system
-DB_PATH = get_db_path()
+def _default_db_path() -> Path:
+    return get_docs_db_path()
 def _workspace() -> Path:
     return get_workspace_dir()
 
@@ -73,6 +74,27 @@ def _canonical_source_path(raw_path: str) -> str:
         return str(Path(os.path.realpath(str(path))))
     except Exception:
         return str(path)
+
+
+def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
+    """Return projects linked to the active instance.
+
+    Returns (projects, resolved) where resolved=False means instance context
+    could not be determined and caller should not enforce scope filtering.
+    """
+    try:
+        from lib.instance import instance_id as _instance_id
+        from core.project_registry import list_projects as _list_projects
+
+        current_instance = _instance_id()
+        linked: List[str] = []
+        for project_name, entry in (_list_projects() or {}).items():
+            instances = entry.get("instances") or []
+            if current_instance in instances:
+                linked.append(str(project_name))
+        return linked, True
+    except Exception:
+        return [], False
 
 
 def _rag_config():
@@ -272,9 +294,19 @@ class DocsRAG:
     """RAG system for technical documentation."""
     
     def __init__(self, db_path: Path = None):
-        self.db_path = db_path or DB_PATH
+        self.db_path = Path(db_path).expanduser() if db_path is not None else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._shared_scope_enabled = (
+            db_path is None and not str(os.environ.get("MEMORY_DB_PATH", "")).strip()
+        )
         self._ensure_schema()
+        if self._shared_scope_enabled:
+            try:
+                from datastore.docsdb.db_migration import migrate_legacy_docs_tables
+
+                migrate_legacy_docs_tables(self.db_path, tables=("doc_chunks",))
+            except Exception as exc:
+                logger.warning("DocsRAG legacy docs-table merge skipped: %s", exc)
 
     def _ensure_schema(self):
         """Ensure the doc_chunks table exists."""
@@ -865,50 +897,60 @@ class DocsRAG:
             source_path = Path(str(source_file))
 
         try:
-            from config import get_config
+            from core.project_registry import list_projects as _list_projects
 
-            cfg = get_config()
-            workspace = _workspace().resolve()
             best_match = None
             best_prefix_len = -1
-
-            for project_name, defn in (cfg.projects.definitions or {}).items():
-                candidate_roots = []
-                if getattr(defn, "home_dir", None):
-                    candidate_roots.append(_resolve_project_root(defn.home_dir).resolve())
-                for root in getattr(defn, "source_roots", []) or []:
-                    candidate_roots.append(_resolve_project_root(root).resolve())
+            for project_name in (_list_projects() or {}).keys():
+                path_info = self._get_project_paths(str(project_name))
+                candidate_roots: List[Path] = []
+                home_dir = str(path_info.get("home_dir") or "").strip()
+                if home_dir:
+                    candidate_roots.append(Path(home_dir))
+                for root in path_info.get("source_roots", []) or []:
+                    root_str = str(root or "").strip()
+                    if root_str:
+                        candidate_roots.append(Path(root_str))
 
                 for candidate in candidate_roots:
+                    try:
+                        candidate = candidate.resolve()
+                    except Exception:
+                        pass
                     prefix = str(candidate)
                     if str(source_path) == prefix or str(source_path).startswith(prefix + os.sep):
                         if len(prefix) > best_prefix_len:
                             best_prefix_len = len(prefix)
-                            best_match = project_name
+                            best_match = str(project_name)
 
             if best_match:
                 return best_match
+        except Exception:
+            pass
+
+        try:
+            from datastore.docsdb.registry import DocsRegistry
 
             try:
-                from datastore.docsdb.registry import DocsRegistry
-
+                registry = DocsRegistry(self.db_path)
+            except TypeError:
                 registry = DocsRegistry()
-                for project_name in (cfg.projects.definitions or {}).keys():
-                    for doc in registry.list_docs(project=project_name):
-                        raw_path = str(doc.get("file_path") or "").strip()
-                        if not raw_path:
-                            continue
-                        p = Path(raw_path)
-                        if not p.is_absolute():
-                            p = workspace / p
-                        try:
-                            if p.resolve() == source_path:
-                                return project_name
-                        except Exception:
-                            if str(p) == str(source_path):
-                                return project_name
-            except Exception:
-                pass
+            workspace = _workspace().resolve()
+            for doc in registry.list_docs():
+                raw_path = str(doc.get("file_path") or "").strip()
+                if not raw_path:
+                    continue
+                p = Path(raw_path)
+                if not p.is_absolute():
+                    p = workspace / p
+                try:
+                    same_path = p.resolve() == source_path
+                except Exception:
+                    same_path = str(p) == str(source_path)
+                if same_path:
+                    project_name = str(doc.get("project") or "").strip()
+                    if project_name:
+                        return project_name
         except Exception:
             pass
 
@@ -943,12 +985,10 @@ class DocsRAG:
         if not project:
             return None
         try:
-            from config import get_config
-
-            cfg = get_config()
-            defn = cfg.projects.definitions.get(project)
-            if defn and defn.home_dir:
-                md_path = _resolve_project_root(defn.home_dir) / "PROJECT.md"
+            paths = self._get_project_paths(str(project))
+            home_dir = str(paths.get("home_dir") or "").strip()
+            if home_dir:
+                md_path = Path(home_dir) / "PROJECT.md"
                 if md_path.exists():
                     return md_path.read_text(encoding="utf-8")
         except Exception:
@@ -974,19 +1014,49 @@ class DocsRAG:
             logger.warning("Failed to get embedding for query; returning no RAG results")
             return []
 
-        # Build project filter — use SQL-level filtering to avoid full scan
+        # Build project/doc filter — SQL-level filtering avoids full scans.
+        doc_filters = self._normalize_docs_filter(docs)
+        query_terms = _docs_query_terms(query)
+
         project_paths = None
-        registry_paths = []
+        registry_paths: List[str] = []
         workspace = _workspace().resolve()
-        if project:
-            project_paths = self._get_project_paths(project)
-            # Also get registered external file paths from doc_registry
+        project_scope_token: Optional[str] = None
+
+        def _add_scope_paths_for_project(
+            project_name: str,
+            seen_registry_paths: set[str],
+            *,
+            include_project_roots: bool,
+        ) -> None:
+            path_info = self._get_project_paths(project_name)
+            if include_project_roots:
+                home_dir = str(path_info.get("home_dir") or "").strip()
+                if home_dir:
+                    for candidate in (home_dir, _canonical_source_path(home_dir)):
+                        if candidate and candidate not in seen_registry_paths:
+                            seen_registry_paths.add(candidate)
+                            registry_paths.append(candidate)
+                for root in path_info.get("source_roots", []) or []:
+                    root_str = str(root or "").strip()
+                    if not root_str:
+                        continue
+                    for candidate in (root_str, _canonical_source_path(root_str)):
+                        if candidate and candidate not in seen_registry_paths:
+                            seen_registry_paths.add(candidate)
+                            registry_paths.append(candidate)
+
+            # Also include all registered external doc paths for this project.
             try:
                 from datastore.docsdb.registry import DocsRegistry
-                registry = DocsRegistry()
-                reg_docs = registry.list_docs(project=project)
+
+                try:
+                    registry = DocsRegistry(self.db_path)
+                except TypeError:
+                    # Test doubles often expose a no-arg constructor.
+                    registry = DocsRegistry()
+                reg_docs = registry.list_docs(project=project_name)
                 resolver = getattr(registry, "_resolve_path", None)
-                seen_registry_paths = set()
                 for d in reg_docs:
                     raw_path = str(d.get("file_path") or "").strip()
                     if not raw_path:
@@ -1019,27 +1089,39 @@ class DocsRAG:
                             seen_registry_paths.add(canonical)
                             registry_paths.append(canonical)
             except RuntimeError:
-                # Preserve explicit failHard resolver failures raised in the
-                # per-entry resolution path above.
                 raise
             except Exception as exc:
                 if is_fail_hard_enabled():
                     raise RuntimeError(
-                        f"Failed to load docs registry paths for project {project!r}"
+                        f"Failed to load docs registry paths for project {project_name!r}"
                     ) from exc
                 logger.warning(
                     "docs recall failed to load registry paths for project %r: %s",
-                    project,
+                    project_name,
                     exc,
                 )
 
-        doc_filters = self._normalize_docs_filter(docs)
-        query_terms = _docs_query_terms(query)
+        if project:
+            project_scope_token = project
+            project_paths = self._get_project_paths(project)
+            seen_registry_paths: set[str] = set()
+            _add_scope_paths_for_project(project, seen_registry_paths, include_project_roots=False)
+        elif self._shared_scope_enabled and not doc_filters:
+            linked_projects, resolved_scope = _linked_projects_for_current_instance()
+            if resolved_scope:
+                if not linked_projects:
+                    return []
+                project_scope_token = "__instance_linked_scope__"
+                seen_registry_paths: set[str] = set()
+                for project_name in linked_projects:
+                    _add_scope_paths_for_project(project_name, seen_registry_paths, include_project_roots=True)
+                if not registry_paths:
+                    return []
 
         results = []
         with _lib_get_connection(self.db_path) as conn:
             where, params, empty = self._build_doc_filter_sql(
-                project=project,
+                project=project_scope_token,
                 project_paths=project_paths,
                 registry_paths=registry_paths,
                 doc_filters=doc_filters,
@@ -1050,7 +1132,7 @@ class DocsRAG:
                 return []
 
             use_vec = _lib_has_vec() and self._doc_vec_table_exists(conn)
-            if use_vec and (project or doc_filters):
+            if use_vec and (project_scope_token or doc_filters):
                 # sqlite-vec evaluates ANN k-NN before the SQL WHERE predicate.
                 # For project/docs-scoped recall, that can starve valid matches when
                 # the global top-k candidate set doesn't contain scoped rows.
@@ -1083,7 +1165,7 @@ class DocsRAG:
 
             if not use_vec:
                 scan_where, scan_params, _ = self._build_doc_filter_sql(
-                    project=project,
+                    project=project_scope_token,
                     project_paths=project_paths,
                     registry_paths=registry_paths,
                     doc_filters=doc_filters,
@@ -1168,16 +1250,30 @@ class DocsRAG:
     def _get_project_paths(self, project: str) -> dict:
         """Get project path info for filtering."""
         try:
-            from config import get_config
-            cfg = get_config()
-            defn = cfg.projects.definitions.get(project)
-            if defn:
+            from datastore.docsdb.registry import DocsRegistry
+
+            defn = DocsRegistry(self.db_path).get_project_definition(project)
+            if defn is not None:
                 return {
                     "home_dir": str(_resolve_project_root(defn.home_dir)),
-                    "source_roots": [str(_resolve_project_root(r)) for r in defn.source_roots],
+                    "source_roots": [str(_resolve_project_root(r)) for r in (defn.source_roots or [])],
                 }
         except Exception:
             pass
+
+        try:
+            from core.project_registry import get_project as _get_project
+
+            entry = _get_project(project) or {}
+            canonical_path = str(entry.get("canonical_path") or "").strip()
+            if canonical_path:
+                return {
+                    "home_dir": canonical_path,
+                    "source_roots": [],
+                }
+        except Exception:
+            pass
+
         return {"home_dir": "", "source_roots": []}
 
     def stats(self) -> Dict:
