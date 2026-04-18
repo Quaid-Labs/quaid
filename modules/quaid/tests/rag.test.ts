@@ -2,19 +2,32 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import { unlink } from 'fs/promises'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE
-  || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
+const CREATED_TEST_HOME = !process.env.QUAID_HOME
+const TEST_QUAID_HOME = process.env.QUAID_HOME
+  || fs.mkdtempSync(path.join(os.tmpdir(), 'quaid-rag-test-home-'))
 const TEST_INSTANCE = process.env.QUAID_INSTANCE || 'pytest-runner'
 const RAG_SCRIPT = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/rag.py")
 const PYTHON_MODULE_ROOT = path.resolve(path.dirname(RAG_SCRIPT), "../..")
 const TEST_FIXTURES_DIR = '/tmp/rag-test-fixtures'
 
+if (CREATED_TEST_HOME) {
+  process.on('exit', () => {
+    try {
+      fs.rmSync(TEST_QUAID_HOME, { recursive: true, force: true })
+    } catch {
+      // Best effort: hard exits can leave temp homes for OS cleanup.
+    }
+  })
+}
+
 // Ensure instance-aware adapter config exists
 ;(() => {
-  const instanceCfgPath = path.join(WORKSPACE, "instances", TEST_INSTANCE, "config.json")
+  const instanceCfgPath = path.join(TEST_QUAID_HOME, "instances", TEST_INSTANCE, "config.json")
   try {
     if (!fs.existsSync(instanceCfgPath)) {
       fs.mkdirSync(path.dirname(instanceCfgPath), { recursive: true })
@@ -39,7 +52,7 @@ class TestRAGInterface {
           ...process.env,
           MEMORY_DB_PATH: this.dbPath,
           MOCK_EMBEDDINGS: "1",
-          QUAID_HOME: WORKSPACE,
+          QUAID_HOME: TEST_QUAID_HOME,
           QUAID_INSTANCE: TEST_INSTANCE,
           OPENCLAW_WORKSPACE: WORKSPACE,
           PYTHONPATH: process.env.PYTHONPATH
