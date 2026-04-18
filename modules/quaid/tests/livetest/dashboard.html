@@ -253,8 +253,9 @@
       const low = value.toLowerCase();
       if (!value) return { klass: "status-empty", label: "EMPTY", detail: "" };
       if (low.includes("pass")) return { klass: "status-pass", label: "PASS", detail: value };
+      if (low.includes("pwn")) return { klass: "status-blocked", label: "PWN", detail: value };
       if (low.includes("blocked")) return { klass: "status-blocked", label: "BLOCKED", detail: value };
-      if (low.includes("fail") || low.includes("error") || low.includes("pwn")) {
+      if (low.includes("fail") || low.includes("error")) {
         return { klass: "status-fail", label: "FAIL", detail: value };
       }
       if (low.includes("running") || low.includes("in progress") || low.includes("active")) {
