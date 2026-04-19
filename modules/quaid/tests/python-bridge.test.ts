@@ -25,6 +25,7 @@ function makeProc() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.resetModules();
   vi.clearAllMocks();
   delete process.env.QUAID_VISIBLE_HOME;
@@ -58,5 +59,40 @@ describe("python-bridge visible home resolution", () => {
 
     const env = spawnMock.mock.calls[0]?.[2]?.env;
     expect(env?.QUAID_VISIBLE_HOME).toBe(path.join(os.homedir(), "quaid-visible"));
+  });
+
+  it("escalates timed-out recall subprocesses if SIGTERM does not exit", async () => {
+    vi.useFakeTimers();
+    const proc = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    spawnMock.mockReturnValue(proc);
+
+    const { createPythonBridgeExecutor } = await import("../adaptors/openclaw/python-bridge.js");
+    const execPython = createPythonBridgeExecutor({
+      scriptPath: "/tmp/test-script.py",
+      dbPath: "/tmp/test.db",
+      workspace: "/tmp/.quaid",
+      pluginRoot: "/tmp/plugin-root",
+    });
+
+    const pending = expect(execPython("recall", [
+      "Who is my niece?",
+      JSON.stringify({ stores: ["vector", "graph"], timeout_ms: 1000 }),
+      "--json",
+    ])).rejects.toThrow("Python bridge timeout after 2500ms");
+
+    await vi.advanceTimersByTimeAsync(2500);
+    await pending;
+    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
   });
 });

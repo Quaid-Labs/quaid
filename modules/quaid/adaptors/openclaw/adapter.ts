@@ -3968,15 +3968,28 @@ notify_user(${JSON.stringify(message)})
             // block them. Recall-only injection (typically <22s) is within the budget.
             const recallStartMs = Date.now();
             writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
-            const [allMemories] = await Promise.race([
-              Promise.all([
-                recallMemories(_buildAutoInjectRecallOptions(query, injectLimit, injectDomain)),
-              ]),
-              deadline,
-            ]);
-            // Cancel the deadline timer if recall completed first; prevents a ghost
-            // deadline_hit trace from firing 10s after recall already succeeded.
-            if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+            let allMemories: MemoryResult[];
+            try {
+              [allMemories] = await Promise.race([
+                Promise.all([
+                  recallMemories(_buildAutoInjectRecallOptions(query, injectLimit, injectDomain)),
+                ]),
+                deadline,
+              ]);
+            } catch (recallErr: unknown) {
+              writeHookTrace("hook.recall_error", {
+                query: query.slice(0, 80),
+                elapsed_ms: Date.now() - recallStartMs,
+                error: String((recallErr as Error)?.message || recallErr).slice(0, 240),
+                deadline_ms: BEFORE_PROMPT_BUILD_DEADLINE_MS,
+                recall_timeout_ms: AUTO_INJECT_RECALL_TIMEOUT_MS,
+              });
+              throw recallErr;
+            } finally {
+              // Cancel the deadline timer for both success and error; otherwise
+              // bridge-timeout failures produce a misleading late deadline_hit.
+              if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+            }
             const recallDiagnostics = summarizeRecallDiagnostics((allMemories as any)?.__quaidRecallDiagnostics || null);
             writeHookTrace("hook.recall_done", {
               count: allMemories.length,

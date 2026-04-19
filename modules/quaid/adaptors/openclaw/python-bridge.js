@@ -31,6 +31,7 @@ function _resolveVisibleHome(root) {
 }
 const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 12e4);
 const RECALL_TIMEOUT_GRACE_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_RECALL_TIMEOUT_GRACE_MS", 1500);
+const PYTHON_BRIDGE_KILL_GRACE_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_KILL_GRACE_MS", 2e3);
 function _extractPositiveInt(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
@@ -142,10 +143,14 @@ function createPythonBridgeExecutor(config) {
       let stdout = "";
       let stderr = "";
       let settled = false;
+      let killTimer;
       const timer = setTimeout(() => {
         if (!settled) {
           settled = true;
           proc.kill("SIGTERM");
+          killTimer = setTimeout(() => {
+            proc.kill("SIGKILL");
+          }, PYTHON_BRIDGE_KILL_GRACE_MS);
           reject(new Error(`Python bridge timeout after ${commandTimeoutMs}ms: ${command} ${args.join(" ")}`));
         }
       }, commandTimeoutMs);
@@ -156,6 +161,9 @@ function createPythonBridgeExecutor(config) {
         stderr += data;
       });
       proc.on("close", (code) => {
+        if (killTimer !== void 0) {
+          clearTimeout(killTimer);
+        }
         if (settled) {
           return;
         }
@@ -171,6 +179,9 @@ function createPythonBridgeExecutor(config) {
         }
       });
       proc.on("error", (err) => {
+        if (killTimer !== void 0) {
+          clearTimeout(killTimer);
+        }
         if (settled) {
           return;
         }

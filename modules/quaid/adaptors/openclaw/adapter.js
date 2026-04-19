@@ -3166,13 +3166,26 @@ ${deferredNoticeContext}` : deferredNoticeContext;
             });
             const recallStartMs = Date.now();
             writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
-            const [allMemories2] = await Promise.race([
-              Promise.all([
-                recallMemories(_buildAutoInjectRecallOptions(query, injectLimit, injectDomain))
-              ]),
-              deadline
-            ]);
-            if (deadlineTimer !== void 0) clearTimeout(deadlineTimer);
+            let allMemories2;
+            try {
+              [allMemories2] = await Promise.race([
+                Promise.all([
+                  recallMemories(_buildAutoInjectRecallOptions(query, injectLimit, injectDomain))
+                ]),
+                deadline
+              ]);
+            } catch (recallErr) {
+              writeHookTrace("hook.recall_error", {
+                query: query.slice(0, 80),
+                elapsed_ms: Date.now() - recallStartMs,
+                error: String(recallErr?.message || recallErr).slice(0, 240),
+                deadline_ms: BEFORE_PROMPT_BUILD_DEADLINE_MS,
+                recall_timeout_ms: AUTO_INJECT_RECALL_TIMEOUT_MS
+              });
+              throw recallErr;
+            } finally {
+              if (deadlineTimer !== void 0) clearTimeout(deadlineTimer);
+            }
             const recallDiagnostics2 = summarizeRecallDiagnostics(allMemories2?.__quaidRecallDiagnostics || null);
             writeHookTrace("hook.recall_done", {
               count: allMemories2.length,
