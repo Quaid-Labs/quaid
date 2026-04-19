@@ -246,87 +246,6 @@ def _provider_failure_notice_message(exc: Exception) -> str:
     return f"[Quaid error] [provider] {text}"
 
 
-def _queue_provider_failure_notice(exc: Exception) -> None:
-    """Queue provider failures for next-turn relay across hook adapters.
-
-    CC/CDX surface pending adapter notifications on every UserPromptSubmit,
-    even on turns where recall itself does not fail. Prefer that visible
-    per-adapter channel and fall back to the deferred queue only if adapter
-    notification delivery fails.
-    """
-    message = _provider_failure_notice_message(exc)
-    try:
-        from lib.m15_trace import trace_m15
-
-        trace_m15(
-            "provider_notice.queue.start",
-            message=message,
-            exc_type=type(exc).__name__,
-            exc=str(exc),
-        )
-    except Exception:
-        pass
-    try:
-        from lib.adapter import get_adapter
-
-        adapter = get_adapter()
-        notify = getattr(adapter, "notify", None)
-        if callable(notify):
-            ok = bool(notify(message, force=True))
-            try:
-                from lib.m15_trace import trace_m15
-
-                trace_m15(
-                    "provider_notice.adapter_notify",
-                    ok=ok,
-                    adapter=str(adapter.adapter_id() if hasattr(adapter, "adapter_id") else ""),
-                )
-            except Exception:
-                pass
-            if ok:
-                return
-        else:
-            try:
-                from lib.m15_trace import trace_m15
-
-                trace_m15("provider_notice.adapter_notify_missing")
-            except Exception:
-                pass
-    except Exception as notice_exc:
-        try:
-            from lib.m15_trace import trace_m15
-
-            trace_m15("provider_notice.adapter_notify_error", error=str(notice_exc))
-        except Exception:
-            pass
-        logger.warning("Failed queueing provider access error as adapter notice: %s", notice_exc)
-    try:
-        from lib.runtime_context import queue_deferred_notice
-
-        queued = queue_deferred_notice(
-            message,
-            kind="provider",
-            priority="high",
-            source="provider",
-            dedupe_key=f"hook-provider:{type(exc).__name__}:{str(exc).strip()}",
-        )
-        try:
-            from lib.m15_trace import trace_m15
-
-            trace_m15("provider_notice.deferred_queue", queued=queued)
-        except Exception:
-            pass
-    except Exception as notice_exc:
-        try:
-            from lib.m15_trace import trace_m15
-
-            trace_m15("provider_notice.deferred_queue_error", error=str(notice_exc))
-        except Exception:
-            pass
-        logger.warning("Failed queueing provider failure notice for hook relay: %s", notice_exc)
-        return
-
-
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     if doc_file != "TOOLS.md":
         return content
@@ -1119,10 +1038,9 @@ def hook_inject(args):
                 )
         pending_context = _get_pending_context()
         if provider_failure:
-            _queue_provider_failure_notice(e)
             # Keep provider failures literal and immediate on failing turns.
-            # Deferred notice drain can paraphrase; leave queued copy for
-            # subsequent successful turns.
+            # Do not requeue them as sticky notices; a later clean turn should
+            # not claim a fixed provider configuration is still broken.
             deferred_notice_relay_context = ""
             deferred_notice_hint = ""
         else:

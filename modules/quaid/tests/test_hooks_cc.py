@@ -789,16 +789,13 @@ class TestHookInjectRecallResilience:
                 monkeypatch=monkeypatch,
             )
 
-        assert queued, "provider failHard path should queue a pending provider notice"
-        message, kwargs = queued[-1]
-        assert "[Quaid error] [provider]" in message
-        assert kwargs.get("force") is True
+        assert queued == []
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid error] [provider]" in context
         assert "invalid-model-xyzzy" in context
 
-    def test_recall_fast_provider_failure_relays_on_next_successful_turn_after_fail_hard(
+    def test_recall_fast_provider_failure_does_not_relay_after_next_successful_turn(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -865,10 +862,10 @@ class TestHookInjectRecallResilience:
                 monkeypatch=monkeypatch,
             )
 
-        payload = json.loads(out)
-        context = payload["hookSpecificOutput"]["additionalContext"]
-        assert "[Quaid error] [provider]" in context
-        assert "invalid-model-xyzzy" in context
+        payload = json.loads(out) if out.strip() else {}
+        context = payload.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "[Quaid error] [provider]" not in context
+        assert "invalid-model-xyzzy" not in context
 
     def test_deferred_notice_hint_is_injected_without_draining(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
