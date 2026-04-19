@@ -3327,20 +3327,11 @@ async function step1_preflight() {
       );
       bail("Unsupported OpenClaw version. Update OpenClaw and re-run.");
     }
-    const hasHooks = gatewayHasHooks(gwDir);
-    if (!hasHooks) {
-      s.stop(C.red("Memory hooks missing"), 2);
-      note(
-        `Your gateway is missing the memory hooks Quaid needs.\n` +
-        `Quaid now requires OpenClaw ${MIN_GATEWAY_VERSION}+ lifecycle hook support.\n\n` +
-        `Update your gateway to the latest version:\n` +
-        `  npm install -g openclaw\n\n` +
-        `Or check: ${HOOKS_PR_URL}`,
-        "Gateway update required"
-      );
-      bail("Gateway hooks required. Update OpenClaw and re-run.");
+    const hasHookSymbols = gatewayHasHookSymbols(gwDir);
+    if (!hasHookSymbols) {
+      s.message("Gateway hook symbols are bundled/renamed; using version + health gate...");
     }
-    s.stop(C.green("Gateway hooks present"));
+    s.stop(C.green(hasHookSymbols ? "Gateway hooks present" : "Gateway lifecycle support (version-gated)"));
   }
 
   // --- Plugin source ---
@@ -5283,13 +5274,16 @@ function findGateway() {
   return null;
 }
 
-function gatewayHasHooks(gwDir) {
+function gatewayHasHookSymbols(gwDir) {
   for (const sub of ["dist", "src"]) {
     const dir = path.join(gwDir, sub);
     if (!fs.existsSync(dir)) continue;
     const out = shell(`grep -rl "runBeforeCompaction\\|before_compaction" "${dir}" 2>/dev/null | head -1`);
     if (out) return true;  // before_compaction is the critical hook
   }
+  // OpenClaw 2026.4+ bundles/minifies lifecycle internals and no longer keeps
+  // stable hook symbol strings in dist/. The version gate above is the product
+  // capability gate; this grep is diagnostic only.
   return false;
 }
 

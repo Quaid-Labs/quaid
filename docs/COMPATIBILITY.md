@@ -14,6 +14,11 @@ Versions confirmed fully compatible with Quaid through the complete M1–M15 + X
 
 **Run 96 primary fix:** CamelCase CDX hook event names (`SessionStart` / `UserPromptSubmit` / `Stop`) — commit `3921fa602`.
 
+Installer compatibility for OpenClaw is version-gated plus gateway-health-gated.
+Do not use bundled JavaScript hook-symbol greps as a hard installer gate:
+current OpenClaw releases can bundle or rename lifecycle internals while still
+providing the required hook behavior.
+
 ---
 
 ## Primary Host Integrations

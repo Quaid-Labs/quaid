@@ -265,9 +265,9 @@ _try_brew_install() {
 }
 
 # --- Gateway compatibility check ---
-# Quaid requires before_compaction/before_reset hooks (PR #13287).
-# If hooks are present: silently returns 0.
-# If hooks are missing: tells user to update OpenClaw.
+# Quaid requires lifecycle hook support from OpenClaw. Current OpenClaw bundles
+# may minify/rename hook implementation symbols, so the minimum version gate is
+# the capability check and grep is diagnostic only.
 GATEWAY_DIR=""  # Set by check_gateway_hooks if found
 
 _find_gateway() {
@@ -323,10 +323,11 @@ _find_gateway() {
     return 1
 }
 
-_gateway_has_hooks() {
+_gateway_has_hook_symbols() {
     local gw_path="$1"
-    # Check both dist/ (bundled) and src/ (source) for the hook features
-    # before_compaction is the critical hook — bootstrap-extra-files is optional
+    # Check both dist/ (bundled) and src/ (source) for older hook symbols.
+    # OpenClaw 2026.4+ can bundle/minify these away; absence is not fatal once
+    # the version gate has passed.
     { grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/dist/" 2>/dev/null || \
       grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/src/" 2>/dev/null; }
 }
@@ -388,33 +389,13 @@ PY
         return 1
     fi
 
-    # If hooks are already present, we're done
-    if _gateway_has_hooks "$gw_path"; then
-        info "Gateway OK — hooks present (v${gw_version:-unknown})"
+    if _gateway_has_hook_symbols "$gw_path"; then
+        info "Gateway OK — hook symbols present (v${gw_version:-unknown})"
         return 0
     fi
 
-    # --- Hooks missing — tell user to update ---
-    echo ""
-    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "  ${BOLD}${YELLOW} Gateway Update Required${RESET}"
-    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo "  Your OpenClaw gateway is missing memory hooks that Quaid needs."
-    echo "  These hooks let Quaid capture memories when conversations are"
-    echo "  compacted or reset — without them, no memories get extracted."
-    echo ""
-    if [[ -n "$gw_version" ]]; then
-        echo -e "  Your version:     ${YELLOW}${gw_version}${RESET}"
-    fi
-    echo -e "  Required version: ${GREEN}${MIN_GATEWAY_VERSION}+${RESET}"
-    echo ""
-    echo -e "  ${BOLD}Update your gateway:${RESET}"
-    echo "    npm install -g openclaw"
-    echo ""
-    echo "  Then re-run this installer."
-    echo ""
-    return 1
+    info "Gateway OK — lifecycle support assumed from version (v${gw_version:-unknown}); bundled hook symbols not found"
+    return 0
 }
 
 enable_required_openclaw_hooks() {

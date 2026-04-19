@@ -154,6 +154,16 @@ describe("install daemon policy", () => {
     expect(setupText).not.toContain("OpenClaw status/probe unavailable in agent mode; continuing with install.");
   });
 
+  it("OpenClaw hook symbol grep is diagnostic after the version gate", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("Gateway lifecycle support (version-gated)");
+    expect(setupText).toContain("function gatewayHasHookSymbols(gwDir)");
+    expect(setupText).not.toContain('bail("Gateway hooks required. Update OpenClaw and re-run.");');
+    expect(setupText).not.toContain("Your gateway is missing the memory hooks Quaid needs.");
+  });
+
   it("OpenClaw add-instance still writes gateway runtime env", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
