@@ -104,9 +104,7 @@ RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 JANITOR_TASK_CHOICES = [
     "embeddings",
     "edges",
-    "workspace",
-    "docs_staleness",
-    "docs_cleanup",
+    "project_docs_monitor",
     "snippets",
     "journal",
     "review",
@@ -116,7 +114,6 @@ JANITOR_TASK_CHOICES = [
     "decay",
     "decay_review",
     "graduate",
-    "rag",
     "temporal",
     "tests",
     "cleanup",
@@ -936,7 +933,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # ⚠️ LLM PROVIDER CHECK — janitor needs a working LLM provider for most tasks.
     # The adapter layer handles provider selection and authentication.
     # Skip in dry-run mode — dry-run never calls the LLM.
-    if not dry_run and task not in ("embeddings", "cleanup", "rag"):
+    if not dry_run and task not in ("embeddings", "cleanup", "project_docs_monitor"):
         try:
             _llm = get_llm_provider()
             _profiles = _llm.get_profiles()
@@ -983,9 +980,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # Journal system
         "snippets": "journal", "journal": "journal",
         # Projects system
-        "docs_staleness": "projects", "docs_cleanup": "projects", "rag": "projects",
-        # Workspace system
-        "workspace": "workspace",
+        "project_docs_monitor": "projects",
         # Infrastructure tasks (always run): tests, cleanup
     }
 
@@ -994,8 +989,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # the invariant stated at line 843: "dry-run never calls the LLM".
     _LLM_TASKS = frozenset({
         "review", "dedup_review", "decay_review",
-        "workspace", "snippets", "journal",
-        "docs_staleness", "docs_cleanup",
+        "snippets", "journal",
     })
 
     def _system_enabled_or_skip(task_name: str, task_label: str) -> bool:
@@ -1041,12 +1035,9 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         "decay_review_deleted": 0,
         "decay_review_extended": 0,
         "decay_review_pinned": 0,
-        "workspace_phase": "skipped",
-        "workspace_moved_to_docs": 0,
-        "workspace_moved_to_memory": 0,
-        "rag_files_indexed": 0,
-        "rag_chunks_created": 0,
-        "rag_files_skipped": 0,
+        "project_docs_update_requests": 0,
+        "project_docs_update_request_errors": 0,
+        "project_docs_supervisor_pid": None,
         "temporal_found": 0,
         "temporal_fixed": 0,
         "graduated_to_active": 0,
@@ -1065,6 +1056,36 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     )
 
     try:
+        # --- Task 0a: Project Docs Monitor Kick ---
+        # Janitor does not own heavy docs writes/indexing. DocsDB publishes this
+        # lifecycle callback, which only queues async project-docs monitor work.
+        if task in ("project_docs_monitor", "all") and _system_enabled_or_skip("project_docs_monitor", "Task 0a: Project Docs Monitor") and not _skip_if_over_budget("Task 0a: Project Docs Monitor", 5):
+            print("[Task 0a: Project Docs Monitor Sanity Request]")
+            metrics.start_task("project_docs_monitor")
+            lifecycle_result = _lifecycle_registry().run(
+                "project_docs_monitor",
+                RoutineContext(
+                    cfg=_cfg,
+                    dry_run=dry_run,
+                    workspace=_workspace(),
+                    options={"reason": "janitor-sanity", "requested_by": "janitor"},
+                ),
+            )
+            for line in lifecycle_result.logs:
+                print(f"  {line}")
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
+            applied_changes["project_docs_update_requests"] = int(
+                lifecycle_result.metrics.get("project_docs_update_requests", 0) or 0
+            )
+            applied_changes["project_docs_update_request_errors"] = int(
+                lifecycle_result.metrics.get("project_docs_update_request_errors", 0) or 0
+            )
+            applied_changes["project_docs_supervisor_pid"] = lifecycle_result.data.get("supervisor_pid")
+            metrics.end_task("project_docs_monitor")
+            print(f"Task completed in {metrics.task_duration('project_docs_monitor'):.2f}s\n")
+
         # --- Task 0b: Embedding Backfill ---
         # (Moved before memory pipeline — embeddings needed for recall pass)
         if task in ("embeddings", "all") and _system_enabled_or_skip("embeddings", "Task 0b: Embedding Backfill") and not _skip_if_over_budget("Task 0b: Embeddings", 15):
@@ -1352,105 +1373,9 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.end_task("decay_review")
                 print(f"Task completed in {metrics.task_duration('decay_review'):.2f}s\n")
 
-        def _allow_doc_apply(doc_path: str, action: str) -> bool:
-            doc_p = Path(doc_path)
-            is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
-            is_quaid_project_md = (
-                len(doc_p.parts) >= 2
-                and doc_p.parts[0] == "projects"
-                and doc_p.parts[1] == "quaid"
-                and doc_p.suffix.lower() == ".md"
-            )
-            if is_root_md:
-                return _can_apply_scope("core_markdown_writes", f"docs {action}: {doc_path}")
-            if is_quaid_project_md:
-                return True
-            return _can_apply_scope("project_docs_writes", f"project docs {action}: {doc_path}")
-
         parallel_lifecycle_results = {}
-        # Parallel prepass removed: docs_staleness and docs_cleanup spawn subprocesses
-        # that block on poll() in the CC OAuth context, causing the dry-run to hang
-        # before printing any output. All routines run sequentially below via the
-        # `parallel_lifecycle_results.get(...) or _lifecycle_registry().run(...)` fallback.
-
-        # --- Task 1: Workspace Audit (Deep Reasoning) ---
-        # (Runs after memory pipeline — memory tasks are higher priority under time budget)
-        if task in ("workspace", "all") and _system_enabled_or_skip("workspace", "Task 1: Workspace Audit") and not _skip_if_over_budget("Task 1: Workspace Audit", 30):
-            print("[Task 1: Workspace Audit - Single-Pass Deep Reasoning Review]")
-            metrics.start_task("workspace_audit")
-            workspace_apply_allowed = _can_apply_scope(
-                "workspace_file_moves_deletes",
-                "workspace file moves/deletes"
-            )
-            workspace_dry_run = dry_run or (not workspace_apply_allowed)
-
-            lifecycle_result = parallel_lifecycle_results.get("workspace") or _lifecycle_registry().run(
-                "workspace",
-                RoutineContext(cfg=_cfg, dry_run=workspace_dry_run, workspace=_workspace()),
-            )
-            for line in lifecycle_result.logs:
-                print(f"  {line}")
-            for err in lifecycle_result.errors:
-                print(f"  {err}")
-                metrics.add_error(err)
-
-            applied_changes["workspace_phase"] = lifecycle_result.data.get("workspace_phase", "unknown")
-            if lifecycle_result.data.get("bloated_files"):
-                applied_changes["bloated_files"] = lifecycle_result.data["bloated_files"]
-
-            applied_changes["workspace_moved_to_docs"] = lifecycle_result.metrics.get("workspace_moved_to_docs", 0)
-            applied_changes["workspace_moved_to_memory"] = lifecycle_result.metrics.get("workspace_moved_to_memory", 0)
-            applied_changes["workspace_trimmed"] = lifecycle_result.metrics.get("workspace_trimmed", 0)
-            applied_changes["workspace_bloat_warnings"] = lifecycle_result.metrics.get("workspace_bloat_warnings", 0)
-            applied_changes["workspace_project_detected"] = lifecycle_result.metrics.get("workspace_project_detected", 0)
-
-            metrics.end_task("workspace_audit")
-            print(f"Task completed in {metrics.task_duration('workspace_audit'):.2f}s\n")
-
-        # --- Task 1b: Documentation Staleness Check ---
-        # (Runs after memory pipeline — expensive Deep Reasoning doc updates are lower priority)
-        if task in ("docs_staleness", "all") and _system_enabled_or_skip("docs_staleness", "Task 1b: Doc Staleness") and not _skip_if_over_budget("Task 1b: Doc Staleness", 60):
-            print("[Task 1b: Documentation Staleness Check]")
-            metrics.start_task("docs_staleness")
-            lifecycle_result = parallel_lifecycle_results.get("docs_staleness") or _lifecycle_registry().run(
-                "docs_staleness",
-                RoutineContext(
-                    cfg=_cfg,
-                    dry_run=dry_run,
-                    workspace=_workspace(),
-                    allow_doc_apply=_allow_doc_apply,
-                ),
-            )
-            for line in lifecycle_result.logs:
-                print(f"  {line}")
-            for err in lifecycle_result.errors:
-                print(f"  {err}")
-                metrics.add_error(err)
-            applied_changes["docs_updated"] = lifecycle_result.metrics.get("docs_updated", 0)
-            metrics.end_task("docs_staleness")
-            print(f"Task completed in {metrics.task_duration('docs_staleness'):.2f}s\n")
-
-        # --- Task 1c: Documentation Cleanup (churn-based) ---
-        if task in ("docs_cleanup", "all") and _system_enabled_or_skip("docs_cleanup", "Task 1c: Doc Cleanup") and not _skip_if_over_budget("Task 1c: Doc Cleanup", 60):
-            print("[Task 1c: Documentation Cleanup]")
-            metrics.start_task("docs_cleanup")
-            lifecycle_result = parallel_lifecycle_results.get("docs_cleanup") or _lifecycle_registry().run(
-                "docs_cleanup",
-                RoutineContext(
-                    cfg=_cfg,
-                    dry_run=dry_run,
-                    workspace=_workspace(),
-                    allow_doc_apply=_allow_doc_apply,
-                ),
-            )
-            for line in lifecycle_result.logs:
-                print(f"  {line}")
-            for err in lifecycle_result.errors:
-                print(f"  {err}")
-                metrics.add_error(err)
-            applied_changes["docs_cleaned"] = lifecycle_result.metrics.get("docs_cleaned", 0)
-            metrics.end_task("docs_cleanup")
-            print(f"Task completed in {metrics.task_duration('docs_cleanup'):.2f}s\n")
+        # Heavy project-docs work is monitor-owned. Janitor only queues the
+        # DocsDB-published monitor callback near the start of the run.
 
         # --- Task 1d-snippets: Soul Snippets Review (Deep Reasoning, nightly) ---
         if task in ("snippets", "all") and _system_enabled_or_skip("snippets", "Task 1d-snippets: Snippets") and not _skip_if_over_budget("Task 1d-snippets: Snippets", 30):
@@ -1513,35 +1438,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     applied_changes["log_entries_archived"] = proj_archived + journal_archived
             except Exception as e:
                 print(f"  Log rotation error: {e}", file=sys.stderr)
-
-        # --- Task 7: RAG Reindex + Project Discovery (Ollama embeddings) ---
-        if task in ("rag", "all") and _system_enabled_or_skip("rag", "Task 7: RAG Reindex") and not _skip_if_over_budget("Task 7: RAG Reindex", 15):
-            print("[Task 7: RAG Reindex + Project Discovery]")
-            metrics.start_task("rag_reindex")
-            lifecycle_result = _lifecycle_registry().run(
-                "rag",
-                RoutineContext(cfg=_cfg, dry_run=dry_run, workspace=_workspace()),
-            )
-
-            for line in lifecycle_result.logs:
-                print(f"  {line}")
-            for err in lifecycle_result.errors:
-                print(f"  {err}")
-                metrics.add_error(err)
-
-            applied_changes["project_files_discovered"] = lifecycle_result.metrics.get("project_files_discovered", 0)
-            applied_changes["rag_files_indexed"] = lifecycle_result.metrics.get("rag_files_indexed", 0)
-            applied_changes["rag_chunks_created"] = lifecycle_result.metrics.get("rag_chunks_created", 0)
-            applied_changes["rag_files_skipped"] = lifecycle_result.metrics.get("rag_files_skipped", 0)
-
-            print(f"\n  RAG Index Updated:")
-            print(f"    Total files: {lifecycle_result.metrics.get('rag_total_files', 0)}")
-            print(f"    Indexed: {lifecycle_result.metrics.get('rag_files_indexed', 0)}")
-            print(f"    Skipped (unchanged): {lifecycle_result.metrics.get('rag_files_skipped', 0)}")
-            print(f"    Chunks created: {lifecycle_result.metrics.get('rag_chunks_created', 0)}")
-
-            metrics.end_task("rag_reindex")
-            print(f"Task completed in {metrics.task_duration('rag_reindex'):.2f}s\n")
 
         # --- Task 8: Unit Tests (subprocess) ---
         # Only run tests in dev mode: set QUAID_DEV=1 or janitor.run_tests=true in config

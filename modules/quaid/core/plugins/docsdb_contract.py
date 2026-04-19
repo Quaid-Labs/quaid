@@ -2,13 +2,126 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
+from typing import Any, Dict
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
 from datastore.docsdb.system_context import (
     build_system_context_metadata as build_docsdb_system_context_metadata,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+    except Exception:
+        return False
+    return bool(is_fail_hard_enabled())
+
+
+def _supervisor_disabled() -> bool:
+    raw = str(os.environ.get("QUAID_SUPERVISOR_DISABLE", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> Dict[str, Any]:
+    """Queue async project-docs monitor refresh requests for registered projects.
+
+    DocsDB owns this maintenance callout. The core project-docs module owns the
+    supervisor/request primitives, so this bridge only asks for monitor work and
+    never performs heavy docs writes or RAG indexing inline in janitor.
+    """
+    if _supervisor_disabled():
+        msg = "project-docs supervisor is disabled; cannot queue monitor maintenance"
+        if _fail_hard_enabled():
+            raise RuntimeError(msg)
+        logger.warning(msg)
+        return {
+            "requested": 0,
+            "projects": [],
+            "errors": [msg],
+            "supervisor_pid": None,
+            "skipped": True,
+        }
+
+    from core import project_docs
+    from core.project_registry import list_projects
+
+    projects = list_projects()
+    names = sorted(str(name) for name in projects.keys() if str(name or "").strip())
+    result: Dict[str, Any] = {
+        "requested": 0,
+        "projects": [],
+        "errors": [],
+        "supervisor_pid": None,
+        "skipped": False,
+    }
+    if not names:
+        return result
+
+    for name in names:
+        try:
+            request = project_docs.request_update(name, reason=reason, requested_by=requested_by)
+            result["requested"] = int(result["requested"]) + 1
+            result["projects"].append({"name": name, "request_id": request.get("request_id")})
+        except Exception as exc:
+            msg = f"failed to queue project-docs monitor request for {name}: {exc}"
+            logger.warning(msg)
+            result["errors"].append(msg)
+            if _fail_hard_enabled():
+                raise RuntimeError(msg) from exc
+
+    try:
+        result["supervisor_pid"] = project_docs.ensure_supervisor_alive()
+    except Exception as exc:
+        msg = f"failed to ensure project-docs supervisor for monitor maintenance: {exc}"
+        logger.warning(msg)
+        result["errors"].append(msg)
+        if _fail_hard_enabled():
+            raise RuntimeError(msg) from exc
+
+    return result
+
+
+def run_project_docs_monitor_maintenance(ctx: Any, result_factory: Any) -> Any:
+    """DocsDB maintenance routine that asynchronously kicks project docs monitors."""
+    result = result_factory()
+    if bool(getattr(ctx, "dry_run", False)):
+        result.logs.append("Project-docs monitor request skipped (dry-run)")
+        return result
+
+    options = dict(getattr(ctx, "options", {}) or {})
+    reason = str(options.get("reason") or "janitor-sanity").strip() or "janitor-sanity"
+    requested_by = str(options.get("requested_by") or "janitor").strip() or "janitor"
+    try:
+        queued = _queue_project_docs_monitor_requests(reason=reason, requested_by=requested_by)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError("Project-docs monitor maintenance failed") from exc
+        result.errors.append(f"Project-docs monitor maintenance failed: {exc}")
+        return result
+
+    errors = list(queued.get("errors") or [])
+    result.metrics["project_docs_update_requests"] = int(queued.get("requested") or 0)
+    result.metrics["project_docs_update_request_errors"] = len(errors)
+    result.data["supervisor_pid"] = queued.get("supervisor_pid")
+    result.data["project_docs_monitor"] = queued
+    if errors:
+        result.errors.extend(errors)
+    result.logs.append(
+        "Queued project-docs monitor refresh requests: "
+        f"{result.metrics['project_docs_update_requests']}"
+    )
+    if queued.get("supervisor_pid"):
+        result.logs.append(f"Project-docs supervisor PID: {queued.get('supervisor_pid')}")
+    return result
 
 
 def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
@@ -70,8 +183,30 @@ class DocsDbPluginContract(PluginContractBase):
         return {"panel": "docsdb", "enabled": False}
 
     def on_maintenance(self, ctx: PluginHookContext) -> dict:
-        _ = ctx
-        return {"handled": False}
+        payload = dict(ctx.payload or {})
+        subtask = str(payload.get("subtask") or payload.get("stage") or "").strip().lower()
+        if subtask not in {"project_docs_monitor", "docs_monitor", "project-docs-monitor"}:
+            return {"handled": False}
+
+        from core.lifecycle.janitor_lifecycle import RoutineContext, RoutineResult
+
+        routine_ctx = RoutineContext(
+            cfg=ctx.config,
+            dry_run=bool(payload.get("dry_run", False)),
+            workspace=Path(ctx.workspace_root),
+            options={
+                "reason": payload.get("reason") or "janitor-sanity",
+                "requested_by": payload.get("requested_by") or "janitor",
+            },
+        )
+        result = run_project_docs_monitor_maintenance(routine_ctx, RoutineResult)
+        return {
+            "handled": True,
+            "metrics": dict(result.metrics or {}),
+            "errors": list(result.errors or []),
+            "logs": list(result.logs or []),
+            "data": dict(result.data or {}),
+        }
 
     def on_tool_runtime(self, ctx: PluginHookContext) -> dict:
         _ = ctx
@@ -115,3 +250,11 @@ def on_tool_runtime(ctx: PluginHookContext) -> dict:
 
 def on_health(ctx: PluginHookContext) -> dict:
     return _CONTRACT.on_health(ctx)
+
+
+def register_lifecycle_routines(registry, result_factory) -> None:
+    """Register DocsDB-owned janitor lifecycle callbacks."""
+    registry.register(
+        "project_docs_monitor",
+        lambda ctx: run_project_docs_monitor_maintenance(ctx, result_factory),
+    )

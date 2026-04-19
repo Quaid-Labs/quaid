@@ -10,6 +10,7 @@ import pytest
 from core.lifecycle.janitor_lifecycle import (
     LifecycleRegistry,
     RoutineContext,
+    RoutineResult,
     _register_module_routines,
     build_default_registry,
 )
@@ -88,9 +89,17 @@ def test_rag_lifecycle_runs_and_returns_metrics(monkeypatch, tmp_path):
     (tmp_path / "docs" / "a.md").write_text("# a\n")
     (tmp_path / "projects" / "demo" / "b.md").write_text("# b\n")
 
-    registry = build_default_registry()
     ctx = RoutineContext(cfg=_make_cfg(projects_enabled=True), dry_run=False, workspace=tmp_path)
-    result = registry.run("rag", ctx)
+    handlers = {}
+
+    class _Registry:
+        def register(self, name, handler):
+            handlers[name] = handler
+
+    from datastore.docsdb.rag import register_lifecycle_routines
+
+    register_lifecycle_routines(_Registry(), RoutineResult)
+    result = handlers["rag"](ctx)
 
     assert result.errors == []
     assert result.metrics["project_files_discovered"] == 2
@@ -106,48 +115,12 @@ def test_rag_lifecycle_handles_missing_routine():
     assert "No lifecycle routine registered" in result.errors[0]
 
 
-def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
-    # Force OC adapter maintenance module (workspace audit is OC-specific)
-    monkeypatch.setattr(
-        "core.lifecycle.janitor_lifecycle._resolve_adapter_maintenance_module",
-        lambda default_module="": "adaptors.openclaw.maintenance",
-    )
-    monkeypatch.setattr("core.lifecycle.workspace_audit.run_workspace_check", lambda dry_run: {
-        "phase": "apply",
-        "moved_to_docs": 3,
-        "moved_to_memory": 1,
-        "trimmed": 2,
-        "bloat_warnings": 1,
-        "project_detected": 1,
-        "bloat_stats": {
-            "big.md": {"over_limit": True, "lines": 250, "maxLines": 200},
-            "ok.md": {"over_limit": False, "lines": 10, "maxLines": 200},
-        },
-    })
-
+def test_workspace_lifecycle_disabled_until_user_invoked_redesign(tmp_path):
     registry = build_default_registry()
     result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
 
-    assert result.errors == []
-    assert result.data["workspace_phase"] == "apply"
-    assert result.data["bloated_files"] == ["big.md"]
-    assert result.metrics["workspace_moved_to_docs"] == 3
-    assert result.metrics["workspace_project_detected"] == 1
-    assert any("Would apply review decisions" in line for line in result.logs)
-
-
-def test_workspace_lifecycle_skips_cleanly_for_codex_adapter(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "core.lifecycle.janitor_lifecycle._resolve_adapter_maintenance_module",
-        lambda default_module="": "adaptors.codex.maintenance",
-    )
-
-    registry = build_default_registry()
-    result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path))
-
-    assert result.errors == []
-    assert result.data["workspace_phase"] == "skipped"
-    assert "Workspace audit not applicable for codex adapter" in result.logs
+    assert result.errors
+    assert "No lifecycle routine registered: workspace" in result.errors[0]
 
 
 def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
@@ -213,25 +186,70 @@ def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
         allow_calls.append((doc_path, action))
         return doc_path.endswith("README.md")
 
-    registry = build_default_registry()
+    handlers = {}
 
-    staleness_result = registry.run(
-        "docs_staleness",
-        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, allow_doc_apply=_allow),
+    class _Registry:
+        def register(self, name, handler):
+            handlers[name] = handler
+
+    from datastore.docsdb.updater import register_lifecycle_routines
+
+    register_lifecycle_routines(_Registry(), RoutineResult)
+
+    staleness_result = handlers["docs_staleness"](
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, allow_doc_apply=_allow)
     )
     assert staleness_result.errors == []
     assert staleness_result.metrics["docs_updated"] == 1
     assert [c[0] for c in calls["updated"]] == ["README.md"]
 
-    cleanup_result = registry.run(
-        "docs_cleanup",
-        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, allow_doc_apply=_allow),
+    cleanup_result = handlers["docs_cleanup"](
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, allow_doc_apply=_allow)
     )
     assert cleanup_result.errors == []
     assert cleanup_result.metrics["docs_cleaned"] == 1
     assert [c[0] for c in calls["cleaned"]] == ["README.md"]
     assert ("README.md", "staleness update") in allow_calls
     assert ("projects/x/NOTES.md", "cleanup") in allow_calls
+
+
+def test_docsdb_monitor_lifecycle_queues_async_project_docs(monkeypatch, tmp_path):
+    from core.plugins import docsdb_contract
+
+    calls = []
+
+    def _fake_queue(*, reason, requested_by):
+        calls.append((reason, requested_by))
+        return {
+            "requested": 2,
+            "projects": [
+                {"name": "alpha", "request_id": "r1"},
+                {"name": "beta", "request_id": "r2"},
+            ],
+            "errors": [],
+            "supervisor_pid": 4321,
+            "skipped": False,
+        }
+
+    monkeypatch.setattr(docsdb_contract, "_queue_project_docs_monitor_requests", _fake_queue)
+
+    registry = build_default_registry()
+    result = registry.run(
+        "project_docs_monitor",
+        RoutineContext(
+            cfg=_make_cfg(projects_enabled=True),
+            dry_run=False,
+            workspace=tmp_path,
+            options={"reason": "nightly", "requested_by": "pytest"},
+        ),
+    )
+
+    assert result.errors == []
+    assert calls == [("nightly", "pytest")]
+    assert result.metrics["project_docs_update_requests"] == 2
+    assert result.metrics["project_docs_update_request_errors"] == 0
+    assert result.data["supervisor_pid"] == 4321
+    assert any("Queued project-docs monitor refresh requests: 2" in line for line in result.logs)
 
 
 def test_datastore_cleanup_lifecycle_runs_with_graph_override(tmp_path):

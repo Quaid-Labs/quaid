@@ -1,7 +1,7 @@
 """Lifecycle maintenance registry for janitor datastore routines.
 
 This module provides a narrow orchestration contract between janitor and
-module-owned maintenance routines. Datastore/workspace modules own maintenance
+module-owned maintenance routines. Datastore/plugin modules own maintenance
 logic and register their routines here.
 """
 
@@ -472,13 +472,9 @@ class LifecycleRegistry:
 
 _DEFAULT_WRITE_RESOURCES: Dict[str, List[str]] = {
     # Any routine that can write markdown/docs gets the global files lock.
-    "workspace": ["files:global"],
-    "docs_staleness": ["files:global"],
-    "docs_cleanup": ["files:global"],
+    "project_docs_monitor": ["files:global"],
     "snippets": ["files:global"],
     "journal": ["files:global"],
-    # RAG updates docs index and sqlite artifacts.
-    "rag": ["files:global", "db:memory"],
     # Memory maintenance is db-write heavy.
     "memory_graph_maintenance": ["db:memory"],
     "datastore_cleanup": ["db:memory"],
@@ -618,14 +614,16 @@ def _resolve_adapter_maintenance_module(default_module: str = "") -> str:
 def build_default_registry() -> LifecycleRegistry:
     registry = LifecycleRegistry()
 
-    adapter_module = _resolve_adapter_maintenance_module()
     module_specs: List[tuple[str, List[str]]] = []
-    if adapter_module:
-        module_specs.append((adapter_module, ["workspace"]))
+    # Workspace markdown audit is disabled for launch. It edited core
+    # agentic-system markdown inline from janitor, which is too risky and
+    # crosses ownership boundaries. Reintroduce it later as an explicit
+    # user-invoked script with a redesigned approval model.
     module_specs.extend([
-        ("datastore.docsdb.updater", ["docs_staleness", "docs_cleanup"]),
+        # DocsDB owns this callback. It only requests async project-docs monitor
+        # work; heavy docs writes/indexing stay out of janitor.
+        ("core.plugins.docsdb_contract", ["project_docs_monitor"]),
         ("datastore.notedb.soul_snippets", ["snippets", "journal"]),
-        ("datastore.docsdb.rag", ["rag"]),
         ("datastore.memorydb.maintenance", ["memory_graph_maintenance"]),
         ("datastore.memorydb.memory_graph", ["datastore_cleanup"]),
     ])
