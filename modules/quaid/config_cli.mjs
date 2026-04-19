@@ -358,7 +358,6 @@ function compactSummary(cfgPath, cfg) {
   const janitorApplyMode = String(getPath(cfg, "janitor.applyMode", "auto"));
   const corePolicy = String(getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "auto"));
   const projectPolicy = String(getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "auto"));
-  const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "auto"));
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
   const routerFailOpen = !!getPath(cfg, "retrieval.router_fail_open", getPath(cfg, "retrieval.routerFailOpen", true));
   const failHard = retrievalFailHard(cfg);
@@ -628,7 +627,6 @@ async function runEdit() {
           { value: "janitor_apply", label: "Apply mode", hint: "master policy: auto/ask/dry-run-only" },
           { value: "janitor_policy_core", label: "Core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
           { value: "janitor_policy_project", label: "Project docs policy", hint: "project docs outside projects/quaid" },
-          { value: "janitor_policy_workspace", label: "Workspace move/delete policy", hint: "workspace audit file moves/deletes" },
           { value: "janitor_policy_destructive", label: "Destructive memory policy", hint: "merges/supersedes/deletes in memory DB" },
           { value: "back", label: "Back" },
         ],
@@ -852,13 +850,6 @@ async function runEdit() {
         options: janitorScopePolicyOptions(),
       }));
       setPath(cfg, "janitor.approvalPolicies.projectDocsWrites", next);
-    } else if (menu === "janitor_policy_workspace") {
-      const next = handleCancel(await select({
-        message: "janitor.approvalPolicies.workspaceFileMovesDeletes",
-        initialValue: getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "auto"),
-        options: janitorScopePolicyOptions(),
-      }));
-      setPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", next);
     } else if (menu === "janitor_policy_destructive") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.destructiveMemoryOps",
@@ -933,7 +924,7 @@ function showConfig() {
   console.log(`janitor apply:    ${getPath(cfg, "janitor.applyMode", "auto")}`);
   console.log(`fail hard:        ${retrievalFailHard(cfg) ? "on" : "off"} (retrieval.fail_hard)`);
   console.log(`core parallel:    ${coreParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${coreLlmWorkers(cfg)} embeddingWorkers=${coreEmbeddingWorkers(cfg)} prepassWorkers=${coreLifecyclePrepassWorkers(cfg)})`);
-  console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
+  console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${captureTimeoutMinutes(cfg)}m`);
   console.log(`timeout compact:  ${getPath(cfg, "capture.autoCompactionOnTimeout", true) ? "on" : "off"}`);
   console.log("\nsystems:");

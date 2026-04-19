@@ -3366,8 +3366,8 @@ async function step1_preflight() {
   // --- Backup (only if existing files) ---
   // Uses snapshots from before openclaw commands (which create data/memory.db)
   if (!_existingInstallDetected && (_existingFiles.length > 0 || _hasConfig || _hasDb)) {
-    log.warn("Quaid's nightly janitor modifies your workspace markdown files");
-    log.warn("(SOUL.md, USER.md, etc.) to keep them current. Back up first.");
+    log.warn("Existing Quaid files were found.");
+    log.warn("Create a backup before updating config or database files.");
 
     const doBackup = handleCancel(await confirm({ message: "Create a backup now?" }));
     if (doBackup) {
@@ -4051,7 +4051,6 @@ async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAsk
   const approvalPolicies = {
     coreMarkdownWrites: "auto",
     projectDocsWrites: "auto",
-    workspaceFileMovesDeletes: "auto",
     destructiveMemoryOps: "auto",
   };
 
@@ -5773,7 +5772,6 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   const policies = janitorPolicies || {
     coreMarkdownWrites: "auto",
     projectDocsWrites: "auto",
-    workspaceFileMovesDeletes: "auto",
     destructiveMemoryOps: "auto",
   };
   const config = {

@@ -1221,9 +1221,8 @@ conn.close()
 
     if $has_existing; then
         echo ""
-        echo -e "  ${YELLOW}Note:${RESET} Quaid's nightly janitor will modify your workspace markdown"
-        echo "  files (SOUL.md, USER.md, MEMORY.md, etc.) to keep them slim and"
-        echo "  up-to-date. It is highly recommended to back up your workspace first."
+        echo -e "  ${YELLOW}Note:${RESET} Existing Quaid files were found."
+        echo "  It is recommended to back up config/database files before updating."
         echo ""
 
         if confirm "Create a backup now?"; then
@@ -2185,7 +2184,6 @@ _write_config() {
     "approvalPolicies": {
       "coreMarkdownWrites": "ask",
       "projectDocsWrites": "ask",
-      "workspaceFileMovesDeletes": "ask",
       "destructiveMemoryOps": "auto"
     },
     "taskTimeoutMinutes": 60,

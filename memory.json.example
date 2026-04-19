@@ -100,7 +100,6 @@
     "approvalPolicies": {
       "coreMarkdownWrites": "ask",
       "projectDocsWrites": "ask",
-      "workspaceFileMovesDeletes": "ask",
       "destructiveMemoryOps": "auto"
     },
     "taskTimeoutMinutes": 60,
