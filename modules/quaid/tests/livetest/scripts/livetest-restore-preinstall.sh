@@ -139,6 +139,12 @@ rsync -a --checksum \
     --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
     --exclude='.git/' --exclude='logs/' --exclude='.env*' --exclude='.tmp/' \
     --exclude='*MagicMock*' --exclude='<MagicMock*' --exclude='~/' \
+    --exclude='.ci-local-logs/' --exclude='.pytest-home/' --exclude='.pytest_cache/' \
+    --exclude='.ruff_cache/' --exclude='pytest-home/' \
+    --exclude='release-promote-compatibility-work-*/' \
+    --exclude='modules/quaid/tmp-lifecycle-*/' \
+    --exclude='/data/*.db' --exclude='/data/*.sqlite' --exclude='/data/*.sqlite3' \
+    --exclude='/instances/*/data/*.db' --exclude='/instances/*/data/*.sqlite' --exclude='/instances/*/data/*.sqlite3' \
     "$DEV_ROOT/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
 
 echo ""

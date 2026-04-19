@@ -452,6 +452,12 @@ else
             --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
             --exclude='.git/' --exclude='logs/' --exclude='.env*' --exclude='.tmp/' \
             --exclude='*MagicMock*' --exclude='<MagicMock*' --exclude='~/' \
+            --exclude='.ci-local-logs/' --exclude='.pytest-home/' --exclude='.pytest_cache/' \
+            --exclude='.ruff_cache/' --exclude='pytest-home/' \
+            --exclude='release-promote-compatibility-work-*/' \
+            --exclude='modules/quaid/tmp-lifecycle-*/' \
+            --exclude='/data/*.db' --exclude='/data/*.sqlite' --exclude='/data/*.sqlite3' \
+            --exclude='/instances/*/data/*.db' --exclude='/instances/*/data/*.sqlite' --exclude='/instances/*/data/*.sqlite3' \
             "$LOCAL_DEV/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
         # Do not pre-seed ~/.quaid/plugins/quaid before M0 install.
         # A plugin/runtime copy in place before the installer runs can cause the
@@ -496,6 +502,64 @@ if p.exists():
         p.write_text(json.dumps(d, indent=2))
         print('  removed stale ANTHROPIC_API_KEY from settings.json')
 PYEOF
+    fi
+fi
+
+# --- Step 7b: Seed shared Quaid auth credentials for installer ---
+# M0 expects ~/.quaid/shared/auth/credentials.json to exist on the run VM.
+# Source token from first line of ~/quaidcode/anthtoken-yuni.md.
+echo ""
+echo "[7b/8] Seeding Quaid shared auth credentials on remote..."
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "  [dry-run] would read ~/quaidcode/anthtoken-yuni.md first line and write $REMOTE_HOST:~/.quaid/shared/auth/credentials.json"
+else
+    LOCAL_SHARED_TOKEN_FILE="$HOME/quaidcode/anthtoken-yuni.md"
+    if [[ ! -f "$LOCAL_SHARED_TOKEN_FILE" ]]; then
+        echo "  WARN  $LOCAL_SHARED_TOKEN_FILE not found — shared auth credentials not updated"
+    else
+        IFS= read -r SHARED_TOKEN < "$LOCAL_SHARED_TOKEN_FILE" || true
+        if [[ -z "${SHARED_TOKEN:-}" ]]; then
+            echo "  WARN  $LOCAL_SHARED_TOKEN_FILE first line is empty — shared auth credentials not updated"
+        else
+            ssh "$REMOTE_HOST" 'mkdir -p ~/.quaid/shared/auth'
+            printf '%s\n' "$SHARED_TOKEN" | ssh "$REMOTE_HOST" 'python3 <<'"'"'PYEOF'"'"'
+import json
+import os
+import pathlib
+import sys
+
+token = sys.stdin.readline().strip()
+if not token:
+    raise SystemExit("empty token from stdin")
+
+out_path = pathlib.Path.home() / ".quaid" / "shared" / "auth" / "credentials.json"
+payload = {
+    "credentials": {
+        "anthropic_oauth": {
+            "token": token,
+        }
+    }
+}
+out_path.parent.mkdir(parents=True, exist_ok=True)
+tmp_path = out_path.with_name(f".{out_path.name}.{os.getpid()}.tmp")
+fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, out_path)
+except Exception:
+    try:
+        tmp_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    raise
+out_path.chmod(0o600)
+print(f"  wrote {out_path}")
+PYEOF'
+            echo "  $PASS  shared auth credentials copied to remote ~/.quaid/shared/auth/credentials.json"
+        fi
     fi
 fi
 
