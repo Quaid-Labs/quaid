@@ -4,7 +4,13 @@ import pytest
 import subprocess
 from pathlib import Path
 
-from core.shadow_git import ShadowGit, _parse_name_status, _DEFAULT_EXCLUDES
+from core.shadow_git import (
+    ShadowGit,
+    _parse_name_status,
+    _DEFAULT_EXCLUDES,
+    _SHADOW_GIT_USER_EMAIL,
+    _SHADOW_GIT_USER_NAME,
+)
 
 
 def _git_available():
@@ -25,6 +31,17 @@ class TestShadowGit:
         assert sg.initialized
         assert (sg.git_dir / "HEAD").is_file()
 
+    def test_init_configures_internal_git_identity(self, tmp_path):
+        sg = ShadowGit("test", tmp_path / "project", tracking_base=tmp_path / "tracking")
+        (tmp_path / "project").mkdir()
+
+        sg.init()
+
+        name = sg._git("config", "user.name", check=False)
+        email = sg._git("config", "user.email", check=False)
+        assert name.stdout.strip() == _SHADOW_GIT_USER_NAME
+        assert email.stdout.strip() == _SHADOW_GIT_USER_EMAIL
+
     def test_init_idempotent(self, tmp_path):
         sg = ShadowGit("test", tmp_path / "project", tracking_base=tmp_path / "tracking")
         (tmp_path / "project").mkdir()
@@ -32,6 +49,16 @@ class TestShadowGit:
         sg.init()
         sg.init()  # Should not raise
         assert sg.initialized
+
+    def test_init_repairs_identity_for_existing_repo(self, tmp_path):
+        sg = ShadowGit("test", tmp_path / "project", tracking_base=tmp_path / "tracking")
+        (tmp_path / "project").mkdir()
+        sg.git_dir.mkdir(parents=True)
+        subprocess.run(["git", "init", "--bare", str(sg.git_dir)], capture_output=True, check=True)
+
+        sg.init()
+
+        assert sg._git("config", "user.email", check=False).stdout.strip() == _SHADOW_GIT_USER_EMAIL
 
     def test_default_excludes_written(self, tmp_path):
         sg = ShadowGit("test", tmp_path / "project", tracking_base=tmp_path / "tracking")
@@ -108,6 +135,31 @@ class TestShadowGit:
         # No changes
         result = sg.snapshot()
         assert result is None
+
+    def test_snapshot_raises_when_commit_fails_with_pending_changes(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        sg = ShadowGit("test", project, tracking_base=tmp_path / "tracking")
+        sg.git_dir.mkdir(parents=True)
+        (sg.git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+        sg._ensure_identity_config = lambda: None  # type: ignore[method-assign]
+
+        def fake_git(*args, **_kwargs):
+            cmd = tuple(args)
+            if cmd[:2] == ("status", "--porcelain"):
+                return subprocess.CompletedProcess(args, 0, stdout="A  app.py\n", stderr="")
+            if cmd[0] == "add":
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            if cmd[:2] == ("rev-parse", "HEAD"):
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+            if cmd[0] == "commit":
+                return subprocess.CompletedProcess(args, 128, stdout="", stderr="Author identity unknown")
+            raise AssertionError(f"unexpected git command: {cmd}")
+
+        sg._git = fake_git  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="shadow git commit failed"):
+            sg.snapshot()
 
     def test_ignores_excluded_files(self, tmp_path):
         project = tmp_path / "project"

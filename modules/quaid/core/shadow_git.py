@@ -19,6 +19,9 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
+_SHADOW_GIT_USER_NAME = "Quaid Shadow Git"
+_SHADOW_GIT_USER_EMAIL = "quaid-shadow-git@localhost"
+
 # Default ignore patterns — defensive, cannot be removed by LLM.
 # LLM can add project-specific patterns on top of these.
 _DEFAULT_EXCLUDES = """\
@@ -201,9 +204,25 @@ class ShadowGit:
         """Check if shadow git has been initialized for this project."""
         return (self.git_dir / "HEAD").is_file()
 
+    def _ensure_identity_config(self) -> None:
+        """Shadow repos must not depend on the user's global git identity."""
+        if not self.git_dir.is_dir():
+            return
+        for key, value in (
+            ("user.name", _SHADOW_GIT_USER_NAME),
+            ("user.email", _SHADOW_GIT_USER_EMAIL),
+        ):
+            subprocess.run(
+                ["git", f"--git-dir={self.git_dir}", "config", key, value],
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+
     def init(self) -> None:
         """Initialize shadow git for this project."""
         if self.initialized:
+            self._ensure_identity_config()
             return
 
         self.git_dir.mkdir(parents=True, exist_ok=True)
@@ -211,6 +230,7 @@ class ShadowGit:
             ["git", "init", "--bare", str(self.git_dir)],
             capture_output=True, check=True, timeout=30,
         )
+        self._ensure_identity_config()
         self._apply_default_excludes()
         logger.info("[shadow-git] Initialized tracking for %s at %s",
                     self.project_name, self.git_dir)
@@ -248,6 +268,8 @@ class ShadowGit:
         """
         if not self.initialized:
             self.init()
+        else:
+            self._ensure_identity_config()
 
         if not self.work_tree.is_dir():
             logger.warning("[shadow-git] %s: work tree missing: %s",
@@ -278,6 +300,17 @@ class ShadowGit:
             check=False,
         )
         if commit.returncode != 0:
+            status_after = self._git("status", "--porcelain", check=False)
+            if status_after.stdout.strip():
+                logger.warning(
+                    "[shadow-git] %s: commit failed with pending changes: %s",
+                    self.project_name,
+                    commit.stderr.strip() or commit.stdout.strip(),
+                )
+                raise RuntimeError(
+                    f"shadow git commit failed for {self.project_name}: "
+                    f"{commit.stderr.strip() or commit.stdout.strip() or 'unknown error'}"
+                )
             # Nothing to commit (race condition or all ignored)
             return None
 
