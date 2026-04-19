@@ -221,6 +221,47 @@ def cleanup_project_state(project: str) -> Dict[str, int]:
     return {"removed": removed}
 
 
+def has_project_state(project: str) -> bool:
+    """Return True when per-project docs operational state still exists."""
+    name = validate_project_name(project)
+    candidates = [
+        request_path(name),
+        state_path(name),
+        lock_path(name),
+        _spawn_lock_path("worker", name),
+        worker_pid_path(name),
+        worker_heartbeat_path(name),
+        _worker_dir() / f"{name}.log",
+    ]
+    temp_patterns = [
+        _request_dir() / f".{name}.json.*.tmp",
+        _state_dir() / f".{name}.json.*.tmp",
+        _worker_dir() / f".{name}.pid.*.tmp",
+        _worker_dir() / f".{name}.heartbeat.json.*.tmp",
+    ]
+    for path in candidates:
+        if path.exists():
+            return True
+    for pattern in temp_patterns:
+        if any(pattern.parent.glob(pattern.name)):
+            return True
+    return False
+
+
+def project_is_registered_for_worker(project: str) -> bool:
+    """Check deletion authority without triggering docs-registry reconciliation."""
+    name = validate_project_name(project)
+    try:
+        from core.project_registry import project_exists_raw
+
+        return bool(project_exists_raw(name))
+    except Exception:
+        logger.exception("Failed checking raw project registry for worker lifecycle: %s", name)
+        if _fail_hard_enabled():
+            raise
+        return True
+
+
 def write_state(project: str, state: Dict[str, Any]) -> None:
     payload = dict(state or {})
     payload["project"] = validate_project_name(project)
@@ -954,6 +995,8 @@ def stop_supervisor() -> bool:
 def start_worker(project: str) -> int:
     name = validate_project_name(project)
     with _exclusive_file_lock(_spawn_lock_path("worker", name)):
+        if not project_is_registered_for_worker(name):
+            raise KeyError(f"Project not found: {name}")
         existing = read_worker_pid(name)
         if existing is not None:
             return existing

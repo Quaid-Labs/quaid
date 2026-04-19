@@ -44,12 +44,23 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
         live = set(projects.keys())
         stale_after = project_docs.worker_stale_after_seconds(interval)
         for project in sorted(live):
+            if not project_docs.project_is_registered_for_worker(project):
+                project_docs.cleanup_project_state(project)
+                known_workers.pop(project, None)
+                continue
             try:
                 project_docs.reap_stale_worker(project, stale_after_seconds=stale_after)
                 pid = project_docs.start_worker(project)
                 known_workers[project] = pid
+            except KeyError:
+                project_docs.cleanup_project_state(project)
+                known_workers.pop(project, None)
             except Exception as exc:
-                project_docs.merge_state(project, {"status": "error", "last_error": f"worker start failed: {exc}"})
+                if project_docs.project_is_registered_for_worker(project):
+                    project_docs.merge_state(project, {"status": "error", "last_error": f"worker start failed: {exc}"})
+                else:
+                    project_docs.cleanup_project_state(project)
+                    known_workers.pop(project, None)
         for project in list(known_workers.keys()):
             if project in live:
                 continue

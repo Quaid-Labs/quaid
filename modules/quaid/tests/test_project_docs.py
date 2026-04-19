@@ -199,6 +199,7 @@ def test_cleanup_project_state_removes_all_project_artifacts(project_env):
 
     assert result["removed"] >= len(paths)
     assert all(not path.exists() for path in paths)
+    assert project_docs.has_project_state("demo") is False
 
 
 def test_delete_project_removes_project_docs_worker_state(project_env):
@@ -210,6 +211,7 @@ def test_delete_project_removes_project_docs_worker_state(project_env):
     project_docs.write_worker_heartbeat("demo", {"status": "idle"})
     project_docs.lock_path("demo").parent.mkdir(parents=True, exist_ok=True)
     project_docs.lock_path("demo").write_text("lock", encoding="utf-8")
+    project_docs._spawn_lock_path("worker", "demo").write_text("spawn-lock", encoding="utf-8")
     (project_docs._worker_dir() / "demo.log").write_text("log", encoding="utf-8")
 
     with patch("core.project_registry._sync_docs_registry_project"):
@@ -219,4 +221,20 @@ def test_delete_project_removes_project_docs_worker_state(project_env):
     assert not (tmp_path / "data" / "project-docs" / "state" / "demo.json").exists()
     assert not (tmp_path / "data" / "project-docs" / "workers" / "demo.heartbeat.json").exists()
     assert not (tmp_path / "data" / "project-docs" / "locks" / "demo.lock").exists()
+    assert not (tmp_path / "data" / "project-docs" / "locks" / "demo.worker.spawn.lock").exists()
     assert not (tmp_path / "data" / "project-docs" / "workers" / "demo.log").exists()
+    assert project_docs.has_project_state("demo") is False
+
+
+def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core import project_docs_supervisor
+
+    with patch("core.project_docs_supervisor.list_projects", return_value={"demo": {}}), \
+         patch("core.project_docs.project_is_registered_for_worker", return_value=False), \
+         patch("core.project_docs.start_worker") as start_worker:
+        assert project_docs_supervisor.run_supervisor(once=True) == 0
+
+    start_worker.assert_not_called()
+    assert project_docs.has_project_state("demo") is False

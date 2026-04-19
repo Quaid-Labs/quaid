@@ -536,6 +536,33 @@ class TestDeleteProjectPurgesDb:
 
         assert get_project("my-app") is None
 
+    def test_delete_settles_late_project_docs_state_recreation(self, mock_adapter):
+        """delete_project() cleans worker state recreated by a stale supervisor tick."""
+        _, tmp_path = mock_adapter
+        from core import project_docs
+
+        create_project("my-app")
+        calls = 0
+        real_cleanup = project_docs.cleanup_project_state
+
+        def _cleanup_then_recreate(project):
+            nonlocal calls
+            result = real_cleanup(project)
+            calls += 1
+            if calls == 2:
+                project_docs.state_path(project).parent.mkdir(parents=True, exist_ok=True)
+                project_docs.state_path(project).write_text("{}", encoding="utf-8")
+                project_docs._spawn_lock_path("worker", project).parent.mkdir(parents=True, exist_ok=True)
+                project_docs._spawn_lock_path("worker", project).write_text("lock", encoding="utf-8")
+            return result
+
+        with patch("core.project_docs.cleanup_project_state", side_effect=_cleanup_then_recreate):
+            delete_project("my-app")
+
+        assert get_project("my-app") is None
+        assert not (tmp_path / "data" / "project-docs" / "state" / "my-app.json").exists()
+        assert not (tmp_path / "data" / "project-docs" / "locks" / "my-app.worker.spawn.lock").exists()
+
     def test_delete_handles_missing_db_gracefully(self, mock_adapter):
         """delete_project() does not raise when the DB connection fails."""
         _, tmp_path = mock_adapter

@@ -12,6 +12,7 @@ import os
 import tempfile
 import shutil
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -414,6 +415,18 @@ def get_project(name: str) -> Optional[Dict[str, Any]]:
     return _load_registry().get("projects", {}).get(name)
 
 
+def project_exists_raw(name: str) -> bool:
+    """Return whether a project is present in the global registry without reconciliation.
+
+    Worker lifecycle checks use this path during deletion. Calling the normal
+    get/list APIs can reconcile from docs rows and would reopen the race where a
+    deleted project gets briefly resurrected while the delete transaction is
+    still purging secondary stores.
+    """
+    with _registry_lock():
+        return str(name or "").strip() in _load_registry().get("projects", {})
+
+
 def create_project(
     name: str,
     description: str = "",
@@ -742,39 +755,46 @@ def delete_project(name: str) -> None:
         logger.warning("Failed to clean up DB entries for project %s: %s", name, e)
 
     # A live supervisor/list call can reconcile from project_definitions/doc_registry
-    # in the small window between the first JSON removal and DB cleanup. Remove the
-    # global entry again after the DB rows are gone so deletion is authoritative.
-    try:
-        with _registry_lock():
-            registry = _load_registry()
-            if name in registry.get("projects", {}):
-                del registry["projects"][name]
-                _save_registry(registry)
-    except Exception as e:
-        logger.warning("Failed final registry cleanup for project %s: %s", name, e)
-
-    # Re-run worker/project-doc state cleanup after final registry removal. If the
-    # supervisor observed the project during the reconciliation window, it may have
-    # spawned a short-lived worker after the first cleanup pass.
+    # in the small window between the first JSON removal and DB cleanup. A stale
+    # supervisor tick can also try to start a worker from a pre-delete snapshot.
+    # Settle those races before returning so `project delete` is authoritative.
     try:
         from core import project_docs
 
-        project_docs.stop_worker(name)
-        project_docs.cleanup_project_state(name)
-    except Exception as e:
-        logger.warning("Failed final project docs worker cleanup for %s: %s", name, e)
+        for attempt in range(8):
+            try:
+                with _registry_lock():
+                    registry = _load_registry()
+                    if name in registry.get("projects", {}):
+                        del registry["projects"][name]
+                        _save_registry(registry)
+            except Exception as e:
+                logger.warning("Failed final registry cleanup for project %s: %s", name, e)
 
-    try:
-        _safe_remove_tracking_dir(tracking_base / name, tracking_base)
-    except Exception as e:
-        logger.warning("Failed final shadow git cleanup for project %s: %s", name, e)
+            try:
+                project_docs.stop_worker(name)
+                project_docs.cleanup_project_state(name)
+            except Exception as e:
+                logger.warning("Failed final project docs worker cleanup for %s: %s", name, e)
 
-    # Re-check visible/canonical dirs after the race window for the same reason.
-    for candidate in candidate_dirs:
-        try:
-            _safe_remove_project_dir(candidate, allowed_roots)
-        except Exception as e:
-            logger.warning("Failed final project directory cleanup for %s (%s): %s", name, candidate, e)
+            try:
+                _safe_remove_tracking_dir(tracking_base / name, tracking_base)
+            except Exception as e:
+                logger.warning("Failed final shadow git cleanup for project %s: %s", name, e)
+
+            # Re-check visible/canonical dirs after the race window for the same reason.
+            for candidate in candidate_dirs:
+                try:
+                    _safe_remove_project_dir(candidate, allowed_roots)
+                except Exception as e:
+                    logger.warning("Failed final project directory cleanup for %s (%s): %s", name, candidate, e)
+
+            if not project_exists_raw(name) and not project_docs.has_project_state(name):
+                break
+            if attempt < 7:
+                time.sleep(0.15)
+    except Exception as e:
+        logger.warning("Failed final delete settle for project %s: %s", name, e)
 
     # Clean up stale pending review hints and queued project events.
     try:
