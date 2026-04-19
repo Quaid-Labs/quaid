@@ -20,6 +20,9 @@ on:
       - 'install.sh'
       - 'install.ps1'
 
+permissions:
+  contents: read
+
 jobs:
   openclaw-installer-smoke:
     name: installer-smoke (${{ matrix.openclaw_version }}, ${{ matrix.scenario }})
@@ -43,7 +46,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.12.0'
 
       - name: Setup Python
         uses: actions/setup-python@v5

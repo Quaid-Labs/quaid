@@ -391,7 +391,8 @@ def _validate_session_id(session_id: str) -> str:
     # Generate a deterministic fallback so the same malformed ID does not
     # explode into many synthetic unknown-* sessions across idle scans.
     digest_seed = raw or "empty"
-    safe = f"unknown-{hashlib.sha1(digest_seed.encode('utf-8', 'replace')).hexdigest()[:16]}"
+    digest = hashlib.blake2b(digest_seed.encode("utf-8", "replace"), digest_size=8).hexdigest()
+    safe = f"unknown-{digest}"
     logger.warning("invalid session_id %r, using fallback: %s", session_id, safe)
     return safe
 
@@ -628,7 +629,7 @@ def _cursor_storage_key(session_id: str, source_key: Optional[str] = None) -> st
         return sid
     if _SESSION_ID_RE.match(raw):
         return raw
-    digest = hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:32]
+    digest = hashlib.blake2b(raw.encode("utf-8", "replace"), digest_size=16).hexdigest()
     return f"source-{digest}"
 
 
@@ -804,7 +805,7 @@ def _signal_source_cursor_key(
         cursor_data=cursor_data,
         staged_state=staged_state,
     )
-    digest = hashlib.sha1(identity.encode("utf-8", "replace")).hexdigest()[:32]
+    digest = hashlib.blake2b(identity.encode("utf-8", "replace"), digest_size=16).hexdigest()
     return f"source-{digest}"
 
 

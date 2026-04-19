@@ -1687,7 +1687,7 @@ class TestMockEmbeddingsProvider:
 
     def test_model_name(self):
         p = MockEmbeddingsProvider()
-        assert p.model_name == "mock-md5"
+        assert p.model_name == "mock-sha256"
 
     def test_embed_returns_correct_dim(self):
         p = MockEmbeddingsProvider()

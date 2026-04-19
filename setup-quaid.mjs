@@ -5109,16 +5109,16 @@ c.close()
     s.stop(C.green("OpenClaw gateway reachable"));
   }
   s.start("Smoke test (store + recall)...");
-  const smokeSafeId = owner.id.replace(/'/g, "\\'");
   const smokeScript = `
 import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store, recall
+owner_id = os.environ.get('QUAID_INSTALLER_SMOKE_OWNER_ID', '')
 try:
-    store('Quaid installer smoke test fact', owner_id='${smokeSafeId}', category='fact', source='installer-test')
-    results = recall('installer smoke test', owner_id='${smokeSafeId}', limit=1)
+    store('Quaid installer smoke test fact', owner_id=owner_id, category='fact', source='installer-test')
+    results = recall('installer smoke test', owner_id=owner_id, limit=1)
     if results:
         print('OK')
     else:
@@ -5127,7 +5127,12 @@ except Exception as e:
     print(f'warn: {e}', file=sys.stderr)
     print('PARTIAL')
 `;
-  const smoke = python3Spawn(["-c", smokeScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  const smoke = python3Spawn(["-c", smokeScript], {
+    cwd: PLUGIN_DIR,
+    encoding: "utf8",
+    env: { ...process.env, QUAID_INSTALLER_SMOKE_OWNER_ID: String(owner.id || "") },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
   const smokeResult = (smoke.stdout || "").trim();
   if (smoke.status !== 0) {
     s.stop(C.red("Smoke test failed — Python execution error"));

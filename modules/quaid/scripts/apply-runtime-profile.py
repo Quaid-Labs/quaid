@@ -548,8 +548,28 @@ def _apply_secrets(secrets_cfg: Dict[str, Any], dev_root: Path) -> None:
     out_path = _resolve_config_path(str(env_path), dev_root)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"{k}={v}" for k, v in env_map.items()]
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.chmod(out_path, 0o600)
+    # This profile path intentionally materializes local runtime secrets for
+    # smoke/live environments. Create the file with 0600 from the first byte so
+    # there is no world-readable window before chmod.
+    _write_secret_file(out_path, "\n".join(lines) + "\n")
+
+
+def _write_secret_file(path: Path, content: str) -> None:
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    os.chmod(path, 0o600)
 
 
 def main() -> int:

@@ -13,7 +13,7 @@ Concrete providers shipped:
 
   Embeddings:
     OllamaEmbeddingsProvider — HTTP call to local Ollama instance
-    MockEmbeddingsProvider   — deterministic MD5 vectors for tests
+    MockEmbeddingsProvider   — deterministic SHA-256 vectors for tests
 """
 
 import abc
@@ -1739,11 +1739,11 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
 
 
 class MockEmbeddingsProvider(EmbeddingsProvider):
-    """Deterministic MD5-based embeddings for testing.  Returns 128-dim vectors."""
+    """Deterministic SHA-256-based embeddings for testing. Returns 128-dim vectors."""
 
     def embed(self, text):
-        h = hashlib.md5(text.encode()).digest()
-        raw = [float(b) / 255.0 for b in h] * 8  # 16 bytes * 8 = 128-dim
+        h = hashlib.sha256(text.encode()).digest()
+        raw = [float(b) / 255.0 for b in h] * 4  # 32 bytes * 4 = 128-dim
         magnitude = sum(x * x for x in raw) ** 0.5
         return [x / magnitude for x in raw] if magnitude > 0 else raw
 
@@ -1752,4 +1752,4 @@ class MockEmbeddingsProvider(EmbeddingsProvider):
 
     @property
     def model_name(self):
-        return "mock-md5"
+        return "mock-sha256"
