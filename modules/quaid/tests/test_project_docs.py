@@ -311,3 +311,40 @@ def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):
 
     start_worker.assert_not_called()
     assert project_docs.has_project_state("demo") is False
+
+
+def test_supervisor_removal_path_cleans_full_project_state(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core import project_docs_supervisor
+
+    project_docs_supervisor._STOP = False
+    sleep_calls = 0
+
+    def fake_sleep(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            project_docs_supervisor._STOP = True
+
+    def fake_stop_worker(project):
+        # stop_worker takes the spawn lock and can create this file even when
+        # the project was already deleted. The supervisor removal path must
+        # clean the full monitor state, not just heartbeat/pid files.
+        path = project_docs._spawn_lock_path("worker", project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("lock", encoding="utf-8")
+        return False
+
+    with patch("core.project_docs_supervisor.list_projects", side_effect=[{"demo": {}}, {}]), \
+         patch("core.project_docs.project_is_registered_for_worker", return_value=True), \
+         patch("core.project_docs.start_worker", return_value=123), \
+         patch("core.project_docs.stop_worker", side_effect=fake_stop_worker), \
+         patch("core.project_docs.reap_child_processes", return_value=0), \
+         patch("core.project_docs.write_supervisor_pid", lambda _token: None), \
+         patch("core.project_docs.clear_supervisor_pid_for_current_process", lambda: None), \
+         patch.object(project_docs_supervisor.time, "sleep", fake_sleep):
+        assert project_docs_supervisor.run_supervisor(interval_seconds=0.5) == 0
+
+    project_docs_supervisor._STOP = False
+    assert project_docs.has_project_state("demo") is False
