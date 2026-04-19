@@ -1033,6 +1033,8 @@ def stop_supervisor() -> bool:
 
 def start_worker(project: str) -> int:
     name = validate_project_name(project)
+    if not project_is_registered_for_worker(name):
+        raise KeyError(f"Project not found: {name}")
     with _exclusive_file_lock(_spawn_lock_path("worker", name)):
         if not project_is_registered_for_worker(name):
             raise KeyError(f"Project not found: {name}")

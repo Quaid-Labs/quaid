@@ -264,6 +264,22 @@ def test_delete_project_stops_live_project_docs_worker(project_env, monkeypatch)
         project_docs.cleanup_project_state("demo")
 
 
+def test_start_worker_deleted_project_does_not_create_spawn_lock(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core.project_registry import delete_project
+
+    with patch("core.project_registry._sync_docs_registry_project"):
+        delete_project("demo")
+    spawn_lock = project_docs._spawn_lock_path("worker", "demo")
+    spawn_lock.unlink(missing_ok=True)
+
+    with pytest.raises(KeyError):
+        project_docs.start_worker("demo")
+
+    assert not spawn_lock.exists()
+
+
 def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

@@ -514,21 +514,25 @@ class TestDeleteProjectPurgesDb:
         mem_conn.commit()
 
         create_project("my-app")
+        resurrected = False
 
         @contextmanager
         def _fake_get_connection(_db_path):
+            nonlocal resurrected
             yield mem_conn
             mem_conn.commit()
             # Simulate a concurrent list/show reconciliation that observed stale
             # DB rows before this delete transaction finished its DB cleanup.
-            path = registry_mod._registry_path()
-            data = json.loads(path.read_text(encoding="utf-8"))
-            data.setdefault("projects", {})["my-app"] = {
-                "canonical_path": str(tmp_path / "projects" / "my-app"),
-                "instances": ["pytest-runner"],
-                "description": "resurrected",
-            }
-            path.write_text(json.dumps(data), encoding="utf-8")
+            if not resurrected:
+                resurrected = True
+                path = registry_mod._registry_path()
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data.setdefault("projects", {})["my-app"] = {
+                    "canonical_path": str(tmp_path / "projects" / "my-app"),
+                    "instances": ["pytest-runner"],
+                    "description": "resurrected",
+                }
+                path.write_text(json.dumps(data), encoding="utf-8")
 
         with patch("lib.database.get_connection", _fake_get_connection), \
              patch("lib.config.get_db_path", return_value=tmp_path / "memory.db"):

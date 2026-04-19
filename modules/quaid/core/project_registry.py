@@ -632,6 +632,49 @@ def unlink_project(name: str) -> Dict[str, Any]:
         return registry["projects"][name]
 
 
+def _docs_db_table_exists(conn: Any, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return bool(row)
+
+
+def _delete_docs_db_project_rows(name: str) -> List[str]:
+    """Remove docs DB metadata rows for a deleted project and return chunk paths."""
+    from lib.database import get_connection
+    from lib.config import get_docs_db_path
+
+    chunk_paths: List[str] = []
+    with get_connection(get_docs_db_path()) as conn:
+        if _docs_db_table_exists(conn, "doc_registry"):
+            rows = conn.execute(
+                "SELECT file_path FROM doc_registry WHERE project = ?",
+                (name,),
+            ).fetchall()
+            chunk_paths.extend(str(r[0] or "").strip() for r in rows if str(r[0] or "").strip())
+            conn.execute("DELETE FROM doc_registry WHERE project = ?", (name,))
+        if _docs_db_table_exists(conn, "project_definitions"):
+            conn.execute("DELETE FROM project_definitions WHERE name = ?", (name,))
+    return chunk_paths
+
+
+def _docs_db_project_rows_exist(name: str) -> bool:
+    from lib.database import get_connection
+    from lib.config import get_docs_db_path
+
+    with get_connection(get_docs_db_path()) as conn:
+        if _docs_db_table_exists(conn, "project_definitions"):
+            row = conn.execute("SELECT 1 FROM project_definitions WHERE name = ? LIMIT 1", (name,)).fetchone()
+            if row:
+                return True
+        if _docs_db_table_exists(conn, "doc_registry"):
+            row = conn.execute("SELECT 1 FROM doc_registry WHERE project = ? LIMIT 1", (name,)).fetchone()
+            if row:
+                return True
+    return False
+
+
 def delete_project(name: str) -> None:
     """Remove a project from the registry and clean up artifacts.
 
@@ -738,25 +781,15 @@ def delete_project(name: str) -> None:
 
     # Clean up shared docs DB: project definitions, registry rows, and RAG chunks.
     try:
-        from lib.database import get_connection
         from lib.config import get_docs_db_path
         from datastore.docsdb.rag import DocsRAG
 
-        docs_db_path = get_docs_db_path()
-        chunk_paths: List[str] = []
-        with get_connection(docs_db_path) as conn:
-            rows = conn.execute(
-                "SELECT file_path FROM doc_registry WHERE project = ?",
-                (name,),
-            ).fetchall()
-            chunk_paths.extend(str(r[0] or "").strip() for r in rows if str(r[0] or "").strip())
-            conn.execute("DELETE FROM project_definitions WHERE name = ?", (name,))
-            conn.execute("DELETE FROM doc_registry WHERE project = ?", (name,))
+        chunk_paths = _delete_docs_db_project_rows(name)
         canonical = str(entry.get("canonical_path") or "").strip()
         if canonical:
             chunk_paths.append(str(Path(canonical) / "PROJECT.md"))
         if chunk_paths:
-            rag = DocsRAG(db_path=docs_db_path)
+            rag = DocsRAG(db_path=get_docs_db_path())
             seen: set[str] = set()
             for file_path in chunk_paths:
                 key = str(file_path or "").strip()
@@ -791,6 +824,11 @@ def delete_project(name: str) -> None:
                 logger.warning("Failed final project docs worker cleanup for %s: %s", name, e)
 
             try:
+                _delete_docs_db_project_rows(name)
+            except Exception as e:
+                logger.warning("Failed final docs DB cleanup for project %s: %s", name, e)
+
+            try:
                 _safe_remove_tracking_dir(tracking_base / name, tracking_base)
             except Exception as e:
                 logger.warning("Failed final shadow git cleanup for project %s: %s", name, e)
@@ -802,7 +840,12 @@ def delete_project(name: str) -> None:
                 except Exception as e:
                     logger.warning("Failed final project directory cleanup for %s (%s): %s", name, candidate, e)
 
-            if not project_exists_raw(name) and not project_docs.has_project_state(name):
+            docs_db_clear = False
+            try:
+                docs_db_clear = not _docs_db_project_rows_exist(name)
+            except Exception as e:
+                logger.warning("Failed checking docs DB cleanup for project %s: %s", name, e)
+            if not project_exists_raw(name) and not project_docs.has_project_state(name) and docs_db_clear:
                 break
             if attempt < 7:
                 time.sleep(0.15)
