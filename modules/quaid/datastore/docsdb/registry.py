@@ -678,6 +678,13 @@ class DocsRegistry:
         name = self._syncable_project_name(project)
         if not name:
             return False
+        try:
+            from lib.project_registry import is_deleted as global_project_deleted
+
+            if global_project_deleted(name):
+                return False
+        except Exception:
+            pass
 
         if defn is None:
             try:

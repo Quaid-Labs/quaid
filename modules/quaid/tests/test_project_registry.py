@@ -445,6 +445,17 @@ class TestUnlinkProject:
 
 
 class TestDeleteProjectPurgesDb:
+    def test_create_project_clears_delete_marker(self, mock_adapter):
+        from lib.project_registry import is_deleted
+
+        create_project("my-app")
+        delete_project("my-app")
+        assert is_deleted("my-app") is True
+
+        create_project("my-app")
+
+        assert is_deleted("my-app") is False
+
     def test_delete_purges_project_definitions_and_doc_registry(self, mock_adapter):
         """delete_project() removes project_definitions and doc_registry rows from SQLite."""
         import sqlite3

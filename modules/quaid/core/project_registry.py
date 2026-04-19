@@ -337,15 +337,17 @@ def _load_registry() -> Dict[str, Any]:
     """Load the registry file. Returns empty structure if missing/corrupt."""
     path = _registry_path()
     if not path.is_file():
-        return {"projects": {}}
+        return {"projects": {}, "deleted_projects": {}}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "projects" not in data:
-            return {"projects": {}}
+            return {"projects": {}, "deleted_projects": {}}
+        if not isinstance(data.get("deleted_projects"), dict):
+            data["deleted_projects"] = {}
         return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read project registry: %s", e)
-        return {"projects": {}}
+        return {"projects": {}, "deleted_projects": {}}
 
 
 def _save_registry(data: Dict[str, Any]) -> None:
@@ -461,6 +463,7 @@ def create_project(
         registry = _load_registry()
         if name in registry["projects"]:
             raise ValueError(f"Project already exists: {name}")
+        registry.setdefault("deleted_projects", {}).pop(name, None)
         if initial_instance is not None:
             current_instance = str(initial_instance).strip()
         else:
@@ -755,6 +758,7 @@ def delete_project(name: str) -> None:
 
         # Remove from registry
         del registry["projects"][name]
+        registry.setdefault("deleted_projects", {})[name] = datetime.now(tz=timezone.utc).isoformat()
         _save_registry(registry)
     misc_instance = _misc_project_instance_id(name)
     if misc_instance:

@@ -142,3 +142,39 @@ def test_project_show_reconciles_doc_registry_only_external_project(project_regi
     assert defn.home_dir == "projects/recipe-app/"
     assert defn.source_roots == [str(external_doc.parent)]
     assert (project_dir / "PROJECT.md").is_file()
+
+
+def test_deleted_project_marker_blocks_docs_reconciliation(project_registry_env):
+    from core.project_registry import get_project
+    from datastore.docsdb.registry import DocsRegistry
+    from lib.database import get_connection
+    from lib.project_registry import mark_deleted
+
+    visible_home = project_registry_env["visible_home"]
+    external_root = visible_home / "external-source" / "recipe-app"
+    external_doc = external_root / "README.md"
+    external_root.mkdir(parents=True)
+    external_doc.write_text("# Recipe App\n", encoding="utf-8")
+    project_dir = visible_home / "projects" / "recipe-app"
+
+    registry = DocsRegistry()
+    with get_connection(registry.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO doc_registry (file_path, project, asset_type, title, description, state, registered_by)
+            VALUES (?, ?, 'doc', ?, ?, 'active', 'legacy-fixture')
+            """,
+            (
+                str(external_doc),
+                "recipe-app",
+                "Recipe App README",
+                "Orphan test row",
+            ),
+        )
+
+    mark_deleted("recipe-app")
+    registry.reconcile_global_project_registry()
+
+    assert get_project("recipe-app") is None
+    assert registry.get_project_definition("recipe-app") is None
+    assert not project_dir.exists()

@@ -43,14 +43,16 @@ def _load() -> Dict[str, Any]:
     """Load the registry, returning empty structure if missing."""
     p = _registry_path()
     if not p.is_file():
-        return {"projects": {}}
+        return {"projects": {}, "deleted_projects": {}}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
         if "projects" not in data:
             data["projects"] = {}
+        if not isinstance(data.get("deleted_projects"), dict):
+            data["deleted_projects"] = {}
         return data
     except (json.JSONDecodeError, OSError):
-        return {"projects": {}}
+        return {"projects": {}, "deleted_projects": {}}
 
 
 def _save(data: Dict[str, Any]) -> None:
@@ -88,6 +90,8 @@ def register(
     with registry_lock():
         data = _load()
         now = datetime.now().isoformat()
+        if name in data.get("deleted_projects", {}) and name not in data["projects"]:
+            return {}
 
         if name in data["projects"]:
             entry = data["projects"][name]
@@ -114,6 +118,28 @@ def register(
 
         _save(data)
         return entry
+
+
+def mark_deleted(name: str) -> None:
+    """Remember an explicit project deletion so docs reconciliation cannot resurrect it."""
+    with registry_lock():
+        data = _load()
+        data.setdefault("deleted_projects", {})[name] = datetime.now().isoformat()
+        _save(data)
+
+
+def clear_deleted(name: str) -> None:
+    """Clear an explicit delete marker when a user recreates a project."""
+    with registry_lock():
+        data = _load()
+        if name in data.get("deleted_projects", {}):
+            del data["deleted_projects"][name]
+            _save(data)
+
+
+def is_deleted(name: str) -> bool:
+    """Return whether a project has an explicit delete marker."""
+    return name in _load().get("deleted_projects", {})
 
 
 def link(name: str, instance: Optional[str] = None, create_symlink: bool = False) -> bool:
