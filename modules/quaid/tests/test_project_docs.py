@@ -176,6 +176,20 @@ def test_worker_heartbeat_writes_atomic_json_pid_record(project_env):
     assert pid_data["project"] == "demo"
 
 
+def test_pid_startup_wait_allows_first_bootstrap_headroom(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.delenv("QUAID_PROJECT_DOCS_PID_WAIT_SECONDS", raising=False)
+    assert project_docs.pid_startup_wait_seconds() == 30.0
+
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_PID_WAIT_SECONDS", "3")
+    assert project_docs.pid_startup_wait_seconds() == 5.0
+
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_PID_WAIT_SECONDS", "240")
+    assert project_docs.pid_startup_wait_seconds() == 120.0
+
+
 def test_cleanup_project_state_removes_all_project_artifacts(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

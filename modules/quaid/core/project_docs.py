@@ -857,6 +857,16 @@ def worker_stale_after_seconds(interval_seconds: Optional[float] = None) -> floa
     return max(900.0, base * 12.0)
 
 
+def pid_startup_wait_seconds() -> float:
+    raw = os.environ.get("QUAID_PROJECT_DOCS_PID_WAIT_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(5.0, min(120.0, float(raw)))
+        except ValueError:
+            logger.warning("Invalid QUAID_PROJECT_DOCS_PID_WAIT_SECONDS=%r; using default", raw)
+    return 30.0
+
+
 def _worker_heartbeat_stale(project: str, *, stale_after_seconds: float) -> bool:
     heartbeat = read_worker_heartbeat(project)
     ts = _parse_iso_ts(heartbeat.get("heartbeat_at"))
@@ -894,9 +904,10 @@ def _wait_for_pid(
     role: str,
     project: Optional[str] = None,
     proc: Optional[subprocess.Popen] = None,
-    timeout_seconds: float = 5.0,
+    timeout_seconds: Optional[float] = None,
 ) -> int:
-    deadline = time.time() + timeout_seconds
+    timeout = pid_startup_wait_seconds() if timeout_seconds is None else float(timeout_seconds)
+    deadline = time.time() + timeout
     while time.time() < deadline:
         pid = _read_valid_pid(path, role=role, project=project)
         if pid == expected_pid:
@@ -905,6 +916,22 @@ def _wait_for_pid(
             raise RuntimeError(f"{role} exited before writing pid file rc={proc.returncode}")
         time.sleep(0.05)
     raise TimeoutError(f"{role} did not write a valid pid file for pid {expected_pid}")
+
+
+def _terminate_process(proc: subprocess.Popen, *, grace_seconds: float = 5.0) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=1.0)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _unlink_pid_record_if_matches(path: Path, *, pid: int, token: Optional[str] = None) -> None:
@@ -954,10 +981,7 @@ def start_supervisor() -> int:
                 proc=proc,
             )
         except Exception:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            _terminate_process(proc)
             raise
 
 
@@ -1027,10 +1051,7 @@ def start_worker(project: str) -> int:
                 proc=proc,
             )
         except Exception:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            _terminate_process(proc)
             raise
 
 
