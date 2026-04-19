@@ -221,6 +221,19 @@ Docs output must not reset source quiet windows or self-trigger circular updates
 - Enforce source-deletion and missing-doc invariants.
 - Ensure project delete stops docs worker and clears worker state.
 
+### Milestone 6: Large Project And Large File Safety
+
+- Add a bounded project-inspection planner before any content-heavy LLM prompt.
+- Scan projects in fidelity layers: coarse tree summary, directory rollups, changed-path rollups, then only bounded file-content drill-down.
+- Compute input size before each expansion step; stop expanding when the next layer would exceed configured byte/token/file-count budgets.
+- Never expand binary files into prompt context. Catalog them by path, size, type, and change metadata only.
+- Collapse huge trees into hierarchical summaries: top-level directory counts, extension/type counts, total bytes, changed bytes, top-N largest files, top-N changed dirs/files, and long-tail counts.
+- Collapse huge diffs into diffstat/name-status and top-N bounded hunks; do not pass unbounded diffs to the LLM.
+- Treat cap hits as catalog-only mode, not whole-project failure: docs should state that detailed content inspection was skipped due caps and rely on `PROJECT.log` or later scoped updates for semantics.
+- Refuse only when even metadata scanning cannot complete within a stall/IO safety budget.
+- Because docs updates are async, long wall-clock runtime is allowed. Stall protection should key off lack of heartbeat/progress movement, not elapsed duration alone.
+- Expose progress through `quaid project status` and a log/tail surface: phase, current directory/file, files/bytes scanned, LLM calls queued/completed, caps hit, and recent worker log lines.
+
 ## Validation Plan
 
 For implementation commits:
