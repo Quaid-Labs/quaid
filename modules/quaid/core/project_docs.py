@@ -98,6 +98,10 @@ def worker_heartbeat_path(project: str) -> Path:
     return _safe_path(_worker_dir(), project, ".heartbeat.json")
 
 
+def worker_log_path(project: str) -> Path:
+    return _safe_path(_worker_dir(), project, ".log")
+
+
 def supervisor_dir() -> Path:
     return project_docs_root() / "supervisor"
 
@@ -178,6 +182,25 @@ def read_state(project: str) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def read_worker_log_tail(project: str, *, max_lines: int = 40, max_bytes: int = 65536) -> List[str]:
+    path = worker_log_path(project)
+    if not path.is_file():
+        return []
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > max_bytes:
+                fh.seek(max(0, size - max_bytes))
+            data = fh.read(max_bytes)
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        return lines[-max(1, int(max_lines)):]
+    except OSError as exc:
+        logger.warning("Failed reading project-docs worker log tail for %s: %s", project, exc)
+        if _fail_hard_enabled():
+            raise
+        return []
+
+
 def cleanup_project_state(project: str) -> Dict[str, int]:
     """Remove all per-project project-docs operational state.
 
@@ -194,7 +217,7 @@ def cleanup_project_state(project: str) -> Dict[str, int]:
         _spawn_lock_path("worker", name),
         worker_pid_path(name),
         worker_heartbeat_path(name),
-        _worker_dir() / f"{name}.log",
+        worker_log_path(name),
     ]
     temp_patterns = [
         _request_dir() / f".{name}.json.*.tmp",
@@ -231,7 +254,7 @@ def has_project_state(project: str) -> bool:
         _spawn_lock_path("worker", name),
         worker_pid_path(name),
         worker_heartbeat_path(name),
-        _worker_dir() / f"{name}.log",
+        worker_log_path(name),
     ]
     temp_patterns = [
         _request_dir() / f".{name}.json.*.tmp",
@@ -274,6 +297,17 @@ def merge_state(project: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     state.update(updates)
     write_state(project, state)
     return state
+
+
+def merge_progress(project: str, phase: str, message: str = "", **details: Any) -> Dict[str, Any]:
+    progress = {
+        "phase": str(phase or "").strip() or "unknown",
+        "message": str(message or "").strip(),
+        "updated_at": utc_now(),
+    }
+    for key, value in details.items():
+        progress[str(key)] = value
+    return merge_state(project, {"phase": progress["phase"], "progress": progress})
 
 
 @contextlib.contextmanager
@@ -567,6 +601,7 @@ def project_status(project: str) -> Dict[str, Any]:
     req = read_update_request(name)
     worker_pid = read_worker_pid(name)
     worker_heartbeat = read_worker_heartbeat(name)
+    log_path = worker_log_path(name)
     supervisor_pid = read_supervisor_pid()
     sg = _shadow_git(name, entry)
     current_shadow_head = sg.current_head() if sg is not None else None
@@ -605,11 +640,15 @@ def project_status(project: str) -> Dict[str, Any]:
         "project_log_bytes_pending": log_pending,
         "worker_pid": worker_pid,
         "worker_heartbeat": worker_heartbeat,
+        "worker_log_path": str(log_path),
+        "worker_log_tail": read_worker_log_tail(name, max_lines=40),
         "supervisor_pid": supervisor_pid,
         "last_update_status": state.get("status"),
         "last_update_started_at": state.get("last_started_at"),
         "last_update_completed_at": state.get("last_completed_at"),
         "last_update_error": state.get("last_error"),
+        "phase": state.get("phase"),
+        "progress": state.get("progress") or {},
         "state": state,
     }
 
@@ -774,10 +813,13 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             return {"project": name, "status": "locked", "request_id": request_id, "request_retained": bool(request_id)}
         started = utc_now()
         merge_state(name, {"status": "updating", "last_started_at": started, "last_error": None})
+        merge_progress(name, "starting", "project-docs update started")
         try:
             state = read_state(name)
             log_offset = int(state.get("project_log_offset") or 0)
+            merge_progress(name, "read_project_log", "reading PROJECT.log cursor", project_log_offset=log_offset)
             log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset)
+            merge_progress(name, "snapshot", "snapshotting source changes")
             snapshot = snapshot_project(name, entry)
             snapshots = [snapshot] if snapshot else []
             metrics: Dict[str, Any] = {
@@ -793,6 +835,14 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             from core.docs import updater as docs_updater
 
             if snapshots or log_entries or request:
+                merge_progress(
+                    name,
+                    "update_docs",
+                    "running project docs update",
+                    snapshot_changes=len((snapshot or {}).get("changes") or []),
+                    project_log_entries=len(log_entries),
+                    request_id=request_id,
+                )
                 metrics = update_project_docs(
                     snapshots,
                     extraction_result={"project_logs": {name: log_entries}},
@@ -800,8 +850,10 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                     force_project=name,
                 )
             if not dry_run:
+                merge_progress(name, "sync_registry", "syncing visible project docs registry")
                 registry_sync = sync_project_docs_registry(name, entry)
                 try:
+                    merge_progress(name, "index_docs", "indexing registered project docs")
                     index_count = int(
                         docs_updater.update_registered_docs(
                             project=name,
@@ -823,6 +875,15 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "last_registry_sync": registry_sync,
                 "last_indexed_docs": index_count,
                 "project_log_offset": log_size,
+                "phase": "idle",
+                "progress": {
+                    "phase": "idle",
+                    "message": "project-docs update complete",
+                    "updated_at": completed,
+                    "docs_updated": int(metrics.get("docs_updated") or 0),
+                    "docs_registered": int(registry_sync.get("registered") or 0),
+                    "indexed_docs": index_count,
+                },
             }
             if snapshot and snapshot.get("commit_hash"):
                 next_state["last_shadow_commit"] = snapshot.get("commit_hash")
@@ -1081,7 +1142,7 @@ def start_worker(project: str) -> int:
         if existing is not None:
             return existing
         _worker_dir().mkdir(parents=True, exist_ok=True)
-        log_path = _worker_dir() / f"{name}.log"
+        log_path = worker_log_path(name)
         script = Path(__file__).parent / "project_docs_worker.py"
         env = dict(os.environ)
         env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
@@ -1149,11 +1210,23 @@ def format_status(status: Dict[str, Any]) -> str:
         lines.append(f"Pending force request: {req.get('request_id')} at {req.get('requested_at')}")
     lines.append(f"Supervisor PID: {status.get('supervisor_pid') or '(not running)'}")
     lines.append(f"Worker PID: {status.get('worker_pid') or '(not running)'}")
+    if status.get("phase"):
+        lines.append(f"Phase: {status.get('phase')}")
+    progress = status.get("progress") or {}
+    if progress.get("message"):
+        lines.append(f"Progress: {progress.get('message')}")
+    if status.get("worker_log_path"):
+        lines.append(f"Worker log: {status.get('worker_log_path')}")
     state = status.get("state") or {}
     if state.get("last_completed_at"):
         lines.append(f"Last completed: {state.get('last_completed_at')}")
     if state.get("last_error"):
         lines.append(f"Last error: {state.get('last_error')}")
+    tail = status.get("worker_log_tail") or []
+    if tail:
+        lines.append("Recent worker log:")
+        for line in tail[-5:]:
+            lines.append(f"  {line}")
     return "\n".join(lines)
 
 

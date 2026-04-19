@@ -62,7 +62,26 @@ def test_status_and_diff_report_pending_source_change(project_env):
     assert "current_shadow_head" in status
     assert "docs_cursor_head" in status
     assert "worker_heartbeat" in status
+    assert "worker_log_path" in status
+    assert "worker_log_tail" in status
     assert any(change["path"] == "tool.py" for change in diff["changes"])
+
+
+def test_status_includes_worker_log_tail(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    log_path = project_docs.worker_log_path("demo")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("\n".join(f"line-{i}" for i in range(50)), encoding="utf-8")
+
+    status = project_docs.project_status("demo")
+    rendered = project_docs.format_status(status)
+
+    assert status["worker_log_path"] == str(log_path)
+    assert status["worker_log_tail"][-1] == "line-49"
+    assert "Recent worker log:" in rendered
+    assert "line-49" in rendered
 
 
 def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(project_env):
@@ -88,6 +107,8 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert not project_docs.request_path("demo").exists()
     state = project_docs.read_state("demo")
     assert state["status"] == "fresh"
+    assert state["phase"] == "idle"
+    assert state["progress"]["message"] == "project-docs update complete"
     assert state["project_log_offset"] == project_log.stat().st_size
     assert state["last_indexed_docs"] == 2
     assert state["last_registry_sync"]["project_md_refreshed"] in (0, 1)
