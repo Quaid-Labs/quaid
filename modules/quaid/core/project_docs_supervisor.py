@@ -28,6 +28,24 @@ def _handle_stop(_signum, _frame) -> None:
     _STOP = True
 
 
+def _interval_from_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0.5, float(raw))
+    except ValueError:
+        return default
+
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+    except Exception:
+        return False
+    return bool(is_fail_hard_enabled())
+
+
 def run_supervisor(*, once: bool = False, interval_seconds: float | None = None) -> int:
     interval = interval_seconds
     if interval is None:
@@ -39,8 +57,13 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
     token = os.environ.get("QUAID_SUPERVISOR_TOKEN", "").strip()
     project_docs.write_supervisor_pid(token)
     known_workers: Dict[str, int] = {}
+    last_stale_doc_check = 0.0
+    last_auto_register_check = 0.0
+    stale_doc_interval = _interval_from_env("QUAID_PROJECT_DOCS_STALE_INDEX_INTERVAL_SECONDS", 60.0)
+    auto_register_interval = _interval_from_env("QUAID_PROJECT_DOCS_AUTO_REGISTER_INTERVAL_SECONDS", 300.0)
     while not _STOP:
         project_docs.reap_child_processes()
+        now = time.time()
         projects = list_projects()
         live = set(projects.keys())
         stale_after = project_docs.worker_stale_after_seconds(interval)
@@ -73,6 +96,26 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             except Exception:
                 pass
             known_workers.pop(project, None)
+        if now - last_auto_register_check > auto_register_interval:
+            try:
+                project_docs.auto_register_project_docs()
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning("project docs auto-register tick failed: %s", exc)
+                if _fail_hard_enabled():
+                    raise
+            last_auto_register_check = now
+        if now - last_stale_doc_check > stale_doc_interval:
+            try:
+                project_docs.index_one_stale_registered_doc()
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning("project docs stale-index tick failed: %s", exc)
+                if _fail_hard_enabled():
+                    raise
+            last_stale_doc_check = now
         if once:
             return 0
         time.sleep(interval)

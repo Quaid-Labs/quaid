@@ -3836,142 +3836,6 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Stale-doc indexing (runs periodically in daemon loop)
-# ---------------------------------------------------------------------------
-
-
-def _index_one_stale_doc() -> bool:
-    """Index one stale registered doc, if any. Returns True if a doc was indexed.
-
-    Called every ~60s from the daemon loop. Indexes docs one at a time so they
-    trickle into the search index continuously rather than in large batches.
-    This replaces the new-doc indexing pass in cmd_update_stale.
-    """
-    try:
-        from datastore.docsdb.rag import DocsRAG
-        from datastore.docsdb.registry import DocsRegistry
-    except ImportError:
-        return False
-
-    registry = DocsRegistry()
-    rag = DocsRAG()
-    try:
-        from config import _workspace_root
-        runtime_workspace = _workspace_root()
-    except Exception:
-        runtime_workspace = Path.cwd()
-
-    # Get all registered docs, sorted by registered_at DESC so newly registered
-    # docs are indexed first.
-    all_docs = sorted(
-        registry.list_docs(),
-        key=lambda e: e.get("registered_at") or "",
-        reverse=True,
-    )
-
-    candidate_paths = []
-    for entry in all_docs:
-        file_path = entry.get("file_path") or entry.get("path", "")
-        if not file_path:
-            continue
-        resolved_path = Path(file_path)
-        if not resolved_path.is_absolute():
-            resolved_path = runtime_workspace / resolved_path
-        if not resolved_path.exists():
-            continue
-        candidate_paths.append(str(resolved_path))
-
-    if not candidate_paths:
-        return False
-
-    needs = rag.needs_reindex_many(candidate_paths)
-    for file_path in candidate_paths:
-        if not needs.get(file_path, True):
-            continue
-        try:
-            chunks = rag.index_document(file_path)
-            logger.info("[daemon] indexed stale doc: %s (%d chunks)", file_path, chunks)
-            return True
-        except Exception as e:
-            logger.warning("[daemon] failed to index stale doc %s: %s", file_path, e)
-            return False
-
-    return False
-
-
-def _auto_register_untracked_docs() -> int:
-    """Scan tracked project dirs for .md files not yet in the docs registry.
-
-    Called every ~5 minutes from the daemon loop. Registers any .md file found
-    under a project's home_dir or source_roots that is not already tracked.
-
-    Returns the count of newly registered docs.
-    """
-    try:
-        from config import get_config
-        from datastore.docsdb.registry import DocsRegistry
-    except ImportError:
-        return 0
-
-    try:
-        cfg = get_config()
-        registry = DocsRegistry()
-    except Exception:
-        return 0
-
-    registered_paths: set = set()
-    try:
-        for doc in registry.list_docs():
-            fp = doc.get("file_path") or doc.get("path", "")
-            if fp:
-                registered_paths.add(str(Path(fp).resolve()))
-    except Exception:
-        return 0
-
-    count = 0
-    for proj_name, defn in (cfg.projects.definitions or {}).items():
-        try:
-            from lib.adapter import get_adapter, quaid_projects_dir
-            home_dir = str(defn.home_dir or "").strip()
-            if not home_dir:
-                continue
-            # home_dir is relative to QUAID_HOME/projects/ by convention
-            if not Path(home_dir).is_absolute():
-                adapter = get_adapter()
-                base = quaid_projects_dir(adapter.quaid_home())
-                # strip leading "projects/" if present
-                rel = home_dir.removeprefix("projects/")
-                candidate_dir = base / rel
-            else:
-                candidate_dir = Path(home_dir)
-
-            if not candidate_dir.is_dir():
-                continue
-
-            for md_path in candidate_dir.rglob("*.md"):
-                abs_path = str(md_path.resolve())
-                if abs_path in registered_paths:
-                    continue
-                try:
-                    registry.register(
-                        file_path=abs_path,
-                        project=proj_name,
-                        asset_type="doc",
-                        title=md_path.stem.replace("-", " ").replace("_", " ").title(),
-                        registered_by="daemon_auto_scan",
-                    )
-                    registered_paths.add(abs_path)
-                    count += 1
-                    logger.info("[daemon] auto-registered doc: %s (project=%s)", abs_path, proj_name)
-                except Exception as e:
-                    logger.debug("[daemon] auto-register skipped %s: %s", abs_path, e)
-        except Exception as e:
-            logger.debug("[daemon] auto-register scan error for project %s: %s", proj_name, e)
-
-    return count
-
-
 def _retry_missing_embeddings() -> int:
     """Retry embeddings for nodes stored without one (e.g. when Ollama was down).
 
@@ -4017,12 +3881,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
     signal.signal(signal.SIGINT, handle_sigterm)
 
     last_idle_check = 0.0
-    last_stale_doc_check = 0.0
     last_embed_retry_check = 0.0
-    last_auto_register_check = 0.0
-    _STALE_DOC_CHECK_INTERVAL = 60.0  # check for stale docs every 60s
     _EMBED_RETRY_INTERVAL = 300.0  # retry missing embeddings every 5 minutes
-    _AUTO_REGISTER_INTERVAL = 300.0  # scan for untracked project docs every 5 minutes
 
     # Initialize version watcher and janitor scheduler
     from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
@@ -4113,17 +3973,6 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             except Exception as e:
                 logger.debug("janitor scheduler tick failed: %s", e)
 
-            # Periodic stale-doc indexing — index one stale doc per cycle
-            if now - last_stale_doc_check > _STALE_DOC_CHECK_INTERVAL:
-                try:
-                    if read_pending_signals():
-                        logger.debug("skipping stale doc indexing while extraction signals are pending")
-                    else:
-                        _index_one_stale_doc()
-                except Exception as e:
-                    logger.debug("stale doc indexing failed: %s", e)
-                last_stale_doc_check = now
-
             # Periodic embedding retry — backfill facts stored without embeddings
             if now - last_embed_retry_check > _EMBED_RETRY_INTERVAL:
                 try:
@@ -4131,15 +3980,6 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.debug("embed retry failed: %s", e)
                 last_embed_retry_check = now
-
-            # Periodic doc auto-registration — find .md files in project dirs
-            # that are not yet registered in the docs registry
-            if now - last_auto_register_check > _AUTO_REGISTER_INTERVAL:
-                try:
-                    _auto_register_untracked_docs()
-                except Exception as e:
-                    logger.debug("auto-register docs failed: %s", e)
-                last_auto_register_check = now
 
             time.sleep(poll_interval)
 

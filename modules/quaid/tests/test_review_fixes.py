@@ -168,33 +168,32 @@ class TestJanitorLockRetry:
 
 
 # ---------------------------------------------------------------------------
-# Daemon stale-doc indexer
+# Project-docs stale-doc indexer
 # ---------------------------------------------------------------------------
 
-class TestDaemonStaleDocIndex:
+class TestProjectDocsStaleDocIndex:
     def test_index_one_stale_doc_no_docs(self, monkeypatch):
         """Returns False when no docs are registered."""
-        from core import extraction_daemon
+        from core import project_docs
 
         mock_registry = MagicMock()
         mock_registry.list_docs.return_value = []
         mock_rag = MagicMock()
 
-        with patch("core.extraction_daemon.DocsRAG", return_value=mock_rag, create=True), \
-             patch("core.extraction_daemon.DocsRegistry", return_value=mock_registry, create=True):
-            # _index_one_stale_doc does lazy imports, mock them
-            import importlib
+        with patch("core.project_docs.DocsRAG", return_value=mock_rag, create=True), \
+             patch("core.project_docs.DocsRegistry", return_value=mock_registry, create=True):
+            # index_one_stale_registered_doc does lazy imports, mock them
             import datastore.docsdb.rag as rag_mod
             import datastore.docsdb.registry as reg_mod
             monkeypatch.setattr(rag_mod, "DocsRAG", lambda: mock_rag)
             monkeypatch.setattr(reg_mod, "DocsRegistry", lambda: mock_registry)
-            result = extraction_daemon._index_one_stale_doc()
+            result = project_docs.index_one_stale_registered_doc()
 
         assert result is False
 
     def test_index_one_stale_doc_indexes_newest_first(self, monkeypatch, tmp_path):
         """Should index the most recently registered doc first."""
-        from core import extraction_daemon
+        from core import project_docs
 
         # Create two fake doc files
         old_doc = tmp_path / "old.md"
@@ -207,6 +206,7 @@ class TestDaemonStaleDocIndex:
             {"file_path": str(old_doc), "registered_at": "2026-01-01"},
             {"file_path": str(new_doc), "registered_at": "2026-03-25"},
         ]
+        mock_registry._resolve_path.side_effect = lambda path: path
 
         indexed_paths = []
         mock_rag = MagicMock()
@@ -221,7 +221,7 @@ class TestDaemonStaleDocIndex:
         monkeypatch.setattr(rag_mod, "DocsRAG", lambda: mock_rag)
         monkeypatch.setattr(reg_mod, "DocsRegistry", lambda: mock_registry)
 
-        result = extraction_daemon._index_one_stale_doc()
+        result = project_docs.index_one_stale_registered_doc()
 
         assert result is True
         assert len(indexed_paths) == 1

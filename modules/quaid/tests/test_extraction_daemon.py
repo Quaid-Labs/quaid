@@ -44,10 +44,10 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     assert marked == []
 
 
-def test_daemon_loop_skips_stale_doc_indexing_when_signals_are_pending(monkeypatch):
+def test_daemon_loop_leaves_docs_refresh_to_project_docs_supervisor(monkeypatch):
     pending_signal = {"session_id": "sess-late", "type": "session_end"}
     read_calls = 0
-    indexed = []
+    docs_refresh_calls = []
 
     def fake_read_pending_signals():
         nonlocal read_calls
@@ -67,9 +67,11 @@ def test_daemon_loop_skips_stale_doc_indexing_when_signals_are_pending(monkeypat
     monkeypatch.setattr(extraction_daemon, "process_signal", lambda _sig: None)
     monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
     monkeypatch.setattr(extraction_daemon, "check_idle_sessions", lambda _mins: None)
-    monkeypatch.setattr(extraction_daemon, "_index_one_stale_doc", lambda: indexed.append(True))
     monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
-    monkeypatch.setattr(extraction_daemon, "_auto_register_untracked_docs", lambda: 0)
+    from core import project_docs
+
+    monkeypatch.setattr(project_docs, "index_one_stale_registered_doc", lambda: docs_refresh_calls.append("index"))
+    monkeypatch.setattr(project_docs, "auto_register_project_docs", lambda: docs_refresh_calls.append("register"))
     monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1_700_000_000.0)
     monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
     monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
@@ -77,7 +79,7 @@ def test_daemon_loop_skips_stale_doc_indexing_when_signals_are_pending(monkeypat
     with pytest.raises(_StopDaemonLoop):
         extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
 
-    assert indexed == []
+    assert docs_refresh_calls == []
 
 
 def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tmp_path):
@@ -1369,6 +1371,8 @@ def test_check_idle_sessions_treats_file_growth_past_eof_cursor_as_new_content(m
 
 
 def test_index_one_stale_doc_resolves_relative_registry_paths_from_workspace(monkeypatch, tmp_path):
+    from core import project_docs
+
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     doc_path = workspace / "docs" / "fresh.md"
@@ -1394,7 +1398,7 @@ def test_index_one_stale_doc_resolves_relative_registry_paths_from_workspace(mon
     monkeypatch.setitem(sys.modules, "datastore.docsdb.rag", types.SimpleNamespace(DocsRAG=lambda: _RagStub()))
 
     try:
-        assert extraction_daemon._index_one_stale_doc() is True
+        assert project_docs.index_one_stale_registered_doc() is True
     finally:
         sys.modules.pop("datastore.docsdb.registry", None)
         sys.modules.pop("datastore.docsdb.rag", None)

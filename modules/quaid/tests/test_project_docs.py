@@ -280,6 +280,25 @@ def test_start_worker_deleted_project_does_not_create_spawn_lock(project_env):
     assert not spawn_lock.exists()
 
 
+def test_supervisor_runs_docs_rag_refresh_ticks(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core import project_docs_supervisor
+
+    calls: list[str] = []
+    monkeypatch.setattr(project_docs, "write_supervisor_pid", lambda _token: None)
+    monkeypatch.setattr(project_docs, "reap_child_processes", lambda: 0)
+    monkeypatch.setattr(project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
+    monkeypatch.setattr(project_docs, "reap_stale_worker", lambda _project, *, stale_after_seconds: False)
+    monkeypatch.setattr(project_docs, "start_worker", lambda _project: 123)
+    monkeypatch.setattr(project_docs, "auto_register_project_docs", lambda: calls.append("register") or 1)
+    monkeypatch.setattr(project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
+
+    project_docs_supervisor.run_supervisor(once=True, interval_seconds=0.5)
+
+    assert calls == ["register", "index"]
+
+
 def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
