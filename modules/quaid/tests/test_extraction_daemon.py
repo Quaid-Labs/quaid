@@ -82,6 +82,37 @@ def test_daemon_loop_leaves_docs_refresh_to_project_docs_supervisor(monkeypatch)
     assert docs_refresh_calls == []
 
 
+def test_daemon_loop_exits_when_supervisor_disappears(monkeypatch):
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+
+def test_ensure_alive_prefers_supervisor_owned_instance_monitor(monkeypatch):
+    calls = {"read": 0, "ensured": 0}
+
+    def fake_read_pid():
+        calls["read"] += 1
+        return 2222 if calls["read"] >= 3 else None
+
+    def fake_ensure_supervisor():
+        calls["ensured"] += 1
+        return 1111
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", "1")
+    monkeypatch.setattr(extraction_daemon, "read_pid", fake_read_pid)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr("core.project_docs.ensure_supervisor_alive", fake_ensure_supervisor)
+
+    assert extraction_daemon.ensure_alive() == 2222
+    assert calls["ensured"] == 1
+
+
 def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tmp_path):
     cfg_path = tmp_path / "instances" / "pytest-runner" / "config.json"
     cfg_path.parent.mkdir(parents=True)

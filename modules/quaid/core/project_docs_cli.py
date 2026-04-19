@@ -72,8 +72,9 @@ def cmd_diff(args) -> None:
 
 
 def cmd_supervisor(args) -> None:
-    if getattr(args, "type", "project-docs") != "project-docs":
-        print("Error: only --type project-docs is supported", file=sys.stderr)
+    supervisor_type = getattr(args, "type", "runtime")
+    if supervisor_type not in {"runtime", "all", "project-docs"}:
+        print("Error: supported --type values: runtime, all, project-docs", file=sys.stderr)
         raise SystemExit(1)
     if args.action == "run":
         from core.project_docs_supervisor import run_supervisor
@@ -82,19 +83,19 @@ def cmd_supervisor(args) -> None:
     if args.action == "ensure":
         pid = project_docs.ensure_supervisor_alive()
         if args.json:
-            print(json.dumps({"type": "project-docs", "running": True, "pid": pid}, indent=2))
+            print(json.dumps({"type": supervisor_type, "running": True, "pid": pid}, indent=2))
         else:
             print(pid)
     elif args.action == "stop":
         stopped = project_docs.stop_supervisor()
         if args.json:
-            print(json.dumps({"type": "project-docs", "stopped": stopped, "running": False}, indent=2))
+            print(json.dumps({"type": supervisor_type, "stopped": stopped, "running": False}, indent=2))
         else:
             print("stopped" if stopped else "not running")
     else:
         pid = project_docs.read_supervisor_pid()
         if args.json:
-            print(json.dumps({"type": "project-docs", "running": bool(pid), "pid": pid}, indent=2))
+            print(json.dumps({"type": supervisor_type, "running": bool(pid), "pid": pid}, indent=2))
         else:
             print(pid if pid else "not running")
 
@@ -122,7 +123,7 @@ def main() -> None:
 
     sup_p = sub.add_parser("supervisor", help="Manage the Quaid supervisor")
     sup_p.add_argument("action", choices=("status", "ensure", "stop", "run"), nargs="?", default="status")
-    sup_p.add_argument("--type", default="project-docs", help="Supervisor component to run (project-docs)")
+    sup_p.add_argument("--type", default="runtime", help="Supervisor component to run (runtime/all/project-docs)")
     sup_p.add_argument("--once", action="store_true", help="Run a single supervisor tick and exit")
     sup_p.add_argument("--interval", type=float, help="Foreground run interval in seconds")
     add_json_argument(sup_p)

@@ -1155,14 +1155,20 @@ def stop_supervisor() -> bool:
             _unlink_pid_record_if_matches(supervisor_pid_path(), pid=pid, token=record.get("token"))
             return False
         try:
-            os.kill(pid, signal.SIGTERM)
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except Exception:
+                os.kill(pid, signal.SIGTERM)
             deadline = time.time() + 5.0
             while time.time() < deadline:
                 if not _pid_alive(pid):
                     break
                 time.sleep(0.1)
             if _pid_alive(pid):
-                os.kill(pid, signal.SIGKILL)
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except Exception:
+                    os.kill(pid, signal.SIGKILL)
             if _worker_dir().is_dir():
                 for pid_file in sorted(_worker_dir().glob("*.pid")):
                     project = pid_file.stem
@@ -1170,6 +1176,11 @@ def stop_supervisor() -> bool:
                         stop_worker(project)
                     except Exception:
                         logger.exception("Failed stopping project docs worker for %s", project)
+            try:
+                from core.project_docs_supervisor import stop_all_instance_monitors
+                stop_all_instance_monitors()
+            except Exception:
+                logger.exception("Failed stopping supervisor-owned instance monitors")
             return True
         finally:
             if not _pid_alive(pid):

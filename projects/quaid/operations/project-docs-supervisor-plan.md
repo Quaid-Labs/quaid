@@ -18,10 +18,12 @@ Near-term process tree:
 
 ```text
 quaid-supervisor
+  +- instance-daemon <instance-a>
+  +- instance-daemon <instance-b>
   +- project-docs-monitor <project-a>
   +- project-docs-monitor <project-b>
   +- project-docs-monitor <project-c>
-  +- existing instance daemons still partly legacy-managed during transition
+  +- janitor worker / scheduler
 ```
 
 Long-term process tree:
@@ -33,6 +35,7 @@ quaid-supervisor
   +- project-docs-monitor <project-a>
   +- project-docs-monitor <project-b>
   +- janitor worker / scheduler
+  +- registered datastore/ingest runtime monitors
   +- other runtime daemons
 ```
 
@@ -357,8 +360,37 @@ Validation after this revision:
 - Impacted Python suite passed: 452 tests across project docs/updater/registry, docs hook, extraction, daemon, and CC/CDX hook coverage.
 - CLI smoke covered `project create`, async `docs update --wait`, `project status`, and `supervisor stop`; no supervisor/worker process leak after stop.
 
-Still before W4/W8:
+### 2026-04-19 Slice D: Runtime Supervisor Migration
 
-- Commit this revision separately on top of `e3efe312a`.
-- Send revised SHA back to W6 for targeted re-review, with concurrency/data-loss findings called out explicitly.
-- Only after W6 approval, request W4 live VM validation and W8 static validation in parallel.
+Implemented direction:
+- The project-docs supervisor is now the root Quaid runtime supervisor.
+- Registered instance daemons run as supervisor-owned instance monitors.
+- Instance daemons watchdog supervisor liveness and exit when their parent
+  supervisor disappears.
+- The legacy extraction daemon no longer owns the janitor scheduler tick.
+- Janitor scheduling now runs in a bounded supervisor-owned worker process.
+- DocsDB's `project_docs_monitor` maintenance routine remains datastore-owned:
+  janitor queues async project-docs monitor requests through the datastore
+  lifecycle callback instead of doing heavy docs writes inline.
+- Supervisor-owned janitor workers do not recursively bootstrap another
+  supervisor; they trust the live supervisor parent passed in
+  `QUAID_SUPERVISOR_PID`.
+- `quaid daemon start` routes through supervisor ensure by default, while
+  `QUAID_SUPERVISOR_DISABLE=1` preserves the legacy direct daemon path for
+  controlled test/runtime escape hatches.
+- `quaid supervisor --type runtime|all|project-docs` accepts the broader
+  runtime supervisor terminology while keeping `project-docs` as a compatible
+  selector.
+
+Validation notes:
+- Focused local coverage added for supervisor instance monitor start/stop,
+  janitor worker throttling, extraction daemon supervisor-watchdog exit, and
+  supervisor-owned janitor monitor requests.
+- Existing project-docs removal-path tests were isolated from the new runtime
+  monitor ticks so they continue testing only project-docs worker cleanup.
+
+Open follow-up:
+- W4 should add a quick live milestone covering supervisor-owned instance
+  monitor lifecycle, project-docs auto-update, janitor monitor request kickoff,
+  and full supervisor stop cleanup.
+- W8 should fold the new focused tests into the static suite ownership path.

@@ -381,6 +381,8 @@ def test_supervisor_runs_docs_rag_refresh_ticks(project_env, monkeypatch):
     monkeypatch.setattr(project_docs, "start_worker", lambda _project: 123)
     monkeypatch.setattr(project_docs, "auto_register_project_docs", lambda: calls.append("register") or 1)
     monkeypatch.setattr(project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    monkeypatch.setattr(project_docs_supervisor, "_maintain_instance_monitors", lambda _known: None)
+    monkeypatch.setattr(project_docs_supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
 
     project_docs_supervisor.run_supervisor(once=True, interval_seconds=0.5)
 
@@ -393,6 +395,10 @@ def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):
     from core import project_docs_supervisor
 
     with patch("core.project_docs_supervisor.list_projects", return_value={"demo": {}}), \
+         patch("core.project_docs_supervisor._maintain_instance_monitors", lambda _known: None), \
+         patch("core.project_docs_supervisor._maintain_janitor_workers", lambda *_args, **_kwargs: None), \
+         patch("core.project_docs.auto_register_project_docs", return_value=0), \
+         patch("core.project_docs.index_one_stale_registered_doc", return_value=False), \
          patch("core.project_docs.project_is_registered_for_worker", return_value=False), \
          patch("core.project_docs.start_worker") as start_worker:
         assert project_docs_supervisor.run_supervisor(once=True) == 0
@@ -425,10 +431,14 @@ def test_supervisor_removal_path_cleans_full_project_state(project_env):
         return False
 
     with patch("core.project_docs_supervisor.list_projects", side_effect=[{"demo": {}}, {}]), \
+         patch("core.project_docs_supervisor._maintain_instance_monitors", lambda _known: None), \
+         patch("core.project_docs_supervisor._maintain_janitor_workers", lambda *_args, **_kwargs: None), \
          patch("core.project_docs.project_is_registered_for_worker", return_value=True), \
          patch("core.project_docs.start_worker", return_value=123), \
          patch("core.project_docs.stop_worker", side_effect=fake_stop_worker), \
          patch("core.project_docs.reap_child_processes", return_value=0), \
+         patch("core.project_docs.auto_register_project_docs", return_value=0), \
+         patch("core.project_docs.index_one_stale_registered_doc", return_value=False), \
          patch("core.project_docs.write_supervisor_pid", lambda _token: None), \
          patch("core.project_docs.clear_supervisor_pid_for_current_process", lambda: None), \
          patch.object(project_docs_supervisor.time, "sleep", fake_sleep):

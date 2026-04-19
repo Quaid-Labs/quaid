@@ -429,6 +429,18 @@ def _is_daemon_process(pid: int) -> bool:
         return True
 
 
+def _supervisor_alive() -> bool:
+    raw = os.environ.get("QUAID_SUPERVISOR_PID", "").strip()
+    if not raw:
+        return True
+    try:
+        pid = int(raw)
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
 def read_pid() -> Optional[int]:
     """Read daemon PID from file. Returns None if not found or stale."""
     pid_file = _pid_path()
@@ -3885,17 +3897,19 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
     last_embed_retry_check = 0.0
     _EMBED_RETRY_INTERVAL = 300.0  # retry missing embeddings every 5 minutes
 
-    # Initialize version watcher and janitor scheduler
-    from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
+    # Initialize version watcher. Janitor scheduling is supervisor-owned.
+    from core.compatibility import VersionWatcher, read_circuit_breaker
     home = _instance_root()
     data_dir = home / "data"
     quaid_version = _get_quaid_version()
     version_watcher = VersionWatcher(data_dir=data_dir, quaid_version=quaid_version)
-    janitor_scheduler = JanitorScheduler(data_dir=data_dir, quaid_home=home)
 
     try:
         while not shutdown_requested:
             _reload_config_if_changed("daemon poll")
+            if not _supervisor_alive():
+                logger.info("supervisor exited; extraction daemon exiting")
+                break
 
             # Version watcher tick — cheap mtime check on every iteration
             try:
@@ -3968,12 +3982,6 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
 
-            # Janitor scheduler tick — checks if maintenance is due
-            try:
-                janitor_scheduler.tick()
-            except Exception as e:
-                logger.debug("janitor scheduler tick failed: %s", e)
-
             # Periodic embedding retry — backfill facts stored without embeddings
             if now - last_embed_retry_check > _EMBED_RETRY_INTERVAL:
                 try:
@@ -4020,6 +4028,31 @@ def ensure_alive() -> int:
                 fail_hard = bool(is_fail_hard_enabled())
             if fail_hard:
                 raise
+        else:
+            pid = read_pid()
+            if pid is not None:
+                return pid
+            try:
+                wait_seconds = float(os.environ.get("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", "5") or 5)
+            except ValueError:
+                wait_seconds = 5.0
+            deadline = time.time() + max(0.5, wait_seconds)
+            while time.time() < deadline:
+                time.sleep(0.1)
+                pid = read_pid()
+                if pid is not None:
+                    return pid
+            msg = "supervisor did not start an instance monitor before timeout"
+            logger.warning(msg)
+            try:
+                from lib.fail_policy import is_fail_hard_enabled
+            except Exception:
+                fail_hard = False
+            else:
+                fail_hard = bool(is_fail_hard_enabled())
+            if fail_hard:
+                raise RuntimeError(msg)
+            return -1
     pid = read_pid()
     if pid is not None:
         return pid
@@ -4173,7 +4206,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "start":
-        pid = start_daemon()
+        pid = ensure_alive()
         print(f"daemon started (pid={pid})")
     elif args.command == "stop":
         stopped = stop_daemon()

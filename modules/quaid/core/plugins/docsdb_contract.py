@@ -29,6 +29,21 @@ def _supervisor_disabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _supervisor_parent_pid() -> int | None:
+    raw = str(os.environ.get("QUAID_SUPERVISOR_PID", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+        os.kill(pid, 0)
+        return pid
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError(f"invalid supervisor parent pid: {raw!r}") from exc
+        logger.warning("Ignoring invalid supervisor parent pid %r: %s", raw, exc)
+        return None
+
+
 def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> Dict[str, Any]:
     """Queue async project-docs monitor refresh requests for registered projects.
 
@@ -54,6 +69,7 @@ def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> D
 
     projects = list_projects()
     names = sorted(str(name) for name in projects.keys() if str(name or "").strip())
+    supervisor_parent = _supervisor_parent_pid()
     result: Dict[str, Any] = {
         "requested": 0,
         "projects": [],
@@ -76,14 +92,17 @@ def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> D
             if _fail_hard_enabled():
                 raise RuntimeError(msg) from exc
 
-    try:
-        result["supervisor_pid"] = project_docs.ensure_supervisor_alive()
-    except Exception as exc:
-        msg = f"failed to ensure project-docs supervisor for monitor maintenance: {exc}"
-        logger.warning(msg)
-        result["errors"].append(msg)
-        if _fail_hard_enabled():
-            raise RuntimeError(msg) from exc
+    if supervisor_parent is not None:
+        result["supervisor_pid"] = supervisor_parent
+    else:
+        try:
+            result["supervisor_pid"] = project_docs.ensure_supervisor_alive()
+        except Exception as exc:
+            msg = f"failed to ensure project-docs supervisor for monitor maintenance: {exc}"
+            logger.warning(msg)
+            result["errors"].append(msg)
+            if _fail_hard_enabled():
+                raise RuntimeError(msg) from exc
 
     return result
 

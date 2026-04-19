@@ -1,3 +1,5 @@
+import os
+
 from core.plugins.docsdb_contract import DocsDbPluginContract
 from core.runtime.plugins import PluginHookContext, PluginManifest
 from datastore.docsdb.system_context import build_system_context_metadata
@@ -53,6 +55,29 @@ def test_docsdb_contract_get_system_context_metadata(monkeypatch, tmp_path):
     payload = contract.get_system_context_metadata(_ctx(str(tmp_path)))
 
     assert payload == {"entries": [{"key": "ok", "label": "ok", "value": "delegated"}]}
+
+
+def test_project_docs_monitor_uses_supervisor_parent_without_reensure(monkeypatch):
+    from core.plugins import docsdb_contract
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", str(os.getpid()))
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: {"demo": {}})
+    monkeypatch.setattr(
+        "core.project_docs.request_update",
+        lambda name, *, reason, requested_by: {"project": name, "request_id": "req-1"},
+    )
+
+    def _unexpected_ensure():
+        raise AssertionError("supervisor-owned janitor worker must not re-bootstrap supervisor")
+
+    monkeypatch.setattr("core.project_docs.ensure_supervisor_alive", _unexpected_ensure)
+
+    result = docsdb_contract._queue_project_docs_monitor_requests(reason="janitor", requested_by="pytest")
+
+    assert result["requested"] == 1
+    assert result["supervisor_pid"] == os.getpid()
+    assert result["errors"] == []
 
 
 def test_build_docsdb_system_context_metadata(monkeypatch, tmp_path):
