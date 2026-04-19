@@ -226,6 +226,31 @@ class TestGetGitDiff:
         assert run_mock.call_count == 1
         assert "Git subprocess budget exhausted while collecting git diff for src.py" in caplog.text
 
+    def test_binary_source_uses_catalog_only_diff_context(self, tmp_path):
+        calls = []
+
+        def _fake_run(cmd, *args, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:2] == ["git", "log"]:
+                return MagicMock(returncode=0, stdout="abc123 add video\n", stderr="")
+            if cmd[:3] == ["git", "diff", "--stat"]:
+                return MagicMock(returncode=0, stdout=" video.mp4 | Bin 0 -> 1024 bytes\n", stderr="")
+            if cmd[:3] == ["git", "diff", "HEAD"]:
+                raise AssertionError("binary source should not request full patch diff")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with _adapter_patch(tmp_path) as iroot, \
+             patch("datastore.docsdb.updater.subprocess.run", side_effect=_fake_run):
+            (iroot / "video.mp4").write_bytes(b"\0" * 1024)
+            from datastore.docsdb.updater import get_git_diff
+
+            result = get_git_diff("video.mp4", 0.0)
+
+        assert "Catalog-only source entry for video.mp4" in result
+        assert "safety_mode: catalog_only" in result
+        assert "Diff summary for video.mp4" in result
+        assert any(cmd[:3] == ["git", "diff", "--stat"] for cmd in calls)
+
 
 class TestGetDocPurposes:
     """Tests for get_doc_purposes()."""
@@ -784,6 +809,38 @@ def test_save_changelog_uses_atomic_replace(tmp_path):
 
 
 class TestCmdUpdateStaleNeverIndexed:
+    def test_update_doc_from_diffs_caps_total_diff_prompt(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc = iroot / "docs" / "doc.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n\nExisting details.\n", encoding="utf-8")
+
+            monkeypatch.setenv("QUAID_DOCS_PROMPT_DIFF_MAX_BYTES", "4096")
+            monkeypatch.setattr(updater, "get_git_diff", lambda *_args, **_kwargs: "X" * 8000)
+
+            captured = {}
+
+            def _fake_deep(prompt, system_prompt=None, max_tokens=0, timeout=0):
+                captured["prompt"] = prompt
+                return "# Doc\n\nUpdated safely.\n<!-- CHANGE_SUMMARY: bounded -->", 0.1
+
+            monkeypatch.setattr(updater, "call_deep_reasoning", _fake_deep)
+
+            ok = updater.update_doc_from_diffs(
+                "docs/doc.md",
+                "test purpose",
+                ["src/large.txt"],
+                dry_run=True,
+            )
+
+        assert ok is True
+        prompt = captured["prompt"]
+        assert "QUAID DOCS SAFETY NOTE" in prompt
+        assert "Project diff catalog limit reached" in prompt
+        assert len(prompt.encode("utf-8")) < 7000
+
     def test_skips_protected_project_log_staleness_update(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             from datastore.docsdb import updater

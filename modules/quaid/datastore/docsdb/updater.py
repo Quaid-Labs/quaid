@@ -551,6 +551,148 @@ class StalenessInfo:
     change_classification: Optional[Dict[str, Any]] = None  # From classify_doc_change()
 
 
+@dataclass
+class BoundedDiffContext:
+    text: str
+    capped: bool = False
+    reasons: List[str] = field(default_factory=list)
+
+
+_BINARY_EXTENSIONS = {
+    ".7z", ".avi", ".bin", ".bmp", ".bz2", ".class", ".dll", ".dmg", ".doc",
+    ".docx", ".dylib", ".exe", ".gif", ".gz", ".ico", ".iso", ".jar", ".jpeg",
+    ".jpg", ".mov", ".mp3", ".mp4", ".o", ".pdf", ".png", ".ppt", ".pptx",
+    ".pyc", ".rar", ".so", ".tar", ".tgz", ".webm", ".webp", ".xls", ".xlsx",
+    ".zip", ".zst",
+}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %d", name, raw, default)
+        return default
+    return max(minimum, value)
+
+
+def _max_source_patch_bytes() -> int:
+    return _env_int("QUAID_DOCS_SOURCE_PATCH_MAX_BYTES", 256_000, minimum=1024)
+
+
+def _max_diff_file_bytes() -> int:
+    return _env_int("QUAID_DOCS_PROMPT_DIFF_FILE_MAX_BYTES", 48_000, minimum=1024)
+
+
+def _max_diff_total_bytes() -> int:
+    return _env_int("QUAID_DOCS_PROMPT_DIFF_MAX_BYTES", 160_000, minimum=4096)
+
+
+def _max_doc_prompt_bytes() -> int:
+    return _env_int("QUAID_DOCS_PROMPT_DOC_MAX_BYTES", 240_000, minimum=4096)
+
+
+def _utf8_len(text: str) -> int:
+    return len(str(text or "").encode("utf-8", errors="replace"))
+
+
+def _truncate_text_bytes(text: str, max_bytes: int) -> Tuple[str, bool]:
+    raw = str(text or "").encode("utf-8", errors="replace")
+    if len(raw) <= max_bytes:
+        return str(text or ""), False
+    suffix = (
+        "\n\n[QUAID DOCS SAFETY CAP: content truncated before LLM prompt; "
+        f"max_bytes={max_bytes}. Use metadata/catalog context only for omitted tail.]"
+    )
+    suffix_raw = suffix.encode("utf-8")
+    head_limit = max(0, max_bytes - len(suffix_raw))
+    clipped = raw[:head_limit].decode("utf-8", errors="ignore")
+    return clipped + suffix, True
+
+
+def _looks_binary(path: Path) -> bool:
+    if path.suffix.lower() in _BINARY_EXTENSIONS:
+        return True
+    try:
+        with path.open("rb") as fh:
+            sample = fh.read(8192)
+    except OSError:
+        return False
+    return b"\0" in sample
+
+
+def _catalog_entry(source_path: str, src_abs: Path, *, reason: str) -> str:
+    try:
+        stat = src_abs.stat()
+        size = stat.st_size
+        mtime = datetime.fromtimestamp(stat.st_mtime).isoformat()
+    except OSError as exc:
+        size = -1
+        mtime = "unknown"
+        reason = f"{reason}; stat_error={exc}"
+    file_kind = "binary" if _looks_binary(src_abs) else "text"
+    return (
+        f"### Catalog-only source entry for {source_path}\n"
+        f"- safety_mode: catalog_only\n"
+        f"- reason: {reason}\n"
+        f"- path: {source_path}\n"
+        f"- kind: {file_kind}\n"
+        f"- size_bytes: {size}\n"
+        f"- mtime: {mtime}\n"
+        "- contents: not expanded into LLM prompt\n"
+    )
+
+
+def _read_prompt_doc(doc_abs: Path) -> Tuple[str, bool]:
+    max_bytes = _max_doc_prompt_bytes()
+    try:
+        size = doc_abs.stat().st_size
+    except OSError:
+        size = 0
+    if size > max_bytes:
+        return "", True
+    text = doc_abs.read_text()
+    truncated, capped = _truncate_text_bytes(text, max_bytes)
+    return truncated, capped
+
+
+def _bounded_diff_context(stale_sources: List[str], doc_mtime: float) -> BoundedDiffContext:
+    max_total = _max_diff_total_bytes()
+    sections: List[str] = []
+    total = 0
+    capped = False
+    reasons: List[str] = []
+
+    for src in stale_sources:
+        diff = get_git_diff(src, doc_mtime)
+        if not diff:
+            continue
+        diff_bytes = _utf8_len(diff)
+        if total + diff_bytes > max_total:
+            remaining = max_total - total
+            if remaining > 512:
+                clipped, _ = _truncate_text_bytes(diff, remaining)
+                sections.append(clipped)
+            capped = True
+            reasons.append(f"total diff cap hit before/inside {src} ({max_total} bytes)")
+            skipped = len(stale_sources) - len(sections)
+            sections.append(
+                "\n### Project diff catalog limit reached\n"
+                f"- safety_mode: catalog_only_tail\n"
+                f"- max_total_diff_bytes: {max_total}\n"
+                f"- remaining_sources_not_expanded: {max(0, skipped)}\n"
+                "- note: omitted sources must be treated as catalog-only until a scoped update drills into them.\n"
+            )
+            break
+        sections.append(diff)
+        total += diff_bytes
+
+    return BoundedDiffContext(text="\n\n".join(sections), capped=capped, reasons=reasons)
+
+
 def classify_doc_change(diff_text: str) -> Dict[str, Any]:
     """Classify a doc-affecting change as trivial or significant.
 
@@ -728,14 +870,19 @@ def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:
             # Classify the change by gathering git diffs
             classification = None
             try:
-                diff_sections = []
-                for src in stale_sources:
-                    diff = get_git_diff(src, doc_mtime)
-                    if diff:
-                        diff_sections.append(diff)
-                if diff_sections:
-                    combined_diff = "\n\n".join(diff_sections)
-                    classification = classify_doc_change(combined_diff)
+                diff_context = _bounded_diff_context(stale_sources, doc_mtime)
+                if diff_context.text:
+                    if diff_context.capped:
+                        classification = {
+                            "classification": "significant",
+                            "confidence": 1.0,
+                            "reasons": ["diff/catalog safety cap hit", *diff_context.reasons],
+                            "lines_changed": 0,
+                            "trivial_signals": 0,
+                            "significant_signals": 1,
+                        }
+                    else:
+                        classification = classify_doc_change(diff_context.text)
             except Exception as exc:
                 logger.warning("Failed diff classification for %s: %s", doc_path, exc)
 
@@ -760,6 +907,19 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
     if not src_abs.exists():
         return ""
 
+    try:
+        source_size = src_abs.stat().st_size
+    except OSError:
+        source_size = 0
+    metadata_only = False
+    metadata_reason = ""
+    if _looks_binary(src_abs):
+        metadata_only = True
+        metadata_reason = "binary file"
+    elif source_size > _max_source_patch_bytes():
+        metadata_only = True
+        metadata_reason = f"source file exceeds patch expansion cap ({source_size} bytes)"
+
     deadline = time.monotonic() + _git_subprocess_budget_seconds()
     parts = []
 
@@ -777,6 +937,27 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         logger.debug("Git log unavailable for %s since %s: %s", source_path, since_iso, exc)
 
+    if metadata_only:
+        parts.append(_catalog_entry(source_path, src_abs, reason=metadata_reason))
+        try:
+            stat_output = _run_git_command(
+                ["git", "diff", "--stat", "--numstat", "--summary", "HEAD", "--", source_path],
+                deadline,
+            )
+            if stat_output.returncode == 0 and stat_output.stdout.strip():
+                stat_text, stat_capped = _truncate_text_bytes(stat_output.stdout.strip(), _max_diff_file_bytes())
+                if stat_capped:
+                    parts.append(
+                        f"### Diff summary for {source_path} (truncated by safety cap):\n{stat_text}"
+                    )
+                else:
+                    parts.append(f"### Diff summary for {source_path}:\n{stat_text}")
+        except TimeoutError:
+            logger.warning("Git subprocess budget exhausted while collecting git diff summary for %s", source_path)
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logger.debug("Git diff summary unavailable for %s: %s", source_path, exc)
+        return "\n\n".join(parts)
+
     # Git diff (staged + unstaged changes)
     try:
         diff_output = _run_git_command(
@@ -784,8 +965,12 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
             deadline,
         )
         if diff_output.returncode == 0 and diff_output.stdout.strip():
-            diff_text = diff_output.stdout.strip()
-            parts.append(f"### Diff for {source_path}:\n{diff_text}")
+            diff_text, diff_capped = _truncate_text_bytes(diff_output.stdout.strip(), _max_diff_file_bytes())
+            if diff_capped:
+                parts.append(f"### Diff for {source_path} (truncated by safety cap):\n{diff_text}")
+                parts.append(_catalog_entry(source_path, src_abs, reason="per-file diff prompt cap hit"))
+            else:
+                parts.append(f"### Diff for {source_path}:\n{diff_text}")
     except TimeoutError:
         logger.warning("Git subprocess budget exhausted while collecting git diff for %s", source_path)
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
@@ -853,26 +1038,38 @@ def update_doc_from_diffs(
         print(f"  Doc not found: {doc_abs}")
         return False
 
-    current_doc = doc_abs.read_text()
+    current_doc, doc_capped = _read_prompt_doc(doc_abs)
+    if doc_capped:
+        reason = (
+            f"Skipped: current doc exceeds prompt safety cap "
+            f"({_max_doc_prompt_bytes()} bytes)"
+        )
+        print(f"  WARNING: {reason} — {doc_path}")
+        log_doc_update(doc_path, trigger, stale_sources, reason, dry_run, False, 0, 0)
+        return False
     chars_before = len(current_doc)
     doc_mtime = doc_abs.stat().st_mtime
 
-    # Gather diffs for each stale source
-    diff_sections = []
-    for src in stale_sources:
-        diff = get_git_diff(src, doc_mtime)
-        if diff:
-            diff_sections.append(diff)
-
-    if not diff_sections:
+    diff_context = _bounded_diff_context(stale_sources, doc_mtime)
+    if not diff_context.text:
         print(f"  No git diffs found for {doc_path}")
         return False
 
-    all_diffs = "\n\n".join(diff_sections)
+    all_diffs = diff_context.text
 
     # Smart staleness: classify diffs before calling Deep Reasoning
     # Rule-based classifier catches trivial diffs (comments, whitespace, imports)
-    classification = classify_doc_change(all_diffs)
+    if diff_context.capped:
+        classification = {
+            "classification": "significant",
+            "confidence": 1.0,
+            "reasons": ["diff/catalog safety cap hit", *diff_context.reasons],
+            "lines_changed": 0,
+            "trivial_signals": 0,
+            "significant_signals": 1,
+        }
+    else:
+        classification = classify_doc_change(all_diffs)
     if classification["classification"] == "trivial" and classification["confidence"] >= 0.7:
         print(f"  Skipping {doc_path} — trivial changes: {', '.join(classification['reasons'])}")
         return True  # Success — no update needed
@@ -945,9 +1142,19 @@ def update_doc_from_diffs(
             "<!-- CHANGE_SUMMARY: brief description of what was updated -->"
         )
 
+    safety_note = ""
+    if diff_context.capped or any("catalog_only" in section for section in all_diffs.splitlines()):
+        safety_note = (
+            "\n\nQUAID DOCS SAFETY NOTE:\n"
+            "Some source inputs were intentionally provided as bounded metadata/catalog "
+            "instead of raw content or full diffs. Do not invent implementation details "
+            "for catalog-only inputs. If needed, document that detailed content inspection "
+            "was skipped because project-docs safety caps were reached.\n"
+        )
+
     user_message = (
         f"CURRENT DOCUMENT ({doc_path}):\n\n{current_doc}\n\n"
-        f"GIT CHANGES SINCE DOC LAST UPDATED:\n\n{all_diffs}"
+        f"GIT CHANGES SINCE DOC LAST UPDATED:{safety_note}\n\n{all_diffs}"
     )
 
     print(f"  Calling Deep Reasoning to update {doc_path}...")
