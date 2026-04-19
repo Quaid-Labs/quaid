@@ -18,9 +18,9 @@ Near-term process tree:
 
 ```text
 quaid-supervisor
-  +- project-docs-worker <project-a>
-  +- project-docs-worker <project-b>
-  +- project-docs-worker <project-c>
+  +- project-docs-monitor <project-a>
+  +- project-docs-monitor <project-b>
+  +- project-docs-monitor <project-c>
   +- existing instance daemons still partly legacy-managed during transition
 ```
 
@@ -30,13 +30,19 @@ Long-term process tree:
 quaid-supervisor
   +- instance-daemon <instance-a>
   +- instance-daemon <instance-b>
-  +- project-docs-worker <project-a>
-  +- project-docs-worker <project-b>
+  +- project-docs-monitor <project-a>
+  +- project-docs-monitor <project-b>
   +- janitor worker / scheduler
   +- other runtime daemons
 ```
 
 If the supervisor is stopped, Quaid runtime should stop. Workers should also watchdog supervisor liveness so they exit if the supervisor disappears unexpectedly.
+
+Terminology direction: the long-lived per-project docs process is better described
+as a docs monitor than a docs daemon thread. The supervisor owns lifecycle and
+process grouping; the docs monitor owns the project-docs domain operations.
+Use the same language for future instance monitors when instance daemons move
+under supervisor ownership.
 
 ## Tick Ownership Decision
 
@@ -165,6 +171,12 @@ Project-docs worker update job:
 
 V1 can run low/no parallelism as long as the structure is planner -> scoped draft -> final review -> apply.
 
+Benchmark harnesses should register benchmark projects explicitly through product
+surfaces, the same way a live project would be created/linked/registered. The
+docs registry reconciliation path is invariant repair and defense-in-depth for
+pre-existing orphan state; it is not the normal mechanism for benchmark project
+discovery.
+
 ## Due Conditions
 
 Worker should update when one of these is true:
@@ -181,8 +193,12 @@ Docs output must not reset source quiet windows or self-trigger circular updates
 - Source deletion must not silently unregister docs.
 - Missing registered docs outside docs-updater apply are stale/anomaly state.
 - Only docs-updater apply transaction or project delete transaction may unregister/archive docs.
-- Project delete must stop/remove project-docs worker state.
+- Project delete must stop/remove project-docs monitor state.
 - Deleted/disabled projects must not be resurrected by legacy staged events; legacy staged events should be removed.
+- The docs monitor should own project-docs cleanup semantics: force requests,
+  status/cursor state, project-doc locks, heartbeat/pid/log/temp files, and
+  docs-specific shadow tracking. The supervisor may coordinate process stopping,
+  but cleanup knowledge should not sprawl across registry and supervisor code.
 
 ## Implementation Milestones
 
@@ -219,7 +235,10 @@ Docs output must not reset source quiet windows or self-trigger circular updates
 
 - Audit unregister/delete paths.
 - Enforce source-deletion and missing-doc invariants.
-- Ensure project delete stops docs worker and clears worker state.
+- Ensure project delete stops docs monitor and clears monitor-owned state.
+- Move tactical inline cleanup toward a docs-monitor-owned cleanup primitive so
+  the project registry requests deletion but does not need to know every docs
+  monitor artifact path.
 
 ### Milestone 6: Large Project And Large File Safety
 
@@ -246,7 +265,7 @@ For implementation commits:
 
 Live VM canary:
 
-1. Create/link/register project with source root.
+1. Create/link/register project with source root through product CLI/API surfaces.
 2. Start supervisor/docs worker.
 3. Change source with durable project fact/API/command.
 4. `quaid project status <project>` reports stale.
@@ -256,6 +275,15 @@ Live VM canary:
 8. Docs update naturally, without benchmark-authored hints.
 9. `PROJECT.log` is unchanged by updater.
 10. Docs recall answers from updated project docs.
+
+Benchmark canary:
+
+1. Harness creates/registers benchmark projects explicitly; it must not rely on
+   write-on-read reconciliation to discover project labels from docs rows.
+2. Harness starts supervisor/docs monitors or foreground supervisor mode.
+3. Harness waits on `quaid project status <project> --json` freshness/cursor
+   agreement before scoring docs recall.
+4. Harness archives status/diff/docs-list/project docs artifacts for review.
 
 ## Implementation Log
 
