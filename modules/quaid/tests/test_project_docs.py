@@ -176,6 +176,31 @@ def test_worker_heartbeat_writes_atomic_json_pid_record(project_env):
     assert pid_data["project"] == "demo"
 
 
+def test_cleanup_project_state_removes_all_project_artifacts(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    paths = [
+        project_docs.request_path("demo"),
+        project_docs.state_path("demo"),
+        project_docs.lock_path("demo"),
+        project_docs._spawn_lock_path("worker", "demo"),
+        project_docs.worker_pid_path("demo"),
+        project_docs.worker_heartbeat_path("demo"),
+        project_docs._worker_dir() / "demo.log",
+        project_docs._state_dir() / ".demo.json.123.tmp",
+        project_docs._worker_dir() / ".demo.heartbeat.json.123.tmp",
+    ]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+
+    result = project_docs.cleanup_project_state("demo")
+
+    assert result["removed"] >= len(paths)
+    assert all(not path.exists() for path in paths)
+
+
 def test_delete_project_removes_project_docs_worker_state(project_env):
     tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -183,6 +208,9 @@ def test_delete_project_removes_project_docs_worker_state(project_env):
 
     project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
     project_docs.write_worker_heartbeat("demo", {"status": "idle"})
+    project_docs.lock_path("demo").parent.mkdir(parents=True, exist_ok=True)
+    project_docs.lock_path("demo").write_text("lock", encoding="utf-8")
+    (project_docs._worker_dir() / "demo.log").write_text("log", encoding="utf-8")
 
     with patch("core.project_registry._sync_docs_registry_project"):
         delete_project("demo")
@@ -190,3 +218,5 @@ def test_delete_project_removes_project_docs_worker_state(project_env):
     assert not (tmp_path / "data" / "project-docs" / "requests" / "demo.json").exists()
     assert not (tmp_path / "data" / "project-docs" / "state" / "demo.json").exists()
     assert not (tmp_path / "data" / "project-docs" / "workers" / "demo.heartbeat.json").exists()
+    assert not (tmp_path / "data" / "project-docs" / "locks" / "demo.lock").exists()
+    assert not (tmp_path / "data" / "project-docs" / "workers" / "demo.log").exists()

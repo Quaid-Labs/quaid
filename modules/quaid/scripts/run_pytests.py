@@ -120,6 +120,27 @@ def expand_targets(files: list[Path], mode: str) -> list[str]:
                 ]
             )
             continue
+        if (
+            mode == "unit"
+            and file_path.name == "test_hooks_cc.py"
+            and os.environ.get("QUAID_PYTEST_SPLIT_HOOKS_CC", "1") != "0"
+        ):
+            # This file validates several independent hook surfaces and runs
+            # longer than the per-target timeout as one subprocess on loaded CI.
+            # Split by stable class/function groups rather than weakening the
+            # timeout guard for every Python unit file.
+            targets.extend(
+                [
+                    f"{rel}::TestHookInjectCursorSeeding",
+                    f"{rel}::test_hook_extract_precompact_resolves_cc_transcript_and_flushes_staged_payload",
+                    f"{rel}::test_hook_extract_precompact_sweeps_older_staged_payloads",
+                    f"{rel}::test_hook_extract_precompact_refreshes_rules_context_from_identity_and_projects",
+                    f"{rel}::TestHookInjectRecallResilience",
+                    f"{rel}::TestHookSessionInitRegistryAugmentation",
+                    f"{rel}::TestSubagentHooks",
+                ]
+            )
+            continue
         targets.append(rel)
     return targets
 

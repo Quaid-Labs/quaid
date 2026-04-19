@@ -178,6 +178,49 @@ def read_state(project: str) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def cleanup_project_state(project: str) -> Dict[str, int]:
+    """Remove all per-project project-docs operational state.
+
+    Project deletion is authoritative: force requests, cursors, lock files,
+    worker pid/heartbeat/logs, and temporary atomic-write files must not survive
+    and later resurrect or confuse a deleted project.
+    """
+    name = validate_project_name(project)
+    removed = 0
+    candidates = [
+        request_path(name),
+        state_path(name),
+        lock_path(name),
+        _spawn_lock_path("worker", name),
+        worker_pid_path(name),
+        worker_heartbeat_path(name),
+        _worker_dir() / f"{name}.log",
+    ]
+    temp_patterns = [
+        _request_dir() / f".{name}.json.*.tmp",
+        _state_dir() / f".{name}.json.*.tmp",
+        _worker_dir() / f".{name}.pid.*.tmp",
+        _worker_dir() / f".{name}.heartbeat.json.*.tmp",
+    ]
+    for pattern in temp_patterns:
+        candidates.extend(pattern.parent.glob(pattern.name))
+    seen: set[str] = set()
+    for path in candidates:
+        try:
+            key = str(path.resolve(strict=False))
+        except Exception:
+            key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            logger.warning("Failed removing project-docs state file for %s: %s", name, path)
+    return {"removed": removed}
+
+
 def write_state(project: str, state: Dict[str, Any]) -> None:
     payload = dict(state or {})
     payload["project"] = validate_project_name(project)

@@ -137,6 +137,28 @@ def _safe_remove_project_dir(path: Path, allowed_roots: List[Path]) -> bool:
     return True
 
 
+def _safe_remove_tracking_dir(path: Path, tracking_base: Path) -> bool:
+    """Guarded recursive delete for shadow-git project tracking dirs."""
+    try:
+        resolved = path.resolve()
+    except Exception:
+        resolved = Path(os.path.realpath(str(path)))
+    try:
+        root = tracking_base.resolve()
+    except Exception:
+        root = Path(os.path.realpath(str(tracking_base)))
+    if resolved == root or root not in resolved.parents:
+        logger.warning("Refusing to remove tracking dir outside tracking root: %s", path)
+        return False
+    if not resolved.exists():
+        return False
+    if not resolved.is_dir():
+        logger.warning("Refusing to remove non-directory tracking path: %s", resolved)
+        return False
+    shutil.rmtree(resolved)
+    return True
+
+
 def _misc_project_instance_id(project_name: str) -> Optional[str]:
     name = str(project_name or "").strip()
     if not name.startswith("misc--"):
@@ -684,16 +706,7 @@ def delete_project(name: str) -> None:
         from core import project_docs
 
         project_docs.stop_worker(name)
-        for path in (
-            project_docs.request_path(name),
-            project_docs.state_path(name),
-            project_docs.worker_heartbeat_path(name),
-            project_docs.worker_pid_path(name),
-        ):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        project_docs.cleanup_project_state(name)
     except Exception as e:
         logger.warning("Failed to clean up project docs worker state for %s: %s", name, e)
 
@@ -747,18 +760,14 @@ def delete_project(name: str) -> None:
         from core import project_docs
 
         project_docs.stop_worker(name)
-        for path in (
-            project_docs.request_path(name),
-            project_docs.state_path(name),
-            project_docs.worker_heartbeat_path(name),
-            project_docs.worker_pid_path(name),
-        ):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        project_docs.cleanup_project_state(name)
     except Exception as e:
         logger.warning("Failed final project docs worker cleanup for %s: %s", name, e)
+
+    try:
+        _safe_remove_tracking_dir(tracking_base / name, tracking_base)
+    except Exception as e:
+        logger.warning("Failed final shadow git cleanup for project %s: %s", name, e)
 
     # Re-check visible/canonical dirs after the race window for the same reason.
     for candidate in candidate_dirs:
