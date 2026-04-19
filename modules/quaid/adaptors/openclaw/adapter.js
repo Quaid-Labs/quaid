@@ -2196,7 +2196,13 @@ const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py"
 const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
-let _beforePromptBuildInFlight = false;
+const _beforePromptBuildInFlightByTurn = /* @__PURE__ */ new Map();
+function _autoInjectTurnKey(agentLabel, query) {
+  const normalizedAgent = String(agentLabel || "main").trim().toLowerCase() || "main";
+  const normalizedQuery = String(query || "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 500);
+  return `${normalizedAgent}
+${normalizedQuery}`;
+}
 const _lastDaemonAliveCheckMsByInstance = /* @__PURE__ */ new Map();
 const _DAEMON_ALIVE_CHECK_INTERVAL_MS = 6e4;
 function _getGatewayCredential(providers) {
@@ -3084,62 +3090,93 @@ ${deferredNoticeContext}` : deferredNoticeContext;
         const injectLimit = autoInjectK;
         const injectIntent = "general";
         const injectDomain = { all: true };
-        if (_beforePromptBuildInFlight) {
-          writeHookTrace("hook.before_prompt_build.reentrant_skip", { query: query.slice(0, 80) });
+        const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
+        let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
+        if (!turnPromise && _beforePromptBuildInFlightByTurn.size > 0) {
+          writeHookTrace("hook.before_prompt_build.reentrant_skip", {
+            query: query.slice(0, 80),
+            active_turns: _beforePromptBuildInFlightByTurn.size,
+            same_turn: false
+          });
           return withDocs({ prependContext: event.prependContext });
         }
-        _beforePromptBuildInFlight = true;
-        let allMemories;
-        let recallDiagnostics = null;
-        try {
-          const modelConfigNotice = await validatePromptModelConfigIfChanged();
-          if (modelConfigNotice) {
-            prependContextParts.push(modelConfigNotice);
-            appendSystemContext = appendSystemContext ? `${appendSystemContext}
+        if (turnPromise) {
+          writeHookTrace("hook.before_prompt_build.duplicate_wait", {
+            query: query.slice(0, 80),
+            active_turns: _beforePromptBuildInFlightByTurn.size
+          });
+        } else {
+          turnPromise = (async () => {
+            const modelConfigNotice2 = await validatePromptModelConfigIfChanged();
+            let deadlineTimer;
+            const deadline = new Promise((resolve) => {
+              deadlineTimer = setTimeout(() => {
+                writeHookTrace("hook.before_prompt_build.deadline_hit", {});
+                resolve([[]]);
+              }, BEFORE_PROMPT_BUILD_DEADLINE_MS);
+            });
+            const recallStartMs = Date.now();
+            writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
+            const [allMemories2] = await Promise.race([
+              Promise.all([
+                recallMemories({
+                  query,
+                  limit: injectLimit,
+                  expandGraph: false,
+                  // OC already injects project docs separately in before_prompt_build.
+                  // Keep auto-inject memory recall focused on memory stores so a slow
+                  // project search cannot consume the full hook budget and starve
+                  // otherwise-fast personal memory hits like Baxter.
+                  datastores: ["vector_basic"],
+                  routeStores: false,
+                  intent: injectIntent,
+                  domain: injectDomain,
+                  failOpen: true,
+                  waitForExtraction: false,
+                  fast: true,
+                  sourceTag: "auto_inject"
+                })
+              ]),
+              deadline
+            ]);
+            if (deadlineTimer !== void 0) clearTimeout(deadlineTimer);
+            const recallDiagnostics2 = summarizeRecallDiagnostics(allMemories2?.__quaidRecallDiagnostics || null);
+            writeHookTrace("hook.recall_done", {
+              count: allMemories2.length,
+              elapsed_ms: Date.now() - recallStartMs,
+              diagnostics: recallDiagnostics2,
+              top_results: summarizeRecallResults(allMemories2)
+            });
+            const injection2 = facade.prepareAutoInjectionContext({
+              allMemories: allMemories2,
+              eventMessages: event.messages || [],
+              context: ctx,
+              existingPrependContext: void 0,
+              injectLimit,
+              maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
+            });
+            return { allMemories: allMemories2, recallDiagnostics: recallDiagnostics2, injection: injection2, modelConfigNotice: modelConfigNotice2 || void 0 };
+          })();
+          _beforePromptBuildInFlightByTurn.set(turnKey, turnPromise);
+          turnPromise.then(
+            () => {
+              if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
+                _beforePromptBuildInFlightByTurn.delete(turnKey);
+              }
+            },
+            () => {
+              if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
+                _beforePromptBuildInFlightByTurn.delete(turnKey);
+              }
+            }
+          );
+        }
+        const { allMemories, recallDiagnostics, injection, modelConfigNotice } = await turnPromise;
+        if (modelConfigNotice) {
+          prependContextParts.push(modelConfigNotice);
+          appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${modelConfigNotice}` : modelConfigNotice;
-          }
-          let deadlineTimer;
-          const deadline = new Promise((resolve) => {
-            deadlineTimer = setTimeout(() => {
-              writeHookTrace("hook.before_prompt_build.deadline_hit", {});
-              resolve([[]]);
-            }, BEFORE_PROMPT_BUILD_DEADLINE_MS);
-          });
-          const recallStartMs = Date.now();
-          writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
-          [allMemories] = await Promise.race([
-            Promise.all([
-              recallMemories({
-                query,
-                limit: injectLimit,
-                expandGraph: false,
-                // OC already injects project docs separately in before_prompt_build.
-                // Keep auto-inject memory recall focused on memory stores so a slow
-                // project search cannot consume the full hook budget and starve
-                // otherwise-fast personal memory hits like Baxter.
-                datastores: ["vector_basic"],
-                routeStores: false,
-                intent: injectIntent,
-                domain: injectDomain,
-                failOpen: true,
-                waitForExtraction: false,
-                fast: true,
-                sourceTag: "auto_inject"
-              })
-            ]),
-            deadline
-          ]);
-          if (deadlineTimer !== void 0) clearTimeout(deadlineTimer);
-          recallDiagnostics = summarizeRecallDiagnostics(allMemories?.__quaidRecallDiagnostics || null);
-          writeHookTrace("hook.recall_done", {
-            count: allMemories.length,
-            elapsed_ms: Date.now() - recallStartMs,
-            diagnostics: recallDiagnostics,
-            top_results: summarizeRecallResults(allMemories)
-          });
-        } finally {
-          _beforePromptBuildInFlight = false;
         }
         if (!Array.isArray(allMemories) || allMemories.length === 0) {
           writeHookTrace("hook.before_prompt_build.recall_empty", {
@@ -3149,14 +3186,6 @@ ${modelConfigNotice}` : modelConfigNotice;
             diagnostics: recallDiagnostics
           });
         }
-        const injection = facade.prepareAutoInjectionContext({
-          allMemories,
-          eventMessages: event.messages || [],
-          context: ctx,
-          existingPrependContext: void 0,
-          injectLimit,
-          maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
-        });
         if (!injection) {
           writeHookTrace("hook.before_prompt_build.injection_skipped", {
             query: query.slice(0, 80),
@@ -5204,6 +5233,7 @@ const __test = {
   getContextRefreshStrategy,
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
+  autoInjectTurnKey: _autoInjectTurnKey,
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,

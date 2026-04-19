@@ -2743,13 +2743,27 @@ const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 // PROJECT_UPDATER removed — project events now emitted from Python extraction.
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
+type AutoInjectTurnOutcome = {
+  allMemories: any[];
+  recallDiagnostics: Record<string, unknown> | null;
+  injection: ReturnType<ReturnType<typeof createQuaidFacade>["prepareAutoInjectionContext"]>;
+  modelConfigNotice?: string;
+};
+
 // Re-entrancy guard for beforePromptBuildHandler.
-// OC reuses the TUI session key for internal openresponses LLM calls spawned by
-// callConfiguredLLM. This means session-key filtering cannot distinguish user messages
-// from internal calls. Instead we track whether a recall is already in flight: if
-// before_prompt_build fires while we are inside recallMemories, it must be an internal
-// call and we skip to prevent a recursive recall→LLM→recall→... loop.
-let _beforePromptBuildInFlight = false;
+// OC may invoke both api.on and registerHook for the same external
+// before_prompt_build turn. A single global boolean suppresses whichever hook
+// fires second, which can drop the only mutating injection result on Matrix.
+// Cache the in-flight prepared injection for duplicate same-turn invocations,
+// while still skipping different prompts that arrive during recall to prevent
+// recall→LLM→recall recursion from internal OpenClaw calls.
+const _beforePromptBuildInFlightByTurn = new Map<string, Promise<AutoInjectTurnOutcome>>();
+
+function _autoInjectTurnKey(agentLabel: string, query: string): string {
+  const normalizedAgent = String(agentLabel || "main").trim().toLowerCase() || "main";
+  const normalizedQuery = String(query || "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 500);
+  return `${normalizedAgent}\n${normalizedQuery}`;
+}
 
 // Rate-limit for daemon liveness pings from before_prompt_build.
 // ensureDaemonAlive() is cheap (just checks PID), but the subprocess call adds
@@ -3864,73 +3878,104 @@ notify_user(${JSON.stringify(message)})
         const injectDomain: DomainFilter = { all: true };
 
         // Re-entrancy guard: if before_prompt_build fires while we are already inside
-        // recallMemories, this is an OC-internal LLM call (OC reuses the TUI session key
-        // for callConfiguredLLM openresponses sessions). Skip to prevent the
-        // recall→LLM→recall→... recursive loop.
-        if (_beforePromptBuildInFlight) {
-          writeHookTrace("hook.before_prompt_build.reentrant_skip", { query: query.slice(0, 80) });
+        // recallMemories for a different prompt, this is likely an OC-internal LLM call
+        // (OC reuses the TUI session key for callConfiguredLLM openresponses sessions).
+        // Duplicate hook surfaces for the same Matrix prompt share the prepared injection
+        // so the mutating hook path is not starved by the non-mutating event-bus path.
+        const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
+        let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
+        if (!turnPromise && _beforePromptBuildInFlightByTurn.size > 0) {
+          writeHookTrace("hook.before_prompt_build.reentrant_skip", {
+            query: query.slice(0, 80),
+            active_turns: _beforePromptBuildInFlightByTurn.size,
+            same_turn: false,
+          });
           return withDocs({ prependContext: event.prependContext });
         }
-        _beforePromptBuildInFlight = true;
-        let allMemories: any[];
-        let recallDiagnostics: Record<string, unknown> | null = null;
-        try {
-          const modelConfigNotice = await validatePromptModelConfigIfChanged();
-          if (modelConfigNotice) {
-            prependContextParts.push(modelConfigNotice);
-            appendSystemContext = appendSystemContext
-              ? `${appendSystemContext}\n\n${modelConfigNotice}`
-              : modelConfigNotice;
-          }
-          let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-          const deadline = new Promise<[any[]]>(resolve => {
-            deadlineTimer = setTimeout(() => {
-              writeHookTrace("hook.before_prompt_build.deadline_hit", {});
-              resolve([[]]);
-            }, BEFORE_PROMPT_BUILD_DEADLINE_MS);
+        if (turnPromise) {
+          writeHookTrace("hook.before_prompt_build.duplicate_wait", {
+            query: query.slice(0, 80),
+            active_turns: _beforePromptBuildInFlightByTurn.size,
           });
-          // planToolHint is intentionally omitted here: callFastRouter spawns OC
-          // ephemeral sessions that each re-trigger before_prompt_build. Those
-          // sessions fire after planToolHint completes (after _beforePromptBuildInFlight
-          // is cleared), so the re-entrancy guard cannot block them. The result is
-          // several concurrent recall calls stacking up and burning the deadline.
-          // Recall-only injection (typically <22s) is within the budget.
-          const recallStartMs = Date.now();
-          writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
-          [allMemories] = await Promise.race([
-            Promise.all([
-              recallMemories({
-                query,
-                limit: injectLimit,
-                expandGraph: false,
-                // OC already injects project docs separately in before_prompt_build.
-                // Keep auto-inject memory recall focused on memory stores so a slow
-                // project search cannot consume the full hook budget and starve
-                // otherwise-fast personal memory hits like Baxter.
-                datastores: ["vector_basic"],
-                routeStores: false,
-                intent: injectIntent,
-                domain: injectDomain,
-                failOpen: true,
-                waitForExtraction: false,
-                fast: true,
-                sourceTag: "auto_inject"
-              }),
-            ]),
-            deadline,
-          ]);
-          // Cancel the deadline timer if recall completed first; prevents a ghost
-          // deadline_hit trace from firing 10s after recall already succeeded.
-          if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-          recallDiagnostics = summarizeRecallDiagnostics((allMemories as any)?.__quaidRecallDiagnostics || null);
-          writeHookTrace("hook.recall_done", {
-            count: allMemories.length,
-            elapsed_ms: Date.now() - recallStartMs,
-            diagnostics: recallDiagnostics,
-            top_results: summarizeRecallResults(allMemories),
-          });
-        } finally {
-          _beforePromptBuildInFlight = false;
+        } else {
+          turnPromise = (async (): Promise<AutoInjectTurnOutcome> => {
+            const modelConfigNotice = await validatePromptModelConfigIfChanged();
+            let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+            const deadline = new Promise<[any[]]>(resolve => {
+              deadlineTimer = setTimeout(() => {
+                writeHookTrace("hook.before_prompt_build.deadline_hit", {});
+                resolve([[]]);
+              }, BEFORE_PROMPT_BUILD_DEADLINE_MS);
+            });
+            // planToolHint is intentionally omitted here: callFastRouter spawns OC
+            // ephemeral sessions that each re-trigger before_prompt_build. Those
+            // sessions fire after planToolHint completes, so a same-turn cache cannot
+            // block them. Recall-only injection (typically <22s) is within the budget.
+            const recallStartMs = Date.now();
+            writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
+            const [allMemories] = await Promise.race([
+              Promise.all([
+                recallMemories({
+                  query,
+                  limit: injectLimit,
+                  expandGraph: false,
+                  // OC already injects project docs separately in before_prompt_build.
+                  // Keep auto-inject memory recall focused on memory stores so a slow
+                  // project search cannot consume the full hook budget and starve
+                  // otherwise-fast personal memory hits like Baxter.
+                  datastores: ["vector_basic"],
+                  routeStores: false,
+                  intent: injectIntent,
+                  domain: injectDomain,
+                  failOpen: true,
+                  waitForExtraction: false,
+                  fast: true,
+                  sourceTag: "auto_inject"
+                }),
+              ]),
+              deadline,
+            ]);
+            // Cancel the deadline timer if recall completed first; prevents a ghost
+            // deadline_hit trace from firing 10s after recall already succeeded.
+            if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+            const recallDiagnostics = summarizeRecallDiagnostics((allMemories as any)?.__quaidRecallDiagnostics || null);
+            writeHookTrace("hook.recall_done", {
+              count: allMemories.length,
+              elapsed_ms: Date.now() - recallStartMs,
+              diagnostics: recallDiagnostics,
+              top_results: summarizeRecallResults(allMemories),
+            });
+            const injection = facade.prepareAutoInjectionContext({
+              allMemories,
+              eventMessages: event.messages || [],
+              context: ctx,
+              existingPrependContext: undefined,
+              injectLimit,
+              maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
+            });
+            return { allMemories, recallDiagnostics, injection, modelConfigNotice: modelConfigNotice || undefined };
+          })();
+          _beforePromptBuildInFlightByTurn.set(turnKey, turnPromise);
+          turnPromise.then(
+            () => {
+              if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
+                _beforePromptBuildInFlightByTurn.delete(turnKey);
+              }
+            },
+            () => {
+              if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
+                _beforePromptBuildInFlightByTurn.delete(turnKey);
+              }
+            },
+          );
+        }
+
+        const { allMemories, recallDiagnostics, injection, modelConfigNotice } = await turnPromise;
+        if (modelConfigNotice) {
+          prependContextParts.push(modelConfigNotice);
+          appendSystemContext = appendSystemContext
+            ? `${appendSystemContext}\n\n${modelConfigNotice}`
+            : modelConfigNotice;
         }
 
         if (!Array.isArray(allMemories) || allMemories.length === 0) {
@@ -3942,14 +3987,6 @@ notify_user(${JSON.stringify(message)})
           });
         }
 
-        const injection = facade.prepareAutoInjectionContext({
-          allMemories,
-          eventMessages: event.messages || [],
-          context: ctx,
-          existingPrependContext: undefined,
-          injectLimit,
-          maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
-        });
         if (!injection) {
           writeHookTrace("hook.before_prompt_build.injection_skipped", {
             query: query.slice(0, 80),
@@ -6407,6 +6444,7 @@ export const __test = {
   getContextRefreshStrategy,
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
+  autoInjectTurnKey: _autoInjectTurnKey,
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,

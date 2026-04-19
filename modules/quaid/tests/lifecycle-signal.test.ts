@@ -447,6 +447,15 @@ describe("lifecycle signal detection", () => {
     expect(selected.source).toBe("message_received_cache");
   });
 
+  it("keys duplicate auto-inject hook surfaces by agent and normalized query", () => {
+    const first = __test.autoInjectTurnKey("main", "What do you know about my dog Baxter?");
+    const duplicate = __test.autoInjectTurnKey("main", "  what   do you know about my dog Baxter? ");
+    const otherAgent = __test.autoInjectTurnKey("worker", "What do you know about my dog Baxter?");
+
+    expect(duplicate).toBe(first);
+    expect(otherAgent).not.toBe(first);
+  });
+
   it("strips queued OC session-startup wrapper text from raw prompt queries", () => {
     const selected = __test.selectAutoInjectQuery(
       {
