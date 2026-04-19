@@ -30,6 +30,39 @@ function _resolveVisibleHome(root) {
   return resolved;
 }
 const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 12e4);
+const RECALL_TIMEOUT_GRACE_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_RECALL_TIMEOUT_GRACE_MS", 1500);
+function _extractPositiveInt(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+function _extractRecallTimeoutMs(command, args) {
+  if (command === "recall") {
+    for (const arg of args) {
+      const text = String(arg || "").trim();
+      if (!text.startsWith("{")) continue;
+      try {
+        const parsed = JSON.parse(text);
+        const timeout = _extractPositiveInt(parsed?.timeout_ms ?? parsed?.timeoutMs);
+        if (timeout !== null) return timeout;
+      } catch {
+      }
+    }
+  }
+  if (command === "recall-fast") {
+    const idx = args.findIndex((arg) => String(arg || "") === "--timeout-ms");
+    if (idx >= 0) {
+      return _extractPositiveInt(args[idx + 1]);
+    }
+  }
+  return null;
+}
+function resolvePythonBridgeCommandTimeoutMs(command, args = [], defaultTimeoutMs = PYTHON_BRIDGE_TIMEOUT_MS) {
+  const defaultTimeout = Math.max(1, Math.floor(Number(defaultTimeoutMs) || PYTHON_BRIDGE_TIMEOUT_MS));
+  const recallTimeout = _extractRecallTimeoutMs(command, args);
+  if (recallTimeout === null) return defaultTimeout;
+  return Math.max(1, Math.min(defaultTimeout, recallTimeout + RECALL_TIMEOUT_GRACE_MS));
+}
 function _pythonVersionOk(bin) {
   const candidate = String(bin || "").trim();
   if (!candidate) {
@@ -93,6 +126,7 @@ function createPythonBridgeExecutor(config) {
   const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;
   return async function execPython(command, args = []) {
     return new Promise((resolve, reject) => {
+      const commandTimeoutMs = resolvePythonBridgeCommandTimeoutMs(command, args);
       const proc = spawn(PYTHON_BIN, [config.scriptPath, command, ...args], {
         cwd: config.workspace,
         env: {
@@ -112,9 +146,9 @@ function createPythonBridgeExecutor(config) {
         if (!settled) {
           settled = true;
           proc.kill("SIGTERM");
-          reject(new Error(`Python bridge timeout after ${PYTHON_BRIDGE_TIMEOUT_MS}ms: ${command} ${args.join(" ")}`));
+          reject(new Error(`Python bridge timeout after ${commandTimeoutMs}ms: ${command} ${args.join(" ")}`));
         }
-      }, PYTHON_BRIDGE_TIMEOUT_MS);
+      }, commandTimeoutMs);
       proc.stdout.on("data", (data) => {
         stdout += data;
       });
@@ -149,5 +183,6 @@ function createPythonBridgeExecutor(config) {
 }
 export {
   PYTHON_BRIDGE_TIMEOUT_MS,
-  createPythonBridgeExecutor
+  createPythonBridgeExecutor,
+  resolvePythonBridgeCommandTimeoutMs
 };

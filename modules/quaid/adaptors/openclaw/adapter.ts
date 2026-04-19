@@ -2526,6 +2526,13 @@ type PluginConfig = {
 
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
 const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35_000;
+const AUTO_INJECT_RECALL_TIMEOUT_MS = Math.max(
+  1_000,
+  Math.min(
+    _envTimeoutMs("QUAID_AUTO_INJECT_RECALL_TIMEOUT_MS", 32_000),
+    Math.max(1_000, BEFORE_PROMPT_BUILD_DEADLINE_MS - 1_500),
+  ),
+);
 const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8_000);
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
@@ -3930,6 +3937,7 @@ notify_user(${JSON.stringify(message)})
                   failOpen: true,
                   waitForExtraction: false,
                   fast: true,
+                  timeoutMs: AUTO_INJECT_RECALL_TIMEOUT_MS,
                   sourceTag: "auto_inject"
                 }),
               ]),

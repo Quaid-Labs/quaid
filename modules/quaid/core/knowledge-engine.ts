@@ -40,6 +40,7 @@ export type RecallMemoryOpts = {
   dateFrom?: string;
   dateTo?: string;
   fast?: boolean;
+  timeoutMs?: number;
   candidatePool?: unknown[];
 };
 

@@ -31,6 +31,17 @@ afterEach(() => {
 });
 
 describe("python-bridge visible home resolution", () => {
+  it("uses recall timeout_ms plus grace as subprocess timeout", async () => {
+    const { resolvePythonBridgeCommandTimeoutMs } = await import("../adaptors/openclaw/python-bridge.js");
+
+    expect(resolvePythonBridgeCommandTimeoutMs("recall", [
+      "What do you know about Baxter?",
+      JSON.stringify({ stores: ["vector"], timeout_ms: 32000 }),
+      "--json",
+    ], 120_000)).toBe(33_500);
+    expect(resolvePythonBridgeCommandTimeoutMs("stats", [], 120_000)).toBe(120_000);
+  });
+
   it("normalizes an explicit QUAID_VISIBLE_HOME with tilde expansion", async () => {
     process.env.QUAID_VISIBLE_HOME = "~/quaid-visible";
     spawnMock.mockImplementation(() => makeProc());

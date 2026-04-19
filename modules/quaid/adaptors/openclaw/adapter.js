@@ -2005,6 +2005,13 @@ const configSchema = Type.Object({
 });
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
 const BEFORE_PROMPT_BUILD_DEADLINE_MS = 35e3;
+const AUTO_INJECT_RECALL_TIMEOUT_MS = Math.max(
+  1e3,
+  Math.min(
+    _envTimeoutMs("QUAID_AUTO_INJECT_RECALL_TIMEOUT_MS", 32e3),
+    Math.max(1e3, BEFORE_PROMPT_BUILD_DEADLINE_MS - 1500)
+  )
+);
 const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8e3);
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
@@ -3134,6 +3141,7 @@ ${deferredNoticeContext}` : deferredNoticeContext;
                   failOpen: true,
                   waitForExtraction: false,
                   fast: true,
+                  timeoutMs: AUTO_INJECT_RECALL_TIMEOUT_MS,
                   sourceTag: "auto_inject"
                 })
               ]),

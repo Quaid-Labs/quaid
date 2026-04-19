@@ -193,6 +193,7 @@ export type FacadeRecallOptions = {
   dateTo?: string;
   docs?: string[];
   datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
+  timeoutMs?: number;
   failOpen?: boolean;
 };
 
@@ -2414,6 +2415,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (opts.dateFrom) cfg["date_from"] = opts.dateFrom;
     if (opts.dateTo) cfg["date_to"] = opts.dateTo;
     if (opts.fast) cfg["fast"] = true;
+    if (opts.timeoutMs) cfg["timeout_ms"] = opts.timeoutMs;
     if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
     if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
       cfg["candidate_pool"] = opts.candidatePool;
@@ -2800,7 +2802,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const {
       query, limit = 10, expandGraph = true, graphDepth = 1,
       datastores, routeStores, reasoning = "fast", domain = { all: true }, domainBoost, project,
-      dateFrom, dateTo,
+      dateFrom, dateTo, timeoutMs,
     } = opts;
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
@@ -2815,6 +2817,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         dateTo,
         depth: graphDepth,
         fast: reasoning === "fast",
+        timeoutMs,
       });
       return { results, diagnostics: { meta } };
     }

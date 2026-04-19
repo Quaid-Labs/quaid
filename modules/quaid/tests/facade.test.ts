@@ -683,6 +683,28 @@ describe("QuaidFacade", () => {
     expect(recallArgs).not.toContain("--domain");
   });
 
+  it("recallWithDiagnostics forwards timeout budget in JSON config", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return JSON.stringify([{ text: "timed fact", category: "fact", similarity: 0.8 }]);
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    await facade.recallWithDiagnostics({
+      query: "test timeout budget",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      timeoutMs: 32000,
+    });
+    const recallCall = execPython.mock.calls.find((args) => args[0] === "recall");
+    const recallArgs: string[] = recallCall?.[1] ?? [];
+    const cfgArg = recallArgs.find((a: string) => a.startsWith("{"));
+    expect(JSON.parse(cfgArg!).timeout_ms).toBe(32000);
+  });
+
   it("recallWithDiagnostics with expandGraph preserves both vector and graph results", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {

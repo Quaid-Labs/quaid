@@ -36,6 +36,47 @@ function _resolveVisibleHome(root: string): string {
 }
 
 export const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
+const RECALL_TIMEOUT_GRACE_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_RECALL_TIMEOUT_GRACE_MS", 1_500);
+
+function _extractPositiveInt(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
+function _extractRecallTimeoutMs(command: string, args: string[]): number | null {
+  if (command === "recall") {
+    for (const arg of args) {
+      const text = String(arg || "").trim();
+      if (!text.startsWith("{")) continue;
+      try {
+        const parsed = JSON.parse(text);
+        const timeout = _extractPositiveInt(parsed?.timeout_ms ?? parsed?.timeoutMs);
+        if (timeout !== null) return timeout;
+      } catch {
+        // Non-config JSON is not expected here; ignore and keep the default bridge timeout.
+      }
+    }
+  }
+  if (command === "recall-fast") {
+    const idx = args.findIndex((arg) => String(arg || "") === "--timeout-ms");
+    if (idx >= 0) {
+      return _extractPositiveInt(args[idx + 1]);
+    }
+  }
+  return null;
+}
+
+export function resolvePythonBridgeCommandTimeoutMs(
+  command: string,
+  args: string[] = [],
+  defaultTimeoutMs: number = PYTHON_BRIDGE_TIMEOUT_MS,
+): number {
+  const defaultTimeout = Math.max(1, Math.floor(Number(defaultTimeoutMs) || PYTHON_BRIDGE_TIMEOUT_MS));
+  const recallTimeout = _extractRecallTimeoutMs(command, args);
+  if (recallTimeout === null) return defaultTimeout;
+  return Math.max(1, Math.min(defaultTimeout, recallTimeout + RECALL_TIMEOUT_GRACE_MS));
+}
 
 function _pythonVersionOk(bin: string): boolean {
   const candidate = String(bin || "").trim();
@@ -117,6 +158,7 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
 
   return async function execPython(command: string, args: string[] = []): Promise<string> {
     return new Promise((resolve, reject) => {
+      const commandTimeoutMs = resolvePythonBridgeCommandTimeoutMs(command, args);
       const proc = spawn(PYTHON_BIN, [config.scriptPath, command, ...args], {
         cwd: config.workspace,
         env: {
@@ -138,9 +180,9 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
         if (!settled) {
           settled = true;
           proc.kill("SIGTERM");
-          reject(new Error(`Python bridge timeout after ${PYTHON_BRIDGE_TIMEOUT_MS}ms: ${command} ${args.join(" ")}`));
+          reject(new Error(`Python bridge timeout after ${commandTimeoutMs}ms: ${command} ${args.join(" ")}`));
         }
-      }, PYTHON_BRIDGE_TIMEOUT_MS);
+      }, commandTimeoutMs);
 
       proc.stdout.on("data", (data) => {
         stdout += data;

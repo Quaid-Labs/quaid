@@ -1743,6 +1743,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
     if (opts.dateFrom) cfg["date_from"] = opts.dateFrom;
     if (opts.dateTo) cfg["date_to"] = opts.dateTo;
     if (opts.fast) cfg["fast"] = true;
+    if (opts.timeoutMs) cfg["timeout_ms"] = opts.timeoutMs;
     if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
     if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
       cfg["candidate_pool"] = opts.candidatePool;
@@ -2125,7 +2126,8 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       domainBoost,
       project,
       dateFrom,
-      dateTo
+      dateTo,
+      timeoutMs
     } = opts;
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
@@ -2139,7 +2141,8 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
         dateFrom,
         dateTo,
         depth: graphDepth,
-        fast: reasoning === "fast"
+        fast: reasoning === "fast",
+        timeoutMs
       });
       return { results: results2, diagnostics: { meta } };
     }
