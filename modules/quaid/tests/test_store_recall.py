@@ -2605,6 +2605,51 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["include_lexical_anchor_shaping"] is True
         assert captured["kwargs"]["lexical_anchor_planner_mode"] == "deterministic"
 
+    def test_run_recall_store_plan_skips_duplicate_graph_seed_recall_in_fast_vector_graph_plan(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [{"id": "fact-1", "text": "Diana is Solomon's sister", "category": "fact", "similarity": 0.8}],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 100}},
+                None,
+            )
+
+        def _fake_graph(*args, **kwargs):
+            captured["candidate_pool"] = kwargs.get("candidate_pool")
+            return (
+                [{"id": "alice", "text": "Solomon --sibling_of--> Diana --parent_of--> Alice", "category": "graph", "similarity": 0.76}],
+                {"selected_path": "graph_aware", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "Who is my niece?",
+                stores=["vector", "graph"],
+                limit=5,
+                owner_id="quaid",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["Who is my niece?"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=True,
+                graph_depth=2,
+                common_kwargs={},
+            )
+
+        assert captured["candidate_pool"] == []
+        assert [row["id"] for row in rows] == ["fact-1", "alice"]
+        assert meta["planned_stores"] == ["vector", "graph"]
+
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
 

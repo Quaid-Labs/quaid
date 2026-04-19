@@ -4432,7 +4432,14 @@ def _run_recall_store_plan(
                 ),
             ))
         elif store == "graph":
-            callables.append(lambda store=store, handler=handler: (
+            graph_candidate_pool = kwargs.get("candidate_pool")
+            if graph_candidate_pool is None and fast_mode and "vector" in normalized_stores:
+                # The vector lane is already running in this store plan. In the
+                # fast auto-inject path, avoid making the graph lane pay for a
+                # second base vector recall before it can traverse owner/entity
+                # anchors.
+                graph_candidate_pool = []
+            callables.append(lambda store=store, handler=handler, graph_candidate_pool=graph_candidate_pool: (
                 store,
                 handler(
                     query,
@@ -4443,7 +4450,7 @@ def _run_recall_store_plan(
                     domain_boost=kwargs.get("domain_boost"),
                     project=planned_project,
                     depth=graph_depth,
-                    candidate_pool=kwargs.get("candidate_pool"),
+                    candidate_pool=graph_candidate_pool,
                 ),
             ))
 
