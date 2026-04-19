@@ -650,6 +650,19 @@ def delete_project(name: str) -> None:
     tracking_base = quaid_tracking_dir(quaid_home)
     entry: Dict[str, Any]
     canonical_path: Optional[Path] = None
+
+    # Stop the live worker before taking the registry lock. The worker stop
+    # path can touch config/bootstrap helpers that may read registry state; doing
+    # this under _registry_lock risks self-deadlock. If a supervisor races and
+    # starts another worker before the delete lock is acquired, the final settle
+    # loop below catches and removes it.
+    try:
+        from core import project_docs
+
+        project_docs.stop_worker(name)
+    except Exception as e:
+        logger.warning("Failed to stop project docs worker before deleting %s: %s", name, e)
+
     with _registry_lock():
         registry = _load_registry()
         if name not in registry["projects"]:

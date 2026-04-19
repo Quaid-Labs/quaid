@@ -934,6 +934,21 @@ def _terminate_process(proc: subprocess.Popen, *, grace_seconds: float = 5.0) ->
         pass
 
 
+def reap_child_processes() -> int:
+    """Reap finished child processes when running as their supervisor parent."""
+    reaped = 0
+    while True:
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return reaped
+        except OSError:
+            return reaped
+        if pid <= 0:
+            return reaped
+        reaped += 1
+
+
 def _unlink_pid_record_if_matches(path: Path, *, pid: int, token: Optional[str] = None) -> None:
     record = _read_pid_record(path)
     if not record or int(record.get("pid") or 0) != int(pid):
@@ -1074,6 +1089,7 @@ def stop_worker(project: str) -> bool:
                 time.sleep(0.1)
             if _pid_alive(pid):
                 os.kill(pid, signal.SIGKILL)
+            reap_child_processes()
         if not _pid_alive(pid):
             _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
         return True

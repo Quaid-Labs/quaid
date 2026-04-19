@@ -240,6 +240,30 @@ def test_delete_project_removes_project_docs_worker_state(project_env):
     assert project_docs.has_project_state("demo") is False
 
 
+def test_delete_project_stops_live_project_docs_worker(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core.project_registry import delete_project
+
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_PID_WAIT_SECONDS", "45")
+    pid = project_docs.start_worker("demo")
+    try:
+        assert project_docs.read_worker_pid("demo") == pid
+
+        with patch("core.project_registry._sync_docs_registry_project"):
+            delete_project("demo")
+
+        assert project_docs.read_worker_pid("demo") is None
+        assert project_docs.has_project_state("demo") is False
+    finally:
+        try:
+            project_docs.stop_worker("demo")
+        except Exception:
+            pass
+        project_docs.cleanup_project_state("demo")
+
+
 def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

@@ -40,6 +40,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
     project_docs.write_supervisor_pid(token)
     known_workers: Dict[str, int] = {}
     while not _STOP:
+        project_docs.reap_child_processes()
         projects = list_projects()
         live = set(projects.keys())
         stale_after = project_docs.worker_stale_after_seconds(interval)
@@ -66,6 +67,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 continue
             try:
                 project_docs.stop_worker(project)
+                project_docs.reap_child_processes()
                 project_docs.worker_heartbeat_path(project).unlink(missing_ok=True)
                 project_docs.worker_pid_path(project).unlink(missing_ok=True)
             except Exception:
@@ -77,6 +79,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
     for project in list(known_workers.keys()):
         try:
             project_docs.stop_worker(project)
+            project_docs.reap_child_processes()
         except Exception:
             pass
     project_docs.clear_supervisor_pid_for_current_process()
