@@ -720,18 +720,6 @@ def delete_project(name: str) -> None:
     entry: Dict[str, Any]
     canonical_path: Optional[Path] = None
 
-    # Stop the live worker before taking the registry lock. The worker stop
-    # path can touch config/bootstrap helpers that may read registry state; doing
-    # this under _registry_lock risks self-deadlock. If a supervisor races and
-    # starts another worker before the delete lock is acquired, the final settle
-    # loop below catches and removes it.
-    try:
-        from core import project_docs
-
-        project_docs.stop_worker(name)
-    except Exception as e:
-        logger.warning("Failed to stop project docs worker before deleting %s: %s", name, e)
-
     with _registry_lock():
         registry = _load_registry()
         if name not in registry["projects"]:
@@ -742,47 +730,51 @@ def delete_project(name: str) -> None:
         if raw_canonical:
             canonical_path = Path(raw_canonical)
 
-        # Clean up shadow git tracking
-        try:
-            from core.shadow_git import ShadowGit
-            source_root = entry.get("source_root")
-            if source_root:
-                sg = ShadowGit(
-                    name,
-                    Path(source_root),
-                    tracking_base=tracking_base,
-                )
-                sg.destroy()
-        except Exception as e:
-            logger.warning("Failed to destroy shadow git for %s: %s", name, e)
-
-        # Clean up project directories (canonical + standard fallbacks).
-        allowed_roots = [
-            visible_home / "projects",
-            quaid_home / "projects",
-        ]
-        candidate_dirs: List[Path] = [visible_home / "projects" / name, quaid_home / "projects" / name]
-        if canonical_path is not None:
-            candidate_dirs.insert(0, canonical_path)
-
-        seen_dirs: set[str] = set()
-        for candidate in candidate_dirs:
-            try:
-                key = str(candidate.resolve())
-            except Exception:
-                key = str(candidate)
-            if key in seen_dirs:
-                continue
-            seen_dirs.add(key)
-            try:
-                _safe_remove_project_dir(candidate, allowed_roots)
-            except Exception as e:
-                logger.warning("Failed to remove project directory for %s (%s): %s", name, candidate, e)
-
-        # Remove from registry
+        # Hide the project before slower cleanup. `project show/list` must stop
+        # returning a project once deletion has been accepted, even while a live
+        # supervisor/monitor is still draining worker state.
         del registry["projects"][name]
         registry.setdefault("deleted_projects", {})[name] = datetime.now(tz=timezone.utc).isoformat()
         _save_registry(registry)
+
+    # Clean up shadow git tracking after the project is already hidden.
+    try:
+        from core.shadow_git import ShadowGit
+
+        source_root = entry.get("source_root")
+        if source_root:
+            sg = ShadowGit(
+                name,
+                Path(source_root),
+                tracking_base=tracking_base,
+            )
+            sg.destroy()
+    except Exception as e:
+        logger.warning("Failed to destroy shadow git for %s: %s", name, e)
+
+    # Clean up project directories (canonical + standard fallbacks).
+    allowed_roots = [
+        visible_home / "projects",
+        quaid_home / "projects",
+    ]
+    candidate_dirs: List[Path] = [visible_home / "projects" / name, quaid_home / "projects" / name]
+    if canonical_path is not None:
+        candidate_dirs.insert(0, canonical_path)
+
+    seen_dirs: set[str] = set()
+    for candidate in candidate_dirs:
+        try:
+            key = str(candidate.resolve())
+        except Exception:
+            key = str(candidate)
+        if key in seen_dirs:
+            continue
+        seen_dirs.add(key)
+        try:
+            _safe_remove_project_dir(candidate, allowed_roots)
+        except Exception as e:
+            logger.warning("Failed to remove project directory for %s (%s): %s", name, candidate, e)
+
     misc_instance = _misc_project_instance_id(name)
     if misc_instance:
         try:

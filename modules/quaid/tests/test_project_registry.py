@@ -480,6 +480,29 @@ class TestDeleteProjectPurgesDb:
         cleaned = json.loads(path.read_text(encoding="utf-8"))
         assert "my-app" not in cleaned.get("projects", {})
 
+    def test_delete_hides_project_before_worker_cleanup(self, mock_adapter):
+        """delete_project() should hide the project before slower monitor cleanup."""
+        from core import project_docs
+        from core.project_registry import project_exists_raw
+
+        create_project("my-app")
+        checked = False
+
+        def _stop_worker_after_hidden(project):
+            nonlocal checked
+            if not checked:
+                checked = True
+                assert project == "my-app"
+                assert project_exists_raw("my-app") is False
+                assert get_project("my-app") is None
+                assert "my-app" not in list_projects()
+
+        with patch.object(project_docs, "stop_worker", side_effect=_stop_worker_after_hidden), \
+             patch.object(project_docs, "cleanup_project_state", return_value={"removed": 0}):
+            delete_project("my-app")
+
+        assert checked is True
+
     def test_delete_purges_project_definitions_and_doc_registry(self, mock_adapter):
         """delete_project() removes project_definitions and doc_registry rows from SQLite."""
         import sqlite3
