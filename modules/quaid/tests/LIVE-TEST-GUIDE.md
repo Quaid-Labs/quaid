@@ -837,6 +837,19 @@ relying on whatever arrived via auto-inject:
   quaid recall "exercise habits recent plans". What do you know about my
   exercise habits or recent plans?`
 
+For host shell tools with an explicit command timeout, set the shell timeout to
+at least 90s for default `quaid recall`. Default deliberate recall can use the
+full planner window. For quick iterative M6 runs, keep the command bounded with
+JSON config instead of relying on the host shell timeout:
+
+```bash
+quaid recall "exercise habits recent plans" '{"timeout_ms":25000}'
+```
+
+Treat a host-side `SIGTERM` at a 30s shell timeout as a harness timeout, not as a
+product recall failure. Re-run with a larger shell timeout or the bounded JSON
+config above before reporting a product bug.
+
 Pass:
 - the agent runs `quaid recall` via bash/shell tool OR makes an equivalent
   explicit memory lookup (not just reading auto-injected context)
