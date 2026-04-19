@@ -176,9 +176,14 @@ and is picked up when the daemon next starts.
    <content>
    ```
 
-5. **Collect project docs** — scans all `projects/<name>/` subdirectories for
-   `TOOLS.md` and `AGENTS.md`. The `quaid` project directory is sorted first.
-   Each file is prefixed as:
+5. **Collect bounded project context** — scans registered project directories
+   for `TOOLS.md` and `AGENTS.md`. By default, only the `quaid` operational
+   project is injected as full markdown. User projects are rendered as compact
+   catalog entries with doc sizes, short summaries, active-project status, and
+   a docs-recall command. This keeps detailed generated project docs reachable
+   without making them default answer authority. Full-project bootstrap can be
+   adjusted with `QUAID_PROJECT_CONTEXT_FULL_PROJECTS`.
+   Full entries are prefixed as:
    ```
    --- quaid/TOOLS.md ---
    <content>
@@ -317,11 +322,11 @@ auto-registered.
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  SessionStart                                                           │
 │    └─ hook-session-init                                                 │
-│         ├─ ensure daemon alive                                          │
+│         ├─ ensure runtime supervisor/current instance monitor alive      │
 │         ├─ signal prior session end if adapter detects transition        │
 │         ├─ seed cursor for current session_id                           │
 │         └─ write/update .claude/rules/quaid-projects.md                │
-│              (identity files + TOOLS.md + AGENTS.md for all projects)  │
+│              (identity files + full quaid docs + compact project catalog)│
 ├─────────────────────────────────────────────────────────────────────────┤
 │  User sends message                                                     │
 │    └─ UserPromptSubmit → hook-inject                                    │

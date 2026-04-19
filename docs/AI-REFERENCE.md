@@ -184,7 +184,7 @@ There is no `PostCompact` hook wired. `hook-inject-compact` exists as a callable
    is a controlled fallback when `QUAID_SUPERVISOR_DISABLE=1`.
 2. For adapters that track session transitions (e.g. Codex), signals extraction for the session that just ended via `/new` or process restart.
 3. Seeds an extraction cursor for the current session so the daemon can discover it for timeout-based extraction.
-4. Scans `$QUAID_VISIBLE_HOME/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
+4. Collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`, scans registered projects for bounded context, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set). Bounded project context injects full `TOOLS.md`/`AGENTS.md` only for allowlisted operational projects such as `quaid`; other project docs appear as compact catalog entries and remain available through docs recall.
 
 The write is idempotent — if content is unchanged the file is not touched, preventing unnecessary prompt cache invalidation. Claude Code auto-loads `rules/*.md` and preserves them through compaction (unlike `additionalContext` which is lost on compaction).
 

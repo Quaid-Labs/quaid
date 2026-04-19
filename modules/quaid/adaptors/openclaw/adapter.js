@@ -2970,7 +2970,8 @@ notify_user(${JSON.stringify(message)})
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
-            const projectDocs = await facade.injectProjectContext(void 0);
+            const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
+            const projectDocs = await facade.injectProjectContext(void 0, { cwd: hookCwd });
             if (projectDocs) {
               appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });

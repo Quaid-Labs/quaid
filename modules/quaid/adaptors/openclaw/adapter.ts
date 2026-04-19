@@ -3684,8 +3684,9 @@ notify_user(${JSON.stringify(message)})
       const nowMs = Date.now();
       pingDaemonAliveIfNeeded(promptInstanceId, nowMs);
 
-      // Inject project docs once per session on the first message.
-      // - appendSystemContext: full TOOLS.md + AGENTS.md docs (appended after OC base prompt)
+      // Inject bounded project context once per session on the first message.
+      // - appendSystemContext: identity + runtime metadata + compact project catalog
+      //   (full TOOLS/AGENTS only for allowlisted operational projects)
       // - prependSystemContext: short mandatory file-placement rules (prepended before OC base
       //   prompt so the model sees them at maximum priority)
       let appendSystemContext: string | undefined;
@@ -3709,7 +3710,8 @@ notify_user(${JSON.stringify(message)})
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
-            const projectDocs = await facade.injectProjectContext(undefined);
+            const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
+            const projectDocs = await facade.injectProjectContext(undefined, { cwd: hookCwd });
             if (projectDocs) {
               appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });

@@ -7,8 +7,8 @@ and the systems you operate. Without it, every conversation starts from zero.
 
 ### How It Works (Three Layers)
 
-1. **Markdown** (always loaded): SOUL.md, USER.md, ENVIRONMENT.md, AGENTS.md, TOOLS.md, CONSTITUTION.md, PROJECT.md - your identity and operational context, loaded every turn.
-2. **Docs/RAG** (searched on demand): `projects/<project>/` docs with deep technical references, queried with `projects_search` or `datastore/docsdb/rag.py`.
+1. **Markdown/bootstrap**: SOUL.md, USER.md, ENVIRONMENT.md, and bounded Quaid/project context. Full project `TOOLS.md`/`AGENTS.md` bootstrap is allowlisted for operational projects such as `quaid`; user projects are injected as compact catalogs.
+2. **Docs/RAG** (searched on demand): `projects/<project>/` docs with deep technical references, queried with `quaid recall ... '{"stores":["docs"],"project":"<project>"}'` or `datastore/docsdb/rag.py`.
 3. **Memory DB** (semantic recall): SQLite graph of user facts, preferences, and relationships queried via `memory_recall`.
 
 Runtime-injected metadata is a separate surface from the static markdown/docs set.

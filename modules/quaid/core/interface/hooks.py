@@ -333,6 +333,162 @@ def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     return re.sub(_TOOLS_DOMAIN_BLOCK_RE, "", content).strip()
 
 
+def _project_context_full_project_names() -> set[str] | None:
+    raw = os.environ.get("QUAID_PROJECT_CONTEXT_FULL_PROJECTS", "quaid").strip()
+    if raw.lower() == "all":
+        return None
+    if not raw or raw.lower() in {"none", "false", "0"}:
+        return set()
+    return {part.strip() for part in re.split(r"[,\s]+", raw) if part.strip()}
+
+
+def _should_inject_full_project_context(project_name: str) -> bool:
+    full_projects = _project_context_full_project_names()
+    return full_projects is None or project_name in full_projects
+
+
+def _first_useful_line_from_prefix(path: Path, *, max_bytes: int = 8192) -> str:
+    try:
+        with path.open("rb") as fh:
+            prefix = fh.read(max_bytes)
+        text = prefix.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not stripped.startswith("|"):
+            return stripped[:240]
+    return ""
+
+
+def _path_contains(base: Path, candidate: Path) -> bool:
+    try:
+        base_resolved = base.resolve()
+        candidate_resolved = candidate.resolve()
+    except Exception:
+        base_resolved = base
+        candidate_resolved = candidate
+    base_str = str(base_resolved)
+    candidate_str = str(candidate_resolved)
+    return candidate_str == base_str or candidate_str.startswith(base_str + os.sep)
+
+
+def _is_active_project_context(project_dir: Path, registry_entry: Dict[str, Any], hook_cwd: str) -> bool:
+    raw_cwd = str(hook_cwd or "").strip()
+    if not raw_cwd:
+        return False
+    try:
+        cwd = Path(raw_cwd)
+    except Exception:
+        return False
+    candidates: List[Path] = [project_dir]
+    for key in ("canonical_path", "source_root"):
+        raw = str((registry_entry or {}).get(key) or "").strip()
+        if raw:
+            candidates.append(Path(raw))
+    source_roots = (registry_entry or {}).get("source_roots")
+    if isinstance(source_roots, list):
+        for raw in source_roots:
+            value = str(raw or "").strip()
+            if value:
+                candidates.append(Path(value))
+    return any(_path_contains(candidate, cwd) for candidate in candidates)
+
+
+def _project_catalog_section(
+    project_name: str,
+    project_dir: Path,
+    registry_entry: Dict[str, Any],
+    doc_files: List[str],
+    *,
+    hook_cwd: str = "",
+) -> str:
+    active = _is_active_project_context(project_dir, registry_entry, hook_cwd)
+    lines = [
+        f"--- {project_name}/project-catalog ---",
+        f"project: {project_name}",
+        f"active_project: {'true' if active else 'false'}",
+        "context_policy: compact catalog only; detailed project docs are current source-state hints, not default answer authority.",
+        f"details_recall: quaid recall \"<query>\" '{{\"stores\":[\"docs\"],\"project\":\"{project_name}\"}}'",
+    ]
+    for doc_file in doc_files:
+        path = project_dir / doc_file
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        summary = _first_useful_line_from_prefix(path)
+        suffix = f"; summary: {summary}" if summary else ""
+        lines.append(f"- {doc_file}: {size} bytes{suffix}")
+    return "\n".join(lines)
+
+
+def _iter_project_context_dirs(projects_dir: Path) -> List[tuple[str, Path, Dict[str, Any]]]:
+    subdirs: List[Path] = []
+    if projects_dir.is_dir():
+        try:
+            subdirs = sorted(
+                [d for d in projects_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
+                key=lambda d: (0 if d.name == "quaid" else 1, d.name),
+            )
+        except OSError:
+            subdirs = []
+
+    registry_entries: Dict[str, Dict[str, Any]] = {}
+    registry_extra: Dict[str, Path] = {}
+    try:
+        from core.project_registry import list_projects as _list_projects
+        registry_entries = dict(_list_projects() or {})
+        projects_dir_resolved = projects_dir.resolve()
+        for proj_name, proj_entry in registry_entries.items():
+            raw_canonical = str((proj_entry or {}).get("canonical_path") or "").strip()
+            if not raw_canonical:
+                continue
+            canonical = Path(raw_canonical).resolve()
+            if canonical.is_dir() and not canonical.is_relative_to(projects_dir_resolved):
+                registry_extra[proj_name] = canonical
+    except Exception:
+        pass
+
+    seen_names = {d.name for d in subdirs}
+    entries: List[tuple[str, Path, Dict[str, Any]]] = [
+        (d.name, d, registry_entries.get(d.name, {})) for d in subdirs
+    ]
+    entries.extend(
+        (name, path, registry_entries.get(name, {}))
+        for name, path in sorted(
+            [(name, path) for name, path in registry_extra.items() if name not in seen_names],
+            key=lambda t: (0 if t[0] == "quaid" else 1, t[0]),
+        )
+    )
+    return entries
+
+
+def _collect_project_doc_context_sections(projects_dir: Path, *, hook_cwd: str = "") -> List[str]:
+    sections: List[str] = []
+    for project_name, project_dir, registry_entry in _iter_project_context_dirs(projects_dir):
+        existing_docs = [doc for doc in ("TOOLS.md", "AGENTS.md") if (project_dir / doc).is_file()]
+        if not existing_docs:
+            continue
+        if _should_inject_full_project_context(project_name):
+            for doc_file in existing_docs:
+                fpath = project_dir / doc_file
+                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
+                if content:
+                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
+        else:
+            sections.append(
+                _project_catalog_section(
+                    project_name,
+                    project_dir,
+                    registry_entry,
+                    existing_docs,
+                    hook_cwd=hook_cwd,
+                )
+            )
+    return sections
+
+
 def _build_runtime_context_block() -> str:
     from core.runtime.system_context import build_system_context_block
 
@@ -1312,7 +1468,7 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
     return should_emit
 
 
-def _collect_project_context_sections() -> List[str]:
+def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
     sections: List[str] = []
 
     identity_dir = _get_identity_dir()
@@ -1324,50 +1480,7 @@ def _collect_project_context_sections() -> List[str]:
                 sections.append(f"--- {special_file} ---\n{content}")
 
     projects_dir = _get_projects_dir()
-    subdirs: List[Path] = []
-    if projects_dir.is_dir():
-        try:
-            subdirs = sorted(
-                [d for d in projects_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
-                key=lambda d: (0 if d.name == "quaid" else 1, d.name),
-            )
-        except OSError:
-            subdirs = []
-
-    registry_extra: Dict[str, Path] = {}
-    try:
-        from core.project_registry import list_projects as _list_projects
-        if projects_dir.is_dir():
-            projects_dir_resolved = projects_dir.resolve()
-            for proj_name, proj_entry in _list_projects().items():
-                canonical = Path(proj_entry.get("canonical_path", "")).resolve()
-                if canonical.is_dir() and not canonical.is_relative_to(projects_dir_resolved):
-                    registry_extra[proj_name] = canonical
-    except Exception:
-        pass
-
-    seen_names = {d.name for d in subdirs}
-    extra_subdirs = sorted(
-        [(name, path) for name, path in registry_extra.items() if name not in seen_names],
-        key=lambda t: (0 if t[0] == "quaid" else 1, t[0]),
-    )
-
-    for project_dir in subdirs:
-        project_name = project_dir.name
-        for doc_file in ("TOOLS.md", "AGENTS.md"):
-            fpath = project_dir / doc_file
-            if fpath.is_file():
-                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
-                if content:
-                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
-
-    for project_name, project_dir in extra_subdirs:
-        for doc_file in ("TOOLS.md", "AGENTS.md"):
-            fpath = project_dir / doc_file
-            if fpath.is_file():
-                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
-                if content:
-                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
+    sections.extend(_collect_project_doc_context_sections(projects_dir, hook_cwd=hook_cwd))
 
     try:
         from lib.adapter import get_adapter
@@ -1399,8 +1512,9 @@ def _build_project_context_message(
     warning_sections: List[str] | None = None,
     *,
     include_startup_pending_context: bool = False,
+    hook_cwd: str = "",
 ) -> str:
-    sections = _collect_project_context_sections()
+    sections = _collect_project_context_sections(hook_cwd=hook_cwd)
     warnings = list(warning_sections or [])
     if not sections and not warnings:
         return ""
@@ -1447,7 +1561,8 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
         return
     if _context_refresh_strategy() != "compaction":
         return
-    content = _build_project_context_message()
+    hook_cwd = str(hook_input.get("cwd") or "").strip() if isinstance(hook_input, dict) else ""
+    content = _build_project_context_message(hook_cwd=hook_cwd)
     if not content:
         return
     _write_rules_context_content(hook_input, content, label="context-refresh")
@@ -2060,53 +2175,11 @@ def hook_session_init(args):
             if content:
                 sections.append(f"--- {special_file} ---\n{content}")
 
-    # 2. Collect TOOLS.md and AGENTS.md from all project subdirs.
-    #    Also include canonical_paths from the project registry so that
-    #    projects whose docs live outside projects_dir (e.g. in an OC silo
-    #    but registered as shared) are included without requiring symlinks.
-    try:
-        subdirs = sorted(
-            [d for d in projects_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
-            key=lambda d: (0 if d.name == "quaid" else 1, d.name),
-        )
-    except OSError:
-        subdirs = []
-
-    # Collect registry canonical_paths for projects not already under projects_dir.
-    # Keyed by project name so registry entries win for the same name.
-    registry_extra: Dict[str, Path] = {}
-    try:
-        from core.project_registry import list_projects as _list_projects
-        for proj_name, proj_entry in _list_projects().items():
-            canonical = Path(proj_entry.get("canonical_path", "")).resolve()
-            if canonical.is_dir() and not canonical.is_relative_to(projects_dir.resolve()):
-                registry_extra[proj_name] = canonical
-    except Exception:
-        pass
-
-    # Merge: projects_dir subdirs first, then registry extras not yet covered.
-    seen_names = {d.name for d in subdirs}
-    extra_subdirs = sorted(
-        [(name, path) for name, path in registry_extra.items() if name not in seen_names],
-        key=lambda t: (0 if t[0] == "quaid" else 1, t[0]),
-    )
-
-    for project_dir in subdirs:
-        project_name = project_dir.name
-        for doc_file in ("TOOLS.md", "AGENTS.md"):
-            fpath = project_dir / doc_file
-            if fpath.is_file():
-                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
-                if content:
-                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
-
-    for project_name, project_dir in extra_subdirs:
-        for doc_file in ("TOOLS.md", "AGENTS.md"):
-            fpath = project_dir / doc_file
-            if fpath.is_file():
-                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
-                if content:
-                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
+    # 2. Collect compact project context. Full TOOLS/AGENTS bootstrap is reserved
+    #    for explicitly allowlisted operational projects; user projects get a
+    #    bounded catalog and are reached through docs recall.
+    hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
+    sections.extend(_collect_project_doc_context_sections(projects_dir, hook_cwd=hook_cwd))
 
     # 2b. Append base context file names so guidance can refer to them generically.
     #     These are the adapter's authoritative instruction files (e.g. CLAUDE.md for CC).

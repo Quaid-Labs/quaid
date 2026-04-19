@@ -1216,8 +1216,10 @@ class TestHookSessionInitRegistryAugmentation:
             )
 
         assert content is not None, "quaid-projects.md should have been written"
-        assert "myproject/TOOLS.md" in content
+        assert "myproject/project-catalog" in content
+        assert "details_recall: quaid recall" in content
         assert "some tool docs" in content
+        assert "--- myproject/TOOLS.md ---" not in content
 
     def test_registry_project_outside_projects_dir_included(self, tmp_path, monkeypatch):
         """A project whose canonical_path is outside projects_dir is still included."""
@@ -1240,8 +1242,9 @@ class TestHookSessionInitRegistryAugmentation:
             )
 
         assert content is not None
-        assert "externalproject/AGENTS.md" in content
+        assert "externalproject/project-catalog" in content
         assert "external agent doc" in content
+        assert "--- externalproject/AGENTS.md ---" not in content
 
     def test_duplicate_project_name_not_doubled(self, tmp_path, monkeypatch):
         """A project that exists in both projects_dir and registry appears exactly once."""
@@ -1266,7 +1269,7 @@ class TestHookSessionInitRegistryAugmentation:
 
         assert content is not None
         # Count occurrences — should appear exactly once
-        occurrences = content.count("sharedproject/TOOLS.md")
+        occurrences = content.count("sharedproject/project-catalog")
         assert occurrences == 1, f"Expected exactly 1 occurrence, found {occurrences}"
 
     def test_tools_md_content_in_output(self, tmp_path, monkeypatch):

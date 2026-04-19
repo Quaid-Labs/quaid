@@ -159,6 +159,10 @@ export type AutoInjectionPreparation = {
   uniqueSessionId: string;
 };
 
+export type ProjectContextOptions = {
+  cwd?: string;
+};
+
 export type RecallDiagnostics = {
   meta: Record<string, unknown> | null;
 };
@@ -332,7 +336,7 @@ export type QuaidFacade = {
   // --- Project catalog ---
   getProjectCatalog: () => Array<{ name: string; description: string }>;
   getProjectNames: () => string[];
-  injectProjectContext: (existingContext?: string) => Promise<string | undefined>;
+  injectProjectContext: (existingContext?: string, options?: ProjectContextOptions) => Promise<string | undefined>;
 
   // --- Guidance rendering ---
   renderDatastoreGuidance: () => string;
@@ -3532,6 +3536,58 @@ ${lines.join("\n")}
     return content.replace(TOOLS_DOMAIN_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
   }
 
+  function _projectContextFullProjectNames(): Set<string> | null {
+    const raw = String(process.env.QUAID_PROJECT_CONTEXT_FULL_PROJECTS || "quaid").trim();
+    if (raw.toLowerCase() === "all") return null;
+    if (!raw || ["none", "false", "0"].includes(raw.toLowerCase())) return new Set();
+    return new Set(raw.split(/[,\s]+/).map((part) => part.trim()).filter(Boolean));
+  }
+
+  function _shouldInjectFullProjectContext(projectName: string): boolean {
+    const fullProjects = _projectContextFullProjectNames();
+    return fullProjects === null || fullProjects.has(projectName);
+  }
+
+  function _firstUsefulLine(content: string): string {
+    return String(content || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("#") && !line.startsWith("|")) || "";
+  }
+
+  function _pathContains(base: string, candidate?: string): boolean {
+    const rawCandidate = String(candidate || "").trim();
+    if (!rawCandidate) return false;
+    try {
+      const baseResolved = path.resolve(base);
+      const candidateResolved = path.resolve(rawCandidate);
+      return candidateResolved === baseResolved || candidateResolved.startsWith(baseResolved + path.sep);
+    } catch {
+      return false;
+    }
+  }
+
+  function _projectCatalogSection(projectName: string, projectDir: string, docFiles: string[], cwd?: string): string {
+    const lines = [
+      `--- ${projectName}/project-catalog ---`,
+      `project: ${projectName}`,
+      `active_project: ${_pathContains(projectDir, cwd) ? "true" : "false"}`,
+      "context_policy: compact catalog only; detailed project docs are current source-state hints, not default answer authority.",
+      `details_recall: quaid recall "<query>" '{"stores":["docs"],"project":"${projectName}"}'`,
+    ];
+    for (const docFile of docFiles) {
+      const filePath = path.join(projectDir, docFile);
+      let size = 0;
+      let summary = "";
+      try {
+        size = fs.statSync(filePath).size;
+        summary = _firstUsefulLine(fs.readFileSync(filePath, "utf8").slice(0, 8192)).slice(0, 240);
+      } catch { /* best-effort catalog only */ }
+      lines.push(`- ${docFile}: ${size} bytes${summary ? `; summary: ${summary}` : ""}`);
+    }
+    return lines.join("\n");
+  }
+
   async function _buildRuntimeContextBlock(): Promise<string> {
     try {
       return String(await deps.execPython("system-context-metadata", []) || "").trim();
@@ -3543,7 +3599,7 @@ ${lines.join("\n")}
     }
   }
 
-  async function injectProjectContext(existingContext?: string): Promise<string | undefined> {
+  async function injectProjectContext(existingContext?: string, options: ProjectContextOptions = {}): Promise<string | undefined> {
     let prepend = existingContext;
     try {
       const sections: string[] = [];
@@ -3575,14 +3631,19 @@ ${lines.join("\n")}
       } catch { /* no projects dir yet */ }
 
       for (const projectName of subdirs) {
-        for (const docFile of ["TOOLS.md", "AGENTS.md"]) {
-          const filePath = path.join(projectsDir, projectName, docFile);
-          if (fs.existsSync(filePath)) {
+        const projectDir = path.join(projectsDir, projectName);
+        const existingDocs = ["TOOLS.md", "AGENTS.md"].filter((docFile) => fs.existsSync(path.join(projectDir, docFile)));
+        if (existingDocs.length === 0) continue;
+        if (_shouldInjectFullProjectContext(projectName)) {
+          for (const docFile of existingDocs) {
+            const filePath = path.join(projectDir, docFile);
             try {
               const content = _stripInjectedToolsDomainBlock(docFile, fs.readFileSync(filePath, "utf8").trim());
               if (content) sections.push(`--- ${projectName}/${docFile} ---\n${content}`);
             } catch { /* skip unreadable */ }
           }
+        } else {
+          sections.push(_projectCatalogSection(projectName, projectDir, existingDocs, options.cwd));
         }
       }
 

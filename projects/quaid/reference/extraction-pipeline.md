@@ -564,7 +564,8 @@ prints them as plain text to stdout (no JSON wrapper). Uses `recall()` with
 ```
 
 **What it does:**
-1. Calls `ensure_alive()` to start the daemon if not running.
+1. Calls `ensure_alive()` to ensure the runtime supervisor and current instance
+   monitor are running.
 2. Determines signal type: `"compaction"` if `--precompact`, else `"session_end"`.
 3. Calls `write_signal()` to write the signal file atomically.
 4. Logs signal file name to stderr.
@@ -589,8 +590,9 @@ the signal asynchronously.
 3. Seeds a cursor for the current session (so the daemon can find it for timeout extraction).
 4. Collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from the per-instance
    identity directory.
-5. Collects `TOOLS.md` and `AGENTS.md` from all project subdirectories under `projects/`.
-   The `quaid` project is sorted first.
+5. Collects bounded project context: full `TOOLS.md`/`AGENTS.md` only for
+   allowlisted operational projects such as `quaid`, and compact catalog entries
+   for user projects. Detailed user-project docs are reached through docs recall.
 6. Checks janitor health; prepends a warning if janitor hasn't run in 24 hours.
 7. Checks compatibility circuit breaker; prepends a warning if degraded.
 8. Writes combined content to `.claude/rules/quaid-projects.md` (idempotent — only

@@ -2703,6 +2703,51 @@ ${header}${journalContent}` : `${header}${journalContent}`;
     }
     return content.replace(TOOLS_DOMAIN_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
   }
+  function _projectContextFullProjectNames() {
+    const raw = String(process.env.QUAID_PROJECT_CONTEXT_FULL_PROJECTS || "quaid").trim();
+    if (raw.toLowerCase() === "all") return null;
+    if (!raw || ["none", "false", "0"].includes(raw.toLowerCase())) return /* @__PURE__ */ new Set();
+    return new Set(raw.split(/[,\s]+/).map((part) => part.trim()).filter(Boolean));
+  }
+  function _shouldInjectFullProjectContext(projectName) {
+    const fullProjects = _projectContextFullProjectNames();
+    return fullProjects === null || fullProjects.has(projectName);
+  }
+  function _firstUsefulLine(content) {
+    return String(content || "").split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#") && !line.startsWith("|")) || "";
+  }
+  function _pathContains(base, candidate) {
+    const rawCandidate = String(candidate || "").trim();
+    if (!rawCandidate) return false;
+    try {
+      const baseResolved = path.resolve(base);
+      const candidateResolved = path.resolve(rawCandidate);
+      return candidateResolved === baseResolved || candidateResolved.startsWith(baseResolved + path.sep);
+    } catch {
+      return false;
+    }
+  }
+  function _projectCatalogSection(projectName, projectDir, docFiles, cwd) {
+    const lines = [
+      `--- ${projectName}/project-catalog ---`,
+      `project: ${projectName}`,
+      `active_project: ${_pathContains(projectDir, cwd) ? "true" : "false"}`,
+      "context_policy: compact catalog only; detailed project docs are current source-state hints, not default answer authority.",
+      `details_recall: quaid recall "<query>" '{"stores":["docs"],"project":"${projectName}"}'`
+    ];
+    for (const docFile of docFiles) {
+      const filePath = path.join(projectDir, docFile);
+      let size = 0;
+      let summary = "";
+      try {
+        size = fs.statSync(filePath).size;
+        summary = _firstUsefulLine(fs.readFileSync(filePath, "utf8").slice(0, 8192)).slice(0, 240);
+      } catch {
+      }
+      lines.push(`- ${docFile}: ${size} bytes${summary ? `; summary: ${summary}` : ""}`);
+    }
+    return lines.join("\n");
+  }
   async function _buildRuntimeContextBlock() {
     try {
       return String(await deps.execPython("system-context-metadata", []) || "").trim();
@@ -2713,7 +2758,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
       return "";
     }
   }
-  async function injectProjectContext(existingContext) {
+  async function injectProjectContext(existingContext, options = {}) {
     let prepend = existingContext;
     try {
       const sections = [];
@@ -2744,9 +2789,12 @@ ${content}`);
       } catch {
       }
       for (const projectName of subdirs) {
-        for (const docFile of ["TOOLS.md", "AGENTS.md"]) {
-          const filePath = path.join(projectsDir, projectName, docFile);
-          if (fs.existsSync(filePath)) {
+        const projectDir = path.join(projectsDir, projectName);
+        const existingDocs = ["TOOLS.md", "AGENTS.md"].filter((docFile) => fs.existsSync(path.join(projectDir, docFile)));
+        if (existingDocs.length === 0) continue;
+        if (_shouldInjectFullProjectContext(projectName)) {
+          for (const docFile of existingDocs) {
+            const filePath = path.join(projectDir, docFile);
             try {
               const content = _stripInjectedToolsDomainBlock(docFile, fs.readFileSync(filePath, "utf8").trim());
               if (content) sections.push(`--- ${projectName}/${docFile} ---
@@ -2754,6 +2802,8 @@ ${content}`);
             } catch {
             }
           }
+        } else {
+          sections.push(_projectCatalogSection(projectName, projectDir, existingDocs, options.cwd));
         }
       }
       if (sections.length === 0) return prepend;

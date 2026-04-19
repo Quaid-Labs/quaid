@@ -31,7 +31,7 @@ The system uses three tiers with distinct purposes:
 
 | Layer | Storage | Loaded When | Purpose | Examples |
 |-------|---------|-------------|---------|----------|
-| **Markdown** | SOUL.md, USER.md, ENVIRONMENT.md, AGENTS.md, TOOLS.md, CONSTITUTION.md, PROJECT.md | Every context (always injected) | Core instructions, identity, system pointers | "Alfie's personality", "Quaid's core facts", "System tool locations" |
+| **Markdown/bootstrap** | SOUL.md, USER.md, ENVIRONMENT.md, allowlisted operational project AGENTS.md/TOOLS.md, compact project catalog | Every context (bounded) | Core instructions, identity, system pointers, project discovery hints | "Alfie's personality", "Quaid's core facts", "Use docs recall for project details" |
 | **RAG** | `projects/<project>/` docs | Searched when topically relevant | Reference documentation, system architecture | "Knowledge layer design", "Janitor pipeline reference", "Spark agent planning" |
 | **Memory DB** | `data/memory.db` | Searched per-message via recall pipeline | Personal facts from conversations | "Quaid prefers dark mode", "Melina's birthday is Oct 12", "Quaid chose SQLite for simplicity" |
 

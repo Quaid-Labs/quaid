@@ -166,6 +166,31 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("injectProjectContext catalogs non-quaid project docs instead of injecting full content", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-catalog-"));
+    const projectDir = path.join(workspace, "projects", "recipe-app");
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(projectDir, "TOOLS.md"), "# Tools\nRun npm test\nSECRET FULL TOOL BODY", "utf8");
+    await writeFile(path.join(projectDir, "AGENTS.md"), "# Agents\nUse app docs\nSECRET FULL AGENT BODY", "utf8");
+
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    }));
+
+    const out = await facade.injectProjectContext(undefined, { cwd: projectDir });
+    expect(out).toContain("--- recipe-app/project-catalog ---");
+    expect(out).toContain("active_project: true");
+    expect(out).toContain("details_recall: quaid recall");
+    expect(out).toContain("- TOOLS.md:");
+    expect(out).toContain("summary: Run npm test");
+    expect(out).not.toContain("--- recipe-app/TOOLS.md ---");
+    expect(out).not.toContain("SECRET FULL TOOL BODY");
+    expect(out).not.toContain("SECRET FULL AGENT BODY");
+
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("injectProjectContext warns and skips visible-home root files when instance is unknown", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-context-no-instance-"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

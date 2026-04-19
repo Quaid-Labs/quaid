@@ -701,8 +701,14 @@ python3 datastore/docsdb/registry.py discover --project myproject    # Auto-disc
 
 Each project directory under `projects/` can contain:
 - `PROJECT.md` -- Generated project documentation (scaffolded by `project create`)
-- `TOOLS.md` -- Tool usage guidance (what to call, when, and why; loaded into agent context)
-- `AGENTS.md` -- Project behavior and operating rules (loaded into agent context)
+- `TOOLS.md` -- Tool usage guidance (what to call, when, and why; full bootstrap only for allowlisted operational projects by default)
+- `AGENTS.md` -- Project behavior and operating rules (full bootstrap only for allowlisted operational projects by default)
+
+User project `TOOLS.md` and `AGENTS.md` files are indexed for docs recall, but
+session bootstrap injects only compact catalog entries for them unless
+`QUAID_PROJECT_CONTEXT_FULL_PROJECTS` explicitly allowlists the project. This
+keeps current generated project docs from overriding memory/session evidence on
+unrelated questions.
 
 Projects are registered through project creation/linking surfaces. Docs registry reconciliation can repair pre-existing orphan state, but benchmark and runtime flows should explicitly register projects rather than relying on write-on-read discovery.
 

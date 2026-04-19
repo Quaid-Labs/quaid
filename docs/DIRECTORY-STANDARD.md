@@ -126,9 +126,11 @@ projects/
 
 ## Layer 4: Project Context (TOOLS.md, AGENTS.md)
 
-**What**: Injected markdown that becomes part of the LLM's system context
-every session. Tool references, behavioral rules, project-specific
-instructions.
+**What**: Project markdown available to the LLM. Full session bootstrap is
+reserved for allowlisted operational projects such as `quaid`; user projects are
+injected as compact catalog entries and detailed content is retrieved through
+docs recall. This prevents generated project docs from becoming global answer
+authority on unrelated memory questions.
 
 **Canonical location**: `QUAID_VISIBLE_HOME/projects/<name>/TOOLS.md` and
 `QUAID_VISIBLE_HOME/projects/<name>/AGENTS.md`
@@ -137,31 +139,29 @@ instructions.
 
 | Adapter | How injected | Sync needed? |
 |---------|-------------|-------------|
-| Claude Code | `hooks.py` reads directly from `QUAID_VISIBLE_HOME/projects/` | No — reads from canonical location |
-| OpenClaw | ExtraBootstrapFiles hook reads from OC workspace | **Yes** — files must be copied inside workspace boundary |
+| Claude Code | `hooks.py` reads directly from `QUAID_VISIBLE_HOME/projects/` and renders bounded context | No — reads from canonical location |
+| OpenClaw | Runtime facade reads canonical project docs and renders bounded context | No for current runtime context; legacy OC workspace sync is historical |
 
-### OC Sync Engine
+### Historical OC Sync Engine
 
-OpenClaw's `ExtraBootstrapFiles` hook enforces a workspace boundary —
-files must resolve (via `realpath`) inside `~/.openclaw/workspace/`.
-Quaid's canonical project location is outside this boundary.
+Earlier OpenClaw bootstrap work used `ExtraBootstrapFiles`, which enforced a
+workspace boundary where files had to resolve inside `~/.openclaw/workspace/`.
+The current launch runtime uses the facade/hook context path above instead of
+syncing every project doc as full bootstrap context.
 
-**Solution**: A sync engine in core copies bootstrap-eligible files from the
-canonical location to the OC workspace. The adapter requests this service.
+If a future adapter reintroduces file sync, it must sync only bootstrap-eligible
+bounded files and must not turn every user project `TOOLS.md`/`AGENTS.md` into
+global prompt authority.
 
 ```
 Canonical:  QUAID_VISIBLE_HOME/projects/myapp/TOOLS.md
      Sync:  ~/.openclaw/workspace/plugins/quaid/projects/myapp/TOOLS.md  (copy)
 ```
 
-See [Project System Spec](../projects/quaid/reference/projects-reference.md) for sync engine details.
-
 **Rules**:
 - Canonical location is always `QUAID_VISIBLE_HOME/projects/<name>/`.
-- OC workspace copies are read-only shadows. Never edit there.
-- A `README.md` in the OC sync target explains where canonical files live.
 - CC never needs sync — it reads directly.
-- The sync engine lives in core (reusable) and is triggered by the daemon.
+- Detailed user-project docs are primarily reached through docs recall.
 
 ---
 
@@ -248,7 +248,7 @@ directly from Quaid's split roots.
 ```
 QUAID_VISIBLE_HOME/
   instances/<instance>/    → hooks.py reads identity from here
-  projects/<name>/         → hooks.py reads TOOLS.md/AGENTS.md from here
+  projects/<name>/         → hooks.py builds compact catalog from TOOLS.md/AGENTS.md
   projects/<name>/docs/    → docsdb indexes from here
 ```
 
