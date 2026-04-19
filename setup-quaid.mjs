@@ -2562,6 +2562,14 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   const cli = canRun("openclaw") ? "openclaw" : "";
   if (!cli) return { ok: false, reason: "OpenClaw CLI not found" };
   const normalize = (s) => String(s || "").toLowerCase();
+  const pluginListHasQuaid = () => {
+    const listRes = runCliWithTimeout(cli, ["plugins", "list"], 30_000);
+    const listText = `${_safeTrim(listRes.stdout)}\n${_safeTrim(listRes.stderr)}`.trim().toLowerCase();
+    return {
+      ok: listRes.status === 0,
+      hasQuaid: /(^|[^a-z0-9_-])quaid([^a-z0-9_-]|$)/m.test(listText),
+    };
+  };
   const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
   const stagedPluginPath = path.join(
     os.tmpdir(),
@@ -2607,15 +2615,18 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   _removeOpenClawPluginsAllowQuaid();
   _sanitizeOpenClawMemorySlot();
 
-  const uninstallRes = runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000);
-  if (uninstallRes.status !== 0) {
-    const msg = renderCliFailure(uninstallRes, 45_000);
-    const norm = normalize(msg);
-    const unmanaged = norm.includes("not managed by plugins config/install records");
-    if (!norm.includes("not installed") && !norm.includes("not found") && !norm.includes("missing") && !unmanaged) {
-      return { ok: false, reason: `plugins uninstall failed: ${msg.trim() || "unknown error"}` };
+  const preUninstallList = pluginListHasQuaid();
+  if (preUninstallList.hasQuaid || !preUninstallList.ok) {
+    const uninstallRes = runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000);
+    if (uninstallRes.status !== 0) {
+      const msg = renderCliFailure(uninstallRes, 45_000);
+      const norm = normalize(msg);
+      const unmanaged = norm.includes("not managed by plugins config/install records");
+      if (!norm.includes("not installed") && !norm.includes("not found") && !norm.includes("missing") && !unmanaged) {
+        return { ok: false, reason: `plugins uninstall failed: ${msg.trim() || "unknown error"}` };
+      }
+      if (unmanaged) removeStaleExtensionDir();
     }
-    if (unmanaged) removeStaleExtensionDir();
   }
 
   // OpenClaw plugin discovery reads Dirent.isDirectory() and does not follow

@@ -199,6 +199,9 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const listTimeoutMs = 60_000;");
     expect(setupText).toContain("if (listRes.status === 0 || discovered)");
     expect(setupText).toContain("_sleepMs(listRetryDelayMs)");
+    expect(setupText).toContain("const preUninstallList = pluginListHasQuaid();");
+    expect(setupText).toContain("if (preUninstallList.hasQuaid || !preUninstallList.ok)");
+    expect(setupText).toContain('runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000)');
   });
 
   it("OpenClaw installer reconciles launchd env for the gateway service", () => {

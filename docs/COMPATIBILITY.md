@@ -18,6 +18,9 @@ Installer compatibility for OpenClaw is version-gated plus gateway-health-gated.
 Do not use bundled JavaScript hook-symbol greps as a hard installer gate:
 current OpenClaw releases can bundle or rename lifecycle internals while still
 providing the required hook behavior.
+Fresh installs may also report a non-zero `plugins uninstall quaid --force`
+when no plugin is installed yet; the installer treats an absent `quaid` row in
+`openclaw plugins list` as already-clean state and proceeds.
 
 ---
 
