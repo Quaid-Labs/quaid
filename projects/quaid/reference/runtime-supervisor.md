@@ -159,8 +159,10 @@ supervisor lifecycle bug.
 | `QUAID_SUPERVISOR_INTERVAL_SECONDS` | Supervisor tick interval |
 | `QUAID_SUPERVISOR_JANITOR_CHECK_INTERVAL_SECONDS` | Minimum interval between janitor scheduler worker starts per instance |
 | `QUAID_INSTANCE_MONITOR_WAIT_SECONDS` | How long `ensure_alive()` waits for a supervisor-owned instance monitor PID |
+| `QUAID_PROJECT_DOCS_AUTO_REGISTER_INTERVAL_SECONDS` | Supervisor interval for visible project-docs registry sync |
+| `QUAID_PROJECT_DOCS_STALE_INDEX_INTERVAL_SECONDS` | Supervisor interval for indexing one stale registered doc |
 | `QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS` | Project-docs worker tick interval |
-| `QUAID_PROJECT_DOCS_WORKER_STALE_AFTER_SECONDS` | Heartbeat stale threshold for project-docs worker restart |
+| `QUAID_PROJECT_DOCS_WORKER_STALE_SECONDS` | Heartbeat stale threshold for project-docs worker restart |
 | `QUAID_PROJECT_DOCS_PID_WAIT_SECONDS` | Startup PID handshake timeout for supervisor/worker children |
 
 Long project-docs updates can legitimately take minutes or hours on large
@@ -179,4 +181,3 @@ The M19 supervisor runtime canary validated:
 - janitor `project_docs_monitor` request path is async, not inline docs work
 - active project delete removes worker/state/locks/shadow git/scaffold
 - `quaid supervisor stop` leaves zero processes in the supervisor PGID
-
