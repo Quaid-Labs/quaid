@@ -101,7 +101,7 @@ Indexes: project, state, asset_type, source scope, subject/state.
 | `label` | TEXT | Human-readable label |
 | `home_dir` | TEXT | Workspace-relative path to project root |
 | `source_roots` | TEXT | JSON list of source root paths |
-| `auto_index` | INTEGER | Whether janitor auto-discovers files |
+| `auto_index` | INTEGER | Whether project/docs maintenance may auto-discover files |
 | `patterns` | TEXT | JSON list of glob patterns (default `["*.md"]`) |
 | `exclude` | TEXT | JSON list of exclude patterns |
 | `description` | TEXT | Project description |
@@ -126,24 +126,29 @@ This calls `DocsRegistry.register()`, inserting a row into `doc_registry`. The f
 
 **Step 2: RAG maintenance trigger**
 
-Two equivalent paths both call `DocsRAG.reindex_all()` and `DocsRAG.index_document()`:
+Automatic project-docs indexing is owned by the project-docs worker. After a
+docs apply, the worker syncs visible project docs and reindexes the changed
+registered docs for that project.
 
-- **Janitor (automated):** `quaid janitor --task rag --apply [--approve]` → `_run_rag_maintenance(ctx)` registered at `registry.register("rag", ...)` in `rag.py`.
-- **Manual:** `cd <module_root> && PYTHONPATH=. python3 datastore/docsdb/rag.py reindex [--all] [--dir <path>]`
+Manual/debug indexing still exists:
 
-**Step 3: Three-pass scan inside `_run_rag_maintenance()`**
+```bash
+cd <module_root>
+PYTHONPATH=. python3 datastore/docsdb/rag.py reindex [--all] [--dir <path>]
+```
 
-The janitor performs three distinct passes:
+Janitor no longer exposes `--task rag`; its project-docs role is to queue async
+monitor requests through `project_docs_monitor`.
 
-1. **Pass 1 — workspace `docs/` directory:** `rag.reindex_all(cfg.rag.docs_dir)` — scans `*.md`, `PROJECT.log`, and `log/*.log` recursively under the configured docs directory.
+**Step 3: Project-docs worker sync**
 
-2. **Pass 2 — project home directories:** For each project in `cfg.projects.definitions`, if `proj_dir.exists()`, calls `rag.reindex_all(str(proj_dir))` using the same scan logic. Covers project-owned markdown and logs.
+After applying project docs changes, the worker:
 
-3. **Pass 3 — `doc_registry` external files:** Enumerates all entries via `DocsRegistry().list_docs()`. For each entry whose `file_path` resolves to a real file, janitor batches them through `rag.needs_reindex_many()` and indexes only the stale subset. This covers files registered outside the scanned directories (e.g., source code files linked via `quaid registry register`). **Double-counting guard:** Passes 1 and 2 each append their scanned directory to a `scanned_dirs` list. Pass 3 resolves each registry path to an absolute path and skips it if it starts with any entry in `scanned_dirs`. This prevents files that live inside an already-scanned project directory from being re-counted in pass 3.
-
-Pre-pass: before the three indexing passes, janitor also:
-- Calls `docs_registry.auto_discover(proj_name)` for each project with `auto_index=True`.
-- Calls `docs_registry.sync_external_files(proj_name)` for each project.
+1. Registers new visible project docs under `PROJECT.md`, `TOOLS.md`,
+   `AGENTS.md`, and `docs/**/*.md`.
+2. Unregisters project-doc files deleted by the updater apply transaction.
+3. Refreshes managed `PROJECT.md` registry/navigation sections.
+4. Reindexes registered docs for the project through the docs datastore.
 
 Project-doc workers, not janitor, own source/log-driven documentation updates.
 
@@ -155,8 +160,8 @@ def needs_reindex_many(self, file_paths: List[str]) -> Dict[str, bool]
 
 Reads `st_mtime` from disk (UTC), batches `MAX(updated_at)` queries against
 `doc_chunks`, and returns a per-file `True/False` map. `needs_reindex(file_path)`
-is still available for one-off callers, but janitor and updater now use the
-batched path so large reindex passes do not issue one SQL query per file. On
+is still available for one-off callers, but updater and project-docs paths use
+the batched path so large reindex passes do not issue one SQL query per file. On
 table-missing or stat errors, the implementation returns `True` (reindex when
 in doubt).
 
@@ -343,20 +348,22 @@ After repeated updates, docs can grow bloated. `updater.py` tracks cleanup state
 
 ---
 
-## 10. Project Docs Supervisor
+## 10. Runtime Supervisor And Project Docs Monitors
 
-Project docs updates are owned by the project-docs supervisor, not by compact/reset
-event JSON files. Extraction appends durable bullets to `PROJECT.log`; the
-supervisor-owned worker reads `PROJECT.log` through a hidden cursor, compares the
-linked source tree through shadow git, applies doc edits, syncs the docs registry,
-and advances cursors only after apply succeeds.
+Project docs updates are owned by the runtime supervisor and project-docs
+workers, not by compact/reset event JSON files or inline janitor tasks.
+Extraction appends durable bullets to `PROJECT.log`; the supervisor-owned
+project-docs worker reads `PROJECT.log` through a hidden cursor, compares the
+linked source tree through shadow git, applies doc edits, syncs the docs
+registry/RAG, and advances cursors only after apply succeeds.
 
 **Update flow:**
 
 1. `quaid docs update <project>` writes a hidden force-update request under
-   `QUAID_HOME/data/project-docs/requests/` and ensures the supervisor is alive.
-2. The supervisor owns one worker per active project. Workers own their own tick
-   loop and take a per-project update lock before applying changes.
+   `QUAID_HOME/data/project-docs/requests/` and ensures the runtime supervisor
+   is alive.
+2. The runtime supervisor owns one worker per active project. Workers own their
+   own tick loop and take a per-project update lock before applying changes.
 3. The worker reads pending shadow-git changes plus `PROJECT.log` entries since
    the hidden cursor.
 4. The docs updater may edit `PROJECT.md`, `TOOLS.md`, `AGENTS.md`, and
@@ -376,23 +383,31 @@ removal.
 
 Worker liveness is supervised with PID identity checks, per-project locks, and
 heartbeat staleness. A stale worker is stopped and restarted by the supervisor.
+`quaid project status <project>` exposes phase/progress and recent worker log
+tail so async updates can run for a long time without being confused with true
+stalls.
+
+The same runtime supervisor also owns instance monitors and one-shot janitor
+workers. See `projects/quaid/reference/runtime-supervisor.md` for process-group
+teardown and benchmark cleanup guidance.
 
 ---
 
-## 11. reindex --all vs janitor --task rag
+## 11. Manual reindex vs project-docs worker indexing
 
-| | `python3 datastore/docsdb/rag.py reindex [--all]` | `quaid janitor --task rag --apply` |
+| | `python3 datastore/docsdb/rag.py reindex [--all]` | Project-docs worker |
 |---|---|---|
-| Trigger | Manual CLI | Automated (nightly or on-demand) |
-| Pass 1 | `docs/` directory | `cfg.rag.docs_dir` |
-| Pass 2 | Workspace root `*.md` files | Each project's `home_dir` |
-| Pass 3 | `doc_registry` entries | `doc_registry` entries |
-| Pre-pass | None | project-doc worker auto-discovery + registry sync after docs apply |
+| Trigger | Manual CLI | Supervisor-owned docs update |
+| Scope | Directory or all registered docs depending on CLI args | One project after docs apply |
+| Registry sync | None | Registers/unregisters visible project docs before indexing |
 | Force flag | `--all` forces reindex of unchanged files | No force; always mtime-gated |
-| Dry-run | Not supported | Supported via `ctx.dry_run`; skips all indexing |
-| Approval | Not required | Requires `--approve` if `janitor.applyMode=ask` |
+| Dry-run | Not supported | Not used in worker apply path |
+| Approval | Not required | Controlled by project-docs update policy |
 
-Both paths use `DocsRAG.needs_reindex()` for change detection (except `reindex --all` which bypasses it). Both call the same `DocsRAG.index_document()` and produce identical chunk rows. Project-doc workers additionally sync visible project docs before indexing.
+Both paths use `DocsRAG.needs_reindex()` for change detection (except
+`reindex --all` which bypasses it). Both call the same
+`DocsRAG.index_document()` and produce identical chunk rows. Project-doc
+workers additionally sync visible project docs before indexing.
 
 ---
 
@@ -408,8 +423,7 @@ quaid docs list --project <name>
 quaid project create <name> [--description "Label"] [--source-root /path]
 
 # --- Indexing ---
-quaid janitor --task rag --apply --approve            # Recommended: all three passes
-# Manual (from module root with PYTHONPATH=.):
+# Manual/debug (from module root with PYTHONPATH=.):
 python3 datastore/docsdb/rag.py reindex              # mtime-gated
 python3 datastore/docsdb/rag.py reindex --all        # Force full reindex
 python3 datastore/docsdb/rag.py stats                # Index statistics
@@ -429,12 +443,12 @@ quaid docs cleanup-check                             # Which docs have update/gr
 quaid docs cleanup --apply                           # Clean all bloated docs via Opus
 quaid docs cleanup <doc_path> --apply                # Clean specific doc
 
-# --- Project docs supervisor ---
+# --- Runtime supervisor / project docs monitors ---
 quaid docs update <project>                          # Queue async force update
 quaid docs update <project> --wait                   # Queue and wait for apply
 quaid project status <project>                       # Fresh/stale, worker, cursor state
 quaid project diff <project> [--full]                # Pending source/log delta
-quaid supervisor status|ensure|stop
+quaid supervisor status|ensure|stop                  # Runtime supervisor process tree
 
 # --- Changelog ---
 quaid docs changelog                                 # Recent doc update history

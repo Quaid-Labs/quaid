@@ -66,8 +66,9 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 
 Trigger indexing first (embeddings run on `<oc-host>` via Ollama):
 ```bash
-ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid janitor --task rag --apply --approve"
+ssh <oc-host> "cd <quaid-module-root> && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw PYTHONPATH=. \
+  python3 datastore/docsdb/rag.py reindex --all"
 ```
 
 Then search:
@@ -91,14 +92,14 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 
 ---
 
-### OC-P5: Janitor check
+### OC-P5: Registry check
 
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid janitor --task rag --dry-run 2>&1 | grep -E 'oc-test-proj|orphan|ERROR'"
+  ~/.local/bin/quaid docs list --project oc-test-proj"
 ```
 
-**Expected:** No orphan warnings or errors.
+**Expected:** The registered doc is listed; no errors.
 
 ---
 
@@ -173,8 +174,9 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 
 Trigger indexing (same Ollama instance as OC — `<oc-host>`):
 ```bash
-ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
-  ~/.local/bin/quaid janitor --task rag --apply --approve"
+ssh <oc-host> "cd <quaid-module-root> && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code PYTHONPATH=. \
+  python3 datastore/docsdb/rag.py reindex --all"
 ```
 
 Then search:
@@ -198,14 +200,14 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
 
 ---
 
-### CC-P5: Janitor check
+### CC-P5: Registry check
 
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
-  ~/.local/bin/quaid janitor --task rag --dry-run 2>&1 | grep -E 'cc-test-proj|orphan|ERROR'"
+  ~/.local/bin/quaid docs list --project cc-test-proj"
 ```
 
-**Expected:** No orphan warnings or errors.
+**Expected:** The registered doc is listed; no errors.
 
 ---
 
@@ -322,8 +324,9 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 
 ```bash
 # Index all docs (Ollama on <oc-host> handles both OC and CC docs)
-ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
-  ~/.local/bin/quaid janitor --task rag --apply --approve"
+ssh <oc-host> "cd <quaid-module-root> && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code PYTHONPATH=. \
+  python3 datastore/docsdb/rag.py reindex --all"
 
 # CC searches for OC's doc
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
@@ -345,14 +348,14 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 
 ---
 
-### XP-7: Janitor check (cross-instance)
+### XP-7: Registry check (cross-instance)
 
 ```bash
 ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
-  ~/.local/bin/quaid janitor --task rag --dry-run 2>&1 | grep -E 'shared-xp-proj|orphan|ERROR'"
+  ~/.local/bin/quaid docs list --project shared-xp-proj"
 ```
 
-**Expected:** No errors or orphan warnings.
+**Expected:** Both registered docs are listed; no errors.
 
 ---
 
@@ -388,10 +391,10 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 | Check | Pass condition |
 |-------|---------------|
 | OC CRUD | P1–P7 all complete without errors |
-| OC janitor | P5 — no orphans |
+| OC registry | P5 — registered doc is visible |
 | OC markdown | P6 — `#` heading, UTF-8, `docs/` exists |
 | CC CRUD | P1–P7 all complete without errors |
-| CC janitor | P5 — no orphans |
+| CC registry | P5 — registered doc is visible |
 | CC markdown | P6 — `#` heading, UTF-8, `docs/` exists |
 | Global registry | XP-1 — both adapters see same list |
 | OC doc created | XP-2 — doc registered to shared project |
@@ -399,7 +402,7 @@ ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
 | CC links + makes doc | XP-4 — project shows both instances; both docs listed |
 | CC sees OC doc | XP-5 — search returns OC doc |
 | OC sees CC doc | XP-6 — search returns CC doc |
-| Cross-instance janitor | XP-7 — no orphans |
+| Cross-instance registry | XP-7 — both registered docs are visible |
 | Cleanup | XP-9 — project gone from global registry |
 
 ---

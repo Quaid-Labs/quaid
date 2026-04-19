@@ -619,23 +619,25 @@ what to add by inspecting the project directory structure.
 
 ---
 
-## 6. Project Docs Supervisor
+## 6. Runtime Supervisor And Project Docs Workers
 
 **Location:** `core/project_docs.py`, `core/project_docs_supervisor.py`,
 `core/project_docs_worker.py`, with append-only PROJECT.log helpers in
 `datastore/docsdb/project_updater.py`.
 
-**Purpose:** Supervisor-owned project documentation maintenance. Extraction writes
-durable project observations to `PROJECT.log`; workers compare shadow-git source
-changes and `PROJECT.log` cursor deltas, update visible project docs, sync the
-docs registry, and reindex registered docs.
+**Purpose:** Runtime-supervisor-owned project documentation maintenance.
+Extraction writes durable project observations to `PROJECT.log`; project-docs
+workers compare shadow-git source changes and `PROJECT.log` cursor deltas,
+update visible project docs, sync the docs registry, and reindex registered
+docs. The same runtime supervisor also owns instance monitors and janitor
+worker lifecycle; see `reference/runtime-supervisor.md`.
 
 ### 6.1 Request and Cursor Model
 
 `quaid docs update <project>` writes a force-update request to
-`QUAID_HOME/data/project-docs/requests/<project>.json` and ensures the supervisor
-is alive. The command is async by default; `--wait` waits for that request to
-finish.
+`QUAID_HOME/data/project-docs/requests/<project>.json` and ensures the runtime
+supervisor is alive. The command is async by default; `--wait` waits for that
+request to finish.
 
 Hidden state lives outside the visible project tree:
 

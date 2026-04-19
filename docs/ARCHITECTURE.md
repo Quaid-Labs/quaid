@@ -80,7 +80,7 @@ Store execution is sequential (not parallel). Graph store receives accumulated v
 
 **`core/session-timeout.ts` — Idle-session extraction.** `SessionTimeoutManager` is instantiated by the OpenClaw adapter and provides a secondary extraction path for sessions that never fire a `/compact` or `/reset`. It buffers messages via `onAgentEnd` and sets a debounced timer (`timeoutMinutes`, default from `capture.inactivityTimeoutMinutes`). If the timer fires before `onAgentStart` clears it, `queueExtractionFromSession` is called. For OC, this writes a daemon signal (compaction type) rather than running extraction in-process. A stale-sweep mechanism (`recoverStaleBuffers`) runs at startup to catch sessions that timed out while the process was not running; it uses a windowed scan between the last sweep timestamp and now, capped at `maxStaleRecoverPerTick` (default 3) per invocation with exponential backoff on failures. Replay prevention uses per-session cursor files in `data/session-cursors/`.
 
-**Maintenance** -- A nightly janitor pipeline reviews pending facts, deduplicates near-identical memories, resolves contradictions, decays stale memories, updates documentation, and runs structural health checks.
+**Maintenance** -- A supervisor-scheduled janitor pipeline reviews pending facts, deduplicates near-identical memories, decays stale memories, queues async project-docs monitor refreshes, and runs structural health checks.
 
 Almost every decision in the system is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. This means Quaid naturally scales with AI models -- as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
 
@@ -115,7 +115,7 @@ Conversation messages
         +---> *.snippets.md (bullet-point observations)
         +---> journal/*.journal.md (reflective diary entries)
         |
-  [Janitor]  Nightly: review, dedup, decay, workspace audit
+  [Janitor]  Supervisor-scheduled: review, dedup, decay, project-docs monitor kickoff
         |
         +---> nodes promoted to status: active
         +---> duplicates merged (contradiction resolution disabled by default)
@@ -460,13 +460,13 @@ The schema maintains indexes on high-query-frequency columns: `owner_id + status
 
 SQLite's WAL (Write-Ahead Logging) mode allows concurrent readers. Multiple recall queries can run simultaneously without blocking each other or blocking an in-progress extraction write. Writers still serialize -- only one write transaction at a time -- but the `busy_timeout` of 30 seconds means a blocked writer automatically retries rather than failing immediately.
 
-In practice, extraction (write) and retrieval (read) can run simultaneously. The janitor is the only source of sustained writes, and it runs nightly when retrieval volume is low. The 64MB page cache (`cache_size = -64000`) keeps frequently-accessed embeddings and FTS indexes in memory, reducing disk I/O during concurrent access.
+In practice, extraction (write) and retrieval (read) can run simultaneously. The janitor is the only source of sustained writes, and it runs nightly when retrieval volume is low. Runtime ownership is supervisor-based: the supervisor owns instance monitors, project-docs workers, and bounded janitor worker processes, while each worker owns its domain logic. The 64MB page cache (`cache_size = -64000`) keeps frequently-accessed embeddings and FTS indexes in memory, reducing disk I/O during concurrent access.
 
 ---
 
 ## 5. Janitor Pipeline (Nightly Maintenance)
 
-The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 19 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
+The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs registered maintenance routines in a defined order, grouped by phase. Scheduling is supervisor-owned: a short-lived `core/janitor_worker.py scheduler-once` process checks whether maintenance is due, then exits. The janitor itself dispatches datastore and adapter maintenance through `core/lifecycle/janitor_lifecycle.py`.
 
 ### Execution Order
 
@@ -491,13 +491,11 @@ The task numbering is historical -- tasks were added over time and the numbers r
 | decay | Ebbinghaus exponential confidence decay on old unused facts | No |
 | decay_review | Review memories that decayed below threshold (delete/extend/pin) | High |
 
-**Phase 3: Workspace & Docs** (independent of memory pipeline)
+**Phase 3: Project Docs, Snippets, And Journal** (independent of memory pipeline)
 
 | Task | Purpose | LLM? |
 |------|---------|------|
-| workspace | OpenClaw adaptor-registered core markdown bloat monitoring + deep-reasoning LLM review | High |
-| docs_staleness | Auto-update stale docs from git diffs (fast-reasoning pre-filter + deep-reasoning update) | Both |
-| docs_cleanup | Clean bloated docs based on churn metrics | Low |
+| project_docs_monitor | Queue async project-docs monitor refresh requests through the DocsDB maintenance routine | No |
 | snippets | Review soul snippets: FOLD (merge into file), REWRITE, or DISCARD | High |
 | journal | Distill journal entries into core markdown, archive originals | High |
 
@@ -505,7 +503,6 @@ The task numbering is historical -- tasks were added over time and the numbers r
 
 | Task | Purpose | LLM? |
 |------|---------|------|
-| rag | Reindex docs for RAG search + auto-discover new projects | No |
 | tests | Run vitest suite via `npm test` (dev/CI only, gated by `QUAID_DEV=1`) | No |
 | cleanup | Prune old logs and orphaned embeddings | No |
 | update_check | Check for Quaid updates (version comparison) | No |
@@ -513,7 +510,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 
 ### Fail-Fast Behavior
 
-Memory tasks (2 through 5) form a critical pipeline. If any memory task fails, all remaining memory tasks are skipped and fact graduation is blocked. Pending facts are left in place and picked up by the next successful janitor review. Non-memory tasks (workspace, docs, RAG) continue independently.
+Memory tasks (2 through 5) form a critical pipeline. If any memory task fails, all remaining memory tasks are skipped and fact graduation is blocked. Pending facts are left in place and picked up by the next successful janitor review. Non-memory tasks such as project-docs monitor request kickoff, snippets, journal, tests, cleanup, and update checks continue independently.
 
 ### Token-Based Batching
 
@@ -550,9 +547,8 @@ _TASK_SYSTEM_GATE = {
     "embeddings": "memory", "review": "memory", "temporal": "memory",
     "dedup_review": "memory", "duplicates": "memory", "contradictions": "memory",
     "decay": "memory", "decay_review": "memory",
+    "project_docs_monitor": "projects",
     "snippets": "journal", "journal": "journal",
-    "docs_staleness": "projects", "docs_cleanup": "projects", "rag": "projects",
-    "workspace": "workspace",
     # tests, cleanup: always run (infrastructure)
 }
 ```
@@ -699,7 +695,7 @@ python3 datastore/docsdb/registry.py discover --project myproject    # Auto-disc
 
 **RAG Search** (`datastore/docsdb/rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
 
-**Project Updater** (`datastore/docsdb/project_updater.py`): Processes file change events and refreshes project documentation. Integrates with OpenClaw runtime events/hook paths (`docs.ingest_transcript`, `before_compaction`) to stage and process documentation updates.
+**Project Docs Monitor** (`core/project_docs.py`, `core/project_docs_worker.py`, `core/project_docs_supervisor.py`): Processes project source and `PROJECT.log` changes asynchronously under supervisor ownership. It snapshots linked source roots into shadow git, updates visible project docs, syncs the docs registry/RAG, and advances hidden cursors only after a successful apply.
 
 ### Auto-Discovery
 
@@ -708,7 +704,7 @@ Each project directory under `projects/` can contain:
 - `TOOLS.md` -- Tool usage guidance (what to call, when, and why; loaded into agent context)
 - `AGENTS.md` -- Project behavior and operating rules (loaded into agent context)
 
-Projects are auto-discovered during RAG reindexing (janitor task 7).
+Projects are registered through project creation/linking surfaces. Docs registry reconciliation can repair pre-existing orphan state, but benchmark and runtime flows should explicitly register projects rather than relying on write-on-read discovery.
 
 ---
 
@@ -756,10 +752,12 @@ class SystemsConfig:
     memory: bool = True       # Extract and recall facts from conversations
     journal: bool = True      # Track personality evolution via snippets + journal
     projects: bool = True     # Auto-update project docs from code changes
-    workspace: bool = True    # Monitor core markdown file health
+    workspace: bool = True    # Reserved; legacy workspace markdown audit is disabled for launch
 ```
 
-These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and the Python janitor (`_system_enabled_or_skip()`).
+These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and
+Python runtime paths such as extraction, janitor maintenance, and project-docs
+monitor request kickoff.
 
 ### Environment Overrides
 
@@ -821,8 +819,8 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The `camelC
 
 ```python
 def call_deep_reasoning(prompt, system_prompt=None, max_tokens=2000, timeout=600):
-    """High-reasoning model. Used for fact review, contradiction resolution,
-    workspace audits, journal distillation."""
+    """High-reasoning model. Used for fact review, decay review,
+    snippets, and journal distillation."""
 
 def call_fast_reasoning(prompt, max_tokens=200, timeout=120, system_prompt=None, max_retries=None):
     """Fast-reasoning model. Used for dedup verification, reranking,

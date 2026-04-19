@@ -120,7 +120,9 @@ reranker to reduce latency.
 
 **What it does:**
 
-1. Calls `ensure_alive()` to start the extraction daemon if it is not running.
+1. Calls `ensure_alive()` to ensure the runtime supervisor is running. In normal
+   mode the supervisor starts or owns the instance extraction daemon; direct
+   daemon start is reserved for `QUAID_SUPERVISOR_DISABLE=1` fallback runs.
 2. Determines adapter type (currently only `openclaw` is flagged
    `supports_compaction_control=True`; CC is `False`).
 3. Calls `write_signal(signal_type, session_id, transcript_path, adapter,
@@ -153,8 +155,8 @@ and is picked up when the daemon next starts.
 
 **What it does (in order):**
 
-1. **Ensure daemon alive** — calls `ensure_alive()` so the extraction daemon
-   is running before any other hook fires.
+1. **Ensure runtime alive** — calls `ensure_alive()` so the runtime supervisor
+   and current instance monitor are running before any other hook fires.
 
 2. **Prior session signal** — for adapters that track session transitions
    (e.g. Codex), calls `adapter.check_session_transition()` to detect whether

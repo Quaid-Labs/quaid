@@ -1,8 +1,10 @@
-# Project Docs Supervisor Plan
+# Project Docs And Runtime Supervisor Plan
 
 Status: active design plan
 Owner: W1 runtime/project-system
 Last updated: 2026-04-19
+
+Primary runtime reference: `projects/quaid/reference/runtime-supervisor.md`.
 
 ## Why This Exists
 
@@ -294,7 +296,7 @@ Benchmark canary:
 
 Implemented direction:
 - Hidden project-docs operational state lives under `QUAID_HOME/data/project-docs/`.
-- `quaid docs update <project>` queues an async force-update request and ensures the project-docs supervisor is alive.
+- `quaid docs update <project>` queues an async force-update request and ensures the runtime supervisor is alive.
 - `quaid project status <project>` reports freshness from hidden state, pending source changes, pending `PROJECT.log` bytes, and worker/supervisor PIDs.
 - `quaid project diff <project> [--stat|--full]` reports pending shadow-git changes plus pending `PROJECT.log` entries since the cursor.
 - `quaid-supervisor` now owns project-docs workers; workers own their domain tick and run project updates under a per-project lock.

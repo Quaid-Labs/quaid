@@ -62,12 +62,15 @@ Write request
 | `datastore/memorydb/maintenance.py` | Datastore lifecycle registration facade | `register_lifecycle_routines()` for `memory_graph_maintenance` |
 | `core/lifecycle/janitor.py` | Janitor orchestration, scheduling, reporting, lifecycle dispatch | `run_task_optimized()`, `run_tests()`, task orchestration and policy gating |
 | `core/lifecycle/janitor_lifecycle.py` | Lifecycle routine registry and dispatch | `LifecycleRegistry`, `RoutineContext`, `RoutineResult`, `build_default_registry()` |
-| `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
+| `core/project_docs_supervisor.py` | Root runtime supervisor | Owns instance monitors, project-docs workers, janitor workers |
+| `core/project_docs.py` | Project-docs state, requests, status, worker/supervisor lifecycle helpers | `request_update()`, `project_status()`, `project_diff()`, `ensure_supervisor_alive()` |
+| `core/project_docs_worker.py` | Project-docs worker loop | Reads shadow-git/PROJECT.log cursors, applies docs updates |
+| `core/janitor_worker.py` | Supervisor-owned janitor scheduler worker | `scheduler-once` |
 | `datastore/notedb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
 | `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search_docs()`, `index_document()`, `register_lifecycle_routines()` |
-| `datastore/docsdb/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
+| `datastore/docsdb/updater.py` | Project-docs updater implementation | `check_staleness()`, `update_doc_from_diffs()`, bounded diff/context helpers |
 | `datastore/docsdb/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
-| `datastore/docsdb/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
+| `datastore/docsdb/project_updater.py` | PROJECT.log append and PROJECT.md registry-section helpers | `append_project_logs()`, `refresh_project_md()` |
 | `core/runtime/events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
 | `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
 | `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
@@ -85,7 +88,7 @@ Write request
 | File | Purpose | Key Exports / Notes |
 |------|---------|---------------------|
 | `adaptors/openclaw/adapter.py` | OpenClaw-specific adapter | `OpenClawAdapter`, sessions from `~/.openclaw/sessions/`, notifications via `openclaw message send` CLI |
-| `adaptors/openclaw/maintenance.py` | OpenClaw lifecycle registrations | `register_lifecycle_routines()` (workspace audit) |
+| `adaptors/openclaw/maintenance.py` | OpenClaw lifecycle registrations | `register_lifecycle_routines()` for legacy workspace audit registration; not in active launch janitor task choices |
 | `adaptors/claude_code/adapter.py` | Claude Code adapter | `ClaudeCodeAdapter`, sessions from `~/.claude/projects/`, deferred notifications via pending file, Anthropic token auth |
 | `adaptors/codex/adapter.py` | Codex adapter | `CodexAdapter`, sessions from `~/.codex/sessions/`, deferred notifications via pending file, direct OpenAI token auth |
 | `adaptors/claude_code/hooks.py` | Backwards-compatible shim for CC hooks | Auto-provisions a new instance silo on first invocation if needed, then delegates to `core.interface.hooks.main` |
@@ -176,7 +179,9 @@ There is no `PostCompact` hook wired. `hook-inject-compact` exists as a callable
 
 `quaid hook-session-init` runs at `SessionStart` (wired to the `SessionStart` hook in `~/.claude/settings.json`). It:
 
-1. Calls `ensure_alive()` to start the extraction daemon if needed.
+1. Calls `ensure_alive()` to ensure the runtime supervisor is alive. In normal
+   mode the supervisor owns the instance extraction daemon; direct daemon start
+   is a controlled fallback when `QUAID_SUPERVISOR_DISABLE=1`.
 2. For adapters that track session transitions (e.g. Codex), signals extraction for the session that just ended via `/new` or process restart.
 3. Seeds an extraction cursor for the current session so the daemon can discover it for timeout-based extraction.
 4. Scans `$QUAID_VISIBLE_HOME/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
@@ -185,7 +190,7 @@ The write is idempotent — if content is unchanged the file is not touched, pre
 
 ### Auth Token
 
-The Claude Code adapter requires a long-lived Anthropic token for daemon-mode API calls (nightly janitor, extraction daemon). Store it at `~/.quaid/adaptors/claude-code/.auth-token` or set `ANTHROPIC_API_KEY` explicitly for the daemon environment.
+The Claude Code adapter requires a long-lived Anthropic token for background API calls made by supervisor-owned instance monitors and janitor workers. Store it at `~/.quaid/adaptors/claude-code/.auth-token` or set `ANTHROPIC_API_KEY` explicitly for the daemon environment.
 
 ```bash
 claude setup-token    # Generate token
@@ -296,6 +301,8 @@ $QUAID_HOME/                         # Hidden system root (~/.quaid)
 │       │   ├── session-cursors/     # Extraction progress per session
 │       │   └── extraction-daemon.pid
 │       └── logs/                    # Structured JSONL logs, janitor checkpoints
+├── data/
+│   └── project-docs/                # Supervisor/project-docs requests, state, locks, worker logs
 └── runtime/                         # Shared hidden runtime state
 
 $QUAID_VISIBLE_HOME/                 # Visible user-facing root (~/quaid)
@@ -467,12 +474,9 @@ Merges are crash-safe, executed in single database transactions.
 | 4b | contradictions (resolve) | **Disabled by default** (`janitor.contradiction.enabled=false`) | — |
 | 5 | decay | Ebbinghaus confidence decay | Free |
 | 5b | decay_review | Review decayed memories (Opus) | ~$0.01-0.05 |
-| 1 | workspace | Core markdown review (Opus) | ~$0.05 |
-| 1b | docs_staleness | Update stale docs from git diffs | ~$0.01-0.10 |
-| 1c | docs_cleanup | Clean bloated docs (churn-based) | ~$0.01-0.05 |
+| 0a | project_docs_monitor | Queue async project-docs monitor refresh requests | Free |
 | 1d | snippets | Soul snippets review (FOLD/REWRITE/DISCARD into core markdown) | ~$0.01-0.05 |
 | 1d | journal | Distill journal entries into core markdown | ~$0.05-0.10 |
-| 7 | rag | Reindex docs for RAG + project discovery | Free (local) |
 | 8 | tests | Run vitest suite (`npm test`) | Free |
 | 9 | cleanup | Prune old logs, orphaned embeddings | Free |
 | 10 | update_check | Check for Quaid updates (version comparison + cache) | Free |

@@ -1,13 +1,14 @@
 # Janitor (Sandman) Reference
 <!-- PURPOSE: Complete reference for nightly janitor pipeline: task list, schedule, thresholds, fail-fast, edge normalization, cost tracking -->
-<!-- SOURCES: core/lifecycle/janitor.py, core/lifecycle/workspace_audit.py, adaptors/openclaw/adapter.ts, adaptors/openclaw/adapter.py, adaptors/openclaw/providers.py -->
+<!-- SOURCES: core/lifecycle/janitor.py, core/janitor_worker.py, core/lifecycle/janitor_lifecycle.py, core/plugins/docsdb_contract.py, adaptors/openclaw/adapter.ts, adaptors/openclaw/adapter.py, adaptors/openclaw/providers.py -->
 
-Nightly memory maintenance pipeline. Cleans, decays, deduplicates, processes docs/project updates, and maintains memory quality.
+Nightly memory maintenance pipeline. Cleans, decays, deduplicates, queues async project-docs monitor refreshes, and maintains memory quality.
 
 ## Schedule
 - **Cron name:** `sandman`
 - **Time:** 4:30 AM Asia/Makassar (WITA)
-- **Script:** `modules/quaid/core/lifecycle/janitor.py`
+- **Scheduler worker:** `modules/quaid/core/janitor_worker.py scheduler-once`
+- **Janitor script:** `modules/quaid/core/lifecycle/janitor.py`
 - **Logs:** `logs/janitor/janitor.log` (structured JSON)
 - **Stats:** `logs/janitor-stats.json` (run metrics + API cost)
 - **Session:** `isolated` (dedicated session per run, not the main interactive session)
@@ -29,6 +30,18 @@ openclaw cron list
 # Fix if needed (replace JOB_ID with actual ID)
 openclaw cron edit <JOB_ID> --session isolated --message "Run janitor..."
 ```
+
+## Runtime Ownership
+
+The runtime supervisor owns janitor scheduling. It periodically starts a
+short-lived `core/janitor_worker.py scheduler-once` process for each registered
+instance. The worker checks whether janitor maintenance is due, runs one
+eligibility tick, and exits. If the supervisor disappears while a janitor worker
+is active, the worker exits through its supervisor watchdog.
+
+Manual `quaid janitor ...` commands still run the janitor directly for
+operator-initiated maintenance. The automatic background path should be treated
+as supervisor-owned.
 
 ## Concurrency Lock
 
@@ -61,50 +74,46 @@ The janitor requires LLM access for review/dedup/docs tasks. Provider/model rout
 | 4 | **contradictions** | None | Memory | **Decommissioned** in active janitor path (task name retained as no-op compatibility surface) |
 | 5 | **decay** | None | Memory | Confidence decay on old unused memories |
 | 5b | **decay_review** | Opus | Memory | Review decayed facts (DELETE/EXTEND/PIN) |
-| 1 | **workspace** | Opus | Infra | Single-pass audit of changed workspace files (runs after memory pipeline) |
-| 1b | **docs_staleness** | Opus | Infra | Update stale docs from git diffs (runs after memory pipeline) |
-| 1c | **docs_cleanup** | Opus | Infra | Clean bloated docs (churn-based trigger; runs after memory pipeline) |
+| 0a | **project_docs_monitor** | None | Infra | Queue async project-docs monitor refresh requests through DocsDB maintenance |
 | 1d-snippets | **snippets** | Opus | Infra | Review & fold pending snippets into core markdown (runs after memory pipeline) |
 | 1d-journal | **journal** | Opus | Infra | Distill journal entries into core markdown themes, archive old entries (runs after memory pipeline) |
-| 7 | **rag** | None | Infra | RAG reindex + project discovery + event processing |
 | 8 | **tests** | None | Infra | Run vitest suite (npm test; only when `--task tests`, `QUAID_DEV=1`, or `janitor.run_tests=true`) |
 | 9 | **cleanup** | None | Infra | Prune old recall_log (90d), dedup_log (90d), health_snapshots (180d), orphaned embeddings |
 | 10 | **update_check** | None | Infra | Check for Quaid updates (version comparison + cache) |
 | 11 | **graduate** | None | Memory | Promote approved memories to active after a healthy memory pipeline |
 
-> **Execution order note:** The task numbers (0b, 1, 1b, etc.) reflect historical labeling, not execution order. In `--task all`, the memory pipeline (0b, 2, 2a, 2b, 3, 5, 5b) runs **first**, then workspace/docs/snippets/journal (1, 1b, 1c, 1d). Memory tasks have higher priority under time budget pressure because late-arriving workspace/docs work is less critical than memory quality. Infrastructure tasks (rag, tests, cleanup, update_check) run last.
+> **Execution order note:** The task numbers reflect historical labeling, not execution order. In `--task all`, janitor first queues project-docs monitor requests, then runs memory preparation and the memory pipeline, then snippets/journal, then infrastructure tasks. Memory tasks have higher priority under time budget pressure because memory quality is launch-critical.
 
 > **Category** determines fail-fast behavior — see "Fail-Fast Pipeline Guard" below.
 
 ### Parallel Dry-Run Prepass
 
-When `--task all --dry-run`, the janitor runs workspace, docs_staleness, docs_cleanup, snippets, and journal as a **parallel prepass** before executing them sequentially. This is an optimization: the dry-run results are cached in `parallel_lifecycle_results` and reused, avoiding a second serial pass when the apply phase runs immediately after. Concurrency is controlled by `core.parallel.lifecyclePrepassWorkers` (default 3). If the prepass fails for any reason, execution falls back to serial.
+When `--task all --dry-run`, the janitor can run registered lifecycle routines as a **parallel prepass** before executing them sequentially. This is an optimization: dry-run results are cached in `parallel_lifecycle_results` and reused, avoiding a second serial pass when the apply phase runs immediately after. Concurrency is controlled by `core.parallel.lifecyclePrepassWorkers` (default 3). If the prepass fails for any reason, execution falls back to serial.
 
 ### Task 0b: Embeddings
 Backfills missing vector embeddings before memory pipeline tasks.
 
-### Task 1: Workspace Audit (Opus)
-Single-pass review of changed workspace markdown files:
-1. Detect files changed since last run (mtime comparison)
-2. Read file contents
-3. Call Opus with review prompt
-4. Parse and apply decisions (move to docs, convert to memory, move to project, etc.)
+### Task 0a: Project Docs Monitor Request
+Queues async project-docs refresh requests through the DocsDB datastore
+maintenance routine:
 
-### Task 1b: Documentation Staleness (Opus)
-Detects and updates stale docs using git-based drift detection via `detect_drift_from_git()`:
-1. Check instance `config.json → docs.sourceMapping` for monitored files
-2. Compare source file vs doc file git commit timestamps (not just mtime) for accurate staleness scoring
-3. Gather git diffs since doc was last modified
-4. Call Opus to update doc based on diffs
-5. Log to `doc_update_log` SQLite table (replaces the old `data/docs-update-log.json` for concurrent safety and queryability)
+1. Enumerates canonical registered projects.
+2. Writes a hidden request for each project through `project_docs.request_update`.
+3. Ensures or reports the runtime supervisor PID.
+4. Returns immediately; project-docs workers own heavy docs writes and RAG sync.
 
-### Task 1c: Documentation Cleanup (Opus)
-Cleans bloated docs based on churn heuristics (not time-based):
-- **Triggers:** 10+ updates since last cleanup OR 30%+ size growth
-- **State tracking:** `logs/docs-cleanup-state.json`
-- **Cleanup prompt:** Remove stale sections, consolidate redundant explanations, trim verbosity
-- Preserves all current, accurate information
-- Resets churn counters after cleanup
+This task is a sanity kickoff for long-running docs systems. It prevents project
+docs from waiting forever for a quiet time, but it does not run the docs updater
+inline inside janitor.
+
+### Removed Legacy Workspace/Docs Tasks
+
+The old `workspace`, `docs_staleness`, `docs_cleanup`, and `rag` janitor task
+surfaces were removed for launch. Core agentic-system-owned markdown is treated
+as immutable unless a user explicitly invokes a future dedicated script. Project
+docs updates are owned by the supervisor/project-docs worker pipeline, and RAG
+indexing is run by docs datastore/project-docs paths rather than as a broad
+inline janitor task.
 
 ### Task 1d-snippets: Soul Snippets Review (Opus)
 Reviews pending soul snippets (from `.snippets.md` files) and decides whether to fold them into core markdown files:
@@ -194,23 +203,23 @@ Uses the Ebbinghaus forgetting curve with access-scaled half-life:
 - Frequently accessed memories decay slower (access_count scales half-life)
 - When confidence drops below threshold: queued for Task 5b review (not silently deleted)
 
-### Task 7: RAG Reindex + Project Discovery
-
-Enhanced from simple reindex to include project management:
+### Project Docs And RAG Ownership
 
 Project docs updates are owned by the supervisor/worker pipeline. Janitor no
-longer drains staged project-event JSON files.
+longer drains staged project-event JSON files, updates stale docs from git
+diffs, cleans project docs inline, or exposes `--task rag`.
 
-**7a: Auto-discover for autoIndex projects** — scans each project's `homeDir` for new files matching `patterns` (respects `exclude`), registers them in the doc_registry.
+The project-docs worker owns:
 
-**7b: Sync PROJECT.md External Files** — parses PROJECT.md "External Files" sections and creates registry entries for declared external files.
+- shadow-git source snapshots
+- `PROJECT.log` cursor reads
+- docs updater apply
+- visible project docs registry sync
+- docs RAG reindex for changed registered docs
 
-**7c: RAG reindex (three passes):**
-1. **docs/ directory pass** — reindexes `cfg.rag.docs_dir` (the workspace `docs/` directory).
-2. **Project directory pass** — reindexes each project's `homeDir` for projects with `autoIndex: true`.
-3. **doc_registry pass** (added in commit `dedf2c47`) — enumerates all files registered via `DocsRegistry().list_docs()` and indexes any that need reindex. This covers external registered files (e.g. `/tmp/*.md`, files outside the workspace) that neither of the directory scans would reach.
-
-**Why the doc_registry pass matters:** Before this fix, `quaid registry register <path> --project <name>` registered a file in the database but the janitor never indexed it. The RAG search could not find content in those files. Now, `quaid janitor --task rag --apply --approve` is sufficient to index newly registered docs — no need for a separate manual `reindex --all`.
+Manual RAG tools still exist for operator/debug use, but automatic project-docs
+freshness should flow through `quaid docs update <project>`,
+`quaid project status <project>`, and the runtime supervisor.
 
 ### Task 8: Tests
 Runs the vitest test suite. Output parser handles both vitest format (`Tests X failed | Y passed (Z)`) and test-runner.js summary format (`Total: X / Passed: Y / Failed: Z`).
@@ -358,8 +367,8 @@ python3 core/lifecycle/janitor.py --task all --apply --time-budget 1800 --token-
 # Explicitly approve policy-gated apply mode
 python3 core/lifecycle/janitor.py --task review --apply --approve
 
-# Index newly registered docs (doc_registry pass)
-python3 core/lifecycle/janitor.py --task rag --apply --approve
+# Queue project-docs monitor refresh requests through datastore maintenance
+python3 core/lifecycle/janitor.py --task project_docs_monitor --apply --approve
 ```
 
 > **`--approve` flag:** If `janitor.applyMode=ask` is set in instance `config.json` (the default for some setups), running with `--apply` alone will print a dry-run result and prompt you to re-run with `--approve`. Pass both `--apply --approve` to actually execute changes. When `applyMode=auto` (the standard cron default), `--approve` is a no-op and `--apply` suffices.
@@ -423,11 +432,10 @@ The janitor dispatches maintenance tasks through a `LifecycleRegistry` — a plu
 
 **Default registry** (`build_default_registry()`): Loads routines from these modules in order:
 1. Adapter maintenance module (discovered from active adapter manifest or `adaptors/` tree)
-2. `datastore.docsdb.updater` — `docs_staleness`, `docs_cleanup`
+2. `core.plugins.docsdb_contract` — `project_docs_monitor`
 3. `datastore.notedb.soul_snippets` — `snippets`, `journal`
-4. `datastore.docsdb.rag` — `rag`
-5. `datastore.memorydb.maintenance` — `memory_graph_maintenance`
-6. `datastore.memorydb.memory_graph` — `datastore_cleanup`
+4. `datastore.memorydb.maintenance` — `memory_graph_maintenance`
+5. `datastore.memorydb.memory_graph` — `datastore_cleanup`
 
 **Extension hooks:**
 - `QUAID_LIFECYCLE_MODULES` env var — comma-separated list of extra module names to register (must start with `adaptors.`, `core.`, or `datastore.`)
@@ -479,10 +487,10 @@ Settings are driven by instance `config.json`. Key sections used by the janitor:
 
 | Config Section | Used By | Settings |
 |----------------|---------|----------|
-| `models.deep_reasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
+| `models.deep_reasoning` | review, snippets, journal | High-tier reasoning model (explicit or `default`) |
 | `models.fast_reasoning` | duplicates | Fast-tier reasoning model ID |
 | `database.path` | all tasks | Main DB path |
-| `docs.docs_dir` | rag task | Docs directory to index |
+| `projects` / `systems.projects` | project_docs_monitor | Project-docs monitor request gating |
 | `decay` | decay task | Decay rates, thresholds |
 | `dedup` | duplicates | Similarity threshold, batch size |
 | `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` | all LLM tasks | Provider→tier model-class maps used when tier is `default` |
