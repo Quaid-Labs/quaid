@@ -136,6 +136,27 @@ class TestShadowGit:
         result = sg.snapshot()
         assert result is None
 
+    def test_committed_snapshot_since_recovers_already_committed_change(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+
+        sg = ShadowGit("test", project, tracking_base=tmp_path / "tracking")
+        sg.init()
+
+        (project / "hello.py").write_text("v1")
+        base = sg.snapshot().commit_hash
+        (project / "hello.py").write_text("v2")
+        head = sg.snapshot().commit_hash
+
+        assert sg.snapshot() is None
+        recovered = sg.committed_snapshot_since(base)
+        diff = sg.committed_diff_since(base, full=True)
+
+        assert recovered is not None
+        assert recovered.commit_hash == head
+        assert any(c.status == "M" and c.path == "hello.py" for c in recovered.changes)
+        assert diff and "v2" in diff
+
     def test_snapshot_raises_when_commit_fails_with_pending_changes(self, tmp_path):
         project = tmp_path / "project"
         project.mkdir()

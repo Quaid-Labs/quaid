@@ -606,6 +606,7 @@ def project_status(project: str) -> Dict[str, Any]:
     sg = _shadow_git(name, entry)
     current_shadow_head = sg.current_head() if sg is not None else None
     docs_cursor_head = state.get("last_shadow_commit")
+    shadow_cursor_pending = bool(current_shadow_head and current_shadow_head != docs_cursor_head)
     source_error = None
     try:
         changes = pending_source_changes(name, entry)
@@ -616,7 +617,7 @@ def project_status(project: str) -> Dict[str, Any]:
     log_offset = int(state.get("project_log_offset") or 0)
     log_size = _current_project_log_size(entry)
     log_pending = max(0, log_size - min(log_offset, log_size))
-    stale = bool(req) or bool(changes) or log_pending > 0
+    stale = bool(req) or bool(changes) or shadow_cursor_pending or log_pending > 0
     status_value = "stale" if stale else "fresh"
     if source_error and not stale:
         status_value = "error"
@@ -634,6 +635,7 @@ def project_status(project: str) -> Dict[str, Any]:
         "pending_source_change_count": len(changes),
         "current_shadow_head": current_shadow_head,
         "docs_cursor_head": docs_cursor_head,
+        "shadow_cursor_pending": shadow_cursor_pending,
         "project_log_offset": log_offset,
         "project_log_cursor": log_offset,
         "project_log_size": log_size,
@@ -659,13 +661,25 @@ def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
     sg = _shadow_git(name, entry)
     changes = pending_source_changes(name, entry)
     diff_text = ""
+    state = read_state(name)
+    docs_cursor_head = state.get("last_shadow_commit")
     if sg is not None:
+        committed_snapshot = sg.committed_snapshot_since(docs_cursor_head)
+        if committed_snapshot is not None:
+            changes = [
+                {"status": c.status, "path": c.path, "old_path": c.old_path}
+                for c in committed_snapshot.changes
+            ] + changes
+            committed_diff = sg.committed_diff_since(docs_cursor_head, full=full) or ""
+            if committed_diff:
+                diff_text = committed_diff
         try:
-            diff_text = sg.pending_diff(full=full) or ""
+            pending_diff = sg.pending_diff(full=full) or ""
+            if pending_diff:
+                diff_text = f"{diff_text}\n{pending_diff}".strip() if diff_text else pending_diff
         except Exception as exc:
             logger.exception("Failed reading pending source diff for project %s", name)
             raise RuntimeError(f"failed to read pending source diff for {name}: {exc}") from exc
-    state = read_state(name)
     log_offset = int(state.get("project_log_offset") or 0)
     log_lines, _, log_size = _read_project_log_since(entry, log_offset)
     return {
@@ -694,6 +708,31 @@ def snapshot_project(project: str, entry: Optional[Dict[str, Any]] = None) -> Op
         "is_initial": snapshot.is_initial,
         "commit_hash": snapshot.commit_hash,
         "diff": sg.get_diff() or "",
+        "changes": [
+            {"status": c.status, "path": c.path, "old_path": c.old_path}
+            for c in snapshot.changes
+        ],
+    }
+
+
+def committed_shadow_snapshot_since_cursor(
+    project: str,
+    entry: Optional[Dict[str, Any]] = None,
+    cursor: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    name = validate_project_name(project)
+    entry = entry or get_project_entry(name)
+    sg = _shadow_git(name, entry)
+    if sg is None:
+        return None
+    snapshot = sg.committed_snapshot_since(cursor)
+    if not snapshot:
+        return None
+    return {
+        "project": name,
+        "is_initial": snapshot.is_initial,
+        "commit_hash": snapshot.commit_hash,
+        "diff": sg.committed_diff_since(cursor, full=True) or "",
         "changes": [
             {"status": c.status, "path": c.path, "old_path": c.old_path}
             for c in snapshot.changes
@@ -817,10 +856,12 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
         try:
             state = read_state(name)
             log_offset = int(state.get("project_log_offset") or 0)
+            docs_cursor_head = state.get("last_shadow_commit")
             merge_progress(name, "read_project_log", "reading PROJECT.log cursor", project_log_offset=log_offset)
             log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset)
             merge_progress(name, "snapshot", "snapshotting source changes")
-            snapshot = snapshot_project(name, entry)
+            snapshot_project(name, entry)
+            snapshot = committed_shadow_snapshot_since_cursor(name, entry, docs_cursor_head)
             snapshots = [snapshot] if snapshot else []
             metrics: Dict[str, Any] = {
                 "projects_checked": 0,

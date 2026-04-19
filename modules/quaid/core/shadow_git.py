@@ -368,6 +368,60 @@ class ShadowGit:
         head = result.stdout.strip()
         return head or None
 
+    def _commit_exists(self, commit_hash: Optional[str]) -> bool:
+        raw = str(commit_hash or "").strip()
+        if not raw:
+            return False
+        result = self._git("cat-file", "-e", f"{raw}^{{commit}}", check=False)
+        return result.returncode == 0
+
+    def committed_snapshot_since(self, base_commit: Optional[str]) -> Optional[SnapshotResult]:
+        """Return already-committed shadow changes newer than a docs cursor.
+
+        This is used to recover from a worker that committed a shadow snapshot
+        but died before advancing the docs cursor.
+        """
+        head = self.current_head()
+        if not head or head == str(base_commit or "").strip():
+            return None
+
+        if self._commit_exists(base_commit):
+            diff = self._git(
+                "diff", "--find-renames", "--name-status", f"{base_commit}..HEAD",
+                check=False,
+            )
+            changes = _parse_name_status(diff.stdout) if diff.returncode == 0 else []
+            return SnapshotResult(changes=changes, commit_hash=head, is_initial=False)
+
+        ls = self._git("ls-tree", "-r", "--name-only", "HEAD", check=False)
+        changes = [
+            FileChange(status="A", path=f)
+            for f in ls.stdout.strip().splitlines()
+            if f.strip()
+        ] if ls.returncode == 0 else []
+        return SnapshotResult(changes=changes, commit_hash=head, is_initial=True)
+
+    def committed_diff_since(self, base_commit: Optional[str], *, full: bool = False) -> Optional[str]:
+        """Return a diff for committed shadow changes newer than a docs cursor."""
+        head = self.current_head()
+        if not head or head == str(base_commit or "").strip():
+            return None
+
+        if self._commit_exists(base_commit):
+            args = ["diff", "--find-renames"]
+            if not full:
+                args.append("--stat")
+            args.append(f"{base_commit}..HEAD")
+        else:
+            args = ["show", "--format=", "--find-renames"]
+            if not full:
+                args.append("--stat")
+            args.append("HEAD")
+        result = self._git(*args, check=False)
+        if result.returncode != 0:
+            return None
+        return result.stdout if result.stdout.strip() else None
+
     def pending_changes(self) -> List[FileChange]:
         """Return uncommitted work-tree changes without mutating the shadow repo."""
         if not self.initialized:

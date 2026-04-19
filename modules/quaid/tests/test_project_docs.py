@@ -114,6 +114,43 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["last_registry_sync"]["project_md_refreshed"] in (0, 1)
 
 
+def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
+    _tmp_path, src, _entry = project_env
+    from core import project_docs
+
+    with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
+         patch("core.docs.updater.update_registered_docs", return_value=0):
+        first = project_docs.execute_update_once("demo")
+    first_head = first["snapshot"]["commit_hash"]
+
+    (src / "tool.py").write_text("print('v2')\n", encoding="utf-8")
+    crash_snapshot = project_docs.snapshot_project("demo")
+    assert crash_snapshot["commit_hash"] != first_head
+    assert project_docs.pending_source_changes("demo") == []
+
+    status = project_docs.project_status("demo")
+    diff = project_docs.project_diff("demo", full=False)
+
+    assert status["status"] == "stale"
+    assert status["fresh"] is False
+    assert status["shadow_cursor_pending"] is True
+    assert status["pending_source_change_count"] == 0
+    assert diff["change_count"] >= 1
+    assert any(change["path"] == "tool.py" for change in diff["changes"])
+
+    with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}) as update_docs, \
+         patch("core.docs.updater.update_registered_docs", return_value=1):
+        result = project_docs.execute_update_once("demo")
+
+    assert result["status"] == "fresh"
+    assert result["snapshot"]["commit_hash"] == crash_snapshot["commit_hash"]
+    assert result["snapshot"]["diff"]
+    update_docs.assert_called_once()
+    state = project_docs.read_state("demo")
+    assert state["last_shadow_commit"] == crash_snapshot["commit_hash"]
+    assert project_docs.project_status("demo")["fresh"] is True
+
+
 def test_execute_update_once_preserves_force_request_when_locked(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
