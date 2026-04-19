@@ -3469,6 +3469,55 @@ type RecallOptions = FacadeRecallOptions & {
   sourceTag?: "tool" | "auto_inject" | "unknown";
 };
 
+function _buildAutoInjectRecallOptions(
+  query: string,
+  limit: number,
+  domain: DomainFilter,
+): RecallOptions {
+  return {
+    query,
+    limit,
+    expandGraph: true,
+    graphDepth: 2,
+    // OC already injects project docs separately in before_prompt_build.
+    // Keep auto-inject memory recall focused on memory stores so a slow
+    // project search cannot consume the hook budget. Graph recall stays
+    // bounded by the same subprocess timeout and keeps linked memories
+    // reachable without language-specific routing heuristics.
+    datastores: ["vector_basic", "graph"],
+    routeStores: false,
+    intent: "general",
+    domain,
+    failOpen: true,
+    waitForExtraction: false,
+    timeoutMs: AUTO_INJECT_RECALL_TIMEOUT_MS,
+    sourceTag: "auto_inject",
+  };
+}
+
+function _buildFacadeRecallOptions(opts: RecallOptions): FacadeRecallOptions {
+  return {
+    query: opts.query,
+    limit: opts.limit,
+    expandGraph: opts.expandGraph,
+    graphDepth: opts.graphDepth,
+    datastores: opts.datastores,
+    routeStores: opts.routeStores,
+    reasoning: opts.reasoning,
+    intent: opts.intent,
+    ranking: opts.ranking,
+    domain: opts.domain,
+    domainBoost: opts.domainBoost,
+    project: opts.project,
+    dateFrom: opts.dateFrom,
+    dateTo: opts.dateTo,
+    docs: opts.docs,
+    datastoreOptions: opts.datastoreOptions,
+    failOpen: opts.failOpen,
+    timeoutMs: opts.timeoutMs,
+  };
+}
+
 
 // ============================================================================
 // Plugin Definition
@@ -3877,7 +3926,6 @@ notify_user(${JSON.stringify(message)})
         // Dynamic K: 2 * log2(nodeCount) — scales with graph size
         const autoInjectK = facade.computeDynamicK();
         const injectLimit = autoInjectK;
-        const injectIntent: "general" = "general";
         // Use all-domain search for auto-inject: domain tagging may be incomplete
         // on fresh installs or for newly extracted facts. A strict { personal: true }
         // filter excludes untagged or differently-tagged facts. Retrieve all facts
@@ -3922,24 +3970,7 @@ notify_user(${JSON.stringify(message)})
             writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
             const [allMemories] = await Promise.race([
               Promise.all([
-                recallMemories({
-                  query,
-                  limit: injectLimit,
-                  expandGraph: false,
-                  // OC already injects project docs separately in before_prompt_build.
-                  // Keep auto-inject memory recall focused on memory stores so a slow
-                  // project search cannot consume the full hook budget and starve
-                  // otherwise-fast personal memory hits like Baxter.
-                  datastores: ["vector_basic"],
-                  routeStores: false,
-                  intent: injectIntent,
-                  domain: injectDomain,
-                  failOpen: true,
-                  waitForExtraction: false,
-                  fast: true,
-                  timeoutMs: AUTO_INJECT_RECALL_TIMEOUT_MS,
-                  sourceTag: "auto_inject"
-                }),
+                recallMemories(_buildAutoInjectRecallOptions(query, injectLimit, injectDomain)),
               ]),
               deadline,
             ]);
@@ -5662,25 +5693,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
       }
 
-      const recallOpts = {
-        query,
-        limit,
-        expandGraph,
-        graphDepth,
-        datastores,
-        routeStores,
-        reasoning,
-        intent,
-        ranking,
-        domain,
-        domainBoost,
-        project,
-        dateFrom,
-        dateTo,
-        docs,
-        datastoreOptions,
-        failOpen: opts.failOpen,
-      };
+      const recallOpts = _buildFacadeRecallOptions(opts);
       const recallResponse = (sourceTag !== "tool" && !(routeStores ?? false))
         ? await facade.recallWithDiagnostics(recallOpts)
         : {
@@ -6453,6 +6466,8 @@ export const __test = {
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
   autoInjectTurnKey: _autoInjectTurnKey,
+  buildAutoInjectRecallOptions: _buildAutoInjectRecallOptions,
+  buildFacadeRecallOptions: _buildFacadeRecallOptions,
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,

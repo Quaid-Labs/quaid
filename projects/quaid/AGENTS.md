@@ -13,7 +13,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 - For direct personal questions (names, relationships, pets, preferences, past events), answer from these memories when the match is exact or high-confidence — do not say you have no information when relevant facts appear here.
 - Items marked (uncertain) have lower extraction confidence. Only run `memory_recall` if results are marked (uncertain) or the match seems only loosely related to the question.
 - Dates shown are when the fact was recorded.
-- Auto-injected memories are optimized for fast direct matches. They can miss answers that depend on query rewriting, graph traversal, or combining multiple stored relationships.
+- Auto-injected memories are optimized for fast direct matches. OpenClaw requests vector plus graph recall within a hard timeout, but injected results can still miss answers that require query rewriting, deeper traversal, or combining multiple stored relationships.
 - If injected memories already clearly answer the question, answer directly. Do not ignore strong injected evidence just because explicit recall is available.
 - Quaid may provide a runtime metadata block listing active domains and active graph relation types. If a question appears to depend on relationships, hierarchy, dependency structure, or other link-based reasoning, and injected memories do not clearly answer it, an explicit `quaid recall` may help.
 - **Topic licensing:** knowing a sensitive detail does not make it on-topic. For light prompts, acknowledgments, or vague openings, do not volunteer private health, finances, conflicts, or emotionally loaded history unless the user clearly opens that topic.

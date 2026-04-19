@@ -456,6 +456,32 @@ describe("lifecycle signal detection", () => {
     expect(otherAgent).not.toBe(first);
   });
 
+  it("uses graph and a bounded subprocess timeout for auto-inject queries", () => {
+    const direct = __test.buildAutoInjectRecallOptions(
+      "What do you know about my dog Baxter?",
+      5,
+      { all: true },
+    );
+    expect(direct.datastores).toEqual(["vector_basic", "graph"]);
+    expect(direct.expandGraph).toBe(true);
+    expect(direct.graphDepth).toBe(2);
+    expect(direct.timeoutMs).toBeGreaterThan(0);
+
+    const relational = __test.buildAutoInjectRecallOptions(
+      "Who is my niece?",
+      5,
+      { all: true },
+    );
+    expect(relational.datastores).toEqual(["vector_basic", "graph"]);
+    expect(relational.expandGraph).toBe(true);
+    expect(relational.graphDepth).toBe(2);
+    expect(relational.intent).toBe("general");
+
+    const facadeOpts = __test.buildFacadeRecallOptions(relational);
+    expect(facadeOpts.timeoutMs).toBe(relational.timeoutMs);
+    expect(facadeOpts.datastores).toEqual(["vector_basic", "graph"]);
+  });
+
   it("strips queued OC session-startup wrapper text from raw prompt queries", () => {
     const selected = __test.selectAutoInjectQuery(
       {

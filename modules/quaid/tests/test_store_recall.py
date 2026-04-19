@@ -3379,6 +3379,35 @@ class TestRecallFastHookInjectContract:
         assert meta == {"source": "test"}
         assert bundle is None
 
+    def test_graph_aware_recall_does_not_relation_filter_multi_hop_depth(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        captured = {}
+
+        def _fake_related(node_id, *, relations=None, depth=1):
+            captured["node_id"] = node_id
+            captured["relations"] = relations
+            captured["depth"] = depth
+            return []
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "recall", return_value=([], {"mode": "seed"})), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "has_owner_pronoun", return_value=True), \
+             patch.object(mg, "resolve_owner_person", return_value=SimpleNamespace(id="owner-node", name="Owner")), \
+             patch.object(mg, "_relation_matches_for_query", return_value=["sibling_of"]), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(graph, "get_related_bidirectional", side_effect=_fake_related):
+            mg.graph_aware_recall(
+                "Who is my niece?",
+                owner_id="quaid",
+                limit=5,
+                graph_depth=2,
+            )
+
+        assert captured == {"node_id": "owner-node", "relations": None, "depth": 2}
+
     def test_classify_intent_prefers_relation_for_broad_family_prompt(self):
         import datastore.memorydb.memory_graph as mg
 

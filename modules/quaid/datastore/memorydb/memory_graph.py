@@ -2873,7 +2873,10 @@ def graph_aware_recall(
 
     # Determine which relations to expand based on currently active graph relations
     matched_relations = _relation_matches_for_query(query)
-    expand_relations = matched_relations or None
+    # A multi-hop traversal may need to cross different relation types. If the
+    # caller requested depth > 1, keep the graph open instead of narrowing to
+    # a single keyword-matched relation.
+    expand_relations = None if graph_depth > 1 else (matched_relations or None)
     if _has_generic_graph_signal(query):
         graph_depth = max(graph_depth, 2)
 

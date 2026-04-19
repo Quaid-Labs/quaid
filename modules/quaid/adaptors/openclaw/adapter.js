@@ -2771,6 +2771,49 @@ const facade = createQuaidFacade({
   }
 });
 const getProjectNames = () => facade.getProjectNames();
+function _buildAutoInjectRecallOptions(query, limit, domain) {
+  return {
+    query,
+    limit,
+    expandGraph: true,
+    graphDepth: 2,
+    // OC already injects project docs separately in before_prompt_build.
+    // Keep auto-inject memory recall focused on memory stores so a slow
+    // project search cannot consume the hook budget. Graph recall stays
+    // bounded by the same subprocess timeout and keeps linked memories
+    // reachable without language-specific routing heuristics.
+    datastores: ["vector_basic", "graph"],
+    routeStores: false,
+    intent: "general",
+    domain,
+    failOpen: true,
+    waitForExtraction: false,
+    timeoutMs: AUTO_INJECT_RECALL_TIMEOUT_MS,
+    sourceTag: "auto_inject"
+  };
+}
+function _buildFacadeRecallOptions(opts) {
+  return {
+    query: opts.query,
+    limit: opts.limit,
+    expandGraph: opts.expandGraph,
+    graphDepth: opts.graphDepth,
+    datastores: opts.datastores,
+    routeStores: opts.routeStores,
+    reasoning: opts.reasoning,
+    intent: opts.intent,
+    ranking: opts.ranking,
+    domain: opts.domain,
+    domainBoost: opts.domainBoost,
+    project: opts.project,
+    dateFrom: opts.dateFrom,
+    dateTo: opts.dateTo,
+    docs: opts.docs,
+    datastoreOptions: opts.datastoreOptions,
+    failOpen: opts.failOpen,
+    timeoutMs: opts.timeoutMs
+  };
+}
 const quaidPlugin = {
   id: "quaid",
   name: "Memory (Local Graph)",
@@ -3095,7 +3138,6 @@ ${deferredNoticeContext}` : deferredNoticeContext;
         }
         const autoInjectK = facade.computeDynamicK();
         const injectLimit = autoInjectK;
-        const injectIntent = "general";
         const injectDomain = { all: true };
         const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
         let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
@@ -3126,24 +3168,7 @@ ${deferredNoticeContext}` : deferredNoticeContext;
             writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
             const [allMemories2] = await Promise.race([
               Promise.all([
-                recallMemories({
-                  query,
-                  limit: injectLimit,
-                  expandGraph: false,
-                  // OC already injects project docs separately in before_prompt_build.
-                  // Keep auto-inject memory recall focused on memory stores so a slow
-                  // project search cannot consume the full hook budget and starve
-                  // otherwise-fast personal memory hits like Baxter.
-                  datastores: ["vector_basic"],
-                  routeStores: false,
-                  intent: injectIntent,
-                  domain: injectDomain,
-                  failOpen: true,
-                  waitForExtraction: false,
-                  fast: true,
-                  timeoutMs: AUTO_INJECT_RECALL_TIMEOUT_MS,
-                  sourceTag: "auto_inject"
-                })
+                recallMemories(_buildAutoInjectRecallOptions(query, injectLimit, injectDomain))
               ]),
               deadline
             ]);
@@ -4557,25 +4582,7 @@ ${notice}` : notice;
           if (raceTimer) clearTimeout(raceTimer);
         }
       }
-      const recallOpts = {
-        query,
-        limit,
-        expandGraph,
-        graphDepth,
-        datastores,
-        routeStores,
-        reasoning,
-        intent,
-        ranking,
-        domain,
-        domainBoost,
-        project,
-        dateFrom,
-        dateTo,
-        docs,
-        datastoreOptions,
-        failOpen: opts.failOpen
-      };
+      const recallOpts = _buildFacadeRecallOptions(opts);
       const recallResponse = sourceTag !== "tool" && !(routeStores ?? false) ? await facade.recallWithDiagnostics(recallOpts) : {
         results: await (sourceTag === "tool" ? facade.recallWithToolRetry(recallOpts) : facade.recall(recallOpts)),
         diagnostics: null
@@ -5242,6 +5249,8 @@ const __test = {
   resolveAdapterMemoryDbPath,
   scrubAutoInjectQuery,
   autoInjectTurnKey: _autoInjectTurnKey,
+  buildAutoInjectRecallOptions: _buildAutoInjectRecallOptions,
+  buildFacadeRecallOptions: _buildFacadeRecallOptions,
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,
