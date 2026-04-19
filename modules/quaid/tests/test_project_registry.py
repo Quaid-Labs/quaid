@@ -49,7 +49,7 @@ class TestRegistryIO:
     def test_load_empty(self, mock_adapter):
         _, tmp_path = mock_adapter
         result = _load_registry()
-        assert result == {"projects": {}}
+        assert result == {"projects": {}, "deleted_projects": {}}
 
     def test_save_and_load(self, mock_adapter):
         _, tmp_path = mock_adapter
@@ -65,7 +65,7 @@ class TestRegistryIO:
         reg.parent.mkdir(parents=True, exist_ok=True)
         reg.write_text("not valid json{{{")
         result = _load_registry()
-        assert result == {"projects": {}}
+        assert result == {"projects": {}, "deleted_projects": {}}
 
     def test_registry_lock_path_uses_stable_sidecar(self, mock_adapter):
         _, tmp_path = mock_adapter
@@ -455,6 +455,30 @@ class TestDeleteProjectPurgesDb:
         create_project("my-app")
 
         assert is_deleted("my-app") is False
+
+    def test_delete_marker_wins_over_resurrected_registry_row(self, mock_adapter):
+        import json
+        from core import project_registry as registry_mod
+        from core.project_registry import project_exists_raw
+
+        _, tmp_path = mock_adapter
+        create_project("my-app")
+        delete_project("my-app")
+
+        path = registry_mod._registry_path()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.setdefault("projects", {})["my-app"] = {
+            "canonical_path": str(tmp_path / "projects" / "my-app"),
+            "instances": ["pytest-runner"],
+            "description": "stale resurrection",
+        }
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        assert project_exists_raw("my-app") is False
+        assert get_project("my-app") is None
+        assert "my-app" not in list_projects()
+        cleaned = json.loads(path.read_text(encoding="utf-8"))
+        assert "my-app" not in cleaned.get("projects", {})
 
     def test_delete_purges_project_definitions_and_doc_registry(self, mock_adapter):
         """delete_project() removes project_definitions and doc_registry rows from SQLite."""

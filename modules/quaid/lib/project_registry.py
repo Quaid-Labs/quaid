@@ -228,12 +228,16 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 def lookup(name: str) -> Optional[Dict[str, Any]]:
     """Look up a project by name. Returns entry dict or None."""
     data = _load()
+    if name in data.get("deleted_projects", {}):
+        return None
     return data["projects"].get(name)
 
 
 def list_all() -> Dict[str, Dict[str, Any]]:
     """Return all registered projects."""
-    return _load()["projects"]
+    data = _load()
+    deleted = set((data.get("deleted_projects") or {}).keys())
+    return {name: entry for name, entry in data["projects"].items() if name not in deleted}
 
 
 def remove(name: str, force: bool = False) -> bool:

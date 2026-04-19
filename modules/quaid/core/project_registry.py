@@ -408,13 +408,32 @@ def _reconcile_docs_registry_projects() -> None:
 def list_projects() -> Dict[str, Dict[str, Any]]:
     """Return all registered projects."""
     _reconcile_docs_registry_projects()
-    return _load_registry().get("projects", {})
+    with _registry_lock():
+        data = _load_registry()
+        deleted = set((data.get("deleted_projects") or {}).keys())
+        projects = data.get("projects", {})
+        changed = False
+        for name in list(projects.keys()):
+            if name in deleted:
+                del projects[name]
+                changed = True
+        if changed:
+            _save_registry(data)
+        return projects
 
 
 def get_project(name: str) -> Optional[Dict[str, Any]]:
     """Get a single project by name, or None if not found."""
     _reconcile_docs_registry_projects()
-    return _load_registry().get("projects", {}).get(name)
+    key = str(name or "").strip()
+    with _registry_lock():
+        data = _load_registry()
+        if key in (data.get("deleted_projects") or {}):
+            if key in data.get("projects", {}):
+                del data["projects"][key]
+                _save_registry(data)
+            return None
+        return data.get("projects", {}).get(key)
 
 
 def project_exists_raw(name: str) -> bool:
@@ -425,8 +444,12 @@ def project_exists_raw(name: str) -> bool:
     deleted project gets briefly resurrected while the delete transaction is
     still purging secondary stores.
     """
+    key = str(name or "").strip()
     with _registry_lock():
-        return str(name or "").strip() in _load_registry().get("projects", {})
+        data = _load_registry()
+        if key in (data.get("deleted_projects") or {}):
+            return False
+        return key in data.get("projects", {})
 
 
 def create_project(

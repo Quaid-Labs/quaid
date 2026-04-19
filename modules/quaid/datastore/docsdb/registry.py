@@ -56,6 +56,15 @@ from lib.runtime_context import get_quaid_home, get_visible_quaid_home, get_work
 logger = logging.getLogger(__name__)
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return False
+
+
 def _run_locked_write_with_retry(op, *, op_name: str, max_attempts: int = 3, base_sleep_seconds: float = 2.0):
     """Retry transient SQLite lock failures for small metadata writes."""
     attempt = 0
@@ -683,8 +692,10 @@ class DocsRegistry:
 
             if global_project_deleted(name):
                 return False
-        except Exception:
-            pass
+        except Exception as exc:
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Failed checking project delete marker for {name!r}: {exc}") from exc
+            logger.warning("Project delete marker check failed for %s: %s", name, exc)
 
         if defn is None:
             try:
