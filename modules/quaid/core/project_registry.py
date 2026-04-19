@@ -728,6 +728,45 @@ def delete_project(name: str) -> None:
     except Exception as e:
         logger.warning("Failed to clean up DB entries for project %s: %s", name, e)
 
+    # A live supervisor/list call can reconcile from project_definitions/doc_registry
+    # in the small window between the first JSON removal and DB cleanup. Remove the
+    # global entry again after the DB rows are gone so deletion is authoritative.
+    try:
+        with _registry_lock():
+            registry = _load_registry()
+            if name in registry.get("projects", {}):
+                del registry["projects"][name]
+                _save_registry(registry)
+    except Exception as e:
+        logger.warning("Failed final registry cleanup for project %s: %s", name, e)
+
+    # Re-run worker/project-doc state cleanup after final registry removal. If the
+    # supervisor observed the project during the reconciliation window, it may have
+    # spawned a short-lived worker after the first cleanup pass.
+    try:
+        from core import project_docs
+
+        project_docs.stop_worker(name)
+        for path in (
+            project_docs.request_path(name),
+            project_docs.state_path(name),
+            project_docs.worker_heartbeat_path(name),
+            project_docs.worker_pid_path(name),
+        ):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception as e:
+        logger.warning("Failed final project docs worker cleanup for %s: %s", name, e)
+
+    # Re-check visible/canonical dirs after the race window for the same reason.
+    for candidate in candidate_dirs:
+        try:
+            _safe_remove_project_dir(candidate, allowed_roots)
+        except Exception as e:
+            logger.warning("Failed final project directory cleanup for %s (%s): %s", name, candidate, e)
+
     # Clean up stale pending review hints and queued project events.
     try:
         removed_hints = _cleanup_pending_project_review_entries(

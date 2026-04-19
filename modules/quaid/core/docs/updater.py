@@ -20,9 +20,13 @@ def append_project_logs(project_logs: dict[str, list[str]], trigger: str = "Comp
     return _append_project_logs(project_logs, trigger=trigger, dry_run=dry_run)
 
 
-def update_registered_docs(project: str | None = None, dry_run: bool = False) -> int:
+def update_registered_docs(
+    project: str | None = None,
+    dry_run: bool = False,
+    protected_names: set[str] | None = None,
+) -> int:
     """Update/reindex registered docs, optionally scoped to one project."""
-    return _updater.cmd_update_stale(dry_run=dry_run, project=project)
+    return _updater.cmd_update_stale(dry_run=dry_run, project=project, protected_names=protected_names)
 
 
 def sync_project_visible_docs(project: str, canonical_path: str, *, root_docs: set[str], protected_names: set[str]) -> dict[str, int]:

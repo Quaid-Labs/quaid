@@ -7,6 +7,7 @@ import json
 import tempfile
 from pathlib import Path
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 # Ensure the plugin root is on the path
@@ -783,6 +784,48 @@ def test_save_changelog_uses_atomic_replace(tmp_path):
 
 
 class TestCmdUpdateStaleNeverIndexed:
+    def test_skips_protected_project_log_staleness_update(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            called = []
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return []
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {}
+
+            monkeypatch.setattr(
+                updater,
+                "check_staleness",
+                lambda project=None: {
+                    "projects/demo/PROJECT.log": SimpleNamespace(
+                        change_classification=None,
+                        stale_sources=["src/app.py"],
+                    )
+                },
+            )
+            monkeypatch.setattr(updater, "get_doc_purposes", lambda: {})
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(
+                updater,
+                "update_doc_from_diffs",
+                lambda *args, **kwargs: called.append((args, kwargs)) or True,
+            )
+
+            count = updater.cmd_update_stale(
+                dry_run=False,
+                project="demo",
+                protected_names={"PROJECT.log"},
+            )
+
+            assert count == 0
+            assert called == []
+
     def test_indexes_registry_relative_paths_via_registry_resolver(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
             from datastore.docsdb import updater

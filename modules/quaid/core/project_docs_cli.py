@@ -14,6 +14,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import project_docs
 
 
+def add_json_argument(parser: argparse.ArgumentParser) -> None:
+    """Allow both `--json command` and `command --json` forms."""
+    parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON output")
+
+
 def cmd_update(args) -> None:
     try:
         prior_state = project_docs.read_state(args.project)
@@ -67,13 +72,31 @@ def cmd_diff(args) -> None:
 
 
 def cmd_supervisor(args) -> None:
+    if getattr(args, "type", "project-docs") != "project-docs":
+        print("Error: only --type project-docs is supported", file=sys.stderr)
+        raise SystemExit(1)
+    if args.action == "run":
+        from core.project_docs_supervisor import run_supervisor
+
+        raise SystemExit(run_supervisor(once=bool(args.once), interval_seconds=args.interval))
     if args.action == "ensure":
-        print(project_docs.ensure_supervisor_alive())
+        pid = project_docs.ensure_supervisor_alive()
+        if args.json:
+            print(json.dumps({"type": "project-docs", "running": True, "pid": pid}, indent=2))
+        else:
+            print(pid)
     elif args.action == "stop":
-        print("stopped" if project_docs.stop_supervisor() else "not running")
+        stopped = project_docs.stop_supervisor()
+        if args.json:
+            print(json.dumps({"type": "project-docs", "stopped": stopped, "running": False}, indent=2))
+        else:
+            print("stopped" if stopped else "not running")
     else:
         pid = project_docs.read_supervisor_pid()
-        print(pid if pid else "not running")
+        if args.json:
+            print(json.dumps({"type": "project-docs", "running": bool(pid), "pid": pid}, indent=2))
+        else:
+            print(pid if pid else "not running")
 
 
 def main() -> None:
@@ -85,17 +108,24 @@ def main() -> None:
     update_p.add_argument("project")
     update_p.add_argument("--wait", action="store_true", help="Wait until this request is applied or fails")
     update_p.add_argument("--timeout", type=float, default=300.0, help="Seconds to wait with --wait")
+    add_json_argument(update_p)
 
     status_p = sub.add_parser("status", help="Show project docs freshness/status")
     status_p.add_argument("project")
+    add_json_argument(status_p)
 
     diff_p = sub.add_parser("diff", help="Show pending project docs update diff")
     diff_p.add_argument("project")
     diff_p.add_argument("--stat", action="store_true", help="Show compact diff/stat output")
     diff_p.add_argument("--full", action="store_true", help="Show full git diff")
+    add_json_argument(diff_p)
 
     sup_p = sub.add_parser("supervisor", help="Manage the Quaid supervisor")
-    sup_p.add_argument("action", choices=("status", "ensure", "stop"), nargs="?", default="status")
+    sup_p.add_argument("action", choices=("status", "ensure", "stop", "run"), nargs="?", default="status")
+    sup_p.add_argument("--type", default="project-docs", help="Supervisor component to run (project-docs)")
+    sup_p.add_argument("--once", action="store_true", help="Run a single supervisor tick and exit")
+    sup_p.add_argument("--interval", type=float, help="Foreground run interval in seconds")
+    add_json_argument(sup_p)
 
     args = parser.parse_args()
     if args.command == "update":

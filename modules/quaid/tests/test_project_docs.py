@@ -56,7 +56,12 @@ def test_status_and_diff_report_pending_source_change(project_env):
     diff = project_docs.project_diff("demo", full=False)
 
     assert status["status"] == "stale"
+    assert status["fresh"] is False
     assert status["pending_source_change_count"] >= 1
+    assert status["project_log_cursor"] == status["project_log_offset"]
+    assert "current_shadow_head" in status
+    assert "docs_cursor_head" in status
+    assert "worker_heartbeat" in status
     assert any(change["path"] == "tool.py" for change in diff["changes"])
 
 
@@ -79,7 +84,7 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     update_docs.assert_called_once()
     assert update_docs.call_args.kwargs["force_project"] == "demo"
     assert update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"]
-    update_registered.assert_called_once_with(project="demo", dry_run=False)
+    update_registered.assert_called_once_with(project="demo", dry_run=False, protected_names={"PROJECT.log"})
     assert not project_docs.request_path("demo").exists()
     state = project_docs.read_state("demo")
     assert state["status"] == "fresh"

@@ -325,6 +325,16 @@ class ShadowGit:
             return None
         return result.stdout if result.stdout.strip() else None
 
+    def current_head(self) -> Optional[str]:
+        """Return the current shadow commit hash, if the tracker has commits."""
+        if not self.initialized:
+            return None
+        result = self._git("rev-parse", "HEAD", check=False)
+        if result.returncode != 0:
+            return None
+        head = result.stdout.strip()
+        return head or None
+
     def pending_changes(self) -> List[FileChange]:
         """Return uncommitted work-tree changes without mutating the shadow repo."""
         if not self.initialized:

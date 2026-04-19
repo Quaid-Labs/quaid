@@ -55,6 +55,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 continue
             try:
                 project_docs.stop_worker(project)
+                project_docs.worker_heartbeat_path(project).unlink(missing_ok=True)
+                project_docs.worker_pid_path(project).unlink(missing_ok=True)
             except Exception:
                 pass
             known_workers.pop(project, None)

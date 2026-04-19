@@ -500,6 +500,42 @@ class TestDeleteProjectPurgesDb:
         ).fetchall()
         assert len(other) == 1
 
+    def test_delete_final_cleanup_removes_registry_resurrection(self, mock_adapter):
+        """delete_project() wins races where reconciliation re-adds JSON before DB cleanup finishes."""
+        import json
+        import sqlite3
+        from contextlib import contextmanager
+        from core import project_registry as registry_mod
+
+        _, tmp_path = mock_adapter
+        mem_conn = sqlite3.connect(":memory:")
+        mem_conn.execute("CREATE TABLE project_definitions (name TEXT PRIMARY KEY, data TEXT)")
+        mem_conn.execute("CREATE TABLE doc_registry (id INTEGER PRIMARY KEY, project TEXT, file_path TEXT)")
+        mem_conn.commit()
+
+        create_project("my-app")
+
+        @contextmanager
+        def _fake_get_connection(_db_path):
+            yield mem_conn
+            mem_conn.commit()
+            # Simulate a concurrent list/show reconciliation that observed stale
+            # DB rows before this delete transaction finished its DB cleanup.
+            path = registry_mod._registry_path()
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data.setdefault("projects", {})["my-app"] = {
+                "canonical_path": str(tmp_path / "projects" / "my-app"),
+                "instances": ["pytest-runner"],
+                "description": "resurrected",
+            }
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+        with patch("lib.database.get_connection", _fake_get_connection), \
+             patch("lib.config.get_db_path", return_value=tmp_path / "memory.db"):
+            delete_project("my-app")
+
+        assert get_project("my-app") is None
+
     def test_delete_handles_missing_db_gracefully(self, mock_adapter):
         """delete_project() does not raise when the DB connection fails."""
         _, tmp_path = mock_adapter

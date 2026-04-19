@@ -281,7 +281,9 @@ def _pid_record_matches(record: Dict[str, Any], *, role: str, project: Optional[
         return False
     command = _process_command(pid)
     if role == SUPERVISOR_ROLE:
-        return "project_docs_supervisor.py" in command and " run" in f" {command}"
+        if "project_docs_supervisor.py" in command and " run" in f" {command}":
+            return True
+        return "project_docs_cli.py" in command and " supervisor " in f" {command} " and " run" in f" {command}"
     if role == WORKER_ROLE:
         name = validate_project_name(project or str(record.get("project") or ""))
         return "project_docs_worker.py" in command and f" {name}" in f" {command}"
@@ -480,7 +482,11 @@ def project_status(project: str) -> Dict[str, Any]:
     state = read_state(name)
     req = read_update_request(name)
     worker_pid = read_worker_pid(name)
+    worker_heartbeat = read_worker_heartbeat(name)
     supervisor_pid = read_supervisor_pid()
+    sg = _shadow_git(name, entry)
+    current_shadow_head = sg.current_head() if sg is not None else None
+    docs_cursor_head = state.get("last_shadow_commit")
     source_error = None
     try:
         changes = pending_source_changes(name, entry)
@@ -495,21 +501,31 @@ def project_status(project: str) -> Dict[str, Any]:
     status_value = "stale" if stale else "fresh"
     if source_error and not stale:
         status_value = "error"
+    fresh = status_value == "fresh"
     return {
         "project": name,
         "registered": True,
         "status": status_value,
+        "fresh": fresh,
         "source_root": entry.get("source_root"),
         "canonical_path": entry.get("canonical_path"),
         "source_error": source_error,
         "pending_request": req,
         "pending_source_changes": changes,
         "pending_source_change_count": len(changes),
+        "current_shadow_head": current_shadow_head,
+        "docs_cursor_head": docs_cursor_head,
         "project_log_offset": log_offset,
+        "project_log_cursor": log_offset,
         "project_log_size": log_size,
         "project_log_bytes_pending": log_pending,
         "worker_pid": worker_pid,
+        "worker_heartbeat": worker_heartbeat,
         "supervisor_pid": supervisor_pid,
+        "last_update_status": state.get("status"),
+        "last_update_started_at": state.get("last_started_at"),
+        "last_update_completed_at": state.get("last_completed_at"),
+        "last_update_error": state.get("last_error"),
         "state": state,
     }
 
@@ -663,7 +679,13 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             if not dry_run:
                 registry_sync = sync_project_docs_registry(name, entry)
                 try:
-                    index_count = int(docs_updater.update_registered_docs(project=name, dry_run=False) or 0)
+                    index_count = int(
+                        docs_updater.update_registered_docs(
+                            project=name,
+                            dry_run=False,
+                            protected_names={PROJECT_LOG},
+                        ) or 0
+                    )
                 except Exception as exc:
                     if _fail_hard_enabled():
                         raise

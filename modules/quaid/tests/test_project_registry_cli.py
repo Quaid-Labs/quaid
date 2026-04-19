@@ -35,6 +35,13 @@ def _args(**kwargs):
 
 
 class TestCmdList:
+    def test_main_accepts_json_after_list_subcommand(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["project_registry_cli.py", "list", "--json"])
+        with patch("core.project_registry.list_projects", return_value={}):
+            cli.main()
+        parsed = json.loads(capsys.readouterr().out)
+        assert parsed == {}
+
     def test_empty_projects_prints_message(self, capsys):
         with patch("core.project_registry.list_projects", return_value={}):
             cli.cmd_list(_args())

@@ -63,8 +63,11 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
                 project_docs.write_worker_heartbeat(name, {"status": "idle"})
         except KeyError:
             # Project was deleted; supervisor will stop/remove this worker.
-            project_docs.write_worker_heartbeat(name, {"status": "stopped", "reason": "project_deleted"})
             project_docs.clear_worker_pid_for_current_process(name)
+            try:
+                project_docs.worker_heartbeat_path(name).unlink(missing_ok=True)
+            except OSError:
+                pass
             return 0
         except Exception as exc:
             import logging

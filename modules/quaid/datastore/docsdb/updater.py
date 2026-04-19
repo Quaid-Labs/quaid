@@ -844,6 +844,10 @@ def update_doc_from_diffs(
     Detects core markdown targets and uses line-limit-aware prompts.
     Returns True on success.
     """
+    if Path(str(doc_path or "")).name == "PROJECT.log":
+        print(f"  Skipping {doc_path} — PROJECT.log is append-only")
+        return False
+
     doc_abs = _resolve_path(doc_path)
     if not doc_abs.exists():
         print(f"  Doc not found: {doc_abs}")
@@ -1315,6 +1319,7 @@ def cmd_update_stale(
     dry_run: bool = True,
     trivial_only: bool = False,
     project: Optional[str] = None,
+    protected_names: Optional[set[str]] = None,
 ) -> int:
     """CLI: update all stale docs from git diffs. Returns count of updated docs.
 
@@ -1323,7 +1328,9 @@ def cmd_update_stale(
         trivial_only: If True, only auto-update docs with trivial changes.
             Significant changes will be skipped with a warning.
         project: If set, only process docs belonging to this project.
+        protected_names: Basenames that must never be modified by stale-doc writes.
     """
+    protected_names = {str(name) for name in (protected_names or set()) if str(name or "").strip()}
     stale = check_staleness(project=project)
     purposes = get_doc_purposes()
     updated = 0
@@ -1331,6 +1338,9 @@ def cmd_update_stale(
 
     if stale:
         for doc_path, info in list(stale.items()):
+            if Path(str(doc_path or "")).name in protected_names:
+                print(f"  SKIPPED {doc_path} — protected append-only project file")
+                continue
             # Check classification if trivial_only mode
             if trivial_only and info.change_classification:
                 cls = info.change_classification.get("classification", "significant")

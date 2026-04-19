@@ -26,6 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def add_json_argument(parser: argparse.ArgumentParser) -> None:
+    """Allow both `--json command` and `command --json` forms."""
+    parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON output")
+
+
 def _live_instance_ids() -> set[str]:
     """Best-effort current instance IDs from on-disk silos."""
     try:
@@ -60,6 +65,14 @@ def cmd_list(args):
     from core.project_registry import list_projects
     projects = list_projects()
     names_only = bool(getattr(args, "names_only", False))
+    if args.json:
+        live_instances = _live_instance_ids()
+        rendered = {
+            name: _instance_view(entry, live_instances)
+            for name, entry in projects.items()
+        }
+        print(json.dumps(rendered, indent=2))
+        return
     if not projects:
         if not names_only:
             print("No projects registered.")
@@ -72,9 +85,6 @@ def cmd_list(args):
     if names_only:
         for name in sorted(rendered.keys()):
             print(name)
-        return
-    if args.json:
-        print(json.dumps(rendered, indent=2))
         return
     for name, entry in sorted(rendered.items()):
         src = entry.get("source_root") or "(no source root)"
@@ -286,30 +296,36 @@ def main():
         action="store_true",
         help="Print one project name per line with no header/chatter",
     )
+    add_json_argument(list_p)
 
     # create
     create_p = subparsers.add_parser("create", help="Create a new project")
     create_p.add_argument("name", help="Project name (lowercase kebab-case)")
     create_p.add_argument("--description", "-d", help="Project description")
     create_p.add_argument("--source-root", "-s", help="Path to source files")
+    add_json_argument(create_p)
 
     # show
     show_p = subparsers.add_parser("show", help="Show project details")
     show_p.add_argument("name", help="Project name")
+    add_json_argument(show_p)
 
     # update
     update_p = subparsers.add_parser("update", help="Update project fields")
     update_p.add_argument("name", help="Project name")
     update_p.add_argument("--description", "-d", help="New description")
     update_p.add_argument("--source-root", "-s", help="New source root path")
+    add_json_argument(update_p)
 
     # link
     link_p = subparsers.add_parser("link", help="Add current instance to a project's instances list")
     link_p.add_argument("name", help="Project name")
+    add_json_argument(link_p)
 
     # unlink
     unlink_p = subparsers.add_parser("unlink", help="Remove current instance from a project's instances list")
     unlink_p.add_argument("name", help="Project name")
+    add_json_argument(unlink_p)
 
     # delete
     delete_p = subparsers.add_parser("delete", help="Delete a project")
@@ -319,21 +335,25 @@ def main():
     rename_p = subparsers.add_parser("rename", help="Rename a project")
     rename_p.add_argument("old_name", help="Current project name")
     rename_p.add_argument("new_name", help="New project name")
+    add_json_argument(rename_p)
 
     # archive
     archive_p = subparsers.add_parser("archive", help="Archive a project")
     archive_p.add_argument("name", help="Project name")
     archive_p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    add_json_argument(archive_p)
 
     # status
     status_p = subparsers.add_parser("status", help="Show project docs freshness/status")
     status_p.add_argument("name", help="Project name")
+    add_json_argument(status_p)
 
     # diff
     diff_p = subparsers.add_parser("diff", help="Show pending project docs update diff")
     diff_p.add_argument("name", help="Project name")
     diff_p.add_argument("--stat", action="store_true", help="Show compact diff/stat output")
     diff_p.add_argument("--full", action="store_true", help="Show full git diff")
+    add_json_argument(diff_p)
 
     # snapshot
     snap_p = subparsers.add_parser("snapshot", help="Take shadow git snapshot(s)")
