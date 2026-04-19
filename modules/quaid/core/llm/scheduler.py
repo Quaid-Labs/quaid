@@ -194,6 +194,18 @@ class GlobalLlmScheduler:
                 continue
 
             # Timeout path: cancel queued futures, keep only incomplete indices for retry.
+            for fut, idx in list(in_flight.items()):
+                if not fut.done():
+                    continue
+                in_flight.pop(fut, None)
+                try:
+                    results[idx] = fut.result()
+                except Exception:
+                    for pending in list(in_flight.keys()):
+                        pending.cancel()
+                    raise
+                completed_this_attempt.append(idx)
+
             for fut in list(in_flight.keys()):
                 fut.cancel()
 
