@@ -7,6 +7,7 @@ import argparse
 import os
 import signal
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -35,6 +36,28 @@ def _supervisor_alive() -> bool:
     return project_docs.read_supervisor_pid() == pid
 
 
+def _update_heartbeat_interval(interval_seconds: float) -> float:
+    stale_after = project_docs.worker_stale_after_seconds(interval_seconds)
+    return max(0.5, min(5.0, float(interval_seconds), stale_after / 3.0))
+
+
+def _start_update_heartbeat(project: str, interval_seconds: float) -> tuple[threading.Event, threading.Thread]:
+    stop_event = threading.Event()
+    heartbeat_interval = _update_heartbeat_interval(interval_seconds)
+
+    def _loop() -> None:
+        while not stop_event.wait(heartbeat_interval):
+            project_docs.write_worker_heartbeat(project, {"status": "updating"})
+
+    thread = threading.Thread(
+        target=_loop,
+        name=f"project-docs-update-heartbeat-{project}",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
 def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[float] = None) -> int:
     name = project_docs.validate_project_name(project)
     interval = interval_seconds
@@ -57,7 +80,12 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
             stale = status.get("status") == "stale"
             if request or stale:
                 project_docs.write_worker_heartbeat(name, {"status": "updating"})
-                result = project_docs.execute_update_once(name, request=request)
+                heartbeat_stop, heartbeat_thread = _start_update_heartbeat(name, interval)
+                try:
+                    result = project_docs.execute_update_once(name, request=request)
+                finally:
+                    heartbeat_stop.set()
+                    heartbeat_thread.join(timeout=1.0)
                 project_docs.write_worker_heartbeat(name, {"status": "idle", "last_result": result})
             else:
                 project_docs.write_worker_heartbeat(name, {"status": "idle"})

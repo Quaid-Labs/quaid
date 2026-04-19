@@ -211,6 +211,36 @@ def test_pid_startup_wait_allows_first_bootstrap_headroom(project_env, monkeypat
     assert project_docs.pid_startup_wait_seconds() == 120.0
 
 
+def test_worker_update_heartbeat_interval_stays_inside_stale_window(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs_worker
+
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_WORKER_STALE_SECONDS", "5")
+
+    assert project_docs_worker._update_heartbeat_interval(30.0) < 5.0
+    assert project_docs_worker._update_heartbeat_interval(0.5) == 0.5
+
+
+def test_reap_stale_worker_does_not_overwrite_racing_success(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs.write_state("demo", {"status": "updating", "last_started_at": project_docs.utc_now()})
+
+    monkeypatch.setattr(project_docs, "read_worker_pid", lambda _name: 12345)
+    monkeypatch.setattr(project_docs, "_worker_heartbeat_stale", lambda _name, *, stale_after_seconds: True)
+
+    def _stop_worker(_name):
+        project_docs.merge_state("demo", {"status": "fresh", "last_error": None, "last_completed_at": project_docs.utc_now()})
+
+    monkeypatch.setattr(project_docs, "stop_worker", _stop_worker)
+
+    assert project_docs.reap_stale_worker("demo", stale_after_seconds=5.0) is True
+    state = project_docs.read_state("demo")
+    assert state["status"] == "fresh"
+    assert state["last_error"] is None
+
+
 def test_cleanup_project_state_removes_all_project_artifacts(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

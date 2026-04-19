@@ -985,7 +985,11 @@ def reap_stale_worker(project: str, *, stale_after_seconds: float) -> bool:
     if pid is not None and stale:
         logger.warning("Project docs worker heartbeat stale for %s; restarting pid=%s", name, pid)
         stop_worker(name)
-    if state.get("status") == "updating":
+    # stop_worker can race with a worker that completes normally while handling
+    # SIGTERM. Re-read state before queuing a retry so a successful fresh cursor
+    # update is not overwritten by the stale pre-stop snapshot.
+    current_state = read_state(name)
+    if current_state.get("status") == "updating":
         merge_state(
             name,
             {
