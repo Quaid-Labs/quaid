@@ -2521,6 +2521,33 @@ function _removeOpenClawPluginsAllowQuaid() {
   }
 }
 
+const OPENCLAW_PLUGIN_STAGE_EXCLUDE_NAMES = new Set([
+  ".git",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".tmp",
+  "__pycache__",
+  "coverage",
+  "logs",
+  "node_modules",
+  "pytest-home",
+  "tests",
+]);
+
+function _copyOpenClawPluginSource(srcDir, destDir) {
+  const root = path.resolve(srcDir);
+  fs.cpSync(srcDir, destDir, {
+    recursive: true,
+    dereference: true,
+    filter: (source) => {
+      const rel = path.relative(root, path.resolve(source));
+      if (!rel) return true;
+      const parts = rel.split(path.sep).filter(Boolean);
+      return !parts.some((part) => OPENCLAW_PLUGIN_STAGE_EXCLUDE_NAMES.has(part));
+    },
+  });
+}
+
 function _ensureOpenClawCompactionModeDefault() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -2561,15 +2588,6 @@ function _ensureOpenClawDefaultAgentModel() {
 function _registerOpenClawQuaidPlugin(pluginPath) {
   const cli = canRun("openclaw") ? "openclaw" : "";
   if (!cli) return { ok: false, reason: "OpenClaw CLI not found" };
-  const normalize = (s) => String(s || "").toLowerCase();
-  const pluginListHasQuaid = () => {
-    const listRes = runCliWithTimeout(cli, ["plugins", "list"], 30_000);
-    const listText = `${_safeTrim(listRes.stdout)}\n${_safeTrim(listRes.stderr)}`.trim().toLowerCase();
-    return {
-      ok: listRes.status === 0,
-      hasQuaid: /(^|[^a-z0-9_-])quaid([^a-z0-9_-]|$)/m.test(listText),
-    };
-  };
   const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
   const stagedPluginPath = path.join(
     os.tmpdir(),
@@ -2588,8 +2606,11 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   // Force-refresh plugin install to avoid stale extension code lingering at ~/.openclaw/extensions/quaid.
   // Some OpenClaw builds report "already installed" and keep old files instead of replacing contents.
   try {
-    // Stage real files for install metadata and dependency backfill.
-    fs.cpSync(pluginPath, stagedPluginPath, { recursive: true, dereference: true });
+    // Stage runtime source only. Copying the full dev tree includes node_modules
+    // and local caches that can exceed 1GB and make M0 appear hung before the
+    // direct install-record bypass has a chance to run.
+    log.info("Staging OpenClaw plugin runtime source (excluding generated caches/node_modules)...");
+    _copyOpenClawPluginSource(pluginPath, stagedPluginPath);
   } catch (err) {
     return { ok: false, reason: `failed to stage plugin source: ${String(err)}` };
   }
@@ -2608,39 +2629,29 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     return { ok: false, reason: `failed to normalize staged plugin manifest: ${String(err)}` };
   }
 
-  // Pre-clean stale extension/config so plugin CLI can run even when previous state is invalid.
+  // Pre-clean stale extension/config before direct repair. Avoid OpenClaw plugin
+  // CLI repair calls here; current beta CLIs can hang or emit "Plugin not found"
+  // before the direct install-record bypass has a chance to run.
   removeStaleExtensionDir();
   _sanitizeOpenClawPluginInstallSources();
   _sanitizeOpenClawQuaidPluginEntry();
   _removeOpenClawPluginsAllowQuaid();
   _sanitizeOpenClawMemorySlot();
 
-  const preUninstallList = pluginListHasQuaid();
-  if (preUninstallList.hasQuaid || !preUninstallList.ok) {
-    const uninstallRes = runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000);
-    if (uninstallRes.status !== 0) {
-      const msg = renderCliFailure(uninstallRes, 45_000);
-      const norm = normalize(msg);
-      const unmanaged = norm.includes("not managed by plugins config/install records");
-      if (!norm.includes("not installed") && !norm.includes("not found") && !norm.includes("missing") && !unmanaged) {
-        return { ok: false, reason: `plugins uninstall failed: ${msg.trim() || "unknown error"}` };
-      }
-      if (unmanaged) removeStaleExtensionDir();
-    }
-  }
-
   // OpenClaw plugin discovery reads Dirent.isDirectory() and does not follow
   // symlinked extension directories. Keep a real directory at extensionDir.
   try {
     fs.mkdirSync(path.dirname(extensionDir), { recursive: true });
     fs.rmSync(extensionDir, { recursive: true, force: true });
-    fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, dereference: true });
+    log.info("Provisioning OpenClaw extension directory...");
+    _copyOpenClawPluginSource(stagedPluginPath, extensionDir);
   } catch (err) {
     return { ok: false, reason: `failed to provision extension directory: ${String(err)}` };
   }
+  log.info("Provisioning OpenClaw extension runtime dependencies...");
   const depsResult = ensureOpenClawExtensionDependencies({
     extensionDir,
-    pluginDir: stagedPluginPath,
+    pluginDir: pluginPath,
   });
   if (!depsResult.ok) {
     return { ok: false, reason: `failed to provision plugin dependencies: ${depsResult.reason}` };
@@ -2744,10 +2755,11 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   return { ok: true, reason: "" };
 }
 
-function _readOpenClawPluginState() {
+function _readOpenClawPluginState(options = {}) {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
   const cli = canRun("openclaw") ? "openclaw" : "";
+  const skipPluginList = !!options.skipPluginList;
   let pluginEnabled = false;
   let memorySlotBound = false;
   let installPath = "";
@@ -2762,7 +2774,7 @@ function _readOpenClawPluginState() {
       installPath = String(plugins?.installs?.quaid?.installPath || "").trim();
     }
   } catch {}
-  if (cli) {
+  if (cli && !skipPluginList) {
     const listAttempts = 3;
     const listTimeoutMs = 60_000;
     const listRetryDelayMs = 5_000;
@@ -2812,13 +2824,12 @@ function _warnOpenClawPluginListDiagnostic(state, context = "validation") {
 }
 
 function _ensureOpenClawPluginRegistered(pluginPath) {
-  const state = _readOpenClawPluginState();
-  if (
-    _openClawPluginDirectRegistrationOk(state)
-    && state.pluginListCheckOk
-    && state.pluginListed
-  ) {
-    return { ok: true, reason: "", repaired: false };
+  const state = _readOpenClawPluginState({ skipPluginList: true });
+  if (_openClawPluginDirectRegistrationOk(state)) {
+    const listState = _readOpenClawPluginState();
+    if (listState.pluginListCheckOk && listState.pluginListed) {
+      return { ok: true, reason: "", repaired: false };
+    }
   }
   const reg = _registerOpenClawQuaidPlugin(pluginPath);
   return { ...reg, repaired: true };

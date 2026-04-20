@@ -188,20 +188,34 @@ describe("install daemon policy", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
-    expect(setupText).toContain("function _readOpenClawPluginState()");
+    expect(setupText).toContain("function _readOpenClawPluginState(options = {})");
     expect(setupText).toContain("function _ensureOpenClawPluginRegistered(pluginPath)");
     expect(setupText).toContain("const reg = _ensureOpenClawPluginRegistered(PLUGIN_DIR);");
     expect(setupText).toContain("OpenClaw add-instance install repaired a missing/stale plugin registration.");
     expect(setupText).toContain("OpenClaw Quaid plugin is not fully registered after install");
     expect(setupText).toContain("pluginListCheckOk");
     expect(setupText).toContain("pluginListed");
+    expect(setupText).toContain("_readOpenClawPluginState({ skipPluginList: true })");
     expect(setupText).toContain("const listAttempts = 3;");
     expect(setupText).toContain("const listTimeoutMs = 60_000;");
     expect(setupText).toContain("if (listRes.status === 0 || discovered)");
-    expect(setupText).toContain("_sleepMs(listRetryDelayMs)");
-    expect(setupText).toContain("const preUninstallList = pluginListHasQuaid();");
-    expect(setupText).toContain("if (preUninstallList.hasQuaid || !preUninstallList.ok)");
-    expect(setupText).toContain('runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000)');
+    expect(setupText).toContain("Avoid OpenClaw plugin");
+    expect(setupText).not.toContain("const preUninstallList = pluginListHasQuaid();");
+    expect(setupText).not.toContain('runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000)');
+  });
+
+  it("OpenClaw plugin registration stages runtime source without generated caches", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("OPENCLAW_PLUGIN_STAGE_EXCLUDE_NAMES");
+    expect(setupText).toContain('"node_modules"');
+    expect(setupText).toContain('"tests"');
+    expect(setupText).toContain('"logs"');
+    expect(setupText).toContain("_copyOpenClawPluginSource(pluginPath, stagedPluginPath);");
+    expect(setupText).toContain("_copyOpenClawPluginSource(stagedPluginPath, extensionDir);");
+    expect(setupText).toContain("pluginDir: pluginPath");
+    expect(setupText).not.toContain("fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, dereference: true })");
   });
 
   it("OpenClaw validation treats plugin-list visibility as diagnostic after direct registration passes", () => {
@@ -213,8 +227,7 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("OpenClaw plugins list did not report quaid during");
     expect(setupText).toContain("continuing because direct registration checks passed");
     expect(setupText).toContain("_openClawPluginDirectRegistrationOk(state)");
-    expect(setupText).toContain("&& state.pluginListCheckOk");
-    expect(setupText).toContain("&& state.pluginListed");
+    expect(setupText).toContain("listState.pluginListCheckOk && listState.pluginListed");
     expect(setupText).toContain("const pluginDirectRegistrationOk = _openClawPluginDirectRegistrationOk(pluginState);");
     expect(setupText).toContain("if (!pluginDirectRegistrationOk)");
     const validationIdx = setupText.indexOf("const pluginDirectRegistrationOk = _openClawPluginDirectRegistrationOk(pluginState);");
@@ -244,7 +257,7 @@ describe("install daemon policy", () => {
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain("Dirent.isDirectory() and does not follow");
-    expect(setupText).toContain("fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, dereference: true })");
+    expect(setupText).toContain("_copyOpenClawPluginSource(stagedPluginPath, extensionDir);");
     expect(setupText).toContain("failed to provision extension directory");
   });
 

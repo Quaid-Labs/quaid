@@ -26,6 +26,12 @@ Some OpenClaw builds also omit directly registered plugins from
 as diagnostic when the extension directory, config entry, memory slot binding,
 and install path confirm the plugin is registered. The installer still runs its
 separate store/recall smoke test before finishing.
+OpenClaw plugin registration is repaired through direct config/install-record
+writes rather than `openclaw plugins install/uninstall`, because those CLI paths
+can block under gateway/plugin-list races. During repair, Quaid stages only
+runtime source files and excludes generated caches, tests, logs, and
+`node_modules`; production dependencies are copied separately or installed as a
+fallback.
 
 ---
 
