@@ -131,18 +131,18 @@ ssh REMOTE_HOST 'QUAID_HOME=~/.quaid QUAID_INSTANCE=OC_INSTANCE \
 
 ### M2 — Snippets and Persona
 
-**Snippet path is in hidden home (`~/.quaid`), not visible home (`~/quaid`).**
+**Snippet path is in visible home (`~/quaid`), not hidden home (`~/.quaid`).**
 After extraction, snippets are written to:
 ```
-~/.quaid/instances/openclaw-main/USER.snippets.md
-~/.quaid/instances/openclaw-main/SOUL.snippets.md
+~/quaid/instances/openclaw-main/USER.snippets.md
+~/quaid/instances/openclaw-main/SOUL.snippets.md
 ```
-Do NOT search `~/quaid/instances/` for snippet files — they will not be there.
+Do NOT search `~/.quaid/instances/` for snippet files — they will not be there.
 
 Verify:
 ```bash
-ssh REMOTE_HOST 'ls ~/.quaid/instances/openclaw-main/*.snippets.md 2>/dev/null && \
-  head -20 ~/.quaid/instances/openclaw-main/USER.snippets.md'
+ssh REMOTE_HOST 'ls ~/quaid/instances/openclaw-main/*.snippets.md 2>/dev/null && \
+  head -20 ~/quaid/instances/openclaw-main/USER.snippets.md'
 ```
 
 **Wait for the full extraction window before checking.** Sessions with
