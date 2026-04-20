@@ -598,10 +598,14 @@ class DocsRegistry:
 
         _run_locked_write_with_retry(_write, op_name=f"save_project_definition({name})")
 
-    def save_project_definition(self, name: str, defn):
+    def save_project_definition(self, name: str, defn, *, link_current_instance: bool = True):
         """Upsert a project definition to DB."""
         self._write_project_definition_row(name, defn)
-        self._ensure_global_project_entry(name, defn=defn)
+        self._ensure_global_project_entry(
+            name,
+            defn=defn,
+            link_current_instance=link_current_instance,
+        )
 
     def delete_project_definition(self, name: str):
         """Soft-delete a project definition (set state to 'deleted')."""
@@ -888,6 +892,7 @@ class DocsRegistry:
         participant_entity_ids: Optional[List[str]] = None,
         provenance_confidence: Optional[float] = None,
         registered_by: str = "system",
+        link_current_instance: bool = True,
     ) -> int:
         """Register a document in the registry. Returns the row ID."""
         if not file_path or not file_path.strip():
@@ -900,7 +905,12 @@ class DocsRegistry:
                 "Quaid only tracks durable file paths that persist across reboots. "
                 "Move the file to a permanent location first."
             )
-        self._ensure_global_project_entry(project, file_path=file_path, source_files=source_files)
+        self._ensure_global_project_entry(
+            project,
+            file_path=file_path,
+            source_files=source_files,
+            link_current_instance=link_current_instance,
+        )
         with get_connection(self.db_path) as conn:
             conn.execute("""
                 INSERT INTO doc_registry

@@ -150,6 +150,27 @@ def test_docs_reconcile_does_not_cross_link_current_instance(project_registry_en
     assert entry["instances"] == ["codex-private-tmp-cdx-livetest"]
 
 
+def test_project_registry_sync_does_not_cross_link_ambient_instance(project_registry_env, monkeypatch):
+    from core.project_registry import create_project, get_project
+
+    project_name = "misc--codex-private-tmp-cdx-m13-test"
+    creating_instance = "codex-private-tmp-cdx-m13-test"
+
+    # Auto-provision can create a derived instance while an older adapter
+    # process is still the ambient QUAID_INSTANCE. The docs mirror must not
+    # treat that ambient instance as an owner of the new misc project.
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    create_project(
+        project_name,
+        description="Scratch pad for ephemeral and temporary files.",
+        initial_instance=creating_instance,
+    )
+
+    entry = get_project(project_name)
+    assert entry is not None
+    assert entry["instances"] == [creating_instance]
+
+
 def test_docs_registry_scopes_lists_and_reads_to_current_instance(project_registry_env, monkeypatch):
     from datastore.docsdb.registry import DocsRegistry
     from lib.database import get_connection

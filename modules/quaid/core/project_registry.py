@@ -69,7 +69,7 @@ def _sync_docs_registry_project(
         description=description or (existing.description if existing else f"{label} project."),
         state="active",
     )
-    registry.save_project_definition(name, defn)
+    registry.save_project_definition(name, defn, link_current_instance=False)
     project_md = canonical / "PROJECT.md"
     if project_md.is_file():
         registry.register(
@@ -78,6 +78,7 @@ def _sync_docs_registry_project(
             asset_type="doc",
             title=f"Project: {label}",
             registered_by="project_registry_sync",
+            link_current_instance=False,
         )
 
 
