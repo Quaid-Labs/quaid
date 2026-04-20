@@ -6,7 +6,7 @@
 
 ### A Knowledge Layer for Agentic Systems
 
-**Long-term memory for AI agents across OpenClaw, Claude Code, and Codex.**
+**Long term memory for AI agents**
 
 > **Early alpha** — launched 2026, active daily development.
 

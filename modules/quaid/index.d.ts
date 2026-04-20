@@ -1,5 +1,5 @@
 /**
- * quaid - Local graph-based memory for AI agents
+ * quaid - Long term memory for AI agents
  *
  * Uses SQLite + Ollama embeddings for fully local memory storage.
  * Replaces memory-lancedb with no external API dependencies.

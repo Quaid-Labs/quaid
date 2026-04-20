@@ -1,7 +1,7 @@
 {
   "name": "quaid",
   "version": "0.3.0-alpha",
-  "description": "Long-term memory for AI agents using local SQLite graph storage and embeddings",
+  "description": "Long term memory for AI agents",
   "main": "adaptors/openclaw/index.js",
   "type": "module",
   "keywords": [
