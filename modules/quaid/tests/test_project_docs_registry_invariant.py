@@ -101,7 +101,53 @@ def test_project_list_reconciles_existing_docs_registry_project_rows(project_reg
     assert "recipe-app" in projects
     assert projects["recipe-app"]["canonical_path"] == str(project_dir)
     assert projects["recipe-app"]["source_root"] == str(source_root)
-    assert "benchrunner" in projects["recipe-app"]["instances"]
+    assert projects["recipe-app"]["instances"] == []
+
+
+def test_docs_reconcile_does_not_cross_link_current_instance(project_registry_env, monkeypatch):
+    from datastore.docsdb.registry import DocsRegistry
+    from lib.database import get_connection
+    from lib.project_registry import lookup, register
+
+    visible_home = project_registry_env["visible_home"]
+    project_dir = visible_home / "projects" / "quaid-live-src"
+    source_root = visible_home / "src" / "quaid-live-src"
+    project_dir.mkdir(parents=True)
+    source_root.mkdir(parents=True)
+
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+    register(
+        name="quaid-live-src",
+        canonical_path=str(project_dir),
+        source_root=str(source_root),
+        link_current_instance=True,
+    )
+
+    registry = DocsRegistry()
+    with get_connection(registry.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO project_definitions
+                (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'active')
+            """,
+            (
+                "quaid-live-src",
+                "Quaid Live Src",
+                "projects/quaid-live-src/",
+                json.dumps([str(source_root)]),
+                json.dumps(["*.md"]),
+                json.dumps([]),
+                "CDX-created test project",
+            ),
+        )
+
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    registry.reconcile_global_project_registry()
+
+    entry = lookup("quaid-live-src")
+    assert entry is not None
+    assert entry["instances"] == ["codex-private-tmp-cdx-livetest"]
 
 
 def test_project_show_reconciles_doc_registry_only_external_project(project_registry_env):
@@ -136,7 +182,7 @@ def test_project_show_reconciles_doc_registry_only_external_project(project_regi
     assert entry is not None
     assert entry["canonical_path"] == str(project_dir)
     assert entry["source_root"] == str(external_doc.parent)
-    assert "benchrunner" in entry["instances"]
+    assert entry["instances"] == []
     defn = registry.get_project_definition("recipe-app")
     assert defn is not None
     assert defn.home_dir == "projects/recipe-app/"

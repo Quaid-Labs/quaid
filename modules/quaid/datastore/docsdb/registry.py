@@ -682,6 +682,7 @@ class DocsRegistry:
         source_files: Optional[List[str]] = None,
         defn: Optional[Any] = None,
         create_scaffold: bool = True,
+        link_current_instance: bool = True,
     ) -> bool:
         """Keep docs registry project labels backed by the canonical project registry."""
         name = self._syncable_project_name(project)
@@ -750,7 +751,7 @@ class DocsRegistry:
                 canonical_path=str(canonical),
                 description=description,
                 source_root=source_root,
-                link_current_instance=True,
+                link_current_instance=link_current_instance,
             )
             return True
         except Exception as exc:
@@ -768,7 +769,7 @@ class DocsRegistry:
         seen: set[str] = set()
 
         for name, defn in sorted((self.get_all_project_definitions() or {}).items()):
-            if self._ensure_global_project_entry(name, defn=defn):
+            if self._ensure_global_project_entry(name, defn=defn, link_current_instance=False):
                 synced.append(str(name))
                 seen.add(str(name))
 
@@ -806,7 +807,12 @@ class DocsRegistry:
 
         for name, paths in sorted(orphan_paths_by_project.items()):
             doc_path = paths[0] if paths else None
-            if self._ensure_global_project_entry(name, file_path=doc_path, source_files=paths):
+            if self._ensure_global_project_entry(
+                name,
+                file_path=doc_path,
+                source_files=paths,
+                link_current_instance=False,
+            ):
                 synced.append(name)
                 seen.add(name)
 

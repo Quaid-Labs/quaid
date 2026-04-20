@@ -19,7 +19,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -61,9 +61,49 @@ def _instance_view(entry: Dict[str, Any], live_instances: set[str]) -> Dict[str,
     return rendered
 
 
+def _current_instance_id() -> str:
+    raw = os.environ.get("QUAID_INSTANCE", "").strip()
+    if raw:
+        return raw
+    try:
+        from lib.instance import instance_id
+        return str(instance_id() or "").strip()
+    except Exception:
+        return ""
+
+
+def _linked_to_current_instance(entry: Dict[str, Any]) -> bool:
+    current = _current_instance_id()
+    if not current:
+        return True
+    return current in _dedupe_instances((entry or {}).get("instances", []))
+
+
+def _scope_projects_to_current_instance(projects: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    current = _current_instance_id()
+    if not current:
+        return dict(projects or {})
+    return {
+        name: entry
+        for name, entry in (projects or {}).items()
+        if current in _dedupe_instances((entry or {}).get("instances", []))
+    }
+
+
+def _project_visible_to_current_instance(project: Optional[Dict[str, Any]]) -> bool:
+    return bool(project) and _linked_to_current_instance(project)
+
+
+def _require_project_visible(name: str, project: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not _project_visible_to_current_instance(project):
+        print(f"Project not found: {name}", file=sys.stderr)
+        sys.exit(1)
+    return project
+
+
 def cmd_list(args):
     from core.project_registry import list_projects
-    projects = list_projects()
+    projects = _scope_projects_to_current_instance(list_projects())
     names_only = bool(getattr(args, "names_only", False))
     if args.json:
         live_instances = _live_instance_ids()
@@ -112,10 +152,7 @@ def cmd_create(args):
 
 def cmd_show(args):
     from core.project_registry import get_project
-    project = get_project(args.name)
-    if not project:
-        print(f"Project not found: {args.name}", file=sys.stderr)
-        sys.exit(1)
+    project = _require_project_visible(args.name, get_project(args.name))
     print(
         json.dumps(
             {args.name: _instance_view(project, _live_instance_ids())},
@@ -125,7 +162,8 @@ def cmd_show(args):
 
 
 def cmd_update(args):
-    from core.project_registry import update_project
+    from core.project_registry import get_project, update_project
+    _require_project_visible(args.name, get_project(args.name))
     updates = {}
     if args.description is not None:
         updates["description"] = args.description
@@ -171,7 +209,8 @@ def cmd_unlink(args):
 
 
 def cmd_delete(args):
-    from core.project_registry import delete_project
+    from core.project_registry import delete_project, get_project
+    _require_project_visible(args.name, get_project(args.name))
     try:
         delete_project(args.name)
         print(f"Deleted project: {args.name}")
@@ -181,7 +220,8 @@ def cmd_delete(args):
 
 
 def cmd_rename(args):
-    from core.project_registry import rename_project
+    from core.project_registry import get_project, rename_project
+    _require_project_visible(args.old_name, get_project(args.old_name))
     try:
         result = rename_project(args.old_name, args.new_name)
         print(f"Renamed project '{args.old_name}' → '{args.new_name}'")
@@ -195,14 +235,13 @@ def cmd_rename(args):
 def cmd_archive(args):
     from core.project_registry import get_project, archive_project
     if not args.yes:
-        project = get_project(args.name)
-        if not project:
-            print(f"Project not found: {args.name}", file=sys.stderr)
-            sys.exit(1)
+        _require_project_visible(args.name, get_project(args.name))
         ans = input(f"Archive project '{args.name}'? [y/N] ").strip().lower()
         if ans not in ("y", "yes"):
             print("Aborted.")
             return
+    else:
+        _require_project_visible(args.name, get_project(args.name))
     try:
         result = archive_project(args.name)
         print(f"Archived project: {args.name}")
@@ -214,7 +253,9 @@ def cmd_archive(args):
 
 
 def cmd_status(args):
+    from core.project_registry import get_project
     from core.project_docs import project_status, format_status
+    _require_project_visible(args.name, get_project(args.name))
     try:
         status = project_status(args.name)
         if args.json:
@@ -227,7 +268,9 @@ def cmd_status(args):
 
 
 def cmd_diff(args):
+    from core.project_registry import get_project
     from core.project_docs import project_diff, format_diff
+    _require_project_visible(args.name, get_project(args.name))
     try:
         diff = project_diff(args.name, full=bool(getattr(args, "full", False)))
         if args.json:
@@ -246,10 +289,7 @@ def cmd_snapshot(args):
         from lib.adapter import get_adapter, quaid_tracking_dir
         from pathlib import Path
 
-        project = get_project(args.name)
-        if not project:
-            print(f"Project not found: {args.name}", file=sys.stderr)
-            sys.exit(1)
+        project = _require_project_visible(args.name, get_project(args.name))
         if not project.get("source_root"):
             print(f"No source root for {args.name}", file=sys.stderr)
             sys.exit(1)
