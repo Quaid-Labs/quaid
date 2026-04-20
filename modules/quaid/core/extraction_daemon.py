@@ -2222,6 +2222,44 @@ def _load_runtime_adapter():
         return None
 
 
+def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str) -> bool:
+    """Return whether an adapter-scoped transcript belongs to this daemon instance."""
+    if adapter is None or not transcript_path:
+        return True
+    owns_fn = getattr(adapter, "owns_session_path", None)
+    if not callable(owns_fn):
+        owns_fn = getattr(adapter, "owns_transcript_path", None)
+    if not callable(owns_fn):
+        return True
+    try:
+        return bool(owns_fn(Path(transcript_path), session_id=session_id))
+    except TypeError:
+        try:
+            return bool(owns_fn(Path(transcript_path)))
+        except Exception as exc:
+            logger.warning(
+                "adapter transcript ownership check failed for session %s (%s): %s",
+                session_id,
+                transcript_path,
+                exc,
+            )
+            return False
+    except Exception as exc:
+        logger.warning(
+            "adapter transcript ownership check failed for session %s (%s): %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+            if is_fail_hard_enabled():
+                raise
+        except ImportError:
+            pass
+        return False
+
+
 def _ensure_discovered_session_cursors(adapter=None) -> int:
     """Seed cursors for transcript files that exist but have never been seen.
 
@@ -2247,15 +2285,17 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
     for transcript_path in sessions_root.rglob("*.jsonl"):
         if _is_discovery_artifact_transcript(transcript_path):
             continue
+        if not transcript_path.is_file():
+            continue
         try:
             session_id = _validate_session_id(transcript_path.stem)
         except ValueError:
             continue
+        if not _adapter_owns_transcript_path(active_adapter, session_id, str(transcript_path)):
+            continue
         source_cursor_key = _signal_source_cursor_key(session_id, str(transcript_path))
         cursor_file = _cursor_dir() / f"{source_cursor_key}.json"
         legacy_cursor_file = _cursor_dir() / f"{session_id}.json"
-        if not transcript_path.is_file():
-            continue
         if cursor_file.exists() or legacy_cursor_file.exists():
             cursor_data = read_cursor(session_id, source_key=source_cursor_key)
             existing_path = str(cursor_data.get("transcript_path") or "").strip()
@@ -2491,6 +2531,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         adapter = None
 
+    if transcript_path and os.path.isfile(transcript_path) and not _adapter_owns_transcript_path(adapter, session_id, transcript_path):
+        logger.warning(
+            "[%s] session %s: transcript does not belong to active instance, skipping: %s",
+            label,
+            session_id,
+            transcript_path,
+        )
+        clear_rolling_state(session_id)
+        mark_signal_processed(signal_data)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
+        return
+
     cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
     internal_state = _reconcile_internal_cursor_state(
         session_id,
@@ -2610,6 +2662,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
+
+    if not _adapter_owns_transcript_path(adapter, session_id, transcript_path):
+        logger.warning(
+            "[%s] session %s: resolved transcript does not belong to active instance, skipping: %s",
+            label,
+            session_id,
+            transcript_path,
+        )
+        clear_rolling_state(session_id)
+        mark_signal_processed(signal_data)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
+        return
 
     cursor_offset = int(cursor_data["line_offset"] or 0)
     cursor_transcript = cursor_data["transcript_path"]
@@ -3591,6 +3655,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
+        if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
+            continue
         internal_state = _reconcile_internal_cursor_state(
             session_id,
             transcript_path,
@@ -3775,6 +3841,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
             continue
         internal_state = _reconcile_internal_cursor_state(
             session_id,

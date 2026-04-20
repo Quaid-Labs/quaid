@@ -452,11 +452,57 @@ class CodexAdapter(QuaidAdapter):
         if sessions_dir is None:
             return None
         matches = sorted(
-            sessions_dir.rglob(f"rollout-*{session_id}.jsonl"),
+            (
+                path for path in sessions_dir.rglob(f"rollout-*{session_id}.jsonl")
+                if self.owns_session_path(path, session_id=session_id)
+            ),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
         return matches[0] if matches else None
+
+    def _current_instance_id_for_sessions(self) -> str:
+        try:
+            return str(self.instance_id() or "").strip()
+        except Exception:
+            name = self.get_instance_name()
+            return f"{self.agent_id_prefix()}-{name}" if name else self.agent_id_prefix()
+
+    def _session_meta_payload(self, path: Path) -> dict:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(obj.get("type") or "").strip() != "session_meta":
+                        continue
+                    payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+                    return payload
+        except OSError:
+            return {}
+        return {}
+
+    def _session_instance_id_from_path(self, path: Path) -> str:
+        payload = self._session_meta_payload(path)
+        cwd = str(payload.get("cwd") or "").strip()
+        if not cwd:
+            return ""
+        slug = instance_slug_from_project_dir(cwd)
+        return f"{self.agent_id_prefix()}-{slug}" if slug else ""
+
+    def owns_session_path(self, path: Path, session_id: str = "") -> bool:
+        """Return whether a global Codex rollout file belongs to this instance."""
+        _ = session_id
+        expected = self._current_instance_id_for_sessions()
+        actual = self._session_instance_id_from_path(Path(path))
+        if not actual:
+            return False
+        return actual == expected
 
     def filter_system_messages(self, text: str) -> bool:
         if (
@@ -687,6 +733,8 @@ class CodexAdapter(QuaidAdapter):
         found: list[dict] = []
         seen_ids: set[str] = set()
         for path in sessions_dir.rglob("rollout-*.jsonl"):
+            if not self.owns_session_path(path):
+                continue
             child_parent = self._subagent_parent_id_from_path(path)
             if child_parent != parent:
                 continue

@@ -335,6 +335,34 @@ def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch
     assert list(cursor_dir.glob("unknown-*.json")) == []
 
 
+def test_ensure_discovered_session_cursors_skips_foreign_adapter_transcripts(monkeypatch, tmp_path):
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    owned = sessions_dir / "owned-session.jsonl"
+    foreign = sessions_dir / "foreign-session.jsonl"
+    owned.write_text('{"role":"user","content":"owned"}\n', encoding="utf-8")
+    foreign.write_text('{"role":"user","content":"foreign"}\n', encoding="utf-8")
+
+    class _Adapter:
+        def get_sessions_dir(self):
+            return sessions_dir
+
+        def owns_session_path(self, path, session_id=""):
+            return Path(path).name == "owned-session.jsonl"
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+    assert discovered == 1
+
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+    cursor_paths = sorted(cursor_dir.glob("*.json"))
+    assert len(cursor_paths) == 1
+    cursor = json.loads(cursor_paths[0].read_text(encoding="utf-8"))
+    assert cursor["session_id"] == "owned-session"
+    assert cursor["transcript_path"] == str(owned)
+
+
 def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -374,6 +402,48 @@ def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeyp
     )
 
     assert not extraction_daemon._rolling_state_path("sess-empty-struct").exists()
+
+
+def test_process_signal_skips_foreign_adapter_transcript(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    transcript_path = tmp_path / "foreign-session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"foreign fact"}\n', encoding="utf-8")
+    signal_path = extraction_daemon.write_signal(
+        signal_type="timeout",
+        session_id="foreign-session",
+        transcript_path=str(transcript_path),
+    )
+    signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+    signal_data["_signal_path"] = str(signal_path)
+    extraction_daemon.write_rolling_state(
+        "foreign-session",
+        {
+            "session_id": "foreign-session",
+            "transcript_path": str(transcript_path),
+            "raw_facts": ["foreign payload"],
+            "semantic_buffer": "foreign payload",
+            "semantic_buffer_tokens": 2,
+        },
+    )
+
+    class _Adapter:
+        def owns_session_path(self, path, session_id=""):
+            return False
+
+        def parse_session_jsonl(self, path):
+            raise AssertionError("foreign transcript should not be parsed")
+
+    set_adapter(_Adapter())
+    try:
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert not signal_path.exists()
+    assert not extraction_daemon._rolling_state_path("foreign-session").exists()
 
 
 def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypatch, tmp_path):

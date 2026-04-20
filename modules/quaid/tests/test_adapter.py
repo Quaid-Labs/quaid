@@ -1152,6 +1152,8 @@ class TestCodexAdapter:
 
     def test_get_session_path_finds_nested_rollout(self, tmp_path, monkeypatch):
         session_id = "019d4367-1794-7fc2-84f3-bb30ba99a24f"
+        project_dir = tmp_path / "cdx-project"
+        project_dir.mkdir()
         session_file = (
             tmp_path
             / ".codex"
@@ -1162,14 +1164,50 @@ class TestCodexAdapter:
             / f"rollout-2026-03-31T18-18-42-{session_id}.jsonl"
         )
         session_file.parent.mkdir(parents=True)
-        session_file.write_text("{}\n", encoding="utf-8")
+        session_file.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(project_dir)}}) + "\n",
+            encoding="utf-8",
+        )
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
         adapter = CodexAdapter()
         assert adapter.get_session_path(session_id) == session_file
 
+    def test_get_session_path_ignores_foreign_project_rollout(self, tmp_path, monkeypatch):
+        own_project = tmp_path / "cdx-m13-test"
+        foreign_project = tmp_path / "cdx-livetest"
+        own_project.mkdir()
+        foreign_project.mkdir()
+        own_session = "019d4367-1794-7fc2-84f3-bb30ba99a24f"
+        foreign_session = "019d4367-1794-7fc2-84f3-bb30ba99a250"
+        sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "04" / "20"
+        sessions_root.mkdir(parents=True)
+        own_file = sessions_root / f"rollout-2026-04-20T12-00-00-{own_session}.jsonl"
+        foreign_file = sessions_root / f"rollout-2026-04-20T13-00-00-{foreign_session}.jsonl"
+        own_file.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": own_session, "cwd": str(own_project)}}) + "\n",
+            encoding="utf-8",
+        )
+        foreign_file.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": foreign_session, "cwd": str(foreign_project)}}) + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(own_project))
+        adapter = CodexAdapter()
+
+        assert adapter.owns_session_path(own_file) is True
+        assert adapter.owns_session_path(foreign_file) is False
+        assert adapter.get_session_path(own_session) == own_file
+        assert adapter.get_session_path(foreign_session) is None
 
     def test_check_session_transition_accepts_thread_id_payload(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(tmp_path))
         adapter = CodexAdapter()
         adapter._write_last_session_id("old-thread")
         ended = (
@@ -1182,7 +1220,10 @@ class TestCodexAdapter:
             / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
         )
         ended.parent.mkdir(parents=True)
-        ended.write_text("{}\n", encoding="utf-8")
+        ended.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(tmp_path)}}) + "\n",
+            encoding="utf-8",
+        )
 
         signal = adapter.check_session_transition({"thread_id": "new-thread"})
         assert signal is not None
@@ -1293,6 +1334,8 @@ class TestCodexAdapter:
     def test_codex_adapter_discovers_subagent_children_by_parent_thread_id(self, tmp_path, monkeypatch):
         parent_session_id = "parent-1"
         child_session_id = "019d734c-2904-7d32-9f06-52011c9d1adb"
+        project_dir = tmp_path / "cdx-parent"
+        project_dir.mkdir()
         child_path = (
             tmp_path
             / ".codex"
@@ -1310,6 +1353,7 @@ class TestCodexAdapter:
                         {
                             "type": "session_meta",
                             "payload": {
+                                "cwd": str(project_dir),
                                 "source": {
                                     "subagent": {
                                         "thread_spawn": {
@@ -1327,6 +1371,8 @@ class TestCodexAdapter:
             encoding="utf-8",
         )
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
         adapter = CodexAdapter()
         children = adapter.discover_subagent_children(parent_session_id)
         assert children == [
