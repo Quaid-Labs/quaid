@@ -6,6 +6,8 @@
 
 ### A Knowledge Layer for Agentic Systems
 
+**Long-term memory for AI agents across OpenClaw, Claude Code, and Codex.**
+
 > **Early alpha** — launched 2026, active daily development.
 
 Quaid helps your agent remember who you are, what you are working on, and what already happened, so you do not have to reteach it after every reset, new session, or context loss.

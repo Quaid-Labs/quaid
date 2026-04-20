@@ -919,7 +919,7 @@ step1_preflight() {
     printf "  ║   %-$((bw-3))s║\n" "Quaid v${QUAID_VERSION}"
     printf "  ║   %-$((bw-3))s║\n" "\"If I'm not me, then who the hell am I?\""
     echo "  ║${pad}║"
-    printf "  ║   %-$((bw-3))s║\n" "Long-term memory for your OpenClaw bot."
+    printf "  ║   %-$((bw-3))s║\n" "Long-term memory for your AI agents."
     echo "  ║${pad}║"
     echo "  ╚$(printf '═%.0s' $(seq 1 $bw))╝"
     echo -e "${RESET}"

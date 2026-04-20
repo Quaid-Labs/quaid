@@ -1,12 +1,14 @@
 {
   "name": "quaid",
   "version": "0.3.0-alpha",
-  "description": "Total Recall memory system — graph-based memory plugin using SQLite + Ollama",
+  "description": "Long-term memory for AI agents using local SQLite graph storage and embeddings",
   "main": "adaptors/openclaw/index.js",
   "type": "module",
   "keywords": [
+    "ai-agents",
     "openclaw",
-    "plugin",
+    "claude-code",
+    "codex",
     "memory",
     "local",
     "sqlite",

@@ -98,3 +98,18 @@ QUAID_INSTANCE=<instance> quaid recall "query"
 quaid domain list
 quaid domain register <name> "description"
 ```
+
+<!-- AUTO-GENERATED:DOMAIN-LIST:START -->
+Available domains (from datastore `domain_registry` active rows):
+- `finance`: budgeting, purchases, salary, bills
+- `health`: training, injuries, routines, wellness
+- `household`: home, chores, food planning, shared logistics
+- `legal`: contracts, policy, and regulatory constraints
+- `personal`: identity, preferences, relationships, life events
+- `project`: project status, tasks, files, milestones
+- `research`: options considered, comparisons, tradeoff analysis
+- `schedule`: dates, appointments, deadlines
+- `technical`: code, infra, APIs, architecture
+- `travel`: trips, moves, places, logistics
+- `work`: job/team/process decisions not deeply technical
+<!-- AUTO-GENERATED:DOMAIN-LIST:END -->
