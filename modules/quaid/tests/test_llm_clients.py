@@ -572,6 +572,26 @@ class TestCallLlmProvider:
             with pytest.raises(RuntimeError, match="could not access its fast language model provider"):
                 llm_clients.call_llm("system", "user", max_retries=0, model_tier="fast")
 
+    def test_config_error_notifies_agent_before_failhard_raise(self, test_adapter):
+        import core.llm.clients as llm_clients
+
+        def config_error(*_args, **_kwargs):
+            raise RuntimeError(
+                "Quaid fast LLM call failed: HTTP 400 from gateway "
+                "(model=openai/invalid-model-xyzzy). Check fastReasoning/deepReasoning in config.json."
+            )
+
+        test_adapter._llm.llm_call = config_error
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.notify_agent") as mock_notify:
+            with pytest.raises(RuntimeError, match="failHard is enabled"):
+                llm_clients.call_llm("system", "user", max_retries=0, model_tier="fast")
+
+        mock_notify.assert_called_once()
+        assert "invalid-model-xyzzy" in mock_notify.call_args.args[0]
+        assert mock_notify.call_args.kwargs["severity"] == "error"
+        assert mock_notify.call_args.kwargs["source"] == "provider"
+
     def test_uses_remaining_deadline_for_slot_and_provider_timeout(self):
         """Per-attempt timeout should use remaining deadline, not full timeout each retry."""
         import core.llm.clients as llm_clients

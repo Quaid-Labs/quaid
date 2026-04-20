@@ -64,6 +64,12 @@ def _is_provider_config_error(exc: Optional[Exception]) -> bool:
         "check fastreasoning/deepreasoning in config.json" in text
         or "no model configured for tier" in text
         or "unsupported provider" in text
+        or "unsupported model" in text
+        or "invalid model" in text
+        or "invalid-model" in text
+        or "model_not_found" in text
+        or "model not found" in text
+        or "not a valid model" in text
         or "reasoningmodelclasses" in text
         or "language model provider" in text
     )
@@ -77,6 +83,43 @@ def _short_error_text(exc: Optional[Exception], *, max_len: int = 240) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3].rstrip() + "..."
+
+
+def _notify_provider_access_error(
+    *,
+    provider_name: str,
+    resolved_tier: str,
+    model: Optional[str],
+    last_error: Optional[Exception],
+    dedupe_prefix: str,
+    action: str = "access",
+) -> None:
+    """Queue an agent-visible provider notice before surfacing the error."""
+    action = "reach" if str(action or "").strip().lower() == "reach" else "access"
+    if action == "reach":
+        message = (
+            f"Quaid could not reach its {resolved_tier} provider "
+            f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
+        )
+    else:
+        message = (
+            f"Quaid could not access its {resolved_tier} language model provider "
+            f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
+        )
+    try:
+        notify_agent(
+            message,
+            severity="error",
+            source="provider",
+            dedupe_key=(
+                f"{dedupe_prefix}:{provider_name}:{resolved_tier}:{model}:"
+                f"{getattr(last_error, 'code', type(last_error).__name__) if last_error is not None else 'unknown'}:"
+                f"{_short_error_text(last_error, max_len=96)}"
+            ),
+            ttl_seconds=900,
+        )
+    except Exception as notice_exc:
+        logger.warning("Failed queueing provider access error for agent relay: %s", notice_exc)
 
 
 # Timeouts (seconds)
@@ -761,18 +804,13 @@ def call_llm(system_prompt: str, user_message: str,
             resolved_tier=resolved_tier,
             fail_hard=is_fail_hard_enabled(),
         )
-        notify_agent(
-            (
-                f"Quaid could not reach its {resolved_tier} provider "
-                f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
-            ),
-            severity="error",
-            source="provider",
-            dedupe_key=(
-                f"llm-outage:{provider_name}:{resolved_tier}:{model}:"
-                f"{getattr(last_error, 'code', type(last_error).__name__) if last_error is not None else 'unknown'}"
-            ),
-            ttl_seconds=900,
+        _notify_provider_access_error(
+            provider_name=provider_name,
+            resolved_tier=resolved_tier,
+            model=model,
+            last_error=last_error,
+            dedupe_prefix="llm-outage",
+            action="reach",
         )
         if is_fail_hard_enabled():
             err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
@@ -796,6 +834,14 @@ def call_llm(system_prompt: str, user_message: str,
             exc_type=type(last_error).__name__ if last_error is not None else None,
             error=str(last_error),
         )
+        if _is_provider_config_error(last_error):
+            _notify_provider_access_error(
+                provider_name=provider_name,
+                resolved_tier=resolved_tier,
+                model=model,
+                last_error=last_error,
+                dedupe_prefix="llm-config",
+            )
         err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
         raise RuntimeError(
             "LLM call failed after retries while failHard is enabled "
