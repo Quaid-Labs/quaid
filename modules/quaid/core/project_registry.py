@@ -170,7 +170,18 @@ def _misc_project_instance_id(project_name: str) -> Optional[str]:
 
 
 def _misc_auto_create_tombstone_path(quaid_home: Path, instance_id: str) -> Path:
-    return quaid_home / "instances" / str(instance_id).strip() / "data" / "project-bootstrap" / "skip-auto-misc-project"
+    from lib.instance import validate_instance_id
+
+    instance = validate_instance_id(str(instance_id or "").strip())
+    # Keep delete state outside the per-instance silo so cleanup cannot erase it.
+    return quaid_home / "data" / "project-bootstrap" / "disabled-auto-misc" / f"{instance}.json"
+
+
+def _legacy_misc_auto_create_tombstone_path(quaid_home: Path, instance_id: str) -> Path:
+    from lib.instance import validate_instance_id
+
+    instance = validate_instance_id(str(instance_id or "").strip())
+    return quaid_home / "instances" / instance / "data" / "project-bootstrap" / "skip-auto-misc-project"
 
 
 def mark_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> Path:
@@ -192,17 +203,22 @@ def mark_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Pat
 
 def clear_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> None:
     home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
-    marker = _misc_auto_create_tombstone_path(home, instance_id)
-    try:
-        marker.unlink(missing_ok=True)
-    except OSError:
-        pass
+    for marker in (
+        _misc_auto_create_tombstone_path(home, instance_id),
+        _legacy_misc_auto_create_tombstone_path(home, instance_id),
+    ):
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def is_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> bool:
     home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
-    marker = _misc_auto_create_tombstone_path(home, instance_id)
-    return marker.is_file()
+    return (
+        _misc_auto_create_tombstone_path(home, instance_id).is_file()
+        or _legacy_misc_auto_create_tombstone_path(home, instance_id).is_file()
+    )
 
 
 def _is_path_for_deleted_project(raw_path: str, *, project_name: str, canonical: Optional[Path]) -> bool:

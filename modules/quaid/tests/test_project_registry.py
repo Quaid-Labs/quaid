@@ -2,9 +2,11 @@
 
 import json
 import os
-import pytest
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from core.project_registry import (
     clear_misc_auto_create_disabled,
@@ -239,6 +241,8 @@ class TestDeleteProject:
     def test_delete_misc_project_sets_auto_create_tombstone(self, mock_adapter):
         _, tmp_path = mock_adapter
         instance_id = "claude-code-private-tmp-m13"
+        instance_root = tmp_path / "instances" / instance_id
+        instance_root.mkdir(parents=True)
         with patch("lib.instance.instance_id", return_value=instance_id), \
              patch("core.project_registry._sync_docs_registry_project"):
             create_project(f"misc--{instance_id}", description="scratch")
@@ -246,6 +250,13 @@ class TestDeleteProject:
 
         delete_project(f"misc--{instance_id}")
 
+        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is True
+        marker = tmp_path / "data" / "project-bootstrap" / "disabled-auto-misc" / f"{instance_id}.json"
+        assert marker.is_file()
+
+        shutil.rmtree(instance_root)
+
+        assert marker.is_file()
         assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is True
 
     def test_recreate_misc_project_clears_auto_create_tombstone(self, mock_adapter):
@@ -259,7 +270,29 @@ class TestDeleteProject:
             create_project(f"misc--{instance_id}", description="scratch", initial_instance=instance_id)
 
         assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is False
+        assert not marker.exists()
         clear_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
+
+    def test_legacy_misc_auto_create_tombstone_is_honored_and_cleared(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        instance_id = "claude-code-private-tmp-m13"
+        legacy_marker = (
+            tmp_path
+            / "instances"
+            / instance_id
+            / "data"
+            / "project-bootstrap"
+            / "skip-auto-misc-project"
+        )
+        legacy_marker.parent.mkdir(parents=True)
+        legacy_marker.write_text("legacy\n", encoding="utf-8")
+
+        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is True
+
+        clear_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
+
+        assert not legacy_marker.exists()
+        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is False
 
 
 class TestListAndQuery:

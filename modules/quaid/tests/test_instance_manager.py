@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sqlite3
 import pytest
 from pathlib import Path
@@ -372,7 +373,11 @@ class TestInstanceManagerBase:
         mgr = InstanceManager(adapter)
 
         instance_id = "claude-code-proj"
+        instance_root = tmp_path / "instances" / instance_id
+        instance_root.mkdir(parents=True)
+        (instance_root / "stale.txt").write_text("old silo\n", encoding="utf-8")
         mark_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
+        shutil.rmtree(instance_root)
 
         with patch.object(mgr, "_ensure_shared_quaid_project") as mock_shared, \
              patch("core.project_registry.get_project", return_value=None), \
