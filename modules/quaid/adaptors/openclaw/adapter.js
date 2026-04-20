@@ -592,7 +592,7 @@ function isQueuedSessionStartupWrapper(raw) {
 }
 function isOpenClawTransientSessionId(value) {
   const sid = String(value || "").trim().toLowerCase();
-  return sid === "slug-generator";
+  return Boolean(sid) && (sid === "slug-generator" || sid.includes(":slug-generator") || sid.includes("slug-generator:"));
 }
 function selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs = Date.now(), currentSessionId) {
   if (!lastUserMessageQuery) return null;
@@ -759,7 +759,7 @@ function isInternalSessionContext(event, ctx) {
   const sessionKey = String(
     ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(sessionId)
   ).trim().toLowerCase();
-  return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:") || sessionKey === "slug-generator");
+  return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:") || isOpenClawTransientSessionId(sessionKey));
 }
 function _scrubTranscriptMessageText(message) {
   const text = String(facade.getMessageText(message) || "").trim();
@@ -3205,6 +3205,8 @@ ${deferredNoticeContext}` : deferredNoticeContext;
         );
         const eventMessages = Array.isArray(event.messages) ? event.messages : [];
         writeHookTrace("hook.before_prompt_build.query_extracted", {
+          session_id: promptSessionId,
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
           query: query.slice(0, 80),
           source: querySource,
           msg_count: eventMessages.length,
@@ -4256,17 +4258,29 @@ ${notice}` : notice;
         if (rawText.length >= 3 && !rawText.startsWith("/")) {
           const resolvedSessionId = resolveActiveUserSessionId(event, ctx);
           const originSessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
-          const transientOrigin = isOpenClawTransientSessionId(originSessionId) || isOpenClawTransientSessionId(resolvedSessionId);
+          const originSessionKey = String(
+            event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || ""
+          ).trim();
+          const transientOriginValue = [
+            originSessionId,
+            originSessionKey,
+            resolvedSessionId
+          ].find((value) => isOpenClawTransientSessionId(value)) || "";
+          const transientOrigin = Boolean(transientOriginValue);
           const sessionId = transientOrigin ? currentInteractiveSession?.sessionId || String(lastTranscriptSessionHint?.sessionId || "").trim() || "" : resolvedSessionId;
           lastUserMessageQuery = {
             text: rawText,
             seenAtMs: Date.now(),
             ...sessionId ? { sessionId } : {},
-            ...transientOrigin ? { originSessionId: originSessionId || resolvedSessionId } : {}
+            ...transientOrigin ? { originSessionId: transientOriginValue } : {}
           };
           writeHookTrace("hook.message_received.user_cache", {
             session_id: sessionId || "",
-            origin_session_id: transientOrigin ? originSessionId || resolvedSessionId : "",
+            origin_session_id: transientOrigin ? transientOriginValue : "",
+            hook_session_id: originSessionId,
+            hook_session_key: originSessionKey,
+            resolved_session_id: resolvedSessionId,
+            transient_origin: transientOrigin,
             text_len: rawText.length
           });
         }

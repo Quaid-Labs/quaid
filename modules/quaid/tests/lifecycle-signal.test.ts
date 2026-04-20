@@ -173,6 +173,11 @@ describe("lifecycle signal detection", () => {
     )).toBe(true);
 
     expect(__test.isInternalSessionContext(
+      { sessionKey: "agent:main:slug-generator" },
+      { sessionId: "89003867-ed94-4bb3-8881-289a63e8250c" },
+    )).toBe(true);
+
+    expect(__test.isInternalSessionContext(
       { sessionKey: "agent:main:tui-user-session" },
       { sessionId: "86bea2fc-b843-43b8-94bb-7ffb9a0e9d17" },
     )).toBe(false);
@@ -680,6 +685,31 @@ describe("lifecycle signal detection", () => {
     );
     expect(recovered?.text).toBe("Juniper marks the kiln with a cobalt crescent.");
     expect(__test.isOpenClawTransientSessionId("slug-generator")).toBe(true);
+    expect(__test.isOpenClawTransientSessionId("agent:main:slug-generator")).toBe(true);
+  });
+
+  it("allows queued startup recovery when transient origin is carried as a session key", () => {
+    const nowMs = 350_000;
+    const recovered = __test.selectQueuedStartupRecoveryMessage(
+      {
+        prompt: [
+          "[Queued messages while agent was busy]",
+          "---",
+          "Queued #1",
+          "A new session was started via /new or /reset.",
+        ].join("\n"),
+        messages: [],
+      },
+      {
+        text: "Sparrow marks the kiln with a cobalt crescent.",
+        seenAtMs: nowMs - 140_000,
+        sessionId: "slug-helper-uuid",
+        originSessionId: "agent:main:slug-generator",
+      },
+      nowMs,
+      "ca574a00",
+    );
+    expect(recovered?.text).toBe("Sparrow marks the kiln with a cobalt crescent.");
   });
 
   it("uses the instance silo db path for adapter python calls", () => {

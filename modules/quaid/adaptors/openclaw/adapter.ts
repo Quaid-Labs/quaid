@@ -817,7 +817,11 @@ function isQueuedSessionStartupWrapper(raw: string): boolean {
 
 function isOpenClawTransientSessionId(value: unknown): boolean {
   const sid = String(value || "").trim().toLowerCase();
-  return sid === "slug-generator";
+  return Boolean(sid) && (
+    sid === "slug-generator"
+    || sid.includes(":slug-generator")
+    || sid.includes("slug-generator:")
+  );
 }
 
 function selectQueuedStartupRecoveryMessage(
@@ -1047,7 +1051,7 @@ function isInternalSessionContext(event: any, ctx: any): boolean {
   return Boolean(sessionKey) && (
     sessionKey.includes("quaid-llm")
     || sessionKey.includes("openresponses:")
-    || sessionKey === "slug-generator"
+    || isOpenClawTransientSessionId(sessionKey)
   );
 }
 
@@ -4002,6 +4006,8 @@ notify_user(${JSON.stringify(message)})
         const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
 
         writeHookTrace("hook.before_prompt_build.query_extracted", {
+          session_id: promptSessionId,
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
           query: query.slice(0, 80),
           source: querySource,
           msg_count: eventMessages.length,
@@ -5324,8 +5330,19 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (rawText.length >= 3 && !rawText.startsWith("/")) {
           const resolvedSessionId = resolveActiveUserSessionId(event, ctx);
           const originSessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
-          const transientOrigin = isOpenClawTransientSessionId(originSessionId)
-            || isOpenClawTransientSessionId(resolvedSessionId);
+          const originSessionKey = String(
+            event?.sessionKey
+            || ctx?.sessionKey
+            || event?.targetSessionKey
+            || ctx?.targetSessionKey
+            || "",
+          ).trim();
+          const transientOriginValue = [
+            originSessionId,
+            originSessionKey,
+            resolvedSessionId,
+          ].find((value) => isOpenClawTransientSessionId(value)) || "";
+          const transientOrigin = Boolean(transientOriginValue);
           const sessionId = transientOrigin
             ? (
                 currentInteractiveSession?.sessionId
@@ -5337,11 +5354,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             text: rawText,
             seenAtMs: Date.now(),
             ...(sessionId ? { sessionId } : {}),
-            ...(transientOrigin ? { originSessionId: originSessionId || resolvedSessionId } : {}),
+            ...(transientOrigin ? { originSessionId: transientOriginValue } : {}),
           };
           writeHookTrace("hook.message_received.user_cache", {
             session_id: sessionId || "",
-            origin_session_id: transientOrigin ? (originSessionId || resolvedSessionId) : "",
+            origin_session_id: transientOrigin ? transientOriginValue : "",
+            hook_session_id: originSessionId,
+            hook_session_key: originSessionKey,
+            resolved_session_id: resolvedSessionId,
+            transient_origin: transientOrigin,
             text_len: rawText.length,
           });
         }
