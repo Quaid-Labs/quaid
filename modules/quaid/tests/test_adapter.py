@@ -1204,11 +1204,32 @@ class TestCodexAdapter:
         assert adapter.get_session_path(own_session) == own_file
         assert adapter.get_session_path(foreign_session) is None
 
+    def test_get_session_path_ignores_unclassified_rollout(self, tmp_path, monkeypatch):
+        session_id = "019d4367-1794-7fc2-84f3-bb30ba99a24f"
+        project_dir = tmp_path / "cdx-project"
+        project_dir.mkdir()
+        sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "04" / "20"
+        sessions_root.mkdir(parents=True)
+        session_file = sessions_root / f"rollout-2026-04-20T12-00-00-{session_id}.jsonl"
+        session_file.write_text(
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Marisol fact"}}) + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+        adapter = CodexAdapter()
+
+        assert adapter.owns_session_path(session_file) is False
+        assert adapter.get_session_path(session_id) is None
+
     def test_check_session_transition_accepts_thread_id_payload(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
         monkeypatch.setenv("CODEX_PROJECT_DIR", str(tmp_path))
         adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
         adapter._write_last_session_id("old-thread")
         ended = (
             tmp_path
@@ -1229,6 +1250,68 @@ class TestCodexAdapter:
         assert signal is not None
         assert signal["ended_session_id"] == "old-thread"
         assert signal["signal_type"] == "session_end"
+        assert adapter._read_last_session_id() == "new-thread"
+
+    def test_check_session_transition_allows_unclassified_prior_rollout(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(tmp_path))
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._write_last_session_id("old-thread")
+        ended = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "14"
+            / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        )
+        ended.parent.mkdir(parents=True)
+        ended.write_text(
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Marisol fact"}}) + "\n",
+            encoding="utf-8",
+        )
+
+        assert adapter.get_session_path("old-thread") is None
+        signal = adapter.check_session_transition({"thread_id": "new-thread"})
+
+        assert signal is not None
+        assert signal["ended_session_id"] == "old-thread"
+        assert signal["ended_transcript_path"] == str(ended)
+        assert signal["signal_type"] == "session_end"
+        assert adapter._read_last_session_id() == "new-thread"
+
+    def test_check_session_transition_rejects_explicit_foreign_prior_rollout(self, tmp_path, monkeypatch):
+        own_project = tmp_path / "cdx-livetest"
+        foreign_project = tmp_path / "cdx-m13-test"
+        own_project.mkdir()
+        foreign_project.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(own_project))
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._write_last_session_id("old-thread")
+        ended = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "14"
+            / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        )
+        ended.parent.mkdir(parents=True)
+        ended.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(foreign_project)}}) + "\n",
+            encoding="utf-8",
+        )
+
+        signal = adapter.check_session_transition({"thread_id": "new-thread"})
+
+        assert signal is None
         assert adapter._read_last_session_id() == "new-thread"
 
     def test_parse_session_jsonl_prefers_event_messages(self, tmp_path):

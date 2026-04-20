@@ -425,8 +425,10 @@ class CodexAdapter(QuaidAdapter):
         self._write_last_session_id(current_id)
         if not last_id or last_id == current_id:
             return None
-        # Session changed — the old session ended via /new or /clear.
-        transcript_path = self.get_session_path(last_id)
+        # Session changed — the old session ended via /new or /clear.  The
+        # prior session id comes from this instance's own state file, so allow
+        # a just-rotated Codex rollout whose session_meta.cwd has not landed yet.
+        transcript_path = self._get_session_path(last_id, allow_unclassified=True)
         if transcript_path is None:
             return None
         return {
@@ -444,22 +446,26 @@ class CodexAdapter(QuaidAdapter):
         sessions_dir = Path.home() / ".codex" / "sessions"
         return sessions_dir if sessions_dir.is_dir() else None
 
-    def get_session_path(self, session_id: str) -> Optional[Path]:
+    def _get_session_path(self, session_id: str, *, allow_unclassified: bool = False) -> Optional[Path]:
         session_id = str(session_id or "").strip()
         if not session_id:
             return None
         sessions_dir = self.get_sessions_dir()
         if sessions_dir is None:
             return None
-        matches = sorted(
-            (
-                path for path in sessions_dir.rglob(f"rollout-*{session_id}.jsonl")
-                if self.owns_session_path(path, session_id=session_id)
-            ),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
+        expected = self._current_instance_id_for_sessions()
+        matches: list[Path] = []
+        for path in sessions_dir.rglob(f"rollout-*{session_id}.jsonl"):
+            actual = self._session_instance_id_from_path(path)
+            if actual == expected:
+                matches.append(path)
+            elif allow_unclassified and not actual:
+                matches.append(path)
+        matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return matches[0] if matches else None
+
+    def get_session_path(self, session_id: str) -> Optional[Path]:
+        return self._get_session_path(session_id, allow_unclassified=False)
 
     def _current_instance_id_for_sessions(self) -> str:
         try:
