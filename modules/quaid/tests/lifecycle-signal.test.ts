@@ -625,6 +625,46 @@ describe("lifecycle signal detection", () => {
     expect(selected.source).toBe("message_received_cache_queued_startup");
   });
 
+  it("recovers delayed startup when the prompt is only the startup boilerplate", () => {
+    const nowMs = 410_000;
+    const latestUserMessage = "Lark paints a cobalt crescent beside Juniper's kiln.";
+
+    const selected = __test.selectAutoInjectQuery(
+      {
+        prompt: [
+          "A new session was started via /new or /reset.",
+          "If runtime-provided startup context is included for this first turn, use it before responding to the user.",
+          "Current time: Monday.",
+        ].join("\n"),
+        messages: [],
+      },
+      { text: latestUserMessage, seenAtMs: nowMs - 150_000 },
+      nowMs,
+      "main-session",
+    );
+
+    expect(selected.query).toBe(latestUserMessage);
+    expect(selected.source).toBe("message_received_cache_queued_startup");
+  });
+
+  it("does not use bare startup boilerplate as a recall query when no recovery cache exists", () => {
+    const selected = __test.selectAutoInjectQuery(
+      {
+        prompt: [
+          "A new session was started via /new or /reset.",
+          "If runtime-provided startup context is included for this first turn, use it before responding to the user.",
+        ].join("\n"),
+        messages: [],
+      },
+      null,
+      420_000,
+      "main-session",
+    );
+
+    expect(selected.query).toBe("");
+    expect(selected.source).toBe("rawPrompt_scrubbed");
+  });
+
   it("does not recover stale cached user text for startup wrappers", () => {
     const nowMs = 200_000;
     const recovered = __test.selectQueuedStartupRecoveryMessage(

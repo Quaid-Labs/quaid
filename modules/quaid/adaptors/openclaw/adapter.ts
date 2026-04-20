@@ -733,6 +733,8 @@ const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 const OPENCLAW_QUEUED_SESSION_START_RE =
   /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
+const OPENCLAW_SESSION_START_BOILERPLATE_RE =
+  /(?:^|\n)\s*A new session was started via \/new or \/reset\.[\s\S]*$/i;
 const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
 const QUEUED_STARTUP_RECOVERY_CACHE_MS = Math.max(
   10_000,
@@ -789,6 +791,7 @@ function scrubAutoInjectQuery(raw: string): string {
   return stripOpenClawInternalContext(raw)
     // Strip queued OC startup wrapper blocks from /new or /reset handoff prompts.
     .replace(OPENCLAW_QUEUED_SESSION_START_RE, "")
+    .replace(OPENCLAW_SESSION_START_BOILERPLATE_RE, "")
     .replace(OPENCLAW_QUEUED_LABEL_RE, "\n")
     // Strip our own prior injections that OC persists back into future turns
     .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
@@ -811,6 +814,7 @@ function isQueuedSessionStartupWrapper(raw: string): boolean {
   const text = String(raw || "");
   if (!text) return false;
   if (OPENCLAW_QUEUED_SESSION_START_RE.test(text)) return true;
+  if (OPENCLAW_SESSION_START_BOILERPLATE_RE.test(text)) return true;
   return /\[Queued messages while agent was busy\]/i.test(text)
     && /A new session was started via \/new or \/reset\./i.test(text);
 }
@@ -988,6 +992,14 @@ function resolveSessionKeyForSessionId(sessionId: string): string {
     if (String((row as any)?.sessionId || "").trim() === sid) {
       return String(key || "").trim();
     }
+  }
+  return "";
+}
+
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
   }
   return "";
 }
@@ -5329,14 +5341,30 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         ).replace(/^\[.*?\]\s*/, "").trim();
         if (rawText.length >= 3 && !rawText.startsWith("/")) {
           const resolvedSessionId = resolveActiveUserSessionId(event, ctx);
-          const originSessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
-          const originSessionKey = String(
-            event?.sessionKey
-            || ctx?.sessionKey
-            || event?.targetSessionKey
-            || ctx?.targetSessionKey
-            || "",
-          ).trim();
+          const originSessionId = firstNonEmptyString(
+            event?.sessionId,
+            ctx?.sessionId,
+            event?.message?.sessionId,
+            event?.session?.id,
+            ctx?.session?.id,
+            event?.context?.sessionId,
+            ctx?.context?.sessionId,
+          );
+          const originSessionKey = firstNonEmptyString(
+            event?.sessionKey,
+            ctx?.sessionKey,
+            event?.targetSessionKey,
+            ctx?.targetSessionKey,
+            event?.message?.sessionKey,
+            event?.message?.targetSessionKey,
+            event?.session?.key,
+            event?.session?.sessionKey,
+            ctx?.session?.key,
+            ctx?.session?.sessionKey,
+            event?.context?.sessionKey,
+            ctx?.context?.sessionKey,
+            resolveSessionKeyForSessionId(originSessionId || resolvedSessionId),
+          );
           const transientOriginValue = [
             originSessionId,
             originSessionKey,

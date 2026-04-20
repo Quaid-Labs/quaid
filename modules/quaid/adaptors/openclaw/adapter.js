@@ -542,6 +542,7 @@ function isAutoInjectEnabled(config = getMemoryConfig()) {
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 const OPENCLAW_QUEUED_SESSION_START_RE = /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
+const OPENCLAW_SESSION_START_BOILERPLATE_RE = /(?:^|\n)\s*A new session was started via \/new or \/reset\.[\s\S]*$/i;
 const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
 const QUEUED_STARTUP_RECOVERY_CACHE_MS = Math.max(
   1e4,
@@ -582,12 +583,13 @@ function stripOpenClawInternalContext(raw) {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
 }
 function scrubAutoInjectQuery(raw) {
-  return stripOpenClawInternalContext(raw).replace(OPENCLAW_QUEUED_SESSION_START_RE, "").replace(OPENCLAW_QUEUED_LABEL_RE, "\n").replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/\n{3,}/g, "\n\n").trim();
+  return stripOpenClawInternalContext(raw).replace(OPENCLAW_QUEUED_SESSION_START_RE, "").replace(OPENCLAW_SESSION_START_BOILERPLATE_RE, "").replace(OPENCLAW_QUEUED_LABEL_RE, "\n").replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 function isQueuedSessionStartupWrapper(raw) {
   const text = String(raw || "");
   if (!text) return false;
   if (OPENCLAW_QUEUED_SESSION_START_RE.test(text)) return true;
+  if (OPENCLAW_SESSION_START_BOILERPLATE_RE.test(text)) return true;
   return /\[Queued messages while agent was busy\]/i.test(text) && /A new session was started via \/new or \/reset\./i.test(text);
 }
 function isOpenClawTransientSessionId(value) {
@@ -712,6 +714,13 @@ function resolveSessionKeyForSessionId(sessionId) {
     if (String(row?.sessionId || "").trim() === sid) {
       return String(key || "").trim();
     }
+  }
+  return "";
+}
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
   }
   return "";
 }
@@ -4257,10 +4266,30 @@ ${notice}` : notice;
         ).replace(/^\[.*?\]\s*/, "").trim();
         if (rawText.length >= 3 && !rawText.startsWith("/")) {
           const resolvedSessionId = resolveActiveUserSessionId(event, ctx);
-          const originSessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
-          const originSessionKey = String(
-            event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || ""
-          ).trim();
+          const originSessionId = firstNonEmptyString(
+            event?.sessionId,
+            ctx?.sessionId,
+            event?.message?.sessionId,
+            event?.session?.id,
+            ctx?.session?.id,
+            event?.context?.sessionId,
+            ctx?.context?.sessionId
+          );
+          const originSessionKey = firstNonEmptyString(
+            event?.sessionKey,
+            ctx?.sessionKey,
+            event?.targetSessionKey,
+            ctx?.targetSessionKey,
+            event?.message?.sessionKey,
+            event?.message?.targetSessionKey,
+            event?.session?.key,
+            event?.session?.sessionKey,
+            ctx?.session?.key,
+            ctx?.session?.sessionKey,
+            event?.context?.sessionKey,
+            ctx?.context?.sessionKey,
+            resolveSessionKeyForSessionId(originSessionId || resolvedSessionId)
+          );
           const transientOriginValue = [
             originSessionId,
             originSessionKey,
