@@ -2792,13 +2792,29 @@ function _readOpenClawPluginState() {
   };
 }
 
-function _ensureOpenClawPluginRegistered(pluginPath) {
-  const state = _readOpenClawPluginState();
-  if (
-    state.extensionExists
+function _openClawPluginDirectRegistrationOk(state) {
+  return !!(
+    state
+    && state.extensionExists
     && state.pluginEnabled
     && state.memorySlotBound
     && state.installPathExists
+  );
+}
+
+function _warnOpenClawPluginListDiagnostic(state, context = "validation") {
+  if (!state || (state.pluginListCheckOk && state.pluginListed)) return;
+  log.warn(
+    `OpenClaw plugins list did not report quaid during ${context}; `
+    + "continuing because direct registration checks passed "
+    + `(pluginListCheckOk=${!!state.pluginListCheckOk}, pluginListed=${!!state.pluginListed}).`
+  );
+}
+
+function _ensureOpenClawPluginRegistered(pluginPath) {
+  const state = _readOpenClawPluginState();
+  if (
+    _openClawPluginDirectRegistrationOk(state)
     && state.pluginListCheckOk
     && state.pluginListed
   ) {
@@ -5178,14 +5194,8 @@ except Exception as e:
 
   if (_isPlatform("openclaw")) {
     const pluginState = _readOpenClawPluginState();
-    if (
-      !pluginState.extensionExists
-      || !pluginState.pluginEnabled
-      || !pluginState.memorySlotBound
-      || !pluginState.installPathExists
-      || !pluginState.pluginListCheckOk
-      || !pluginState.pluginListed
-    ) {
+    const pluginDirectRegistrationOk = _openClawPluginDirectRegistrationOk(pluginState);
+    if (!pluginDirectRegistrationOk) {
       s.stop(C.red("OpenClaw plugin validation failed"));
       throw new Error(
         "OpenClaw Quaid plugin is not fully registered after install "
@@ -5197,6 +5207,7 @@ except Exception as e:
         + `pluginListed=${pluginState.pluginListed})`
       );
     }
+    _warnOpenClawPluginListDiagnostic(pluginState, "post-install validation");
   }
 
   // Clear any deferred notices generated during install (smoke test, janitor

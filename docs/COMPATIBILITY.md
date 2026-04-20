@@ -21,6 +21,11 @@ providing the required hook behavior.
 Fresh installs may also report a non-zero `plugins uninstall quaid --force`
 when no plugin is installed yet; the installer treats an absent `quaid` row in
 `openclaw plugins list` as already-clean state and proceeds.
+Some OpenClaw builds also omit directly registered plugins from
+`openclaw plugins list` after a successful install; Quaid treats that CLI list
+as diagnostic when the extension directory, config entry, memory slot binding,
+and install path confirm the plugin is registered. The installer still runs its
+separate store/recall smoke test before finishing.
 
 ---
 

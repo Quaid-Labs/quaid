@@ -204,6 +204,25 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000)');
   });
 
+  it("OpenClaw validation treats plugin-list visibility as diagnostic after direct registration passes", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function _openClawPluginDirectRegistrationOk(state)");
+    expect(setupText).toContain('log.warn(');
+    expect(setupText).toContain("OpenClaw plugins list did not report quaid during");
+    expect(setupText).toContain("continuing because direct registration checks passed");
+    expect(setupText).toContain("_openClawPluginDirectRegistrationOk(state)");
+    expect(setupText).toContain("&& state.pluginListCheckOk");
+    expect(setupText).toContain("&& state.pluginListed");
+    expect(setupText).toContain("const pluginDirectRegistrationOk = _openClawPluginDirectRegistrationOk(pluginState);");
+    expect(setupText).toContain("if (!pluginDirectRegistrationOk)");
+    const validationIdx = setupText.indexOf("const pluginDirectRegistrationOk = _openClawPluginDirectRegistrationOk(pluginState);");
+    const validationSlice = setupText.slice(validationIdx, setupText.indexOf("_warnOpenClawPluginListDiagnostic(pluginState", validationIdx));
+    expect(validationSlice).not.toContain("!pluginState.pluginListCheckOk");
+    expect(validationSlice).not.toContain("!pluginState.pluginListed");
+  });
+
   it("OpenClaw installer reconciles launchd env for the gateway service", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
