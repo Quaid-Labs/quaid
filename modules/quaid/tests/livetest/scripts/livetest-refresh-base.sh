@@ -89,7 +89,12 @@ chmod +w "$BASE_DISK"
 base_unlocked=1
 
 echo "Copying run disk into base..."
-cp -f "$RUN_DISK" "$BASE_DISK"
+if cp -c "$RUN_DISK" "$BASE_DISK" 2>/dev/null; then
+    echo "  cloned disk with APFS copy-on-write"
+else
+    echo "  APFS clone copy unavailable; falling back to full copy"
+    cp -f "$RUN_DISK" "$BASE_DISK"
+fi
 sync
 
 echo "Re-locking base disk..."
