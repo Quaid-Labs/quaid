@@ -681,6 +681,11 @@ function transcriptPathMatchesSession(sessionId, filePath) {
   const pathSessionId = parseSessionIdFromTranscriptFilePath(filePath);
   return Boolean(sid && (!pathSessionId || pathSessionId === sid));
 }
+function transcriptPathExplicitlyMatchesSession(sessionId, filePath) {
+  const sid = String(sessionId || "").trim();
+  const pathSessionId = parseSessionIdFromTranscriptFilePath(filePath);
+  return Boolean(sid && pathSessionId && pathSessionId === sid);
+}
 function rememberSessionTranscriptPath(sessionId, filePath, source, opts) {
   const sid = String(sessionId || "").trim();
   const candidate = String(filePath || "").trim();
@@ -1170,14 +1175,21 @@ function preferredTranscriptPathForSession(sessionId, preferredPath) {
   const mapped = String(sessionTranscriptPaths.get(sid) || "").trim();
   if (mapped && transcriptPathMatchesSession(sid, mapped)) return mapped;
   const preferred = String(preferredPath || "").trim();
-  if (preferred && transcriptPathMatchesSession(sid, preferred)) {
+  if (preferred && transcriptPathExplicitlyMatchesSession(sid, preferred)) {
     return preferred;
   }
   const physical = getOpenClawSessionFile(sid);
   if (fs.existsSync(physical)) {
     return physical;
   }
-  return preferred || physical;
+  if (preferred) {
+    writeHookTrace("session_index.preferred_transcript_mismatch_skipped", {
+      session_id: sid,
+      preferred_path: preferred,
+      preferred_session_id: parseSessionIdFromTranscriptFilePath(preferred)
+    });
+  }
+  return physical;
 }
 function selectNewKeyFanoutTarget(candidates, opts) {
   const nowMs = Number(opts.nowMs || Date.now());
@@ -1318,12 +1330,31 @@ function selectBestTranscriptCandidate(candidates, opts = {}) {
 }
 function preserveSessionTranscript(sessionId, preferredPath, reason) {
   const candidates = [];
+  const sid = String(sessionId || "").trim();
+  if (!sid) {
+    writeHookTrace("session_index.transcript_preserve_missing", {
+      session_id: "",
+      reason,
+      candidates: []
+    });
+    return null;
+  }
   const preferred = String(preferredPath || "").trim();
   if (preferred) {
-    candidates.push(preferred);
+    if (transcriptPathExplicitlyMatchesSession(sid, preferred)) {
+      candidates.push(preferred);
+    } else {
+      writeHookTrace("session_index.transcript_preserve_candidate_skipped", {
+        session_id: sid,
+        reason,
+        candidate_source: "preferred",
+        candidate_path: preferred,
+        candidate_session_id: parseSessionIdFromTranscriptFilePath(preferred)
+      });
+    }
   }
-  candidates.push(getOpenClawSessionFile(sessionId));
-  const resetBackup = latestResetBackup(sessionId);
+  candidates.push(getOpenClawSessionFile(sid));
+  const resetBackup = latestResetBackup(sid);
   if (resetBackup) {
     candidates.push(resetBackup);
   }
@@ -1333,19 +1364,19 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
   });
   if (!sourcePath) {
     writeHookTrace("session_index.transcript_preserve_missing", {
-      session_id: sessionId,
+      session_id: sid,
       reason,
       candidates: deduped
     });
     return null;
   }
-  const destPath = getPreservedSessionFile(sessionId);
+  const destPath = getPreservedSessionFile(sid);
   try {
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     fs.copyFileSync(sourcePath, destPath);
-    sessionTranscriptPaths.set(sessionId, destPath);
+    sessionTranscriptPaths.set(sid, destPath);
     writeHookTrace("session_index.transcript_preserved", {
-      session_id: sessionId,
+      session_id: sid,
       reason,
       source_path: sourcePath,
       dest_path: destPath
@@ -1353,7 +1384,7 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
     return destPath;
   } catch (err) {
     writeHookTrace("session_index.transcript_preserve_error", {
-      session_id: sessionId,
+      session_id: sid,
       reason,
       source_path: sourcePath,
       error: String(err?.message || err)
@@ -1671,6 +1702,10 @@ function _envTimeoutMs(name, fallbackMs) {
 }
 const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 3e5);
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 3e5);
+const DATASTORE_STATS_TIMEOUT_MS = Math.max(
+  500,
+  Math.min(_envTimeoutMs("QUAID_DATASTORE_STATS_TIMEOUT_MS", 2e3), 1e4)
+);
 function resolveAdapterMemoryDbPath(workspace, instanceId, legacyDbPath) {
   const normalizedInstance = String(instanceId || "").trim();
   return normalizedInstance ? path.join(workspace, "instances", normalizedInstance, "data", "memory.db") : legacyDbPath;
@@ -1705,7 +1740,7 @@ function getDatastoreStatsSync() {
   try {
     const output = execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
-      timeout: 3e4,
+      timeout: DATASTORE_STATS_TIMEOUT_MS,
       env: buildPythonEnv()
     });
     const parsed = JSON.parse(output || "{}");
@@ -2967,10 +3002,11 @@ notify_user(${JSON.stringify(message)})
       try {
         facade.maybeQueueJanitorHealthAlert({ statePath: JANITOR_NUDGE_STATE_PATH });
       } catch (err) {
-        if (isFailHardEnabled2()) {
-          throw err;
-        }
-        console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
+        const message = String(err?.message || err);
+        console.warn(`[quaid] Janitor health alert dispatch failed: ${message}`);
+        writeHookTrace("hook.before_agent_start.janitor_health_failed", {
+          error: message.slice(0, 240)
+        });
       }
       if (timeoutManager) {
         timeoutManager.onAgentStart(resolveActiveUserSessionId(event, ctx));
@@ -4947,11 +4983,22 @@ notify_memory_extraction(
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
-        const extractionSessionId = facade.resolveLifecycleHookSessionId(event, ctx, conversationMessages);
         const preferredTranscriptPath = resolveLifecycleTranscriptPath("reset", event, ctx);
+        const preferredTranscriptSessionId = parseSessionIdFromTranscriptFilePath(preferredTranscriptPath);
+        let extractionSessionId = facade.resolveLifecycleHookSessionId(event, ctx, conversationMessages);
+        if (preferredTranscriptSessionId && preferredTranscriptSessionId !== extractionSessionId && fs.existsSync(preferredTranscriptPath)) {
+          writeHookTrace("hook.before_reset.retargeted_to_transcript", {
+            hook_session_id: String(sessionId || ""),
+            original_extraction_session_id: extractionSessionId || "",
+            transcript_session_id: preferredTranscriptSessionId,
+            preferred_transcript_path: preferredTranscriptPath
+          });
+          extractionSessionId = preferredTranscriptSessionId;
+        }
         writeHookTrace("hook.before_reset.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",
+          preferred_transcript_session_id: preferredTranscriptSessionId || "",
           preferred_transcript_path: preferredTranscriptPath,
           reason: String(reason || "unknown"),
           event_message_count: messages.length,
@@ -4971,7 +5018,11 @@ notify_memory_extraction(
           );
         }
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
-        preserveSessionTranscript(extractionSessionId, preferredTranscriptPath, "before_reset");
+        preserveSessionTranscript(
+          extractionSessionId,
+          preferredTranscriptPathForSession(extractionSessionId, preferredTranscriptPath),
+          "before_reset"
+        );
         const doExtraction = async () => {
           if (isSystemEnabled2("memory")) {
             if (facade.shouldProcessLifecycleSignal(extractionSessionId, {
@@ -5285,6 +5336,8 @@ const __test = {
   isMeaningfulUserTranscriptActivity,
   parseSessionMessagesJsonl,
   rememberSessionTranscriptPath,
+  transcriptPathExplicitlyMatchesSession,
+  preferredTranscriptPathForSession,
   writeDaemonSignal,
   looksLikeQuaidEventLogTranscript,
   preserveSessionTranscript,

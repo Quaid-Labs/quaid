@@ -326,6 +326,46 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("does not preserve a mismatched preferred transcript into the target session", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-mismatch-"));
+    const homeDir = path.join(baseDir, "home");
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawRoot = path.join(homeDir, ".openclaw");
+    const sessionsDir = path.join(openClawRoot, "agents", "main", "sessions");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const oldSessionId = "9ce00000";
+    const newSessionId = "95900000";
+    const oldBackup = path.join(sessionsDir, `${oldSessionId}.jsonl.reset.20260420T074030Z`);
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(oldBackup, `${JSON.stringify({ role: "assistant", content: "old extraction summary" })}\n`, "utf8");
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+
+      expect(isolatedTest.transcriptPathExplicitlyMatchesSession(newSessionId, oldBackup)).toBe(false);
+      expect(isolatedTest.preferredTranscriptPathForSession(newSessionId, oldBackup)).toBe(
+        path.join(sessionsDir, `${newSessionId}.jsonl`),
+      );
+      expect(isolatedTest.preserveSessionTranscript(newSessionId, oldBackup, "before_reset")).toBe(null);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("trusts explicit transcript-update session mappings for physical OC filenames", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-map-"));
     const quaidHome = path.join(baseDir, ".quaid");
