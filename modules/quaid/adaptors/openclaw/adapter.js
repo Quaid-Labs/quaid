@@ -590,6 +590,10 @@ function isQueuedSessionStartupWrapper(raw) {
   if (OPENCLAW_QUEUED_SESSION_START_RE.test(text)) return true;
   return /\[Queued messages while agent was busy\]/i.test(text) && /A new session was started via \/new or \/reset\./i.test(text);
 }
+function isOpenClawTransientSessionId(value) {
+  const sid = String(value || "").trim().toLowerCase();
+  return sid === "slug-generator";
+}
 function selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs = Date.now(), currentSessionId) {
   if (!lastUserMessageQuery) return null;
   const ageMs = nowMs - lastUserMessageQuery.seenAtMs;
@@ -598,8 +602,9 @@ function selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs =
     return null;
   }
   const cachedSessionId = String(lastUserMessageQuery.sessionId || "").trim();
+  const originSessionId = String(lastUserMessageQuery.originSessionId || "").trim();
   const activeSessionId = String(currentSessionId || "").trim();
-  if (cachedSessionId && activeSessionId && cachedSessionId !== activeSessionId) {
+  if (cachedSessionId && activeSessionId && cachedSessionId !== activeSessionId && !isOpenClawTransientSessionId(cachedSessionId) && !isOpenClawTransientSessionId(originSessionId)) {
     return null;
   }
   const eventTextRaw = String(
@@ -748,13 +753,13 @@ function rememberSessionTranscriptPath(sessionId, filePath, source, opts) {
 }
 function isInternalSessionContext(event, ctx) {
   const sessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
-  if (facade.isInternalQuaidSession(sessionId)) {
+  if (facade.isInternalQuaidSession(sessionId) || isOpenClawTransientSessionId(sessionId)) {
     return true;
   }
   const sessionKey = String(
     ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(sessionId)
   ).trim().toLowerCase();
-  return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:"));
+  return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:") || sessionKey === "slug-generator");
 }
 function _scrubTranscriptMessageText(message) {
   const text = String(facade.getMessageText(message) || "").trim();
@@ -4117,7 +4122,8 @@ ${notice}` : notice;
     };
     const resolveActiveUserSessionId = (event, ctx, messages = []) => {
       const direct = facade.resolveLifecycleHookSessionId(event, ctx, messages);
-      if (direct && !isInternalSessionContext(event, { ...ctx || {}, sessionId: direct })) {
+      const directIsInternal = Boolean(direct && isInternalSessionContext(event, { ...ctx || {}, sessionId: direct }));
+      if (direct && !directIsInternal) {
         return direct;
       }
       if (currentInteractiveSession?.sessionId) {
@@ -4130,7 +4136,7 @@ ${notice}` : notice;
           return hint.sessionId;
         }
       }
-      return direct;
+      return directIsInternal ? "" : direct;
     };
     const resolveLifecycleCommandTargetSessionId = (action, event, ctx) => {
       if (action === "new" || action === "reset") {
@@ -4248,12 +4254,21 @@ ${notice}` : notice;
           facade.getMessageText(event?.message || event) || event?.text || event?.content || ""
         ).replace(/^\[.*?\]\s*/, "").trim();
         if (rawText.length >= 3 && !rawText.startsWith("/")) {
-          const sessionId = resolveActiveUserSessionId(event, ctx);
+          const resolvedSessionId = resolveActiveUserSessionId(event, ctx);
+          const originSessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
+          const transientOrigin = isOpenClawTransientSessionId(originSessionId) || isOpenClawTransientSessionId(resolvedSessionId);
+          const sessionId = transientOrigin ? currentInteractiveSession?.sessionId || String(lastTranscriptSessionHint?.sessionId || "").trim() || "" : resolvedSessionId;
           lastUserMessageQuery = {
             text: rawText,
             seenAtMs: Date.now(),
-            ...sessionId ? { sessionId } : {}
+            ...sessionId ? { sessionId } : {},
+            ...transientOrigin ? { originSessionId: originSessionId || resolvedSessionId } : {}
           };
+          writeHookTrace("hook.message_received.user_cache", {
+            session_id: sessionId || "",
+            origin_session_id: transientOrigin ? originSessionId || resolvedSessionId : "",
+            text_len: rawText.length
+          });
         }
       } catch {
       }
@@ -5387,6 +5402,7 @@ const __test = {
   selectAutoInjectQuery,
   isSubagentSessionEntry,
   isSubagentSessionKeyLike,
+  isOpenClawTransientSessionId,
   listRecentResetBackupSessions,
   isImmediateProviderFailure,
   buildImmediateProviderNotice,

@@ -727,7 +727,7 @@ function isAutoInjectEnabled(config: Record<string, any> = getMemoryConfig()): b
   return configured !== false;
 }
 
-type LastUserMessageQuery = { text: string; seenAtMs: number; sessionId?: string } | null;
+type LastUserMessageQuery = { text: string; seenAtMs: number; sessionId?: string; originSessionId?: string } | null;
 
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
@@ -815,6 +815,11 @@ function isQueuedSessionStartupWrapper(raw: string): boolean {
     && /A new session was started via \/new or \/reset\./i.test(text);
 }
 
+function isOpenClawTransientSessionId(value: unknown): boolean {
+  const sid = String(value || "").trim().toLowerCase();
+  return sid === "slug-generator";
+}
+
 function selectQueuedStartupRecoveryMessage(
   event: any,
   lastUserMessageQuery: LastUserMessageQuery,
@@ -828,8 +833,15 @@ function selectQueuedStartupRecoveryMessage(
     return null;
   }
   const cachedSessionId = String(lastUserMessageQuery.sessionId || "").trim();
+  const originSessionId = String(lastUserMessageQuery.originSessionId || "").trim();
   const activeSessionId = String(currentSessionId || "").trim();
-  if (cachedSessionId && activeSessionId && cachedSessionId !== activeSessionId) {
+  if (
+    cachedSessionId
+    && activeSessionId
+    && cachedSessionId !== activeSessionId
+    && !isOpenClawTransientSessionId(cachedSessionId)
+    && !isOpenClawTransientSessionId(originSessionId)
+  ) {
     return null;
   }
 
@@ -1023,7 +1035,7 @@ function rememberSessionTranscriptPath(
 
 function isInternalSessionContext(event: any, ctx: any): boolean {
   const sessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
-  if (facade.isInternalQuaidSession(sessionId)) {
+  if (facade.isInternalQuaidSession(sessionId) || isOpenClawTransientSessionId(sessionId)) {
     return true;
   }
   const sessionKey = String(
@@ -1032,7 +1044,11 @@ function isInternalSessionContext(event: any, ctx: any): boolean {
       || event?.targetSessionKey
       || resolveSessionKeyForSessionId(sessionId)
   ).trim().toLowerCase();
-  return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:"));
+  return Boolean(sessionKey) && (
+    sessionKey.includes("quaid-llm")
+    || sessionKey.includes("openresponses:")
+    || sessionKey === "slug-generator"
+  );
 }
 
 function _scrubTranscriptMessageText(message: any): string {
@@ -5137,7 +5153,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
     const resolveActiveUserSessionId = (event: any, ctx: any, messages: any[] = []): string => {
       const direct = facade.resolveLifecycleHookSessionId(event, ctx, messages);
-      if (direct && !isInternalSessionContext(event, { ...(ctx || {}), sessionId: direct })) {
+      const directIsInternal = Boolean(direct && isInternalSessionContext(event, { ...(ctx || {}), sessionId: direct }));
+      if (direct && !directIsInternal) {
         return direct;
       }
       if (currentInteractiveSession?.sessionId) {
@@ -5150,7 +5167,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return hint.sessionId;
         }
       }
-      return direct;
+      return directIsInternal ? "" : direct;
     };
 
     const resolveLifecycleCommandTargetSessionId = (
@@ -5305,12 +5322,28 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           ""
         ).replace(/^\[.*?\]\s*/, "").trim();
         if (rawText.length >= 3 && !rawText.startsWith("/")) {
-          const sessionId = resolveActiveUserSessionId(event, ctx);
+          const resolvedSessionId = resolveActiveUserSessionId(event, ctx);
+          const originSessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
+          const transientOrigin = isOpenClawTransientSessionId(originSessionId)
+            || isOpenClawTransientSessionId(resolvedSessionId);
+          const sessionId = transientOrigin
+            ? (
+                currentInteractiveSession?.sessionId
+                || String(lastTranscriptSessionHint?.sessionId || "").trim()
+                || ""
+              )
+            : resolvedSessionId;
           lastUserMessageQuery = {
             text: rawText,
             seenAtMs: Date.now(),
             ...(sessionId ? { sessionId } : {}),
+            ...(transientOrigin ? { originSessionId: originSessionId || resolvedSessionId } : {}),
           };
+          writeHookTrace("hook.message_received.user_cache", {
+            session_id: sessionId || "",
+            origin_session_id: transientOrigin ? (originSessionId || resolvedSessionId) : "",
+            text_len: rawText.length,
+          });
         }
       } catch { /* ignore */ }
       await handleSlashLifecycleFromMessage(event, ctx, "message:received");
@@ -6625,6 +6658,7 @@ export const __test = {
   selectAutoInjectQuery,
   isSubagentSessionEntry,
   isSubagentSessionKeyLike,
+  isOpenClawTransientSessionId,
   listRecentResetBackupSessions,
   isImmediateProviderFailure,
   buildImmediateProviderNotice,

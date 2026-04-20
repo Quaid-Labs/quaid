@@ -657,6 +657,31 @@ describe("lifecycle signal detection", () => {
     expect(recovered).toBe(null);
   });
 
+  it("allows queued startup recovery from OpenClaw transient helper sessions", () => {
+    const nowMs = 350_000;
+    const recovered = __test.selectQueuedStartupRecoveryMessage(
+      {
+        prompt: [
+          "[Queued messages while agent was busy]",
+          "---",
+          "Queued #1",
+          "A new session was started via /new or /reset.",
+        ].join("\n"),
+        messages: [],
+      },
+      {
+        text: "Juniper marks the kiln with a cobalt crescent.",
+        seenAtMs: nowMs - 140_000,
+        sessionId: "slug-generator",
+        originSessionId: "slug-generator",
+      },
+      nowMs,
+      "ca574a00",
+    );
+    expect(recovered?.text).toBe("Juniper marks the kiln with a cobalt crescent.");
+    expect(__test.isOpenClawTransientSessionId("slug-generator")).toBe(true);
+  });
+
   it("uses the instance silo db path for adapter python calls", () => {
     expect(__test.resolveAdapterMemoryDbPath(
       "/tmp/quaid-home",
