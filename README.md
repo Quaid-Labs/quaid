@@ -157,7 +157,7 @@ Known limitations for **v0.3.0-alpha**:
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows is not supported. macOS and Linux only.
 - Host integrations are still maturing across platforms; OpenClaw, Claude Code, and Codex are supported today, with broader host coverage still in progress.
-- We have designed quaid LLM first, and have been careful not to special case it against English as much as possible. In theory it should currently work with non-English content as long as the LLM provider works in that language, but this is completely untested.
+- Quaid is designed LLM-first and avoids English-specific special casing where possible. Multilingual support has been tested and the system does work with non-English content when the configured LLM provider supports that language, but coverage is still not thorough. Initial multilingual tests showed a quality regression of about 10 percentage points compared with English lanes.
 
 The system is backed by over 2,500 tests in the default gate (2,236 selected pytest + 333 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus ongoing AgentLife benchmark evaluation.
 
