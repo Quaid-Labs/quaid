@@ -564,6 +564,74 @@ describe("lifecycle signal detection", () => {
     expect(selected.source).toBe("rawPrompt_scrubbed");
   });
 
+  it("recovers the latest user message when a delayed startup wrapper overtakes it", () => {
+    const nowMs = 100_000;
+    const prompt = [
+      "[Queued messages while agent was busy]",
+      "",
+      "---",
+      "Queued #1 (from quaid-test-bot)",
+      "A new session was started via /new or /reset. If runtime-provided startup context is included for this first turn, use it before responding to the user.",
+      "Current time: Friday, April 17th, 2026 - 2:51 AM (UTC) / 2026-04-17 02:51 UTC",
+    ].join("\n");
+    const latestUserMessage = "Juniper runs a ceramics studio and uses a gas kiln.";
+    const cached = { text: latestUserMessage, seenAtMs: nowMs - 47_000 };
+
+    const selected = __test.selectAutoInjectQuery(
+      { prompt, messages: [] },
+      cached,
+      nowMs,
+    );
+    expect(selected.query).toBe(latestUserMessage);
+    expect(selected.source).toBe("message_received_cache_queued_startup");
+
+    const recovered = __test.selectQueuedStartupRecoveryMessage(
+      { prompt, messages: [] },
+      cached,
+      nowMs,
+    );
+    const override = __test.buildQueuedStartupUserMessageOverride(recovered);
+    expect(override).toContain("delayed /new or /reset startup wrapper");
+    expect(override).toContain(latestUserMessage);
+  });
+
+  it("does not recover stale cached user text for startup wrappers", () => {
+    const nowMs = 200_000;
+    const recovered = __test.selectQueuedStartupRecoveryMessage(
+      {
+        prompt: [
+          "[Queued messages while agent was busy]",
+          "---",
+          "Queued #1",
+          "A new session was started via /new or /reset.",
+        ].join("\n"),
+        messages: [],
+      },
+      { text: "This should be too old to replay.", seenAtMs: nowMs - 121_000 },
+      nowMs,
+    );
+    expect(recovered).toBe(null);
+  });
+
+  it("does not recover cached user text from a different session", () => {
+    const nowMs = 300_000;
+    const recovered = __test.selectQueuedStartupRecoveryMessage(
+      {
+        prompt: [
+          "[Queued messages while agent was busy]",
+          "---",
+          "Queued #1",
+          "A new session was started via /new or /reset.",
+        ].join("\n"),
+        messages: [],
+      },
+      { text: "Prior session message should not replay.", seenAtMs: nowMs - 20_000, sessionId: "old-session" },
+      nowMs,
+      "new-session",
+    );
+    expect(recovered).toBe(null);
+  });
+
   it("uses the instance silo db path for adapter python calls", () => {
     expect(__test.resolveAdapterMemoryDbPath(
       "/tmp/quaid-home",
