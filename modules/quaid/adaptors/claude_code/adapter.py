@@ -65,6 +65,10 @@ class ClaudeCodeAdapter(QuaidAdapter):
         r"<command-name>\s*(/(?:new|clear|reset|restart))\b.*?</command-name>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _SESSION_ID_FROM_TRANSCRIPT_RE = re.compile(
+        r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8,})",
+        flags=re.IGNORECASE,
+    )
     """Adapter for running Quaid inside Claude Code sessions."""
 
     def __init__(self, home: Optional[Path] = None):
@@ -403,6 +407,118 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def get_sessions_dir(self) -> Optional[Path]:
         d = Path.home() / ".claude" / "projects"
         return d if d.is_dir() else None
+
+    def get_session_path(self, session_id: str) -> Optional[Path]:
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return None
+        sessions_dir = self.get_sessions_dir()
+        if sessions_dir is None:
+            return None
+        direct = sessions_dir / f"{session_id}.jsonl"
+        if direct.is_file():
+            return direct
+        matches = sorted(
+            sessions_dir.rglob(f"*{session_id}*.jsonl"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        return matches[0] if matches else None
+
+    def _session_transition_state_path(self) -> Path:
+        return self.data_dir() / "claude-code-last-session.json"
+
+    def _read_session_transition_state(self) -> dict:
+        path = self._session_transition_state_path()
+        if not path.is_file():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _write_session_transition_state(self, session_id: str, transcript_path: str = "") -> None:
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return
+        path = self._session_transition_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "transcript_path": str(transcript_path or "").strip(),
+                },
+                indent=2,
+                sort_keys=True,
+            ) + "\n",
+            encoding="utf-8",
+        )
+
+    def _extract_hook_session_id(self, hook_input) -> str:
+        if not isinstance(hook_input, dict):
+            return ""
+        for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id"):
+            value = str(hook_input.get(key) or "").strip()
+            if value:
+                return value
+        transcript_path = str(hook_input.get("transcript_path") or "").strip()
+        if transcript_path:
+            match = self._SESSION_ID_FROM_TRANSCRIPT_RE.search(Path(transcript_path).name)
+            if match:
+                return match.group(1)
+        return ""
+
+    def _transition_command_for_hook(self, hook_input: dict) -> str:
+        command = self._scan_lifecycle_candidates(hook_input)
+        if command:
+            return command
+        source = " ".join(
+            str(hook_input.get(key) or "")
+            for key in ("source", "reason", "hook_event_name", "hookEventName")
+        ).lower()
+        if "clear" in source or "reset" in source:
+            return "/clear"
+        return "/new"
+
+    def check_session_transition(self, hook_input: dict) -> Optional[dict]:
+        """Detect Claude Code transcript rotation, including /clear and /reset.
+
+        Claude Code can handle /clear and /reset without sending a
+        UserPromptSubmit hook for the old transcript. It starts a new transcript
+        with SessionStart:clear instead, so SessionStart must flush the previous
+        transcript that accumulated rolling state.
+        """
+        if not isinstance(hook_input, dict):
+            return None
+        current_id = self._extract_hook_session_id(hook_input)
+        if not current_id:
+            return None
+
+        current_tx = str(hook_input.get("transcript_path") or "").strip()
+        last = self._read_session_transition_state()
+        last_id = str(last.get("session_id") or "").strip()
+        last_tx = str(last.get("transcript_path") or "").strip()
+        self._write_session_transition_state(current_id, current_tx)
+
+        if not last_id or last_id == current_id:
+            return None
+        if not last_tx or not Path(last_tx).is_file():
+            resolved = self.get_session_path(last_id)
+            last_tx = str(resolved) if resolved else ""
+        if not last_tx:
+            return None
+        return {
+            "ended_session_id": last_id,
+            "ended_transcript_path": last_tx,
+            "signal_type": "session_end",
+            "meta": {
+                "source": "session_transition",
+                "command": self._transition_command_for_hook(hook_input),
+                "reason": "session_start_transition",
+            },
+        }
 
     @classmethod
     def _extract_lifecycle_command(cls, text: str) -> str:

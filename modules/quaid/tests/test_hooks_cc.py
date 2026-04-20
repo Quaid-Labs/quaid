@@ -92,13 +92,13 @@ def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
     """
     from core.interface import hooks
 
-    stdin_text = json.dumps(hook_input)
     captured_out = io.StringIO()
     captured_err = io.StringIO()
 
     rules_file = rules_dir / "quaid-projects.md"
+    monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
 
-    with patch("core.interface.hooks.sys.stdin", io.StringIO(stdin_text)), \
+    with patch("core.interface.hooks._read_stdin_json", return_value=hook_input), \
          patch("core.interface.hooks.sys.stdout", captured_out), \
          patch("core.interface.hooks.sys.stderr", captured_err):
         hooks.hook_session_init(MagicMock())
@@ -240,6 +240,95 @@ def test_claude_code_inject_writes_session_end_signal_for_empty_prompt_reset_met
     assert sig["meta"]["command"] == "/reset"
     assert sig["meta"]["reason"] == "command:reset"
     assert err.strip() == ""
+
+
+def test_claude_code_session_start_clear_queues_prior_session_signal(
+    monkeypatch, tmp_path, cursor_dir
+):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    quaid_home = tmp_path / ".quaid"
+    monkeypatch.setenv("QUAID_HOME", str(quaid_home))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    transcript_dir = tmp_path / ".claude" / "projects" / "-private-tmp-cc-livetest"
+    transcript_dir.mkdir(parents=True)
+    old_transcript = transcript_dir / "32c388db-old.jsonl"
+    new_transcript = transcript_dir / "2d29284b-new.jsonl"
+    old_transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "M11 seed fact."}}) + "\n",
+        encoding="utf-8",
+    )
+    new_transcript.write_text(
+        json.dumps(
+            {
+                "type": "system",
+                "subtype": "SessionStart",
+                "source": "clear",
+                "message": {"content": "<command-name>/clear</command-name>"},
+            }
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = ClaudeCodeAdapter(home=quaid_home)
+    assert adapter.check_session_transition(
+        {
+            "session_id": "32c388db",
+            "transcript_path": str(old_transcript),
+            "cwd": str(tmp_path),
+        }
+    ) is None
+
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    rules_dir = tmp_path / "rules"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+    rules_dir.mkdir()
+
+    written_signals = []
+
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-session-end.json")
+
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
+    monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
+    monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+
+    _run_hook_session_init(
+        {
+            "session_id": "2d29284b",
+            "transcript_path": str(new_transcript),
+            "cwd": str(tmp_path),
+            "source": "clear",
+        },
+        monkeypatch=monkeypatch,
+        rules_dir=rules_dir,
+    )
+
+    assert len(written_signals) == 1
+    sig = written_signals[0]
+    assert sig["signal_type"] == "session_end"
+    assert sig["session_id"] == "32c388db"
+    assert sig["transcript_path"] == str(old_transcript)
+    assert sig["adapter"] == "claude-code"
+    assert sig["supports_compaction_control"] is False
+    assert sig["meta"]["source"] == "session_transition"
+    assert sig["meta"]["command"] == "/clear"
+    assert sig["meta"]["reason"] == "session_start_transition"
 
 
 # ---------------------------------------------------------------------------
