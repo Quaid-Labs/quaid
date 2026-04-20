@@ -48,6 +48,65 @@ def test_supervisor_stops_removed_instance_monitor(monkeypatch):
     assert known == {}
 
 
+def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+
+    captured = {}
+
+    class _FakePopen:
+        pid = 12345
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
+    monkeypatch.setenv(
+        "MEMORY_ARCHIVE_DB_PATH",
+        str(tmp_path / "instances" / "openclaw-main" / "data" / "memory_archive.db"),
+    )
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    monkeypatch.setattr(supervisor, "_wait_for_instance_pid", lambda _name, pid: pid)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", _FakePopen)
+
+    assert supervisor._start_instance_monitor("codex-private-tmp-cdx-livetest") == 12345
+
+    env = captured["env"]
+    assert "MEMORY_DB_PATH" not in env
+    assert "MEMORY_ARCHIVE_DB_PATH" not in env
+    assert env["QUAID_HOME"] == str(tmp_path)
+    assert env["QUAID_INSTANCE"] == "codex-private-tmp-cdx-livetest"
+    assert env["QUAID_DAEMON"] == "1"
+
+
+def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
+    monkeypatch.setenv(
+        "MEMORY_ARCHIVE_DB_PATH",
+        str(tmp_path / "instances" / "openclaw-main" / "data" / "memory_archive.db"),
+    )
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", _FakePopen)
+
+    supervisor._start_janitor_worker("claude-code-private-tmp-cc-livetest")
+
+    env = captured["env"]
+    assert "MEMORY_DB_PATH" not in env
+    assert "MEMORY_ARCHIVE_DB_PATH" not in env
+    assert env["QUAID_HOME"] == str(tmp_path)
+    assert env["QUAID_INSTANCE"] == "claude-code-private-tmp-cc-livetest"
+
+
 def test_janitor_worker_throttles_per_instance(monkeypatch):
     from core import project_docs_supervisor as supervisor
 

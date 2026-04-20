@@ -25,6 +25,7 @@ from core.project_registry import list_projects
 from lib.instance import list_instances, quaid_home, validate_instance_id
 
 _STOP = False
+_INSTANCE_DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
 
 
 def _handle_stop(_signum, _frame) -> None:
@@ -62,6 +63,20 @@ def _pid_alive(pid: int) -> bool:
 
 def _instance_root(instance: str) -> Path:
     return quaid_home() / "instances" / validate_instance_id(instance)
+
+
+def _instance_child_env(instance: str, *, daemon: bool = False) -> dict[str, str]:
+    """Build an env for a supervisor-owned per-instance child process."""
+    name = validate_instance_id(instance)
+    env = dict(os.environ)
+    for key in _INSTANCE_DB_OVERRIDE_ENV_KEYS:
+        env.pop(key, None)
+    env["QUAID_HOME"] = str(quaid_home())
+    env["QUAID_INSTANCE"] = name
+    env["QUAID_SUPERVISOR_PID"] = str(os.getpid())
+    if daemon:
+        env["QUAID_DAEMON"] = "1"
+    return env
 
 
 def _instance_daemon_pid_path(instance: str) -> Path:
@@ -131,11 +146,7 @@ def _start_instance_monitor(instance: str) -> int:
     if existing is not None:
         return existing
     script = Path(__file__).parent / "extraction_daemon.py"
-    env = dict(os.environ)
-    env["QUAID_HOME"] = str(quaid_home())
-    env["QUAID_INSTANCE"] = name
-    env["QUAID_DAEMON"] = "1"
-    env["QUAID_SUPERVISOR_PID"] = str(os.getpid())
+    env = _instance_child_env(name, daemon=True)
     with _instance_daemon_log_path(name).open("ab") as log_fh:
         proc = subprocess.Popen(
             [sys.executable, str(script), "_worker"],
@@ -184,10 +195,7 @@ def _janitor_check_interval_seconds() -> float:
 def _start_janitor_worker(instance: str) -> subprocess.Popen:
     name = validate_instance_id(instance)
     script = Path(__file__).parent / "janitor_worker.py"
-    env = dict(os.environ)
-    env["QUAID_HOME"] = str(quaid_home())
-    env["QUAID_INSTANCE"] = name
-    env["QUAID_SUPERVISOR_PID"] = str(os.getpid())
+    env = _instance_child_env(name)
     with _janitor_worker_log_path(name).open("ab") as log_fh:
         return subprocess.Popen(
             [sys.executable, str(script), "scheduler-once"],

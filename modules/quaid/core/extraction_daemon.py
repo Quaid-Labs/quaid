@@ -4107,7 +4107,7 @@ def start_daemon() -> int:
 
         # Strip host-adapter env vars that must not be inherited by the daemon.
         _skip_prefixes = ("OPENCLAW_",)
-        _skip_keys = {"CLAUDE_CODE_OAUTH_TOKEN"}
+        _skip_keys = {"CLAUDE_CODE_OAUTH_TOKEN", "MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH"}
         env = {
             k: v for k, v in os.environ.items()
             if not any(k.startswith(p) for p in _skip_prefixes)

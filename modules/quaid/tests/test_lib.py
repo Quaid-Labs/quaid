@@ -225,6 +225,39 @@ class TestLibConfigPaths:
             assert get_db_path() == fake_home / "db" / "main.db"
             assert get_archive_db_path() == fake_home / "db" / "archive.db"
 
+    def test_env_db_path_rejects_other_instance_memory_db(self, tmp_path):
+        from lib.config import get_db_path
+
+        quaid_home = tmp_path / "quaid-home"
+        other_db = quaid_home / "instances" / "openclaw-main" / "data" / "memory.db"
+        with patch.dict(
+            os.environ,
+            {
+                "QUAID_HOME": str(quaid_home),
+                "QUAID_INSTANCE": "codex-private-tmp-cdx-livetest",
+                "MEMORY_DB_PATH": str(other_db),
+            },
+            clear=False,
+        ):
+            with pytest.raises(RuntimeError, match="cross-instance memory database"):
+                get_db_path()
+
+    def test_env_db_path_allows_current_instance_memory_db(self, tmp_path):
+        from lib.config import get_db_path
+
+        quaid_home = tmp_path / "quaid-home"
+        db_path = quaid_home / "instances" / "codex-private-tmp-cdx-livetest" / "data" / "memory.db"
+        with patch.dict(
+            os.environ,
+            {
+                "QUAID_HOME": str(quaid_home),
+                "QUAID_INSTANCE": "codex-private-tmp-cdx-livetest",
+                "MEMORY_DB_PATH": str(db_path),
+            },
+            clear=False,
+        ):
+            assert get_db_path() == db_path
+
     def test_config_db_paths_expand_user(self, tmp_path):
         from lib.config import get_db_path, get_archive_db_path
 

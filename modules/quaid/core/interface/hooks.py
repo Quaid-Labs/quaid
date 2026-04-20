@@ -34,6 +34,19 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
+_DAEMON_START_SKIP_ENV_KEYS = {
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "MEMORY_DB_PATH",
+    "MEMORY_ARCHIVE_DB_PATH",
+}
+
+
+def _daemon_start_env() -> dict[str, str]:
+    return {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("OPENCLAW_") and k not in _DAEMON_START_SKIP_ENV_KEYS
+    }
+
 _CODEX_TOOL_OUTPUT_KEYS = (
     "tool_output",
     "toolOutput",
@@ -708,10 +721,7 @@ def hook_inject(args):
                 })
                 try:
                     _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-                    _env = {
-                        k: v for k, v in os.environ.items()
-                        if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
-                    }
+                    _env = _daemon_start_env()
                     subprocess.Popen(
                         [sys.executable, str(_daemon_script), "start"],
                         start_new_session=True,
@@ -757,10 +767,7 @@ def hook_inject(args):
 
                 try:
                     _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-                    _env = {
-                        k: v for k, v in os.environ.items()
-                        if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
-                    }
+                    _env = _daemon_start_env()
                     subprocess.Popen(
                         [sys.executable, str(_daemon_script), "start"],
                         start_new_session=True,
@@ -1724,10 +1731,7 @@ def hook_extract(args):
         # cancellation cannot interrupt daemon startup.
         try:
             _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-            _env = {
-                k: v for k, v in os.environ.items()
-                if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
-            }
+            _env = _daemon_start_env()
             subprocess.Popen(
                 [sys.executable, str(_daemon_script), "start"],
                 start_new_session=True,
@@ -1813,10 +1817,7 @@ def hook_codex_stop(args):
         # Best-effort daemon wakeup using the same detached launcher strategy as hook_extract.
         try:
             _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-            _env = {
-                k: v for k, v in os.environ.items()
-                if not k.startswith("OPENCLAW_") and k != "CLAUDE_CODE_OAUTH_TOKEN"
-            }
+            _env = _daemon_start_env()
             subprocess.Popen(
                 [sys.executable, str(_daemon_script), "start"],
                 start_new_session=True,

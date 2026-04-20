@@ -194,6 +194,11 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
+    monkeypatch.setenv(
+        "MEMORY_ARCHIVE_DB_PATH",
+        str(tmp_path / "instances" / "openclaw-main" / "data" / "memory_archive.db"),
+    )
     monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
     monkeypatch.setattr(extraction_daemon, "_log_path", lambda: tmp_path / "daemon.log")
     monkeypatch.setattr(extraction_daemon.subprocess, "Popen", _FakePopen)
@@ -206,6 +211,8 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     assert captured["env"]["QUAID_HOME"] == str(tmp_path / "home")
     assert captured["env"]["QUAID_INSTANCE"] == "codex-livetest"
     assert captured["env"]["QUAID_DAEMON"] == "1"
+    assert "MEMORY_DB_PATH" not in captured["env"]
+    assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
 
 
 def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(monkeypatch, tmp_path):
