@@ -1194,7 +1194,9 @@ class DocsRegistry:
                         continue
                     if file_path in sources:
                         project = row["project"]
-                        return project if _docs_project_visible_to_current_instance(project) else None
+                        if _docs_project_visible_to_current_instance(project):
+                            return project
+                        continue
                 except (json.JSONDecodeError, KeyError):
                     continue
         return None
@@ -1819,6 +1821,8 @@ class DocsRegistry:
         with get_connection(self.db_path) as conn:
             rows = conn.execute("SELECT id, file_path, project FROM doc_registry WHERE state = 'active'").fetchall()
             for row in rows:
+                if not _docs_project_visible_to_current_instance(row["project"]):
+                    continue
                 abs_path = self._resolve_path(row["file_path"])
                 if not abs_path.exists():
                     removed.append({"id": row["id"], "file_path": row["file_path"], "project": row["project"]})

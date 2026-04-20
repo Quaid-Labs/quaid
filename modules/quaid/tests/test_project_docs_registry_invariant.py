@@ -167,8 +167,11 @@ def test_docs_registry_scopes_lists_and_reads_to_current_instance(project_regist
 
     cdx_doc = cdx_project_dir / "PROJECT.md"
     cc_doc = cc_project_dir / "PROJECT.md"
+    shared_source = visible_home / "src" / "shared.py"
     cdx_doc.write_text("# Quaid Live Src\n", encoding="utf-8")
     cc_doc.write_text("# Quaid CLI Tool\n", encoding="utf-8")
+    shared_source.parent.mkdir(parents=True, exist_ok=True)
+    shared_source.write_text("VALUE = 1\n", encoding="utf-8")
 
     monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
     register(
@@ -189,8 +192,8 @@ def test_docs_registry_scopes_lists_and_reads_to_current_instance(project_regist
     registry = DocsRegistry(seed_projects=False)
     with get_connection(registry.db_path) as conn:
         for name, label, project_dir, source_root, doc_path in (
-            ("quaid-live-src", "Quaid Live Src", cdx_project_dir, cdx_source_root, cdx_doc),
             ("quaid-cli-tool", "Quaid CLI Tool", cc_project_dir, cc_source_root, cc_doc),
+            ("quaid-live-src", "Quaid Live Src", cdx_project_dir, cdx_source_root, cdx_doc),
         ):
             conn.execute(
                 """
@@ -210,23 +213,42 @@ def test_docs_registry_scopes_lists_and_reads_to_current_instance(project_regist
             )
             conn.execute(
                 """
-                INSERT INTO doc_registry (file_path, project, asset_type, title, state, registered_by)
-                VALUES (?, ?, 'doc', ?, 'active', 'test')
+                INSERT INTO doc_registry
+                    (file_path, project, asset_type, title, state, registered_by, source_files, auto_update)
+                VALUES (?, ?, 'doc', ?, 'active', 'test', ?, 1)
                 """,
-                (str(doc_path), name, "Project Guide"),
+                (str(doc_path), name, "Project Guide", json.dumps([str(shared_source)])),
             )
+        conn.execute(
+            """
+            INSERT INTO doc_registry (file_path, project, asset_type, title, state, registered_by)
+            VALUES (?, ?, 'doc', ?, 'active', 'test')
+            """,
+            (str(cc_project_dir / "MISSING.md"), "quaid-cli-tool", "Hidden Missing"),
+        )
 
     assert [doc["project"] for doc in registry.list_docs()] == ["quaid-live-src"]
     visible_project_names = {project["name"] for project in registry.list_projects()}
     assert "quaid-live-src" in visible_project_names
     assert "quaid-cli-tool" not in visible_project_names
     assert registry.get(str(cc_doc)) is None
+    assert registry.find_project_by_source_file(str(shared_source)) == "quaid-live-src"
 
     # A hidden exact-title match must not shadow the visible project document.
     read_entry = registry.read("Project Guide")
     assert read_entry is not None
     assert read_entry["project"] == "quaid-live-src"
     assert read_entry["file_path"] == str(cdx_doc)
+
+    gc_result = registry.gc(dry_run=False)
+    assert gc_result["removed"] == []
+    with get_connection(registry.db_path) as conn:
+        hidden_row = conn.execute(
+            "SELECT state FROM doc_registry WHERE project = ? AND file_path = ?",
+            ("quaid-cli-tool", str(cc_project_dir / "MISSING.md")),
+        ).fetchone()
+    assert hidden_row is not None
+    assert hidden_row["state"] == "active"
 
 
 def test_project_show_reconciles_doc_registry_only_external_project(project_registry_env):
