@@ -826,6 +826,26 @@ class TestDocsSearchFiltering:
         assert hint.get("type") == "unlinked_project_candidates"
         assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
 
+    def test_linked_project_scope_fails_closed_when_reconcile_fails(self, tmp_path):
+        from datastore.docsdb import rag as rag_module
+
+        with patch("datastore.docsdb.registry.DocsRegistry", side_effect=RuntimeError("registry boom")), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
+             patch("lib.instance.instance_id", return_value="claude-code-private-tmp-cc-livetest"):
+            linked, resolved = rag_module._linked_projects_for_current_instance()
+
+        assert linked == []
+        assert resolved is True
+
+    def test_linked_project_scope_raises_under_failhard_when_reconcile_fails(self, tmp_path):
+        from datastore.docsdb import rag as rag_module
+
+        with patch("datastore.docsdb.registry.DocsRegistry", side_effect=RuntimeError("registry boom")), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             patch("lib.instance.instance_id", return_value="claude-code-private-tmp-cc-livetest"), \
+             pytest.raises(RuntimeError, match="Failed to resolve current instance project scope"):
+            rag_module._linked_projects_for_current_instance()
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)

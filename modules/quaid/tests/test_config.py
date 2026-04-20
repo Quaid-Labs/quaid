@@ -662,13 +662,70 @@ class TestConfigPathResolution:
             config_file.write_text(json.dumps({}))
 
             with patch.object(config, "_config_paths", lambda: [config_file]), \
-                 patch("lib.config.get_db_path", return_value=db_path):
+                 patch("lib.config.get_docs_db_path", return_value=db_path):
                 cfg = load_config()
 
             loaded = cfg.projects.definitions["db-proj"]
             assert loaded.source_roots == []
             assert loaded.patterns == ["*.md"]
             assert loaded.exclude == []
+        finally:
+            config._config = old_config
+
+    def test_loads_project_definitions_from_shared_docs_db(self, tmp_path, monkeypatch):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            docs_db_path = tmp_path / "shared" / "data" / "docs.db"
+            docs_db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(docs_db_path)
+            conn.execute(
+                """
+                CREATE TABLE project_definitions (
+                    name TEXT PRIMARY KEY,
+                    label TEXT,
+                    home_dir TEXT,
+                    source_roots TEXT,
+                    auto_index INTEGER,
+                    patterns TEXT,
+                    exclude TEXT,
+                    description TEXT,
+                    state TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO project_definitions
+                (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "shared-docs-proj",
+                    "Shared Docs Project",
+                    "projects/shared-docs-proj/",
+                    "[]",
+                    1,
+                    '["*.md"]',
+                    "[]",
+                    "from shared docs db",
+                    "active",
+                ),
+            )
+            conn.commit()
+            conn.close()
+            monkeypatch.setenv("DOCS_DB_PATH", str(docs_db_path))
+
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({}))
+
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+
+            loaded = cfg.projects.definitions["shared-docs-proj"]
+            assert loaded.label == "Shared Docs Project"
+            assert loaded.description == "from shared docs db"
         finally:
             config._config = old_config
 
@@ -695,7 +752,7 @@ class TestConfigPathResolution:
             }))
 
             with patch.object(config, "_config_paths", lambda: [config_file]), \
-                 patch("lib.config.get_db_path", return_value=tmp_path / "missing.db"):
+                 patch("lib.config.get_docs_db_path", return_value=tmp_path / "missing.db"):
                 cfg = load_config()
 
             loaded = cfg.projects.definitions["json-proj"]

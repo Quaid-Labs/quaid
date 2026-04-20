@@ -327,6 +327,32 @@ def _is_active_project_context(project_dir: Path, registry_entry: Dict[str, Any]
     return any(_path_contains(candidate, cwd) for candidate in candidates)
 
 
+def _current_quaid_instance_id() -> str:
+    raw = os.environ.get("QUAID_INSTANCE", "").strip()
+    if raw:
+        return raw
+    try:
+        from lib.instance import instance_id as _instance_id
+
+        return str(_instance_id() or "").strip()
+    except Exception:
+        return ""
+
+
+def _project_is_linked_to_current_instance(project_name: str, registry_entry: Dict[str, Any]) -> bool:
+    """Return whether a registry project is visible to the active instance."""
+    current_instance = _current_quaid_instance_id()
+    if not current_instance:
+        return True
+    name = str(project_name or "").strip()
+    if name.startswith("misc--") and name != f"misc--{current_instance}":
+        return False
+    instances = (registry_entry or {}).get("instances")
+    if isinstance(instances, list):
+        return current_instance in {str(item).strip() for item in instances}
+    return False
+
+
 def _project_catalog_section(
     project_name: str,
     project_dir: Path,
@@ -618,18 +644,29 @@ def _infer_docs_project_from_cwd(cwd: str) -> str | None:
         best_match = None
         best_prefix_len = -1
         for project_name, entry in (_list_projects() or {}).items():
-            canonical_path = str((entry or {}).get("canonical_path") or "").strip()
-            if not canonical_path:
+            if not _project_is_linked_to_current_instance(str(project_name), entry or {}):
                 continue
-            try:
-                candidate = Path(canonical_path).resolve()
-            except Exception:
-                candidate = Path(canonical_path)
-            prefix = str(candidate)
-            if str(source_path) == prefix or str(source_path).startswith(prefix + os.sep):
-                if len(prefix) > best_prefix_len:
-                    best_prefix_len = len(prefix)
-                    best_match = str(project_name).strip()
+            candidates: List[Path] = []
+            for key in ("canonical_path", "source_root"):
+                raw_path = str((entry or {}).get(key) or "").strip()
+                if raw_path:
+                    candidates.append(Path(raw_path))
+            source_roots = (entry or {}).get("source_roots")
+            if isinstance(source_roots, list):
+                for raw_path in source_roots:
+                    value_path = str(raw_path or "").strip()
+                    if value_path:
+                        candidates.append(Path(value_path))
+            for raw_candidate in candidates:
+                try:
+                    candidate = raw_candidate.resolve()
+                except Exception:
+                    candidate = raw_candidate
+                prefix = str(candidate)
+                if str(source_path) == prefix or str(source_path).startswith(prefix + os.sep):
+                    if len(prefix) > best_prefix_len:
+                        best_prefix_len = len(prefix)
+                        best_match = str(project_name).strip()
         return best_match or None
     except Exception as exc:
         logger.debug("docs project hint inference failed cwd=%s: %s", value, exc)

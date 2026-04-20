@@ -1114,6 +1114,50 @@ class TestHookInjectRecallResilience:
         assert "[Quaid Project Docs: cross-live-test]" in context
         assert "Ember Glass means pager escalation level 2" in context
 
+    def test_project_docs_hint_ignores_other_instance_misc_projects(self, tmp_path, monkeypatch):
+        from core.interface import hooks
+
+        current_root = tmp_path / "cc-livetest"
+        other_root = tmp_path / "oc-livetest"
+        current_root.mkdir()
+        other_root.mkdir()
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+
+        projects = {
+            "misc--openclaw-main": {
+                "canonical_path": str(other_root),
+                "instances": ["openclaw-main"],
+            },
+            "misc--claude-code-private-tmp-cc-livetest": {
+                "canonical_path": str(current_root),
+                "instances": ["claude-code-private-tmp-cc-livetest"],
+            },
+        }
+
+        with patch("core.project_registry.list_projects", return_value=projects):
+            assert hooks._infer_docs_project_from_cwd(str(other_root / "hello.py")) is None
+            assert hooks._infer_docs_project_from_cwd(str(current_root / "hello.py")) == (
+                "misc--claude-code-private-tmp-cc-livetest"
+            )
+
+    def test_project_docs_hint_uses_current_instance_source_root(self, tmp_path, monkeypatch):
+        from core.interface import hooks
+
+        source_root = tmp_path / "src" / "phase4"
+        source_root.mkdir(parents=True)
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+
+        projects = {
+            "phase4": {
+                "canonical_path": str(tmp_path / "projects" / "phase4"),
+                "source_root": str(source_root),
+                "instances": ["claude-code-private-tmp-cc-livetest"],
+            },
+        }
+
+        with patch("core.project_registry.list_projects", return_value=projects):
+            assert hooks._infer_docs_project_from_cwd(str(source_root / "hello.py")) == "phase4"
+
     def test_project_docs_search_falls_back_to_unscoped_when_cwd_hint_missing(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

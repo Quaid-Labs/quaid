@@ -1326,40 +1326,44 @@ def _load_config_inner() -> MemoryConfig:
         journal=journal,
     )
 
-    # Parse projects config — load definitions from DB (source of truth)
-    # Direct DB query avoids DocsRegistry side effects (seeding, WORKSPACE dependency)
+    # Parse projects config — load definitions from the shared docs DB (source of truth).
+    # Direct DB query avoids DocsRegistry side effects (seeding, WORKSPACE dependency).
     raw_projects = raw_config.get('projects', {})
     project_definitions = {}
     try:
-        from lib.config import get_db_path as _get_db_path
+        from lib.config import get_docs_db_path as _get_docs_db_path
         from lib.database import get_connection as _get_conn
-        _db = _get_db_path()
+        _db = _get_docs_db_path()
         if _db.exists():
             with _get_conn(_db) as _conn:
-                _rows = _conn.execute(
-                    "SELECT * FROM project_definitions WHERE state = 'active'"
-                ).fetchall()
-                for _row in _rows:
-                    project_definitions[_row["name"]] = ProjectDefinition(
-                        label=_row["label"],
-                        home_dir=_row["home_dir"],
-                        source_roots=_decode_json_list(
-                            _row["source_roots"],
-                            field_name="project_definitions.source_roots",
-                        ),
-                        auto_index=bool(_row["auto_index"]),
-                        patterns=_decode_json_list(
-                            _row["patterns"],
-                            field_name="project_definitions.patterns",
-                            default=["*.md"],
-                        ),
-                        exclude=_decode_json_list(
-                            _row["exclude"],
-                            field_name="project_definitions.exclude",
-                        ),
-                        description=_row["description"] or "",
-                        state=_row["state"],
-                    )
+                _has_table = _conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_definitions'"
+                ).fetchone()
+                if _has_table:
+                    _rows = _conn.execute(
+                        "SELECT * FROM project_definitions WHERE state = 'active'"
+                    ).fetchall()
+                    for _row in _rows:
+                        project_definitions[_row["name"]] = ProjectDefinition(
+                            label=_row["label"],
+                            home_dir=_row["home_dir"],
+                            source_roots=_decode_json_list(
+                                _row["source_roots"],
+                                field_name="project_definitions.source_roots",
+                            ),
+                            auto_index=bool(_row["auto_index"]),
+                            patterns=_decode_json_list(
+                                _row["patterns"],
+                                field_name="project_definitions.patterns",
+                                default=["*.md"],
+                            ),
+                            exclude=_decode_json_list(
+                                _row["exclude"],
+                                field_name="project_definitions.exclude",
+                            ),
+                            description=_row["description"] or "",
+                            state=_row["state"],
+                        )
     except Exception as exc:
         logger.warning("Failed to load project definitions from datastore; falling back to JSON config: %s", exc)
     if not project_definitions:

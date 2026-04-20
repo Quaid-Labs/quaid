@@ -93,7 +93,8 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
         except Exception as exc:
             if is_fail_hard_enabled():
                 raise RuntimeError("Failed to reconcile docs/project registry before linked-project scoping.") from exc
-            logger.warning("docs/project registry reconciliation skipped before linked-project scoping: %s", exc)
+            logger.warning("docs/project registry reconciliation failed; shared docs recall is failing closed: %s", exc)
+            return [], True
 
         current_instance = _instance_id()
         linked: List[str] = []
@@ -102,8 +103,11 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
             if current_instance in instances:
                 linked.append(str(project_name))
         return linked, True
-    except Exception:
-        return [], False
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to resolve current instance project scope for shared docs recall.") from exc
+        logger.warning("shared docs recall could not resolve active instance scope; failing closed: %s", exc)
+        return [], True
 
 
 def _rag_config():
