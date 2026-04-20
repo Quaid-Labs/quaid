@@ -543,7 +543,10 @@ const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 const OPENCLAW_QUEUED_SESSION_START_RE = /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
 const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
-const QUEUED_STARTUP_RECOVERY_CACHE_MS = 12e4;
+const QUEUED_STARTUP_RECOVERY_CACHE_MS = Math.max(
+  1e4,
+  Math.min(_envTimeoutMs("QUAID_QUEUED_STARTUP_RECOVERY_CACHE_MS", 3e5), 6e5)
+);
 function normalizeLifecycleSlashAction(text) {
   const normalized = String(text || "").trim().toLowerCase();
   if (!normalized.startsWith("/")) return null;
@@ -641,9 +644,6 @@ function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now(), 
       return "";
     }
   };
-  if (eventTextScrubbed.length >= 3 && !eventTextScrubbed.startsWith("/")) {
-    return { query: eventTextScrubbed.slice(0, 500), source: "event_text_scrubbed", rawPrompt };
-  }
   const queuedStartupRecovery = selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs, currentSessionId);
   if (queuedStartupRecovery) {
     return {
@@ -651,6 +651,9 @@ function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now(), 
       source: "message_received_cache_queued_startup",
       rawPrompt
     };
+  }
+  if (eventTextScrubbed.length >= 3 && !eventTextScrubbed.startsWith("/")) {
+    return { query: eventTextScrubbed.slice(0, 500), source: "event_text_scrubbed", rawPrompt };
   }
   if (lastUserMessageQuery && nowMs - lastUserMessageQuery.seenAtMs <= 1e4 && lastUserMessageQuery.text.length >= 3) {
     return {

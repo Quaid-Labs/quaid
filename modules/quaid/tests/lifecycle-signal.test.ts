@@ -595,6 +595,31 @@ describe("lifecycle signal detection", () => {
     expect(override).toContain(latestUserMessage);
   });
 
+  it("prefers delayed startup recovery before scrubbed startup wrapper text", () => {
+    const nowMs = 400_000;
+    const prompt = "A new session was started via /new or /reset. Current time: Monday.";
+    const latestUserMessage = "Juniper paints a tiny teal star beside the kiln firebox.";
+    const cached = { text: latestUserMessage, seenAtMs: nowMs - 225_000 };
+
+    const selected = __test.selectAutoInjectQuery(
+      {
+        prompt,
+        text: [
+          "[Queued messages while agent was busy]",
+          "---",
+          "Queued #1",
+          "A new session was started via /new or /reset.",
+        ].join("\n"),
+        messages: [],
+      },
+      cached,
+      nowMs,
+    );
+
+    expect(selected.query).toBe(latestUserMessage);
+    expect(selected.source).toBe("message_received_cache_queued_startup");
+  });
+
   it("does not recover stale cached user text for startup wrappers", () => {
     const nowMs = 200_000;
     const recovered = __test.selectQueuedStartupRecoveryMessage(
@@ -607,7 +632,7 @@ describe("lifecycle signal detection", () => {
         ].join("\n"),
         messages: [],
       },
-      { text: "This should be too old to replay.", seenAtMs: nowMs - 121_000 },
+      { text: "This should be too old to replay.", seenAtMs: nowMs - 301_000 },
       nowMs,
     );
     expect(recovered).toBe(null);

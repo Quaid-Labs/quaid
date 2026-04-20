@@ -734,7 +734,10 @@ const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are b
 const OPENCLAW_QUEUED_SESSION_START_RE =
   /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
 const OPENCLAW_QUEUED_LABEL_RE = /(?:^|\n)\s*Queued\s*#(?:\d+)?\s*/gi;
-const QUEUED_STARTUP_RECOVERY_CACHE_MS = 120_000;
+const QUEUED_STARTUP_RECOVERY_CACHE_MS = Math.max(
+  10_000,
+  Math.min(_envTimeoutMs("QUAID_QUEUED_STARTUP_RECOVERY_CACHE_MS", 300_000), 600_000),
+);
 type LifecycleSlashAction = "new" | "reset" | "compact";
 
 function normalizeLifecycleSlashAction(text: string): LifecycleSlashAction | null {
@@ -893,12 +896,6 @@ function selectAutoInjectQuery(
     }
   };
 
-  // Prefer direct hook payload text first — this recovers fresh-session OC turns
-  // where before_prompt_build arrives with messages=0 and event.prompt is empty/stale.
-  if (eventTextScrubbed.length >= 3 && !eventTextScrubbed.startsWith("/")) {
-    return { query: eventTextScrubbed.slice(0, 500), source: "event_text_scrubbed", rawPrompt };
-  }
-
   const queuedStartupRecovery = selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs, currentSessionId);
   if (queuedStartupRecovery) {
     return {
@@ -906,6 +903,12 @@ function selectAutoInjectQuery(
       source: "message_received_cache_queued_startup",
       rawPrompt,
     };
+  }
+
+  // Prefer direct hook payload text first — this recovers fresh-session OC turns
+  // where before_prompt_build arrives with messages=0 and event.prompt is empty/stale.
+  if (eventTextScrubbed.length >= 3 && !eventTextScrubbed.startsWith("/")) {
+    return { query: eventTextScrubbed.slice(0, 500), source: "event_text_scrubbed", rawPrompt };
   }
 
   // Next prefer the most recent user text captured by message_received if it is fresh.
