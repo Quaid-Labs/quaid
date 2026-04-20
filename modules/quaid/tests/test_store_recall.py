@@ -2815,6 +2815,88 @@ class TestRecallFastHookInjectContract:
         assert meta["lexical_anchor"]["anchor_count"] == 2
         assert meta["turn_details"][0]["diagnostics"]["lexical_anchor"]["anchors"] == ["maya", "alice"]
 
+    def test_run_recall_store_plan_continues_after_timeout_store_when_failhard_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [{"id": "fact-1", "text": "Solomon has a canal towpath run", "category": "fact", "similarity": 0.82}],
+                {"selected_path": "vector", "counts": {"final_results": 1}, "phases_ms": {"total_ms": 8}},
+                None,
+            )
+
+        def _fake_docs(*args, **kwargs):
+            raise TimeoutError("1 of 3 futures unfinished")
+
+        def _fake_graph(*args, **kwargs):
+            return (
+                [{"id": "fact-2", "text": "Solomon plans recent exercise", "category": "fact", "similarity": 0.74}],
+                {"selected_path": "graph_aware", "counts": {"final_results": 1}, "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "exercise habits recent plans",
+                stores=["vector", "docs", "graph"],
+                limit=5,
+                owner_id="owner",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["exercise habits recent plans"],
+                planner_meta={"planned_stores": ["vector", "docs", "graph"]},
+                fast_mode=True,
+                common_kwargs={"timeout_ms": 1000},
+            )
+
+        assert [row["id"] for row in rows] == ["fact-1", "fact-2"]
+        assert meta["planned_stores"] == ["vector", "docs", "graph"]
+        docs_run = next(run for run in meta["store_runs"] if run["store"] == "docs")
+        assert docs_run["result_count"] == 0
+        assert docs_run["timed_out"] is True
+        assert docs_run["error_type"] == "TimeoutError"
+        assert "futures unfinished" in docs_run["error"]
+
+    def test_run_recall_store_plan_still_raises_non_timeout_store_error(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [{"id": "fact-1", "text": "Solomon has a canal towpath run", "category": "fact", "similarity": 0.82}],
+                {"selected_path": "vector", "counts": {"final_results": 1}, "phases_ms": {"total_ms": 8}},
+                None,
+            )
+
+        def _fake_docs(*args, **kwargs):
+            raise RuntimeError("docs registry corrupted")
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            with pytest.raises(RuntimeError, match="docs registry corrupted"):
+                mg._run_recall_store_plan(
+                    "exercise habits recent plans",
+                    stores=["vector", "docs"],
+                    limit=5,
+                    owner_id="owner",
+                    min_similarity=0.6,
+                    planner_profile="fast",
+                    planned_queries=["exercise habits recent plans"],
+                    planner_meta={"planned_stores": ["vector", "docs"]},
+                    fast_mode=True,
+                    common_kwargs={"timeout_ms": 1000},
+                )
+
     def test_quality_gate_requires_query_term_overlap_for_specific_fact_queries(self):
         import datastore.memorydb.memory_graph as mg
 

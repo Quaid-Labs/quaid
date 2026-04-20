@@ -4404,6 +4404,35 @@ def _get_recall_store_registry() -> Dict[str, Dict[str, Any]]:
     return _validate_recall_store_registry(registry)
 
 
+def _is_timeout_like_exception(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    detail = str(exc or "").lower()
+    return (
+        "timed out" in detail
+        or "timeout" in detail
+        or "deadline exhausted" in detail
+        or "futures unfinished" in detail
+    )
+
+
+def _recall_store_plan_timeout_s(timeout_ms: Optional[int], *, fast_mode: bool) -> float:
+    if timeout_ms is not None:
+        try:
+            return max(0.5, float(timeout_ms) / 1000.0)
+        except (TypeError, ValueError):
+            pass
+    if fast_mode:
+        try:
+            from config import get_config
+
+            raw = getattr(get_config().retrieval, "injection_timeout_ms", 3000)
+            return max(0.5, float(raw or 3000) / 1000.0)
+        except Exception:
+            return 3.0
+    return 30.0
+
+
 def _run_recall_store_plan(
     query: str,
     *,
@@ -4474,10 +4503,12 @@ def _run_recall_store_plan(
             ))
 
     started = time.monotonic()
+    store_plan_timeout_s = _recall_store_plan_timeout_s(kwargs.get("timeout_ms"), fast_mode=fast_mode)
     outputs = run_callables(
         callables,
         max_workers=min(len(callables), 3),
         pool_name="recall_stores",
+        timeout_seconds=store_plan_timeout_s,
         return_exceptions=True,
     )
     wall_ms = round((time.monotonic() - started) * 1000)
@@ -4489,9 +4520,37 @@ def _run_recall_store_plan(
     base_meta: Optional[Dict[str, Any]] = None
     vector_meta: Optional[Dict[str, Any]] = None
     store_meta_entries: List[Tuple[str, Dict[str, Any]]] = []
-    for output in outputs:
+    for idx, output in enumerate(outputs):
+        store_name = normalized_stores[idx] if idx < len(normalized_stores) else "unknown"
         if isinstance(output, Exception):
-            raise output
+            timeout_like = _is_timeout_like_exception(output)
+            fail_hard = _is_fail_hard_mode()
+            store_runs.append({
+                "store": store_name,
+                "result_count": 0,
+                "total_ms": None,
+                "selected_path": None,
+                "error_type": type(output).__name__,
+                "error": str(output)[:240],
+                "timed_out": timeout_like,
+            })
+            _trace_m15(
+                "memory_graph.recall_store_plan.store_error",
+                query=query,
+                store=store_name,
+                timeout_like=timeout_like,
+                fail_hard=fail_hard,
+                error_type=type(output).__name__,
+                error=str(output),
+            )
+            if fail_hard or not timeout_like:
+                raise output
+            logger.warning(
+                "recall store '%s' timed out; continuing with completed stores: %s",
+                store_name,
+                output,
+            )
+            continue
         store, payload = output
         rows, meta, bundle = payload
         rows = _validate_recall_result_rows(rows)

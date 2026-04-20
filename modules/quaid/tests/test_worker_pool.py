@@ -172,6 +172,19 @@ class TestTimeout:
         assert "callable_index=0" in str(out[0])
         assert "callable_index=1" in str(out[1])
 
+    def test_timeout_return_exceptions_preserves_completed_items(self):
+        out = worker_pool.run_callables(
+            [lambda: "fast", lambda: time.sleep(0.2) or "slow"],
+            max_workers=2,
+            pool_name="test-timeout-partial",
+            timeout_seconds=0.05,
+            return_exceptions=True,
+        )
+        assert len(out) == 2
+        assert out[0] == "fast"
+        assert isinstance(out[1], TimeoutError)
+        assert "callable_index=1" in str(out[1])
+
     def test_no_timeout_completes_normally(self):
         out = worker_pool.run_callables(
             [lambda: "done"],

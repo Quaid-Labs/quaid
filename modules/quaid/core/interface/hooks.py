@@ -603,6 +603,8 @@ def _summarize_recall_meta(meta: dict | None) -> dict | None:
                 "result_count": run.get("result_count"),
                 "total_ms": run.get("total_ms"),
                 "selected_path": run.get("selected_path"),
+                "error_type": run.get("error_type"),
+                "timed_out": run.get("timed_out"),
             }
             for run in store_runs[:6]
             if isinstance(run, dict)
