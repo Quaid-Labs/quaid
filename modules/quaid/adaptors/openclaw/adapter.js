@@ -3007,6 +3007,9 @@ notify_user(${JSON.stringify(message)})
         writeHookTrace("hook.before_agent_start.janitor_health_failed", {
           error: message.slice(0, 240)
         });
+        if (isFailHardEnabled2()) {
+          throw err;
+        }
       }
       if (timeoutManager) {
         timeoutManager.onAgentStart(resolveActiveUserSessionId(event, ctx));

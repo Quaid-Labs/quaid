@@ -3731,6 +3731,9 @@ notify_user(${JSON.stringify(message)})
         writeHookTrace("hook.before_agent_start.janitor_health_failed", {
           error: message.slice(0, 240),
         });
+        if (isFailHardEnabled()) {
+          throw err;
+        }
       }
       // api.on hooks can fire during plugin bootstrap before timeoutManager is constructed.
       if (timeoutManager) {
