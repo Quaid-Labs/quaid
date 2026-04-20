@@ -261,21 +261,41 @@ class ClaudeCodeAdapter(QuaidAdapter):
         make_instance and has its QUAID_INSTANCE packed into the project's
         .claude/settings.json.
 
-        Always includes the current instance (from QUAID_INSTANCE env var)
-        even if its silo does not yet exist on disk.
+        Includes the current instance (from QUAID_INSTANCE env var) even if
+        its silo does not yet exist on disk, unless its misc project was
+        explicitly deleted.
         """
+        def _is_deleted_misc_instance(instance_id: str) -> bool:
+            try:
+                from core.project_registry import is_misc_auto_create_disabled
+
+                return bool(is_misc_auto_create_disabled(instance_id, quaid_home=self.quaid_home()))
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise
+                print(
+                    "[adapter][WARN] Could not check deleted misc tombstone "
+                    f"for {instance_id}: {exc}",
+                    file=sys.stderr,
+                )
+                return False
+
         prefix = self.agent_id_prefix() + "-"  # "claude-code-"
         current = self.instance_id()
+        found = []
         try:
             home = self.quaid_home() / "instances"
-            found = sorted(
-                d.name for d in home.iterdir()
-                if d.is_dir() and d.name.startswith(prefix)
-            )
+            candidates = list(home.iterdir())
         except Exception:
-            found = []
+            candidates = []
+        for d in candidates:
+            if d.is_dir() and d.name.startswith(prefix) and not _is_deleted_misc_instance(d.name):
+                found.append(d.name)
+        found = sorted(found)
         # Ensure current instance is always present and listed first
-        if current in found:
+        if _is_deleted_misc_instance(current):
+            found = [x for x in found if x != current]
+        elif current in found:
             found = [current] + [x for x in found if x != current]
         else:
             found = [current] + found

@@ -18,6 +18,11 @@ def _make_cc_adapter(tmp_path: Path):
     return ClaudeCodeAdapter(home=tmp_path)
 
 
+def _make_cdx_adapter(tmp_path: Path):
+    from adaptors.codex.adapter import CodexAdapter
+    return CodexAdapter(home=tmp_path)
+
+
 def _make_oc_adapter(tmp_path: Path):
     """Build an OpenClawAdapter with a tmp quaid_home.
 
@@ -128,6 +133,66 @@ class TestListAgentInstanceIds:
         adapter = _make_cc_adapter(tmp_path)
         ids = adapter.list_agent_instance_ids()
         assert ids == ["claude-code-myproject"]
+
+    def test_cc_skips_deleted_misc_instance_from_scan(self, monkeypatch, tmp_path):
+        from core.project_registry import mark_misc_auto_create_disabled
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-main")
+        (tmp_path / "instances" / "claude-code-main").mkdir(parents=True)
+        (tmp_path / "instances" / "claude-code-private-tmp-quaid-m13-test").mkdir(parents=True)
+        mark_misc_auto_create_disabled(
+            "claude-code-private-tmp-quaid-m13-test",
+            quaid_home=tmp_path,
+        )
+
+        adapter = _make_cc_adapter(tmp_path)
+        ids = adapter.list_agent_instance_ids()
+
+        assert ids == ["claude-code-main"]
+
+    def test_cc_skips_deleted_misc_current_instance(self, monkeypatch, tmp_path):
+        from core.project_registry import mark_misc_auto_create_disabled
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-quaid-m13-test")
+        mark_misc_auto_create_disabled(
+            "claude-code-private-tmp-quaid-m13-test",
+            quaid_home=tmp_path,
+        )
+
+        adapter = _make_cc_adapter(tmp_path)
+        ids = adapter.list_agent_instance_ids()
+
+        assert ids == []
+
+    def test_cdx_skips_deleted_misc_instance_from_scan(self, monkeypatch, tmp_path):
+        from core.project_registry import mark_misc_auto_create_disabled
+
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        (tmp_path / "instances" / "codex-private-tmp-cdx-livetest").mkdir(parents=True)
+        (tmp_path / "instances" / "codex-private-tmp-cdx-m13-test").mkdir(parents=True)
+        mark_misc_auto_create_disabled(
+            "codex-private-tmp-cdx-m13-test",
+            quaid_home=tmp_path,
+        )
+
+        adapter = _make_cdx_adapter(tmp_path)
+        ids = adapter.list_agent_instance_ids()
+
+        assert ids == ["codex-private-tmp-cdx-livetest"]
+
+    def test_cdx_skips_deleted_misc_current_instance(self, monkeypatch, tmp_path):
+        from core.project_registry import mark_misc_auto_create_disabled
+
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-m13-test")
+        mark_misc_auto_create_disabled(
+            "codex-private-tmp-cdx-m13-test",
+            quaid_home=tmp_path,
+        )
+
+        adapter = _make_cdx_adapter(tmp_path)
+        ids = adapter.list_agent_instance_ids()
+
+        assert ids == []
 
     def test_oc_is_multi_agent(self, tmp_path):
         adapter = _make_oc_adapter(tmp_path)

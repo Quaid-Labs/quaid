@@ -115,16 +115,35 @@ class CodexAdapter(QuaidAdapter):
         return self.adapter_id()
 
     def list_agent_instance_ids(self) -> list:
+        def _is_deleted_misc_instance(instance_id: str) -> bool:
+            try:
+                from core.project_registry import is_misc_auto_create_disabled
+
+                return bool(is_misc_auto_create_disabled(instance_id, quaid_home=self.quaid_home()))
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise
+                print(
+                    "[adapter][WARN] Could not check deleted misc tombstone "
+                    f"for {instance_id}: {exc}",
+                    file=sys.stderr,
+                )
+                return False
+
         prefix = self.agent_id_prefix() + "-"
         current = self.instance_id()
+        found = []
         try:
             home = self.quaid_home() / "instances"
-            found = sorted(
-                d.name for d in home.iterdir()
-                if d.is_dir() and d.name.startswith(prefix)
-            )
+            candidates = list(home.iterdir())
         except Exception:
-            found = []
+            candidates = []
+        for d in candidates:
+            if d.is_dir() and d.name.startswith(prefix) and not _is_deleted_misc_instance(d.name):
+                found.append(d.name)
+        found = sorted(found)
+        if _is_deleted_misc_instance(current):
+            return [item for item in found if item != current]
         if current in found:
             return [current] + [item for item in found if item != current]
         return [current] + found
