@@ -1251,6 +1251,23 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_retrieval_auto_inject_graph_depth_respects_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "autoInjectGraphDepth": 3
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.auto_inject_graph_depth == 3
+        finally:
+            config._config = old_config
+
     def test_reload_config_resets_unknown_key_warning_cache(self, tmp_path, capsys):
         import config
         old_config = config._config

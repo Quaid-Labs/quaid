@@ -2843,6 +2843,10 @@ def graph_aware_recall(
     if owner_id is None:
         from config import get_config
         owner_id = get_config().users.default_owner
+    try:
+        graph_depth = max(1, int(graph_depth or 1))
+    except Exception:
+        graph_depth = 1
     graph = get_graph()
 
     results = {
@@ -2871,14 +2875,17 @@ def graph_aware_recall(
     expand_from: List[str] = []  # Node IDs to expand from
     seen_ids: set = set()
 
-    # Determine which relations to expand based on currently active graph relations
-    matched_relations = _relation_matches_for_query(query)
-    # A multi-hop traversal may need to cross different relation types. If the
-    # caller requested depth > 1, keep the graph open instead of narrowing to
-    # a single keyword-matched relation.
-    expand_relations = None if graph_depth > 1 else (matched_relations or None)
     if _has_generic_graph_signal(query):
         graph_depth = max(graph_depth, 2)
+    results["meta"]["graph_depth"] = int(graph_depth)
+
+    # Depth-1 graph recall can narrow to relation-shaped prompts. Multi-hop
+    # auto-inject needs open expansion so platform adapters do not miss mixed
+    # paths like owner -> sibling -> child when the surface wording only names
+    # one relation.
+    matched_relations = _relation_matches_for_query(query)
+    expand_relations = None if graph_depth > 1 else (matched_relations or None)
+    results["meta"]["relation_expansion"] = "open" if expand_relations is None else "narrowed"
 
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
@@ -3296,6 +3303,18 @@ def _is_fail_hard_mode() -> bool:
         return bool(is_fail_hard_enabled())
     except Exception:
         return True
+
+
+def _resolve_auto_inject_graph_depth() -> int:
+    """Return platform-wide graph depth for fast auto-inject recall."""
+    default_depth = 2
+    try:
+        cfg = _get_memory_config() if _HAS_CONFIG else None
+        retrieval_cfg = getattr(cfg, "retrieval", None) if cfg is not None else None
+        raw_depth = getattr(retrieval_cfg, "auto_inject_graph_depth", default_depth)
+        return max(1, int(raw_depth or default_depth))
+    except Exception:
+        return default_depth
 
 
 def route_query(query: str, timeout_ms: Optional[int] = None, max_retries: Optional[int] = None) -> str:
@@ -8063,6 +8082,7 @@ def recall_fast(
         )
     planned_stores = _planner_store_plan((planner_meta or {}).get("planned_stores") or ["vector"])
     planned_project = (planner_meta or {}).get("planned_project") or project
+    auto_inject_graph_depth = _resolve_auto_inject_graph_depth()
 
     rows, meta, docs_bundle = _run_recall_store_plan(
         query,
@@ -8074,7 +8094,7 @@ def recall_fast(
         planned_queries=planned_queries,
         planner_meta=planner_meta,
         fast_mode=True,
-        graph_depth=1,
+        graph_depth=auto_inject_graph_depth,
         common_kwargs={
             "privacy": privacy,
             "current_session_id": current_session_id,
@@ -8098,6 +8118,7 @@ def recall_fast(
     )
     meta = dict(meta or {})
     meta["mode"] = "fast"
+    meta["auto_inject_graph_depth"] = auto_inject_graph_depth
     if docs_bundle:
         meta["docs_rows_count"] = len((docs_bundle.get("chunks") or []) if isinstance(docs_bundle, dict) else [])
 
@@ -8216,7 +8237,7 @@ def recall_fast(
                 planned_queries=drill_queries,
                 planner_meta=fast_drill_meta,
                 fast_mode=True,
-                graph_depth=1,
+                graph_depth=auto_inject_graph_depth,
                 common_kwargs={
                     "privacy": privacy,
                     "current_session_id": current_session_id,

@@ -1738,6 +1738,67 @@ class TestRecallTelemetry:
         assert captured["planner_profile"] == "fast"
         assert captured["max_retries"] == 0
 
+    def test_recall_fast_uses_depth_two_graph_auto_inject_by_default(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            captured["stores"] = list(stores)
+            captured["graph_depth"] = graph_depth
+            return [], {"phases_ms": {"total_ms": 0}}, None
+
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["Who is Maya's niece?"],
+                {
+                    "used_llm": False,
+                    "queries_count": 1,
+                    "elapsed_ms": 0,
+                    "planner_profile": "fast",
+                    "planned_stores": ["vector", "graph"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run):
+            _rows, meta = mg.recall_fast("Who is Maya's niece?", return_meta=True)
+
+        assert captured["stores"] == ["vector", "graph"]
+        assert captured["graph_depth"] == 2
+        assert meta["auto_inject_graph_depth"] == 2
+
+    def test_recall_fast_graph_auto_inject_depth_is_configurable(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+        cfg = SimpleNamespace(retrieval=SimpleNamespace(auto_inject_graph_depth=3))
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            captured["graph_depth"] = graph_depth
+            return [], {"phases_ms": {"total_ms": 0}}, None
+
+        with patch.object(mg, "_get_memory_config", return_value=cfg), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["Who is Maya's niece?"],
+                {
+                    "used_llm": False,
+                    "queries_count": 1,
+                    "elapsed_ms": 0,
+                    "planner_profile": "fast",
+                    "planned_stores": ["vector", "graph"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run):
+            _rows, meta = mg.recall_fast("Who is Maya's niece?", return_meta=True)
+
+        assert captured["graph_depth"] == 3
+        assert meta["auto_inject_graph_depth"] == 3
+
     def test_recall_fast_falls_back_to_off_when_planner_times_out_without_failhard(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -4385,6 +4446,40 @@ class TestRecallLimitEdgeCases:
         assert kwargs["include_mmr"] is False
         assert kwargs["max_turns"] == 1
         assert payload["meta"]["base_recall_meta"] == {"mode": "deliberate"}
+
+    def test_graph_aware_recall_opens_relation_expansion_for_multi_hop_depth(self):
+        import datastore.memorydb.memory_graph as mg
+
+        graph = MagicMock()
+        graph.get_related_bidirectional.return_value = []
+        anchor = SimpleNamespace(id="person-diana", name="Diana", type="Person")
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "extract_entities_from_text", return_value=[anchor]), \
+             patch.object(mg, "_relation_matches_for_query", return_value=["sibling_of"]), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False):
+            one_hop = mg.graph_aware_recall(
+                "Who is Maya's sister?",
+                owner_id="maya",
+                graph_depth=1,
+                candidate_pool=[],
+            )
+            first_kwargs = graph.get_related_bidirectional.call_args.kwargs
+            graph.get_related_bidirectional.reset_mock()
+
+            two_hop = mg.graph_aware_recall(
+                "Who is Maya's sister's daughter?",
+                owner_id="maya",
+                graph_depth=2,
+                candidate_pool=[],
+            )
+            second_kwargs = graph.get_related_bidirectional.call_args.kwargs
+
+        assert first_kwargs["relations"] == ["sibling_of"]
+        assert one_hop["meta"]["relation_expansion"] == "narrowed"
+        assert second_kwargs["relations"] is None
+        assert two_hop["meta"]["relation_expansion"] == "open"
+        assert two_hop["meta"]["graph_depth"] == 2
 
     def test_resolve_recall_store_request_defaults_to_vector_only(self):
         from datastore.memorydb.memory_graph import _resolve_recall_store_request

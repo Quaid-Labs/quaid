@@ -276,6 +276,7 @@ class RetrievalConfig:
     injection_timeout_ms: int = 3_000  # Overall wall-clock budget for pre-injection recall
     injection_fanout_max: int = 5  # Max parallel HyDE queries for injection
     injection_fanout_llm_ms: int = 1_500  # LLM budget for query fanout within injection
+    auto_inject_graph_depth: int = 2  # Graph traversal depth for fast auto-inject recall
     domains: Dict[str, str] = field(default_factory=dict)  # Domain id -> brief description
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
     tool_hint_timeout_ms: int = 1_500  # LLM budget for tool hint planner (reads TOOLS.md)
@@ -645,6 +646,7 @@ _KNOWN_RETRIEVAL_KEYS = {
     "injection_timeout_ms",
     "injection_fanout_max",
     "injection_fanout_llm_ms",
+    "auto_inject_graph_depth",
     "domains",
     "traversal",
     "reranker",
@@ -1260,6 +1262,7 @@ def _load_config_inner() -> MemoryConfig:
         injection_timeout_ms=int(retrieval_data.get('injection_timeout_ms', retrieval_data.get('injectionTimeoutMs', 3000))),
         injection_fanout_max=int(retrieval_data.get('injection_fanout_max', retrieval_data.get('injectionFanoutMax', 5))),
         injection_fanout_llm_ms=int(retrieval_data.get('injection_fanout_llm_ms', retrieval_data.get('injectionFanoutLlmMs', 1500))),
+        auto_inject_graph_depth=max(1, int(retrieval_data.get('auto_inject_graph_depth', 2) or 2)),
         domains=parsed_domains,
         traversal=traversal,
     )

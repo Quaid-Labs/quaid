@@ -278,6 +278,7 @@ Notes:
 | `retrieval.injection_timeout_ms` | `int` | `3000` | Overall wall-clock budget for pre-injection recall |
 | `retrieval.injection_fanout_max` | `int` | `5` | Max parallel HyDE queries for injection |
 | `retrieval.injection_fanout_llm_ms` | `int` | `1500` | LLM budget for query fanout within injection |
+| `retrieval.auto_inject_graph_depth` | `int` | `2` | Graph traversal depth for fast auto-inject recall |
 | `retrieval.domains` | `dict[str, str]` | `{}` | Domain id -> brief description |
 | `retrieval.traversal.use_beam` | `bool` | `true` | Use BEAM search instead of BFS |
 | `retrieval.traversal.beam_width` | `int` | `5` | Top-B candidates per hop level |
