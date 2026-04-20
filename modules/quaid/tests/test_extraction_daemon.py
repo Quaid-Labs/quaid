@@ -363,6 +363,46 @@ def test_ensure_discovered_session_cursors_skips_foreign_adapter_transcripts(mon
     assert cursor["transcript_path"] == str(owned)
 
 
+def test_codex_discovery_skips_rollouts_from_other_instances(monkeypatch, tmp_path):
+    from adaptors.codex.adapter import CodexAdapter
+
+    m13_project = tmp_path / "cdx-m13-test"
+    livetest_project = tmp_path / "cdx-livetest"
+    m13_project.mkdir()
+    livetest_project.mkdir()
+    monkeypatch.setattr(
+        "adaptors.codex.adapter.instance_slug_from_project_dir",
+        lambda raw: Path(str(raw)).name,
+    )
+    m13_instance = "codex-cdx-m13-test"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", m13_instance)
+    monkeypatch.setenv("CODEX_PROJECT_DIR", str(m13_project))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "04" / "20"
+    sessions_root.mkdir(parents=True)
+    m13_rollout = sessions_root / "rollout-2026-04-20T15-00-00-m13-session.jsonl"
+    livetest_rollout = sessions_root / "rollout-2026-04-20T15-10-19-livetest-session.jsonl"
+    m13_rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "m13-session", "cwd": str(m13_project)}}) + "\n",
+        encoding="utf-8",
+    )
+    livetest_rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "livetest-session", "cwd": str(livetest_project)}}) + "\n",
+        encoding="utf-8",
+    )
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(
+        CodexAdapter(home=tmp_path / ".quaid")
+    )
+
+    assert discovered == 1
+    cursor_dir = tmp_path / ".quaid" / "instances" / m13_instance / "data" / "session-cursors"
+    cursors = [json.loads(path.read_text(encoding="utf-8")) for path in cursor_dir.glob("*.json")]
+    assert [cursor["transcript_path"] for cursor in cursors] == [str(m13_rollout)]
+
+
 def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -477,6 +517,9 @@ def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypa
     captured = {}
 
     class _Adapter:
+        def owns_session_path(self, path, session_id=""):
+            return True
+
         def parse_session_jsonl(self, path):
             return (
                 "User: I always park near the stone arch by the river before work.\n"

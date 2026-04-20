@@ -368,6 +368,11 @@ class QuaidAdapter(abc.ABC):
         path = sessions_dir / f"{session_id}.jsonl"
         return path if path.exists() else None
 
+    def owns_session_path(self, path: Path, session_id: str = "") -> bool:
+        """Return whether a transcript path belongs to this adapter instance."""
+        _ = path, session_id
+        return True
+
     # ---- Platform filtering ----
 
     @abc.abstractmethod

@@ -2224,13 +2224,26 @@ def _load_runtime_adapter():
 
 def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str) -> bool:
     """Return whether an adapter-scoped transcript belongs to this daemon instance."""
-    if adapter is None or not transcript_path:
-        return True
+    if adapter is None:
+        logger.warning(
+            "adapter unavailable during transcript ownership check for session %s (%s)",
+            session_id,
+            transcript_path,
+        )
+        return False
+    if not transcript_path:
+        return False
     owns_fn = getattr(adapter, "owns_session_path", None)
     if not callable(owns_fn):
         owns_fn = getattr(adapter, "owns_transcript_path", None)
     if not callable(owns_fn):
-        return True
+        logger.warning(
+            "adapter %s does not expose transcript ownership check; refusing transcript %s for session %s",
+            type(adapter).__name__,
+            transcript_path,
+            session_id,
+        )
+        return False
     try:
         return bool(owns_fn(Path(transcript_path), session_id=session_id))
     except TypeError:
@@ -2243,6 +2256,12 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
                 transcript_path,
                 exc,
             )
+            try:
+                from lib.fail_policy import is_fail_hard_enabled
+                if is_fail_hard_enabled():
+                    raise
+            except ImportError:
+                pass
             return False
     except Exception as exc:
         logger.warning(
