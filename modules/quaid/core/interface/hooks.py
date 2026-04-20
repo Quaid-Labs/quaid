@@ -693,22 +693,21 @@ def hook_inject(args):
 
     session_id = _extract_hook_session_id(hook_input)
     query = hook_input.get("prompt", "").strip()
-    if not query:
-        return
-    try:
-        from lib.m15_trace import activate_m15_trace_for_prompt, m15_trace_path, trace_m15
+    if query:
+        try:
+            from lib.m15_trace import activate_m15_trace_for_prompt, m15_trace_path, trace_m15
 
-        activate_m15_trace_for_prompt(query)
-        trace_m15(
-            "hook_inject.entry",
-            prompt=query,
-            session_id=session_id,
-            cwd=hook_input.get("cwd", "") if isinstance(hook_input, dict) else "",
-            hook_input_keys=sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
-            trace_file=m15_trace_path(),
-        )
-    except Exception:
-        pass
+            activate_m15_trace_for_prompt(query)
+            trace_m15(
+                "hook_inject.entry",
+                prompt=query,
+                session_id=session_id,
+                cwd=hook_input.get("cwd", "") if isinstance(hook_input, dict) else "",
+                hook_input_keys=sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
+                trace_file=m15_trace_path(),
+            )
+        except Exception:
+            pass
     direct_notices: List[str] = []
 
     try:
@@ -828,6 +827,9 @@ def hook_inject(args):
         raise
     except Exception:
         pass
+
+    if not query:
+        return
 
     # Any prompt traffic is a daemon liveness contact point.
     # ensure_alive is instance-scoped and lock-guarded, so repeated calls are cheap.

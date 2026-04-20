@@ -181,6 +181,67 @@ def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypa
     assert err.strip() == ""
 
 
+def test_claude_code_inject_writes_session_end_signal_for_empty_prompt_reset_metadata(
+    monkeypatch, tmp_path, cursor_dir
+):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    transcript_path = tmp_path / "cc-reset.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "Zephyr delta nine."}}) + "\n",
+        encoding="utf-8",
+    )
+
+    written_signals = []
+
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-session-end.json")
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+    out, err = _run_hook_inject(
+        {
+            "session_id": "sess-cc-reset",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "",
+            "message": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "<command-name>/reset</command-name>\n"
+                            "<command-message>reset context</command-message>\n"
+                            "<command-args></command-args>"
+                        ),
+                    }
+                ]
+            },
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    assert out.strip() == ""
+    assert len(written_signals) == 1
+    sig = written_signals[0]
+    assert sig["signal_type"] == "session_end"
+    assert sig["session_id"] == "sess-cc-reset"
+    assert sig["transcript_path"] == str(transcript_path)
+    assert sig["adapter"] == "claude-code"
+    assert sig["supports_compaction_control"] is False
+    assert sig["meta"]["source"] == "hook_inject"
+    assert sig["meta"]["command"] == "/reset"
+    assert sig["meta"]["reason"] == "command:reset"
+    assert err.strip() == ""
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
