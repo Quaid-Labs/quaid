@@ -737,18 +737,44 @@ class CodexAdapter(QuaidAdapter):
             return "openai"
         return ""
 
+    def _has_provider_credential(self, provider: str) -> bool:
+        normalized = str(provider or "").strip().lower()
+        if normalized == "anthropic":
+            return bool(
+                self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"])
+                or os.environ.get("ANTHROPIC_API_KEY", "").strip()
+            )
+        if normalized in ("openai", "openai-compatible"):
+            return bool(
+                self.read_shared_auth_token(["codex_oauth", "openai_api"])
+                or os.environ.get("OPENAI_OAUTH_TOKEN", "").strip()
+                or os.environ.get("OPENAI_API_KEY", "").strip()
+            )
+        return False
+
     def _resolve_central_provider(self, configured: str, deep_model: str, fast_model: str) -> str:
         provider = str(configured or "").strip().lower()
         if provider and provider != "default":
+            if self._has_provider_credential(provider):
+                return provider
+            detected = self._detect_shared_primary_provider()
+            if detected and detected != provider:
+                print(
+                    "[adapter][provider] configured provider "
+                    f"{provider!r} has no credential; using single available shared "
+                    f"{detected!r} credential.",
+                    file=sys.stderr,
+                )
+                return detected
             return provider
-
-        inferred = self._infer_provider_from_models(deep_model, fast_model)
-        if inferred:
-            return inferred
 
         detected = self._detect_shared_primary_provider()
         if detected:
             return detected
+
+        inferred = self._infer_provider_from_models(deep_model, fast_model)
+        if inferred:
+            return inferred
 
         if is_fail_hard_enabled():
             raise RuntimeError(
@@ -762,6 +788,24 @@ class CodexAdapter(QuaidAdapter):
             file=sys.stderr,
         )
         return "anthropic"
+
+    def _resolve_model_for_provider(self, cfg, provider_id: str, configured_model: str, tier: str) -> str:
+        provider = str(provider_id or "").strip().lower()
+        model = str(configured_model or "").strip()
+        inferred = self._infer_provider_from_models(model)
+        if model and model != "default" and (not inferred or inferred == provider):
+            return model
+
+        class_attr = "deep_reasoning_model_classes" if tier == "deep" else "fast_reasoning_model_classes"
+        class_map = getattr(cfg.models, class_attr, {}) or {}
+        if isinstance(class_map, dict):
+            mapped = str(class_map.get(provider) or "").strip()
+            if mapped:
+                return mapped
+
+        defaults = self.installer_default_models(provider) or {}
+        default_key = "deep" if tier == "deep" else "fast"
+        return str(defaults.get(default_key) or model or "default")
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from config import get_config
@@ -787,6 +831,8 @@ class CodexAdapter(QuaidAdapter):
             str(fast_model or ""),
         )
         provider_id = str(provider_id or "").strip().lower()
+        resolved_deep = self._resolve_model_for_provider(cfg, provider_id, str(deep_model or ""), "deep")
+        resolved_fast = self._resolve_model_for_provider(cfg, provider_id, str(fast_model or ""), "fast")
 
         if provider_id == "anthropic":
             api_key = self.get_api_key("ANTHROPIC_API_KEY")
@@ -799,8 +845,8 @@ class CodexAdapter(QuaidAdapter):
                 )
             return AnthropicLLMProvider(
                 api_key=api_key,
-                deep_model=str(deep_model or "claude-sonnet-4-5"),
-                fast_model=str(fast_model or "claude-haiku-4-5"),
+                deep_model=str(resolved_deep or "claude-sonnet-4-5"),
+                fast_model=str(resolved_fast or "claude-haiku-4-5"),
             )
 
         if provider_id in ("openai", "openai-compatible"):
@@ -819,8 +865,8 @@ class CodexAdapter(QuaidAdapter):
             return OpenAICodexOAuthLLMProvider(
                 base_url=base_url,
                 api_key=api_key,
-                deep_model=str(deep_model or "gpt-5.4"),
-                fast_model=str(fast_model or "gpt-5.4-mini"),
+                deep_model=str(resolved_deep or "gpt-5.4"),
+                fast_model=str(resolved_fast or "gpt-5.4-mini"),
                 deep_reasoning_effort=str(deep_effort or "high"),
                 fast_reasoning_effort=str(fast_effort or "none"),
             )

@@ -1651,6 +1651,60 @@ class TestCodexAdapter:
             provider = adapter.get_llm_provider()
         assert isinstance(provider, OpenAICodexOAuthLLMProvider)
 
+    def test_get_llm_provider_prefers_single_anthropic_shared_auth_over_openai_model_hints(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = CodexAdapter()
+        adapter.store_shared_auth_token("anthropic_oauth", "sk-ant-registry")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="default",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-5.4",
+                fast_reasoning="gpt-5.4-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                deep_reasoning_model_classes={},
+                fast_reasoning_model_classes={},
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, AnthropicLLMProvider)
+        assert provider._deep_model == "claude-sonnet-4-5"
+        assert provider._fast_model == "claude-haiku-4-5"
+
+    def test_get_llm_provider_uses_single_anthropic_shared_auth_when_configured_openai_missing_credential(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = CodexAdapter()
+        adapter.store_shared_auth_token("anthropic_api", "sk-ant-registry")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="openai",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-5.4",
+                fast_reasoning="gpt-5.4-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                deep_reasoning_model_classes={},
+                fast_reasoning_model_classes={},
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, AnthropicLLMProvider)
+        assert provider._deep_model == "claude-sonnet-4-5"
+        assert provider._fast_model == "claude-haiku-4-5"
+
     def test_get_api_key_reads_codex_auth_token_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = CodexAdapter()
