@@ -65,6 +65,51 @@ def _fail_hard_enabled() -> bool:
         return False
 
 
+def _current_quaid_instance_id() -> str:
+    raw = os.environ.get("QUAID_INSTANCE", "").strip()
+    if raw:
+        return raw
+    try:
+        from lib.instance import instance_id
+
+        return str(instance_id() or "").strip()
+    except Exception:
+        return ""
+
+
+def _dedupe_instances(instances: Any) -> List[str]:
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for raw in list(instances or []):
+        name = str(raw or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered
+
+
+def _docs_project_visible_to_current_instance(project: Optional[str]) -> bool:
+    name = str(project or "").strip()
+    current = _current_quaid_instance_id()
+    if not current or not name or name == "default":
+        return True
+    if name.startswith("misc--") and name != f"misc--{current}":
+        return False
+    try:
+        from lib.project_registry import lookup
+
+        entry = lookup(name)
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError(f"Failed checking project linkage for {name!r}: {exc}") from exc
+        logger.warning("Project linkage check failed for %s; hiding docs from current instance: %s", name, exc)
+        return False
+    if not entry:
+        return False
+    return current in _dedupe_instances(entry.get("instances", []))
+
+
 def _run_locked_write_with_retry(op, *, op_name: str, max_attempts: int = 3, base_sleep_seconds: float = 2.0):
     """Retry transient SQLite lock failures for small metadata writes."""
     attempt = 0
@@ -933,7 +978,8 @@ class DocsRegistry:
             ).fetchone()
             if not row:
                 return None
-            return self._row_to_dict(row)
+            entry = self._row_to_dict(row)
+            return entry if _docs_project_visible_to_current_instance(entry.get("project")) else None
 
     def list_docs(
         self,
@@ -956,40 +1002,55 @@ class DocsRegistry:
 
         with get_connection(self.db_path) as conn:
             rows = conn.execute(query, params).fetchall()
-            return [self._row_to_dict(r) for r in rows]
+            entries = [self._row_to_dict(r) for r in rows]
+            return [
+                entry
+                for entry in entries
+                if _docs_project_visible_to_current_instance(entry.get("project"))
+            ]
 
     def read(self, identifier: str) -> Optional[Dict[str, Any]]:
         """Read a document by file path or title. Returns entry + content."""
         with get_connection(self.db_path) as conn:
-            # Try by path first
-            row = conn.execute(
-                "SELECT * FROM doc_registry WHERE file_path = ? AND state = 'active'",
-                (identifier,)
-            ).fetchone()
-            if not row:
-                # Try by exact title
-                row = conn.execute(
-                    "SELECT * FROM doc_registry WHERE title = ? AND state = 'active'",
-                    (identifier,)
-                ).fetchone()
-            if not row:
-                # Try by title substring (LIKE) — escape wildcards in user input
-                safe_id = identifier.replace("%", "\\%").replace("_", "\\_")
-                row = conn.execute(
-                    "SELECT * FROM doc_registry WHERE title LIKE ? ESCAPE '\\' AND state = 'active' LIMIT 1",
-                    (f"%{safe_id}%",)
-                ).fetchone()
-            if not row:
-                # Try by file_path substring (slug or partial path)
-                safe_id = identifier.replace("%", "\\%").replace("_", "\\_")
-                row = conn.execute(
-                    "SELECT * FROM doc_registry WHERE file_path LIKE ? ESCAPE '\\' AND state = 'active' LIMIT 1",
-                    (f"%{safe_id}%",)
-                ).fetchone()
-            if not row:
+            def _first_visible(rows) -> Optional[Dict[str, Any]]:
+                for candidate in rows:
+                    entry = self._row_to_dict(candidate)
+                    if _docs_project_visible_to_current_instance(entry.get("project")):
+                        return entry
                 return None
 
-            entry = self._row_to_dict(row)
+            entry = _first_visible(
+                conn.execute(
+                    "SELECT * FROM doc_registry WHERE file_path = ? AND state = 'active'",
+                    (identifier,)
+                ).fetchall()
+            )
+            if entry is None:
+                entry = _first_visible(
+                    conn.execute(
+                        "SELECT * FROM doc_registry WHERE title = ? AND state = 'active' ORDER BY project, file_path",
+                        (identifier,)
+                    ).fetchall()
+                )
+            safe_id = identifier.replace("%", "\\%").replace("_", "\\_")
+            if entry is None:
+                entry = _first_visible(
+                    conn.execute(
+                        "SELECT * FROM doc_registry WHERE title LIKE ? ESCAPE '\\' AND state = 'active' "
+                        "ORDER BY project, file_path",
+                        (f"%{safe_id}%",)
+                    ).fetchall()
+                )
+            if entry is None:
+                entry = _first_visible(
+                    conn.execute(
+                        "SELECT * FROM doc_registry WHERE file_path LIKE ? ESCAPE '\\' AND state = 'active' "
+                        "ORDER BY project, file_path",
+                        (f"%{safe_id}%",)
+                    ).fetchall()
+                )
+            if entry is None:
+                return None
 
             # Read file content
             abs_path = self._resolve_path(entry["file_path"])
@@ -1093,6 +1154,8 @@ class DocsRegistry:
 
         # 1. Inside a project's homeDir
         for name, defn in cfg.projects.definitions.items():
+            if not _docs_project_visible_to_current_instance(name):
+                continue
             home = str(self._resolve_path(defn.home_dir)).rstrip("/") + "/"
             if abs_path.startswith(home) or abs_path == home.rstrip("/"):
                 return name
@@ -1104,6 +1167,8 @@ class DocsRegistry:
 
         # 3. Under a project's sourceRoots
         for name, defn in cfg.projects.definitions.items():
+            if not _docs_project_visible_to_current_instance(name):
+                continue
             for root in defn.source_roots:
                 root_abs = str(self._resolve_path(root)).rstrip("/") + "/"
                 if abs_path.startswith(root_abs) or abs_path == root_abs.rstrip("/"):
@@ -1128,7 +1193,8 @@ class DocsRegistry:
                     if not isinstance(sources, list):
                         continue
                     if file_path in sources:
-                        return row["project"]
+                        project = row["project"]
+                        return project if _docs_project_visible_to_current_instance(project) else None
                 except (json.JSONDecodeError, KeyError):
                     continue
         return None
@@ -1139,7 +1205,7 @@ class DocsRegistry:
         Returns: {doc_path: [source_path, ...]}
         """
         query = """
-            SELECT file_path, source_files FROM doc_registry
+            SELECT file_path, project, source_files FROM doc_registry
             WHERE state = 'active' AND auto_update = 1 AND source_files IS NOT NULL
         """
         params: list = []
@@ -1151,6 +1217,8 @@ class DocsRegistry:
         with get_connection(self.db_path) as conn:
             rows = conn.execute(query, params).fetchall()
             for row in rows:
+                if not _docs_project_visible_to_current_instance(row["project"]):
+                    continue
                 try:
                     sources = json.loads(row["source_files"] or "[]")
                     if isinstance(sources, list) and sources:
@@ -1781,6 +1849,8 @@ class DocsRegistry:
         cfg = self._get_config()
         projects = []
         for name, defn in cfg.projects.definitions.items():
+            if not _docs_project_visible_to_current_instance(name):
+                continue
             docs = self.list_docs(project=name)
             projects.append({
                 "name": name,

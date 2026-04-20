@@ -150,6 +150,85 @@ def test_docs_reconcile_does_not_cross_link_current_instance(project_registry_en
     assert entry["instances"] == ["codex-private-tmp-cdx-livetest"]
 
 
+def test_docs_registry_scopes_lists_and_reads_to_current_instance(project_registry_env, monkeypatch):
+    from datastore.docsdb.registry import DocsRegistry
+    from lib.database import get_connection
+    from lib.project_registry import register
+
+    visible_home = project_registry_env["visible_home"]
+    cdx_project_dir = visible_home / "projects" / "quaid-live-src"
+    cc_project_dir = visible_home / "projects" / "quaid-cli-tool"
+    cdx_source_root = visible_home / "src" / "quaid-live-src"
+    cc_source_root = visible_home / "src" / "quaid-cli-tool"
+    cdx_project_dir.mkdir(parents=True)
+    cc_project_dir.mkdir(parents=True)
+    cdx_source_root.mkdir(parents=True)
+    cc_source_root.mkdir(parents=True)
+
+    cdx_doc = cdx_project_dir / "PROJECT.md"
+    cc_doc = cc_project_dir / "PROJECT.md"
+    cdx_doc.write_text("# Quaid Live Src\n", encoding="utf-8")
+    cc_doc.write_text("# Quaid CLI Tool\n", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+    register(
+        name="quaid-live-src",
+        canonical_path=str(cdx_project_dir),
+        source_root=str(cdx_source_root),
+        link_current_instance=True,
+    )
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    register(
+        name="quaid-cli-tool",
+        canonical_path=str(cc_project_dir),
+        source_root=str(cc_source_root),
+        link_current_instance=True,
+    )
+
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+    registry = DocsRegistry(seed_projects=False)
+    with get_connection(registry.db_path) as conn:
+        for name, label, project_dir, source_root, doc_path in (
+            ("quaid-live-src", "Quaid Live Src", cdx_project_dir, cdx_source_root, cdx_doc),
+            ("quaid-cli-tool", "Quaid CLI Tool", cc_project_dir, cc_source_root, cc_doc),
+        ):
+            conn.execute(
+                """
+                INSERT INTO project_definitions
+                    (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state)
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'active')
+                """,
+                (
+                    name,
+                    label,
+                    f"projects/{name}/",
+                    json.dumps([str(source_root)]),
+                    json.dumps(["*.md"]),
+                    json.dumps([]),
+                    f"{label} test project",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO doc_registry (file_path, project, asset_type, title, state, registered_by)
+                VALUES (?, ?, 'doc', ?, 'active', 'test')
+                """,
+                (str(doc_path), name, "Project Guide"),
+            )
+
+    assert [doc["project"] for doc in registry.list_docs()] == ["quaid-live-src"]
+    visible_project_names = {project["name"] for project in registry.list_projects()}
+    assert "quaid-live-src" in visible_project_names
+    assert "quaid-cli-tool" not in visible_project_names
+    assert registry.get(str(cc_doc)) is None
+
+    # A hidden exact-title match must not shadow the visible project document.
+    read_entry = registry.read("Project Guide")
+    assert read_entry is not None
+    assert read_entry["project"] == "quaid-live-src"
+    assert read_entry["file_path"] == str(cdx_doc)
+
+
 def test_project_show_reconciles_doc_registry_only_external_project(project_registry_env):
     from core.project_registry import get_project
     from datastore.docsdb.registry import DocsRegistry
