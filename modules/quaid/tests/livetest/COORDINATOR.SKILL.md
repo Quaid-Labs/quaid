@@ -50,51 +50,52 @@ while the base VM is unlocked.
 
 ### Platform version checks
 
-Before starting a run, verify platform versions are current:
+Before an overnight loop, run presnapshot maintenance:
 ```bash
-ssh admin@$VM_IP 'source ~/.zprofile
-echo "Installed: OC=$(command -v openclaw) CC=$(claude --version | head -1) CDX=$(codex --version | head -1)"
-echo "Latest: OC=$(npm view openclaw version) CC=$(npm view @anthropic-ai/claude-code version) CDX=$(npm view @openai/codex version)"'
+tests/livetest/scripts/livetest-presnapshot-preflight.sh --config tests/livetest/livetest-config.json
 ```
-If outdated: update the base snapshot (not the run VM). Versions must be pinned in the snapshot.
+This clones the current base, applies slow platform CLI upgrades, and refreshes
+the base snapshot only if the clone actually changed. If nothing changed, it
+destroys the clone and leaves the base untouched.
 
 ### Preflight architecture: platform updates fold into base, never per-run
 
 **Principle.** Platform CLI updates (`claude`, `codex`, `openclaw`) are by far the
-slowest part of preflight — typically 60–180s for `openclaw update --yes` alone,
-and the cost grows as the base snapshot drifts further from upstream. They are
-also rare relative to dev-tree changes. Therefore: updates belong in the base
-image, NOT in per-run preflight.
+slowest part of preflight, and the cost grows as the base snapshot drifts
+further from upstream. They are also rare relative to dev-tree changes.
+Therefore: updates belong in the base image, NOT in per-run preflight.
 
 **Required flow (in order, no exceptions):**
 
-1. **Health checks (no writes):** local≠remote, SSH connectivity, remote brew
-   Python ≥3.10. Sub-second total, safe on every preflight.
+1. **Presnapshot preflight (base maintenance):** run
+   `livetest-presnapshot-preflight.sh` before overnight loops or when
+   `livetest-preflight.sh` warns about platform drift. It starts from the
+   current base snapshot, applies platform upgrades, and auto-promotes the run
+   disk into the locked base only when an upgrade changed the VM.
 
-2. **Platform updates (FIRST write op).** Run `npm i -g claude@latest`,
-   `npm i -g codex@latest`, `openclaw update --yes`. Capture before/after versions.
+2. **Prerun preflight (every run):** run `livetest-preflight.sh`. This path does
+   health checks, non-blocking platform version drift warnings, wipe, rsync,
+   credential seeding, and platform start. It does **not** apply platform
+   upgrades by default.
 
-3. **If ANY update was applied: EXIT preflight cleanly with a clear instruction
-   to the coordinator.** Print the version diff and instruct the coordinator to
-   re-snapshot the base image now (the VM is in the exact post-update state we
-   want pinned). Do NOT continue into wipe/sync/install — those would dirty the
-   snapshot. The coordinator stops the VM, copies the disk over the locked base
-   image, re-locks the base, then re-runs preflight (which will now find no
-   updates pending and proceed cleanly).
+3. **If prerun preflight warns about drift:** do not burn 10–20 minutes inside
+   the run. Finish or stop the current cycle based on urgency, then run
+   `livetest-presnapshot-preflight.sh` so the next cycle starts from an updated
+   base.
 
-4. **If no updates: continue to wipe → rsync dev tree → write CC creds →
-   pre-write Quaid shared auth credential → start platform services.** This path
-   is fast (~30s total) because nothing slow remains.
+4. **Only use `livetest-preflight.sh --with-platform-upgrades` or
+   `--platform-upgrades-only` through presnapshot maintenance.** Those flags are
+   for base-image updates, not normal run setup.
 
 **Why this is right:**
-- Per-run preflight when no updates pending: ~30s instead of 10–15min.
+- Per-run preflight avoids the 10–20min platform-update path.
 - Update cost is paid ONCE per platform release, not every run.
 - Snapshot model fits naturally: base = "all CLIs up-to-date, no Quaid";
   preinstall snapshot (see "Pre-install snapshot" below) = "base + dev tree
   synced + creds written + platforms ready"; install runs against preinstall;
   failure restores preinstall.
-- Removes the silent-update class of bug — platform bumps become an explicit
-  re-snapshot decision, which is also when version diffs route to W2 for review.
+- Removes the silent-update class of bug — platform bumps become a presnapshot
+  event with version diffs visible before the base is refreshed.
 
 **Pre-install snapshot (inner-loop optimization on top of the above):** after
 preflight completes (clean, no updates pending) and before invoking M0 install,
@@ -111,17 +112,12 @@ fails due to an installer bug:
 This keeps install-bug retries to ~5min instead of the full ~15min cycle. Drop
 `quaid-livetest-preinstall` once M0 succeeds across all platforms.
 
-**Implementation status (2026-04-17):** implemented in:
-- `tests/livetest/scripts/livetest-preflight.sh` (step-4 update + version-diff + early-exit)
+**Implementation status (2026-04-20):** implemented in:
+- `tests/livetest/scripts/livetest-presnapshot-preflight.sh` (clone base, run platform upgrades, auto-refresh base if changed)
+- `tests/livetest/scripts/livetest-preflight.sh` (per-run safety checks + platform drift warning + wipe/sync/creds/start)
 - `tests/livetest/scripts/livetest-refresh-base.sh` (promote run VM disk to locked base)
 - `tests/livetest/scripts/livetest-snapshot-preinstall.sh` (capture preinstall VM snapshot)
 - `tests/livetest/scripts/livetest-restore-preinstall.sh` (restore run VM + re-rsync dev tree)
-
-When preflight exits after step 4 due to applied platform updates, run:
-```bash
-tests/livetest/scripts/livetest-refresh-base.sh --config tests/livetest/livetest-config.json
-```
-then rerun preflight.
 
 ## OC Interaction
 

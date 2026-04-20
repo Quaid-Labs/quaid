@@ -22,12 +22,19 @@
 #   livetest-preflight.sh --skip-wipe             # skip wipe, just check + start services
 #   livetest-preflight.sh --dry-run               # print commands without executing
 #   livetest-preflight.sh --config path/to/livetest-config.json
+#   livetest-preflight.sh --with-platform-upgrades # slow presnapshot-only CLI upgrade path
+#   livetest-preflight.sh --platform-upgrades-only # safety checks + CLI upgrades, exit 20 if changed
 #   livetest-preflight.sh --release-verify v0.3.0-alpha  # release verification mode
 #
 # Options:
 #   --wipe-platform <all|oc|cc|cdx>  Wipe scope (default: all)
 #   --skip-wipe                      Skip the wipe step
 #   --skip-platform-start            Skip starting platform services
+#   --skip-platform-version-check    Skip non-blocking platform drift warning
+#   --with-platform-upgrades         Apply platform CLI upgrades during preflight.
+#                                    Intended for presnapshot maintenance, not per-run loops.
+#   --platform-upgrades-only         Run safety checks + platform CLI upgrades, then exit.
+#                                    Returns 20 when upgrades changed the run VM.
 #   --dry-run                        Print commands without executing them
 #   --config <path>                  Path to livetest-config.json (default: auto-detected)
 #   --release-verify <tag>           Release verification mode: step 6 clones the tagged
@@ -51,6 +58,9 @@ CONFIG_DEFAULT="$(dirname "$SCRIPT_DIR")/livetest-config.json"
 WIPE_PLATFORM="all"
 SKIP_WIPE=0
 SKIP_PLATFORM_START=0
+SKIP_PLATFORM_VERSION_CHECK=0
+RUN_PLATFORM_UPGRADES=0
+PLATFORM_UPGRADES_ONLY=0
 DRY_RUN=0
 CONFIG_PATH="$CONFIG_DEFAULT"
 RELEASE_VERIFY=""   # empty = dev mode (default); set to a tag like v0.3.0-alpha for release verification
@@ -61,6 +71,9 @@ while [[ $# -gt 0 ]]; do
         --wipe-platform)        WIPE_PLATFORM="$2"; shift 2 ;;
         --skip-wipe)            SKIP_WIPE=1; shift ;;
         --skip-platform-start)  SKIP_PLATFORM_START=1; shift ;;
+        --skip-platform-version-check) SKIP_PLATFORM_VERSION_CHECK=1; shift ;;
+        --with-platform-upgrades) RUN_PLATFORM_UPGRADES=1; shift ;;
+        --platform-upgrades-only) RUN_PLATFORM_UPGRADES=1; PLATFORM_UPGRADES_ONLY=1; shift ;;
         --dry-run)              DRY_RUN=1; shift ;;
         --config)               CONFIG_PATH="$2"; shift 2 ;;
         --release-verify)       RELEASE_VERIFY="$2"; shift 2 ;;
@@ -232,18 +245,48 @@ if [[ "$ERRORS" -gt 0 ]]; then
     exit 1
 fi
 
-# --- Step 4: Upgrade platform CLIs ---
+# --- Step 4: Platform CLI version handling ---
 echo ""
-echo "[4/8] Upgrading platform CLIs on remote to latest..."
+echo "[4/8] Checking platform CLIs on remote..."
 
-if [[ "$DRY_RUN" == "1" ]]; then
-    echo "  [dry-run] would upgrade claude, codex, openclaw to latest on $REMOTE_HOST"
-    echo "  [dry-run] would compare before/after versions and early-exit when updates are applied"
+if [[ "$SKIP_PLATFORM_VERSION_CHECK" == "1" && "$RUN_PLATFORM_UPGRADES" != "1" ]]; then
+    echo "  (skipped — --skip-platform-version-check)"
+elif [[ "$DRY_RUN" == "1" ]]; then
+    if [[ "$RUN_PLATFORM_UPGRADES" == "1" ]]; then
+        echo "  [dry-run] would upgrade claude, codex, openclaw to latest on $REMOTE_HOST"
+        echo "  [dry-run] would compare before/after versions"
+        if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
+            echo "  [dry-run] would exit after platform upgrade check"
+            exit 0
+        fi
+    else
+        echo "  [dry-run] would check remote platform CLI versions and warn on drift"
+    fi
 else
     local_npm_latest_version() {
         local pkg="$1"
         local latest
-        latest="$(npm view "$pkg" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+        latest="$(PKG_NAME="$pkg" python3 - <<'PYEOF' 2>/dev/null | tail -n 1 | tr -d '\r' || true
+import os
+import subprocess
+
+pkg = os.environ.get("PKG_NAME", "")
+try:
+    proc = subprocess.run(
+        ["npm", "view", pkg, "version"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+except Exception:
+    print("__UNKNOWN__")
+    raise SystemExit(0)
+if proc.returncode != 0:
+    print("__UNKNOWN__")
+else:
+    print((proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else "__UNKNOWN__")
+PYEOF
+)"
         if [[ -z "$latest" ]]; then
             echo "__UNKNOWN__"
         else
@@ -254,16 +297,78 @@ else
     remote_pkg_version() {
         local pkg="$1"
         ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; PKG_NAME='$pkg' python3 - <<'PYEOF'
-import json, os, subprocess
+import json
+import os
+from pathlib import Path
+import shutil
+
 pkg = os.environ.get(\"PKG_NAME\", \"\")
-try:
-    proc = subprocess.run([\"npm\", \"list\", \"-g\", pkg, \"--depth=0\", \"--json\"], capture_output=True, text=True)
-    data = json.loads(proc.stdout.strip() or \"{}\")
-    deps = data.get(\"dependencies\") or {}
-    version = (deps.get(pkg) or {}).get(\"version\") or \"\"
-    print(version or \"__MISSING__\")
-except Exception:
-    print(\"__MISSING__\")
+binary_by_pkg = {
+    \"@anthropic-ai/claude-code\": \"claude\",
+    \"@openai/codex\": \"codex\",
+    \"openclaw\": \"openclaw\",
+}
+
+
+def package_parts(name: str) -> list[str]:
+    return [part for part in name.split(\"/\") if part]
+
+
+def read_version(package_dir: Path) -> str:
+    try:
+        data = json.loads((package_dir / \"package.json\").read_text(encoding=\"utf-8\"))
+    except Exception:
+        return \"\"
+    if str(data.get(\"name\") or \"\") != pkg:
+        return \"\"
+    return str(data.get(\"version\") or \"\").strip()
+
+
+def candidate_dirs() -> list[Path]:
+    parts = package_parts(pkg)
+    candidates: list[Path] = []
+    for root in (
+        Path(\"/opt/homebrew/lib/node_modules\"),
+        Path(\"/usr/local/lib/node_modules\"),
+        Path.home() / \".npm-global\" / \"lib\" / \"node_modules\",
+        Path.home() / \".nvm\" / \"versions\" / \"node\",
+    ):
+        if root.name == \"node\":
+            try:
+                for version_root in root.iterdir():
+                    candidates.append(version_root / \"lib\" / \"node_modules\" / Path(*parts))
+            except Exception:
+                pass
+        else:
+            candidates.append(root / Path(*parts))
+
+    binary = binary_by_pkg.get(pkg, \"\")
+    binary_path = shutil.which(binary) if binary else \"\"
+    if binary_path:
+        real = Path(os.path.realpath(binary_path))
+        for parent in [real.parent, *real.parents]:
+            package_json = parent / \"package.json\"
+            if package_json.is_file():
+                candidates.append(parent)
+            if parent.name == \"node_modules\":
+                candidates.append(parent / Path(*parts))
+
+    seen: set[str] = set()
+    deduped: list[Path] = []
+    for path in candidates:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path)
+    return deduped
+
+
+for package_dir in candidate_dirs():
+    version = read_version(package_dir)
+    if version:
+        print(version)
+        raise SystemExit(0)
+print(\"__MISSING__\")
 PYEOF" 2>/dev/null | tr -d '\r'
     }
 
@@ -296,34 +401,58 @@ PYEOF" 2>/dev/null | tr -d '\r'
     LATEST_CODEX="$(local_npm_latest_version "@openai/codex")"
     LATEST_OPENCLAW="$(local_npm_latest_version "openclaw")"
 
-    upgrade_remote_npm_cli() {
-        local label="$1"
-        local package_name="$2"
-        local before_version="$3"
-        local latest_version="$4"
-        local should_update=1
-
-        if [[ "$before_version" != "__MISSING__" && "$latest_version" != "__UNKNOWN__" && "$before_version" == "$latest_version" ]]; then
-            should_update=0
+    if [[ "$RUN_PLATFORM_UPGRADES" != "1" ]]; then
+        drift=0
+        echo "  remote version -> npm latest:"
+        echo "    claude   : $BEFORE_CLAUDE -> $LATEST_CLAUDE"
+        echo "    codex    : $BEFORE_CODEX -> $LATEST_CODEX"
+        echo "    openclaw : $BEFORE_OPENCLAW -> $LATEST_OPENCLAW"
+        if [[ "$LATEST_CLAUDE" != "__UNKNOWN__" && "$BEFORE_CLAUDE" != "__MISSING__" && "$BEFORE_CLAUDE" != "$LATEST_CLAUDE" ]]; then
+            drift=1
         fi
-
-        if [[ "$should_update" -eq 0 ]]; then
-            echo "  ${label} already at ${before_version} (latest), skipping update"
-            return
+        if [[ "$LATEST_CODEX" != "__UNKNOWN__" && "$BEFORE_CODEX" != "__MISSING__" && "$BEFORE_CODEX" != "$LATEST_CODEX" ]]; then
+            drift=1
         fi
-
-        printf "  upgrading %-12s ... " "${label}"
-        update_output=""
-        if update_output="$(ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; npm install -g ${package_name}@latest --prefer-offline 2>/dev/null || npm install -g ${package_name}@latest" 2>&1)"; then
-            echo "done"
+        if [[ "$LATEST_OPENCLAW" != "__UNKNOWN__" && "$BEFORE_OPENCLAW" != "__MISSING__" && "$BEFORE_OPENCLAW" != "$LATEST_OPENCLAW" ]]; then
+            drift=1
+        fi
+        if [[ "$drift" -eq 1 ]]; then
+            echo "  WARN  platform CLI drift detected; per-run preflight will not upgrade it."
+            echo "        Run $SCRIPT_DIR/livetest-presnapshot-preflight.sh --config $CONFIG_PATH"
+            echo "        to update the base snapshot before the next overnight loop."
         else
-            echo "WARN: upgrade failed (continuing)"
-            printf '%s\n' "$update_output" | tail -3 | sed 's/^/    /'
+            echo "  $PASS  no platform CLI drift detected"
         fi
-    }
+    else
 
-    upgrade_remote_npm_cli "claude" "@anthropic-ai/claude-code" "$BEFORE_CLAUDE" "$LATEST_CLAUDE"
-    upgrade_remote_npm_cli "codex" "@openai/codex" "$BEFORE_CODEX" "$LATEST_CODEX"
+        upgrade_remote_npm_cli() {
+            local label="$1"
+            local package_name="$2"
+            local before_version="$3"
+            local latest_version="$4"
+            local should_update=1
+
+            if [[ "$before_version" != "__MISSING__" && "$latest_version" != "__UNKNOWN__" && "$before_version" == "$latest_version" ]]; then
+                should_update=0
+            fi
+
+            if [[ "$should_update" -eq 0 ]]; then
+                echo "  ${label} already at ${before_version} (latest), skipping update"
+                return
+            fi
+
+            printf "  upgrading %-12s ... " "${label}"
+            update_output=""
+            if update_output="$(ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; npm install -g ${package_name}@latest --prefer-offline 2>/dev/null || npm install -g ${package_name}@latest" 2>&1)"; then
+                echo "done"
+            else
+                echo "WARN: upgrade failed (continuing)"
+                printf '%s\n' "$update_output" | tail -3 | sed 's/^/    /'
+            fi
+        }
+
+        upgrade_remote_npm_cli "claude" "@anthropic-ai/claude-code" "$BEFORE_CLAUDE" "$LATEST_CLAUDE"
+        upgrade_remote_npm_cli "codex" "@openai/codex" "$BEFORE_CODEX" "$LATEST_CODEX"
 
     oc_output=""
     oc_rc=0
@@ -398,15 +527,26 @@ PYEOF" 2>/dev/null | tr -d '\r'
 
     if [[ "$updates_applied" -eq 1 ]]; then
         echo ""
-        echo "Preflight halted after step 4 because one or more platform updates were applied."
-        echo "Refresh the locked base image from this run VM, then re-run preflight:"
-        echo "  $SCRIPT_DIR/livetest-refresh-base.sh --config $CONFIG_PATH"
-        echo ""
-        echo "After base refresh completes, run preflight again. Steps 5-8 are intentionally skipped on this pass."
+        if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
+            echo "Platform updates were applied. Presnapshot wrapper should refresh the base image."
+            exit 20
+        else
+            echo "Preflight halted after step 4 because one or more platform updates were applied."
+            echo "Refresh the locked base image from this run VM, then re-run preflight:"
+            echo "  $SCRIPT_DIR/livetest-refresh-base.sh --config $CONFIG_PATH"
+            echo ""
+            echo "After base refresh completes, run preflight again. Steps 5-8 are intentionally skipped on this pass."
+            exit 0
+        fi
+    fi
+
+    if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
+        echo "No platform updates were applied. Base snapshot is current."
         exit 0
     fi
 fi
-echo "  [4/8] CLI upgrade SSH session complete"
+fi
+echo "  [4/8] platform CLI check complete"
 
 # --- Step 5: Wipe ---
 echo ""
