@@ -9,6 +9,8 @@ Environment variable overrides (for testing):
   OLLAMA_URL           — overrides config ollama.url
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 

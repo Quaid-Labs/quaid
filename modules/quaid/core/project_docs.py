@@ -23,9 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from lib.adapter import quaid_tracking_dir
-from lib.runtime_context import get_quaid_home
-
 _PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PROJECT_LOG = "PROJECT.log"
 UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
@@ -44,6 +41,17 @@ def validate_project_name(project: str) -> str:
     if not _PROJECT_RE.match(name):
         raise ValueError(f"Invalid project name: {project!r}")
     return name
+
+
+def get_quaid_home() -> Path:
+    """Return QUAID_HOME without adapter bootstrap side effects."""
+    raw = os.environ.get("QUAID_HOME", "").strip()
+    return Path(raw).expanduser().resolve() if raw else Path.home() / ".quaid"
+
+
+def quaid_tracking_dir(quaid_home: Path) -> Path:
+    """Shadow git tracking base directory."""
+    return quaid_home / ".git-tracking"
 
 
 def project_docs_root(quaid_home: Optional[Path] = None) -> Path:

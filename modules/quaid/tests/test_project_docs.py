@@ -222,6 +222,14 @@ def test_pid_identity_rejects_unrelated_process(project_env):
     assert project_docs.read_supervisor_pid() is None
 
 
+def test_project_docs_home_resolution_avoids_adapter_bootstrap(project_env):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    assert project_docs.get_quaid_home.__module__ == "core.project_docs"
+    assert project_docs.project_docs_root() == tmp_path / "data" / "project-docs"
+
+
 def test_worker_heartbeat_writes_atomic_json_pid_record(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
