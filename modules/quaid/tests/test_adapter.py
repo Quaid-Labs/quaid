@@ -1283,6 +1283,33 @@ class TestCodexAdapter:
         assert signal["signal_type"] == "session_end"
         assert adapter._read_last_session_id() == "new-thread"
 
+    def test_check_session_transition_prefers_owned_prior_rollout(self, tmp_path, monkeypatch):
+        own_project = tmp_path / "cdx-livetest"
+        own_project.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(own_project))
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._write_last_session_id("old-thread")
+        sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "04" / "14"
+        sessions_root.mkdir(parents=True)
+        owned = sessions_root / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        unclassified = sessions_root / "rollout-2026-04-14T12-00-01-old-thread.jsonl"
+        owned.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(own_project)}}) + "\n",
+            encoding="utf-8",
+        )
+        unclassified.write_text(
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Marisol fact"}}) + "\n",
+            encoding="utf-8",
+        )
+
+        signal = adapter.check_session_transition({"thread_id": "new-thread"})
+
+        assert signal is not None
+        assert signal["ended_transcript_path"] == str(owned)
+
     def test_check_session_transition_rejects_explicit_foreign_prior_rollout(self, tmp_path, monkeypatch):
         own_project = tmp_path / "cdx-livetest"
         foreign_project = tmp_path / "cdx-m13-test"

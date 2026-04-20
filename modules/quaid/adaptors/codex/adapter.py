@@ -454,13 +454,15 @@ class CodexAdapter(QuaidAdapter):
         if sessions_dir is None:
             return None
         expected = self._current_instance_id_for_sessions()
-        matches: list[Path] = []
+        owned_matches: list[Path] = []
+        unclassified_matches: list[Path] = []
         for path in sessions_dir.rglob(f"rollout-*{session_id}.jsonl"):
             actual = self._session_instance_id_from_path(path)
             if actual == expected:
-                matches.append(path)
+                owned_matches.append(path)
             elif allow_unclassified and not actual:
-                matches.append(path)
+                unclassified_matches.append(path)
+        matches = owned_matches or unclassified_matches
         matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return matches[0] if matches else None
 
