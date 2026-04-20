@@ -61,6 +61,10 @@ class ClaudeCodeAdapter(QuaidAdapter):
         r"<command-args>.*?</command-args>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _LOCAL_COMMAND_NAME_RE = re.compile(
+        r"<command-name>\s*(/(?:new|clear|reset|restart))\b.*?</command-name>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     """Adapter for running Quaid inside Claude Code sessions."""
 
     def __init__(self, home: Optional[Path] = None):
@@ -399,6 +403,62 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def get_sessions_dir(self) -> Optional[Path]:
         d = Path.home() / ".claude" / "projects"
         return d if d.is_dir() else None
+
+    @classmethod
+    def _extract_lifecycle_command(cls, text: str) -> str:
+        value = str(text or "").strip()
+        if not value:
+            return ""
+        local_command = cls._LOCAL_COMMAND_NAME_RE.search(value)
+        if local_command:
+            return local_command.group(1).lower()
+        if not value.startswith("/"):
+            return ""
+        command = value.split()[0].lower()
+        if command in ("/new", "/clear", "/reset", "/restart"):
+            return command
+        return ""
+
+    @classmethod
+    def _scan_lifecycle_candidates(cls, value) -> str:
+        if isinstance(value, str):
+            return cls._extract_lifecycle_command(value)
+        if isinstance(value, list):
+            for item in value:
+                cmd = cls._scan_lifecycle_candidates(item)
+                if cmd:
+                    return cmd
+            return ""
+        if not isinstance(value, dict):
+            return ""
+        for key in ("command", "prompt", "message", "input", "last_user_message", "text"):
+            cmd = cls._scan_lifecycle_candidates(value.get(key))
+            if cmd:
+                return cmd
+        payload = value.get("payload")
+        if isinstance(payload, dict):
+            cmd = cls._scan_lifecycle_candidates(payload)
+            if cmd:
+                return cmd
+        content = value.get("content")
+        if isinstance(content, (list, dict, str)):
+            cmd = cls._scan_lifecycle_candidates(content)
+            if cmd:
+                return cmd
+        return ""
+
+    def resolve_prompt_submit_signal(self, hook_input):
+        command = self._scan_lifecycle_candidates(hook_input)
+        if not command:
+            return None
+        return {
+            "signal_type": "session_end",
+            "meta": {
+                "source": "hook_inject",
+                "command": command,
+                "reason": f"command:{command.lstrip('/')}",
+            },
+        }
 
     def sanitize_transcript_text(self, text: str) -> str:
         value = super().sanitize_transcript_text(text)

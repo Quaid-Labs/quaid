@@ -134,6 +134,53 @@ def _run_hook_subagent_stop(hook_input: dict, *, monkeypatch):
     return captured_err.getvalue()
 
 
+def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypatch, tmp_path, cursor_dir):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    transcript_path = tmp_path / "cc-clear.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "My sister is Diana."}}) + "\n",
+        encoding="utf-8",
+    )
+
+    written_signals = []
+
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-session-end.json")
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+    out, err = _run_hook_inject(
+        {
+            "session_id": "sess-cc-clear",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "/clear",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    assert out.strip() == ""
+    assert len(written_signals) == 1
+    sig = written_signals[0]
+    assert sig["signal_type"] == "session_end"
+    assert sig["session_id"] == "sess-cc-clear"
+    assert sig["transcript_path"] == str(transcript_path)
+    assert sig["adapter"] == "claude-code"
+    assert sig["supports_compaction_control"] is False
+    assert sig["meta"]["source"] == "hook_inject"
+    assert sig["meta"]["command"] == "/clear"
+    assert sig["meta"]["reason"] == "command:clear"
+    assert err.strip() == ""
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
