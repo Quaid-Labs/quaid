@@ -4433,6 +4433,78 @@ def _recall_store_plan_timeout_s(timeout_ms: Optional[int], *, fast_mode: bool) 
     return 30.0
 
 
+def _handle_recall_branch_exception(
+    *,
+    parent_query: str,
+    branch_query: str,
+    branch_index: int,
+    turn: int,
+    exc: Exception,
+) -> Dict[str, Any]:
+    timeout_like = _is_timeout_like_exception(exc)
+    fail_hard = _is_fail_hard_mode()
+    _trace_m15(
+        "memory_graph.recall.branch_error",
+        query=parent_query,
+        branch_query=branch_query,
+        branch_index=branch_index,
+        turn=turn,
+        timeout_like=timeout_like,
+        fail_hard=fail_hard,
+        error_type=type(exc).__name__,
+        error=str(exc),
+    )
+    if fail_hard or not timeout_like:
+        raise exc
+    logger.warning(
+        "recall branch %d on turn %d timed out; continuing with completed branches: %s",
+        branch_index,
+        turn,
+        exc,
+    )
+    return {
+        "query": branch_query,
+        "counts": {
+            "initial_candidates": 0,
+            "post_threshold_candidates": 0,
+            "diverse_results": 0,
+            "final_results": 0,
+        },
+        "phases_ms": {
+            "total_ms": 0,
+        },
+        "flags": {
+            "timed_out": True,
+        },
+        "error_type": type(exc).__name__,
+        "error": str(exc)[:240],
+        "timed_out": True,
+        "stop_reason": "branch_timeout",
+    }
+
+
+def _run_recall_branch_callables(
+    callables: List[Any],
+    *,
+    max_workers: int,
+    pool_name: str,
+    timeout_seconds: Optional[float],
+) -> Tuple[List[Any], float]:
+    started = time.monotonic()
+    try:
+        batches = run_callables(
+            callables,
+            max_workers=max_workers,
+            pool_name=pool_name,
+            timeout_seconds=timeout_seconds,
+            return_exceptions=True,
+        )
+    except Exception as exc:
+        batches = [exc for _ in callables]
+    wall_ms = (time.monotonic() - started) * 1000
+    return batches, wall_ms
+
+
 def _run_recall_store_plan(
     query: str,
     *,
@@ -7329,6 +7401,10 @@ def _build_branch_telemetry(
             "search_query": meta.get("search_query"),
             "telemetry": meta.get("telemetry") if isinstance(meta.get("telemetry"), dict) else None,
         }
+        if meta.get("error_type"):
+            branch["error_type"] = meta.get("error_type")
+            branch["error"] = meta.get("error")
+            branch["timed_out"] = bool(meta.get("timed_out"))
         branches.append(branch)
 
     total_values = [float(branch["total_ms"]) for branch in branches]
@@ -8800,18 +8876,15 @@ def recall(
             **common_kwargs,
         ))
 
-    search_started = _time.monotonic()
-    t1_batches = run_callables(
+    t1_batches, search_wall_ms = _run_recall_branch_callables(
         search_callables,
         max_workers=min(len(search_callables), 5),
         pool_name="recall_drill",
         timeout_seconds=remaining,
-        return_exceptions=True,
     )
-    search_wall_ms = (_time.monotonic() - search_started) * 1000
 
     turn1_batch_metas: List[Dict[str, Any]] = []
-    for batch in t1_batches:
+    for index, batch in enumerate(t1_batches):
         if isinstance(batch, tuple) and len(batch) == 2 and isinstance(batch[0], list):
             rows, meta = batch
             all_batches.append(rows)
@@ -8822,6 +8895,14 @@ def recall(
             meta = _extract_recall_meta(batch)
             if meta:
                 turn1_batch_metas.append(meta)
+        elif isinstance(batch, Exception):
+            turn1_batch_metas.append(_handle_recall_branch_exception(
+                parent_query=query,
+                branch_query=fanout_queries[index] if index < len(fanout_queries) else "",
+                branch_index=index,
+                turn=1,
+                exc=batch,
+            ))
     all_branch_metas.extend(turn1_batch_metas)
 
     turn_elapsed = (_time.monotonic() - turn_start) * 1000
@@ -9049,18 +9130,15 @@ def recall(
             for q in new_queries
         ]
 
-        search_started = _time.monotonic()
-        drill_batches = run_callables(
+        drill_batches, search_wall_ms = _run_recall_branch_callables(
             drill_callables,
             max_workers=min(len(drill_callables), 3),
             pool_name="recall_drill",
             timeout_seconds=search_remaining,
-            return_exceptions=True,
         )
-        search_wall_ms = (_time.monotonic() - search_started) * 1000
 
         drill_batch_metas: List[Dict[str, Any]] = []
-        for batch in drill_batches:
+        for index, batch in enumerate(drill_batches):
             if isinstance(batch, tuple) and len(batch) == 2 and isinstance(batch[0], list):
                 rows, meta = batch
                 all_batches.append(rows)
@@ -9071,6 +9149,14 @@ def recall(
                 meta = _extract_recall_meta(batch)
                 if meta:
                     drill_batch_metas.append(meta)
+            elif isinstance(batch, Exception):
+                drill_batch_metas.append(_handle_recall_branch_exception(
+                    parent_query=query,
+                    branch_query=new_queries[index] if index < len(new_queries) else "",
+                    branch_index=index,
+                    turn=turn,
+                    exc=batch,
+                ))
         all_branch_metas.extend(drill_batch_metas)
 
         drill_merge_limit = max(limit * 3, 20) if drill_post_merge_refine else (limit * 2)

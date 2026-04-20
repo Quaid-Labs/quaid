@@ -3038,6 +3038,117 @@ class TestRecallFastHookInjectContract:
         assert meta["turns"] == 2
         assert meta["drill_log"][1]["queries"] == ["Maya current employer Stripe"]
 
+    def test_recall_return_meta_continues_after_drill_timeout_when_failhard_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        initial_row = {
+            "id": "run-1",
+            "text": "Solomon has a canal towpath run planned",
+            "category": "fact",
+            "similarity": 0.42,
+        }
+        planner_meta = {
+            "query": "exercise habits recent plans",
+            "used_llm": False,
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "full",
+        }
+        initial_meta = {
+            "mode": "deliberate",
+            "query": "exercise habits recent plans",
+            "counts": {"final_results": 1},
+            "phases_ms": {"total_ms": 7},
+        }
+        drill_queries = [
+            "canal towpath run",
+            "recent exercise habits",
+            "running plans",
+        ]
+
+        with patch.object(mg, "_plan_fanout_queries", return_value=(["exercise habits recent plans"], planner_meta)), \
+             patch.object(
+                 mg,
+                 "_drill_plan_queries",
+                 return_value=(
+                     drill_queries,
+                     {
+                         "used_llm": True,
+                         "queries_count": len(drill_queries),
+                         "elapsed_ms": 8,
+                         "bailout_reason": None,
+                         "done": False,
+                     },
+                 ),
+             ), \
+             patch.object(
+                 mg,
+                 "_evaluate_quality_gate_readiness",
+                 return_value={
+                     "ready": False,
+                     "needs_validation": True,
+                     "top_similarity": 0.42,
+                     "current_like": True,
+                     "signals": [],
+                 },
+             ), \
+             patch.object(
+                 mg,
+                 "run_callables",
+                 side_effect=[
+                     [([initial_row], initial_meta)],
+                     TimeoutError("3 of 3 futures unfinished"),
+                 ],
+             ), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            rows, meta = mg.recall(
+                "exercise habits recent plans",
+                owner_id="quaid",
+                limit=3,
+                use_routing=True,
+                max_turns=2,
+                timeout_ms=10000,
+                return_meta=True,
+            )
+
+        assert [row["id"] for row in rows] == ["run-1"]
+        assert meta["turns"] == 2
+        drill_fanout = meta["turn_details"][1]["fanout"]
+        assert drill_fanout["queries"] == drill_queries
+        assert drill_fanout["branch_count"] == 3
+        assert all(branch["timed_out"] is True for branch in drill_fanout["branches"])
+        assert {branch["error_type"] for branch in drill_fanout["branches"]} == {"TimeoutError"}
+
+    def test_recall_return_meta_raises_branch_timeout_when_failhard_enabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["exercise habits recent plans"],
+                {
+                    "query": "exercise habits recent plans",
+                    "used_llm": False,
+                    "queries_count": 1,
+                    "elapsed_ms": 0,
+                    "planner_profile": "full",
+                },
+            ),
+        ), \
+             patch.object(mg, "run_callables", side_effect=TimeoutError("1 of 1 futures unfinished")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(TimeoutError, match="futures unfinished"):
+                mg.recall(
+                    "exercise habits recent plans",
+                    owner_id="quaid",
+                    limit=3,
+                    use_routing=True,
+                    max_turns=1,
+                    timeout_ms=1000,
+                    return_meta=True,
+                )
+
     def test_query_fit_multiplier_boosts_assistant_rows_for_agent_queries(self):
         import datastore.memorydb.memory_graph as mg
 
