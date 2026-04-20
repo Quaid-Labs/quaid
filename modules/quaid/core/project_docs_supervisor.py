@@ -129,15 +129,30 @@ def _read_instance_daemon_pid(instance: str) -> int | None:
     return None
 
 
-def _wait_for_instance_pid(instance: str, expected_pid: int, timeout_seconds: float | None = None) -> int:
+def _wait_for_instance_pid(
+    instance: str,
+    expected_pid: int,
+    timeout_seconds: float | None = None,
+    proc: subprocess.Popen | None = None,
+) -> int:
     timeout = project_docs.pid_startup_wait_seconds() if timeout_seconds is None else float(timeout_seconds)
     deadline = time.time() + max(0.5, timeout)
+    last_seen_pid: int | None = None
     while time.time() < deadline:
         pid = _read_instance_daemon_pid(instance)
+        if pid is not None:
+            last_seen_pid = pid
         if pid == int(expected_pid):
             return pid
+        if pid is not None:
+            if proc is not None and proc.poll() is None:
+                project_docs._terminate_process(proc)
+            return pid
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(f"instance monitor {instance} exited before writing pid file rc={proc.returncode}")
         time.sleep(0.1)
-    raise TimeoutError(f"instance monitor {instance} did not write pid file for pid {expected_pid}")
+    detail = f"last_seen_pid={last_seen_pid}" if last_seen_pid is not None else "no live pid observed"
+    raise TimeoutError(f"instance monitor {instance} did not write pid file for pid {expected_pid} ({detail})")
 
 
 def _start_instance_monitor(instance: str) -> int:
@@ -157,7 +172,7 @@ def _start_instance_monitor(instance: str) -> int:
             env=env,
         )
     try:
-        return _wait_for_instance_pid(name, int(proc.pid))
+        return _wait_for_instance_pid(name, int(proc.pid), proc=proc)
     except Exception:
         project_docs._terminate_process(proc)
         raise

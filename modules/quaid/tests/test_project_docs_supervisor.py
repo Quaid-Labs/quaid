@@ -67,7 +67,7 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
     )
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
     monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
-    monkeypatch.setattr(supervisor, "_wait_for_instance_pid", lambda _name, pid: pid)
+    monkeypatch.setattr(supervisor, "_wait_for_instance_pid", lambda _name, pid, **_kwargs: pid)
     monkeypatch.setattr(supervisor.subprocess, "Popen", _FakePopen)
 
     assert supervisor._start_instance_monitor("codex-private-tmp-cdx-livetest") == 12345
@@ -78,6 +78,44 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
     assert env["QUAID_HOME"] == str(tmp_path)
     assert env["QUAID_INSTANCE"] == "codex-private-tmp-cdx-livetest"
     assert env["QUAID_DAEMON"] == "1"
+
+
+def test_wait_for_instance_pid_accepts_concurrent_live_monitor(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    terminated = []
+
+    class _RunningProc:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: 22222)
+    monkeypatch.setattr(supervisor.project_docs, "_terminate_process", lambda proc: terminated.append(proc))
+
+    proc = _RunningProc()
+    assert supervisor._wait_for_instance_pid("alpha", 11111, timeout_seconds=5, proc=proc) == 22222
+    assert terminated == [proc]
+
+
+def test_wait_for_instance_pid_reports_child_exit(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    class _ExitedProc:
+        returncode = 7
+
+        def poll(self):
+            return 7
+
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+
+    try:
+        supervisor._wait_for_instance_pid("alpha", 11111, timeout_seconds=5, proc=_ExitedProc())
+    except RuntimeError as exc:
+        assert "exited before writing pid file rc=7" in str(exc)
+    else:
+        raise AssertionError("expected child-exit RuntimeError")
 
 
 def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, tmp_path):
