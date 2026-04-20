@@ -1,71 +1,149 @@
-# Quaid — Agent Operating Rules
+# Quaid — Operating Guide
 
-Quaid is an active knowledge layer: it recalls stored facts, tracks project context, and maintains project docs. `TOOLS.md` is the callable CLI/API reference. `PROJECT.md` is the project overview, architecture map, and doc index.
+Quaid is an active knowledge layer. It captures facts and project context from conversations, recalls them on demand, and maintains knowledge health nightly.
 
-## Memory And Recall
+For full CLI reference see `TOOLS.md`. For doc index and architecture see `PROJECT.md`.
 
-- Treat auto-injected memories as high-value hints, not invisible noise.
-- For direct personal questions, answer from injected memories when the match is exact or high-confidence.
-- Do not volunteer sensitive health, finance, conflict, or emotionally loaded history unless the user clearly opens that topic.
-- Use explicit `quaid recall` before claiming missing context.
-- Use `quaid recall "query" '{"stores":["docs"]}'` for codebase, architecture, API, or project-doc questions.
-- Use `quaid recall "query" '{"stores":["vector","graph","docs"]}'` when both memory history and project docs may matter.
-- Treat generated project docs and raw source as current-state evidence. For historical, session-scoped, motivation, bug-bash, or "what did the agent find/suggest" questions, prefer chronological memory evidence unless the question explicitly asks about current implementation.
-- Verify concrete claims such as names, dates, versions, and status with explicit recall or direct files when the answer matters.
+---
 
-## Memory Retention Boundary
+## Auto-Injected Memories
 
-- Only information explicitly stated in assistant messages is reliably retained as memory.
-- Raw tool output, private reasoning, and unstated intermediate conclusions may not be preserved.
-- Project file writes may be tracked from filesystem changes, but durable decisions, outcomes, explanations, and status should still be stated explicitly.
+When a `<injected_memories>` block appears in your context, it contains facts automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you.
 
-## Project And File Placement
+- For direct personal questions (names, relationships, pets, preferences, past events), answer from these memories when the match is exact or high-confidence — do not say you have no information when relevant facts appear here.
+- Items marked (uncertain) have lower extraction confidence. Only run `memory_recall` if results are marked (uncertain) or the match seems only loosely related to the question.
+- Dates shown are when the fact was recorded.
+- Auto-injected memories are optimized for fast direct matches. OpenClaw requests vector plus graph recall within a hard timeout, but injected results can still miss answers that require query rewriting, deeper traversal, or combining multiple stored relationships.
+- If injected memories already clearly answer the question, answer directly. Do not ignore strong injected evidence just because explicit recall is available.
+- Quaid may provide a runtime metadata block listing active domains and active graph relation types. If a question appears to depend on relationships, hierarchy, dependency structure, or other link-based reasoning, and injected memories do not clearly answer it, an explicit `quaid recall` may help.
+- **Topic licensing:** knowing a sensitive detail does not make it on-topic. For light prompts, acknowledgments, or vague openings, do not volunteer private health, finances, conflicts, or emotionally loaded history unless the user clearly opens that topic.
 
-Never write files to `/tmp/`, `/var/tmp/`, `~/quaid/`, or `~/.quaid/` except through Quaid-managed flows.
+---
 
-Before writing or delegating work, choose the first matching rule:
+## File Placement — MANDATORY RULES
 
-1. Existing project owns the work: write inside that project or register the real working path to it.
-2. Throwaway or scratch work: use `misc--$QUAID_INSTANCE` as owner, write at a real working path, then register the file.
-3. Durable new work: create a project first with `quaid project create <name> --source-root <path>`, then write files or spawn agents.
-4. User specifies an external path: write there, then `quaid registry register <path> --project <name>`.
+**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, or anywhere under `~/quaid/` or `~/.quaid/` except through Quaid's own managed flows.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
 
-Always tell the user when a file is tracked through the project registry.
+**Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
 
-## Project Docs Consistency
+1. **Existing project owns this work** → place the file inside that project's directory.
+2. **Throwaway / one-off / scratch / quick / hello-world** → use the misc project as the owner, but do not treat `~/quaid/` or `~/.quaid/` as the working directory:
+   ```bash
+   # The misc project is pre-created. Confirm it exists:
+   quaid project show misc--$QUAID_INSTANCE
+   # Write the file at a real working path, then register it to misc:
+   quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
+   ```
+   Prefer a user-visible working path or the active repo. Always tell the user the file is tracked by the misc project and offer to promote it to a real project.
+3. **Durable new work** → create a project first, then write files:
+   ```bash
+   quaid project create <name> --source-root <path>
+   # THEN write files / spawn sub-agents
+   ```
+4. **User specifies a path outside the project system** → write there, then register the file so the project tracks it:
+   ```bash
+   # Write the file at the user's requested path (e.g. ~/my-scripts/tool.py)
+   # Then link it into the owning project:
+   quaid registry register ~/my-scripts/tool.py --project <name>
+   ```
+   Always tell the user the file is tracked via the registry even though it lives outside the project directory.
 
-- When actively working on a project, read that project's `PROJECT.md` first for overview and navigation.
-- `TOOLS.md` is only for callable tools/APIs/commands an agent can use. Keep it terse and role-pure.
-- `AGENTS.md` is only for stable operating behavior and safety rules. Keep strategy, status, architecture narrative, and changelog material in `PROJECT.md` or focused docs.
-- Project docs are eventually consistent. Recent writes may not be visible via docs recall until the supervisor/worker has indexed them.
-- If another agent just wrote a file, read the file directly instead of relying on docs search.
+**Example — user asks for a throwaway script:**
+> "Can you write a quick hello world script?"
 
-## Fail-Hard
+Correct response:
+```bash
+# Step 1: confirm misc project exists
+quaid project show misc--$QUAID_INSTANCE
+# Step 2: write the file at a real working path
+# Step 3: register it to misc
+quaid registry register /absolute/path/to/hello.py --project misc--$QUAID_INSTANCE
+```
+Tell the user: "I tracked it under the misc project so it stays in Quaid's project system."
+Do NOT write to `/tmp/hello.py` or any other path.
 
-- `retrieval.fail_hard=true` means failures must surface loudly.
-- Do not hide fail-hard retrieval, provider, datastore, or docs failures with silent fallbacks.
-- If fail-hard trips in live work, fix or route the underlying issue.
+**Example — user asks to build a new tool:**
+> "I have a Python script. Can you build it into a proper CLI tool?"
 
-## Deferred Notices
+Correct response:
+```bash
+# Step 1: create a project BEFORE doing any work or spawning sub-agents
+quaid project create my-cli-tool --source-root /path/to/script
+# Step 2: then proceed with the work
+```
 
-- Deferred notices are normal Quaid context from janitor/update flows.
-- Do not ask permission to read them.
-- Drain them only when a human user is actively present: `quaid notify --deferred-drain`.
-- If pending notices are detected at the start of a human-facing task, drain and relay the result concisely.
+---
 
-## Cross-Instance Safety
+## Tool Access
 
-- Multiple platforms may share `QUAID_HOME` while using separate `QUAID_INSTANCE` silos.
-- Use `quaid project link` and `quaid project unlink` for cross-instance participation.
-- Prefer `unlink` over destructive `project delete` unless deletion is explicitly intended.
+Use Quaid via your Bash tool. Prefer `quaid`. If it is not on `PATH`, use `$QUAID_HOME/modules/quaid/quaid` for current installs or `$QUAID_HOME/plugins/quaid/quaid` on older installs. `QUAID_HOME` and `QUAID_INSTANCE` are set in your environment by the adapter — do not override them. See `TOOLS.md` for the full command reference.
 
-## Always-Loaded Quaid Files
+---
+
+## How Memory Works
+
+```
+Conversation → compaction/reset → Opus extracts facts + edges → stored in DB
+Nightly janitor (4 AM default) → review → dedup → decay → graduate to active
+```
+
+- **Extraction priority:** user facts first, agent-action memories second, technical/project state third. Agent extraction must never displace user-memory coverage.
+- **Edges** are created at extraction time and linked to source facts.
+- **Janitor** runs nightly: reviews pending, merges duplicates (Ebbinghaus decay), monitors core files.
+- **Soul snippets** (fast path) — bullet observations distilled into SOUL.md, USER.md, ENVIRONMENT.md by janitor.
+- **Journal** (slow path) — diary paragraphs distilled by deep reasoning agent weekly.
+
+---
+
+## Operating Rules
+
+**Retrieval discipline**
+- Every tracked project has its own `PROJECT.md` at `QUAID_VISIBLE_HOME/projects/<project-name>/PROJECT.md`.
+- If you are actively working on a project, load that project's `PROJECT.md` first. Treat it as the overview and navigation map before wandering the tree.
+- Always use memory/project tools before claiming missing context.
+- Treat auto-injected memories as hints — verify concrete claims (names, dates, versions) with explicit `quaid recall`.
+- Use `quaid recall "query" '{"stores":["docs"]}'` for codebase/architecture questions. Docs retrieval will try to infer the relevant project and include its `PROJECT.md` when possible.
+- Use `quaid recall "query" '{"stores":["vector","graph","docs"]}'` for a single pass across memories and docs.
+
+**Memory retention boundary**
+- Only information you state explicitly in assistant messages is reliably retained as memory.
+- Raw tool output, private reasoning, and unstated intermediate results may not be preserved.
+- Project file writes may be tracked from actual filesystem changes, but important conclusions, decisions, explanations, and outcomes should still be stated explicitly if they are worth remembering.
+
+**Fail-hard**
+- Controlled by `retrieval.fail_hard` in the active instance `config.json`.
+- When `true`: never degrade silently — surface the error.
+- When `false`: degrade with loud warnings/diagnostics.
+
+**Project and file placement**
+
+All files go inside a tracked quaid project OR are registered into one. `/tmp/` is never acceptable, even for throwaway work.
+- Misc project: `misc--$QUAID_INSTANCE` is the default owner for throwaway/one-off work. Prefer a real working path, then register that file to misc.
+- New work: create a project first (`quaid project create`), then write files.
+- User specifies a path outside the project system: write there, then `quaid registry register <path> --project <name>` to link it.
+- See the **File Placement — MANDATORY RULES** section above for decision tree and examples.
+
+**Cross-instance**
+- Multiple platforms may be using Quaid on the same machine (e.g. OpenClaw, Claude Code, or others) — each gets its own instance silo under the shared `QUAID_HOME`.
+- Use `quaid project link/unlink` for cross-instance project participation.
+- `quaid project delete` is destructive — prefer `unlink` if you only want to leave the project.
+
+**Project docs are eventually consistent — not real-time**
+- When a file is written or changed, it is NOT immediately visible via `quaid recall`.
+- The pipeline is: file change → daemon picks it up → embedding → RAG index. This takes time (seconds to minutes depending on daemon polling interval and queue depth).
+- **If two agents are working on the same project simultaneously**, one agent's writes will not be visible to the other until the daemon has processed and indexed them. Do not assume a file another agent just wrote is already in the search index.
+- When you need the current content of a file another agent recently wrote, read the file directly rather than relying on docs search.
+- `quaid docs check` shows which registered docs are stale (not yet re-indexed). `quaid docs update --apply` can force a re-index if you need the index to be current before a search.
+
+---
+
+## Core Files (always loaded)
 
 | File | Role |
 |------|------|
-| `TOOLS.md` | Callable CLI/API reference |
-| `AGENTS.md` | Stable operating rules |
-| `PROJECT.md` | Project overview and architecture map |
-| `SOUL.md` | Quaid identity and long-term orientation |
-| `USER.md` | User understanding and preferences |
-| `ENVIRONMENT.md` | Environment and shared operational context |
+| `AGENTS.md` | This guide |
+| `TOOLS.md` | CLI reference |
+| `PROJECT.md` | Doc index and architecture map |
+| `SOUL.md` | Quaid's reflective identity |
+| `USER.md` | User understanding and patterns |
+| `ENVIRONMENT.md` | Functional behaviors, environmental context, and shared history |
