@@ -25,6 +25,7 @@ from lib.adapter import (
     reset_adapter,
     _read_env_file,
 )
+from lib.instance import instance_slug_from_project_dir
 from lib.providers import (
     AnthropicLLMProvider,
     ClaudeCodeLLMProvider,
@@ -1960,7 +1961,7 @@ class TestAdapterSelection:
     def test_config_claude_code_from_cwd_with_explicit_adapter_type(self, monkeypatch, tmp_path):
         project_dir = tmp_path / "cc-project"
         project_dir.mkdir()
-        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        slug = instance_slug_from_project_dir(str(project_dir))
         cfg_dir = tmp_path / "instances" / f"claude-code-{slug}"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "config.json").write_text('{"adapter":{"type":"claude-code"}}', encoding="utf-8")
@@ -1981,7 +1982,7 @@ class TestAdapterSelection:
     def test_config_codex_from_cwd_with_explicit_adapter_type(self, monkeypatch, tmp_path):
         project_dir = tmp_path / "cdx-project"
         project_dir.mkdir()
-        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        slug = instance_slug_from_project_dir(str(project_dir))
         cfg_dir = tmp_path / "instances" / f"codex-{slug}"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "config.json").write_text('{"adapter":{"type":"codex"}}', encoding="utf-8")
@@ -1999,10 +2000,33 @@ class TestAdapterSelection:
         assert isinstance(adapter, CodexAdapter)
         assert os.environ.get("QUAID_INSTANCE") == f"codex-{slug}"
 
+    def test_config_claude_code_from_cwd_without_explicit_adapter_type_when_unique(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "cc-project"
+        project_dir.mkdir()
+        slug = instance_slug_from_project_dir(str(project_dir))
+        cfg_dir = tmp_path / "instances" / f"claude-code-{slug}"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text('{"adapter":{"type":"claude-code"}}', encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+        monkeypatch.chdir(project_dir)
+
+        adapter = get_adapter()
+
+        assert isinstance(adapter, ClaudeCodeAdapter)
+        assert os.environ.get("QUAID_INSTANCE") == f"claude-code-{slug}"
+
     def test_config_codex_from_cwd_without_explicit_adapter_type_when_unique(self, monkeypatch, tmp_path):
         project_dir = tmp_path / "cdx-project"
         project_dir.mkdir()
-        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        slug = instance_slug_from_project_dir(str(project_dir))
         cfg_dir = tmp_path / "instances" / f"codex-{slug}"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "config.json").write_text('{"adapter":{"type":"codex"}}', encoding="utf-8")
@@ -2025,7 +2049,7 @@ class TestAdapterSelection:
     def test_config_from_cwd_without_explicit_adapter_type_refuses_ambiguous_folder_configs(self, monkeypatch, tmp_path):
         project_dir = tmp_path / "shared-project"
         project_dir.mkdir()
-        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        slug = instance_slug_from_project_dir(str(project_dir))
         for adapter_id in ("claude-code", "codex"):
             cfg_dir = tmp_path / "instances" / f"{adapter_id}-{slug}"
             cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -2037,6 +2061,29 @@ class TestAdapterSelection:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
         monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+        monkeypatch.chdir(project_dir)
+
+        with pytest.raises(RuntimeError, match="Ambiguous adapter resolution: both claude-code and codex"):
+            get_adapter()
+
+        assert os.environ.get("QUAID_INSTANCE") is None
+
+    def test_explicit_non_folder_adapter_type_does_not_probe_cwd_folder_configs(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "openclaw-project"
+        project_dir.mkdir()
+        slug = instance_slug_from_project_dir(str(project_dir))
+        cfg_dir = tmp_path / "instances" / f"codex-{slug}"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text('{"adapter":{"type":"codex"}}', encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
         monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)

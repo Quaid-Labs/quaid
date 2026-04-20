@@ -1499,7 +1499,7 @@ def _adapter_config_paths() -> List[Path]:
             paths.append(
                 Path(home) / "instances" / f"{explicit_adapter_type}-{_slug}" / "config.json"
             )
-        elif not _cpd and not _codex_project_dir:
+        elif not explicit_adapter_type and not _cpd and not _codex_project_dir:
             from lib.instance import instance_slug_from_project_dir
 
             _slug = instance_slug_from_project_dir(os.getcwd())
@@ -1510,6 +1510,13 @@ def _adapter_config_paths() -> List[Path]:
             existing_cwd_candidates = [path for path in cwd_candidates if path.is_file()]
             if len(existing_cwd_candidates) == 1:
                 paths.append(existing_cwd_candidates[0])
+            elif len(existing_cwd_candidates) > 1:
+                raise RuntimeError(
+                    "Ambiguous adapter resolution: both claude-code and codex "
+                    f"instance configs exist for cwd slug '{_slug}'. Set "
+                    "QUAID_INSTANCE or QUAID_ADAPTER_TYPE to disambiguate. "
+                    f"Candidates: {', '.join(str(path) for path in existing_cwd_candidates)}"
+                )
 
     # Shared platform config fallback for shared-only installs. If adapter type
     # is explicitly known, prefer that platform config. Otherwise, if exactly one
