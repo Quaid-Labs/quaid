@@ -1499,6 +1499,17 @@ def _adapter_config_paths() -> List[Path]:
             paths.append(
                 Path(home) / "instances" / f"{explicit_adapter_type}-{_slug}" / "config.json"
             )
+        elif not _cpd and not _codex_project_dir:
+            from lib.instance import instance_slug_from_project_dir
+
+            _slug = instance_slug_from_project_dir(os.getcwd())
+            cwd_candidates = [
+                Path(home) / "instances" / f"{adapter_id}-{_slug}" / "config.json"
+                for adapter_id in ("claude-code", "codex")
+            ]
+            existing_cwd_candidates = [path for path in cwd_candidates if path.is_file()]
+            if len(existing_cwd_candidates) == 1:
+                paths.append(existing_cwd_candidates[0])
 
     # Shared platform config fallback for shared-only installs. If adapter type
     # is explicitly known, prefer that platform config. Otherwise, if exactly one

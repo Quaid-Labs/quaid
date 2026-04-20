@@ -1999,6 +1999,56 @@ class TestAdapterSelection:
         assert isinstance(adapter, CodexAdapter)
         assert os.environ.get("QUAID_INSTANCE") == f"codex-{slug}"
 
+    def test_config_codex_from_cwd_without_explicit_adapter_type_when_unique(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "cdx-project"
+        project_dir.mkdir()
+        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        cfg_dir = tmp_path / "instances" / f"codex-{slug}"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text('{"adapter":{"type":"codex"}}', encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+        monkeypatch.chdir(project_dir)
+
+        adapter = get_adapter()
+
+        assert isinstance(adapter, CodexAdapter)
+        assert os.environ.get("QUAID_INSTANCE") == f"codex-{slug}"
+
+    def test_config_from_cwd_without_explicit_adapter_type_refuses_ambiguous_folder_configs(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "shared-project"
+        project_dir.mkdir()
+        slug = re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+        for adapter_id in ("claude-code", "codex"):
+            cfg_dir = tmp_path / "instances" / f"{adapter_id}-{slug}"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            (cfg_dir / "config.json").write_text(
+                json.dumps({"adapter": {"type": adapter_id}}),
+                encoding="utf-8",
+            )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+        monkeypatch.chdir(project_dir)
+
+        with pytest.raises(RuntimeError, match="No config file found|must set adapter type"):
+            get_adapter()
+
+        assert os.environ.get("QUAID_INSTANCE") is None
+
     @pytest.mark.adapter_openclaw
     def test_config_openclaw_from_single_shared_platform_config(self, monkeypatch, tmp_path):
         _write_shared_platform_config(tmp_path, "openclaw")
