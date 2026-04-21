@@ -122,6 +122,16 @@ def supervisor_log_path() -> Path:
     return supervisor_dir() / "supervisor.log"
 
 
+def instance_monitor_disabled_dir() -> Path:
+    return project_docs_root() / "instance-monitors-disabled"
+
+
+def instance_monitor_disabled_path(instance: str) -> Path:
+    from lib.instance import validate_instance_id
+
+    return instance_monitor_disabled_dir() / f"{validate_instance_id(instance)}.json"
+
+
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
@@ -466,6 +476,39 @@ def write_supervisor_pid(token: str) -> None:
 def clear_supervisor_pid_for_current_process() -> None:
     token = os.environ.get("QUAID_SUPERVISOR_TOKEN", "").strip() or None
     _unlink_pid_record_if_matches(supervisor_pid_path(), pid=os.getpid(), token=token)
+
+
+def disable_instance_monitor(instance: str, *, reason: str = "manual_stop") -> None:
+    from lib.instance import validate_instance_id
+
+    name = validate_instance_id(instance)
+    _atomic_write_json(
+        instance_monitor_disabled_path(name),
+        {
+            "instance": name,
+            "reason": str(reason or "manual_stop"),
+            "disabled_at": utc_now(),
+        },
+    )
+
+
+def enable_instance_monitor(instance: str) -> None:
+    try:
+        instance_monitor_disabled_path(instance).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed clearing disabled instance monitor marker for %s: %s", instance, exc)
+        if _fail_hard_enabled():
+            raise
+
+
+def is_instance_monitor_disabled(instance: str) -> bool:
+    try:
+        return instance_monitor_disabled_path(instance).is_file()
+    except Exception as exc:
+        logger.warning("Failed checking disabled instance monitor marker for %s: %s", instance, exc)
+        if _fail_hard_enabled():
+            raise
+        return False
 
 
 def clear_worker_pid_for_current_process(project: str) -> None:

@@ -76,6 +76,35 @@ def test_supervisor_stops_tombstoned_instance_monitor(monkeypatch, tmp_path):
     assert known == {"claude-code-live": 111}
 
 
+def test_supervisor_stops_disabled_instance_monitor(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    started = []
+    stopped = []
+    known = {"claude-code-paused": 222}
+
+    monkeypatch.setattr(
+        supervisor,
+        "list_instances",
+        lambda: ["claude-code-live", "claude-code-paused"],
+    )
+    monkeypatch.setattr(supervisor, "_instance_is_tombstoned", lambda _name: False)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "is_instance_monitor_disabled",
+        lambda name: name == "claude-code-paused",
+    )
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    monkeypatch.setattr(supervisor, "_start_instance_monitor", lambda name: started.append(name) or 111)
+    monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda name: stopped.append(name) or True)
+
+    supervisor._maintain_instance_monitors(known)
+
+    assert stopped == ["claude-code-paused"]
+    assert started == ["claude-code-live"]
+    assert known == {"claude-code-live": 111}
+
+
 def test_start_instance_monitor_refuses_tombstoned_instance(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
     from core.project_registry import mark_misc_auto_create_disabled
@@ -88,6 +117,17 @@ def test_start_instance_monitor_refuses_tombstoned_instance(monkeypatch, tmp_pat
         supervisor._start_instance_monitor("claude-code-dead")
 
     assert not (tmp_path / "instances" / "claude-code-dead").exists()
+
+
+def test_start_instance_monitor_refuses_disabled_instance(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "_instance_is_tombstoned", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: True)
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match="disabled instance"):
+        supervisor._start_instance_monitor("claude-code-paused")
 
 
 def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch, tmp_path):
@@ -185,6 +225,16 @@ def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, 
     assert "MEMORY_ARCHIVE_DB_PATH" not in env
     assert env["QUAID_HOME"] == str(tmp_path)
     assert env["QUAID_INSTANCE"] == "claude-code-private-tmp-cc-livetest"
+
+
+def test_start_janitor_worker_refuses_disabled_instance(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "_instance_is_tombstoned", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: True)
+
+    with pytest.raises(RuntimeError, match="disabled instance"):
+        supervisor._start_janitor_worker("claude-code-paused")
 
 
 def test_janitor_worker_throttles_per_instance(monkeypatch):

@@ -4104,6 +4104,8 @@ def ensure_alive() -> int:
     if os.environ.get("QUAID_SUPERVISOR_DISABLE", "").strip() != "1":
         try:
             from core.project_docs import ensure_supervisor_alive
+            from core import project_docs
+            project_docs.enable_instance_monitor(_instance_id())
             ensure_supervisor_alive()
         except Exception as exc:
             logger.warning("project docs supervisor ensure_alive failed: %s", exc)
@@ -4120,9 +4122,10 @@ def ensure_alive() -> int:
             if pid is not None:
                 return pid
             try:
-                wait_seconds = float(os.environ.get("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", "5") or 5)
+                wait_default = project_docs.pid_startup_wait_seconds()
+                wait_seconds = float(os.environ.get("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", str(wait_default)) or wait_default)
             except ValueError:
-                wait_seconds = 5.0
+                wait_seconds = project_docs.pid_startup_wait_seconds()
             deadline = time.time() + max(0.5, wait_seconds)
             while time.time() < deadline:
                 time.sleep(0.1)
@@ -4236,6 +4239,20 @@ def start_daemon() -> int:
 
 def stop_daemon() -> bool:
     """Stop the daemon. Returns True if it was running."""
+    if os.environ.get("QUAID_SUPERVISOR_DISABLE", "").strip() != "1":
+        try:
+            from core import project_docs
+            project_docs.disable_instance_monitor(_instance_id(), reason="daemon_stop")
+        except Exception:
+            logger.exception("failed disabling supervisor instance monitor before daemon stop")
+            try:
+                from lib.fail_policy import is_fail_hard_enabled
+            except Exception:
+                fail_hard = False
+            else:
+                fail_hard = bool(is_fail_hard_enabled())
+            if fail_hard:
+                raise
     pid = read_pid()
     if pid is None:
         return False

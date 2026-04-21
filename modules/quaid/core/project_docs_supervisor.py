@@ -140,8 +140,12 @@ def _instance_is_tombstoned(instance: str) -> bool:
 
 def _live_instances_for_supervisor() -> tuple[set[str], set[str]]:
     all_instances = set(list_instances())
-    tombstoned = {instance for instance in all_instances if _instance_is_tombstoned(instance)}
-    return all_instances - tombstoned, tombstoned
+    inactive = {
+        instance
+        for instance in all_instances
+        if _instance_is_tombstoned(instance) or project_docs.is_instance_monitor_disabled(instance)
+    }
+    return all_instances - inactive, inactive
 
 
 def _wait_for_instance_pid(
@@ -174,6 +178,8 @@ def _start_instance_monitor(instance: str) -> int:
     name = validate_instance_id(instance)
     if _instance_is_tombstoned(name):
         raise RuntimeError(f"refusing to start monitor for tombstoned instance {name}")
+    if project_docs.is_instance_monitor_disabled(name):
+        raise RuntimeError(f"refusing to start monitor for disabled instance {name}")
     existing = _read_instance_daemon_pid(name)
     if existing is not None:
         return existing
@@ -228,6 +234,8 @@ def _start_janitor_worker(instance: str) -> subprocess.Popen:
     name = validate_instance_id(instance)
     if _instance_is_tombstoned(name):
         raise RuntimeError(f"refusing to start janitor worker for tombstoned instance {name}")
+    if project_docs.is_instance_monitor_disabled(name):
+        raise RuntimeError(f"refusing to start janitor worker for disabled instance {name}")
     script = Path(__file__).parent / "janitor_worker.py"
     env = _instance_child_env(name)
     with _janitor_worker_log_path(name).open("ab") as log_fh:

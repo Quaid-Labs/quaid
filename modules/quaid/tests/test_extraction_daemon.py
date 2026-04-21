@@ -113,6 +113,42 @@ def test_ensure_alive_prefers_supervisor_owned_instance_monitor(monkeypatch):
     assert calls["ensured"] == 1
 
 
+def test_ensure_alive_uses_supervisor_pid_startup_budget(monkeypatch):
+    now = {"value": 100.0}
+    enabled = []
+
+    def fake_read_pid():
+        return 3333 if now["value"] >= 110.0 else None
+
+    def fake_sleep(seconds):
+        now["value"] += max(1.0, float(seconds))
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.delenv("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", fake_read_pid)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now["value"])
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr("core.project_docs.ensure_supervisor_alive", lambda: 1111)
+    monkeypatch.setattr("core.project_docs.pid_startup_wait_seconds", lambda: 30.0)
+    monkeypatch.setattr("core.project_docs.enable_instance_monitor", lambda instance: enabled.append(instance))
+
+    assert extraction_daemon.ensure_alive() == 3333
+    assert enabled == ["claude-code-livetest"]
+
+
+def test_stop_daemon_disables_supervisor_instance_monitor(monkeypatch):
+    disabled = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-livetest")
+    monkeypatch.setattr("core.project_docs.disable_instance_monitor", lambda instance, reason: disabled.append((instance, reason)))
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+
+    assert extraction_daemon.stop_daemon() is False
+    assert disabled == [("claude-code-livetest", "daemon_stop")]
+
+
 def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tmp_path):
     cfg_path = tmp_path / "instances" / "pytest-runner" / "config.json"
     cfg_path.parent.mkdir(parents=True)
