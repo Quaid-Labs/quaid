@@ -128,6 +128,28 @@ For recall-quality contamination cases, check for rows matching things like:
 If the audit still finds contamination, stop and post an ISSUE instead of
 starting the rerun.
 
+### Daemon lifecycle — do NOT manually start before M1
+
+**The extraction daemon auto-starts on the first hook fire** (i.e. your first M1
+prompt to the platform session). The installer intentionally skips daemon startup
+during M0 with the log line `Skipping extraction daemon startup until the first
+real instance is created by hook use`.
+
+**Do NOT run `quaid daemon start` before M1.** On a freshly-installed instance
+with no hooks fired yet, manual `daemon start` hits a supervisor race with the
+error `supervisor did not start an instance monitor before timeout`. This is
+not a bug — the daemon simply does not have a live instance to monitor until a
+hook fires.
+
+Manual `quaid daemon stop` / `daemon start` sequences are only documented for
+**config-reload milestones** (e.g. M4 inactivity timeout on CC/OC, model override
+probes on CDX). In those cases the daemon is already running from earlier
+milestones, and the restart picks up the new config.
+
+If you see the `supervisor did not start an instance monitor` error pre-M1:
+you do not need to start the daemon. Proceed to M1 and send the first prompt —
+the hook will fire and the daemon will come up.
+
 ### Waiting after extraction triggers
 
 **Extraction is async.** After any lifecycle trigger (`/new`, `/clear` on CC,

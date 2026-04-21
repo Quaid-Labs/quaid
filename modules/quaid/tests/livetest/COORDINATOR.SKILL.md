@@ -7,6 +7,42 @@ passes with zero new commits.
 
 ---
 
+## Iterative Live Testing — fail-fast with early clears + lagged regression
+
+**When the run is iterative (not a full ship validation) and a developer is
+waiting on test results to keep building**, prioritize dev velocity by
+structuring the test as:
+
+1. **Dependency-only first.** Given feature E under test, identify E's
+   dependencies (say A & B) and non-dependencies (C & D). Run A & B only — the
+   minimum surface that can invalidate E's own result.
+2. **Run E.** If E fails, bail immediately and report. Dev can fix without
+   waiting on C & D.
+3. **If E passes → early-report success** so the originator can proceed. In the
+   same message, say regression tests on C & D are still running in parallel.
+4. **Run C & D in the background** after the early-clear. When they finish,
+   report final — including any regressions found. A regression after an
+   early-clear should be routed the same way a fresh fail would be (patch
+   request + re-test), and the originator notified that the early-clear is
+   revoked.
+5. **Edge-case time waste is acceptable.** Occasional re-runs on regressed
+   C/D paths are no worse than always running the whole suite from scratch.
+   The average path gets a major speedup; the worst path matches today's cost.
+
+**When to use:** any M17-style or post-Run-110 iterative feature-under-patch
+cycle where a dev is iterating on a single scope and waiting on W4 results to
+keep moving. NOT for ship validation (those run the full suite regardless).
+
+**When not to use:** full-run validation, release gates, push-main gates. Those
+keep the standard end-to-end sequence.
+
+**Reporting format for early-clear:**
+- Subject line: "EARLY-CLEAR: E PASS, regression on C+D running in background."
+- Body: E result details, list of regression scope still outstanding, ETA if
+  known, commit that patch originated from.
+
+---
+
 ## VM Management (tart)
 
 Live tests run on tart VMs cloned from a locked base snapshot. The base snapshot

@@ -1096,8 +1096,8 @@ Verify registration (not just placement):
 ```bash
 # Check file was registered to misc project in docs registry
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list --project misc--openclaw-main 2>&1'
-# Verify misc project exists in project_definitions
-ssh REMOTE_HOST "sqlite3 ~/.quaid/instances/openclaw-main/data/memory.db \"SELECT name, state FROM project_definitions WHERE name LIKE 'misc--%';\""
+# Verify misc project exists in project_definitions (lives in shared docs DB, not instance memory.db, per 440ef0681)
+ssh REMOTE_HOST "sqlite3 ~/.quaid/shared/data/docs.db \"SELECT name, state FROM project_definitions WHERE name LIKE 'misc--%';\""
 ```
 
 **Pass (Phase 4):** File is registered to the misc project in the docs registry AND the agent
