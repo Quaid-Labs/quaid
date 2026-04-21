@@ -200,6 +200,78 @@ class TestGetConnection:
             with get_connection(db_path) as conn:
                 conn.execute("INSERT INTO child VALUES (1, 999)")
 
+    def test_connection_setup_retries_transient_wal_lock(self, tmp_path, monkeypatch):
+        """Transient WAL setup contention should retry instead of killing callers."""
+        from lib import database
+
+        db_path = tmp_path / "test.db"
+        real_connect = database.sqlite3.connect
+        attempts = {"wal": 0}
+
+        class FlakyConnection:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                setattr(self._conn, name, value)
+
+            def execute(self, sql, *args, **kwargs):
+                if str(sql).strip().upper() == "PRAGMA JOURNAL_MODE=WAL" and attempts["wal"] == 0:
+                    attempts["wal"] += 1
+                    raise sqlite3.OperationalError("locking protocol")
+                return self._conn.execute(sql, *args, **kwargs)
+
+        def flaky_connect(*args, **kwargs):
+            return FlakyConnection(real_connect(*args, **kwargs))
+
+        monkeypatch.setattr(database.sqlite3, "connect", flaky_connect)
+        monkeypatch.setattr(database.time, "sleep", lambda _delay: None)
+
+        with database.get_connection(db_path) as conn:
+            conn.execute("CREATE TABLE retry_test (id INTEGER PRIMARY KEY)")
+
+        assert attempts["wal"] == 1
+
+    def test_connection_setup_raises_after_transient_wal_retries(self, tmp_path, monkeypatch):
+        """Persistent WAL setup contention remains loud after bounded retries."""
+        from lib import database
+
+        db_path = tmp_path / "test.db"
+        real_connect = database.sqlite3.connect
+        attempts = {"wal": 0}
+
+        class LockedConnection:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                setattr(self._conn, name, value)
+
+            def execute(self, sql, *args, **kwargs):
+                if str(sql).strip().upper() == "PRAGMA JOURNAL_MODE=WAL":
+                    attempts["wal"] += 1
+                    raise sqlite3.OperationalError("locking protocol")
+                return self._conn.execute(sql, *args, **kwargs)
+
+        def locked_connect(*args, **kwargs):
+            return LockedConnection(real_connect(*args, **kwargs))
+
+        monkeypatch.setattr(database.sqlite3, "connect", locked_connect)
+        monkeypatch.setattr(database, "_CONNECT_RETRY_DELAYS_SECONDS", (0.0, 0.0))
+        monkeypatch.setattr(database.time, "sleep", lambda _delay: None)
+
+        with pytest.raises(sqlite3.OperationalError, match="locking protocol"):
+            with database.get_connection(db_path):
+                pass
+
+        assert attempts["wal"] == 3
+
 
 # ---------------------------------------------------------------------------
 # lib/config.py — path helpers

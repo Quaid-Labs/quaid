@@ -11,6 +11,7 @@ Usage:
 
 import logging
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,13 @@ from typing import Optional
 from .config import get_db_path
 
 logger = logging.getLogger(__name__)
+
+_CONNECT_RETRY_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
+_TRANSIENT_SQLITE_SETUP_ERRORS = (
+    "database is locked",
+    "database is busy",
+    "locking protocol",
+)
 
 # sqlite-vec: optional vector search extension.
 # Verified at import time against an in-memory connection so that _has_sqlite_vec
@@ -63,6 +71,59 @@ def _load_vec(conn: sqlite3.Connection) -> None:
         logger.warning("sqlite-vec per-connection load failed: %s; vec operations may error", exc)
 
 
+def _is_transient_sqlite_setup_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_SQLITE_SETUP_ERRORS)
+
+
+def _open_configured_connection(path: Path) -> sqlite3.Connection:
+    """Open a SQLite connection and absorb transient setup contention with retries.
+
+    `PRAGMA journal_mode=WAL` is intentionally set at connection setup, but it
+    can briefly need a database lock. A transient setup lock should not kill the
+    long-lived supervisor; if contention persists after bounded retries, callers
+    still get the original sqlite error.
+    """
+    attempts = len(_CONNECT_RETRY_DELAYS_SECONDS) + 1
+    last_exc: sqlite3.OperationalError | None = None
+    for attempt in range(1, attempts + 1):
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(str(path), timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA busy_timeout = 30000")  # 30s wait for concurrent access
+            # Force WAL mode on every connection open to avoid check-then-set races.
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")   # Safe with WAL, faster than FULL
+            conn.execute("PRAGMA cache_size = -64000")     # 64MB page cache
+            conn.execute("PRAGMA temp_store = MEMORY")     # Temp tables in memory
+            _load_vec(conn)
+            return conn
+        except sqlite3.OperationalError as exc:
+            if conn is not None:
+                conn.close()
+            last_exc = exc
+            if not _is_transient_sqlite_setup_error(exc) or attempt >= attempts:
+                raise
+            delay = _CONNECT_RETRY_DELAYS_SECONDS[attempt - 1]
+            logger.warning(
+                "sqlite connection setup contention for %s on attempt %d/%d: %s; retrying in %.2fs",
+                path,
+                attempt,
+                attempts,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+        except Exception:
+            if conn is not None:
+                conn.close()
+            raise
+    assert last_exc is not None
+    raise last_exc
+
+
 def refresh_read_visibility(conn: sqlite3.Connection) -> None:
     """Best-effort WAL visibility refresh before cross-process vector reads.
 
@@ -90,16 +151,7 @@ def get_connection(db_path: Optional[Path] = None):
         Commits on clean exit, rolls back on exception, always closes.
     """
     path = db_path or get_db_path()
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 30000")  # 30s wait for concurrent access
-    # Force WAL mode on every connection open to avoid check-then-set races.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")   # Safe with WAL, faster than FULL
-    conn.execute("PRAGMA cache_size = -64000")     # 64MB page cache
-    conn.execute("PRAGMA temp_store = MEMORY")     # Temp tables in memory
-    _load_vec(conn)
+    conn = _open_configured_connection(path)
     try:
         yield conn
         conn.commit()
