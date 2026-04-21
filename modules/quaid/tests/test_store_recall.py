@@ -4494,6 +4494,33 @@ class TestRecallFastHookInjectContract:
         assert meta == {"source": "test"}
         assert bundle is None
 
+    def test_graph_aware_recall_renders_inbound_edge_direction(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        alice = mg.Node.create("Person", "Alice")
+        diana = mg.Node.create("Person", "Diana")
+        graph.add_node(alice, embed=False)
+        graph.add_node(diana, embed=False)
+        graph.add_edge(mg.Edge.create(diana.id, alice.id, "parent_of"))
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "recall", return_value=([], {"mode": "seed"})), \
+             patch.object(mg, "extract_entities_from_text", return_value=[alice]), \
+             patch.object(mg, "has_owner_pronoun", return_value=False), \
+             patch.object(mg, "_relation_matches_for_query", return_value=["parent_of"]), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False):
+            payload = mg.graph_aware_recall(
+                "Who is Alice's parent?",
+                owner_id="quaid",
+                limit=5,
+                graph_depth=1,
+            )
+
+        assert payload["graph_results"][0]["direction"] == "in"
+        assert payload["graph_results"][0]["graph_path"] == "Diana --parent_of--> Alice"
+        assert payload["graph_results"][0]["text"] == "Diana --parent_of--> Alice"
+
     def test_graph_aware_recall_does_not_relation_filter_multi_hop_depth(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

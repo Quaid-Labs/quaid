@@ -2897,6 +2897,41 @@ def extract_entities_from_text(text: str) -> List[Node]:
     return entities
 
 
+def _render_bidirectional_graph_path(
+    anchor_name: str,
+    related_name: str,
+    relation: str,
+    direction: str,
+    path: Optional[List[tuple]] = None,
+) -> str:
+    """Render a graph traversal without reversing inbound one-hop edges."""
+    direction = str(direction or "").lower()
+    if path and len(path) > 1:
+        # Existing multi-hop path tuples do not carry per-hop direction. Preserve
+        # the old representation until traversal returns directed path edges.
+        path_parts = [f"{from_name} --{rel}-->" for from_name, rel in path]
+        return " ".join(path_parts) + f" {related_name}"
+
+    if path:
+        anchor_name, relation = path[0]
+
+    if direction == "in":
+        return f"{related_name} --{relation}--> {anchor_name}"
+    return f"{anchor_name} --{relation}--> {related_name}"
+
+
+def _render_bidirectional_graph_text(
+    anchor_name: str,
+    related_name: str,
+    relation: str,
+    direction: str,
+) -> str:
+    """Render a single directed graph edge for injected recall text."""
+    if str(direction or "").lower() == "in":
+        return f"{related_name} → {relation} → {anchor_name}"
+    return f"{anchor_name} → {relation} → {related_name}"
+
+
 def graph_aware_recall(
     query: str,
     owner_id: str = None,
@@ -3064,14 +3099,13 @@ def graph_aware_recall(
                 source_node = graph.get_node(node_id)
                 source_name = source_node.name if source_node else "?"
 
-                # Build graph_path string from traversal chain
-                if path:
-                    path_parts = []
-                    for from_name, rel in path:
-                        path_parts.append(f"{from_name} --{rel}-->")
-                    graph_path = " ".join(path_parts) + " " + node.name
-                else:
-                    graph_path = f"{source_name} --{relation}--> {node.name}"
+                graph_path = _render_bidirectional_graph_path(
+                    source_name,
+                    node.name,
+                    relation,
+                    direction,
+                    path,
+                )
 
                 results["graph_results"].append({
                     "id": node.id,
@@ -6165,15 +6199,23 @@ def _recall_once(
                         if rel_score < min_similarity:
                             continue
 
-                        if path:
-                            path_parts = [f"{fn} --{rel}-->" for fn, rel in path]
-                            graph_path = " ".join(path_parts) + " " + rel_node.name
-                        else:
-                            graph_path = f"{node.name} --{relation}--> {rel_node.name}"
+                        graph_path = _render_bidirectional_graph_path(
+                            node.name,
+                            rel_node.name,
+                            relation,
+                            direction,
+                            path,
+                        )
+                        graph_text = _render_bidirectional_graph_text(
+                            node.name,
+                            rel_node.name,
+                            relation,
+                            direction,
+                        )
 
                         _rel_attrs = rel_node.attributes if isinstance(rel_node.attributes, dict) else {}
                         output.append({
-                            "text": _sanitize_for_context(f"{node.name} → {relation} → {rel_node.name}"),
+                            "text": _sanitize_for_context(graph_text),
                             "category": rel_node.type.lower(),
                             "similarity": round(rel_score, 3),
                             "verified": rel_node.verified,
@@ -6201,15 +6243,23 @@ def _recall_once(
                         if rel_score < min_similarity:
                             continue
 
-                        if path:
-                            path_parts = [f"{fn} --{rel}-->" for fn, rel in path]
-                            graph_path = " ".join(path_parts) + " " + rel_node.name
-                        else:
-                            graph_path = f"{node.name} --{relation}--> {rel_node.name}"
+                        graph_path = _render_bidirectional_graph_path(
+                            node.name,
+                            rel_node.name,
+                            relation,
+                            direction,
+                            path,
+                        )
+                        graph_text = _render_bidirectional_graph_text(
+                            node.name,
+                            rel_node.name,
+                            relation,
+                            direction,
+                        )
 
                         _rel_attrs = rel_node.attributes if isinstance(rel_node.attributes, dict) else {}
                         output.append({
-                            "text": _sanitize_for_context(f"{node.name} → {relation} → {rel_node.name}"),
+                            "text": _sanitize_for_context(graph_text),
                             "category": rel_node.type.lower(),
                             "similarity": round(rel_score, 3),
                             "verified": rel_node.verified,
@@ -10216,17 +10266,19 @@ def _expand_high_confidence_entity_anchors(
             seen_ids.add(rel_node.id)
             rel_score = max(0.0, float(anchor_score) * max(0.0, float(beam_score or 0.0)))
             rel_attrs = rel_node.attributes if isinstance(rel_node.attributes, dict) else {}
-            if path:
-                path_parts = [f"{node_name} --{edge_rel}-->" for node_name, edge_rel in path]
-                graph_path = " ".join(path_parts) + " " + rel_node.name
-            elif str(direction or "").lower() == "in":
-                graph_path = f"{rel_node.name} --{relation}--> {anchor_text}"
-            else:
-                graph_path = f"{anchor_text} --{relation}--> {rel_node.name}"
-            if str(direction or "").lower() == "in":
-                text = f"{rel_node.name} → {relation} → {anchor_text}"
-            else:
-                text = f"{anchor_text} → {relation} → {rel_node.name}"
+            graph_path = _render_bidirectional_graph_path(
+                anchor_text,
+                rel_node.name,
+                relation,
+                direction,
+                path,
+            )
+            text = _render_bidirectional_graph_text(
+                anchor_text,
+                rel_node.name,
+                relation,
+                direction,
+            )
             expanded.append({
                 "text": _sanitize_for_context(text),
                 "category": rel_node.type.lower(),
