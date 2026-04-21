@@ -185,6 +185,29 @@ class TestTimeout:
         assert isinstance(out[1], TimeoutError)
         assert "callable_index=1" in str(out[1])
 
+    def test_single_callable_timeout_raises_when_not_return_exceptions(self):
+        with pytest.raises(TimeoutError, match="pending_callable_indices"):
+            worker_pool.run_callables(
+                [lambda: time.sleep(0.2)],
+                max_workers=1,
+                pool_name="test-single-timeout-raise",
+                timeout_seconds=0.01,
+                return_exceptions=False,
+            )
+
+    def test_single_callable_timeout_return_exceptions_stores_timeout(self):
+        out = worker_pool.run_callables(
+            [lambda: time.sleep(0.2)],
+            max_workers=1,
+            pool_name="test-single-timeout-capture",
+            timeout_seconds=0.01,
+            return_exceptions=True,
+        )
+
+        assert len(out) == 1
+        assert isinstance(out[0], TimeoutError)
+        assert "callable_index=0" in str(out[0])
+
     def test_no_timeout_completes_normally(self):
         out = worker_pool.run_callables(
             [lambda: "done"],

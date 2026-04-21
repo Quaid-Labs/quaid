@@ -58,7 +58,7 @@ def run_callables(
         return []
 
     worker_count = max(1, min(int(max_workers), len(funcs)))
-    if worker_count == 1:
+    if worker_count == 1 and timeout_seconds is None:
         out: List[Any] = []
         for fn in funcs:
             try:

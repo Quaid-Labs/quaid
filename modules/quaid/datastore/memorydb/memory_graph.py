@@ -685,7 +685,7 @@ class MemoryGraph:
     # Embeddings
     # ==========================================================================
 
-    def get_embedding(self, text: str) -> Optional[List[float]]:
+    def get_embedding(self, text: str, *, timeout_s: Optional[float] = None) -> Optional[List[float]]:
         """Get embedding, checking cache first to avoid redundant Ollama calls."""
         text_hash = content_hash(text)
         model = "unknown"
@@ -721,7 +721,7 @@ class MemoryGraph:
                 pass  # Cache miss or table doesn't exist
 
         # Cache miss — compute fresh
-        embedding = _lib_get_embedding(text)
+        embedding = _lib_get_embedding(text, timeout_s=timeout_s)
         if embedding:
             try:
                 with self._get_conn() as conn:
@@ -1378,14 +1378,15 @@ class MemoryGraph:
         owner_id: Optional[str] = None,
         min_similarity: float = 0.3,
         current_session_id: Optional[str] = None,
-        compaction_time: Optional[str] = None
+        compaction_time: Optional[str] = None,
+        embedding_timeout_s: Optional[float] = None,
     ) -> List[tuple[Node, float]]:
         """Search nodes by semantic similarity.
 
         Uses sqlite-vec indexed KNN when available, falls back to
         FTS5 pre-filter + brute-force cosine when not installed.
         """
-        query_embedding = self.get_embedding(query)
+        query_embedding = self.get_embedding(query, timeout_s=embedding_timeout_s)
         if not query_embedding:
             if _is_fail_hard_mode():
                 raise RuntimeError(
@@ -1664,7 +1665,8 @@ class MemoryGraph:
         owner_id: Optional[str] = None,
         current_session_id: Optional[str] = None,
         compaction_time: Optional[str] = None,
-        intent: Optional[str] = None
+        intent: Optional[str] = None,
+        timeout_seconds: Optional[float] = 10.0,
     ) -> List[tuple[Node, float]]:
         """Hybrid search combining semantic + FTS via Reciprocal Rank Fusion.
 
@@ -1681,6 +1683,7 @@ class MemoryGraph:
         except Exception:
             pass
         VECTOR_WEIGHT, FTS_WEIGHT = _get_fusion_weights(intent)
+        search_timeout_s = None if timeout_seconds is None else max(0.5, float(timeout_seconds))
 
         # Run semantic and FTS search concurrently.
         results = run_callables(
@@ -1693,12 +1696,13 @@ class MemoryGraph:
                     owner_id=owner_id,
                     current_session_id=current_session_id,
                     compaction_time=compaction_time,
+                    embedding_timeout_s=search_timeout_s,
                 ),
                 lambda: self.search_fts(query, limit=limit * 2, owner_id=owner_id),
             ],
             max_workers=2,
             pool_name="search-hybrid",
-            timeout_seconds=10.0,
+            timeout_seconds=search_timeout_s,
             return_exceptions=True,
         )
         semantic_results = [] if isinstance(results[0], Exception) else results[0]
@@ -5320,6 +5324,7 @@ def _recall_once(
     include_lexical_anchor_shaping: bool = True,
     lexical_anchor_planner_mode: str = "llm",
     low_signal_retry: bool = True,
+    timeout_ms: Optional[int] = None,
     return_meta: bool = False,
 ) -> Any:
     """
@@ -5352,6 +5357,12 @@ def _recall_once(
 
     import time as _time
     _recall_start = _time.monotonic()
+    search_timeout_s: Optional[float] = None
+    if timeout_ms is not None:
+        try:
+            search_timeout_s = max(0.5, float(timeout_ms) / 1000.0)
+        except (TypeError, ValueError):
+            search_timeout_s = None
     _fts_fallback_used = False
     _multi_pass_triggered = False
     _multi_pass_ids = set()  # Track which node IDs came from second pass (for Bjork difficulty)
@@ -5476,7 +5487,16 @@ def _recall_once(
         search_query = route_query(clean_query) if _use_hyde else clean_query
         _phase_ms["hyde_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
         _phase_t0 = _time.monotonic()
-        results = graph.search_hybrid(search_query, limit=search_limit, privacy=privacy, owner_id=owner_id, current_session_id=current_session_id, compaction_time=compaction_time, intent=intent)
+        results = graph.search_hybrid(
+            search_query,
+            limit=search_limit,
+            privacy=privacy,
+            owner_id=owner_id,
+            current_session_id=current_session_id,
+            compaction_time=compaction_time,
+            intent=intent,
+            timeout_seconds=search_timeout_s,
+        )
         _phase_ms["search_hybrid_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
     else:
         search_query = clean_query  # No HyDE when embeddings unavailable
@@ -5824,7 +5844,16 @@ def _recall_once(
         for sq in second_pass_queries:
             if sq.strip() and sq.strip() != search_query.strip():
                 try:
-                    extra = graph.search_hybrid(sq, limit=limit * 2, privacy=privacy, owner_id=owner_id, current_session_id=current_session_id, compaction_time=compaction_time, intent=intent)
+                    extra = graph.search_hybrid(
+                        sq,
+                        limit=limit * 2,
+                        privacy=privacy,
+                        owner_id=owner_id,
+                        current_session_id=current_session_id,
+                        compaction_time=compaction_time,
+                        intent=intent,
+                        timeout_seconds=search_timeout_s,
+                    )
                     for node, quality_score in extra:
                         if node.id not in existing_ids:
                             _extra_attrs = node.attributes if isinstance(node.attributes, dict) else {}
@@ -9511,6 +9540,7 @@ def recall(
         domain=domain,
         domain_boost=domain_boost,
         project=project,
+        timeout_ms=overall_timeout_ms,
         include_lexical_anchor_shaping=include_lexical_anchor_shaping,
         lexical_anchor_planner_mode=lexical_anchor_planner_mode,
     )

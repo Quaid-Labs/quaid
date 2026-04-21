@@ -1517,11 +1517,17 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         self._model = model
         self._dim = dim
 
-    def embed(self, text):
+    def embed(self, text, *, timeout_s: Optional[float] = None):
         retries = 1
         last_error = None
         call_started = time.monotonic()
-        timeout_s = 120.0
+        if timeout_s is None:
+            try:
+                timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
+            except Exception:
+                timeout_s = 120.0
+        if timeout_s <= 0:
+            timeout_s = 120.0
         for attempt in range(retries + 1):
             request_started = time.monotonic()
             try:

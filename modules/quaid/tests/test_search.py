@@ -361,6 +361,22 @@ class TestSearchHybrid:
                 for node, score in results:
                     assert 0.0 <= score <= 1.0, f"Quality score {score} out of range"
 
+    def test_hybrid_passes_timeout_to_semantic_embedding(self, tmp_path):
+        from datastore.memorydb.memory_graph import MemoryGraph
+
+        graph = MemoryGraph(db_path=tmp_path / "hybrid-timeout.db")
+        seen = {}
+
+        def fake_semantic(*_args, **kwargs):
+            seen["embedding_timeout_s"] = kwargs.get("embedding_timeout_s")
+            return []
+
+        with patch.object(graph, "search_semantic", side_effect=fake_semantic), \
+             patch.object(graph, "search_fts", return_value=[]):
+            graph.search_hybrid("Baxter", timeout_seconds=1.25)
+
+        assert seen["embedding_timeout_s"] == 1.25
+
 
 class TestRouteQueryFailHard:
     def test_route_query_returns_original_when_fail_hard_disabled(self):

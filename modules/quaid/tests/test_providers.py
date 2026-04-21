@@ -1451,6 +1451,20 @@ class TestOllamaEmbeddingsProvider:
             result = p.embed("test text")
             assert result == embedding
 
+    def test_embed_uses_explicit_timeout(self):
+        p = OllamaEmbeddingsProvider()
+        embedding = [0.1] * 4
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"embeddings": [embedding]}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers._urlopen_with_local_proxy_bypass", return_value=mock_resp) as urlopen:
+            result = p.embed("test text", timeout_s=2.5)
+
+        assert result == embedding
+        assert urlopen.call_args.kwargs["timeout"] == 2.5
+
     def test_embed_returns_none_on_error(self):
         p = OllamaEmbeddingsProvider()
         with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \

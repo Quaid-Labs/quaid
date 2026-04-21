@@ -13,6 +13,7 @@ import os
 import logging
 import struct
 import threading
+import inspect
 from typing import List, Optional, Sequence, Any
 
 from lib.fail_policy import is_fail_hard_enabled
@@ -116,12 +117,28 @@ def reset_embeddings_provider() -> None:
 
 # ── Public API (unchanged signatures) ────────────────────────────────
 
-def get_embedding(text: str) -> Optional[List[float]]:
+def _call_embed(provider: EmbeddingsProvider, text: str, timeout_s: Optional[float]) -> Optional[List[float]]:
+    embed = provider.embed
+    if timeout_s is None:
+        return embed(text)
+    try:
+        params = inspect.signature(embed).parameters
+        accepts_timeout = "timeout_s" in params or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+        )
+    except (TypeError, ValueError):
+        accepts_timeout = True
+    if accepts_timeout:
+        return embed(text, timeout_s=timeout_s)
+    return embed(text)
+
+
+def get_embedding(text: str, *, timeout_s: Optional[float] = None) -> Optional[List[float]]:
     """Get embedding for text using the current provider.
 
     Set MOCK_EMBEDDINGS=1 to use deterministic fakes for testing.
     """
-    return get_embeddings_provider().embed(text)
+    return _call_embed(get_embeddings_provider(), text, timeout_s)
 
 
 def _embedding_parallel_workers(task_name: str = "embeddings", default: int = 4) -> int:
