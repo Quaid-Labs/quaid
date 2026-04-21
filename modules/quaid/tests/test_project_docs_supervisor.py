@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 
 def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatch):
     from core import project_docs_supervisor as supervisor
@@ -46,6 +48,46 @@ def test_supervisor_stops_removed_instance_monitor(monkeypatch):
 
     assert stopped == ["old"]
     assert known == {}
+
+
+def test_supervisor_stops_tombstoned_instance_monitor(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from core.project_registry import mark_misc_auto_create_disabled
+
+    started = []
+    stopped = []
+    known = {"claude-code-dead": 222}
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        supervisor,
+        "list_instances",
+        lambda: ["claude-code-live", "claude-code-dead"],
+    )
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    monkeypatch.setattr(supervisor, "_start_instance_monitor", lambda name: started.append(name) or 111)
+    monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda name: stopped.append(name) or True)
+    mark_misc_auto_create_disabled("claude-code-dead", quaid_home=tmp_path)
+
+    supervisor._maintain_instance_monitors(known)
+
+    assert stopped == ["claude-code-dead"]
+    assert started == ["claude-code-live"]
+    assert known == {"claude-code-live": 111}
+
+
+def test_start_instance_monitor_refuses_tombstoned_instance(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from core.project_registry import mark_misc_auto_create_disabled
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    mark_misc_auto_create_disabled("claude-code-dead", quaid_home=tmp_path)
+
+    with pytest.raises(RuntimeError, match="tombstoned instance"):
+        supervisor._start_instance_monitor("claude-code-dead")
+
+    assert not (tmp_path / "instances" / "claude-code-dead").exists()
 
 
 def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch, tmp_path):
@@ -164,3 +206,39 @@ def test_janitor_worker_throttles_per_instance(monkeypatch):
 
     assert starts == ["alpha"]
     assert "alpha" in workers
+
+
+def test_supervisor_stops_tombstoned_janitor_worker(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from core.project_registry import mark_misc_auto_create_disabled
+
+    starts = []
+    terminated = []
+    reaped = []
+
+    class _RunningProc:
+        def poll(self):
+            return None
+
+    dead_proc = _RunningProc()
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        supervisor,
+        "list_instances",
+        lambda: ["claude-code-live", "claude-code-dead"],
+    )
+    monkeypatch.setattr(supervisor, "_start_janitor_worker", lambda name: starts.append(name) or _RunningProc())
+    monkeypatch.setattr(supervisor.project_docs, "_terminate_process", lambda proc: terminated.append(proc))
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: reaped.append(True) or 0)
+    mark_misc_auto_create_disabled("claude-code-dead", quaid_home=tmp_path)
+
+    workers: dict[str, subprocess.Popen] = {"claude-code-dead": dead_proc}
+    checks: dict[str, float] = {"claude-code-dead": 10.0}
+    supervisor._maintain_janitor_workers(workers, checks, now=100.0, check_interval=0.5)
+
+    assert terminated == [dead_proc]
+    assert starts == ["claude-code-live"]
+    assert "claude-code-dead" not in workers
+    assert "claude-code-dead" not in checks
+    assert "claude-code-live" in workers
+    assert reaped

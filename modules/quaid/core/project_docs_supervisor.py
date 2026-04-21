@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import project_docs
-from core.project_registry import list_projects
+from core.project_registry import is_misc_auto_create_disabled, list_projects
 from lib.instance import list_instances, quaid_home, validate_instance_id
 
 _STOP = False
@@ -129,6 +129,21 @@ def _read_instance_daemon_pid(instance: str) -> int | None:
     return None
 
 
+def _instance_is_tombstoned(instance: str) -> bool:
+    try:
+        return bool(is_misc_auto_create_disabled(instance, quaid_home=quaid_home()))
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+        return False
+
+
+def _live_instances_for_supervisor() -> tuple[set[str], set[str]]:
+    all_instances = set(list_instances())
+    tombstoned = {instance for instance in all_instances if _instance_is_tombstoned(instance)}
+    return all_instances - tombstoned, tombstoned
+
+
 def _wait_for_instance_pid(
     instance: str,
     expected_pid: int,
@@ -157,6 +172,8 @@ def _wait_for_instance_pid(
 
 def _start_instance_monitor(instance: str) -> int:
     name = validate_instance_id(instance)
+    if _instance_is_tombstoned(name):
+        raise RuntimeError(f"refusing to start monitor for tombstoned instance {name}")
     existing = _read_instance_daemon_pid(name)
     if existing is not None:
         return existing
@@ -209,6 +226,8 @@ def _janitor_check_interval_seconds() -> float:
 
 def _start_janitor_worker(instance: str) -> subprocess.Popen:
     name = validate_instance_id(instance)
+    if _instance_is_tombstoned(name):
+        raise RuntimeError(f"refusing to start janitor worker for tombstoned instance {name}")
     script = Path(__file__).parent / "janitor_worker.py"
     env = _instance_child_env(name)
     with _janitor_worker_log_path(name).open("ab") as log_fh:
@@ -223,7 +242,13 @@ def _start_janitor_worker(instance: str) -> subprocess.Popen:
 
 
 def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
-    live = set(list_instances())
+    live, tombstoned = _live_instances_for_supervisor()
+    for instance in sorted(tombstoned):
+        try:
+            _stop_instance_monitor(instance)
+        except Exception:
+            pass
+        known_instances.pop(instance, None)
     for instance in sorted(live):
         pid = _read_instance_daemon_pid(instance)
         if pid is None:
@@ -246,9 +271,14 @@ def _maintain_janitor_workers(
     now: float,
     check_interval: float,
 ) -> None:
-    live = set(list_instances())
+    live, tombstoned = _live_instances_for_supervisor()
     for instance, proc in list(janitor_workers.items()):
-        if proc.poll() is not None:
+        if instance in tombstoned:
+            janitor_workers.pop(instance, None)
+            project_docs._terminate_process(proc)
+            last_janitor_checks.pop(instance, None)
+            project_docs.reap_child_processes()
+        elif proc.poll() is not None:
             janitor_workers.pop(instance, None)
             project_docs.reap_child_processes()
     for instance in sorted(live):
