@@ -5599,12 +5599,15 @@ def _recall_once(
     query_anchor_terms: List[str] = []
     allow_anchor_miss_penalty = bool(include_lexical_anchor_shaping)
     if include_lexical_anchor_shaping:
-        planner_timeout_ms = 2000
+        planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
         planner_max_retries = 0
         try:
-            planner_timeout_ms = int(getattr(config_retrieval, "lexical_anchor_timeout_ms", 2000) or 2000)
+            planner_timeout_ms = int(
+                getattr(config_retrieval, "lexical_anchor_timeout_ms", _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS)
+                or _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
+            )
         except Exception:
-            planner_timeout_ms = 2000
+            planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
         try:
             planner_max_retries = int(getattr(config_retrieval, "lexical_anchor_max_retries", 0) or 0)
         except Exception:
@@ -5694,7 +5697,7 @@ def _recall_once(
                 "miss_penalty_enabled": allow_anchor_miss_penalty,
             }
         else:
-            planner_timeout_s = max(0.2, min(2.0, planner_timeout_ms / 1000.0))
+            planner_timeout_s = max(0.2, min(_LEXICAL_ANCHOR_MAX_TIMEOUT_S, planner_timeout_ms / 1000.0))
             query_anchor_terms, lexical_anchor_meta = _plan_query_anchor_terms(
                 clean_query,
                 limit=planner_anchor_limit,
@@ -7236,11 +7239,17 @@ def _resolve_lexical_anchor_limit(query: str, config_retrieval: Any) -> int:
     return min(16, adaptive_limit)
 
 
+# Live Anthropic fast-model calls can exceed the old 2s cap under normal latency;
+# r1420 hit failHard on lexical-anchor planning before this bounded 8s ceiling.
+_LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS = 8000
+_LEXICAL_ANCHOR_MAX_TIMEOUT_S = 8.0
+
+
 def _plan_query_anchor_terms(
     query: str,
     *,
     limit: int = 4,
-    timeout_s: float = 2.0,
+    timeout_s: float = _LEXICAL_ANCHOR_MAX_TIMEOUT_S,
     max_retries: int = 0,
 ) -> Tuple[List[str], Dict[str, Any]]:
     """Plan lexical anchor terms with a tiny LLM call.
@@ -7253,7 +7262,7 @@ def _plan_query_anchor_terms(
     started = _time.monotonic()
     clean = " ".join(str(query or "").split()).strip()
     limit = max(1, min(24, int(limit or 4)))
-    timeout_s = max(0.2, min(2.0, float(timeout_s or 2.0)))
+    timeout_s = max(0.2, min(_LEXICAL_ANCHOR_MAX_TIMEOUT_S, float(timeout_s or _LEXICAL_ANCHOR_MAX_TIMEOUT_S)))
     max_retries = max(0, int(max_retries or 0))
     timeout_ms = int(round(timeout_s * 1000))
     meta: Dict[str, Any] = {

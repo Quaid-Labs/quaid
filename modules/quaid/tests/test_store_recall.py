@@ -3986,6 +3986,41 @@ class TestRecallFastHookInjectContract:
         assert isinstance(meta["elapsed_ms"], int)
         assert meta["elapsed_ms"] >= 0
 
+    def test_plan_query_anchor_terms_caps_timeout_at_live_safe_ceiling(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(**kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return '{"anchors": ["Maya"]}', {}
+
+        with patch.object(mg, "call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "Maya job transition TechFlow to Stripe timeline",
+                timeout_s=99,
+                max_retries=0,
+            )
+
+        assert anchors == ["maya", "techflow", "stripe"]
+        assert captured["timeout"] == 8.0
+        assert meta["timeout_ms"] == 8000
+
+    def test_plan_query_anchor_terms_uses_live_safe_default_timeout(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(**kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return '{"anchors": ["Maya"]}', {}
+
+        with patch.object(mg, "call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            _anchors, meta = mg._plan_query_anchor_terms("Maya job timeline")
+
+        assert captured["timeout"] == 8.0
+        assert meta["timeout_ms"] == 8000
+
     def test_plan_query_anchor_terms_keeps_multi_entity_queries_above_two_anchors(self):
         import datastore.memorydb.memory_graph as mg
 
