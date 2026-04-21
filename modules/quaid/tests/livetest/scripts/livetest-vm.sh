@@ -219,6 +219,7 @@ cmd_start() {
     echo "[1/4] Cloning $BASE_IMAGE → $RUN_NAME..."
     tart clone "$BASE_IMAGE" "$RUN_NAME"
     echo "  Clone complete."
+    chmod +w "${HOME}/.tart/vms/${RUN_NAME}/disk.img"
 
     # Boot VM (headless)
     echo ""
