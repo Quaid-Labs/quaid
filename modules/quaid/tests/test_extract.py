@@ -754,6 +754,7 @@ class TestExtractFromTranscript:
                     "domains": ["health", "personal"],
                     "extraction_confidence": "high",
                     "keywords": "running exact time",
+                    "created_at": "2026-03-12T23:59:59",
                     "edges": [{"subject": "Maya", "relation": "ran_time", "object": "2:14"}],
                 },
             ],
@@ -787,6 +788,7 @@ class TestExtractFromTranscript:
         assert call["confidence"] == pytest.approx(0.9)
         assert call["extraction_confidence"] == pytest.approx(0.9)
         assert call["provenance_confidence"] == pytest.approx(0.9)
+        assert call["created_at"] == "2026-03-12T23:59:59"
         assert sorted(call["domains"]) == ["health", "personal"]
 
     @patch("ingest.extract._memory.store")
@@ -954,6 +956,59 @@ class TestExtractFromTranscript:
         mock_append_project_logs.assert_called_once_with(
             {"quaid": ["Added a hello_world.py scratch helper for the live test"]},
             trigger="CLI",
+            date_str=None,
+            dry_run=False,
+        )
+
+    @patch("ingest.extract.append_project_logs")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_project_logs_use_session_date_when_quaid_now_missing(
+        self,
+        mock_store,
+        mock_append_project_logs,
+        monkeypatch,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        monkeypatch.delenv("QUAID_NOW", raising=False)
+        mock_store.return_value = {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+        mock_append_project_logs.return_value = {
+            "projects_seen": 1,
+            "projects_updated": 1,
+            "entries_seen": 1,
+            "entries_written": 1,
+            "projects_unknown": 0,
+            "projects_missing_file": 0,
+        }
+
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {"recipe-app": ["Added tests/recipe.test.js"]},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="daemon-compaction",
+            session_id="day-runtime-2026-03-11",
+            dry_run=False,
+        )
+
+        mock_append_project_logs.assert_called_once_with(
+            {"recipe-app": ["Added tests/recipe.test.js"]},
+            trigger="Compaction",
+            date_str="2026-03-11",
             dry_run=False,
         )
 

@@ -1679,11 +1679,36 @@ def cmd_update_stale(
             raise
         logger.warning("never-indexed doc scan failed: %s", e)
 
-    if not stale and not updated and not newly_indexed and not never_indexable:
+    project_logs_indexed = _index_append_only_project_logs(project=project, dry_run=dry_run)
+
+    if not stale and not updated and not newly_indexed and not never_indexable and not project_logs_indexed:
         print("All docs up-to-date.")
         return 0
 
-    return updated + newly_indexed
+    return updated + newly_indexed + project_logs_indexed
+
+
+def _index_append_only_project_logs(project: Optional[str], dry_run: bool) -> int:
+    """Index append-only PROJECT.log files from the legacy docs update CLI path."""
+    if dry_run:
+        return 0
+    try:
+        from core.docs.updater import index_project_logs
+    except Exception as exc:
+        logger.warning("PROJECT.log indexing unavailable from docs update: %s", exc)
+        if is_fail_hard_enabled():
+            raise
+        return 0
+    try:
+        count = int(index_project_logs(project=project) or 0)
+    except Exception as exc:
+        logger.warning("PROJECT.log indexing failed from docs update: %s", exc)
+        if is_fail_hard_enabled():
+            raise
+        return 0
+    if count:
+        print(f"\nIndexed {count} PROJECT.log file(s)")
+    return count
 
 
 def cmd_update_from_transcript(transcript_path: str, dry_run: bool = True, max_docs: int = 3) -> int:

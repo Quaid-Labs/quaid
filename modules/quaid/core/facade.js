@@ -116,10 +116,12 @@ function createQuaidFacade(deps) {
       const journalDir = path.join(visibleInstanceRoot, journalConfig.journalDir || "journal");
       return recallFromJournal(query, limit, journalDir);
     },
-    recallProjectStore: async (query, limit, project, docs) => {
+    recallProjectStore: async (query, limit, project, docs, dateFrom, dateTo) => {
       const args = [query, "--limit", String(limit)];
       if (project) args.push("--project", project);
       if (Array.isArray(docs) && docs.length > 0) args.push("--docs", docs.join(","));
+      if (dateFrom) args.push("--date-from", dateFrom);
+      if (dateTo) args.push("--date-to", dateTo);
       const out = await deps.execDocsRag("search", args);
       return parseProjectStoreResults(out, query, limit, project);
     }
@@ -1722,6 +1724,19 @@ Consider running: docs staleness updater (update-stale --apply)`;
     const text = String(err?.message || err || "").toLowerCase();
     return text.includes("language model provider") || text.includes("check fastreasoning/deepreasoning") || text.includes("provider unavailable after") || text.includes("llm proxy error");
   }
+  function firstNonEmptyString(...values) {
+    for (const value of values) {
+      const text = String(value || "").trim();
+      if (text) return text;
+    }
+    return void 0;
+  }
+  function resolveRecallDateFrom(opts) {
+    return firstNonEmptyString(opts.dateFrom, opts.date_from, opts.after, opts.since);
+  }
+  function resolveRecallDateTo(opts) {
+    return firstNonEmptyString(opts.dateTo, opts.date_to, opts.asOf, opts.as_of, opts.before, opts.until);
+  }
   async function recallMemoryFromBridgeDetailed(query, limit, opts) {
     const rawStores = opts.stores || ["vector"];
     const expandGraph = rawStores.includes("graph");
@@ -1736,12 +1751,14 @@ Consider running: docs staleness updater (update-stale --apply)`;
         domain = { personal: true };
       }
     }
+    const dateFrom = resolveRecallDateFrom(opts);
+    const dateTo = resolveRecallDateTo(opts);
     const cfg = { stores: normalizedStores, limit };
     if (domain) cfg["domain_filter"] = domain;
     if (opts.domainBoost) cfg["domain_boost"] = opts.domainBoost;
     if (opts.project) cfg["project"] = opts.project;
-    if (opts.dateFrom) cfg["date_from"] = opts.dateFrom;
-    if (opts.dateTo) cfg["date_to"] = opts.dateTo;
+    if (dateFrom) cfg["date_from"] = dateFrom;
+    if (dateTo) cfg["date_to"] = dateTo;
     if (opts.fast) cfg["fast"] = true;
     if (opts.timeoutMs) cfg["timeout_ms"] = opts.timeoutMs;
     if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
@@ -2082,12 +2099,12 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       domain = { all: true },
       domainBoost,
       project,
-      dateFrom,
-      dateTo,
       docs,
       datastoreOptions,
       failOpen
     } = opts;
+    const resolvedDateFrom = resolveRecallDateFrom(opts);
+    const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
     const runRecall = (q) => {
@@ -2100,8 +2117,8 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
         domain,
         domainBoost,
         project,
-        dateFrom,
-        dateTo,
+        dateFrom: resolvedDateFrom,
+        dateTo: resolvedDateTo,
         docs,
         datastoreOptions
       };
@@ -2125,10 +2142,10 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       domain = { all: true },
       domainBoost,
       project,
-      dateFrom,
-      dateTo,
       timeoutMs
     } = opts;
+    const resolvedDateFrom = resolveRecallDateFrom(opts);
+    const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
     const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph"]);
@@ -2138,8 +2155,8 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
         domain,
         domainBoost,
         project,
-        dateFrom,
-        dateTo,
+        dateFrom: resolvedDateFrom,
+        dateTo: resolvedDateTo,
         depth: graphDepth,
         fast: reasoning === "fast",
         timeoutMs

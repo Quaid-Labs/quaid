@@ -550,15 +550,35 @@ def _shadow_git(project: str, entry: Dict[str, Any]):
     )
 
 
-def _project_log_path(entry: Dict[str, Any]) -> Optional[Path]:
+def _project_log_path(entry: Dict[str, Any], project: Optional[str] = None) -> Optional[Path]:
+    candidates: List[Path] = []
     raw = str(entry.get("canonical_path") or "").strip()
-    if not raw:
+    if raw:
+        candidates.append(Path(raw) / PROJECT_LOG)
+    if project:
+        managed = _managed_project_log_path(project)
+        if managed is not None and managed not in candidates:
+            candidates.append(managed)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0] if candidates else None
+
+
+def _managed_project_log_path(project: str) -> Optional[Path]:
+    try:
+        from lib.runtime_context import get_projects_dir
+
+        return get_projects_dir() / validate_project_name(project) / PROJECT_LOG
+    except Exception as exc:
+        logger.warning("Failed resolving managed PROJECT.log path for %s: %s", project, exc)
+        if _fail_hard_enabled():
+            raise
         return None
-    return Path(raw) / PROJECT_LOG
 
 
-def _read_project_log_since(entry: Dict[str, Any], offset: int) -> Tuple[List[str], int, int]:
-    log_path = _project_log_path(entry)
+def _read_project_log_since(entry: Dict[str, Any], offset: int, project: Optional[str] = None) -> Tuple[List[str], int, int]:
+    log_path = _project_log_path(entry, project=project)
     if not log_path or not log_path.is_file():
         return [], 0, 0
     try:
@@ -575,8 +595,8 @@ def _read_project_log_since(entry: Dict[str, Any], offset: int) -> Tuple[List[st
         raise RuntimeError(f"failed to read PROJECT.log at {log_path}: {exc}") from exc
 
 
-def _current_project_log_size(entry: Dict[str, Any]) -> int:
-    log_path = _project_log_path(entry)
+def _current_project_log_size(entry: Dict[str, Any], project: Optional[str] = None) -> int:
+    log_path = _project_log_path(entry, project=project)
     if not log_path or not log_path.is_file():
         return 0
     try:
@@ -616,14 +636,17 @@ def project_status(project: str) -> Dict[str, Any]:
     docs_cursor_head = state.get("last_shadow_commit")
     shadow_cursor_pending = bool(current_shadow_head and current_shadow_head != docs_cursor_head)
     source_error = None
-    try:
-        changes = pending_source_changes(name, entry)
-    except RuntimeError as exc:
-        logger.warning("Project docs status source check failed for %s: %s", name, exc)
+    if sg is None:
         changes = []
-        source_error = str(exc)
+    else:
+        try:
+            changes = pending_source_changes(name, entry)
+        except RuntimeError as exc:
+            logger.warning("Project docs status source check failed for %s: %s", name, exc)
+            changes = []
+            source_error = str(exc)
     log_offset = int(state.get("project_log_offset") or 0)
-    log_size = _current_project_log_size(entry)
+    log_size = _current_project_log_size(entry, project=name)
     log_pending = max(0, log_size - min(log_offset, log_size))
     stale = bool(req) or bool(changes) or shadow_cursor_pending or log_pending > 0
     status_value = "stale" if stale else "fresh"
@@ -667,7 +690,16 @@ def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
     name = validate_project_name(project)
     entry = get_project_entry(name)
     sg = _shadow_git(name, entry)
-    changes = pending_source_changes(name, entry)
+    source_error = None
+    if sg is None:
+        changes = []
+    else:
+        try:
+            changes = pending_source_changes(name, entry)
+        except RuntimeError as exc:
+            logger.warning("Project docs diff source check failed for %s: %s", name, exc)
+            changes = []
+            source_error = str(exc)
     diff_text = ""
     state = read_state(name)
     docs_cursor_head = state.get("last_shadow_commit")
@@ -689,7 +721,7 @@ def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
             logger.exception("Failed reading pending source diff for project %s", name)
             raise RuntimeError(f"failed to read pending source diff for {name}: {exc}") from exc
     log_offset = int(state.get("project_log_offset") or 0)
-    log_lines, _, log_size = _read_project_log_since(entry, log_offset)
+    log_lines, _, log_size = _read_project_log_since(entry, log_offset, project=name)
     return {
         "project": name,
         "full": bool(full),
@@ -699,6 +731,7 @@ def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
         "project_log_entries": log_lines,
         "project_log_entry_count": len(log_lines),
         "project_log_size": log_size,
+        "source_error": source_error,
     }
 
 
@@ -866,7 +899,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             log_offset = int(state.get("project_log_offset") or 0)
             docs_cursor_head = state.get("last_shadow_commit")
             merge_progress(name, "read_project_log", "reading PROJECT.log cursor", project_log_offset=log_offset)
-            log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset)
+            log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset, project=name)
             merge_progress(name, "snapshot", "snapshotting source changes")
             snapshot_project(name, entry)
             snapshot = committed_shadow_snapshot_since_cursor(name, entry, docs_cursor_head)
@@ -880,6 +913,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             }
             registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
             index_count = 0
+            project_log_index_count = 0
             from core.docs_updater_hook import update_project_docs
             from core.docs import updater as docs_updater
 
@@ -910,6 +944,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                             protected_names={PROJECT_LOG},
                         ) or 0
                     )
+                    project_log_index_count = int(docs_updater.index_project_logs(project=name) or 0)
                 except Exception as exc:
                     if _fail_hard_enabled():
                         raise
@@ -923,6 +958,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "last_metrics": metrics,
                 "last_registry_sync": registry_sync,
                 "last_indexed_docs": index_count,
+                "last_indexed_project_logs": project_log_index_count,
                 "project_log_offset": log_size,
                 "phase": "idle",
                 "progress": {
@@ -932,6 +968,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                     "docs_updated": int(metrics.get("docs_updated") or 0),
                     "docs_registered": int(registry_sync.get("registered") or 0),
                     "indexed_docs": index_count,
+                    "indexed_project_logs": project_log_index_count,
                 },
             }
             if snapshot and snapshot.get("commit_hash"):
@@ -952,6 +989,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "metrics": metrics,
                 "registry_sync": registry_sync,
                 "indexed_docs": index_count,
+                "indexed_project_logs": project_log_index_count,
             }
             if not dry_run and next_state["status"] == "fresh":
                 _notify_project_docs_update(name, result)

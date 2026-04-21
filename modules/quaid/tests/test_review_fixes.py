@@ -185,8 +185,10 @@ class TestProjectDocsStaleDocIndex:
             # index_one_stale_registered_doc does lazy imports, mock them
             import datastore.docsdb.rag as rag_mod
             import datastore.docsdb.registry as reg_mod
+            import core.docs.updater as docs_updater
             monkeypatch.setattr(rag_mod, "DocsRAG", lambda: mock_rag)
             monkeypatch.setattr(reg_mod, "DocsRegistry", lambda: mock_registry)
+            monkeypatch.setattr(docs_updater, "index_project_logs", lambda project=None: 0)
             result = project_docs.index_one_stale_registered_doc()
 
         assert result is False
@@ -218,8 +220,10 @@ class TestProjectDocsStaleDocIndex:
 
         import datastore.docsdb.rag as rag_mod
         import datastore.docsdb.registry as reg_mod
+        import core.docs.updater as docs_updater
         monkeypatch.setattr(rag_mod, "DocsRAG", lambda: mock_rag)
         monkeypatch.setattr(reg_mod, "DocsRegistry", lambda: mock_registry)
+        monkeypatch.setattr(docs_updater, "index_project_logs", lambda project=None: 0)
 
         result = project_docs.index_one_stale_registered_doc()
 

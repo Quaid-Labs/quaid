@@ -683,6 +683,59 @@ describe("QuaidFacade", () => {
     expect(recallArgs).not.toContain("--domain");
   });
 
+  it("recallWithDiagnostics maps as_of alias to datastore date_to", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return JSON.stringify([{ text: "dated fact", category: "fact", similarity: 0.8 }]);
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    await facade.recallWithDiagnostics({
+      query: "my morning run",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      as_of: "2026-04-15",
+    });
+    const recallCall = execPython.mock.calls.find((args) => args[0] === "recall");
+    const recallArgs: string[] = recallCall?.[1] ?? [];
+    const cfgArg = recallArgs.find((a: string) => a.startsWith("{"));
+    expect(JSON.parse(cfgArg!).date_to).toBe("2026-04-15");
+  });
+
+  it("project recall forwards date bounds to docs search", async () => {
+    const execDocsRag = vi.fn(async () => [
+      "Found 1 results for 'milestone':",
+      "",
+      "1. ~/projects/quaid/PROJECT.log (similarity: 0.95)",
+      "   - [2026-04-20T10:00:00] Milestone shipped",
+    ].join("\n"));
+    const facade = createQuaidFacade(makeMockDeps({
+      execDocsRag,
+      isSystemEnabled: vi.fn((system: string) => system === "projects"),
+    }));
+    await facade.recall({
+      query: "milestone",
+      limit: 5,
+      routeStores: false,
+      datastores: ["project"],
+      expandGraph: false,
+      project: "quaid",
+      dateTo: "2026-04-20",
+    });
+    expect(execDocsRag).toHaveBeenCalledWith("search", [
+      "milestone",
+      "--limit",
+      "5",
+      "--project",
+      "quaid",
+      "--date-to",
+      "2026-04-20",
+    ]);
+  });
+
   it("recallWithDiagnostics forwards timeout budget in JSON config", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {

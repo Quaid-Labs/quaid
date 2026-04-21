@@ -48,6 +48,20 @@ def test_default_extraction_prompt_contains_expected_sections():
     assert "manager->employee" in text
     assert "ROLE/DIRECTION FIDELITY (MANDATORY)" in text
     assert "preserve direction exactly as stated" in text
+    assert "Preserve exact callable/config/test/schema details when present" in text
+    assert "20 or fewer items" in text
+    assert "Do not collapse an available exact list" in text
+
+
+def test_registered_project_extraction_prompt_preserves_exact_lists():
+    from ingest.extract import _load_extraction_prompt
+
+    text = _load_extraction_prompt(known_projects={"recipe-app": "Recipe app"})
+
+    assert "PROJECT LOG CONTRACT (MANDATORY)" in text
+    assert "Preserve exact callable/config/test/schema details when present" in text
+    assert "20 or fewer items" in text
+    assert "Do not collapse an available exact list" in text
 
 
 def test_custom_prompt_set_can_override_selected_keys():

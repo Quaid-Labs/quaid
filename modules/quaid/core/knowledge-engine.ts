@@ -68,7 +68,9 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
     query: string,
     limit: number,
     project?: string,
-    docs?: string[]
+    docs?: string[],
+    dateFrom?: string,
+    dateTo?: string
   ) => Promise<TMemoryResult[]>;
   /** Returns resolved command registry entries for tool hint routing. */
   getCommandRegistry?: () => Array<{ id: string; description: string; hint: string }>;
@@ -428,11 +430,13 @@ ${projectHints}
     query: string,
     limit: number,
     project?: string,
-    docs?: string[]
+    docs?: string[],
+    dateFrom?: string,
+    dateTo?: string
   ): Promise<TMemoryResult[]> {
     if (!deps.isSystemEnabled("projects")) return [];
     if (!deps.recallProjectStore) return [];
-    return deps.recallProjectStore(query, limit, project, docs);
+    return deps.recallProjectStore(query, limit, project, docs, dateFrom, dateTo);
   }
 
   async function _executeStores(query: string, limit: number, opts: TotalRecallOptions): Promise<TMemoryResult[]> {
@@ -492,7 +496,7 @@ ${projectHints}
           const docs = Array.isArray(docsRaw)
             ? docsRaw.map((d) => String(d || "").trim()).filter(Boolean)
             : ctx.opts.docs;
-          return recallFromProjectStore(ctx.query, ctx.limit, project, docs);
+          return recallFromProjectStore(ctx.query, ctx.limit, project, docs, ctx.opts.dateFrom, ctx.opts.dateTo);
         },
       },
     };

@@ -170,6 +170,362 @@ class TestStoreBasic:
             assert result["status"] == "created"
             assert "id" in result
 
+    def test_store_default_created_at_honors_quaid_now(self, tmp_path, monkeypatch):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T23:59:59")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store(
+                "Maya scheduled the cedar deck inspection",
+                owner_id="quaid",
+                skip_dedup=True,
+            )
+
+        node = graph.get_node(result["id"])
+        assert node is not None
+        assert node.created_at == "2026-03-11T23:59:59"
+
+    def test_recall_date_filter_uses_session_source_date_over_publish_time(self, tmp_path):
+        from datastore.memorydb.memory_graph import _recall_once, store
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            old = store(
+                "Maya tested the recipe app import flow with apricot jam",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-05",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            future = store(
+                "Maya tested the recipe app import flow with blueberry syrup",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-15",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            results = _recall_once(
+                "recipe app import flow",
+                owner_id="quaid",
+                limit=10,
+                date_to="2026-03-10",
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                low_signal_retry=False,
+            )
+
+        ids = [row["id"] for row in results]
+        assert old["id"] in ids
+        assert future["id"] not in ids
+        assert any(row.get("source_date") == "2026-03-05" for row in results)
+
+    def test_recall_date_filter_excludes_undated_rows(self, tmp_path):
+        from datastore.memorydb.memory_graph import _recall_once, store
+
+        graph, db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            old = store(
+                "Maya worked at TechFlow as of the March planning session",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-01",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            undated = store(
+                "Maya worked at Stripe with Sarah as manager",
+                owner_id="quaid",
+                session_id="",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            with sqlite3.connect(db_file) as conn:
+                conn.execute("UPDATE nodes SET created_at = '' WHERE id = ?", (undated["id"],))
+                conn.commit()
+
+            results = _recall_once(
+                "where did Maya work",
+                owner_id="quaid",
+                limit=10,
+                date_to="2026-03-01",
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                low_signal_retry=False,
+            )
+
+        ids = [row["id"] for row in results]
+        assert old["id"] in ids
+        assert undated["id"] not in ids
+
+    def test_recall_date_filter_runs_before_limit(self, tmp_path):
+        from datastore.memorydb.memory_graph import _recall_once, store
+
+        graph, _ = _make_graph(tmp_path)
+
+        def _score(node, *_args, **_kwargs):
+            return 0.99 if "Stripe" in node.name else 0.95
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._compute_composite_score", side_effect=_score):
+            old = store(
+                "Maya worked at TechFlow as a product manager",
+                owner_id="quaid",
+                session_id="session-1",
+                created_at="2026-03-01T23:59:59",
+                skip_dedup=True,
+            )
+            future = store(
+                "Maya worked at Stripe as a product manager",
+                owner_id="quaid",
+                session_id="session-13",
+                created_at="2026-04-21T23:59:59",
+                skip_dedup=True,
+            )
+
+            results = _recall_once(
+                "Maya work product manager",
+                owner_id="quaid",
+                limit=1,
+                date_to="2026-03-01",
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                low_signal_retry=False,
+            )
+
+        ids = [row["id"] for row in results]
+        assert ids == [old["id"]]
+        assert future["id"] not in ids
+
+    def test_recall_date_filter_preserves_dated_co_session_expansion(self, tmp_path):
+        from datastore.memorydb.memory_graph import _recall_once, store
+
+        graph, _ = _make_graph(tmp_path)
+
+        def _score(node, *_args, **_kwargs):
+            if "planning anchor" in node.name:
+                return 0.95
+            if "TechFlow used the March API migration checklist" in node.name:
+                return 0.90
+            return 0.10
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._compute_composite_score", side_effect=_score):
+            anchor = store(
+                "Maya mentioned the TechFlow planning anchor",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-05",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            co_session = store(
+                "TechFlow used the March API migration checklist",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-05",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+
+            results = _recall_once(
+                "Maya planning anchor",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.5,
+                date_to="2026-03-05",
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=True,
+                include_mmr=False,
+                low_signal_retry=False,
+            )
+
+        by_id = {row["id"]: row for row in results}
+        assert anchor["id"] in by_id
+        assert co_session["id"] in by_id
+        assert by_id[co_session["id"]]["via_relation"] == "co_session"
+        assert by_id[co_session["id"]]["source_date"] == "2026-03-05"
+
+    def test_co_session_expansion_ranks_wider_session_candidates(self, tmp_path):
+        from datastore.memorydb.memory_graph import _recall_once, store
+
+        graph, _ = _make_graph(tmp_path)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            anchor = store(
+                "Maya mentioned the planning anchor",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-01",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            distractors = [
+                store(
+                    f"Maya discussed unrelated note {index}",
+                    owner_id="quaid",
+                    session_id="day-runtime-2026-03-01",
+                    created_at="2026-04-20T23:59:59",
+                    skip_dedup=True,
+                )
+                for index in range(6)
+            ]
+            future = store(
+                "Maya has a future high-scoring same-session note",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-01",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            with graph._get_conn() as conn:
+                conn.execute(
+                    "UPDATE nodes SET valid_from = ? WHERE id = ?",
+                    ("2026-03-15T00:00:00", future["id"]),
+                )
+            relevant = store(
+                "Maya is a Senior Product Manager at TechFlow",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-01",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+            direct = store(
+                "Direct recall evidence about Maya's work remains primary",
+                owner_id="quaid",
+                created_at="2026-03-01T12:00:00",
+                skip_dedup=True,
+            )
+
+        anchor_node = graph.get_node(anchor["id"])
+        direct_node = graph.get_node(direct["id"])
+
+        def _score(node, *_args, **_kwargs):
+            if node.id == anchor["id"]:
+                return 0.80
+            if node.id == future["id"]:
+                return 0.99
+            if node.id == relevant["id"]:
+                return 0.95
+            if node.id == direct["id"]:
+                return 0.70
+            return 0.10
+
+        co_session_ids = {future["id"], relevant["id"]} | {item["id"] for item in distractors}
+        co_session_fit_kwargs = []
+
+        def _fit_multiplier(_query, node, _attrs, **kwargs):
+            if node.id in co_session_ids:
+                co_session_fit_kwargs.append(kwargs)
+            return 1.0
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(graph, "search_hybrid", return_value=[(anchor_node, 0.80), (direct_node, 0.70)]), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
+             patch("datastore.memorydb.memory_graph._compute_composite_score", side_effect=_score), \
+             patch("datastore.memorydb.memory_graph._compute_query_fit_multiplier", side_effect=_fit_multiplier), \
+             patch("datastore.memorydb.memory_graph._expand_high_confidence_entity_anchors", return_value=([], [])):
+            results = _recall_once(
+                "what did Maya do for work",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.5,
+                date_to="2026-03-01",
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=True,
+                include_mmr=False,
+                include_lexical_anchor_shaping=True,
+                lexical_anchor_planner_mode="deterministic",
+                low_signal_retry=False,
+            )
+
+        by_id = {row["id"]: row for row in results}
+        assert anchor["id"] in by_id
+        assert relevant["id"] in by_id
+        assert future["id"] not in by_id
+        assert by_id[relevant["id"]]["via_relation"] == "co_session"
+        assert by_id[relevant["id"]]["similarity"] == 0.57
+        assert by_id[direct["id"]]["similarity"] > by_id[relevant["id"]]["similarity"]
+        assert [row["id"] for row in results].index(direct["id"]) < [row["id"] for row in results].index(relevant["id"])
+        assert sum(1 for item in distractors if item["id"] in by_id) < len(distractors)
+        assert co_session_fit_kwargs
+        assert all(kwargs["query_anchor_terms"] == ["maya"] for kwargs in co_session_fit_kwargs)
+        assert all(kwargs["allow_anchor_miss_penalty"] is False for kwargs in co_session_fit_kwargs)
+
+    def test_recall_date_filter_preserves_dated_graph_traversal_expansion(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import _recall_once, store
+
+        graph, _ = _make_graph(tmp_path)
+        related = mg.Node.create(
+            type="Fact",
+            name="TechFlow used the dated graph migration checklist",
+            owner_id="quaid",
+            session_id="day-runtime-2026-03-05",
+            created_at="2026-04-20T23:59:59",
+        )
+
+        def _score(node, *_args, **_kwargs):
+            return 0.95 if "planning anchor" in node.name else 0.10
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._compute_composite_score", side_effect=_score), \
+             patch.object(
+                 graph,
+                 "beam_search_graph",
+                 return_value=[(related, "supports", "out", 1, [], 0.9)],
+             ):
+            anchor = store(
+                "Maya mentioned the dated graph planning anchor",
+                owner_id="quaid",
+                session_id="day-runtime-2026-03-05",
+                created_at="2026-04-20T23:59:59",
+                skip_dedup=True,
+            )
+
+            results = _recall_once(
+                "Maya dated graph planning anchor",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.5,
+                date_to="2026-03-05",
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                include_graph_traversal=True,
+                include_co_session=False,
+                include_mmr=False,
+                low_signal_retry=False,
+            )
+
+        by_id = {row["id"]: row for row in results}
+        assert anchor["id"] in by_id
+        assert related.id in by_id
+        assert by_id[related.id]["via_relation"] == "supports"
+        assert by_id[related.id]["source_date"] == "2026-03-05"
+
     def test_store_returns_uuid_id(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
@@ -1657,6 +2013,87 @@ class TestRecallTelemetry:
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 60.0
 
+    def test_plan_fanout_queries_keeps_default_docs_when_llm_downgrades_project_asof(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            return ('{"stores":["vector"],"queries":["recipe app dietary labels"]}', {})
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={"stores": ["vector"], "queries": ["recipe app dietary labels"]},
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "As of 2026-03-08, what dietary labels did the recipe app support?",
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries[0] == "As of 2026-03-08, what dietary labels did the recipe app support?"
+        assert meta["planned_stores"] == ["vector", "docs"]
+        assert meta["planned_project"] == "recipe-app"
+
+    def test_recall_fast_infers_date_to_from_iso_project_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured_kwargs = []
+
+        def _fake_store_plan(*args, **kwargs):
+            captured_kwargs.append(dict(kwargs.get("common_kwargs") or {}))
+            return (
+                [{"text": "[docs] PROJECT.log: dietary.test.js", "category": "docs", "source_type": "docs"}],
+                {"selected_path": "store_plan", "phases_ms": {"total_ms": 1}, "counts": {"final_results": 1}},
+                {"chunks": [{"source": "PROJECT.log", "content": "dietary.test.js", "similarity": 0.8}]},
+            )
+
+        query = "As of 2026-03-18, what test suites existed for the recipe app?"
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=([query], {"planned_stores": ["vector", "docs"], "planned_project": "recipe-app"}),
+        ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_store_plan):
+            _rows, meta = mg.recall_fast(query, return_meta=True)
+
+        assert captured_kwargs[0]["date_to"] == "2026-03-18"
+        assert captured_kwargs[0]["date_from"] is None
+        assert meta["inferred_date_to"] == "2026-03-18"
+
+        captured_kwargs.clear()
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=([query], {"planned_stores": ["vector", "docs"], "planned_project": "recipe-app"}),
+        ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_store_plan):
+            _rows, meta = mg.recall_fast(query, date_to="2026-03-10", return_meta=True)
+
+        assert captured_kwargs[0]["date_to"] == "2026-03-10"
+        assert "inferred_date_to" not in meta
+
+        captured_kwargs.clear()
+        range_query = "Between 2026-01-01 and 2026-04-01, what test suites existed for the recipe app?"
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=([range_query], {"planned_stores": ["vector", "docs"], "planned_project": "recipe-app"}),
+        ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_store_plan):
+            _rows, meta = mg.recall_fast(range_query, return_meta=True)
+
+        assert captured_kwargs[0]["date_to"] == "2026-04-01"
+        assert meta["inferred_date_to"] == "2026-04-01"
+
+        captured_kwargs.clear()
+        with patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=([query], {"planned_stores": ["vector", "docs"], "planned_project": "recipe-app"}),
+        ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_store_plan):
+            _rows, meta = mg.recall_fast(query, date_from="2026-03-01", return_meta=True)
+
+        assert captured_kwargs[0]["date_from"] == "2026-03-01"
+        assert captured_kwargs[0]["date_to"] is None
+        assert "inferred_date_to" not in meta
+
     def test_recall_full_planner_keeps_deliberate_timeout_window(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -2594,6 +3031,281 @@ class TestRecallFastHookInjectContract:
         assert seen == {"vector": 1, "docs": 1}
         assert meta["planned_stores"] == ["vector", "docs"]
 
+    def test_recall_store_plan_preserves_requested_docs_when_vector_crowds_limit(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            rows = [
+                {
+                    "id": f"vector-{idx}",
+                    "text": f"high confidence vector memory {idx}",
+                    "category": "fact",
+                    "similarity": 1.0,
+                }
+                for idx in range(8)
+            ]
+            return rows, {"selected_path": "vector", "phases_ms": {"total_ms": 10}}, None
+
+        def _fake_docs(*args, **kwargs):
+            return (
+                [
+                    {
+                        "text": "[docs] PROJECT.log: DIETARY_LABELS constant: vegetarian, vegan, gluten-free",
+                        "category": "docs",
+                        "source_type": "docs",
+                        "similarity": 0.81,
+                    }
+                ],
+                {"selected_path": "docs_bundle", "phases_ms": {"total_ms": 5}},
+                {
+                    "chunks": [
+                        {
+                            "source": "PROJECT.log",
+                            "content": "DIETARY_LABELS constant: vegetarian, vegan, gluten-free",
+                            "similarity": 0.81,
+                        }
+                    ]
+                },
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "As of 2026-03-08, what dietary labels did the recipe app support?",
+                stores=["vector", "docs"],
+                limit=8,
+                owner_id="maya",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["dietary labels"],
+                planner_meta={"planned_stores": ["vector", "docs"], "planned_project": "recipe-app"},
+                fast_mode=True,
+                common_kwargs={"project": "recipe-app"},
+            )
+
+        assert len(rows) == 8
+        assert any(row.get("category") == "docs" and "DIETARY_LABELS" in row["text"] for row in rows)
+        assert sum(1 for row in rows if row.get("category") == "fact") == 7
+        assert meta["preserved_docs_rows"] == 1
+
+    def test_recall_store_plan_preserves_target_date_docs_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            rows = [
+                {
+                    "id": f"vector-{idx}",
+                    "text": f"high confidence vector memory {idx}",
+                    "category": "fact",
+                    "similarity": 1.0,
+                }
+                for idx in range(8)
+            ]
+            return rows, {"selected_path": "vector", "phases_ms": {"total_ms": 10}}, None
+
+        def _fake_docs(*args, **kwargs):
+            return (
+                [
+                    {
+                        "text": "[docs] PROJECT.log: - [2026-03-11T23:59:59] Jest test suite: tests/recipe.test.js",
+                        "category": "docs",
+                        "source_type": "docs",
+                        "similarity": 0.99,
+                    },
+                    {
+                        "text": "[docs] PROJECT.log: - [2026-03-18T23:59:59] tests/mealplan.test.js: Meal Plan Creation and Grocery List Generation",
+                        "category": "docs",
+                        "source_type": "docs",
+                        "similarity": 0.88,
+                    },
+                    {
+                        "text": "[docs] PROJECT.log: - [2026-03-18T23:59:59] Added tests/dietary.test.js covering DIETARY_LABELS and SAFE_FOR_MOM",
+                        "category": "docs",
+                        "source_type": "docs",
+                        "similarity": 0.87,
+                    },
+                ],
+                {"selected_path": "docs_bundle", "phases_ms": {"total_ms": 5}},
+                {"chunks": []},
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "As of 2026-03-18, what test suites existed for the recipe app?",
+                stores=["vector", "docs"],
+                limit=8,
+                owner_id="maya",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["test suites"],
+                planner_meta={"planned_stores": ["vector", "docs"], "planned_project": "recipe-app"},
+                fast_mode=True,
+                common_kwargs={"project": "recipe-app", "date_to": "2026-03-18"},
+            )
+
+        docs_text = "\n".join(row["text"] for row in rows if row.get("category") == "docs")
+        assert len(rows) == 8
+        assert sum(1 for row in rows if row.get("category") == "docs") == 2
+        assert "tests/mealplan.test.js" in docs_text
+        assert "tests/dietary.test.js" in docs_text
+        assert "2026-03-11" not in docs_text
+        assert meta["preserved_docs_rows"] >= 1
+
+    def test_docs_store_recall_uses_search_docs_when_bundle_lacks_date_args(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class LegacyDocsRAG:
+            def __init__(self):
+                self.search_calls = []
+
+            def search_docs_bundle(self, query, limit=5, project=None):
+                raise AssertionError("date-bounded recall must not call legacy unbounded bundle")
+
+            def search_docs(
+                self,
+                query,
+                limit=5,
+                min_similarity=0.3,
+                project=None,
+                docs=None,
+                date_from=None,
+                date_to=None,
+            ):
+                self.search_calls.append(
+                    {
+                        "query": query,
+                        "limit": limit,
+                        "project": project,
+                        "date_from": date_from,
+                        "date_to": date_to,
+                    }
+                )
+                return [
+                    {
+                        "source": "/tmp/workspace/projects/quaid/PROJECT.log",
+                        "section_header": None,
+                        "content": "- [2026-04-20T10:00:00] Milestone shipped",
+                        "similarity": 0.95,
+                    }
+                ]
+
+            def infer_project_from_chunks(self, chunks):
+                return "quaid" if chunks else None
+
+        legacy = LegacyDocsRAG()
+        with patch("datastore.docsdb.rag.DocsRAG", return_value=legacy):
+            rows, meta, bundle = mg._docs_store_recall(
+                "milestone",
+                limit=5,
+                project="quaid",
+                date_to="2026-04-20",
+            )
+
+        assert legacy.search_calls == [
+            {
+                "query": "milestone",
+                "limit": 5,
+                "project": "quaid",
+                "date_from": None,
+                "date_to": "2026-04-20",
+            }
+        ]
+        assert bundle["project_md"] is None
+        assert bundle["telemetry"]["project_md_attached"] is False
+        assert rows[0]["category"] == "docs"
+        assert "Milestone shipped" in rows[0]["text"]
+        assert meta["selected_path"] == "docs_bundle"
+
+    def test_docs_store_recall_filters_project_log_when_legacy_docs_lacks_date_support(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        db_path = tmp_path / "docs.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE doc_chunks (
+                    source_file TEXT,
+                    chunk_index INTEGER,
+                    content TEXT,
+                    section_header TEXT
+                )
+                """
+            )
+            conn.executemany(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        "/tmp/projects/quaid/PROJECT.log",
+                        0,
+                        "\n".join(
+                            [
+                                "# Project Log",
+                                "- [2026-04-20T10:00:00] Milestone shipped for temporal recall",
+                                "- [2026-04-21T10:00:00] Future milestone must be excluded",
+                            ]
+                        ),
+                        None,
+                    ),
+                    (
+                        "/tmp/projects/other/PROJECT.log",
+                        0,
+                        "- [2026-04-20T10:00:00] Other project milestone",
+                        None,
+                    ),
+                    (
+                        "/tmp/projects/quaid/PROJECT.md",
+                        0,
+                        "# Current undated project state",
+                        None,
+                    ),
+                ],
+            )
+
+        class LegacyDocsRAG:
+            def __init__(self):
+                self.db_path = db_path
+
+            def search_docs_bundle(self, query, limit=5, project=None):
+                raise AssertionError("date-bounded recall must not use legacy unbounded bundle")
+
+            def search_docs(self, query, limit=5, min_similarity=0.3, project=None, docs=None):
+                raise AssertionError("date-bounded recall must not use legacy unbounded search_docs")
+
+            def infer_project_for_source(self, source_file):
+                return "quaid" if "/quaid/" in str(source_file) else "other"
+
+            def infer_project_from_chunks(self, chunks):
+                return "quaid" if chunks else None
+
+        with patch("datastore.docsdb.rag.DocsRAG", return_value=LegacyDocsRAG()):
+            rows, meta, bundle = mg._docs_store_recall(
+                "milestone",
+                limit=5,
+                project="quaid",
+                date_to="2026-04-20",
+            )
+
+        docs_text = "\n".join(row["text"] for row in rows)
+        assert "Milestone shipped for temporal recall" in docs_text
+        assert "2026-04-21" not in docs_text
+        assert "Other project milestone" not in docs_text
+        assert "Current undated project state" not in docs_text
+        assert bundle["project_md"] is None
+        assert bundle["telemetry"]["project_md_attached"] is False
+        assert bundle["telemetry"]["date_to"] == "2026-04-20"
+        assert meta["counts"]["final_results"] == 1
+
     def test_store_registry_requires_recall_fast_contract(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -2974,6 +3686,48 @@ class TestRecallFastHookInjectContract:
         assert "mixed_temporal_candidates" in quality["signals"]
         assert "Another recall pass may help" in quality["note"]
 
+    def test_memory_quality_does_not_warn_when_ready_docs_evidence_is_present(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "Maya added five dietary labels to the recipe app.",
+                "category": "fact",
+                "similarity": 1.0,
+                "created_at": "2026-03-08T00:00:00Z",
+            },
+            {
+                "text": "[docs] PROJECT.log: DIETARY_LABELS constant: vegetarian, vegan, gluten-free, dairy-free, nut-free, diabetic-friendly, low-sodium, low-carb, keto, paleo.",
+                "category": "docs",
+                "source_type": "docs",
+                "similarity": 0.81,
+            },
+        ]
+        gate = {
+            "ready": True,
+            "needs_validation": True,
+            "top_similarity": 1.0,
+            "close_competitor_count": 7,
+            "temporal_span_days": 45,
+            "overlap_ratio": 0.67,
+            "current_like": True,
+            "progression_like": False,
+        }
+
+        quality = mg._summarize_memory_quality(
+            "As of 2026-03-08, what dietary labels did the recipe app support?",
+            rows,
+            gate_eval=gate,
+            intent="PROJECT",
+            limit=8,
+        )
+
+        assert quality["surface_quality"] == "good"
+        assert quality["another_recall_may_help"] is False
+        assert quality["note"] is None
+        assert "close_competitors" not in quality["signals"]
+        assert "wide_temporal_span" not in quality["signals"]
+
     def test_requirement_refinement_queries_are_disabled(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3317,6 +4071,22 @@ class TestRecallFastHookInjectContract:
         assert anchors == ["maya", "work"]
         assert meta["anchor_count"] == 2
 
+    def test_plan_query_anchor_terms_bypasses_llm_for_structural_exact_marker(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "call_fast_reasoning", side_effect=TimeoutError("provider hung")) as call:
+            anchors, meta = mg._plan_query_anchor_terms(
+                "palladium-lens-2024",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["palladium-lens-2024"]
+        assert meta["used_llm"] is False
+        assert meta["source"] == "deterministic"
+        assert meta["bailout_reason"] == "structural_exact_anchor"
+        call.assert_not_called()
+
     def test_extract_distinctive_query_terms_supports_unicode_tokens(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3642,6 +4412,52 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector", "docs"]
         assert project == "cross-live-test"
 
+    def test_infer_recall_store_defaults_routes_docs_for_project_asof_exact_values(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, project = mg._infer_recall_store_defaults(
+                "As of 2026-03-08, what dietary labels did the recipe app support?",
+            )
+
+        assert stores == ["vector", "docs"]
+        assert project == "recipe-app"
+
+    def test_infer_recall_store_defaults_routes_dated_project_query_without_english_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, project = mg._infer_recall_store_defaults(
+                "截至 2026-03-08，recipe app 支持哪些饮食标签？",
+            )
+
+        assert stores == ["vector", "docs"]
+        assert project == "recipe-app"
+
+    def test_infer_recall_store_defaults_does_not_route_non_project_labels_to_docs(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, project = mg._infer_recall_store_defaults("What labels did I put on the moving boxes?")
+
+        assert stores == ["vector"]
+        assert project is None
+
     def test_graph_store_recall_returns_graph_rows(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3833,6 +4649,7 @@ class TestRecallFastHookInjectContract:
 
         related = mg.Node.create(type="Person", name="David")
         related.created_at = "2026-03-20T00:00:00Z"
+        related.session_id = "day-runtime-2026-03-19"
         related.extraction_confidence = 0.88
 
         class _Graph:
@@ -3858,6 +4675,8 @@ class TestRecallFastHookInjectContract:
         assert [row["text"] for row in anchors] == ["Mike"]
         assert expanded[0]["via"] == "graph_anchor_expansion"
         assert expanded[0]["anchor_id"] == "mike-node"
+        assert expanded[0]["source_date"] == "2026-03-19"
+        assert expanded[0]["session_id"] == "day-runtime-2026-03-19"
         assert expanded[0]["anchor_text"] == "Mike"
         assert expanded[0]["text"] == "David → sibling_of → Mike"
 

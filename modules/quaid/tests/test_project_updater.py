@@ -12,6 +12,16 @@ import pytest
 from lib.project_templates import render_project_md_template
 
 _tmp_db = None
+_INDEXED_DOC_PATHS = []
+
+
+class _FakeDocsRAG:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def index_document(self, file_path):
+        _INDEXED_DOC_PATHS.append(str(file_path))
+        return 2
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +91,10 @@ def setup_env(tmp_path, monkeypatch):
     import config as config_mod
     monkeypatch.setattr(config_mod, "_config_paths", lambda: [iroot / "config.json"])
     config_mod.reload_config()
+    _INDEXED_DOC_PATHS.clear()
+
+    import datastore.docsdb.rag as rag_mod
+    monkeypatch.setattr(rag_mod, "DocsRAG", _FakeDocsRAG)
 
     yield iroot
 
@@ -235,8 +249,44 @@ class TestAppendProjectLogs:
         assert "- 2026-03-03 [Compaction] Added API docs" in content
         # PROJECT.log keeps full append-only history (including duplicates).
         history = project_log.read_text()
+        assert "- [2026-03-03T23:59:59] Updated README links" in history
         assert history.count("Updated README links") == 2
         assert "Added API docs" in history
+
+    def test_indexes_project_log_after_append(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+
+        metrics = append_project_logs(
+            {"test-project": ["Session 5: Added dated recall support"]},
+            trigger="Compaction",
+            date_str="2026-03-05",
+            dry_run=False,
+        )
+
+        assert str(project_log.resolve()) in _INDEXED_DOC_PATHS
+        assert metrics["history_entries_written"] == 1
+        assert metrics["history_logs_indexed"] == 1
+        assert metrics["history_chunks_indexed"] == 2
+
+    def test_project_log_history_uses_quaid_now_when_date_not_passed(self, setup_env, monkeypatch):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+        monkeypatch.setenv("QUAID_NOW", "2026-03-07T15:30:00")
+
+        append_project_logs(
+            {"test-project": ["Session 5: Added migration notes"]},
+            trigger="Reset",
+            dry_run=False,
+        )
+
+        assert "- 2026-03-07 [Reset] Added migration notes" in project_md.read_text()
+        assert "- [2026-03-07T15:30:00] Added migration notes" in project_log.read_text()
 
     def test_appends_into_existing_project_log_block(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs
@@ -395,11 +445,111 @@ class TestAppendProjectLogs:
         assert metrics["projects_updated"] == 0
         assert metrics["projects_history_only"] == 1
         assert metrics["history_entries_written"] == 1
+        assert metrics["history_logs_indexed"] == 1
+        assert metrics["history_chunks_indexed"] == 2
         assert project_log.exists()
         assert "missing file" in project_log.read_text(encoding="utf-8")
         out = capsys.readouterr().out
         assert "[project-log][warn] missing PROJECT.md:" in out
         assert "history_only_entries=1" in out
+
+    def test_project_log_index_failure_warns_and_continues_when_fail_open(
+        self,
+        setup_env,
+        monkeypatch,
+        capsys,
+    ):
+        from config import ProjectDefinition
+        import datastore.docsdb.project_updater as project_updater
+
+        tmp_path = setup_env
+        registry = _get_registry()
+        second_dir = tmp_path / "projects" / "second-project"
+        second_dir.mkdir(parents=True, exist_ok=True)
+        (second_dir / "PROJECT.md").write_text(
+            render_project_md_template(
+                label="Second Project",
+                description="Second test project.",
+                project_home=str(second_dir),
+                source_roots=[str(tmp_path / "src")],
+                exclude_patterns=["*.log", "*.db"],
+            ),
+            encoding="utf-8",
+        )
+        registry.save_project_definition(
+            "second-project",
+            ProjectDefinition(
+                label="Second Project",
+                home_dir="projects/second-project/",
+                source_roots=[str(tmp_path / "src")],
+                auto_index=True,
+                patterns=["*.md"],
+                exclude=["*.log", "*.db", "__pycache__/"],
+                description="Second test project.",
+                state="active",
+            ),
+        )
+
+        def _index(log_path, *, project_name, trigger):
+            if project_name == "test-project":
+                raise RuntimeError("index unavailable")
+            return 2
+
+        monkeypatch.setattr(project_updater, "_index_project_history_log", _index)
+        monkeypatch.setattr(project_updater, "is_fail_hard_enabled", lambda: False)
+
+        metrics = project_updater.append_project_logs(
+            {
+                "test-project": ["Session 1: first project"],
+                "second-project": ["Session 1: second project"],
+            },
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        assert metrics["entries_written"] == 2
+        assert metrics["history_entries_written"] == 2
+        assert metrics["history_index_failures"] == 1
+        assert metrics["history_logs_indexed"] == 1
+        assert metrics["history_chunks_indexed"] == 2
+        assert "second project" in (second_dir / "PROJECT.log").read_text(encoding="utf-8")
+        out = capsys.readouterr().out
+        assert "failed PROJECT.log index" in out
+
+    def test_project_log_index_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        import datastore.docsdb.project_updater as project_updater
+
+        def _index(log_path, *, project_name, trigger):
+            raise RuntimeError("index unavailable")
+
+        monkeypatch.setattr(project_updater, "_index_project_history_log", _index)
+        monkeypatch.setattr(project_updater, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="index unavailable"):
+            project_updater.append_project_logs(
+                {"test-project": ["Session 1: fail hard"]},
+                trigger="Compaction",
+                date_str="2026-03-03",
+                dry_run=False,
+            )
+
+    def test_project_log_zero_chunks_warns_without_fail_hard_abort(self, setup_env, monkeypatch):
+        import datastore.docsdb.project_updater as project_updater
+
+        monkeypatch.setattr(project_updater, "_index_project_history_log", lambda *a, **k: 0)
+        monkeypatch.setattr(project_updater, "is_fail_hard_enabled", lambda: True)
+
+        metrics = project_updater.append_project_logs(
+            {"test-project": ["Session 1: tiny"]},
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        assert metrics["entries_written"] == 1
+        assert metrics["history_logs_unindexed"] == 1
+        assert metrics["history_logs_indexed"] == 0
 
     def test_empty_or_invalid_payload_is_noop(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs

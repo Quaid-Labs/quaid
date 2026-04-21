@@ -38,6 +38,7 @@ __all__ = [
 ]
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -87,6 +88,21 @@ from lib.tokens import (
 from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_logs_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _now() -> datetime:
+    """Return the effective runtime clock, honoring test/benchmark override."""
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+    return datetime.now()
+
+
+def _now_iso() -> str:
+    return _now().isoformat()
 
 
 def _trace_m15(event: str, **fields: Any) -> None:
@@ -900,6 +916,7 @@ class MemoryGraph:
         if not node.content_hash:
             node.content_hash = content_hash(node.name)
 
+        now_iso = _now_iso()
         conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
         with conn_cm as active_conn:
             active_conn.execute("""
@@ -923,9 +940,9 @@ class MemoryGraph:
                 node.origin_package_id, node.origin_version_id,
                 node.privacy,
                 node.valid_from, node.valid_until,
-                node.created_at or datetime.now().isoformat(),
-                datetime.now().isoformat(),
-                node.accessed_at or datetime.now().isoformat(),
+                node.created_at or now_iso,
+                now_iso,
+                node.accessed_at or now_iso,
                 node.access_count,
                 node.storage_strength,
                 node.owner_id,
@@ -987,6 +1004,7 @@ class MemoryGraph:
         if not node.content_hash:
             node.content_hash = content_hash(node.name)
 
+        now_iso = _now_iso()
         conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
         with conn_cm as active_conn:
             existing_embedding_blob = None
@@ -1028,8 +1046,8 @@ class MemoryGraph:
                 node.origin_package_id, node.origin_version_id,
                 node.privacy,
                 node.valid_from, node.valid_until,
-                datetime.now().isoformat(),
-                node.accessed_at or datetime.now().isoformat(),
+                now_iso,
+                node.accessed_at or now_iso,
                 node.access_count,
                 node.storage_strength,
                 node.owner_id,
@@ -1246,7 +1264,7 @@ class MemoryGraph:
                 json.dumps(edge.attributes),
                 edge.weight,
                 edge.valid_from, edge.valid_until,
-                edge.created_at or datetime.now().isoformat(),
+                edge.created_at or _now_iso(),
                 edge.source_fact_id,
                 edge.origin_package_id,
                 edge.origin_version_id,
@@ -3412,6 +3430,7 @@ def _compute_composite_score(
     config_retrieval=None,
     intent: str = "GENERAL",
     prefer_fresh: bool = False,
+    target_date: str = "",
 ) -> float:
     """Compute composite score mixing search relevance, recency, and frequency.
 
@@ -3521,6 +3540,7 @@ def _compute_composite_score(
     if prefer_fresh and temporal_penalty > 0.0:
         temporal_penalty = min(0.6, temporal_penalty * 1.5)
     composite = max(0.0, composite - temporal_penalty)
+    composite = max(0.0, composite + _asof_temporal_score_delta(node, target_date))
 
     return min(composite, 1.0)
 
@@ -4321,17 +4341,327 @@ def _vector_store_recall(
     return results, dict(meta or {}), None
 
 
+def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return True
+    return name in params or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+
+
+def _filter_supported_kwargs(fn: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return dict(kwargs)
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return dict(kwargs)
+    return {key: value for key, value in kwargs.items() if key in params}
+
+
+_DOCS_PROJECT_LOG_LINE_DATE_RE = re.compile(
+    r"^\s*-\s*(?:\[(20\d{2}-\d{2}-\d{2})(?:[T\s][^\]]*)?\]|(20\d{2}-\d{2}-\d{2})\b)"
+)
+
+
+def _docs_project_log_line_date(line: str) -> Optional[str]:
+    match = _DOCS_PROJECT_LOG_LINE_DATE_RE.match(str(line or ""))
+    if not match:
+        return None
+    return match.group(1) or match.group(2)
+
+
+def _docs_project_log_query_terms(query: str) -> List[str]:
+    """Language-neutral query terms for legacy PROJECT.log date filtering."""
+    out: List[str] = []
+    for raw in re.findall(r"[\w./-]+", str(query or "").lower()):
+        term = raw.strip().strip("/.")
+        if len(term) < 3 or re.fullmatch(r"20\d{2}-\d{2}-\d{2}", term) or term in out:
+            continue
+        out.append(term)
+    return out
+
+
+def _docs_project_log_line_score(line: str, query_terms: List[str]) -> int:
+    lower_line = str(line or "").lower()
+    score = 0
+    for term in query_terms or []:
+        score += min(lower_line.count(str(term or "").lower()), 3)
+    return score
+
+
+def _filter_docs_project_log_content_by_date(
+    content: str,
+    *,
+    date_from: Optional[str],
+    date_to: Optional[str],
+    query_terms: List[str],
+) -> Optional[Tuple[str, str, int]]:
+    """Return filtered PROJECT.log content plus latest date and best query score."""
+    kept: List[Tuple[str, int, int, str]] = []
+    for index, line in enumerate(str(content or "").splitlines()):
+        line_date = _docs_project_log_line_date(line)
+        if not line_date:
+            continue
+        if date_from and line_date < date_from:
+            continue
+        if date_to and line_date > date_to:
+            continue
+        line_score = _docs_project_log_line_score(line, query_terms)
+        kept.append((line_date, index, line_score, line))
+    if not kept:
+        return None
+    if date_to:
+        kept.sort(key=lambda item: (item[0], item[2], -item[1]), reverse=True)
+    latest = max(line_date for line_date, _, _, _ in kept)
+    best_score = max(line_score for _, _, line_score, _ in kept)
+    return "\n".join(line for _, _, _, line in kept), latest, best_score
+
+
+def _docs_source_matches_filters(source_file: str, docs: Optional[List[str]]) -> bool:
+    filters = [str(item or "").strip().lower() for item in (docs or []) if str(item or "").strip()]
+    if not filters:
+        return True
+    source_lower = str(source_file or "").lower()
+    basename = Path(source_lower).name
+    return any(item in source_lower or item == basename for item in filters)
+
+
+def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[str]) -> bool:
+    if not project:
+        return True
+    infer_project = getattr(rag, "infer_project_for_source", None)
+    if callable(infer_project):
+        try:
+            return str(infer_project(source_file) or "") == str(project)
+        except Exception:
+            pass
+    project_token = str(project or "").strip().lower()
+    if not project_token:
+        return True
+    normalized = str(source_file or "").replace("\\", "/").lower()
+    return f"/{project_token}/" in normalized or normalized.endswith(f"/{project_token}/project.log")
+
+
+def _docs_infer_project_for_source(rag: Any, source_file: str) -> Optional[str]:
+    infer_project = getattr(rag, "infer_project_for_source", None)
+    if not callable(infer_project):
+        return None
+    try:
+        inferred = infer_project(source_file)
+    except Exception:
+        return None
+    return str(inferred) if inferred else None
+
+
+def _legacy_search_dated_project_logs(
+    rag: Any,
+    *,
+    query: str,
+    limit: int,
+    project: Optional[str],
+    docs: Optional[List[str]],
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Strict date-bounded PROJECT.log search for older DocsRAG surfaces."""
+    db_path = getattr(rag, "db_path", None)
+    if not db_path:
+        raise RuntimeError(
+            f"Date-bounded docs recall requires DocsRAG date support or db_path; got {type(rag).__name__}"
+        )
+    query_terms = _docs_project_log_query_terms(query)
+    chunks: List[Dict[str, Any]] = []
+    with _lib_get_connection(Path(db_path)) as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT source_file, chunk_index, content, section_header
+                FROM doc_chunks
+                WHERE source_file LIKE ?
+                """,
+                ("%PROJECT.log",),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError("Date-bounded docs recall requires indexed PROJECT.log chunks") from exc
+
+    for row in rows:
+        source_file = str(row["source_file"] or "")
+        if Path(source_file).name != "PROJECT.log":
+            continue
+        if not _docs_source_matches_filters(source_file, docs):
+            continue
+        if not _docs_source_matches_project(rag, source_file, project):
+            continue
+        filtered = _filter_docs_project_log_content_by_date(
+            str(row["content"] or ""),
+            date_from=date_from,
+            date_to=date_to,
+            query_terms=query_terms,
+        )
+        if not filtered:
+            continue
+        content, latest_date, best_score = filtered
+        score = 0.35 + min(best_score, 4) * 0.08
+        if date_to and latest_date == date_to:
+            score += 0.35
+        chunks.append({
+            "content": content,
+            "source": source_file,
+            "section_header": row["section_header"],
+            "similarity": min(1.0, score),
+            "_rank_score": score,
+            "chunk_index": row["chunk_index"],
+            "project": project or _docs_infer_project_for_source(rag, source_file),
+        })
+    chunks.sort(
+        key=lambda item: float(item.get("_rank_score") or item.get("similarity") or 0.0),
+        reverse=True,
+    )
+    limited = chunks[: max(1, int(limit or 1))]
+    for chunk in limited:
+        chunk.pop("_rank_score", None)
+    return limited
+
+
+def _search_docs_bundle_compat(
+    rag: Any,
+    *,
+    query: str,
+    limit: int,
+    min_similarity: float = 0.3,
+    project: Optional[str] = None,
+    docs: Optional[List[str]] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Call DocsRAG bundle search while preserving strict date-bounded semantics."""
+    bundle_kwargs = {
+        "query": query,
+        "limit": limit,
+        "min_similarity": min_similarity,
+        "project": project,
+        "docs": docs,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    has_date_bounds = bool(date_from or date_to)
+    bundle_fn = getattr(rag, "search_docs_bundle")
+    bundle_accepts_dates = (
+        _callable_accepts_kwarg(bundle_fn, "date_from")
+        and _callable_accepts_kwarg(bundle_fn, "date_to")
+    )
+    if not has_date_bounds or bundle_accepts_dates:
+        return bundle_fn(**_filter_supported_kwargs(bundle_fn, bundle_kwargs))
+
+    search_fn = getattr(rag, "search_docs", None)
+    if not callable(search_fn):
+        chunks = _legacy_search_dated_project_logs(
+            rag,
+            query=query,
+            limit=limit,
+            project=project,
+            docs=docs,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return _build_date_bounded_docs_bundle(
+            rag,
+            query=query,
+            chunks=chunks,
+            project=project,
+            docs=docs,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    if not (
+        _callable_accepts_kwarg(search_fn, "date_from")
+        and _callable_accepts_kwarg(search_fn, "date_to")
+    ):
+        chunks = _legacy_search_dated_project_logs(
+            rag,
+            query=query,
+            limit=limit,
+            project=project,
+            docs=docs,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return _build_date_bounded_docs_bundle(
+            rag,
+            query=query,
+            chunks=chunks,
+            project=project,
+            docs=docs,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    chunks = search_fn(**_filter_supported_kwargs(search_fn, bundle_kwargs))
+    return _build_date_bounded_docs_bundle(
+        rag,
+        query=query,
+        chunks=chunks,
+        project=project,
+        docs=docs,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+def _build_date_bounded_docs_bundle(
+    rag: Any,
+    *,
+    query: str,
+    chunks: Optional[List[Dict[str, Any]]],
+    project: Optional[str],
+    docs: Optional[List[str]],
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> Dict[str, Any]:
+    infer_project = getattr(rag, "infer_project_from_chunks", None)
+    inferred_project = project
+    if not inferred_project and callable(infer_project):
+        inferred_project = infer_project(chunks)
+    bundle: Dict[str, Any] = {
+        "chunks": chunks or [],
+        "project": inferred_project,
+        "project_md": None,
+    }
+    telemetry = {
+        "query": query,
+        "requested_project": project,
+        "resolved_project": inferred_project,
+        "requested_docs": list(docs or []),
+        "chunk_count": len(chunks or []),
+        "project_md_attached": False,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    bundle["telemetry"] = telemetry
+    return bundle
+
+
 def _docs_store_recall(
     query: str,
     *,
     limit: int,
     project: Optional[str],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     started = time.monotonic()
     from datastore.docsdb.rag import DocsRAG as _DocsRAG
 
     rag = _DocsRAG()
-    bundle = rag.search_docs_bundle(query, limit=limit, project=project)
+    bundle = _search_docs_bundle_compat(
+        rag,
+        query=query,
+        limit=limit,
+        project=project,
+        date_from=date_from,
+        date_to=date_to,
+    )
     rows = _docs_bundle_to_rows(bundle, limit=limit)
     elapsed_ms = round((time.monotonic() - started) * 1000)
     meta = {
@@ -4549,6 +4879,8 @@ def _run_recall_store_plan(
                     query,
                     limit=max(1, min(limit, 6 if fast_mode else 8)),
                     project=planned_project,
+                    date_from=kwargs.get("date_from"),
+                    date_to=kwargs.get("date_to"),
                 ),
             ))
         elif store == "graph":
@@ -4586,6 +4918,7 @@ def _run_recall_store_plan(
     wall_ms = round((time.monotonic() - started) * 1000)
 
     merged_batches: List[List[Dict[str, Any]]] = []
+    docs_rows: List[Dict[str, Any]] = []
     docs_bundle: Optional[Dict[str, Any]] = None
     store_runs: List[Dict[str, Any]] = []
     serial_ms = 0
@@ -4626,6 +4959,8 @@ def _run_recall_store_plan(
         store, payload = output
         rows, meta, bundle = payload
         rows = _validate_recall_result_rows(rows)
+        if store == "docs" and rows:
+            docs_rows.extend(rows)
         meta = dict(meta or {})
         store_meta_entries.append((store, meta))
         if rows:
@@ -4649,6 +4984,12 @@ def _run_recall_store_plan(
 
     merged = _merge_recall_batches(merged_batches, limit=max(limit, limit * 2 if fast_mode else limit))
     final_rows = merged[:limit]
+    final_rows, preserved_docs_rows = _preserve_requested_docs_rows(
+        final_rows,
+        docs_rows,
+        limit=limit,
+        date_to=kwargs.get("date_to"),
+    )
     if _store_meta_result_count(base_meta) <= 0:
         for _, candidate_meta in store_meta_entries:
             if _store_meta_result_count(candidate_meta) > 0:
@@ -4663,6 +5004,8 @@ def _run_recall_store_plan(
     meta["planned_stores"] = normalized_stores
     meta["planned_project"] = planned_project
     meta["store_runs"] = store_runs
+    if preserved_docs_rows:
+        meta["preserved_docs_rows"] = preserved_docs_rows
     # Preserve lexical planner diagnostics from vector recall even when the
     # merged/base metadata row was sourced from another store lane.
     if isinstance(vector_meta, dict):
@@ -4961,6 +5304,8 @@ def _recall_once(
     """
     if not query or not query.strip():
         return []
+    date_from = _normalize_recall_date_bound(date_from)
+    date_to = _normalize_recall_date_bound(date_to)
 
     import time as _time
     _recall_start = _time.monotonic()
@@ -5060,7 +5405,11 @@ def _recall_once(
     _temporal_fresh_cues = (
         r"\b(latest|currently|current|now|today|most recent|recently|as of)\b"
     )
-    prefer_fresh = bool(re.search(_temporal_fresh_cues, clean_query, re.IGNORECASE))
+    target_date = _query_target_date(clean_query)
+    # "as of 2026-03-15" is a historical-state query over the final DB, not a
+    # current/latest query. Do not let the generic "as of" wording activate
+    # freshness ranking when an explicit date anchor is present.
+    prefer_fresh = bool(re.search(_temporal_fresh_cues, clean_query, re.IGNORECASE)) and not target_date
 
     # Fast Ollama health check — skip semantic search entirely if Ollama is down
     # Saves ~30s of embedding timeout waits when Ollama is unreachable
@@ -5268,6 +5617,7 @@ def _recall_once(
             config_retrieval,
             intent=intent,
             prefer_fresh=prefer_fresh,
+            target_date=target_date,
         )
         # Apply intent-based type boost
         type_boost_applied = 1.0
@@ -5369,6 +5719,7 @@ def _recall_once(
                 config_retrieval,
                 intent=intent,
                 prefer_fresh=prefer_fresh,
+                target_date=target_date,
             )
             if type_boosts and node.type in type_boosts:
                 composite = min(composite * type_boosts[node.type], 1.0)
@@ -5440,6 +5791,7 @@ def _recall_once(
                                 config_retrieval,
                                 intent=intent,
                                 prefer_fresh=prefer_fresh,
+                                target_date=target_date,
                             )
                             if type_boosts and node.type in type_boosts:
                                 composite = min(composite * type_boosts[node.type], 1.0)
@@ -5487,6 +5839,25 @@ def _recall_once(
     # Filter by minimum similarity before MMR (first-pass results were unfiltered)
     scored_results = [(node, score) for node, score in scored_results if score >= min_similarity]
 
+    # Apply temporal constraints before candidate capping/MMR. Otherwise later
+    # high-similarity facts can fill the top-K candidate set and then get
+    # filtered out, leaving older in-range facts unreachable.
+    if date_from or date_to:
+        def _node_in_date_range(node: Node) -> bool:
+            date_part = _node_temporal_date(node)
+            if not date_part:
+                return False
+            if date_from and date_part < date_from:
+                return False
+            if date_to and date_part > date_to:
+                return False
+            return True
+        scored_results = [
+            (node, score)
+            for node, score in scored_results
+            if _node_in_date_range(node)
+        ]
+
     # Apply MMR diversity (select diverse top-N from candidates)
     _mmr_lambda = 0.7
     _mmr_candidate_cap = max(limit * 4, 12)
@@ -5521,9 +5892,7 @@ def _recall_once(
             "pinned": node.pinned,
             "id": node.id,
             "extraction_confidence": node.extraction_confidence,
-            "created_at": node.created_at,
-            "valid_from": node.valid_from,
-            "valid_until": node.valid_until,
+            **_node_recall_temporal_fields(node),
             "privacy": node.privacy,
             "owner_id": node.owner_id,
             "_multi_pass": node.id in _multi_pass_ids,
@@ -5554,6 +5923,10 @@ def _recall_once(
         for node, score in diverse_results[:5]:
             if node.session_id and node.session_id not in session_ids:
                 session_ids[node.session_id] = score
+        # A bounded wider pool fixes arbitrary LIMIT-order misses while keeping
+        # same-session fanout cheap on broad recall queries.
+        co_session_candidate_limit = max(5, min(50, limit * 4))
+        query_embedding = None
         for sid, anchor_score in session_ids.items():
             try:
                 with graph._get_conn() as conn:
@@ -5563,26 +5936,79 @@ def _recall_once(
                     else:
                         exclude_clause = ""
                         params = [sid]
+                    params.append(co_session_candidate_limit)
                     rows = conn.execute(
-                        "SELECT * FROM nodes WHERE session_id = ? AND status IN ('active', 'approved', 'pending') {} LIMIT 5".format(
+                        "SELECT * FROM nodes WHERE session_id = ? AND status IN ('active', 'approved', 'pending') {} LIMIT ?".format(
                             exclude_clause
                         ),
                         params
                     ).fetchall()
+                    if rows and query_embedding is None:
+                        try:
+                            query_embedding = graph.get_embedding(clean_query)
+                        except Exception:
+                            query_embedding = None
+                    co_candidates = []
                     for row in rows:
                         co_node = graph._row_to_node(row)
                         if co_node.id not in seen_ids and (not owner_id or co_node.owner_id == owner_id):
+                            if date_from or date_to:
+                                date_part = _node_temporal_date(co_node)
+                                if not date_part:
+                                    continue
+                                if date_from and date_part < date_from:
+                                    continue
+                                if date_to and date_part > date_to:
+                                    continue
+                            co_attrs = co_node.attributes if isinstance(co_node.attributes, dict) else {}
+                            semantic_score = 0.4
+                            if query_embedding and co_node.embedding:
+                                try:
+                                    semantic_score = max(0.0, graph.cosine_similarity(query_embedding, co_node.embedding))
+                                except Exception:
+                                    semantic_score = 0.4
+                            rank_score = _compute_composite_score(
+                                co_node,
+                                semantic_score,
+                                config_retrieval,
+                                intent=intent,
+                                prefer_fresh=prefer_fresh,
+                                target_date=target_date,
+                            )
+                            rank_score = min(
+                                rank_score * _compute_query_fit_multiplier(
+                                    clean_query,
+                                    co_node,
+                                    co_attrs,
+                                    intent=intent,
+                                    include_anchor_terms=True,
+                                    query_anchor_terms=query_anchor_terms,
+                                    # Keep exact-anchor boosts, but never apply
+                                    # the stricter anchor-miss penalty to
+                                    # same-session expansion candidates.
+                                    allow_anchor_miss_penalty=False,
+                                ),
+                                1.0,
+                            )
+                            co_candidates.append((co_node, co_attrs, rank_score))
+                    co_candidates.sort(key=lambda item: item[2], reverse=True)
+                    for co_node, _co_attrs, rank_score in co_candidates[:5]:
+                        if co_node.id not in seen_ids:
                             seen_ids.add(co_node.id)
-                            # Co-encoded facts get a fraction of the anchor's score
+                            # Co-encoded facts inherit some anchor confidence, but
+                            # relevance-ranked same-session rows can still survive.
                             _co_decay = 0.6
                             if config_retrieval:
                                 _co_decay = getattr(config_retrieval, 'co_session_decay', 0.6)
-                            co_score = anchor_score * _co_decay
+                            # A strong same-session match should be allowed to
+                            # clear the expansion threshold; decay still keeps
+                            # the serialized score below its own direct rank.
+                            # min() was tried in 47e6c0950; r1387 regressed q1.
+                            co_score = max(anchor_score, rank_score) * _co_decay
                             # Use a lower threshold for co-session facts (75% of min_similarity)
                             co_threshold = min_similarity * 0.75
                             if co_score >= co_threshold:
                                 _co_session_added += 1
-                                _co_attrs = co_node.attributes if isinstance(co_node.attributes, dict) else {}
                                 output.append({
                                     "text": _sanitize_for_context(co_node.name),
                                     "category": co_node.type.lower(),
@@ -5592,6 +6018,7 @@ def _recall_once(
                                     "id": co_node.id,
                                     "via_relation": "co_session",
                                     "hop_depth": 0,
+                                    **_node_recall_temporal_fields(co_node),
                                     "domains": _domains_from_attrs(_co_attrs),
                                     "source_type": _co_attrs.get("source_type"),
                                     "project": _co_attrs.get("project"),
@@ -5670,6 +6097,7 @@ def _recall_once(
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
                             "_multi_pass": rel_node.id in _multi_pass_ids,
+                            **_node_recall_temporal_fields(rel_node),
                             "domains": _domains_from_attrs(_rel_attrs),
                             "project": _rel_attrs.get("project"),
                         })
@@ -5705,6 +6133,7 @@ def _recall_once(
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
                             "_multi_pass": rel_node.id in _multi_pass_ids,
+                            **_node_recall_temporal_fields(rel_node),
                             "domains": _domains_from_attrs(_rel_attrs),
                             "project": _rel_attrs.get("project"),
                         })
@@ -5796,13 +6225,13 @@ def _recall_once(
             if _normalize_project_tag(r.get("project")) == requested_project
         ]
 
-    # Apply date-range filter BEFORE limit (so we get `limit` results in range)
+    # Defense-in-depth for rows injected after the primary pre-MMR temporal
+    # filter, including co-session and graph traversal expansions.
     if date_from or date_to:
         def _in_date_range(r: Dict[str, Any]) -> bool:
-            created = r.get("created_at", "")
-            if not created:
-                return True  # Include results without dates
-            date_part = created.split("T")[0] if "T" in created else created
+            date_part = _recall_row_temporal_date(r)
+            if not date_part:
+                return False
             if date_from and date_part < date_from:
                 return False
             if date_to and date_part > date_to:
@@ -5858,10 +6287,9 @@ def _recall_once(
             ]
         if date_from or date_to:
             def _anchor_in_date_range(r: Dict[str, Any]) -> bool:
-                created = r.get("created_at", "")
-                if not created:
-                    return True
-                date_part = created.split("T")[0] if "T" in created else created
+                date_part = _recall_row_temporal_date(r)
+                if not date_part:
+                    return False
                 if date_from and date_part < date_from:
                     return False
                 if date_to and date_part > date_to:
@@ -6220,6 +6648,96 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
     return merged[: max(1, limit)]
 
 
+def _is_docs_recall_row(row: Dict[str, Any]) -> bool:
+    return str(row.get("category") or "").strip() == "docs" or str(row.get("source_type") or "").strip() == "docs"
+
+
+def _recall_row_identity(row: Dict[str, Any]) -> Tuple[str, str]:
+    rid = str(row.get("id") or "").strip()
+    if rid:
+        return ("id", rid)
+    return ("text", str(row.get("text") or "").strip())
+
+
+def _docs_row_latest_iso_date(row: Dict[str, Any]) -> str:
+    dates = re.findall(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)", str((row or {}).get("text") or ""))
+    return max(dates) if dates else ""
+
+
+def _preserve_requested_docs_rows(
+    final_rows: List[Dict[str, Any]],
+    docs_rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+    date_to: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Ensure a requested docs lane does not disappear in mixed-store recall.
+
+    Vector rows can all score 1.0 after recall normalization; when docs were
+    explicitly planned, dropping every docs row hides exact project-log evidence
+    even though the store returned it. Preserve a bounded docs evidence lane
+    instead of letting score ties crowd it out.
+    """
+    if limit <= 0 or not docs_rows:
+        return final_rows, 0
+
+    target_date = _normalize_recall_date_bound(date_to) if date_to else None
+    out = list(final_rows)
+    if target_date:
+        out = [
+            row for row in out
+            if not _is_docs_recall_row(row) or _docs_row_latest_iso_date(row) == target_date
+        ]
+
+    seen = {_recall_row_identity(row) for row in out}
+    candidate_pool = [
+        row
+        for row in docs_rows
+        if isinstance(row, dict)
+        and str(row.get("text") or "").strip()
+        and _recall_row_identity(row) not in seen
+    ]
+    if not candidate_pool:
+        return final_rows, 0
+
+    existing_docs = [row for row in out if _is_docs_recall_row(row)]
+    existing_target_docs = [
+        row for row in existing_docs
+        if target_date and _docs_row_latest_iso_date(row) == target_date
+    ]
+    target_docs_count = 2 if target_date else 1
+    if target_date and len(existing_target_docs) >= target_docs_count:
+        return final_rows, 0
+    if not target_date and len(existing_docs) >= target_docs_count:
+        return final_rows, 0
+
+    if target_date:
+        candidate_pool.sort(
+            key=lambda row: (
+                1 if _docs_row_latest_iso_date(row) == target_date else 0,
+                str(_docs_row_latest_iso_date(row) or ""),
+                float((row or {}).get("similarity") or 0.0),
+            ),
+            reverse=True,
+        )
+
+    preserved = 0
+    for candidate in candidate_pool:
+        if sum(1 for row in out if _is_docs_recall_row(row)) >= target_docs_count:
+            break
+        if len(out) < limit:
+            out.append(candidate)
+            preserved += 1
+            continue
+        replace_idx = next((idx for idx in range(len(out) - 1, -1, -1) if not _is_docs_recall_row(out[idx])), None)
+        if replace_idx is None:
+            break
+        out.pop(replace_idx)
+        out.append(candidate)
+        preserved += 1
+    return (out[:limit], preserved) if preserved else (final_rows, 0)
+
+
 def _resolve_reranker_enabled(use_reranker: Optional[bool], config_retrieval=None) -> bool:
     reranker_enabled = False
     if config_retrieval is not None:
@@ -6420,9 +6938,11 @@ def _print_recall_results(results: List[Dict[str, Any]]) -> None:
         flag_str = f"[{''.join(flags)}]" if flags else ""
         conf = r.get('extraction_confidence', 0.5)
         created = r.get('created_at', '')
+        source_date = r.get('source_date', '')
         privacy = r.get('privacy', 'shared')
         owner = r.get('owner_id', '')
-        print(f"[{similarity:.2f}] [{category}]{flag_str}[C:{conf:.1f}] {text} |ID:{result_id}|T:{created}|P:{privacy}|O:{owner}")
+        source_suffix = f"|source_date:{source_date}" if source_date else ""
+        print(f"[{similarity:.2f}] [{category}]{flag_str}[C:{conf:.1f}] {text} |ID:{result_id}|T:{created}{source_suffix}|P:{privacy}|O:{owner}")
         if r.get('_debug'):
             d = r['_debug']
             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
@@ -6646,6 +7166,23 @@ def _plan_query_anchor_terms(
         if len(lexical_candidates) >= 24:
             break
     candidate_text = ", ".join(lexical_candidates) if lexical_candidates else "(none)"
+
+    structural_anchors: List[str] = []
+    structural_seen: set[str] = set()
+    for candidate in lexical_candidates:
+        norm = " ".join(str(candidate or "").split()).strip().lower()
+        if (
+            len(norm) >= 8
+            and " " not in norm
+            and re.search(r"[\d._/-]", norm)
+            and norm not in structural_seen
+        ):
+            structural_seen.add(norm)
+            structural_anchors.append(norm)
+            if len(structural_anchors) >= limit:
+                break
+    if structural_anchors:
+        return _finish(structural_anchors, "structural_exact_anchor", "deterministic")
 
     prompt = (
         "Extract high-precision lexical anchors from this recall query.\n"
@@ -6997,9 +7534,129 @@ def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
             return None
 
 
+def _date_part(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
+    if match:
+        return match.group(1)
+    return raw.split("T", 1)[0] if "T" in raw else raw[:10]
+
+
+def _normalize_recall_date_bound(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
+    if not match:
+        raise ValueError(
+            f"Recall date filters must be concrete YYYY-MM-DD dates, got {raw!r}"
+        )
+    return match.group(1)
+
+
+def _recall_row_temporal_date(row: Dict[str, Any]) -> str:
+    """Best available source/record date for recall date filtering."""
+    for key in ("source_date", "valid_from", "created_at"):
+        date_part = _date_part((row or {}).get(key))
+        if date_part:
+            return date_part
+    return ""
+
+
+def _source_date_from_session_id(session_id: Any) -> str:
+    """Extract a durable source date from runtime session identifiers.
+
+    Some project/runtime extraction facts are stored later than the transcript
+    that produced them. For historical recall, the source session date is often
+    the event-time signal; created_at is only the storage time.
+    """
+    raw = str(session_id or "").strip()
+    if not raw:
+        return ""
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
+    return match.group(1) if match else ""
+
+
+def _node_recall_temporal_fields(node: Node) -> Dict[str, Any]:
+    """Temporal fields required by serialized recall date filters."""
+    source_date = _source_date_from_session_id(getattr(node, "session_id", None))
+    return {
+        "created_at": getattr(node, "created_at", None),
+        "valid_from": getattr(node, "valid_from", None),
+        "valid_until": getattr(node, "valid_until", None),
+        "source_date": source_date or None,
+        "session_id": getattr(node, "session_id", None),
+    }
+
+
+def _query_target_date(query: str) -> str:
+    """Return the latest explicit ISO date mentioned in a recall query."""
+    matches = re.findall(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)", str(query or ""))
+    return max(matches) if matches else ""
+
+
+def _resolve_fast_recall_date_bounds(
+    query: str,
+    *,
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Normalize explicit bounds and infer a fast-recall cutoff from an ISO query date."""
+    normalized_from = _normalize_recall_date_bound(date_from)
+    normalized_to = _normalize_recall_date_bound(date_to)
+    inferred_to: Optional[str] = None
+    if normalized_from is None and normalized_to is None:
+        # Fast pre-injection has no agent tool turn to translate "as of" into
+        # arguments. Explicit tool-supplied before/after ranges still win.
+        inferred_to = _query_target_date(query) or None
+        if inferred_to:
+            normalized_to = inferred_to
+    return normalized_from, normalized_to, inferred_to
+
+
+def _node_temporal_date(node: Node) -> str:
+    """Best available event/source date for temporal ranking."""
+    for value in (
+        node.valid_from,
+        _source_date_from_session_id(node.session_id),
+        node.created_at,
+    ):
+        date_part = _date_part(value)
+        if date_part:
+            return date_part
+    return ""
+
+
+def _asof_temporal_score_delta(node: Node, target_date: str) -> float:
+    """Small generic ranking nudge for explicit dated historical queries."""
+    if not target_date:
+        return 0.0
+    node_date = _node_temporal_date(node)
+    if not node_date:
+        return 0.0
+    try:
+        target = datetime.fromisoformat(target_date).date()
+        event_date = datetime.fromisoformat(node_date).date()
+    except Exception:
+        return 0.0
+    if event_date <= target:
+        days_old = max(0, (target - event_date).days)
+        if days_old <= 14:
+            return 0.10
+        if days_old <= 45:
+            return 0.07
+        if days_old <= 120:
+            return 0.04
+        return 0.02
+    days_future = max(1, (event_date - target).days)
+    return -min(0.18, 0.06 + days_future * 0.004)
+
+
 def _collect_recall_temporal_markers(row: Dict[str, Any]) -> List[datetime]:
     markers: List[datetime] = []
-    for key in ("valid_from", "created_at", "valid_until"):
+    for key in ("valid_from", "source_date", "created_at", "valid_until"):
         parsed = _parse_recall_timestamp((row or {}).get(key))
         if parsed is not None:
             markers.append(parsed)
@@ -7099,11 +7756,20 @@ def _summarize_memory_quality(
     ready = bool(gate.get("ready"))
     current_like = bool(gate.get("current_like"))
     progression_like = bool(gate.get("progression_like"))
+    has_docs_evidence = any(_is_docs_recall_row(row) for row in sample if isinstance(row, dict))
+    docs_evidence_ready = has_docs_evidence and ready
 
     low_similarity = bool(sample) and top_similarity < 0.60
-    ambiguity_risk = bool(sample) and needs_validation and close_competitor_count >= 2 and overlap_ratio < 0.85
+    ambiguity_risk = (
+        bool(sample)
+        and needs_validation
+        and not docs_evidence_ready
+        and close_competitor_count >= 2
+        and overlap_ratio < 0.85
+    )
     mixed_temporal_candidates = (
         bool(sample)
+        and not docs_evidence_ready
         and (current_like or progression_like)
         and close_competitor_count >= 2
         and temporal_span_days >= 30
@@ -7112,11 +7778,11 @@ def _summarize_memory_quality(
     signals: List[str] = []
     if not ready:
         signals.append("low_query_term_coverage")
-    if needs_validation:
+    if needs_validation and not docs_evidence_ready:
         signals.append("needs_validation")
-    if close_competitor_count >= 2:
+    if close_competitor_count >= 2 and not docs_evidence_ready:
         signals.append("close_competitors")
-    if temporal_span_days >= 30:
+    if temporal_span_days >= 30 and not docs_evidence_ready:
         signals.append("wide_temporal_span")
     if mixed_temporal_candidates:
         signals.append("mixed_temporal_candidates")
@@ -7130,7 +7796,7 @@ def _summarize_memory_quality(
         surface_quality = "low"
     elif mixed_temporal_candidates or ambiguity_risk:
         surface_quality = "conflicted"
-    elif needs_validation:
+    elif needs_validation and not docs_evidence_ready:
         surface_quality = "mixed"
 
     another_recall_may_help = surface_quality in {"low", "mixed", "conflicted"}
@@ -7743,7 +8409,7 @@ def _plan_fanout_queries(
         "- Fewer good queries beats more weak ones.\n"
         "- Default to stores=['vector'] for ordinary recall.\n"
         "- Add 'graph' only for explicit relationship, family, or causal multi-hop questions.\n"
-        "- Add 'docs' for codebase, architecture, schema, API, tests, or source-file questions.\n"
+        "- Add 'docs' for codebase, architecture, schema, API, tests, source-file, project history/as-of, exact project lists, labels, constants, config, or value questions.\n"
         "- Prefer ['vector','docs'] over docs-only when project history or lived context may matter.\n"
         f"{conservative_guidance}\n"
         f"Message: {clean}"
@@ -7785,6 +8451,8 @@ def _plan_fanout_queries(
         if isinstance(parsed, dict):
             planned_stores = _planner_store_plan(parsed.get("stores")) or planned_default_stores
             planned_project = _sanitize_planned_project(parsed.get("project")) or default_project
+            if "docs" in planned_default_stores and "docs" not in planned_stores:
+                planned_stores = _planner_store_plan([*planned_stores, "docs"])
         else:
             planned_stores = planned_default_stores
             planned_project = default_project
@@ -7906,6 +8574,10 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
         lowered,
     ))
+    dated_project_like = bool(project_name) and bool(_re.search(
+        r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)",
+        lowered,
+    ))
     project_docs_like = bool(project_name) and bool(_re.search(
         r"\b(what does|what do|say|says|said|mention|mentions|mentioned|document|documents|documented|spec|specs|specify|specified|describe|describes|described|note|notes|noted|call|calls|called)\b",
         lowered,
@@ -7916,7 +8588,9 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         lowered,
     ))
 
-    if project_docs_like:
+    if dated_project_like:
+        stores = ["vector", "docs"]
+    elif project_docs_like:
         stores = ["vector", "docs"]
     elif mixed_memory_docs:
         stores = ["vector", "docs"]
@@ -8150,6 +8824,11 @@ def recall_fast(
         _trace_m15("memory_graph.recall_fast.short_circuit", query=query, reason="initial_low_information", meta=meta)
         return ([], meta) if return_meta else []
 
+    date_from, date_to, inferred_date_to = _resolve_fast_recall_date_bounds(
+        query,
+        date_from=date_from,
+        date_to=date_to,
+    )
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
     planner_timeout_s = _recall_planner_timeout_s(timeout_ms, fast_mode=True)
     planner_started = _time.monotonic()
@@ -8254,6 +8933,8 @@ def recall_fast(
     meta = dict(meta or {})
     meta["mode"] = "fast"
     meta["auto_inject_graph_depth"] = auto_inject_graph_depth
+    if inferred_date_to:
+        meta["inferred_date_to"] = inferred_date_to
     if docs_bundle:
         meta["docs_rows_count"] = len((docs_bundle.get("chunks") or []) if isinstance(docs_bundle, dict) else [])
 
@@ -9478,9 +10159,7 @@ def _expand_high_confidence_entity_anchors(
                 "domains": _domains_from_attrs(rel_attrs),
                 "project": rel_attrs.get("project"),
                 "source_type": rel_attrs.get("source_type"),
-                "created_at": getattr(rel_node, "created_at", None),
-                "valid_from": getattr(rel_node, "valid_from", None),
-                "valid_until": getattr(rel_node, "valid_until", None),
+                **_node_recall_temporal_fields(rel_node),
                 "extraction_confidence": getattr(rel_node, "extraction_confidence", None),
                 "privacy": getattr(rel_node, "privacy", None),
                 "owner_id": getattr(rel_node, "owner_id", None),
@@ -10071,7 +10750,7 @@ def store(
                                    1.0, "hash_exact", owner_id=owner_id, source=source, conn=_conn)
                 # Confirmation boosting: re-extraction confirms this fact
                 existing.confirmation_count += 1
-                existing.last_confirmed_at = datetime.now().isoformat()
+                existing.last_confirmed_at = _now_iso()
                 existing.confidence = min(existing.confidence + 0.02, 0.95)
                 # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                 existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
@@ -10162,7 +10841,7 @@ def store(
                                        sim, "auto_reject", owner_id=owner_id, source=source, conn=_conn)
                     # Confirmation boosting: re-extraction confirms this fact
                     existing.confirmation_count += 1
-                    existing.last_confirmed_at = datetime.now().isoformat()
+                    existing.last_confirmed_at = _now_iso()
                     existing.confidence = min(existing.confidence + 0.02, 0.95)
                     # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                     existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
@@ -10203,7 +10882,7 @@ def store(
                                                owner_id=owner_id, source=source, conn=_conn)
                             # Confirmation boosting: re-extraction confirms this fact
                             existing.confirmation_count += 1
-                            existing.last_confirmed_at = datetime.now().isoformat()
+                            existing.last_confirmed_at = _now_iso()
                             existing.confidence = min(existing.confidence + 0.02, 0.95)
                             # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                             existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
@@ -10287,7 +10966,7 @@ def store(
                                                llm_reasoning=llm_result.get("reasoning"),
                                                owner_id=owner_id, source=source, conn=_conn)
                             existing.confirmation_count += 1
-                            existing.last_confirmed_at = datetime.now().isoformat()
+                            existing.last_confirmed_at = _now_iso()
                             existing.confidence = min(existing.confidence + 0.02, 0.95)
                             existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
                             _apply_metadata_flags(existing)
@@ -10331,7 +11010,7 @@ def store(
                                            sim, "fallback_reject",
                                            owner_id=owner_id, source=source, conn=_conn)
                         existing.confirmation_count += 1
-                        existing.last_confirmed_at = datetime.now().isoformat()
+                        existing.last_confirmed_at = _now_iso()
                         existing.confidence = min(existing.confidence + 0.02, 0.95)
                         existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
                         _apply_metadata_flags(existing)
@@ -10607,6 +11286,7 @@ def create_edge(
             node.embedding = graph.get_embedding(embed_text)
         if not node.content_hash:
             node.content_hash = content_hash(node.name)
+        now_iso = _now_iso()
 
         conn.execute("""
             INSERT OR REPLACE INTO nodes
@@ -10627,9 +11307,9 @@ def create_edge(
             node.source, node.source_id,
             node.privacy,
             node.valid_from, node.valid_until,
-            node.created_at or datetime.now().isoformat(),
-            datetime.now().isoformat(),
-            node.accessed_at or datetime.now().isoformat(),
+            node.created_at or now_iso,
+            now_iso,
+            node.accessed_at or now_iso,
             node.access_count,
             node.storage_strength,
             node.owner_id,
@@ -10702,7 +11382,7 @@ def create_edge(
                 json.dumps(edge.attributes),
                 edge.weight,
                 edge.valid_from, edge.valid_until,
-                edge.created_at or datetime.now().isoformat(),
+                edge.created_at or _now_iso(),
                 edge.source_fact_id,
             ),
         )
@@ -11600,6 +12280,9 @@ if __name__ == "__main__":
         #   "depth": 1,
         #   "date_from": "YYYY-MM-DD",
         #   "date_to": "YYYY-MM-DD",
+        #   "after": "YYYY-MM-DD",
+        #   "before": "YYYY-MM-DD",
+        #   "as_of": "YYYY-MM-DD",
         #   "session_id": null,
         #   "current_session_id": null,
         #   "compaction_time": null,
@@ -11997,8 +12680,22 @@ if __name__ == "__main__":
             session_id      = cfg.get("session_id")
             current_session_id = cfg.get("current_session_id")
             compaction_time = cfg.get("compaction_time")
-            date_from       = cfg.get("date_from")
-            date_to         = cfg.get("date_to")
+            date_range      = cfg.get("date_range") if isinstance(cfg.get("date_range"), dict) else {}
+            date_from       = (
+                cfg.get("date_from")
+                or cfg.get("after")
+                or cfg.get("since")
+                or date_range.get("from")
+                or date_range.get("after")
+            )
+            date_to         = (
+                cfg.get("date_to")
+                or cfg.get("before")
+                or cfg.get("until")
+                or cfg.get("as_of")
+                or date_range.get("to")
+                or date_range.get("before")
+            )
             archive         = cfg.get("archive", False)
             candidate_pool  = cfg.get("candidate_pool")
             planner_profile = cfg.get("planner_profile", "full")
@@ -12178,21 +12875,27 @@ if __name__ == "__main__":
                         docs_floor = float(cfg.get("docs_only_min_similarity_floor", 0.35))
                         doc_min_similarity = max(float(doc_min_similarity), docs_floor)
                     _rag = _DocsRAG()
-                    doc_results = _rag.search_docs_bundle(
+                    doc_results = _search_docs_bundle_compat(
+                        _rag,
                         query=query,
                         limit=max(1, min(doc_limit, docs_fanout_max)),
                         min_similarity=doc_min_similarity,
                         project=doc_project if doc_project else None,
                         docs=doc_filters,
+                        date_from=date_from,
+                        date_to=date_to,
                     )
                     # Adaptive fallback: if docs-only returns nothing, retry without the floor.
                     if not want_memory and not _validate_docs_bundle(doc_results).get("chunks"):
-                        doc_results = _rag.search_docs_bundle(
+                        doc_results = _search_docs_bundle_compat(
+                            _rag,
                             query=query,
                             limit=max(1, min(doc_limit, docs_fanout_max)),
                             min_similarity=float(cfg.get("min_similarity", 0.20)),
                             project=doc_project if doc_project else None,
                             docs=doc_filters,
+                            date_from=date_from,
+                            date_to=date_to,
                         )
                     if use_json:
                         if json_payload is None:
@@ -12212,6 +12915,8 @@ if __name__ == "__main__":
                     else:
                         _print_docs_bundle(doc_results)
                 except Exception as _docs_err:
+                    if _is_fail_hard_mode():
+                        raise
                     print(f"[docs] warning: {_docs_err}", file=sys.stderr)
 
             if use_json and json_payload is not None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -94,16 +95,19 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
 
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}) as update_docs, \
-         patch("core.docs.updater.update_registered_docs", return_value=2) as update_registered:
+         patch("core.docs.updater.update_registered_docs", return_value=2) as update_registered, \
+         patch("core.docs.updater.index_project_logs", return_value=1) as index_project_logs:
         result = project_docs.execute_update_once("demo", request=request)
 
     assert result["status"] == "fresh"
     assert result["indexed_docs"] == 2
+    assert result["indexed_project_logs"] == 1
     assert result["snapshot"]["commit_hash"]
     update_docs.assert_called_once()
     assert update_docs.call_args.kwargs["force_project"] == "demo"
     assert update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"]
     update_registered.assert_called_once_with(project="demo", dry_run=False, protected_names={"PROJECT.log"})
+    index_project_logs.assert_called_once_with(project="demo")
     assert not project_docs.request_path("demo").exists()
     state = project_docs.read_state("demo")
     assert state["status"] == "fresh"
@@ -111,6 +115,7 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["progress"]["message"] == "project-docs update complete"
     assert state["project_log_offset"] == project_log.stat().st_size
     assert state["last_indexed_docs"] == 2
+    assert state["last_indexed_project_logs"] == 1
     assert state["last_registry_sync"]["project_md_refreshed"] in (0, 1)
 
 
@@ -119,7 +124,8 @@ def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
     from core import project_docs
 
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
-         patch("core.docs.updater.update_registered_docs", return_value=0):
+         patch("core.docs.updater.update_registered_docs", return_value=0), \
+         patch("core.docs.updater.index_project_logs", return_value=0):
         first = project_docs.execute_update_once("demo")
     first_head = first["snapshot"]["commit_hash"]
 
@@ -139,7 +145,8 @@ def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
     assert any(change["path"] == "tool.py" for change in diff["changes"])
 
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}) as update_docs, \
-         patch("core.docs.updater.update_registered_docs", return_value=1):
+         patch("core.docs.updater.update_registered_docs", return_value=1), \
+         patch("core.docs.updater.index_project_logs", return_value=0):
         result = project_docs.execute_update_once("demo")
 
     assert result["status"] == "fresh"
@@ -149,6 +156,247 @@ def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
     state = project_docs.read_state("demo")
     assert state["last_shadow_commit"] == crash_snapshot["commit_hash"]
     assert project_docs.project_status("demo")["fresh"] is True
+
+
+def test_index_project_logs_indexes_append_only_project_log(project_env, monkeypatch):
+    _tmp_path, _src, entry = project_env
+    from core.docs import updater
+
+    project_log = Path(entry["canonical_path"]) / "PROJECT.log"
+    project_log.write_text("- [2026-04-20T00:00:00] Milestone shipped\n", encoding="utf-8")
+
+    indexed = []
+
+    class FakeRag:
+        def needs_reindex_many(self, paths):
+            return {path: True for path in paths}
+
+        def index_document(self, file_path):
+            indexed.append(file_path)
+            return 2
+
+    monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", FakeRag)
+
+    assert updater.index_project_logs(project="demo") == 1
+    assert indexed == [str(project_log.resolve())]
+
+
+def test_index_project_logs_filters_unlinked_global_projects(project_env, tmp_path, monkeypatch):
+    _tmp_path, _src, entry = project_env
+    from core.docs import updater
+
+    demo_log = Path(entry["canonical_path"]) / "PROJECT.log"
+    demo_log.write_text("- [2026-04-20T00:00:00] Demo milestone\n", encoding="utf-8")
+    other_dir = tmp_path / "other-project"
+    other_dir.mkdir()
+    other_log = other_dir / "PROJECT.log"
+    other_log.write_text("- [2026-04-20T00:00:00] Foreign milestone\n", encoding="utf-8")
+
+    indexed = []
+
+    class FakeRag:
+        def needs_reindex_many(self, paths):
+            return {path: True for path in paths}
+
+        def index_document(self, file_path):
+            indexed.append(file_path)
+            return 1
+
+    monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", FakeRag)
+    monkeypatch.setattr(
+        updater,
+        "_linked_projects_for_current_instance",
+        lambda: ({"demo"}, True),
+    )
+    monkeypatch.setattr(
+        "core.project_registry.list_projects",
+        lambda: {
+            "demo": {"canonical_path": entry["canonical_path"]},
+            "foreign": {"canonical_path": str(other_dir)},
+        },
+    )
+    monkeypatch.setattr(
+        "core.project_registry.get_project",
+        lambda name: {
+            "demo": {"canonical_path": entry["canonical_path"]},
+            "foreign": {"canonical_path": str(other_dir)},
+        }.get(name),
+    )
+
+    assert updater.index_project_logs() == 1
+    assert indexed == [str(demo_log.resolve())]
+
+    indexed.clear()
+    assert updater.index_project_logs(project="foreign") == 0
+    assert indexed == []
+
+
+def test_index_project_logs_uses_managed_dir_when_canonical_path_missing(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core.docs import updater
+
+    managed_log = tmp_path / "projects" / "demo" / "PROJECT.log"
+    managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
+
+    indexed = []
+
+    class FakeRag:
+        def needs_reindex_many(self, paths):
+            return {path: True for path in paths}
+
+        def index_document(self, file_path):
+            indexed.append(file_path)
+            return 1
+
+    monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", FakeRag)
+    monkeypatch.setattr(updater, "_linked_projects_for_current_instance", lambda: ({"demo"}, True))
+    monkeypatch.setattr("core.project_registry.get_project", lambda name: {"source_root": None})
+
+    assert updater.index_project_logs(project="demo") == 1
+    assert indexed == [str(managed_log.resolve())]
+
+
+def test_index_project_logs_uses_managed_dir_when_canonical_log_missing(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core.docs import updater
+
+    canonical_without_log = tmp_path / "canonical-without-log"
+    canonical_without_log.mkdir()
+    managed_log = tmp_path / "projects" / "demo" / "PROJECT.log"
+    managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
+
+    indexed = []
+
+    class FakeRag:
+        def needs_reindex_many(self, paths):
+            return {path: True for path in paths}
+
+        def index_document(self, file_path):
+            indexed.append(file_path)
+            return 1
+
+    monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", FakeRag)
+    monkeypatch.setattr(updater, "_linked_projects_for_current_instance", lambda: ({"demo"}, True))
+    monkeypatch.setattr(
+        "core.project_registry.get_project",
+        lambda name: {"canonical_path": str(canonical_without_log), "source_root": None},
+    )
+
+    assert updater.index_project_logs(project="demo") == 1
+    assert indexed == [str(managed_log.resolve())]
+
+
+def test_index_project_logs_skips_when_instance_scope_unresolved(project_env, monkeypatch, caplog):
+    _tmp_path, _src, entry = project_env
+    from core.docs import updater
+
+    project_log = Path(entry["canonical_path"]) / "PROJECT.log"
+    project_log.write_text("- [2026-04-20T00:00:00] Demo milestone\n", encoding="utf-8")
+
+    def should_not_discover_projects():
+        raise AssertionError("PROJECT.log discovery should fail closed when scope is unresolved")
+
+    monkeypatch.setattr(updater, "_linked_projects_for_current_instance", lambda: (set(), False))
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr("core.project_registry.list_projects", should_not_discover_projects)
+    caplog.set_level(logging.WARNING, logger="core.docs.updater")
+
+    assert updater.index_project_logs() == 0
+    assert updater.index_project_logs(project="demo") == 0
+    assert "cross-instance contamination" in caplog.text
+
+
+def test_index_project_logs_raises_when_instance_scope_unresolved_fail_hard(project_env, monkeypatch):
+    _tmp_path, _src, entry = project_env
+    from core.docs import updater
+
+    project_log = Path(entry["canonical_path"]) / "PROJECT.log"
+    project_log.write_text("- [2026-04-20T00:00:00] Demo milestone\n", encoding="utf-8")
+
+    monkeypatch.setattr(updater, "_linked_projects_for_current_instance", lambda: (set(), False))
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="cannot resolve instance linkage"):
+        updater.index_project_logs()
+
+
+def test_project_status_counts_project_log_without_canonical_path(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    managed_log = tmp_path / "projects" / "demo" / "PROJECT.log"
+    managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "core.project_registry.get_project",
+        lambda name: {"source_root": None, "description": "Demo"},
+    )
+
+    status = project_docs.project_status("demo")
+    diff = project_docs.project_diff("demo")
+
+    assert status["status"] == "stale"
+    assert status["source_error"] is None
+    assert status["project_log_size"] == managed_log.stat().st_size
+    assert status["project_log_bytes_pending"] == managed_log.stat().st_size
+    assert diff["source_error"] is None
+    assert diff["project_log_entry_count"] == 1
+    assert "Managed milestone" in diff["project_log_entries"][0]
+
+
+def test_project_status_counts_managed_log_when_canonical_log_missing(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    canonical_without_log = tmp_path / "canonical-without-log"
+    canonical_without_log.mkdir()
+    managed_log = tmp_path / "projects" / "demo" / "PROJECT.log"
+    managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "core.project_registry.get_project",
+        lambda name: {
+            "canonical_path": str(canonical_without_log),
+            "source_root": None,
+            "description": "Demo",
+        },
+    )
+
+    status = project_docs.project_status("demo")
+    diff = project_docs.project_diff("demo")
+
+    assert status["status"] == "stale"
+    assert status["source_error"] is None
+    assert status["project_log_size"] == managed_log.stat().st_size
+    assert status["project_log_bytes_pending"] == managed_log.stat().st_size
+    assert diff["source_error"] is None
+    assert diff["project_log_entry_count"] == 1
+    assert "Managed milestone" in diff["project_log_entries"][0]
+
+
+def test_project_status_no_source_root_is_fresh_when_managed_log_cursor_current(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    managed_log = tmp_path / "projects" / "demo" / "PROJECT.log"
+    managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
+    log_size = managed_log.stat().st_size
+
+    monkeypatch.setattr(
+        "core.project_registry.get_project",
+        lambda name: {"source_root": None, "description": "Demo"},
+    )
+    project_docs.merge_state("demo", {"project_log_offset": log_size})
+
+    status = project_docs.project_status("demo")
+    diff = project_docs.project_diff("demo")
+
+    assert status["status"] == "fresh"
+    assert status["fresh"] is True
+    assert status["source_error"] is None
+    assert status["project_log_bytes_pending"] == 0
+    assert diff["source_error"] is None
+    assert diff["project_log_entry_count"] == 0
 
 
 def test_execute_update_once_preserves_force_request_when_locked(project_env):

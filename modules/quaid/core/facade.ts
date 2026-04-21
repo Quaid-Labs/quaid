@@ -191,6 +191,14 @@ export type FacadeRecallOptions = {
   project?: string;
   dateFrom?: string;
   dateTo?: string;
+  date_from?: string;
+  date_to?: string;
+  asOf?: string;
+  as_of?: string;
+  before?: string;
+  until?: string;
+  after?: string;
+  since?: string;
   docs?: string[];
   datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
   timeoutMs?: number;
@@ -489,10 +497,12 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const journalDir = path.join(visibleInstanceRoot, journalConfig.journalDir || "journal");
       return recallFromJournal(query, limit, journalDir);
     },
-    recallProjectStore: async (query, limit, project, docs) => {
+    recallProjectStore: async (query, limit, project, docs, dateFrom, dateTo) => {
       const args = [query, "--limit", String(limit)];
       if (project) args.push("--project", project);
       if (Array.isArray(docs) && docs.length > 0) args.push("--docs", docs.join(","));
+      if (dateFrom) args.push("--date-from", dateFrom);
+      if (dateTo) args.push("--date-to", dateTo);
       const out = await deps.execDocsRag("search", args);
       return parseProjectStoreResults(out, query, limit, project);
     },
@@ -2384,6 +2394,35 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     );
   }
 
+  type RecallDateAliasOpts = {
+    dateFrom?: unknown;
+    dateTo?: unknown;
+    date_from?: unknown;
+    date_to?: unknown;
+    asOf?: unknown;
+    as_of?: unknown;
+    before?: unknown;
+    until?: unknown;
+    after?: unknown;
+    since?: unknown;
+  };
+
+  function firstNonEmptyString(...values: unknown[]): string | undefined {
+    for (const value of values) {
+      const text = String(value || "").trim();
+      if (text) return text;
+    }
+    return undefined;
+  }
+
+  function resolveRecallDateFrom(opts: RecallDateAliasOpts): string | undefined {
+    return firstNonEmptyString(opts.dateFrom, opts.date_from, opts.after, opts.since);
+  }
+
+  function resolveRecallDateTo(opts: RecallDateAliasOpts): string | undefined {
+    return firstNonEmptyString(opts.dateTo, opts.date_to, opts.asOf, opts.as_of, opts.before, opts.until);
+  }
+
   async function recallMemoryFromBridgeDetailed(
     query: string,
     limit: number,
@@ -2408,12 +2447,14 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     }
 
     // Build JSON config — all retrieval options in one object
+    const dateFrom = resolveRecallDateFrom(opts);
+    const dateTo = resolveRecallDateTo(opts);
     const cfg: Record<string, unknown> = { stores: normalizedStores, limit };
     if (domain) cfg["domain_filter"] = domain;
     if (opts.domainBoost) cfg["domain_boost"] = opts.domainBoost;
     if (opts.project) cfg["project"] = opts.project;
-    if (opts.dateFrom) cfg["date_from"] = opts.dateFrom;
-    if (opts.dateTo) cfg["date_to"] = opts.dateTo;
+    if (dateFrom) cfg["date_from"] = dateFrom;
+    if (dateTo) cfg["date_to"] = dateTo;
     if (opts.fast) cfg["fast"] = true;
     if (opts.timeoutMs) cfg["timeout_ms"] = opts.timeoutMs;
     if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
@@ -2767,8 +2808,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       query, limit = 10, expandGraph = true, graphDepth = 1,
       datastores, routeStores, reasoning = "fast", intent = "general",
       ranking, domain = { all: true }, domainBoost, project,
-      dateFrom, dateTo, docs, datastoreOptions, failOpen,
+      docs, datastoreOptions, failOpen,
     } = opts;
+    const resolvedDateFrom = resolveRecallDateFrom(opts);
+    const resolvedDateTo = resolveRecallDateTo(opts);
 
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
@@ -2783,8 +2826,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         domain,
         domainBoost,
         project,
-        dateFrom,
-        dateTo,
+        dateFrom: resolvedDateFrom,
+        dateTo: resolvedDateTo,
         docs,
         datastoreOptions,
       };
@@ -2802,8 +2845,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const {
       query, limit = 10, expandGraph = true, graphDepth = 1,
       datastores, routeStores, reasoning = "fast", domain = { all: true }, domainBoost, project,
-      dateFrom, dateTo, timeoutMs,
+      timeoutMs,
     } = opts;
+    const resolvedDateFrom = resolveRecallDateFrom(opts);
+    const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
     const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph"]);
@@ -2813,8 +2858,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         domain,
         domainBoost,
         project,
-        dateFrom,
-        dateTo,
+        dateFrom: resolvedDateFrom,
+        dateTo: resolvedDateTo,
         depth: graphDepth,
         fast: reasoning === "fast",
         timeoutMs,

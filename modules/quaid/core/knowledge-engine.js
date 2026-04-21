@@ -301,10 +301,10 @@ intent: ${intent}`;
     if (!deps.recallJournalStore) return [];
     return deps.recallJournalStore(query, limit);
   }
-  async function recallFromProjectStore(query, limit, project, docs) {
+  async function recallFromProjectStore(query, limit, project, docs, dateFrom, dateTo) {
     if (!deps.isSystemEnabled("projects")) return [];
     if (!deps.recallProjectStore) return [];
-    return deps.recallProjectStore(query, limit, project, docs);
+    return deps.recallProjectStore(query, limit, project, docs, dateFrom, dateTo);
   }
   async function _executeStores(query, limit, opts) {
     const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);
@@ -351,7 +351,7 @@ intent: ${intent}`;
           const docsRaw = storeOption(ctx.opts, "project", "docs");
           const project = typeof projectRaw === "string" && projectRaw.trim() ? projectRaw.trim() : ctx.opts.project;
           const docs = Array.isArray(docsRaw) ? docsRaw.map((d) => String(d || "").trim()).filter(Boolean) : ctx.opts.docs;
-          return recallFromProjectStore(ctx.query, ctx.limit, project, docs);
+          return recallFromProjectStore(ctx.query, ctx.limit, project, docs, ctx.opts.dateFrom, ctx.opts.dateTo);
         }
       }
     };

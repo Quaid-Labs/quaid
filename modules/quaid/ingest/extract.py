@@ -50,6 +50,20 @@ from lib.domain_text import normalize_domain_id
 logger = logging.getLogger(__name__)
 
 
+_SESSION_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
+
+
+def _project_log_date_for_payload(session_id: str) -> Optional[str]:
+    """Resolve the source date for PROJECT.log entries from runtime context."""
+    quaid_now = os.environ.get("QUAID_NOW", "").strip()
+    if quaid_now:
+        return quaid_now
+    match = _SESSION_DATE_RE.search(str(session_id or ""))
+    if match:
+        return match.group(1)
+    return None
+
+
 class _LazyMemoryService:
     def _svc(self):
         from core.services.memory_service import get_memory_service as _runtime_get_memory_service
@@ -237,6 +251,7 @@ def _load_extraction_prompt(
             "- Only emit project_logs entries for projects listed above.",
             "- Use the exact project name as the key (case-sensitive).",
             "- If nothing noteworthy happened for a project, omit it from project_logs.",
+            "- Preserve exact callable/config/test/schema details when present: command names, endpoints, filenames, table/field names, constants/enums, counts, versions, and full short value lists. Cite every item when an exact list has 20 or fewer items. Do not collapse an available exact list into 'etc.', 'plus more', or 'full set'.",
         ])
         prompt += "\n".join(lines) + "\n"
     return prompt
@@ -1748,6 +1763,7 @@ def apply_extracted_payloads(
                 conversation_id=source_conversation_id,
                 participant_entity_ids=participant_entity_ids,
                 source_author_id=source_author_id,
+                created_at=fact.get("created_at"),
                 _conn=write_conn,
                 _dedup_rowid_max=dedup_rowid_max,
             )
@@ -1896,6 +1912,7 @@ def apply_extracted_payloads(
                             conversation_id=source_conversation_id,
                             participant_entity_ids=participant_entity_ids,
                             source_author_id=source_author_id,
+                            created_at=fact.get("created_at"),
                             _conn=write_conn,
                             _dedup_rowid_min_exclusive=external_rowid_seen,
                             _dedup_rowid_max=delta_rowid_max,
@@ -2008,6 +2025,7 @@ def apply_extracted_payloads(
             log_metrics = append_project_logs(
                 result["project_logs"],
                 trigger=trigger,
+                date_str=_project_log_date_for_payload(session_id),
                 dry_run=dry_run,
             )
             result["project_log_metrics"] = log_metrics

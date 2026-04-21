@@ -29,8 +29,13 @@ def cmd_update_from_transcript(transcript_path: str, dry_run: bool = False, max_
     return _updater.cmd_update_from_transcript(transcript_path, dry_run=dry_run, max_docs=max_docs)
 
 
-def append_project_logs(project_logs: dict[str, list[str]], trigger: str = "Compaction", dry_run: bool = False):
-    return _append_project_logs(project_logs, trigger=trigger, dry_run=dry_run)
+def append_project_logs(
+    project_logs: dict[str, list[str]],
+    trigger: str = "Compaction",
+    date_str: str | None = None,
+    dry_run: bool = False,
+):
+    return _append_project_logs(project_logs, trigger=trigger, date_str=date_str, dry_run=dry_run)
 
 
 def update_registered_docs(
@@ -40,6 +45,125 @@ def update_registered_docs(
 ) -> int:
     """Update/reindex registered docs, optionally scoped to one project."""
     return _updater.cmd_update_stale(dry_run=dry_run, project=project, protected_names=protected_names)
+
+
+def _project_log_paths(project: str | None = None) -> list[str]:
+    try:
+        from core.project_registry import get_project, list_projects
+    except ImportError:
+        if _fail_hard_enabled():
+            raise
+        return []
+
+    linked_projects, scope_resolved = _linked_projects_for_current_instance()
+    if not scope_resolved:
+        message = "cannot resolve instance linkage for PROJECT.log indexing"
+        if _fail_hard_enabled():
+            raise RuntimeError(message)
+        logger.warning(
+            "[project-docs] %s; skipping PROJECT.log indexing to avoid cross-instance contamination",
+            message,
+        )
+        return []
+    if project and str(project) not in linked_projects:
+        return []
+
+    try:
+        if project:
+            entry = get_project(str(project))
+            projects = {str(project): entry} if entry else {}
+        else:
+            projects = list_projects()
+            projects = {
+                name: entry
+                for name, entry in projects.items()
+                if str(name) in linked_projects
+            }
+    except Exception as exc:
+        logger.warning("[project-docs] skipped PROJECT.log discovery: %s", exc)
+        if _fail_hard_enabled():
+            raise
+        return []
+
+    paths: list[str] = []
+    for name, entry in sorted(projects.items()):
+        if not isinstance(entry, dict):
+            continue
+        log_path = _project_log_path_for_entry(str(name), entry)
+        if log_path is None:
+            continue
+        if log_path.is_file():
+            paths.append(str(log_path.resolve()))
+    return paths
+
+
+def _project_log_path_for_entry(name: str, entry: dict[str, Any]) -> Path | None:
+    candidates: list[Path] = []
+    canonical = str(entry.get("canonical_path") or "").strip()
+    if canonical:
+        candidates.append(Path(canonical).expanduser() / "PROJECT.log")
+    managed = _managed_project_log_path(name)
+    if managed is not None and managed not in candidates:
+        candidates.append(managed)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0] if candidates else None
+
+
+def _managed_project_log_path(name: str) -> Path | None:
+    try:
+        from core.project_docs import validate_project_name
+        from lib.runtime_context import get_projects_dir
+
+        return get_projects_dir() / validate_project_name(name) / "PROJECT.log"
+    except Exception as exc:
+        logger.warning("[project-docs] cannot resolve managed PROJECT.log path for %s: %s", name, exc)
+        if _fail_hard_enabled():
+            raise
+        return None
+
+
+def _linked_projects_for_current_instance() -> tuple[set[str], bool]:
+    """Return linked projects for the active instance, if the instance can be resolved."""
+    try:
+        from datastore.docsdb.rag import _linked_projects_for_current_instance as _linked
+
+        linked, resolved = _linked()
+        return {str(name) for name in linked}, bool(resolved)
+    except Exception:
+        return set(), False
+
+
+def index_project_logs(project: str | None = None) -> int:
+    """Index append-only PROJECT.log files without making them editable docs."""
+    try:
+        from datastore.docsdb.rag import DocsRAG
+    except ImportError:
+        if _fail_hard_enabled():
+            raise
+        return 0
+
+    paths = _project_log_paths(project)
+    if not paths:
+        return 0
+
+    rag = DocsRAG()
+    needs = rag.needs_reindex_many(paths)
+    indexed = 0
+    for file_path in paths:
+        if not needs.get(file_path, True):
+            continue
+        try:
+            chunks = int(rag.index_document(file_path) or 0)
+            logger.info("[project-docs] indexed PROJECT.log: %s (%d chunks)", file_path, chunks)
+            if chunks > 0:
+                indexed += 1
+        except Exception as exc:
+            logger.warning("[project-docs] failed to index PROJECT.log %s: %s", file_path, exc)
+            if _fail_hard_enabled():
+                raise
+    return indexed
 
 
 def _resolve_registered_doc_path(registry: Any, file_path: str) -> Path:
@@ -59,6 +183,9 @@ def _resolve_registered_doc_path(registry: Any, file_path: str) -> Path:
 
 def index_one_stale_registered_doc(project: str | None = None) -> bool:
     """Index one stale registered doc from the supervisor-owned docs daemon path."""
+    if index_project_logs(project=project):
+        return True
+
     try:
         from datastore.docsdb.rag import DocsRAG
         from datastore.docsdb.registry import DocsRegistry
@@ -172,6 +299,7 @@ __all__ = [
     "cmd_update_from_transcript",
     "append_project_logs",
     "update_registered_docs",
+    "index_project_logs",
     "index_one_stale_registered_doc",
     "sync_project_visible_docs",
 ]

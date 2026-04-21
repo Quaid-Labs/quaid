@@ -202,7 +202,8 @@ class TestIndexDocument:
             conn.commit()
 
         with patch.object(rag, "chunk_markdown", return_value=["# Guide\nChunk A", "## Notes\nChunk B"]), \
-             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3], None]):
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3], None]), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False):
             chunks = rag.index_document(str(test_file))
 
         assert chunks == 0
@@ -214,6 +215,17 @@ class TestIndexDocument:
             ).fetchall()
 
         assert rows == [("old:0", "old chunk", "# Old")]
+
+    def test_embedding_failure_raises_when_fail_hard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.")
+
+        with patch.object(rag, "chunk_markdown", return_value=["# Guide\nChunk A"]), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[None]), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed embedding"):
+            rag.index_document(str(test_file))
 
     def test_syncs_vec_doc_chunks_and_replaces_stale_vec_rows(self, tmp_path):
         from lib.database import get_connection, has_vec
@@ -452,6 +464,412 @@ class TestDocsSearchFiltering:
         results = rag.search_docs("alpha", limit=10, docs=["alpha.md"])
         assert len(results) == 1
         assert results[0]["source"].endswith("alpha.md")
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_filters_project_log_lines_by_date(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "log:0",
+                    "/tmp/workspace/projects/quaid/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2026-03-05T23:59:59] Added legacy recall mode",
+                            "- [2026-03-15T23:59:59] Switched recall planner to hybrid",
+                        ]
+                    ),
+                    None,
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "project-md:0",
+                    "/tmp/workspace/projects/quaid/PROJECT.md",
+                    0,
+                    "Current recall planner summary",
+                    "# Project: Quaid",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        results = rag.search_docs(
+            "recall planner",
+            limit=10,
+            docs=["PROJECT.log", "PROJECT.md"],
+            date_from="2026-03-01",
+            date_to="2026-03-10",
+        )
+
+        assert len(results) == 1
+        assert results[0]["source"].endswith("PROJECT.log")
+        assert "Added legacy recall mode" in results[0]["content"]
+        assert "Switched recall planner to hybrid" not in results[0]["content"]
+        assert "Current recall planner summary" not in results[0]["content"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_date_filtered_project_log_orders_latest_state_first(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "portfolio-log:0",
+                    "/tmp/workspace/projects/portfolio-site/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2026-03-15T23:59:59] Current company listed: TechFlow",
+                            "- [2026-04-21T23:59:59] Portfolio still lists TechFlow before Stripe start date",
+                            "- [2026-04-28T23:59:59] Updated subtitle and About section: TechFlow -> Stripe",
+                        ]
+                    ),
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/portfolio-site",
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs(
+                "As of 2026-04-28, what company was listed on Maya's portfolio site?",
+                limit=1,
+                project="portfolio-site",
+                date_to="2026-04-28",
+            )
+
+        assert len(results) == 1
+        lines = results[0]["content"].splitlines()
+        assert "TechFlow -> Stripe" in lines[0]
+        assert "still lists TechFlow" in lines[1]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_date_filtered_project_log_orders_same_day_query_matches_first(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "recipe-log:0",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2026-03-18T23:59:59] Added meal planning schema: meal_plans and meal_plan_items",
+                            "- [2026-03-18T23:59:59] Added grocery list endpoint: GET /api/meal-plans/:id/grocery-list",
+                            "- [2026-03-18T23:59:59] Added tests/dietary.test.js covering DIETARY_LABELS and SAFE_FOR_MOM",
+                            "- [2026-03-18T23:59:59] Added tests/mealplan.test.js covering meal plan CRUD",
+                        ]
+                    ),
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/recipe-app",
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs(
+                "As of 2026-03-18, what test suites existed for the recipe app?",
+                limit=1,
+                project="recipe-app",
+                date_to="2026-03-18",
+            )
+
+        assert len(results) == 1
+        lines = results[0]["content"].splitlines()
+        assert "tests/dietary.test.js" in lines[0]
+        assert "tests/mealplan.test.js" in lines[1]
+
+    def test_search_docs_date_filtered_project_log_query_lines_outrank_semantic_noise(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "recipe-log:schema",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2026-03-18T23:59:59] Added meal planning schema: meal_plans and meal_plan_items",
+                            "- [2026-03-18T23:59:59] Added grocery list endpoint: GET /api/meal-plans/:id/grocery-list",
+                        ]
+                    ),
+                    None,
+                    b"0.95",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "recipe-log:tests",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    1,
+                    "\n".join(
+                        [
+                            "- [2026-03-18T23:59:59] Added tests/dietary.test.js covering DIETARY_LABELS and SAFE_FOR_MOM",
+                            "- [2026-03-18T23:59:59] tests/mealplan.test.js: 368 lines covering meal plan CRUD",
+                        ]
+                    ),
+                    None,
+                    b"0.55",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        def _unpack(blob):
+            return [float(bytes(blob).decode("ascii"))]
+
+        def _sim(_query_embedding, chunk_embedding):
+            return float(chunk_embedding[0])
+
+        with (
+            patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0]),
+            patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack),
+            patch("datastore.docsdb.rag._lib_cosine_similarity", side_effect=_sim),
+            patch.object(
+                rag,
+                "_get_project_paths",
+                return_value={
+                    "home_dir": "/tmp/workspace/projects/recipe-app",
+                    "source_roots": [],
+                },
+            ),
+        ):
+            results = rag.search_docs(
+                "As of 2026-03-18, what test suites existed for the recipe app?",
+                limit=2,
+                project="recipe-app",
+                date_to="2026-03-18",
+            )
+
+        assert len(results) == 2
+        assert "tests/dietary.test.js" in results[0]["content"]
+        assert "grocery list endpoint" in results[1]["content"]
+        assert all(result["similarity"] <= 1.0 for result in results)
+
+        with (
+            patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0]),
+            patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack),
+            patch("datastore.docsdb.rag._lib_cosine_similarity", side_effect=_sim),
+            patch.object(
+                rag,
+                "_get_project_paths",
+                return_value={
+                    "home_dir": "/tmp/workspace/projects/recipe-app",
+                    "source_roots": [],
+                },
+            ),
+        ):
+            since_results = rag.search_docs(
+                "Since 2026-03-01, what test suites existed for the recipe app?",
+                limit=2,
+                project="recipe-app",
+                date_from="2026-03-01",
+            )
+
+        assert len(since_results) == 2
+        assert "grocery list endpoint" in since_results[0]["content"]
+        assert "tests/dietary.test.js" in since_results[1]["content"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.05)
+    def test_search_docs_date_filtered_project_log_bypasses_similarity_floor(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "recipe-log:0",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2026-03-04T23:59:59] Initial scaffold complete: Express + SQLite CRUD API and single-page frontend",
+                            "- [2026-03-18T23:59:59] Added meal planning tests and dietary filtering suite",
+                        ]
+                    ),
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/recipe-app",
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs(
+                "recipe app features",
+                limit=10,
+                project="recipe-app",
+                date_to="2026-03-05",
+            )
+
+        assert len(results) == 1
+        assert results[0]["source"].endswith("PROJECT.log")
+        assert "Initial scaffold complete" in results[0]["content"]
+        assert "meal planning tests" not in results[0]["content"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.40)
+    def test_search_docs_date_filtered_project_log_prefers_cutoff_day_evidence(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "recipe-log:0",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    0,
+                    "- [2026-03-11T23:59:59] Test suites existed for recipe app baseline CRUD validation tests",
+                    None,
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "recipe-log:1",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    1,
+                    "- [2026-03-18T23:59:59] Added tests/dietary.test.js and tests/mealplan.test.js",
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/recipe-app",
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs(
+                "As of 2026-03-18, what test suites existed for the recipe app?",
+                limit=2,
+                project="recipe-app",
+                date_to="2026-03-18",
+            )
+
+        assert len(results) == 2
+        assert "mealplan.test.js" in results[0]["content"]
+        assert "baseline CRUD" in results[1]["content"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_bundle_does_not_attach_current_project_md_for_date_queries(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "log:0",
+                    "/tmp/workspace/projects/quaid/PROJECT.log",
+                    0,
+                    "- [2026-03-05T23:59:59] Added legacy recall mode",
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(rag, "load_project_md", side_effect=AssertionError("current PROJECT.md should not attach")):
+            bundle = rag.search_docs_bundle(
+                "recall mode",
+                limit=10,
+                docs=["PROJECT.log"],
+                date_to="2026-03-10",
+            )
+
+        assert bundle["project_md"] is None
+        assert len(bundle["chunks"]) == 1
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])

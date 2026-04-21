@@ -289,6 +289,147 @@ def _docs_rank_score(query_terms: List[str], source_file: str, section_header: O
     return max(0.0, round(score, 4))
 
 
+_PROJECT_LOG_LINE_DATE_RE = re.compile(
+    r"^\s*-\s*(?:\[(20\d{2}-\d{2}-\d{2})(?:[T\s][^\]]*)?\]|(20\d{2}-\d{2}-\d{2})\b)"
+)
+
+
+def _normalize_date_bound(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
+    if not match:
+        raise ValueError(f"Doc recall date filters must be concrete YYYY-MM-DD dates, got {raw!r}")
+    return match.group(1)
+
+
+def _project_log_line_date(line: str) -> Optional[str]:
+    match = _PROJECT_LOG_LINE_DATE_RE.match(str(line or ""))
+    if not match:
+        return None
+    return match.group(1) or match.group(2)
+
+
+def _project_log_latest_line_date(content: str) -> Optional[str]:
+    latest: Optional[str] = None
+    for line in str(content or "").splitlines():
+        line_date = _project_log_line_date(line)
+        if line_date and (latest is None or line_date > latest):
+            latest = line_date
+    return latest
+
+
+def _project_log_asof_rank_delta(content: str, date_to: Optional[str]) -> float:
+    """Prefer dated log chunks nearest the requested as-of cutoff."""
+    latest = _project_log_latest_line_date(content)
+    if not latest or not date_to:
+        return 0.0
+    try:
+        days = (datetime.fromisoformat(date_to).date() - datetime.fromisoformat(latest).date()).days
+    except ValueError:
+        return 0.0
+    if days < 0:
+        return 0.0
+    if days == 0:
+        return 0.24
+    if days <= 1:
+        return 0.16
+    if days <= 7:
+        return 0.08
+    if days <= 30:
+        return 0.03
+    return 0.0
+
+
+def _project_log_line_query_score(line: str, query_terms: List[str]) -> int:
+    lower_line = str(line or "").lower()
+    score = 0
+    for term in query_terms or []:
+        normalized = str(term or "").lower().strip()
+        if not normalized or re.fullmatch(r"20\d{2}-\d{2}-\d{2}", normalized):
+            continue
+        score += min(lower_line.count(normalized), 3)
+    return score
+
+
+def _project_log_query_terms(query: str) -> List[str]:
+    """Language-neutral terms for ordering dated PROJECT.log lines."""
+    out: List[str] = []
+    for raw in re.findall(r"[\w./-]+", str(query or "").lower()):
+        term = raw.strip().strip("/.")
+        if len(term) < 3 or term in out:
+            continue
+        out.append(term)
+    return out
+
+
+def _project_log_query_line_rank_delta(
+    content: str,
+    query_terms: List[str],
+    date_to: Optional[str],
+) -> float:
+    """Prefer project-log chunks whose latest lines directly match the query."""
+    latest = _project_log_latest_line_date(content)
+    if not latest:
+        return 0.0
+    if not date_to or latest != date_to:
+        return 0.0
+    terms = [
+        str(term or "").lower()
+        for term in query_terms
+        if str(term or "").strip() and not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", str(term or ""))
+    ]
+    if not terms:
+        return 0.0
+    best = 0
+    for line in str(content or "").splitlines():
+        if _project_log_line_date(line) != latest:
+            continue
+        best = max(best, _project_log_line_query_score(line, terms))
+    return min(0.72, best * 0.18)
+
+
+def _is_project_log_source(source_file: str) -> bool:
+    return Path(str(source_file or "")).name == "PROJECT.log"
+
+
+def _filter_project_log_content_by_date(
+    content: str,
+    *,
+    date_from: Optional[str],
+    date_to: Optional[str],
+    query_terms: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Return only dated project-log lines inside the requested date window."""
+    if not date_from and not date_to:
+        return content
+    terms = [str(term or "").lower() for term in (query_terms or []) if str(term or "").strip()]
+    kept: List[tuple[str, int, int, str]] = []
+    saw_dated_line = False
+    for index, line in enumerate(str(content or "").splitlines()):
+        line_date = _project_log_line_date(line)
+        if not line_date:
+            continue
+        saw_dated_line = True
+        if date_from and line_date < date_from:
+            continue
+        if date_to and line_date > date_to:
+            continue
+        line_score = _project_log_line_query_score(line, terms)
+        kept.append((line_date, index, line_score, line))
+    if kept:
+        if date_to:
+            # As-of recall shows newest state first, then query-matching same-day lines.
+            kept.sort(key=lambda item: (item[0], item[2], -item[1]), reverse=True)
+        return "\n".join(line for _, _, _, line in kept)
+    if saw_dated_line:
+        return None
+    # Date-filtered docs recall is intended for project logs. Undated chunks
+    # should not answer historical/as-of questions by accident.
+    return None
+
+
 class DocumentChunk:
     """A chunk of a document with metadata."""
     def __init__(self, content: str, source_file: str, chunk_index: int, 
@@ -665,11 +806,13 @@ class DocsRAG:
         for i, (chunk_text, embedding) in enumerate(zip(chunk_texts, embeddings)):
             section_header = self._extract_section_header(chunk_text)
             if not embedding:
-                logger.warning(
-                    "Failed embedding for chunk %s in %s; aborting reindex to preserve old chunks",
-                    i,
-                    canonical_file_path,
+                message = (
+                    f"Failed embedding for chunk {i} in {canonical_file_path}; "
+                    "aborting reindex to preserve old chunks"
                 )
+                if is_fail_hard_enabled():
+                    raise RuntimeError(message)
+                logger.warning(message)
                 return 0
             prepared_chunks.append((
                 f"{canonical_file_path}:{i}",
@@ -681,7 +824,10 @@ class DocsRAG:
             ))
 
         if not prepared_chunks:
-            logger.warning("All embeddings failed for %s; keeping old chunks", file_path)
+            message = f"All embeddings failed for {file_path}; keeping old chunks"
+            if chunk_texts and is_fail_hard_enabled():
+                raise RuntimeError(message)
+            logger.warning(message)
             return 0
 
         # All embeddings succeeded — now safe to delete and replace
@@ -734,12 +880,15 @@ class DocsRAG:
                     (first_chunk_id,),
                 ).fetchone()
                 if not vec_row or vec_row[0] == 0:
-                    logger.warning(
-                        "[docs] vec INSERT appeared to succeed but %s is absent from "
-                        "vec_doc_chunks_rowids; last_indexed_at will NOT be set so the "
-                        "doc is re-indexed on the next run",
-                        canonical_file_path,
+                    message = (
+                        "[docs] vec INSERT appeared to succeed but "
+                        f"{canonical_file_path} is absent from vec_doc_chunks_rowids; "
+                        "last_indexed_at will NOT be set so the doc is re-indexed on "
+                        "the next run"
                     )
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(message)
+                    logger.warning(message)
                     chunks_created = 0
 
         logger.info("[docs] Indexed %s chunks from %s", chunks_created, canonical_file_path)
@@ -1009,16 +1158,27 @@ class DocsRAG:
             pass
         return None
 
-    def search_docs(self, query: str, limit: int = 5, min_similarity: float = 0.3,
-                    project: Optional[str] = None, docs: Optional[List[str]] = None) -> List[Dict]:
+    def search_docs(
+        self,
+        query: str,
+        limit: int = 5,
+        min_similarity: float = 0.3,
+        project: Optional[str] = None,
+        docs: Optional[List[str]] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[Dict]:
         """Semantic search of document chunks.
 
         Args:
             project: If set, only return results from files belonging to this project.
                      Uses doc_registry + project homeDir for filtering.
             docs: Optional list of doc filters (basename, relative path, or path fragment).
+            date_from/date_to: Optional YYYY-MM-DD bounds for dated project-log entries.
         """
         self._last_scope_hint = None
+        date_from = _normalize_date_bound(date_from)
+        date_to = _normalize_date_bound(date_to)
         query_embedding = _lib_get_embedding(query)
         if not query_embedding:
             if is_fail_hard_enabled():
@@ -1032,6 +1192,7 @@ class DocsRAG:
         # Build project/doc filter — SQL-level filtering avoids full scans.
         doc_filters = self._normalize_docs_filter(docs)
         query_terms = _docs_query_terms(query)
+        project_log_query_terms = _project_log_query_terms(query)
 
         project_paths = None
         registry_paths: List[str] = []
@@ -1228,29 +1389,55 @@ class DocsRAG:
                     chunk_embedding = _lib_unpack_embedding(row[5])  # embedding is column 5
                     similarity = _lib_cosine_similarity(query_embedding, chunk_embedding)
 
-                if similarity >= min_similarity:
-                    content = row[3]
+                content = row[3]
+                is_dated_project_log = False
+                if date_from or date_to:
+                    if not _is_project_log_source(source_file):
+                        continue
+                    filtered_content = _filter_project_log_content_by_date(
+                        content,
+                        date_from=date_from,
+                        date_to=date_to,
+                        query_terms=project_log_query_terms,
+                    )
+                    if not filtered_content:
+                        continue
+                    content = filtered_content
+                    is_dated_project_log = True
+
+                if similarity >= min_similarity or is_dated_project_log:
+                    rank_similarity = max(similarity, min_similarity) if is_dated_project_log else similarity
                     section_header = row[4]
                     rank_score = _docs_rank_score(
                         query_terms,
                         source_file,
                         section_header,
                         content,
-                        similarity,
+                        rank_similarity,
                     )
+                    if is_dated_project_log:
+                        rank_score += _project_log_asof_rank_delta(content, date_to)
+                        rank_score += _project_log_query_line_rank_delta(
+                            content,
+                            project_log_query_terms,
+                            date_to,
+                        )
                     inferred_project = project or self.infer_project_for_source(row[1])
                     results.append({
                         "content": content,
                         "source": source_file,
                         "section_header": section_header,
                         "similarity": min(1.0, rank_score),
+                        "_rank_score": rank_score,
                         "chunk_index": row[2],  # chunk_index
                         "project": inferred_project,
                     })
 
         # Sort by similarity and limit
-        results.sort(key=lambda x: x["similarity"], reverse=True)
+        results.sort(key=lambda x: float(x.get("_rank_score", x["similarity"])), reverse=True)
         limited_results = results[:limit]
+        for result in limited_results:
+            result.pop("_rank_score", None)
         if not limited_results and project_scope_token == "__instance_linked_scope__":
             with _lib_get_connection(self.db_path) as conn:
                 self._set_scope_hint_for_unlinked_candidates(
@@ -1269,20 +1456,27 @@ class DocsRAG:
         min_similarity: float = 0.3,
         project: Optional[str] = None,
         docs: Optional[List[str]] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search docs and attach the most indicated project's PROJECT.md."""
+        date_from = _normalize_date_bound(date_from)
+        date_to = _normalize_date_bound(date_to)
         chunks = self.search_docs(
             query=query,
             limit=limit,
             min_similarity=min_similarity,
             project=project,
             docs=docs,
+            date_from=date_from,
+            date_to=date_to,
         )
         inferred_project = project or self.infer_project_from_chunks(chunks)
+        attach_current_project_md = not (date_from or date_to)
         bundle = {
             "chunks": chunks,
             "project": inferred_project,
-            "project_md": self.load_project_md(inferred_project),
+            "project_md": self.load_project_md(inferred_project) if attach_current_project_md else None,
         }
         telemetry: Dict[str, Any] = {}
         if _docs_recall_telemetry_enabled():
@@ -1293,6 +1487,8 @@ class DocsRAG:
                 "requested_docs": list(docs or []),
                 "chunk_count": len(chunks),
                 "project_md_attached": bool(bundle["project_md"]),
+                "date_from": date_from,
+                "date_to": date_to,
                 "sources": [chunk.get("source") for chunk in chunks[:5]],
                 "top_similarity": chunks[0].get("similarity") if chunks else None,
             })
@@ -1691,6 +1887,8 @@ def main():
     search_parser.add_argument('--min-similarity', type=float, default=_default_min_sim, help='Minimum similarity threshold')
     search_parser.add_argument('--project', help='Filter results by project name')
     search_parser.add_argument('--docs', help='Comma-separated doc path/name filters')
+    search_parser.add_argument('--date-from', default=None, help='Only return dated project-log entries from this date onward (YYYY-MM-DD)')
+    search_parser.add_argument('--date-to', default=None, help='Only return dated project-log entries up to this date (YYYY-MM-DD)')
     
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show indexing statistics')
@@ -1768,6 +1966,8 @@ def main():
             min_similarity=args.min_similarity,
             project=getattr(args, 'project', None),
             docs=docs_filter,
+            date_from=getattr(args, 'date_from', None),
+            date_to=getattr(args, 'date_to', None),
         )
         
         if not results:

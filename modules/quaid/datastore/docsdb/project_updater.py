@@ -36,6 +36,8 @@ from lib.runtime_context import (
     get_visible_quaid_home,
     get_workspace_dir,
 )
+from lib.fail_policy import is_fail_hard_enabled
+
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
 
 def _workspace() -> Path:
@@ -165,8 +167,56 @@ def _project_md_recent_log_limit(default: int = 15) -> int:
     return max(1, limit)
 
 
+def _project_log_now(date_str: Optional[str] = None) -> datetime:
+    """Return the effective project-log timestamp."""
+    raw = str(date_str or os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            raw = f"{raw}T23:59:59"
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid project log date override %r; using wall clock", raw)
+    return datetime.now()
 
 
+def _index_project_history_log(log_path: Path, *, project_name: str, trigger: str) -> int:
+    """Index PROJECT.log immediately after append so dated project recall can find it.
+
+    This intentionally indexes on the append hot path instead of waiting for a
+    later sweep; the r1383 temporal A/B showed stale PROJECT.log chunks were
+    directly suppressing historical project answers. Relying on sweep-based
+    staleness reindex was considered but rejected because same-cycle recall
+    needs the freshly appended dated log evidence.
+    """
+    try:
+        from datastore.docsdb.rag import DocsRAG
+
+        chunks = int(DocsRAG().index_document(str(log_path)) or 0)
+    except Exception as exc:
+        raise RuntimeError(
+            "append_project_logs: failed to index PROJECT.log "
+            f"project={project_name} path={log_path} trigger={trigger} error={exc}"
+        ) from exc
+
+    if chunks <= 0:
+        logger.warning(
+            "append_project_logs: PROJECT.log indexing produced no chunks "
+            "project=%s path=%s trigger=%s",
+            project_name,
+            log_path,
+            trigger,
+        )
+        return 0
+
+    logger.info(
+        "append_project_logs: indexed PROJECT.log project=%s path=%s chunks=%s trigger=%s",
+        project_name,
+        log_path,
+        chunks,
+        trigger,
+    )
+    return chunks
 def append_project_logs(
     project_logs: Dict[str, List[str]],
     trigger: str = "Compaction",
@@ -190,13 +240,18 @@ def append_project_logs(
         "projects_missing_file": 0,
         "projects_history_only": 0,
         "history_entries_written": 0,
+        "history_logs_indexed": 0,
+        "history_chunks_indexed": 0,
+        "history_logs_unindexed": 0,
+        "history_index_failures": 0,
     }
     if not isinstance(project_logs, dict) or not project_logs:
         return metrics
 
     cfg = get_config()
     registry = docs_registry.DocsRegistry()
-    today = date_str or datetime.now().strftime("%Y-%m-%d")
+    effective_now = _project_log_now(date_str)
+    today = effective_now.date().isoformat()
     marker_begin = PROJECT_LOG_BEGIN
     marker_end = PROJECT_LOG_END
     recent_limit = _project_md_recent_log_limit()
@@ -217,11 +272,41 @@ def append_project_logs(
         if not normalized:
             return 0
         log_path = project_md_path.with_name(PROJECT_HISTORY_FILENAME)
-        ts = datetime.now().isoformat(timespec="seconds")
+        ts = effective_now.isoformat(timespec="seconds")
         lines = [f"- [{ts}] {item}" for item in normalized]
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
         return len(lines)
+
+    def _index_written_history_log(project_name: str, project_md_path: Path) -> int:
+        log_path = project_md_path.with_name(PROJECT_HISTORY_FILENAME)
+        try:
+            chunks = _index_project_history_log(
+                log_path,
+                project_name=project_name,
+                trigger=trigger,
+            )
+        except Exception as e:
+            metrics["history_index_failures"] += 1
+            logger.warning(
+                "append_project_logs: failed PROJECT.log index for project=%s path=%s error=%s",
+                project_name,
+                log_path,
+                e,
+            )
+            print(
+                f"[project-log][warn] failed PROJECT.log index: "
+                f"project={project_name} error={e}"
+            )
+            if is_fail_hard_enabled():
+                raise
+            return 0
+        if chunks > 0:
+            metrics["history_logs_indexed"] += 1
+            metrics["history_chunks_indexed"] += chunks
+        else:
+            metrics["history_logs_unindexed"] += 1
+        return chunks
 
     for project_name, raw_entries in project_logs.items():
         metrics["projects_seen"] += 1
@@ -306,13 +391,6 @@ def append_project_logs(
                 if not dry_run:
                     try:
                         history_written = _append_project_history_log(project_md, history_entries)
-                        if history_written > 0:
-                            metrics["projects_history_only"] += 1
-                            metrics["history_entries_written"] += history_written
-                            print(
-                                f"[project-log] project={project_name} history_only_entries={history_written} "
-                                f"file={project_md.with_name(PROJECT_HISTORY_FILENAME)} dry_run={dry_run}"
-                            )
                     except Exception as e:
                         logger.warning(
                             "append_project_logs: failed PROJECT.log append for project=%s path=%s error=%s",
@@ -324,10 +402,24 @@ def append_project_logs(
                             f"[project-log][warn] failed PROJECT.log append: "
                             f"project={project_name} error={e}"
                         )
+                        if is_fail_hard_enabled():
+                            raise
+                    else:
+                        if history_written > 0:
+                            metrics["projects_history_only"] += 1
+                            metrics["history_entries_written"] += history_written
+                            _index_written_history_log(project_name, project_md)
+                            print(
+                                f"[project-log] project={project_name} history_only_entries={history_written} "
+                                f"file={project_md.with_name(PROJECT_HISTORY_FILENAME)} dry_run={dry_run}"
+                            )
                 continue
 
         if not dry_run:
-            _append_project_history_log(project_md, history_entries)
+            history_written = _append_project_history_log(project_md, history_entries)
+            if history_written > 0:
+                metrics["history_entries_written"] += history_written
+                _index_written_history_log(project_name, project_md)
 
         lines = [f"- {today} [{trigger}] {entry}" for entry in entries_for_write]
         content = project_md.read_text(encoding="utf-8")

@@ -868,6 +868,7 @@ class TestCmdUpdateStaleNeverIndexed:
             monkeypatch.setattr(updater, "get_doc_purposes", lambda: {})
             monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
             monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr("core.docs.updater.index_project_logs", lambda project=None: 0)
             monkeypatch.setattr(
                 updater,
                 "update_doc_from_diffs",
@@ -912,10 +913,38 @@ class TestCmdUpdateStaleNeverIndexed:
             monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
             monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
             monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr("core.docs.updater.index_project_logs", lambda project=None: 0)
 
             count = updater.cmd_update_stale(dry_run=False, project="quaid")
             assert count == 1
             assert indexed == [str(abs_doc.resolve())]
+
+    def test_update_stale_indexes_append_only_project_logs(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return []
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {}
+
+            indexed_projects = []
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr(
+                "core.docs.updater.index_project_logs",
+                lambda project=None: indexed_projects.append(project) or 1,
+            )
+
+            count = updater.cmd_update_stale(dry_run=False, project="quaid")
+
+            assert count == 1
+            assert indexed_projects == ["quaid"]
 
     def test_reindexes_registry_doc_when_timestamp_exists_but_chunks_are_missing(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
@@ -945,6 +974,7 @@ class TestCmdUpdateStaleNeverIndexed:
             monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
             monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
             monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr("core.docs.updater.index_project_logs", lambda project=None: 0)
 
             count = updater.cmd_update_stale(dry_run=False, project="quaid")
             assert count == 1
@@ -972,6 +1002,7 @@ class TestCmdUpdateStaleNeverIndexed:
             monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
             monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
             monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr("core.docs.updater.index_project_logs", lambda project=None: 0)
             monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             monkeypatch.setattr(
                 updater,
@@ -1032,6 +1063,7 @@ class TestCmdUpdateStaleNeverIndexed:
             monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
             monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
             monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr("core.docs.updater.index_project_logs", lambda project=None: 0)
             monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             monkeypatch.setattr(
                 updater,
