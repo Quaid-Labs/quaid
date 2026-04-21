@@ -189,6 +189,8 @@ class OpenClawAdapter(QuaidAdapter):
         candidates = [
             shutil.which("openclaw"),
             "/opt/homebrew/bin/openclaw",
+            "/usr/local/bin/openclaw",
+            str(Path.home() / ".local" / "bin" / "openclaw"),
         ]
         for candidate in candidates:
             if candidate and Path(candidate).exists():
@@ -217,6 +219,41 @@ class OpenClawAdapter(QuaidAdapter):
                 path_entries.append(part)
         env["PATH"] = ":".join(path_entries)
         return env
+
+    @staticmethod
+    def _parse_openclaw_version_output(raw: str) -> str:
+        """Extract the platform version from `openclaw --version` output."""
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        match = re.search(r"\b(\d{4}\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)\b", text)
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _read_openclaw_package_version(binary: str) -> str:
+        """Read OpenClaw's installed package.json version when the CLI cannot run."""
+        if not binary:
+            return ""
+        try:
+            resolved = Path(binary).expanduser().resolve()
+        except (OSError, RuntimeError):
+            resolved = Path(binary).expanduser()
+
+        candidates = [
+            resolved.parent / "package.json",
+            resolved.parent.parent / "package.json",
+        ]
+        for package_json in candidates:
+            try:
+                raw = json.loads(package_json.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if str(raw.get("name") or "").strip() != "openclaw":
+                continue
+            version = str(raw.get("version") or "").strip()
+            if version:
+                return version
+        return ""
 
     def adapter_id(self) -> str:
         return "openclaw"
@@ -253,11 +290,20 @@ class OpenClawAdapter(QuaidAdapter):
                 result = subprocess.run(
                     [binary, "--version"],
                     capture_output=True, text=True, timeout=5,
+                    env=self._notify_subprocess_env(),
                 )
-                if result.returncode == 0 and result.stdout.strip():
-                    version = result.stdout.strip().split()[-1]
+                if result.returncode == 0:
+                    parsed = self._parse_openclaw_version_output(
+                        "\n".join([result.stdout or "", result.stderr or ""])
+                    )
+                    if parsed:
+                        version = parsed
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 pass
+            if version == "unknown":
+                package_version = self._read_openclaw_package_version(binary)
+                if package_version:
+                    version = package_version
 
         return HostInfo(
             platform="openclaw",

@@ -2341,6 +2341,44 @@ class TestKeychainFallback:
         assert result is None
 
 class TestNotifyEdgeCases:
+    def test_openclaw_host_info_parses_version_before_git_hash(self, monkeypatch):
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "/opt/homebrew/bin/openclaw")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "OpenClaw 2026.4.15 (abc123)\n"
+        mock_result.stderr = ""
+
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+            info = adapter.get_host_info()
+
+        assert info.platform == "openclaw"
+        assert info.version == "2026.4.15"
+        assert info.binary_path == "/opt/homebrew/bin/openclaw"
+        assert mock_run.call_args.kwargs["env"]["PATH"].startswith("/opt/homebrew/bin:")
+
+    def test_openclaw_host_info_falls_back_to_package_json_when_cli_fails(self, tmp_path, monkeypatch):
+        package_dir = tmp_path / "openclaw"
+        package_dir.mkdir()
+        binary = package_dir / "openclaw.mjs"
+        binary.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        (package_dir / "package.json").write_text(
+            json.dumps({"name": "openclaw", "version": "2026.4.15"}),
+            encoding="utf-8",
+        )
+
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: str(binary))
+        mock_result = MagicMock()
+        mock_result.returncode = 127
+        mock_result.stdout = ""
+        mock_result.stderr = "env: node: No such file or directory\n"
+
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result):
+            info = adapter.get_host_info()
+
+        assert info.version == "2026.4.15"
+
     def test_notify_cli_not_found(self, monkeypatch):
         """notify() returns False when no message CLI is available."""
         adapter = OpenClawAdapter()
