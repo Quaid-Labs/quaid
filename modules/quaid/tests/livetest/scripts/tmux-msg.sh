@@ -140,12 +140,10 @@ _user_viewing() {
 }
 
 _pane_has_draft() {
-    local cursor_y cursor_x pane_height raw_line candidate last_line
+    local cursor_y pane_height raw_block candidate last_line
     cursor_y="$(tmux display-message -p -t "$PANE" '#{cursor_y}' 2>/dev/null || echo "")"
-    cursor_x="$(tmux display-message -p -t "$PANE" '#{cursor_x}' 2>/dev/null || echo "")"
     pane_height="$(tmux display-message -p -t "$PANE" '#{pane_height}' 2>/dev/null || echo "")"
     [[ "$cursor_y" =~ ^[0-9]+$ ]] || return 1
-    [[ "$cursor_x" =~ ^[0-9]+$ ]] || return 1
     [[ "$pane_height" =~ ^[0-9]+$ ]] || return 1
     # Only treat as draft when cursor is on the bottom line of the pane.
     # Tool call rendering moves the cursor mid-screen; the user input prompt
@@ -153,23 +151,46 @@ _pane_has_draft() {
     # running tool calls (which render output above the input line).
     last_line=$(( pane_height - 1 ))
     [[ "$cursor_y" -ge "$last_line" ]] || return 1
-    raw_line="$(tmux capture-pane -p -t "$PANE" -S "$cursor_y" -E "$cursor_y" 2>/dev/null || true)"
-    candidate="${raw_line:0:$cursor_x}"
-    # Require the cursor line to START WITH a known prompt prefix.
-    # Tool output lines may contain "> " or "$ " mid-line; only the actual
-    # input prompt will have it at position 0.
-    local stripped=0
-    for mark in "❯ " "› " "> " "$ " "% "; do
-        if [[ "$raw_line" == "$mark"* ]]; then
-            candidate="${candidate#"$mark"}"
-            stripped=1
-            break
-        fi
+
+    raw_block="$(tmux capture-pane -p -t "$PANE" -S 0 -E "$cursor_y" 2>/dev/null || true)"
+
+    # Find the last visible prompt line before the cursor and treat everything
+    # from there to the cursor line as the current composer block. Long agent
+    # messages wrap, so checking only the cursor line misses drafts whose bottom
+    # line is a continuation without the prompt prefix.
+    local -a lines=()
+    local line prompt_idx=-1 prompt_mark="" i
+    while IFS= read -r line; do
+        lines+=("$line")
+    done <<< "$raw_block"
+    for ((i = 0; i < ${#lines[@]}; i++)); do
+        for mark in "❯ " "› " "> " "$ " "% "; do
+            if [[ "${lines[$i]}" == "$mark"* ]]; then
+                prompt_idx="$i"
+                prompt_mark="$mark"
+                break
+            fi
+        done
     done
-    [[ "$stripped" -eq 1 ]] || return 1
+    [[ "$prompt_idx" -ge 0 ]] || return 1
+
+    candidate=""
+    for ((i = prompt_idx; i < ${#lines[@]}; i++)); do
+        line="${lines[$i]}"
+        if [[ "$i" -eq "$prompt_idx" ]]; then
+            line="${line#"$prompt_mark"}"
+        fi
+        candidate+="$line"
+    done
+
     # Trim whitespace
     candidate="${candidate#"${candidate%%[![:space:]]*}"}"
     candidate="${candidate%"${candidate##*[![:space:]]}"}"
+    case "$candidate" in
+        ""|"Press up to edit queued messages"|"Type a message"|"Enter a message")
+            return 1
+            ;;
+    esac
     [[ -n "$candidate" ]]
 }
 
@@ -185,10 +206,12 @@ _user_busy() {
 _submit_message() {
     tmux send-keys -l -t "$PANE" -- "$MESSAGE"
     sleep 0.3
-    # Use both Enter and C-m for compatibility across pane types
+    # Use several enter-equivalent keys for compatibility across pane types.
     tmux send-keys -t "$PANE" Enter
     sleep 0.05
     tmux send-keys -t "$PANE" C-m
+    sleep 0.05
+    tmux send-keys -t "$PANE" C-j
 }
 
 # --- Wait for user to finish ---
@@ -233,6 +256,8 @@ for _attempt in 1 2 3; do
     tmux send-keys -t "$PANE" Enter
     sleep 0.05
     tmux send-keys -t "$PANE" C-m
+    sleep 0.05
+    tmux send-keys -t "$PANE" C-j
 done
 
 if _pane_has_draft; then
