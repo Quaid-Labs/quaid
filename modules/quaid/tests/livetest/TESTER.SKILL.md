@@ -131,9 +131,9 @@ starting the rerun.
 ### Daemon lifecycle — do NOT manually start before M1
 
 **The extraction daemon auto-starts on the first hook fire** (i.e. your first M1
-prompt to the platform session). The installer intentionally skips daemon startup
-during M0 with the log line `Skipping extraction daemon startup until the first
-real instance is created by hook use`.
+prompt to the platform session). The installer intentionally leaves daemon
+startup to hook-time instance creation during M0; do not expect daemon-startup
+log lines before the first real platform hook fires.
 
 **Do NOT run `quaid daemon start` before M1.** On a freshly-installed instance
 with no hooks fired yet, manual `daemon start` hits a supervisor race with the
