@@ -29,6 +29,7 @@ afterEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   delete process.env.QUAID_VISIBLE_HOME;
+  delete process.env.QUAID_INSTANCE;
 });
 
 describe("python-bridge visible home resolution", () => {
@@ -59,6 +60,25 @@ describe("python-bridge visible home resolution", () => {
 
     const env = spawnMock.mock.calls[0]?.[2]?.env;
     expect(env?.QUAID_VISIBLE_HOME).toBe(path.join(os.homedir(), "quaid-visible"));
+  });
+
+  it("passes the adapter instance id into Python bridge subprocesses", async () => {
+    spawnMock.mockImplementation(() => makeProc());
+
+    const { createPythonBridgeExecutor } = await import("../adaptors/openclaw/python-bridge.js");
+    const execPython = createPythonBridgeExecutor({
+      scriptPath: "/tmp/test-script.py",
+      dbPath: "/tmp/.quaid/instances/openclaw-main/data/memory.db",
+      workspace: "/tmp/.quaid",
+      pluginRoot: "/tmp/plugin-root",
+      instanceId: "openclaw-main",
+    });
+
+    await execPython("stats", []);
+
+    const env = spawnMock.mock.calls[0]?.[2]?.env;
+    expect(env?.MEMORY_DB_PATH).toBe("/tmp/.quaid/instances/openclaw-main/data/memory.db");
+    expect(env?.QUAID_INSTANCE).toBe("openclaw-main");
   });
 
   it("escalates timed-out recall subprocesses if SIGTERM does not exit", async () => {

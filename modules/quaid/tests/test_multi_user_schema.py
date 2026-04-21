@@ -80,6 +80,48 @@ def test_memory_graph_migrates_origin_columns_on_existing_db(tmp_path):
     assert "origin_version_id" in edge_cols
 
 
+def test_memory_graph_repairs_partial_baseline_schema_when_nodes_exist(tmp_path):
+    db_path = Path(tmp_path) / "partial-memory.db"
+    schema_path = (
+        Path(__file__).resolve().parent.parent / "datastore" / "memorydb" / "schema.sql"
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(schema_path.read_text(encoding="utf-8"))
+        for table in (
+            "entity_aliases",
+            "embedding_cache",
+            "metadata",
+            "edge_keywords",
+            "identity_handles",
+            "identity_credentials",
+            "identity_sessions",
+            "delegation_grants",
+            "trust_assertions",
+            "policy_audit_log",
+            "recall_log",
+            "health_snapshots",
+            "doc_update_log",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+    graph = MemoryGraph(db_path=db_path)
+    with graph._get_conn() as conn:
+        tables = {
+            str(r[0]) for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+    assert "nodes" in tables
+    assert "entity_aliases" in tables
+    assert "embedding_cache" in tables
+    assert "metadata" in tables
+    assert "identity_handles" in tables
+    assert "recall_log" in tables
+    assert "doc_update_log" in tables
+
+
 def test_memory_graph_round_trips_import_provenance(tmp_path):
     db_path = Path(tmp_path) / "memory.db"
     graph = MemoryGraph(db_path=db_path)

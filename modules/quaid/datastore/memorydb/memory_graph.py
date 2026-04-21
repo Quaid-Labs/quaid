@@ -257,6 +257,33 @@ def content_hash(text: str) -> str:
 class MemoryGraph:
     """Local graph-based memory system."""
 
+    _BASELINE_SCHEMA_TABLES = (
+        "nodes",
+        "edges",
+        "nodes_fts",
+        "domain_registry",
+        "node_domains",
+        "contradictions",
+        "dedup_log",
+        "decay_review_queue",
+        "metadata",
+        "edge_keywords",
+        "embedding_cache",
+        "entity_aliases",
+        "entities",
+        "sources",
+        "source_participants",
+        "identity_handles",
+        "identity_credentials",
+        "identity_sessions",
+        "delegation_grants",
+        "trust_assertions",
+        "policy_audit_log",
+        "recall_log",
+        "health_snapshots",
+        "doc_update_log",
+    )
+
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = Path(db_path) if db_path is not None else get_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +425,22 @@ class MemoryGraph:
                     conn.execute("ALTER TABLE dedup_log RENAME COLUMN haiku_reasoning TO llm_reasoning")
             except sqlite3.OperationalError:
                 pass  # Column already renamed or table doesn't exist yet
+
+            missing_baseline_tables = [
+                table
+                for table in self._BASELINE_SCHEMA_TABLES
+                if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                is None
+            ]
+            if missing_baseline_tables:
+                logger.warning(
+                    "memory DB missing baseline schema tables; repairing with schema.sql: %s",
+                    ",".join(missing_baseline_tables[:12]),
+                )
+                conn.executescript(schema)
 
             # Multi-user canonical identity/source tables for forward compatibility.
             conn.execute(

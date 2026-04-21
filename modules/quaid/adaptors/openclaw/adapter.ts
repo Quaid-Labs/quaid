@@ -3524,6 +3524,7 @@ const facade = createQuaidFacade({
     dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
     workspace: WORKSPACE,
     pluginRoot: PYTHON_PLUGIN_ROOT,
+    instanceId: _QUAID_INSTANCE,
   }),
   execExtractPipeline: (tmpPath, args) =>
     _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", {}, EXTRACT_PIPELINE_TIMEOUT_MS),

@@ -146,6 +146,7 @@ type PythonBridgeConfig = {
   dbPath: string;
   workspace: string;
   pluginRoot?: string;
+  instanceId?: string;
 };
 
 export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
@@ -165,6 +166,7 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
         env: {
           ...process.env,
           MEMORY_DB_PATH: config.dbPath,
+          QUAID_INSTANCE: String(config.instanceId || process.env.QUAID_INSTANCE || "").trim() || undefined,
           QUAID_HOME: config.workspace,
           QUAID_VISIBLE_HOME: _resolveVisibleHome(config.workspace),
           QUAID_WORKSPACE: config.workspace,

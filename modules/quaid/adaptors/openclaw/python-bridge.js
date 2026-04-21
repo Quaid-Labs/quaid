@@ -133,6 +133,7 @@ function createPythonBridgeExecutor(config) {
         env: {
           ...process.env,
           MEMORY_DB_PATH: config.dbPath,
+          QUAID_INSTANCE: String(config.instanceId || process.env.QUAID_INSTANCE || "").trim() || void 0,
           QUAID_HOME: config.workspace,
           QUAID_VISIBLE_HOME: _resolveVisibleHome(config.workspace),
           QUAID_WORKSPACE: config.workspace,
