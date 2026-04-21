@@ -140,17 +140,22 @@ _user_viewing() {
 }
 
 _pane_has_draft() {
-    local cursor_y pane_height raw_block candidate last_line
+    local cursor_y pane_height raw_block candidate composer_top scan_lines
     cursor_y="$(tmux display-message -p -t "$PANE" '#{cursor_y}' 2>/dev/null || echo "")"
     pane_height="$(tmux display-message -p -t "$PANE" '#{pane_height}' 2>/dev/null || echo "")"
     [[ "$cursor_y" =~ ^[0-9]+$ ]] || return 1
     [[ "$pane_height" =~ ^[0-9]+$ ]] || return 1
-    # Only treat as draft when cursor is on the bottom line of the pane.
-    # Tool call rendering moves the cursor mid-screen; the user input prompt
-    # is always at the very bottom. This avoids false positives from agents
-    # running tool calls (which render output above the input line).
-    last_line=$(( pane_height - 1 ))
-    [[ "$cursor_y" -ge "$last_line" ]] || return 1
+    # Codex/Claude TUIs reserve footer/status rows below the composer, so the
+    # cursor often sits a few rows above the literal bottom line. Treat only the
+    # lower pane region as composer territory to avoid false positives from
+    # tool output, while still catching buffered drafts above footer rows.
+    scan_lines="${TMUX_MSG_COMPOSER_SCAN_LINES:-12}"
+    [[ "$scan_lines" =~ ^[0-9]+$ ]] || scan_lines=12
+    composer_top=$(( pane_height - scan_lines ))
+    if [[ "$composer_top" -lt 0 ]]; then
+        composer_top=0
+    fi
+    [[ "$cursor_y" -ge "$composer_top" ]] || return 1
 
     raw_block="$(tmux capture-pane -p -t "$PANE" -S 0 -E "$cursor_y" 2>/dev/null || true)"
 
@@ -187,7 +192,7 @@ _pane_has_draft() {
     candidate="${candidate#"${candidate%%[![:space:]]*}"}"
     candidate="${candidate%"${candidate##*[![:space:]]}"}"
     case "$candidate" in
-        ""|"Press up to edit queued messages"|"Type a message"|"Enter a message")
+        ""|"Press up to edit queued messages"*|"Type a message"*|"Enter a message"*|"Write tests for @filename"*)
             return 1
             ;;
     esac
