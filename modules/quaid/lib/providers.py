@@ -1518,7 +1518,8 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         self._dim = dim
 
     def embed(self, text, *, timeout_s: Optional[float] = None):
-        retries = 1
+        explicit_timeout = timeout_s is not None
+        retries = 0 if explicit_timeout else 1
         last_error = None
         call_started = time.monotonic()
         if timeout_s is None:

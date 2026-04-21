@@ -1684,6 +1684,7 @@ class MemoryGraph:
             pass
         VECTOR_WEIGHT, FTS_WEIGHT = _get_fusion_weights(intent)
         search_timeout_s = None if timeout_seconds is None else max(0.5, float(timeout_seconds))
+        embedding_timeout_s = None if search_timeout_s is None else max(0.5, search_timeout_s * 0.8)
 
         # Run semantic and FTS search concurrently.
         results = run_callables(
@@ -1696,7 +1697,7 @@ class MemoryGraph:
                     owner_id=owner_id,
                     current_session_id=current_session_id,
                     compaction_time=compaction_time,
-                    embedding_timeout_s=search_timeout_s,
+                    embedding_timeout_s=embedding_timeout_s,
                 ),
                 lambda: self.search_fts(query, limit=limit * 2, owner_id=owner_id),
             ],
@@ -1705,8 +1706,21 @@ class MemoryGraph:
             timeout_seconds=search_timeout_s,
             return_exceptions=True,
         )
-        semantic_results = [] if isinstance(results[0], Exception) else results[0]
-        fts_results = [] if isinstance(results[1], Exception) else results[1]
+        semantic_error = results[0] if isinstance(results[0], Exception) else None
+        fts_error = results[1] if isinstance(results[1], Exception) else None
+        if _is_fail_hard_mode():
+            if semantic_error is not None:
+                raise RuntimeError(
+                    "Semantic vector search failed during hybrid recall while failHard is enabled"
+                ) from semantic_error
+            if fts_error is not None:
+                raise RuntimeError("FTS search failed during hybrid recall while failHard is enabled") from fts_error
+        if semantic_error is not None:
+            logger.warning("search_hybrid semantic branch failed; continuing with FTS only: %s", semantic_error)
+        if fts_error is not None:
+            logger.warning("search_hybrid FTS branch failed; continuing with semantic only: %s", fts_error)
+        semantic_results = [] if semantic_error is not None else results[0]
+        fts_results = [] if fts_error is not None else results[1]
 
         # Build RRF scores
         # Track both RRF rank score (for ordering) and quality score (for thresholding)

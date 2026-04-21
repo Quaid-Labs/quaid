@@ -375,7 +375,18 @@ class TestSearchHybrid:
              patch.object(graph, "search_fts", return_value=[]):
             graph.search_hybrid("Baxter", timeout_seconds=1.25)
 
-        assert seen["embedding_timeout_s"] == 1.25
+        assert seen["embedding_timeout_s"] == 1.0
+
+    def test_hybrid_raises_semantic_error_when_failhard_enabled(self, tmp_path):
+        from datastore.memorydb.memory_graph import MemoryGraph
+
+        graph = MemoryGraph(db_path=tmp_path / "hybrid-failhard.db")
+
+        with patch.object(graph, "search_semantic", side_effect=TimeoutError("semantic slow")), \
+             patch.object(graph, "search_fts", return_value=[]), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Semantic vector search failed"):
+                graph.search_hybrid("Baxter", timeout_seconds=1.25)
 
 
 class TestRouteQueryFailHard:

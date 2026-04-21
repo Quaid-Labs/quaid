@@ -1465,6 +1465,17 @@ class TestOllamaEmbeddingsProvider:
         assert result == embedding
         assert urlopen.call_args.kwargs["timeout"] == 2.5
 
+    def test_embed_does_not_retry_explicit_timeout(self):
+        p = OllamaEmbeddingsProvider()
+        with patch("lib.providers._urlopen_with_local_proxy_bypass", side_effect=TimeoutError("slow")) as urlopen, \
+             patch("lib.providers.is_fail_hard_enabled", return_value=False), \
+             patch("lib.providers.time.sleep") as sleep:
+            result = p.embed("test text", timeout_s=0.5)
+
+        assert result is None
+        assert urlopen.call_count == 1
+        sleep.assert_not_called()
+
     def test_embed_returns_none_on_error(self):
         p = OllamaEmbeddingsProvider()
         with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \
