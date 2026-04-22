@@ -7,6 +7,7 @@ from .config import (
     get_ollama_url,
     get_embedding_model,
     get_embedding_dim,
+    get_embeddings_provider_id,
 )
 from .database import get_connection
 from .embeddings import get_embedding, pack_embedding, unpack_embedding
@@ -21,6 +22,7 @@ __all__ = [
     "get_ollama_url",
     "get_embedding_model",
     "get_embedding_dim",
+    "get_embeddings_provider_id",
     # Database
     "get_connection",
     # Embeddings

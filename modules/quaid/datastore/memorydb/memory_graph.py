@@ -8702,7 +8702,20 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
             project_name = project
             break
 
-    if not project_name:
+    docs_like = bool(_re.search(
+        r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
+        lowered,
+    ))
+    has_iso_date = bool(_re.search(
+        r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)",
+        lowered,
+    ))
+    project_docs_signal = bool(_re.search(
+        r"\b(what does|what do|say|says|said|mention|mentions|mentioned|document|documents|documented|spec|specs|specify|specified|describe|describes|described|note|notes|noted|call|calls|called)\b",
+        lowered,
+    ))
+
+    if not project_name and (docs_like or has_iso_date or project_docs_signal):
         try:
             from core.project_registry import list_projects
 
@@ -8715,18 +8728,8 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         except Exception:
             pass
 
-    docs_like = bool(_re.search(
-        r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
-        lowered,
-    ))
-    dated_project_like = bool(project_name) and bool(_re.search(
-        r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)",
-        lowered,
-    ))
-    project_docs_like = bool(project_name) and bool(_re.search(
-        r"\b(what does|what do|say|says|said|mention|mentions|mentioned|document|documents|documented|spec|specs|specify|specified|describe|describes|described|note|notes|noted|call|calls|called)\b",
-        lowered,
-    ))
+    dated_project_like = bool(project_name) and has_iso_date
+    project_docs_like = bool(project_name) and project_docs_signal
     graph_like = bool(_relation_matches_for_query(text)) or _has_generic_graph_signal(text)
     mixed_memory_docs = docs_like and bool(_re.search(
         r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",

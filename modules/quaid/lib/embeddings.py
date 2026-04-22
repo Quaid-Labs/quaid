@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 def _configured_embeddings_provider_id() -> str:
     """Return the configured embeddings provider id without loading adapters."""
     try:
-        from config import get_config
+        from lib.config import get_embeddings_provider_id
 
-        provider_id = getattr(getattr(get_config(), "models", None), "embeddings_provider", "ollama")
+        provider_id = get_embeddings_provider_id()
     except Exception as exc:
         if is_fail_hard_enabled():
             raise RuntimeError(

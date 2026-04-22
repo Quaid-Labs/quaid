@@ -11,8 +11,14 @@ Environment variable overrides (for testing):
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from pathlib import Path
+from typing import Any, Dict, List
+
+
+logger = logging.getLogger(__name__)
 
 
 def _workspace_root() -> Path:
@@ -34,6 +40,102 @@ def _get_cfg():
     """Lazy import to avoid circular dependency with config.py."""
     from config import get_config
     return get_config()
+
+
+def _camel_to_snake(camel_str: str) -> str:
+    result = []
+    for idx, char in enumerate(str(camel_str or "")):
+        if char.isupper() and idx > 0:
+            result.append("_")
+        result.append(char.lower())
+    return "".join(result)
+
+
+def _normalize_config_keys(value: Any) -> Any:
+    """Normalize JSON keys without importing the full plugin-aware config loader."""
+    if isinstance(value, dict):
+        return {_camel_to_snake(k): _normalize_config_keys(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_config_keys(v) for v in value]
+    return value
+
+
+def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _platform_from_instance_name(instance_name: str) -> str:
+    name = str(instance_name or "").strip().lower()
+    if name.startswith("claude-code-") or name == "claude-code":
+        return "claude-code"
+    if name.startswith("codex-") or name == "codex":
+        return "codex"
+    if name.startswith("openclaw-") or name == "openclaw":
+        return "openclaw"
+    if name.startswith("standalone-") or name == "standalone":
+        return "standalone"
+    if "-" in name:
+        return name.split("-", 1)[0] or "standalone"
+    return name or "standalone"
+
+
+def _lightweight_platform_id(instance: str) -> str:
+    explicit = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
+    if explicit:
+        return explicit
+    return _platform_from_instance_name(instance)
+
+
+def _lightweight_config_paths() -> List[Path]:
+    """Return raw config layers without loading adapters or plugins.
+
+    The full config loader initializes plugin runtime, which is too expensive
+    for hook-time embedding setup. This mirrors config._config_paths() for the
+    specific lightweight settings in this module.
+    """
+    from lib.instance import quaid_home
+
+    home = quaid_home()
+    instance = os.environ.get("QUAID_INSTANCE", "").strip()
+    platform = _lightweight_platform_id(instance)
+    paths: List[Path] = []
+    if instance:
+        paths.append(home / "instances" / instance / "config.json")
+    paths.append(home / "shared" / "config" / platform / "config.json")
+    paths.append(home / "shared" / "config" / "global" / "config.json")
+    return paths
+
+
+def _load_lightweight_config() -> Dict[str, Any]:
+    raw_config: Dict[str, Any] = {}
+    for config_path in reversed(_lightweight_config_paths()):
+        if not config_path.is_file():
+            continue
+        try:
+            parsed = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            logger.warning("Failed to parse lightweight config %s: %s", config_path, exc)
+            continue
+        except OSError as exc:
+            logger.warning("Failed to read lightweight config %s: %s", config_path, exc)
+            continue
+        if isinstance(parsed, dict):
+            raw_config = _deep_merge_dicts(raw_config, _normalize_config_keys(parsed))
+    return raw_config
+
+
+def _section_value(section: str, key: str, default: Any = None) -> Any:
+    data = _load_lightweight_config()
+    section_data = data.get(section, {})
+    if not isinstance(section_data, dict):
+        return default
+    return section_data.get(key, default)
 
 
 def _cross_instance_override_owner(path: Path) -> str | None:
@@ -140,19 +242,29 @@ def get_docs_db_path() -> Path:
 def get_ollama_url() -> str:
     """Get the Ollama API URL.
 
-    Respects OLLAMA_URL env var, then falls back to config.
+    Respects OLLAMA_URL env var, then falls back to raw config.
     """
     env_url = os.environ.get("OLLAMA_URL")
     if env_url:
         return env_url
-    return _get_cfg().ollama.url
+    return str(_section_value("ollama", "url", "http://localhost:11434") or "http://localhost:11434")
 
 
 def get_embedding_model() -> str:
     """Get the Ollama embedding model name."""
-    return _get_cfg().ollama.embedding_model
+    return str(_section_value("ollama", "embedding_model", "nomic-embed-text") or "nomic-embed-text")
 
 
 def get_embedding_dim() -> int:
     """Get the embedding vector dimension."""
-    return _get_cfg().ollama.embedding_dim
+    raw = _section_value("ollama", "embedding_dim", 768)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 768
+
+
+def get_embeddings_provider_id() -> str:
+    """Get the configured embeddings provider id without plugin initialization."""
+    raw = _section_value("models", "embeddings_provider", "ollama")
+    return str(raw or "ollama").strip().lower()

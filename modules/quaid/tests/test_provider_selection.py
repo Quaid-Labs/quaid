@@ -107,14 +107,15 @@ class TestEmbeddingsProviderSelection:
         custom_embed = MockEmbeddingsProvider()
         adapter.get_embeddings_provider = lambda: custom_embed
         set_adapter(adapter)
-        cfg = SimpleNamespace(models=SimpleNamespace(embeddings_provider="adapter"))
-        with patch("config.get_config", return_value=cfg):
+        with patch("lib.config.get_embeddings_provider_id", return_value="adapter"):
             provider = get_embeddings_provider()
         assert provider is custom_embed
 
     def test_default_fallback_to_ollama(self, monkeypatch, tmp_path):
         """Without MOCK_EMBEDDINGS or adapter embeddings, falls back to Ollama."""
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "standalone-test")
         reset_embeddings_provider()
         adapter = StandaloneAdapter(home=tmp_path)
         set_adapter(adapter)
@@ -128,15 +129,8 @@ class TestEmbeddingsProviderSelection:
         """Default Ollama embeddings must not pay adapter/plugin discovery cost."""
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
-        cfg = SimpleNamespace(
-            models=SimpleNamespace(embeddings_provider=provider_id),
-            ollama=SimpleNamespace(
-                url="http://localhost:11434",
-                embedding_model="nomic-embed-text",
-                embedding_dim=768,
-            ),
-        )
-        with patch("config.get_config", return_value=cfg), \
+        with patch("lib.config.get_embeddings_provider_id", return_value=provider_id), \
+             patch("config.get_config", side_effect=AssertionError("full config should not load")), \
              patch("lib.adapter.get_adapter", side_effect=AssertionError("adapter should not load")):
             provider = get_embeddings_provider()
         assert isinstance(provider, OllamaEmbeddingsProvider)
@@ -169,15 +163,7 @@ class TestEmbeddingsProviderSelection:
         """When failHard=false, adapter embedding resolution errors degrade to Ollama."""
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
-        cfg = SimpleNamespace(
-            models=SimpleNamespace(embeddings_provider="adapter"),
-            ollama=SimpleNamespace(
-                url="http://localhost:11434",
-                embedding_model="nomic-embed-text",
-                embedding_dim=768,
-            ),
-        )
-        with patch("config.get_config", return_value=cfg), \
+        with patch("lib.config.get_embeddings_provider_id", return_value="adapter"), \
              patch("lib.embeddings.is_fail_hard_enabled", return_value=False), \
              patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")), \
              patch("lib.embeddings.notify_agent") as mock_notify:
@@ -190,8 +176,7 @@ class TestEmbeddingsProviderSelection:
         """Compound adapter+Ollama config failure still soft-degrades when failHard=false."""
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
-        cfg = SimpleNamespace(models=SimpleNamespace(embeddings_provider="adapter"))
-        with patch("config.get_config", return_value=cfg), \
+        with patch("lib.config.get_embeddings_provider_id", return_value="adapter"), \
              patch("lib.embeddings.is_fail_hard_enabled", return_value=False), \
              patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")), \
              patch(
@@ -208,8 +193,7 @@ class TestEmbeddingsProviderSelection:
         """When failHard=true, adapter embedding resolution errors raise."""
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
-        cfg = SimpleNamespace(models=SimpleNamespace(embeddings_provider="adapter"))
-        with patch("config.get_config", return_value=cfg), \
+        with patch("lib.config.get_embeddings_provider_id", return_value="adapter"), \
              patch("lib.embeddings.is_fail_hard_enabled", return_value=True), \
              patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")), \
              patch("lib.embeddings.notify_agent") as mock_notify:
@@ -220,7 +204,7 @@ class TestEmbeddingsProviderSelection:
     def test_embedding_provider_config_error_raises_when_failhard_enabled(self, monkeypatch):
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
-        with patch("config.get_config", side_effect=RuntimeError("config broken")), \
+        with patch("lib.config.get_embeddings_provider_id", side_effect=RuntimeError("config broken")), \
              patch("lib.embeddings.is_fail_hard_enabled", return_value=True):
             with pytest.raises(RuntimeError, match="configured embeddings provider"):
                 get_embeddings_provider()
@@ -228,7 +212,7 @@ class TestEmbeddingsProviderSelection:
     def test_embedding_provider_config_error_defaults_to_ollama_when_failhard_disabled(self, monkeypatch):
         monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
         reset_embeddings_provider()
-        with patch("config.get_config", side_effect=RuntimeError("config broken")), \
+        with patch("lib.config.get_embeddings_provider_id", side_effect=RuntimeError("config broken")), \
              patch("lib.embeddings.is_fail_hard_enabled", return_value=False):
             provider = get_embeddings_provider()
         assert isinstance(provider, OllamaEmbeddingsProvider)

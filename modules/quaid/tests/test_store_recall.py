@@ -4628,6 +4628,23 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector"]
         assert project is None
 
+    def test_infer_recall_store_defaults_skips_registry_for_plain_memory_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}), \
+             patch("core.project_registry.list_projects", side_effect=AssertionError("registry should not load")):
+            stores, project = mg._infer_recall_store_defaults(
+                "Baxter golden retriever jade frisbee",
+            )
+
+        assert stores == ["vector"]
+        assert project is None
+
     def test_graph_store_recall_returns_graph_rows(self):
         import datastore.memorydb.memory_graph as mg
 

@@ -1450,3 +1450,55 @@ class TestConfigPathResolution:
             ]
         finally:
             config._config = old_config
+
+
+class TestLightweightLibConfig:
+    def test_lightweight_config_reads_raw_layers_without_full_config_loader(self, tmp_path, monkeypatch):
+        from lib.config import (
+            get_embedding_dim,
+            get_embedding_model,
+            get_embeddings_provider_id,
+            get_ollama_url,
+        )
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        platform_cfg = tmp_path / "shared" / "config" / "codex" / "config.json"
+        instance_cfg = tmp_path / "instances" / "codex-main" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+        instance_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_text(json.dumps({
+            "ollama": {
+                "url": "http://global:11434",
+                "embeddingModel": "global-model",
+                "embeddingDim": 111,
+            },
+            "models": {"embeddingsProvider": "ollama"},
+        }), encoding="utf-8")
+        platform_cfg.write_text(json.dumps({
+            "ollama": {
+                "embeddingModel": "platform-model",
+            },
+        }), encoding="utf-8")
+        instance_cfg.write_text(json.dumps({
+            "ollama": {"url": "http://instance:11434"},
+            "models": {"embeddingsProvider": "local-ollama"},
+        }), encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+        with patch("config.get_config", side_effect=AssertionError("full config should not load")):
+            assert get_ollama_url() == "http://instance:11434"
+            assert get_embedding_model() == "platform-model"
+            assert get_embedding_dim() == 111
+            assert get_embeddings_provider_id() == "local-ollama"
+
+    def test_lightweight_config_honors_ollama_url_env(self, tmp_path, monkeypatch):
+        from lib.config import get_ollama_url
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.setenv("OLLAMA_URL", "http://env-ollama:11434")
+        with patch("config.get_config", side_effect=AssertionError("full config should not load")):
+            assert get_ollama_url() == "http://env-ollama:11434"
