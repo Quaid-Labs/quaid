@@ -5,8 +5,8 @@ Manages an EmbeddingsProvider singleton and exposes the same public API
 
 Provider resolution order:
   1. MOCK_EMBEDDINGS=1 env            → MockEmbeddingsProvider
-  2. Adapter provides embeddings       → adapter's provider
-  3. Default                           → OllamaEmbeddingsProvider (from config)
+  2. models.embeddings_provider=ollama → OllamaEmbeddingsProvider (from config)
+  3. Adapter/host provider requested   → adapter's provider
 """
 
 import os
@@ -33,6 +33,32 @@ _provider_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
+def _configured_embeddings_provider_id() -> str:
+    """Return the configured embeddings provider id without loading adapters."""
+    try:
+        from config import get_config
+
+        provider_id = getattr(getattr(get_config(), "models", None), "embeddings_provider", "ollama")
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to resolve configured embeddings provider while failHard is enabled."
+            ) from exc
+        logger.warning("Embedding provider config unavailable; defaulting to ollama: %s", exc)
+        provider_id = "ollama"
+    return str(provider_id or "ollama").strip().lower()
+
+
+def _build_ollama_embeddings_provider() -> OllamaEmbeddingsProvider:
+    from .config import get_ollama_url, get_embedding_model, get_embedding_dim
+
+    return OllamaEmbeddingsProvider(
+        url=get_ollama_url(),
+        model=get_embedding_model(),
+        dim=get_embedding_dim(),
+    )
+
+
 def get_embeddings_provider() -> EmbeddingsProvider:
     """Get the current embeddings provider (auto-resolved on first call)."""
     global _provider
@@ -47,20 +73,53 @@ def get_embeddings_provider() -> EmbeddingsProvider:
             _provider = MockEmbeddingsProvider()
             return _provider
 
-        # 2. Check if the adapter provides embeddings
+        provider_id = _configured_embeddings_provider_id()
+        wants_ollama = provider_id in {"", "ollama", "local-ollama", "standalone-ollama"}
+
+        # The default config is Ollama. Do not load the host adapter just to ask
+        # whether it has an embeddings provider; live hooks run under tight
+        # injection budgets and adapter/plugin discovery can exceed that budget.
+        if wants_ollama:
+            try:
+                _provider = _build_ollama_embeddings_provider()
+                return _provider
+            except Exception as exc:
+                notify_agent(
+                    f"Quaid could not initialize the configured embeddings backend: {exc}",
+                    severity="error" if is_fail_hard_enabled() else "warning",
+                    source="embeddings",
+                    dedupe_key=f"embeddings-config:{type(exc).__name__}",
+                    ttl_seconds=1800,
+                )
+                if is_fail_hard_enabled():
+                    raise RuntimeError(
+                        "Failed to build configured Ollama embeddings provider while failHard is enabled."
+                    ) from exc
+                logger.warning(
+                    "Configured Ollama embedding settings unavailable; using default provider settings: %s",
+                    exc,
+                )
+                _provider = OllamaEmbeddingsProvider()  # defaults
+                return _provider
+
+        # Adapter/host embeddings must be requested explicitly. If the adapter
+        # cannot provide them under failHard, surface the misconfiguration instead
+        # of silently falling back to a different provider.
         try:
             from lib.adapter import get_adapter
+
             adapter = get_adapter()
             adapter_embed = adapter.get_embeddings_provider()
             if adapter_embed is not None:
                 _provider = adapter_embed
                 return _provider
+            raise RuntimeError(f"adapter did not provide embeddings provider '{provider_id}'")
         except Exception as exc:
             notify_agent(
                 f"Quaid could not access the adapter embeddings provider: {exc}",
                 severity="error" if is_fail_hard_enabled() else "warning",
                 source="embeddings",
-                dedupe_key=f"embeddings-adapter:{type(exc).__name__}",
+                dedupe_key=f"embeddings-adapter:{provider_id}:{type(exc).__name__}",
                 ttl_seconds=1800,
             )
             if is_fail_hard_enabled():
@@ -71,32 +130,7 @@ def get_embeddings_provider() -> EmbeddingsProvider:
                 "Adapter embeddings provider unavailable; falling back to standalone Ollama provider: %s",
                 exc,
             )
-
-        # 3. Default: standalone Ollama
-        try:
-            from .config import get_ollama_url, get_embedding_model, get_embedding_dim
-            _provider = OllamaEmbeddingsProvider(
-                url=get_ollama_url(),
-                model=get_embedding_model(),
-                dim=get_embedding_dim(),
-            )
-        except Exception as exc:
-            notify_agent(
-                f"Quaid could not initialize the configured embeddings backend: {exc}",
-                severity="error" if is_fail_hard_enabled() else "warning",
-                source="embeddings",
-                dedupe_key=f"embeddings-config:{type(exc).__name__}",
-                ttl_seconds=1800,
-            )
-            if is_fail_hard_enabled():
-                raise RuntimeError(
-                    "Failed to build configured Ollama embeddings provider while failHard is enabled."
-                ) from exc
-            logger.warning(
-                "Configured Ollama embedding settings unavailable; using default provider settings: %s",
-                exc,
-            )
-            _provider = OllamaEmbeddingsProvider()  # defaults
+            _provider = _build_ollama_embeddings_provider()
 
         return _provider
 
