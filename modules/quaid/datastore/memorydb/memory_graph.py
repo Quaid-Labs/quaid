@@ -5944,12 +5944,16 @@ def _recall_once(
                         ) from exc
                     logger.warning("fast recall FTS lexical rescue failed; continuing without rescue: %s", exc)
                     fts_rescue = []
-                if not fts_rescue:
-                    fts_rescue = _search_nodes_by_query_terms(
-                        graph,
-                        query_terms,
-                        limit=max(search_limit, limit * 3),
-                        owner_id=owner_id,
+                term_rescue = _search_nodes_by_query_terms(
+                    graph,
+                    query_terms,
+                    limit=max(search_limit, limit * 3),
+                    owner_id=owner_id,
+                )
+                if term_rescue:
+                    fts_rescue = _append_missing_node_candidates(
+                        list(fts_rescue or []),
+                        term_rescue,
                     )
                 if fts_rescue:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
@@ -6020,12 +6024,16 @@ def _recall_once(
                         ) from exc
                     logger.warning("fast recall FTS fresh-anchor rescue failed; continuing without rescue: %s", exc)
                     fts_anchor_hits = []
-                if not fts_anchor_hits:
-                    fts_anchor_hits = _search_nodes_by_query_terms(
-                        graph,
-                        explicit_anchor_terms,
-                        limit=max(search_limit, limit * 4),
-                        owner_id=owner_id,
+                term_anchor_hits = _search_nodes_by_query_terms(
+                    graph,
+                    explicit_anchor_terms,
+                    limit=max(search_limit, limit * 4),
+                    owner_id=owner_id,
+                )
+                if term_anchor_hits:
+                    fts_anchor_hits = _append_missing_node_candidates(
+                        list(fts_anchor_hits or []),
+                        term_anchor_hits,
                     )
                 if fts_anchor_hits:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
@@ -8016,6 +8024,25 @@ def _search_nodes_by_query_terms(
         scored.append((node, overlap, str(getattr(node, "created_at", "") or "")))
     scored.sort(key=lambda item: (item[1], item[2]), reverse=True)
     return [(node, float(rank)) for rank, (node, _overlap, _created) in enumerate(scored[:limit], 1)]
+
+
+def _append_missing_node_candidates(
+    candidates: List[tuple[Node, float]],
+    extra: List[tuple[Node, float]],
+) -> List[tuple[Node, float]]:
+    """Append extra node candidates without duplicating ids."""
+    if not extra:
+        return candidates
+    merged = list(candidates or [])
+    seen = {getattr(node, "id", None) for node, _score in merged}
+    for node, score in extra:
+        node_id = getattr(node, "id", None)
+        if node_id and node_id in seen:
+            continue
+        if node_id:
+            seen.add(node_id)
+        merged.append((node, score))
+    return merged
 
 
 def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
