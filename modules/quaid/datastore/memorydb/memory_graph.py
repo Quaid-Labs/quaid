@@ -5891,7 +5891,7 @@ def _recall_once(
             min_overlap = 1 if len(query_terms) <= 2 else 2
             best_overlap = max(
                 (
-                    _query_term_overlap({"text": getattr(node, "name", "")}, query_terms)
+                    _query_term_overlap({"text": _node_searchable_text(node)}, query_terms)
                     for node, _score in scored_results
                 ),
                 default=0,
@@ -5920,7 +5920,7 @@ def _recall_once(
                         if not getattr(node, "id", None)
                     ]
                     for node, fts_rank in fts_rescue:
-                        overlap = _query_term_overlap({"text": getattr(node, "name", "")}, query_terms)
+                        overlap = _query_term_overlap({"text": _node_searchable_text(node)}, query_terms)
                         if overlap < min_overlap or overlap <= best_overlap:
                             continue
                         overlap_ratio = overlap / max(1, len(query_terms))
@@ -7738,6 +7738,20 @@ def _query_term_overlap(row: Dict[str, Any], query_terms: List[str]) -> int:
         return 0
     text = str((row or {}).get("text") or "").lower()
     return sum(1 for term in query_terms if term in text)
+
+
+def _node_searchable_text(node: Node) -> str:
+    """Return the text surface FTS can match for a node."""
+    parts: List[str] = [str(getattr(node, "name", "") or "")]
+    attrs = getattr(node, "attributes", None)
+    if isinstance(attrs, dict) and attrs:
+        try:
+            parts.append(json.dumps(attrs, ensure_ascii=False, sort_keys=True))
+        except Exception:
+            parts.extend(str(value) for value in attrs.values() if value is not None)
+    elif attrs:
+        parts.append(str(attrs))
+    return " ".join(part for part in parts if part)
 
 
 def _parse_recall_timestamp(value: Any) -> Optional[datetime]:

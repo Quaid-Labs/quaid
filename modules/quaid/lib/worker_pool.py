@@ -5,7 +5,7 @@ from __future__ import annotations
 import atexit
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 
@@ -88,9 +88,8 @@ def run_callables(
     timed_out = False
 
     while pending:
-        if deadline is None:
-            iterator = as_completed(pending)
-        else:
+        remaining = None
+        if deadline is not None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
@@ -104,15 +103,20 @@ def run_callables(
                         )
                     break
                 pending_indices = sorted(fut_to_idx[f] for f in pending)
+                # Retire before raising; the post-loop retire only covers return_exceptions=True.
                 _retire_pool(pool_name, worker_count, ex)
                 raise TimeoutError(
                     f"Parallel call timed out after {timeout_seconds}s "
                     f"(pending_callable_indices={pending_indices})"
                 )
-            iterator = as_completed(pending, timeout=remaining)
 
         progressed = False
         try:
+            if deadline is None:
+                iterator = as_completed(pending)
+            else:
+                iterator = as_completed(pending, timeout=remaining)
+
             for fut in iterator:
                 progressed = True
                 pending.discard(fut)
@@ -124,7 +128,7 @@ def run_callables(
                         out[idx] = exc
                     else:
                         raise
-        except TimeoutError:
+        except (TimeoutError, FuturesTimeoutError):
             continue
 
         if not progressed:

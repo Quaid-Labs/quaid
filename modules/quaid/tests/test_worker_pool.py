@@ -203,6 +203,34 @@ class TestTimeout:
         assert isinstance(out[1], TimeoutError)
         assert "callable_index=1" in str(out[1])
 
+    def test_futures_timeout_is_normalized_for_return_exceptions(self, monkeypatch):
+        class SyntheticFuturesTimeout(Exception):
+            pass
+
+        original_as_completed = worker_pool.as_completed
+        calls = {"count": 0}
+
+        def fake_as_completed(pending, timeout=None):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise SyntheticFuturesTimeout("1 (of 1) futures unfinished")
+            return original_as_completed(pending, timeout=timeout)
+
+        monkeypatch.setattr(worker_pool, "FuturesTimeoutError", SyntheticFuturesTimeout)
+        monkeypatch.setattr(worker_pool, "as_completed", fake_as_completed)
+
+        out = worker_pool.run_callables(
+            [lambda: time.sleep(0.2)],
+            max_workers=1,
+            pool_name="test-futures-timeout-normalized",
+            timeout_seconds=0.01,
+            return_exceptions=True,
+        )
+
+        assert len(out) == 1
+        assert isinstance(out[0], TimeoutError)
+        assert "callable_index=0" in str(out[0])
+
     def test_single_callable_timeout_raises_when_not_return_exceptions(self):
         with pytest.raises(TimeoutError, match="pending_callable_indices"):
             worker_pool.run_callables(
