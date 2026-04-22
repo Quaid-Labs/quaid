@@ -83,3 +83,10 @@ def check_read_allowed(data_dir: Path) -> CircuitBreakerState:
     Returns the state. Caller should check state.allows_reads().
     """
     return read_circuit_breaker(data_dir)
+
+
+def check_current_read_allowed() -> CircuitBreakerState:
+    """Check read operations for the current instance without loading adapters."""
+    from lib.instance import instance_root
+
+    return check_read_allowed(instance_root() / "data")

@@ -982,6 +982,29 @@ class TestRecallBasic:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             assert recall(None) == []
 
+    def test_recall_circuit_breaker_check_does_not_load_adapter(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        instance = "codex-private-tmp-cdx-livetest"
+        data_dir = tmp_path / "home" / "instances" / instance / "data"
+        data_dir.mkdir(parents=True)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("QUAID_INSTANCE", instance)
+        graph, _ = _make_graph(tmp_path)
+
+        with patch("lib.adapter.get_adapter", side_effect=AssertionError("adapter should not load")), \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, meta = mg.recall(
+                "Baxter silver supper chime",
+                owner_id="quaid",
+                return_meta=True,
+                use_routing=False,
+                max_turns=1,
+            )
+
+        assert rows == []
+        assert meta["stop_reason"] == "empty_db"
+
     def test_recall_returns_list(self, tmp_path):
         from datastore.memorydb.memory_graph import recall
         graph, _ = _make_graph(tmp_path)

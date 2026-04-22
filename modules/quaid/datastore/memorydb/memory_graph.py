@@ -9675,9 +9675,9 @@ def recall(
 
     # Circuit breaker guard
     try:
-        from lib.circuit_breaker import check_read_allowed
-        from lib.adapter import get_adapter
-        breaker = check_read_allowed(get_adapter().data_dir())
+        from lib.circuit_breaker import check_current_read_allowed
+
+        breaker = check_current_read_allowed()
         if not breaker.allows_reads():
             logger.warning("recall blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
             meta = {
