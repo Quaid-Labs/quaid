@@ -5995,7 +5995,10 @@ def _recall_once(
                 _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
 
         explicit_anchor_terms = _extract_explicit_query_anchor_terms(clean_query, limit=8)
-        if explicit_anchor_terms:
+        if explicit_anchor_terms and (
+            not use_lightweight_config
+            or len(query_terms) <= len(explicit_anchor_terms) + 1
+        ):
             def _node_matches_explicit_anchor(node: Node) -> bool:
                 lower_text = _node_searchable_text(node).lower()
                 return any(term in lower_text for term in explicit_anchor_terms)
@@ -7994,9 +7997,10 @@ def _search_nodes_by_query_terms(
     if not terms:
         return []
 
+    scan_terms = sorted(terms, key=lambda value: (len(value), value), reverse=True)[:3]
     clauses = []
     params: List[Any] = []
-    for term in terms:
+    for term in scan_terms:
         pattern = f"%{term}%"
         clauses.append("LOWER(n.name) LIKE ?")
         params.append(pattern)
