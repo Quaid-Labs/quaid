@@ -5788,6 +5788,7 @@ def _recall_once(
                 include_anchor_terms=include_lexical_anchor_shaping,
                 query_anchor_terms=query_anchor_terms,
                 allow_anchor_miss_penalty=allow_anchor_miss_penalty,
+                include_relation_keywords=not use_lightweight_config,
             ),
             1.0,
         )
@@ -5887,6 +5888,7 @@ def _recall_once(
                     include_anchor_terms=include_lexical_anchor_shaping,
                     query_anchor_terms=query_anchor_terms,
                     allow_anchor_miss_penalty=allow_anchor_miss_penalty,
+                    include_relation_keywords=not use_lightweight_config,
                 ),
                 1.0,
             )
@@ -6127,6 +6129,7 @@ def _recall_once(
                                     include_anchor_terms=include_lexical_anchor_shaping,
                                     query_anchor_terms=query_anchor_terms,
                                     allow_anchor_miss_penalty=allow_anchor_miss_penalty,
+                                    include_relation_keywords=not use_lightweight_config,
                                 ),
                                 1.0,
                             )
@@ -6306,6 +6309,7 @@ def _recall_once(
                                     # the stricter anchor-miss penalty to
                                     # same-session expansion candidates.
                                     allow_anchor_miss_penalty=False,
+                                    include_relation_keywords=not use_lightweight_config,
                                 ),
                                 1.0,
                             )
@@ -7800,10 +7804,15 @@ def _plan_query_anchor_terms(
         return _finish([], "planner_exception", "none")
 
 
-def _derive_query_requirements(query: str, intent: str = "GENERAL") -> Dict[str, Any]:
+def _derive_query_requirements(
+    query: str,
+    intent: str = "GENERAL",
+    *,
+    include_relation_keywords: bool = True,
+) -> Dict[str, Any]:
     lower = str(query or "").lower()
     query_terms = _extract_distinctive_query_terms(query)
-    relation_matches = _relation_matches_for_query(query)
+    relation_matches = _relation_matches_for_query(query) if include_relation_keywords else []
     graph_like = bool(relation_matches) or _has_generic_graph_signal(query)
     assistant_like = bool(re.search(r"\b(agent|assistant|ai)\b", lower))
     current_like = bool(
@@ -8157,8 +8166,13 @@ def _evaluate_quality_gate_readiness(
     *,
     intent: str = "GENERAL",
     limit: int = 5,
+    include_relation_keywords: bool = True,
 ) -> Dict[str, Any]:
-    analysis = _derive_query_requirements(query, intent=intent)
+    analysis = _derive_query_requirements(
+        query,
+        intent=intent,
+        include_relation_keywords=include_relation_keywords,
+    )
     query_terms = list(analysis["query_terms"])
     sample = list(results or [])[: max(limit, 8)]
     overlap_counts = sorted((_query_term_overlap(row, query_terms) for row in sample), reverse=True)
@@ -8233,8 +8247,15 @@ def _summarize_memory_quality(
     gate_eval: Optional[Dict[str, Any]] = None,
     intent: str = "GENERAL",
     limit: int = 5,
+    include_relation_keywords: bool = True,
 ) -> Dict[str, Any]:
-    gate = dict(gate_eval or _evaluate_quality_gate_readiness(query, results, intent=intent, limit=limit))
+    gate = dict(gate_eval or _evaluate_quality_gate_readiness(
+        query,
+        results,
+        intent=intent,
+        limit=limit,
+        include_relation_keywords=include_relation_keywords,
+    ))
     sample = list(results or [])[: max(limit, 8)]
     top_similarity = float(gate.get("top_similarity", 0.0) or 0.0)
     close_competitor_count = int(gate.get("close_competitor_count", 0) or 0)
@@ -8338,7 +8359,13 @@ def _should_fast_drill_follow_up(
     except Exception:
         gate_intent = "GENERAL"
 
-    gate_eval = _evaluate_quality_gate_readiness(query, rows, intent=gate_intent, limit=limit)
+    gate_eval = _evaluate_quality_gate_readiness(
+        query,
+        rows,
+        intent=gate_intent,
+        limit=limit,
+        include_relation_keywords=False,
+    )
     meta = dict(planner_meta or {})
     used_llm = bool(meta.get("used_llm"))
     bailout_reason = str(meta.get("bailout_reason") or "")
@@ -8412,13 +8439,18 @@ def _compute_query_fit_multiplier(
     include_anchor_terms: bool = True,
     query_anchor_terms: Optional[List[str]] = None,
     allow_anchor_miss_penalty: bool = True,
+    include_relation_keywords: bool = True,
 ) -> float:
     # Recall shaping policy: keep this deterministic scorer language-agnostic.
     # Do not add English semantic mappings here (for example family, org-chart,
     # location, or device relationship rules). Semantic interpretation belongs
     # in the fast LLM planner/reranker or the final calling model so multilingual
     # queries are handled by the model instead of hand-written lexical guards.
-    analysis = _derive_query_requirements(query, intent=intent)
+    analysis = _derive_query_requirements(
+        query,
+        intent=intent,
+        include_relation_keywords=include_relation_keywords,
+    )
     query_terms = list(analysis["query_terms"])
     text = f"{node.name} {' '.join(str(v) for v in (attrs or {}).values() if isinstance(v, (str, int, float)))}"
     row = {
@@ -9487,6 +9519,7 @@ def recall_fast(
         gate_eval=gate_eval,
         intent=gate_intent,
         limit=effective_limit,
+        include_relation_keywords=False,
     )
 
     if should_fast_drill and fast_drill_enabled:
