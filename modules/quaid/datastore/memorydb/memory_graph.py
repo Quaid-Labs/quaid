@@ -5419,6 +5419,8 @@ def _recall_once(
     _reranker_avg_displacement = 0.0
     _graph_discoveries = 0
     _co_session_added = 0
+    _lexical_rescue_added = 0
+    _lexical_rescue_boosted = 0
     _phase_ms: Dict[str, int] = {
         "alias_resolution_ms": 0,
         "intent_classification_ms": 0,
@@ -5872,6 +5874,75 @@ def _recall_once(
         if fts_rescue:
             _fts_fallback_used = True
         _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
+
+    # Fast hook lexical rescue:
+    # deterministic pre-injection can get "good enough" vector rows for a broad
+    # anchor (for example Baxter) while missing exact lexical details in a fresh
+    # pending row (for example pewter bell). Before returning generic context,
+    # cheaply merge FTS hits that cover more query terms. This is DB-local and
+    # stays inside existing project/domain/date filters below.
+    planner_mode = str(lexical_anchor_planner_mode or "llm").strip().lower()
+    if include_lexical_anchor_shaping and planner_mode == "deterministic" and scored_results:
+        try:
+            query_terms = list(_derive_query_requirements(clean_query, intent=intent).get("query_terms") or [])
+        except Exception:
+            query_terms = _extract_distinctive_query_terms(clean_query, limit=8)
+        if query_terms:
+            min_overlap = 1 if len(query_terms) <= 2 else 2
+            best_overlap = max(
+                (
+                    _query_term_overlap({"text": getattr(node, "name", "")}, query_terms)
+                    for node, _score in scored_results
+                ),
+                default=0,
+            )
+            best_ratio = best_overlap / max(1, len(query_terms))
+            if best_ratio < 0.67:
+                _phase_t0 = _time.monotonic()
+                try:
+                    fts_rescue = graph.search_fts(clean_query, limit=max(search_limit, limit * 3), owner_id=owner_id)
+                except Exception as exc:
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "FTS lexical rescue failed during fast recall while failHard is enabled"
+                        ) from exc
+                    logger.warning("fast recall FTS lexical rescue failed; continuing without rescue: %s", exc)
+                    fts_rescue = []
+                if fts_rescue:
+                    scored_by_id: Dict[str, Tuple[Node, float]] = {
+                        node.id: (node, score)
+                        for node, score in scored_results
+                        if getattr(node, "id", None)
+                    }
+                    passthrough: List[Tuple[Node, float]] = [
+                        (node, score)
+                        for node, score in scored_results
+                        if not getattr(node, "id", None)
+                    ]
+                    for node, fts_rank in fts_rescue:
+                        overlap = _query_term_overlap({"text": getattr(node, "name", "")}, query_terms)
+                        if overlap < min_overlap or overlap <= best_overlap:
+                            continue
+                        overlap_ratio = overlap / max(1, len(query_terms))
+                        rescue_score = min(
+                            0.98,
+                            max(
+                                float(min_similarity or 0.0),
+                                0.58 + (overlap_ratio * 0.28) + max(0.0, (3.0 - float(fts_rank or 0.0)) * 0.015),
+                            ),
+                        )
+                        existing = scored_by_id.get(node.id)
+                        if existing is None:
+                            scored_by_id[node.id] = (node, rescue_score)
+                            _lexical_rescue_added += 1
+                        elif rescue_score > float(existing[1]):
+                            scored_by_id[node.id] = (node, rescue_score)
+                            _lexical_rescue_boosted += 1
+                    if _lexical_rescue_added or _lexical_rescue_boosted:
+                        scored_results = list(scored_by_id.values()) + passthrough
+                        scored_results.sort(key=lambda x: x[1], reverse=True)
+                        _fts_fallback_used = True
+                _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
 
     # Multi-pass retrieval: if top results are low quality, try broader search
     _multi_pass_gate = 0.70
@@ -6548,10 +6619,13 @@ def _recall_once(
             "diverse_results": len(diverse_results),
             "co_session_added": _co_session_added,
             "graph_discoveries": _graph_discoveries,
+            "lexical_rescue_added": _lexical_rescue_added,
+            "lexical_rescue_boosted": _lexical_rescue_boosted,
             "final_results": len(final_output),
         },
         "flags": {
             "fts_fallback_used": _fts_fallback_used,
+            "lexical_rescue_used": bool(_lexical_rescue_added or _lexical_rescue_boosted),
             "multi_pass_triggered": _multi_pass_triggered,
             "reranker_enabled": reranker_enabled,
             "mmr_enabled": include_mmr,
@@ -11387,6 +11461,15 @@ def store(
     return _with_dedup_telemetry(result)
 
 
+def _resolve_cli_store_status(text: str, explicit_status: Optional[str]) -> Optional[str]:
+    """Default manual CLI stores to approved without bypassing injection review."""
+    if explicit_status is not None and str(explicit_status).strip():
+        return str(explicit_status).strip()
+    if _check_injection_blocklist(text):
+        return None
+    return "approved"
+
+
 def create_edge(
     subject_name: str,
     relation: str,
@@ -12696,7 +12779,7 @@ if __name__ == "__main__":
                     session_id=args.session_id,
                     skip_dedup=args.skip_dedup,
                     speaker=args.speaker,
-                    status=args.status,
+                    status=_resolve_cli_store_status(args.text, args.status),
                     knowledge_type=args.knowledge_type,
                     keywords=args.keywords,
                     source_type=args.source_type,
