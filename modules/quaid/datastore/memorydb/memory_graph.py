@@ -9951,40 +9951,41 @@ def recall(
     except Exception:
         pass
 
-    # Empty-DB short-circuit: skip all LLM calls when there is nothing to search.
-    # On a fresh install with 0 searchable nodes, query expansion and reranking
-    # are pointless and the LLM proxy calls block the bridge for 30-120s.
-    try:
-        _g = get_graph()
-        with _g._get_conn() as _conn:
-            _node_count = _conn.execute(
-                "SELECT COUNT(*) FROM nodes "
-                "WHERE status IS NULL OR status IN ('approved', 'pending', 'active')"
-            ).fetchone()[0]
-        if _node_count == 0:
-            if use_aliases:
-                try:
-                    _g.resolve_alias(query, owner_id=owner_id)
-                except Exception:
-                    pass
-            logger.debug("[recall] empty DB — skipping recall pipeline (0 searchable nodes)")
-            _empty_meta = {
-                "mode": "deliberate",
-                "query": query,
-                "search_queries": [],
-                "turns": 0,
-                "total_ms": 0,
-                "budget_ms": timeout_ms,
-                "over_budget": False,
-                "drill_log": [],
-                "turn_details": [],
-                "stop_reason": "empty_db",
-                "bailout_counts": {},
-                "fanout_count": 0,
-            }
-            return ([], _empty_meta) if return_meta else []
-    except Exception:
-        pass
+    if not use_lightweight_config:
+        # Empty-DB short-circuit: skip all LLM calls when there is nothing to search.
+        # On a fresh install with 0 searchable nodes, query expansion and reranking
+        # are pointless and the LLM proxy calls block the bridge for 30-120s.
+        try:
+            _g = get_graph()
+            with _g._get_conn() as _conn:
+                _node_count = _conn.execute(
+                    "SELECT COUNT(*) FROM nodes "
+                    "WHERE status IS NULL OR status IN ('approved', 'pending', 'active')"
+                ).fetchone()[0]
+            if _node_count == 0:
+                if use_aliases:
+                    try:
+                        _g.resolve_alias(query, owner_id=owner_id)
+                    except Exception:
+                        pass
+                logger.debug("[recall] empty DB — skipping recall pipeline (0 searchable nodes)")
+                _empty_meta = {
+                    "mode": "deliberate",
+                    "query": query,
+                    "search_queries": [],
+                    "turns": 0,
+                    "total_ms": 0,
+                    "budget_ms": timeout_ms,
+                    "over_budget": False,
+                    "drill_log": [],
+                    "turn_details": [],
+                    "stop_reason": "empty_db",
+                    "bailout_counts": {},
+                    "fanout_count": 0,
+                }
+                return ([], _empty_meta) if return_meta else []
+        except Exception:
+            pass
 
     # Load config
     overall_timeout_ms = timeout_ms

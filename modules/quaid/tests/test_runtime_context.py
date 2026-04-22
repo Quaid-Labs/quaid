@@ -1,5 +1,3 @@
-import sys
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -58,15 +56,17 @@ def test_get_llm_provider_preserves_original_error_when_notify_fails(caplog):
     assert "Failed queuing provider access error as deferred notice" in caplog.text
 
 
-def test_fail_policy_logs_when_config_load_fails(caplog):
+def test_fail_policy_logs_when_config_load_fails(caplog, tmp_path, monkeypatch):
     from lib.fail_policy import is_fail_hard_enabled
 
-    fake_config_mod = SimpleNamespace()
-    fake_config_mod.get_config = MagicMock(side_effect=RuntimeError("config broken"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+    cfg = tmp_path / "instances" / "codex-main" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("{not-json", encoding="utf-8")
 
-    with patch.dict(sys.modules, {"config": fake_config_mod}):
-        with caplog.at_level("WARNING"):
-            assert is_fail_hard_enabled() is True
+    with caplog.at_level("WARNING"):
+        assert is_fail_hard_enabled() is True
 
     assert any("defaulting to enabled" in rec.message for rec in caplog.records)
 
