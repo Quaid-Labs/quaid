@@ -59,6 +59,31 @@ def _build_ollama_embeddings_provider() -> OllamaEmbeddingsProvider:
     )
 
 
+def _build_ollama_embeddings_provider_with_fallback(exc: Exception) -> OllamaEmbeddingsProvider:
+    """Build configured Ollama provider, preserving failHard on config errors."""
+    try:
+        return _build_ollama_embeddings_provider()
+    except Exception as ollama_exc:
+        notify_agent(
+            f"Quaid could not initialize the configured embeddings backend: {ollama_exc}",
+            severity="error" if is_fail_hard_enabled() else "warning",
+            source="embeddings",
+            dedupe_key=f"embeddings-config:{type(ollama_exc).__name__}",
+            ttl_seconds=1800,
+        )
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to build configured Ollama embeddings provider while failHard is enabled."
+            ) from ollama_exc
+        logger.warning(
+            "Configured Ollama embedding settings unavailable after adapter provider failure "
+            "(%s); using default provider settings: %s",
+            exc,
+            ollama_exc,
+        )
+        return OllamaEmbeddingsProvider()
+
+
 def get_embeddings_provider() -> EmbeddingsProvider:
     """Get the current embeddings provider (auto-resolved on first call)."""
     global _provider
@@ -130,7 +155,7 @@ def get_embeddings_provider() -> EmbeddingsProvider:
                 "Adapter embeddings provider unavailable; falling back to standalone Ollama provider: %s",
                 exc,
             )
-            _provider = _build_ollama_embeddings_provider()
+            _provider = _build_ollama_embeddings_provider_with_fallback(exc)
 
         return _provider
 
