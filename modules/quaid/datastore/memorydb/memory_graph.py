@@ -5933,6 +5933,23 @@ def _recall_once(
                 default=0,
             )
             best_ratio = best_overlap / max(1, len(query_terms))
+            if best_ratio >= 0.75 and best_overlap >= min_overlap:
+                boosted_results: List[Tuple[Node, float]] = []
+                boosted_existing = 0
+                for node, score in scored_results:
+                    overlap = _query_term_overlap({"text": _node_searchable_text(node)}, query_terms)
+                    if overlap == best_overlap:
+                        overlap_ratio = overlap / max(1, len(query_terms))
+                        boosted_score = min(0.99, max(float(score), 0.60 + (overlap_ratio * 0.38)))
+                        if boosted_score > float(score):
+                            boosted_existing += 1
+                        boosted_results.append((node, boosted_score))
+                    else:
+                        boosted_results.append((node, score))
+                if boosted_existing:
+                    scored_results = boosted_results
+                    scored_results.sort(key=lambda x: x[1], reverse=True)
+                    _lexical_rescue_boosted += boosted_existing
             if best_ratio < 0.67:
                 _phase_t0 = _time.monotonic()
                 term_rescue = _search_nodes_by_query_terms(

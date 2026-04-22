@@ -1341,6 +1341,7 @@ class TestRecallBasic:
             with patch.object(mg.MemoryGraph, "search_hybrid", return_value=[
                 (generic_node, 0.78),
                 (tennis_node, 0.75),
+                (exact_node, 0.61),
             ]), \
                  patch.object(mg.MemoryGraph, "search_fts", return_value=[]), \
                  patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
