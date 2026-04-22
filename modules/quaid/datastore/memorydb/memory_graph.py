@@ -8684,6 +8684,32 @@ def _sanitize_planned_project(value: Any) -> Optional[str]:
     return text[:64]
 
 
+def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
+    """Return a mentioned project name without triggering docs reconciliation."""
+    text = str(lowered_query or "").strip().lower()
+    if not text:
+        return None
+    try:
+        import json as _json
+        from lib.instance import shared_registry_path
+
+        path = shared_registry_path()
+        if not path.is_file():
+            return None
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        projects = data.get("projects", {}) if isinstance(data, dict) else {}
+        deleted = set((data.get("deleted_projects", {}) if isinstance(data, dict) else {}).keys())
+        if not isinstance(projects, dict):
+            return None
+        for name in sorted(projects.keys(), key=lambda item: len(str(item or "")), reverse=True):
+            clean = str(name or "").strip().lower()
+            if clean and name not in deleted and clean in text:
+                return str(name)
+    except Exception:
+        return None
+    return None
+
+
 def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
     import re as _re
 
@@ -8710,26 +8736,11 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)",
         lowered,
     ))
-    project_docs_signal = bool(_re.search(
-        r"\b(what does|what do|say|says|said|mention|mentions|mentioned|document|documents|documented|spec|specs|specify|specified|describe|describes|described|note|notes|noted|call|calls|called)\b",
-        lowered,
-    ))
-
-    if not project_name and (docs_like or has_iso_date or project_docs_signal):
-        try:
-            from core.project_registry import list_projects
-
-            registry_projects = list_projects() or {}
-            for name in registry_projects.keys():
-                clean = str(name or "").strip().lower()
-                if clean and clean in lowered:
-                    project_name = str(name)
-                    break
-        except Exception:
-            pass
+    if not project_name:
+        project_name = _registered_project_name_in_query(lowered)
 
     dated_project_like = bool(project_name) and has_iso_date
-    project_docs_like = bool(project_name) and project_docs_signal
+    project_docs_like = bool(project_name)
     graph_like = bool(_relation_matches_for_query(text)) or _has_generic_graph_signal(text)
     mixed_memory_docs = docs_like and bool(_re.search(
         r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",

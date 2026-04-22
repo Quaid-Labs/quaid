@@ -4565,16 +4565,22 @@ class TestRecallFastHookInjectContract:
 
         assert stores == ["vector", "graph"]
 
-    def test_infer_recall_store_defaults_routes_docs_for_project_says_query(self):
+    def test_infer_recall_store_defaults_routes_docs_for_project_says_query(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         class _Graph:
             def get_known_relations(self):
                 return []
 
+        registry = tmp_path / "project-registry.json"
+        registry.write_text(
+            '{"projects":{"cross-live-test":{"description":"xp"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
              patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}), \
-             patch("core.project_registry.list_projects", return_value={"cross-live-test": {"description": "xp"}}):
+             patch("core.project_registry.list_projects", side_effect=AssertionError("full registry should not load")):
             stores, project = mg._infer_recall_store_defaults(
                 "What does the cross-live-test project say about Ember Glass?",
             )
@@ -4628,16 +4634,40 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector"]
         assert project is None
 
-    def test_infer_recall_store_defaults_skips_registry_for_plain_memory_query(self):
+    def test_infer_recall_store_defaults_routes_docs_for_non_english_registry_project_query(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         class _Graph:
             def get_known_relations(self):
                 return []
 
+        registry = tmp_path / "project-registry.json"
+        registry.write_text(
+            '{"projects":{"cross-live-test":{"description":"xp"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
              patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}), \
-             patch("core.project_registry.list_projects", side_effect=AssertionError("registry should not load")):
+             patch("core.project_registry.list_projects", side_effect=AssertionError("full registry should not load")):
+            stores, project = mg._infer_recall_store_defaults(
+                "cross-live-test 支持哪些饮食标签？",
+            )
+
+        assert stores == ["vector", "docs"]
+        assert project == "cross-live-test"
+
+    def test_infer_recall_store_defaults_skips_full_registry_for_plain_memory_query(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}), \
+             patch("core.project_registry.list_projects", side_effect=AssertionError("full registry should not load")):
             stores, project = mg._infer_recall_store_defaults(
                 "Baxter golden retriever jade frisbee",
             )

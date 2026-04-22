@@ -1502,3 +1502,30 @@ class TestLightweightLibConfig:
         monkeypatch.setenv("OLLAMA_URL", "http://env-ollama:11434")
         with patch("config.get_config", side_effect=AssertionError("full config should not load")):
             assert get_ollama_url() == "http://env-ollama:11434"
+
+    def test_lightweight_config_parse_error_raises_when_failhard_enabled(self, tmp_path, monkeypatch):
+        from lib.config import get_ollama_url
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_text("{not-json", encoding="utf-8")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+        with patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(json.JSONDecodeError):
+                get_ollama_url()
+
+    def test_lightweight_config_parse_error_defaults_when_failhard_disabled(self, tmp_path, monkeypatch):
+        from lib.config import get_ollama_url
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_text("{not-json", encoding="utf-8")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+        with patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
+            assert get_ollama_url() == "http://localhost:11434"

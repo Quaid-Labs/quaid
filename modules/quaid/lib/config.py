@@ -120,9 +120,17 @@ def _load_lightweight_config() -> Dict[str, Any]:
         try:
             parsed = json.loads(config_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
+            from lib.fail_policy import is_fail_hard_enabled
+
+            if is_fail_hard_enabled():
+                raise
             logger.warning("Failed to parse lightweight config %s: %s", config_path, exc)
             continue
         except OSError as exc:
+            from lib.fail_policy import is_fail_hard_enabled
+
+            if is_fail_hard_enabled():
+                raise
             logger.warning("Failed to read lightweight config %s: %s", config_path, exc)
             continue
         if isinstance(parsed, dict):
