@@ -3844,6 +3844,38 @@ class TestRecallFastHookInjectContract:
         assert [row["id"] for row in rows] == ["fact-1", "alice"]
         assert meta["planned_stores"] == ["vector", "graph"]
 
+    def test_run_recall_store_plan_threads_fast_subtimeout_to_vector_lane(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_vector(*args, **kwargs):
+            captured["common_kwargs"] = kwargs.get("common_kwargs")
+            return ([], {"selected_path": "vector", "phases_ms": {"total_ms": 1}}, None)
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(mg, "_recall_store_plan_timeout_s", return_value=3.0):
+            mg._run_recall_store_plan(
+                "What do you know about Baxter?",
+                stores=["vector"],
+                limit=5,
+                owner_id="quaid",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["What do you know about Baxter?"],
+                planner_meta={"planned_stores": ["vector"]},
+                fast_mode=True,
+                common_kwargs={},
+            )
+
+        assert captured["common_kwargs"]["timeout_ms"] == 2400
+
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
 
