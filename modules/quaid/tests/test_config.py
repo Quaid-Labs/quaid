@@ -1455,6 +1455,7 @@ class TestConfigPathResolution:
 class TestLightweightLibConfig:
     def test_lightweight_config_reads_raw_layers_without_full_config_loader(self, tmp_path, monkeypatch):
         from lib.config import (
+            get_db_path_lightweight,
             get_embedding_dim,
             get_embedding_model,
             get_embeddings_provider_id,
@@ -1476,6 +1477,7 @@ class TestLightweightLibConfig:
                 "embeddingDim": 111,
             },
             "models": {"embeddingsProvider": "ollama"},
+            "database": {"path": "data/custom-memory.db"},
             "retrieval": {"rrfK": 42},
         }), encoding="utf-8")
         platform_cfg.write_text(json.dumps({
@@ -1493,6 +1495,7 @@ class TestLightweightLibConfig:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
         monkeypatch.delenv("OLLAMA_URL", raising=False)
+        monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
         with patch("config.get_config", side_effect=AssertionError("full config should not load")):
             assert get_ollama_url() == "http://instance:11434"
             assert get_embedding_model() == "platform-model"
@@ -1500,6 +1503,7 @@ class TestLightweightLibConfig:
             assert get_embeddings_provider_id() == "local-ollama"
             assert get_injection_timeout_ms() == 9000
             assert get_retrieval_rrf_k() == 42
+            assert get_db_path_lightweight() == tmp_path / "instances" / "codex-main" / "data" / "custom-memory.db"
 
     def test_lightweight_config_honors_ollama_url_env(self, tmp_path, monkeypatch):
         from lib.config import get_ollama_url

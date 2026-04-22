@@ -204,6 +204,20 @@ def get_db_path() -> Path:
     return p if p.is_absolute() else _workspace_root() / p
 
 
+def get_db_path_lightweight() -> Path:
+    """Get the main memory DB path without initializing adapters or plugins."""
+    env_path = _validated_memory_override("MEMORY_DB_PATH")
+    if env_path is not None:
+        return env_path
+    raw = str(_section_value("database", "path", "data/memory.db") or "data/memory.db").strip()
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p
+    from lib.instance import instance_root
+
+    return instance_root() / p
+
+
 def get_archive_db_path() -> Path:
     """Get the archive database path.
 

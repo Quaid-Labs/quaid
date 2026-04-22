@@ -58,6 +58,7 @@ from typing import Optional, List, Dict, Any, Tuple, Set
 
 from lib.config import (
     get_db_path,
+    get_db_path_lightweight as _get_db_path_lightweight,
     get_ollama_url,
     get_embedding_dim as _get_configured_embedding_dim,
     get_injection_timeout_ms as _get_configured_injection_timeout_ms,
@@ -291,10 +292,11 @@ class MemoryGraph:
         "doc_update_log",
     )
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None, *, initialize: bool = True):
         self.db_path = Path(db_path) if db_path is not None else get_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        if initialize:
+            self._init_db()
 
     def _init_db(self):
         """Initialize database with schema."""
@@ -5477,7 +5479,10 @@ def _recall_once(
         privacy = ["private", "shared", "public"]
     elif isinstance(privacy, str):
         privacy = [privacy]
-    graph = get_graph()
+    if use_lightweight_config:
+        graph = MemoryGraph(db_path=_get_db_path_lightweight(), initialize=False)
+    else:
+        graph = get_graph()
     requested_domain_filter = (
         isinstance(domain, dict)
         and any(
