@@ -4963,14 +4963,6 @@ def _run_recall_store_plan(
     handler_name = "recall_fast" if fast_mode else "recall"
     kwargs = dict(common_kwargs or {})
     planned_project = (planner_meta or {}).get("planned_project") or kwargs.get("project")
-    store_plan_timeout_s = _recall_store_plan_timeout_s(kwargs.get("timeout_ms"), fast_mode=fast_mode)
-    vector_timeout_ms = kwargs.get("timeout_ms")
-    if vector_timeout_ms is None and store_plan_timeout_s is not None:
-        # Keep the vector lane inside the outer pool deadline so timeout-like
-        # failures can be handled by recall internals instead of orphaning the
-        # worker and dropping every result from this store plan.
-        budget_scale = 0.8 if fast_mode else 1.0
-        vector_timeout_ms = max(500, int(store_plan_timeout_s * budget_scale * 1000))
 
     callables = []
     for store in normalized_stores:
@@ -4986,7 +4978,7 @@ def _run_recall_store_plan(
                     planned_queries=planned_queries,
                     planner_meta=planner_meta,
                     fast_mode=fast_mode,
-                    common_kwargs={**kwargs, "project": planned_project, "timeout_ms": vector_timeout_ms},
+                    common_kwargs={**kwargs, "project": planned_project},
                 ),
             ))
         elif store == "docs":
@@ -5024,6 +5016,7 @@ def _run_recall_store_plan(
             ))
 
     started = time.monotonic()
+    store_plan_timeout_s = _recall_store_plan_timeout_s(kwargs.get("timeout_ms"), fast_mode=fast_mode)
     outputs = run_callables(
         callables,
         max_workers=min(len(callables), 3),
