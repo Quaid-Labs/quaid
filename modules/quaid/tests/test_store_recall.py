@@ -1441,6 +1441,100 @@ class TestRecallBasic:
         branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
         assert branches[0].get("flags", {}).get("lexical_rescue_used") is True
 
+    def test_recall_fast_rescues_newer_named_anchor_hit_for_broad_prompt(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        fake_cfg = SimpleNamespace(
+            retrieval=SimpleNamespace(
+                boost_recent=True,
+                boost_frequent=True,
+                composite_relevance_weight=0.60,
+                composite_recency_weight=0.20,
+                composite_frequency_weight=0.15,
+                recency_decay_days=90,
+                reranker_enabled=False,
+                multi_pass_gate=0.70,
+                use_hyde=False,
+            )
+        )
+        query = "What do you remember about Baxter?"
+        planner_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": "preserve_short_exact_query",
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "fast",
+            "planned_stores": ["vector"],
+            "planned_project": None,
+            "query_shape": "narrow",
+        }
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+             patch("config.get_config", return_value=fake_cfg):
+            generic = mg.store(
+                "Solomon Steadman has a dog named Baxter",
+                owner_id="quaid",
+                skip_dedup=True,
+                created_at="2026-04-01T08:00:00",
+            )
+            tennis = mg.store(
+                "Baxter is a golden retriever who loves tennis balls",
+                owner_id="quaid",
+                skip_dedup=True,
+                created_at="2026-04-02T08:00:00",
+            )
+            fresh = mg.store(
+                "Baxter curls up beside the marigold crate after lunch",
+                owner_id="quaid",
+                skip_dedup=True,
+                created_at="2026-04-22T08:00:00",
+            )
+            generic_node = graph.get_node(generic["id"])
+            tennis_node = graph.get_node(tennis["id"])
+            fresh_node = graph.get_node(fresh["id"])
+            assert generic_node is not None
+            assert tennis_node is not None
+            assert fresh_node is not None
+
+            with patch.object(graph, "search_hybrid", return_value=[
+                (generic_node, 0.93),
+                (tennis_node, 0.91),
+            ]), \
+                 patch.object(graph, "search_fts", return_value=[
+                     (generic_node, 1.0),
+                     (tennis_node, 2.0),
+                     (fresh_node, 3.0),
+                 ]), \
+                 patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
+                rows, meta = mg.recall_fast(
+                    query,
+                    owner_id="quaid",
+                    return_meta=True,
+                    planner_profile="fast",
+                    domain={"all": True},
+                    timeout_ms=20000,
+                )
+
+        assert rows
+        assert rows[0]["id"] == fresh["id"]
+        assert "marigold crate" in rows[0]["text"]
+        branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
+        assert branches[0].get("flags", {}).get("lexical_rescue_used") is True
+
+    def test_fast_recall_default_store_plan_timeout_is_live_safe(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch("config.get_config", return_value=SimpleNamespace(retrieval=SimpleNamespace())):
+            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 8.0
+        with patch("config.get_config", return_value=SimpleNamespace(retrieval=SimpleNamespace(injection_timeout_ms=3000))):
+            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 8.0
+
 # ---------------------------------------------------------------------------
 # store() dedup behavior
 # ---------------------------------------------------------------------------

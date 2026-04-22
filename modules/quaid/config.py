@@ -273,7 +273,7 @@ class RetrievalConfig:
     use_hyde: bool = True  # Enable HyDE query expansion by default
     hyde_timeout_ms: int = 15_000  # Fast-tier timeout for HyDE query routing
     hyde_max_retries: int = 1  # Extra retries for HyDE route calls (fail-hard still enforced)
-    injection_timeout_ms: int = 3_000  # Overall wall-clock budget for pre-injection recall
+    injection_timeout_ms: int = 8_000  # Overall wall-clock budget for pre-injection recall
     injection_fanout_max: int = 5  # Max parallel HyDE queries for injection
     injection_fanout_llm_ms: int = 1_500  # LLM budget for query fanout within injection
     auto_inject_graph_depth: int = 2  # Graph traversal depth for fast auto-inject recall
@@ -1259,7 +1259,7 @@ def _load_config_inner() -> MemoryConfig:
         use_hyde=retrieval_data.get('use_hyde', retrieval_data.get('useHyde', True)),
         hyde_timeout_ms=int(retrieval_data.get('hyde_timeout_ms', retrieval_data.get('hydeTimeoutMs', 15000))),
         hyde_max_retries=max(0, int(retrieval_data.get('hyde_max_retries', retrieval_data.get('hydeMaxRetries', 1)))),
-        injection_timeout_ms=int(retrieval_data.get('injection_timeout_ms', retrieval_data.get('injectionTimeoutMs', 3000))),
+        injection_timeout_ms=int(retrieval_data.get('injection_timeout_ms', retrieval_data.get('injectionTimeoutMs', 8000))),
         injection_fanout_max=int(retrieval_data.get('injection_fanout_max', retrieval_data.get('injectionFanoutMax', 5))),
         injection_fanout_llm_ms=int(retrieval_data.get('injection_fanout_llm_ms', retrieval_data.get('injectionFanoutLlmMs', 1500))),
         auto_inject_graph_depth=max(1, int(retrieval_data.get('auto_inject_graph_depth', 2) or 2)),

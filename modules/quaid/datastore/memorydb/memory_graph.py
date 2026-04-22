@@ -4851,10 +4851,13 @@ def _recall_store_plan_timeout_s(timeout_ms: Optional[int], *, fast_mode: bool) 
         try:
             from config import get_config
 
-            raw = getattr(get_config().retrieval, "injection_timeout_ms", 3000)
-            return max(0.5, float(raw or 3000) / 1000.0)
+            raw = getattr(get_config().retrieval, "injection_timeout_ms", 8000)
+            # Existing prerelease installs may still carry the old 3s generated
+            # config value. Keep the implicit hook budget live-safe unless the
+            # caller passed an explicit timeout_ms above.
+            return max(8.0, float(raw or 8000) / 1000.0)
         except Exception:
-            return 3.0
+            return 8.0
     return 30.0
 
 
@@ -5883,10 +5886,9 @@ def _recall_once(
     # stays inside existing project/domain/date filters below.
     planner_mode = str(lexical_anchor_planner_mode or "llm").strip().lower()
     if include_lexical_anchor_shaping and planner_mode == "deterministic" and scored_results:
-        try:
-            query_terms = list(_derive_query_requirements(clean_query, intent=intent).get("query_terms") or [])
-        except Exception:
-            query_terms = _extract_distinctive_query_terms(clean_query, limit=8)
+        # Keep the hook path cheap: the full requirement helper consults the
+        # relation keyword registry, while this rescue only needs lexical terms.
+        query_terms = _extract_distinctive_query_terms(clean_query, limit=8)
         if query_terms:
             min_overlap = 1 if len(query_terms) <= 2 else 2
             best_overlap = max(
@@ -5941,6 +5943,83 @@ def _recall_once(
                     if _lexical_rescue_added or _lexical_rescue_boosted:
                         scored_results = list(scored_by_id.values()) + passthrough
                         scored_results.sort(key=lambda x: x[1], reverse=True)
+                        _fts_fallback_used = True
+                _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
+
+        explicit_anchor_terms = _extract_explicit_query_anchor_terms(clean_query, limit=8)
+        if explicit_anchor_terms:
+            def _node_matches_explicit_anchor(node: Node) -> bool:
+                lower_text = _node_searchable_text(node).lower()
+                return any(term in lower_text for term in explicit_anchor_terms)
+
+            def _node_created_sort_key(node: Node) -> str:
+                return str(getattr(node, "created_at", None) or "")
+
+            anchor_scored = [
+                (node, score)
+                for node, score in scored_results
+                if getattr(node, "id", None) and _node_matches_explicit_anchor(node)
+            ]
+            latest_anchor_created = max(
+                (_node_created_sort_key(node) for node, _score in anchor_scored),
+                default="",
+            )
+            best_anchor_score = max(
+                (float(score) for _node, score in anchor_scored),
+                default=float(min_similarity or 0.0),
+            )
+            if latest_anchor_created:
+                _phase_t0 = _time.monotonic()
+                try:
+                    fts_anchor_hits = graph.search_fts(clean_query, limit=max(search_limit, limit * 4), owner_id=owner_id)
+                except Exception as exc:
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "FTS fresh-anchor rescue failed during fast recall while failHard is enabled"
+                        ) from exc
+                    logger.warning("fast recall FTS fresh-anchor rescue failed; continuing without rescue: %s", exc)
+                    fts_anchor_hits = []
+                if fts_anchor_hits:
+                    scored_by_id: Dict[str, Tuple[Node, float]] = {
+                        node.id: (node, score)
+                        for node, score in scored_results
+                        if getattr(node, "id", None)
+                    }
+                    passthrough: List[Tuple[Node, float]] = [
+                        (node, score)
+                        for node, score in scored_results
+                        if not getattr(node, "id", None)
+                    ]
+                    touched = False
+                    for node, fts_rank in fts_anchor_hits:
+                        if not getattr(node, "id", None) or not _node_matches_explicit_anchor(node):
+                            continue
+                        created_key = _node_created_sort_key(node)
+                        if not created_key or created_key <= latest_anchor_created:
+                            continue
+                        existing = scored_by_id.get(node.id)
+                        rescue_score = min(
+                            1.0,
+                            max(
+                                best_anchor_score,
+                                float(min_similarity or 0.0),
+                                0.94 + max(0.0, (4.0 - float(fts_rank or 0.0)) * 0.015),
+                            ),
+                        )
+                        if existing is None:
+                            scored_by_id[node.id] = (node, rescue_score)
+                            _lexical_rescue_added += 1
+                            touched = True
+                        elif rescue_score > float(existing[1]):
+                            scored_by_id[node.id] = (node, rescue_score)
+                            _lexical_rescue_boosted += 1
+                            touched = True
+                    if touched:
+                        scored_results = list(scored_by_id.values()) + passthrough
+                        scored_results.sort(
+                            key=lambda item: (float(item[1]), _node_created_sort_key(item[0])),
+                            reverse=True,
+                        )
                         _fts_fallback_used = True
                 _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
 
