@@ -3430,11 +3430,12 @@ def _resolve_auto_inject_graph_depth() -> int:
     """Return platform-wide graph depth for fast auto-inject recall."""
     default_depth = 2
     try:
-        cfg = _get_memory_config() if _HAS_CONFIG else None
-        retrieval_cfg = getattr(cfg, "retrieval", None) if cfg is not None else None
+        retrieval_cfg = _get_retrieval_lightweight_config()
         raw_depth = getattr(retrieval_cfg, "auto_inject_graph_depth", default_depth)
         return max(1, int(raw_depth or default_depth))
     except Exception:
+        if _is_fail_hard_mode():
+            raise
         return default_depth
 
 

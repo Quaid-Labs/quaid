@@ -2601,13 +2601,13 @@ class TestRecallTelemetry:
         import datastore.memorydb.memory_graph as mg
 
         captured = {}
-        cfg = SimpleNamespace(retrieval=SimpleNamespace(auto_inject_graph_depth=3))
+        retrieval_cfg = SimpleNamespace(auto_inject_graph_depth=3)
 
         def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
             captured["graph_depth"] = graph_depth
             return [], {"phases_ms": {"total_ms": 0}}, None
 
-        with patch.object(mg, "_get_memory_config", return_value=cfg), patch.object(
+        with patch.object(mg, "_get_retrieval_lightweight_config", return_value=retrieval_cfg), patch.object(
             mg,
             "_plan_fanout_queries",
             return_value=(
