@@ -3798,6 +3798,7 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["use_routing"] is False
         assert captured["kwargs"]["include_lexical_anchor_shaping"] is True
         assert captured["kwargs"]["lexical_anchor_planner_mode"] == "deterministic"
+        assert captured["kwargs"]["track_access"] is False
 
     def test_run_recall_store_plan_skips_duplicate_graph_seed_recall_in_fast_vector_graph_plan(self):
         import datastore.memorydb.memory_graph as mg

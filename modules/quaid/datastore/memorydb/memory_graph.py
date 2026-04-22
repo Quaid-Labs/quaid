@@ -4428,6 +4428,7 @@ def _vector_store_recall(
         include_mmr=False if fast_mode else True,
         include_lexical_anchor_shaping=True,
         lexical_anchor_planner_mode="deterministic" if fast_mode else "llm",
+        track_access=not fast_mode,
         return_meta=True,
         planned_queries=planned_queries,
         planner_meta=planner_meta,
@@ -5381,6 +5382,7 @@ def _recall_once(
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
     lexical_anchor_planner_mode: str = "llm",
+    track_access: bool = True,
     low_signal_retry: bool = True,
     timeout_ms: Optional[int] = None,
     return_meta: bool = False,
@@ -6648,7 +6650,7 @@ def _recall_once(
     _phase_ms["filtering_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Update access stats for returned results (feeds into Ebbinghaus decay)
-    if final_output:
+    if final_output and track_access:
         _phase_t0 = _time.monotonic()
         try:
             result_ids = {r["id"] for r in final_output}
@@ -9723,6 +9725,7 @@ def recall(
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
     lexical_anchor_planner_mode: str = "llm",
+    track_access: bool = True,
     return_meta: bool = False,
     planned_queries: Optional[List[str]] = None,
     planner_meta: Optional[Dict[str, Any]] = None,
@@ -9877,6 +9880,7 @@ def recall(
         timeout_ms=overall_timeout_ms,
         include_lexical_anchor_shaping=include_lexical_anchor_shaping,
         lexical_anchor_planner_mode=lexical_anchor_planner_mode,
+        track_access=track_access,
     )
     gate_intent = "GENERAL"
     if use_intent:
