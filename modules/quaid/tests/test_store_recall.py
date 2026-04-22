@@ -4675,6 +4675,21 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector"]
         assert project is None
 
+    def test_infer_recall_store_defaults_skips_relation_db_for_plain_memory_query(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        with patch(
+            "datastore.memorydb.memory_graph._relation_matches_for_query",
+            side_effect=AssertionError("relation DB should not load"),
+        ):
+            stores, project = mg._infer_recall_store_defaults(
+                "Baxter golden retriever jade frisbee",
+            )
+
+        assert stores == ["vector"]
+        assert project is None
+
     def test_graph_store_recall_returns_graph_rows(self):
         import datastore.memorydb.memory_graph as mg
 

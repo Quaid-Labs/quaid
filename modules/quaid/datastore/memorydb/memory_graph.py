@@ -2528,7 +2528,7 @@ def _relation_matches_for_query(query: str) -> List[str]:
 def _has_generic_graph_signal(query: str) -> bool:
     lowered = str(query or "").lower()
     return bool(re.search(
-        r"\b(relation|relationship|related|connected|connection|hierarchy|depends|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|family|relative|kin|kinship|reports?\s+to)\b",
+        r"\b(relation|relationship|related|connected|connection|hierarchy|depends?|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|family|relative|kin|kinship|reports?\s+to)\b",
         lowered,
     ))
 
@@ -8741,7 +8741,9 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
 
     dated_project_like = bool(project_name) and has_iso_date
     project_docs_like = bool(project_name)
-    graph_like = bool(_relation_matches_for_query(text)) or _has_generic_graph_signal(text)
+    generic_graph_signal = _has_generic_graph_signal(text)
+    relation_matches = _relation_matches_for_query(text) if generic_graph_signal else []
+    graph_like = bool(relation_matches) or generic_graph_signal
     mixed_memory_docs = docs_like and bool(_re.search(
         r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",
         lowered,
