@@ -5954,10 +5954,7 @@ def _recall_once(
                         logger.warning("fast recall FTS lexical rescue failed; continuing without rescue: %s", exc)
                         fts_rescue = []
                     if term_rescue:
-                        fts_rescue = _append_missing_node_candidates(
-                            list(fts_rescue or []),
-                            term_rescue,
-                        )
+                        fts_rescue = list(fts_rescue or []) + list(term_rescue)
                 if fts_rescue:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
                         node.id: (node, score)
@@ -6040,10 +6037,7 @@ def _recall_once(
                         logger.warning("fast recall FTS fresh-anchor rescue failed; continuing without rescue: %s", exc)
                         fts_anchor_hits = []
                     if term_anchor_hits:
-                        fts_anchor_hits = _append_missing_node_candidates(
-                            list(fts_anchor_hits or []),
-                            term_anchor_hits,
-                        )
+                        fts_anchor_hits = list(fts_anchor_hits or []) + list(term_anchor_hits)
                 if fts_anchor_hits:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
                         node.id: (node, score)
@@ -7434,11 +7428,12 @@ def _summarize_result_coverage(results: List[Dict[str, Any]]) -> Dict[str, int]:
 
 
 _QUERY_STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "for",
+    "a", "about", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "for",
     "from", "had", "has", "have", "how", "i", "if", "in", "is", "it", "its",
     "me", "my", "of", "on", "or", "our", "she", "so", "still", "tell", "that",
     "the", "their", "them", "there", "these", "they", "this", "to", "up", "was",
     "we", "what", "when", "where", "which", "who", "why", "with", "would", "yet",
+    "know",
     "you", "your", "current", "currently", "latest", "most", "recent", "now",
 }
 _SHORT_SIGNAL_TOKENS = {"api", "app", "db", "ui", "ux", "sql", "mom", "dad", "dog", "a1c"}
@@ -8046,25 +8041,6 @@ def _search_nodes_by_query_terms(
         scored.append((node, overlap, str(getattr(node, "created_at", "") or "")))
     scored.sort(key=lambda item: (item[1], item[2]), reverse=True)
     return [(node, float(rank)) for rank, (node, _overlap, _created) in enumerate(scored[:limit], 1)]
-
-
-def _append_missing_node_candidates(
-    candidates: List[tuple[Node, float]],
-    extra: List[tuple[Node, float]],
-) -> List[tuple[Node, float]]:
-    """Append extra node candidates without duplicating ids."""
-    if not extra:
-        return candidates
-    merged = list(candidates or [])
-    seen = {getattr(node, "id", None) for node, _score in merged}
-    for node, score in extra:
-        node_id = getattr(node, "id", None)
-        if node_id and node_id in seen:
-            continue
-        if node_id:
-            seen.add(node_id)
-        merged.append((node, score))
-    return merged
 
 
 def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
