@@ -1358,6 +1358,72 @@ class TestRecallBasic:
         branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
         assert branches[0].get("flags", {}).get("lexical_rescue_used") is True
 
+    def test_recall_fast_rescues_exact_keyword_hit_when_fts_has_no_rows(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        query = "What do you know about Baxter's brass midnight triangle?"
+        planner_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": "preserve_short_exact_query",
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "fast",
+            "planned_stores": ["vector"],
+            "planned_project": None,
+            "query_shape": "narrow",
+        }
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+            generic = mg.store(
+                "Solomon Steadman has a dog named Baxter",
+                owner_id="quaid",
+                skip_dedup=True,
+                created_at="2026-04-01T08:00:00",
+            )
+            stale = mg.store(
+                "Baxter is a golden retriever who loves tennis balls",
+                owner_id="quaid",
+                skip_dedup=True,
+                created_at="2026-04-02T08:00:00",
+            )
+            exact = mg.store(
+                "Baxter hides a sapphire tug ring beneath the pantry mat and rings a brass midnight triangle before bed",
+                owner_id="quaid",
+                skip_dedup=True,
+                created_at="2026-04-22T13:17:09",
+            )
+            generic_node = graph.get_node(generic["id"])
+            stale_node = graph.get_node(stale["id"])
+            assert generic_node is not None
+            assert stale_node is not None
+
+            with patch.object(graph, "search_hybrid", return_value=[
+                (generic_node, 0.78),
+                (stale_node, 0.75),
+            ]), \
+                 patch.object(graph, "search_fts", return_value=[]), \
+                 patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
+                rows, meta = mg.recall_fast(
+                    query,
+                    owner_id="quaid",
+                    return_meta=True,
+                    planner_profile="fast",
+                    domain={"all": True},
+                    timeout_ms=20000,
+                )
+
+        assert rows
+        assert rows[0]["id"] == exact["id"]
+        assert "brass midnight triangle" in rows[0]["text"]
+        branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
+        assert branches[0].get("flags", {}).get("lexical_rescue_used") is True
+
     def test_recall_fast_fts_rescue_uses_node_attributes_for_query_overlap(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
@@ -1530,10 +1596,49 @@ class TestRecallBasic:
     def test_fast_recall_default_store_plan_timeout_is_live_safe(self):
         import datastore.memorydb.memory_graph as mg
 
-        with patch("config.get_config", return_value=SimpleNamespace(retrieval=SimpleNamespace())):
+        with patch("config.get_config", side_effect=AssertionError("full config should not load")), \
+             patch.object(mg, "_get_configured_injection_timeout_ms", return_value=8000):
             assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 8.0
-        with patch("config.get_config", return_value=SimpleNamespace(retrieval=SimpleNamespace(injection_timeout_ms=3000))):
+        with patch("config.get_config", side_effect=AssertionError("full config should not load")), \
+             patch.object(mg, "_get_configured_injection_timeout_ms", return_value=3000):
             assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 8.0
+
+    def test_fast_anchor_priority_keeps_fresh_direct_hit_above_graph_context(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "graph-row",
+                "text": "Alice --mentions--> Baxter",
+                "category": "person",
+                "similarity": 0.99,
+                "via_relation": "mentions",
+                "graph_path": "Alice --mentions--> Baxter",
+                "created_at": "2026-04-22T08:00:00",
+            },
+            {
+                "id": "stale-baxter",
+                "text": "Baxter is a golden retriever who loves tennis balls",
+                "category": "fact",
+                "similarity": 0.98,
+                "created_at": "2026-04-01T08:00:00",
+            },
+            {
+                "id": "fresh-baxter",
+                "text": "Baxter keeps the brass-midnight marker beside the couch",
+                "category": "fact",
+                "similarity": 0.72,
+                "created_at": "2026-04-22T08:00:00",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(
+            "What do you remember about Baxter's brass-midnight marker?",
+            rows,
+        )
+
+        assert ranked[0]["id"] == "fresh-baxter"
+        assert ranked.index(rows[2]) < ranked.index(rows[0])
 
 # ---------------------------------------------------------------------------
 # store() dedup behavior
@@ -3798,6 +3903,7 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["use_routing"] is False
         assert captured["kwargs"]["include_lexical_anchor_shaping"] is True
         assert captured["kwargs"]["lexical_anchor_planner_mode"] == "deterministic"
+        assert captured["kwargs"]["use_lightweight_config"] is True
         assert captured["kwargs"]["track_access"] is False
 
     def test_run_recall_store_plan_skips_duplicate_graph_seed_recall_in_fast_vector_graph_plan(self):

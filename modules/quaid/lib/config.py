@@ -15,6 +15,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 
@@ -276,3 +277,30 @@ def get_embeddings_provider_id() -> str:
     """Get the configured embeddings provider id without plugin initialization."""
     raw = _section_value("models", "embeddings_provider", "ollama")
     return str(raw or "ollama").strip().lower()
+
+
+def get_retrieval_lightweight_config() -> SimpleNamespace:
+    """Return retrieval settings without initializing adapters or plugins."""
+    data = _load_lightweight_config()
+    retrieval = data.get("retrieval", {})
+    if not isinstance(retrieval, dict):
+        retrieval = {}
+    return SimpleNamespace(**retrieval)
+
+
+def get_injection_timeout_ms(default: int = 8000) -> int:
+    """Return retrieval.injection_timeout_ms without loading full config."""
+    raw = getattr(get_retrieval_lightweight_config(), "injection_timeout_ms", default)
+    try:
+        return int(raw if raw is not None else default)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def get_retrieval_rrf_k(default: int = 60) -> int:
+    """Return retrieval.rrf_k without loading full config."""
+    raw = getattr(get_retrieval_lightweight_config(), "rrf_k", default)
+    try:
+        return max(1, int(raw if raw is not None else default))
+    except (TypeError, ValueError):
+        return max(1, int(default))

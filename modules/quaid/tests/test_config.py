@@ -1458,7 +1458,9 @@ class TestLightweightLibConfig:
             get_embedding_dim,
             get_embedding_model,
             get_embeddings_provider_id,
+            get_injection_timeout_ms,
             get_ollama_url,
+            get_retrieval_rrf_k,
         )
 
         global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
@@ -1474,15 +1476,18 @@ class TestLightweightLibConfig:
                 "embeddingDim": 111,
             },
             "models": {"embeddingsProvider": "ollama"},
+            "retrieval": {"rrfK": 42},
         }), encoding="utf-8")
         platform_cfg.write_text(json.dumps({
             "ollama": {
                 "embeddingModel": "platform-model",
             },
+            "retrieval": {"injectionTimeoutMs": 3000},
         }), encoding="utf-8")
         instance_cfg.write_text(json.dumps({
             "ollama": {"url": "http://instance:11434"},
             "models": {"embeddingsProvider": "local-ollama"},
+            "retrieval": {"injectionTimeoutMs": 9000},
         }), encoding="utf-8")
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -1493,6 +1498,8 @@ class TestLightweightLibConfig:
             assert get_embedding_model() == "platform-model"
             assert get_embedding_dim() == 111
             assert get_embeddings_provider_id() == "local-ollama"
+            assert get_injection_timeout_ms() == 9000
+            assert get_retrieval_rrf_k() == 42
 
     def test_lightweight_config_honors_ollama_url_env(self, tmp_path, monkeypatch):
         from lib.config import get_ollama_url

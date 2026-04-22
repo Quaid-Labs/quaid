@@ -56,7 +56,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Set
 
-from lib.config import get_db_path, get_ollama_url, get_embedding_dim as _get_configured_embedding_dim
+from lib.config import (
+    get_db_path,
+    get_ollama_url,
+    get_embedding_dim as _get_configured_embedding_dim,
+    get_injection_timeout_ms as _get_configured_injection_timeout_ms,
+    get_retrieval_lightweight_config as _get_retrieval_lightweight_config,
+    get_retrieval_rrf_k as _get_configured_rrf_k,
+)
 from lib.database import (
     get_connection as _lib_get_connection,
     has_vec as _lib_has_vec,
@@ -1678,9 +1685,10 @@ class MemoryGraph:
         # RRF constant from config (default 60, min 1 to prevent div-by-zero)
         RRF_K = 60
         try:
-            from config import get_config
-            RRF_K = max(1, get_config().retrieval.rrf_k)
+            RRF_K = _get_configured_rrf_k(60)
         except Exception:
+            if _is_fail_hard_mode():
+                raise
             pass
         VECTOR_WEIGHT, FTS_WEIGHT = _get_fusion_weights(intent)
         search_timeout_s = None if timeout_seconds is None else max(0.5, float(timeout_seconds))
@@ -3542,8 +3550,8 @@ def _compute_composite_score(
     w_frequency = 0.15
     recency_days = 90
     if config_retrieval:
-        boost_recent = config_retrieval.boost_recent
-        boost_frequent = config_retrieval.boost_frequent
+        boost_recent = bool(getattr(config_retrieval, "boost_recent", boost_recent))
+        boost_frequent = bool(getattr(config_retrieval, "boost_frequent", boost_frequent))
         w_relevance = getattr(config_retrieval, 'composite_relevance_weight', 0.60)
         w_recency = getattr(config_retrieval, 'composite_recency_weight', 0.20)
         w_frequency = getattr(config_retrieval, 'composite_frequency_weight', 0.15)
@@ -4428,6 +4436,7 @@ def _vector_store_recall(
         include_mmr=False if fast_mode else True,
         include_lexical_anchor_shaping=True,
         lexical_anchor_planner_mode="deterministic" if fast_mode else "llm",
+        use_lightweight_config=fast_mode,
         track_access=not fast_mode,
         return_meta=True,
         planned_queries=planned_queries,
@@ -4850,14 +4859,14 @@ def _recall_store_plan_timeout_s(timeout_ms: Optional[int], *, fast_mode: bool) 
             pass
     if fast_mode:
         try:
-            from config import get_config
-
-            raw = getattr(get_config().retrieval, "injection_timeout_ms", 8000)
+            raw = _get_configured_injection_timeout_ms(8000)
             # Existing prerelease installs may still carry the old 3s generated
             # config value. Keep the implicit hook budget live-safe unless the
             # caller passed an explicit timeout_ms above.
             return max(8.0, float(raw or 8000) / 1000.0)
         except Exception:
+            if _is_fail_hard_mode():
+                raise
             return 8.0
     return 30.0
 
@@ -5089,6 +5098,8 @@ def _run_recall_store_plan(
         })
 
     merged = _merge_recall_batches(merged_batches, limit=max(limit, limit * 2 if fast_mode else limit))
+    if fast_mode:
+        merged = _prioritize_fast_anchor_direct_rows(query, merged)
     final_rows = merged[:limit]
     final_rows, preserved_docs_rows = _preserve_requested_docs_rows(
         final_rows,
@@ -5382,6 +5393,7 @@ def _recall_once(
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
     lexical_anchor_planner_mode: str = "llm",
+    use_lightweight_config: bool = False,
     track_access: bool = True,
     low_signal_retry: bool = True,
     timeout_ms: Optional[int] = None,
@@ -5455,11 +5467,16 @@ def _recall_once(
 
     config_retrieval = None
     try:
-        from config import get_config
-        config_retrieval = get_config().retrieval
+        if use_lightweight_config:
+            config_retrieval = _get_retrieval_lightweight_config()
+        else:
+            from config import get_config
+            config_retrieval = get_config().retrieval
         if min_similarity is None:
-            min_similarity = config_retrieval.min_similarity
+            min_similarity = getattr(config_retrieval, "min_similarity", 0.60)
     except Exception:
+        if use_lightweight_config and _is_fail_hard_mode():
+            raise
         if min_similarity is None:
             min_similarity = 0.60
     if privacy is None:
@@ -5919,6 +5936,13 @@ def _recall_once(
                         ) from exc
                     logger.warning("fast recall FTS lexical rescue failed; continuing without rescue: %s", exc)
                     fts_rescue = []
+                if not fts_rescue:
+                    fts_rescue = _search_nodes_by_query_terms(
+                        graph,
+                        query_terms,
+                        limit=max(search_limit, limit * 3),
+                        owner_id=owner_id,
+                    )
                 if fts_rescue:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
                         node.id: (node, score)
@@ -5988,6 +6012,13 @@ def _recall_once(
                         ) from exc
                     logger.warning("fast recall FTS fresh-anchor rescue failed; continuing without rescue: %s", exc)
                     fts_anchor_hits = []
+                if not fts_anchor_hits:
+                    fts_anchor_hits = _search_nodes_by_query_terms(
+                        graph,
+                        explicit_anchor_terms,
+                        limit=max(search_limit, limit * 4),
+                        owner_id=owner_id,
+                    )
                 if fts_anchor_hits:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
                         node.id: (node, score)
@@ -6949,6 +6980,75 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
     return merged[: max(1, limit)]
 
 
+def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep fresh direct memory rows ahead of graph context for explicit-anchor hook recall."""
+    if not rows:
+        return rows
+    explicit_anchor_terms = _extract_explicit_query_anchor_terms(query, limit=8)
+    if not explicit_anchor_terms:
+        return rows
+    query_terms = _extract_distinctive_query_terms(query, limit=8)
+
+    def _row_text(row: Dict[str, Any]) -> str:
+        return str((row or {}).get("text") or "")
+
+    def _row_matches_anchor(row: Dict[str, Any]) -> bool:
+        lower_text = _row_text(row).lower()
+        return any(term in lower_text for term in explicit_anchor_terms)
+
+    def _row_created_sort_key(row: Dict[str, Any]) -> str:
+        for key in ("created_at", "source_date", "valid_from"):
+            raw = str((row or {}).get(key) or "").strip()
+            if raw:
+                return raw
+        return ""
+
+    def _is_direct_memory_row(row: Dict[str, Any]) -> bool:
+        if str((row or {}).get("category") or "").strip().lower() == "docs":
+            return False
+        if (row or {}).get("via_relation") or (row or {}).get("graph_path"):
+            return False
+        return bool(str((row or {}).get("id") or "").strip())
+
+    direct_anchor_rows = [
+        row
+        for row in rows
+        if isinstance(row, dict) and _is_direct_memory_row(row) and _row_matches_anchor(row)
+    ]
+    if not direct_anchor_rows:
+        return rows
+
+    overlap_by_id = {
+        str(row.get("id")): _query_term_overlap({"text": _row_text(row)}, query_terms)
+        for row in direct_anchor_rows
+    }
+    max_overlap = max(overlap_by_id.values(), default=0)
+    if max_overlap >= 2:
+        priority_rows = [
+            row for row in direct_anchor_rows
+            if overlap_by_id.get(str(row.get("id")), 0) == max_overlap
+        ]
+    else:
+        # Broad anchor prompts have little lexical detail. In that shape, direct
+        # same-anchor memory recency is a better hook context signal than graph
+        # expansions or older generic anchor facts.
+        priority_rows = list(direct_anchor_rows)
+
+    priority_rows.sort(
+        key=lambda row: (
+            overlap_by_id.get(str(row.get("id")), 0),
+            _row_created_sort_key(row),
+            float(row.get("similarity", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
+    priority_keys = {_recall_row_identity(row) for row in priority_rows}
+    return priority_rows + [
+        row for row in rows
+        if _recall_row_identity(row) not in priority_keys
+    ]
+
+
 def _is_docs_recall_row(row: Dict[str, Any]) -> bool:
     return str(row.get("category") or "").strip() == "docs" or str(row.get("source_type") or "").strip() == "docs"
 
@@ -7358,6 +7458,8 @@ def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[
         if not token:
             continue
         lower = token.lower()
+        if lower.endswith(("'s", "’s")):
+            lower = lower[:-2]
         if lower in seen:
             continue
         if lower in _QUERY_STOPWORDS:
@@ -7840,6 +7942,65 @@ def _node_searchable_text(node: Node) -> str:
     elif attrs:
         parts.append(str(attrs))
     return " ".join(part for part in parts if part)
+
+
+def _search_nodes_by_query_terms(
+    graph: "MemoryGraph",
+    query_terms: List[str],
+    *,
+    limit: int,
+    owner_id: Optional[str] = None,
+) -> List[tuple[Node, float]]:
+    """Bounded LIKE fallback for fresh rows not yet visible in FTS."""
+    terms = []
+    seen = set()
+    for raw in query_terms or []:
+        term = " ".join(str(raw or "").split()).strip().lower()
+        if not term or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+        if len(terms) >= 8:
+            break
+    if not terms:
+        return []
+
+    clauses = []
+    params: List[Any] = []
+    for term in terms:
+        pattern = f"%{term}%"
+        clauses.append("(LOWER(n.name) LIKE ? OR LOWER(COALESCE(n.attributes, '')) LIKE ?)")
+        params.extend([pattern, pattern])
+    owner_clause = "AND (n.owner_id = ? OR n.owner_id IS NULL)" if owner_id else ""
+    if owner_id:
+        params.append(owner_id)
+    params.append(max(limit * 8, 32))
+
+    with graph._get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT n.*
+            FROM nodes n
+            WHERE ({' OR '.join(clauses)})
+              AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+              AND n.deleted_at IS NULL
+              AND n.superseded_by IS NULL
+              {owner_clause}
+            ORDER BY COALESCE(n.created_at, '') DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+    scored: List[Tuple[Node, int, str]] = []
+    for row in rows:
+        node = graph._row_to_node(row)
+        overlap = _query_term_overlap({"text": _node_searchable_text(node)}, terms)
+        if overlap <= 0:
+            continue
+        scored.append((node, overlap, str(getattr(node, "created_at", "") or "")))
+    scored.sort(key=lambda item: (item[1], item[2]), reverse=True)
+    return [(node, float(rank)) for rank, (node, _overlap, _created) in enumerate(scored[:limit], 1)]
 
 
 def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
@@ -9483,7 +9644,8 @@ def recall_fast(
                     meta=meta,
                 )
                 return (rows, meta) if return_meta else rows
-            rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))[:effective_limit]
+            rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))
+            rows = _prioritize_fast_anchor_direct_rows(query, rows)[:effective_limit]
             if drill_docs_bundle:
                 docs_bundle = _merge_docs_bundles(docs_bundle, drill_docs_bundle)
             meta.setdefault("turn_details", [])
@@ -9725,6 +9887,7 @@ def recall(
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
     lexical_anchor_planner_mode: str = "llm",
+    use_lightweight_config: bool = False,
     track_access: bool = True,
     return_meta: bool = False,
     planned_queries: Optional[List[str]] = None,
@@ -9827,10 +9990,15 @@ def recall(
     quality_gate = 0.70
     config_retrieval = None
     try:
-        from config import get_config
-        config_retrieval = get_config().retrieval
+        if use_lightweight_config:
+            config_retrieval = _get_retrieval_lightweight_config()
+        else:
+            from config import get_config
+            config_retrieval = get_config().retrieval
         quality_gate = getattr(config_retrieval, "multi_pass_gate", 0.70)
     except Exception:
+        if use_lightweight_config and _is_fail_hard_mode():
+            raise
         pass
 
     recall_start = _time.monotonic()
@@ -9880,6 +10048,7 @@ def recall(
         timeout_ms=overall_timeout_ms,
         include_lexical_anchor_shaping=include_lexical_anchor_shaping,
         lexical_anchor_planner_mode=lexical_anchor_planner_mode,
+        use_lightweight_config=use_lightweight_config,
         track_access=track_access,
     )
     gate_intent = "GENERAL"
