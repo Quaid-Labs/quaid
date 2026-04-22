@@ -1358,10 +1358,11 @@ class TestRecallBasic:
         branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
         assert branches[0].get("flags", {}).get("lexical_rescue_used") is True
 
-    def test_recall_fast_rescues_exact_keyword_hit_when_fts_has_no_rows(self, tmp_path):
+    def test_recall_fast_rescues_exact_keyword_hit_when_fts_has_no_rows(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
+        monkeypatch.setenv("MEMORY_DB_PATH", str(graph.db_path))
         query = "What do you know about Baxter's brass midnight triangle?"
         planner_meta = {
             "query": query,
@@ -1403,11 +1404,11 @@ class TestRecallBasic:
             assert generic_node is not None
             assert stale_node is not None
 
-            with patch.object(graph, "search_hybrid", return_value=[
+            with patch.object(mg.MemoryGraph, "search_hybrid", return_value=[
                 (generic_node, 0.78),
                 (stale_node, 0.75),
             ]), \
-                 patch.object(graph, "search_fts", return_value=[]), \
+                 patch.object(mg.MemoryGraph, "search_fts", return_value=[]), \
                  patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
                 rows, meta = mg.recall_fast(
                     query,

@@ -7984,8 +7984,8 @@ def _search_nodes_by_query_terms(
     params: List[Any] = []
     for term in terms:
         pattern = f"%{term}%"
-        clauses.append("(LOWER(n.name) LIKE ? OR LOWER(COALESCE(n.attributes, '')) LIKE ?)")
-        params.extend([pattern, pattern])
+        clauses.append("LOWER(n.name) LIKE ?")
+        params.append(pattern)
     owner_clause = "AND (n.owner_id = ? OR n.owner_id IS NULL)" if owner_id else ""
     if owner_id:
         params.append(owner_id)
