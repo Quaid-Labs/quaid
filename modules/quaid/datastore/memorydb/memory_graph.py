@@ -8923,6 +8923,12 @@ def recall_fast(
     """Pre-injection recall: thin wrapper over recall() with single-pass settings."""
     import time as _time
 
+    recall_fast_started = _time.monotonic()
+    try:
+        recall_fast_deadline = recall_fast_started + _recall_store_plan_timeout_s(timeout_ms, fast_mode=True)
+    except Exception:
+        recall_fast_deadline = None
+
     _trace_m15(
         "memory_graph.recall_fast.entry",
         query=query,
@@ -9091,12 +9097,31 @@ def recall_fast(
         limit=effective_limit,
     )
     fast_drill_enabled = "preserved_exact_low_overlap" in fast_drill_reasons
+    fast_drill_skip_reason = None
+    fast_drill_remaining_ms: Optional[int] = None
+    fast_drill_min_budget_ms = 3000
+    if recall_fast_deadline is not None:
+        fast_drill_remaining_ms = int(round((recall_fast_deadline - _time.monotonic()) * 1000))
+        if fast_drill_enabled and fast_drill_remaining_ms < fast_drill_min_budget_ms:
+            fast_drill_enabled = False
+            fast_drill_skip_reason = "time_budget_exhausted"
+            _trace_m15(
+                "memory_graph.recall_fast.fast_drill_skipped",
+                query=query,
+                reason=fast_drill_skip_reason,
+                remaining_ms=fast_drill_remaining_ms,
+                min_budget_ms=fast_drill_min_budget_ms,
+                fast_drill_reasons=fast_drill_reasons,
+            )
     meta["quality_gate"] = {
         "evaluation": gate_eval,
         "fast_drill_candidate": should_fast_drill,
         "fast_drill_reasons": fast_drill_reasons,
         "fast_drill_enabled": fast_drill_enabled,
     }
+    if fast_drill_skip_reason:
+        meta["quality_gate"]["fast_drill_skip_reason"] = fast_drill_skip_reason
+        meta["quality_gate"]["fast_drill_remaining_ms"] = fast_drill_remaining_ms
     meta["memory_quality"] = _summarize_memory_quality(
         query,
         rows,
@@ -9188,38 +9213,84 @@ def recall_fast(
             fast_drill_meta = dict(drill_meta or {})
             fast_drill_meta.setdefault("planned_stores", list(planned_stores))
             fast_drill_meta.setdefault("planned_project", planned_project)
-            drill_rows, drill_store_meta, drill_docs_bundle = _run_recall_store_plan(
-                query,
-                stores=planned_stores,
-                limit=drill_limit,
-                owner_id=owner_id,
-                min_similarity=min_similarity,
-                planner_profile="off",
-                planned_queries=drill_queries,
-                planner_meta=fast_drill_meta,
-                fast_mode=True,
-                graph_depth=auto_inject_graph_depth,
-                common_kwargs={
-                    "privacy": privacy,
-                    "current_session_id": current_session_id,
-                    "compaction_time": compaction_time,
-                    "date_from": date_from,
-                    "date_to": date_to,
-                    "source_channel": source_channel,
-                    "source_conversation_id": source_conversation_id,
-                    "source_author_id": source_author_id,
-                    "actor_id": actor_id,
-                    "subject_entity_id": subject_entity_id,
-                    "viewer_entity_id": viewer_entity_id,
-                    "participant_entity_ids": participant_entity_ids,
-                    "include_unscoped": include_unscoped,
-                    "debug": debug,
-                    "domain": domain,
-                    "domain_boost": domain_boost,
-                    "project": planned_project,
-                    "timeout_ms": timeout_ms,
-                },
-            )
+            drill_timeout_ms = timeout_ms
+            if recall_fast_deadline is not None:
+                remaining = int(round((recall_fast_deadline - _time.monotonic()) * 1000))
+                drill_timeout_ms = max(500, remaining)
+            try:
+                drill_rows, drill_store_meta, drill_docs_bundle = _run_recall_store_plan(
+                    query,
+                    stores=planned_stores,
+                    limit=drill_limit,
+                    owner_id=owner_id,
+                    min_similarity=min_similarity,
+                    planner_profile="off",
+                    planned_queries=drill_queries,
+                    planner_meta=fast_drill_meta,
+                    fast_mode=True,
+                    graph_depth=auto_inject_graph_depth,
+                    common_kwargs={
+                        "privacy": privacy,
+                        "current_session_id": current_session_id,
+                        "compaction_time": compaction_time,
+                        "date_from": date_from,
+                        "date_to": date_to,
+                        "source_channel": source_channel,
+                        "source_conversation_id": source_conversation_id,
+                        "source_author_id": source_author_id,
+                        "actor_id": actor_id,
+                        "subject_entity_id": subject_entity_id,
+                        "viewer_entity_id": viewer_entity_id,
+                        "participant_entity_ids": participant_entity_ids,
+                        "include_unscoped": include_unscoped,
+                        "debug": debug,
+                        "domain": domain,
+                        "domain_boost": domain_boost,
+                        "project": planned_project,
+                        "timeout_ms": drill_timeout_ms,
+                    },
+                )
+            except Exception as exc:
+                timeout_like = _is_timeout_like_exception(exc)
+                _trace_m15(
+                    "memory_graph.recall_fast.fast_drill_error",
+                    query=query,
+                    timeout_like=timeout_like,
+                    initial_rows=len(rows or []),
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                if _is_fail_hard_mode() or not timeout_like or not rows:
+                    raise
+                logger.warning(
+                    "fast recall drill timed out; returning initial completed rows: %s",
+                    exc,
+                )
+                meta["quality_gate"] = {
+                    "evaluation": gate_eval,
+                    "fast_drill_candidate": True,
+                    "fast_drill_reasons": fast_drill_reasons,
+                    "fast_drill_enabled": False,
+                    "fast_drill_skip_reason": "timeout",
+                    "fast_drill_error_type": type(exc).__name__,
+                    "fast_drill_error": str(exc)[:240],
+                    "fast_drill_queries": list(drill_queries),
+                }
+                meta["memory_quality"] = _summarize_memory_quality(
+                    query,
+                    rows,
+                    gate_eval=gate_eval,
+                    intent=gate_intent,
+                    limit=effective_limit,
+                )
+                _attach_recall_meta(rows, meta)
+                _trace_m15(
+                    "memory_graph.recall_fast.exit",
+                    query=query,
+                    rows_count=len(rows or []),
+                    meta=meta,
+                )
+                return (rows, meta) if return_meta else rows
             rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))[:effective_limit]
             if drill_docs_bundle:
                 docs_bundle = _merge_docs_bundles(docs_bundle, drill_docs_bundle)

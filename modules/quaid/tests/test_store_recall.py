@@ -2504,6 +2504,10 @@ class TestRecallTelemetry:
 
         with patch.object(
             mg,
+            "_recall_store_plan_timeout_s",
+            return_value=5.0,
+        ), patch.object(
+            mg,
             "_plan_fanout_queries",
             return_value=(
                 ["Have Maya and David done any races together?"],
@@ -2544,6 +2548,137 @@ class TestRecallTelemetry:
         assert meta["quality_gate"]["fast_drill_enabled"] is True
         assert meta["quality_gate"]["fast_drill_queries"] == run_calls[1]["planned_queries"]
         assert meta["phases_ms"]["fast_drill_wall_ms"] == 90
+
+    def test_recall_fast_skips_drill_when_injection_budget_is_exhausted(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+            })
+            return (
+                [{"id": "a", "text": "Baxter wears a blue bandana", "category": "fact", "similarity": 0.91}],
+                {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_recall_store_plan_timeout_s",
+            return_value=0.5,
+        ), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["What do you know about Baxter and his blue bandana?"],
+                {
+                    "query": "What do you know about Baxter and his blue bandana?",
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                {"ready": True, "needs_validation": True, "overlap_ratio": 0.5},
+                ["preserved_exact_low_overlap"],
+                "GENERAL",
+            ),
+        ):
+            rows, meta = mg.recall_fast(
+                "What do you know about Baxter and his blue bandana?",
+                return_meta=True,
+            )
+
+        assert len(run_calls) == 1
+        assert rows[0]["text"] == "Baxter wears a blue bandana"
+        assert meta["quality_gate"]["fast_drill_candidate"] is True
+        assert meta["quality_gate"]["fast_drill_enabled"] is False
+        assert meta["quality_gate"]["fast_drill_skip_reason"] == "time_budget_exhausted"
+
+    def test_recall_fast_preserves_initial_rows_when_optional_drill_times_out(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "timeout_ms": common_kwargs.get("timeout_ms"),
+            })
+            if len(run_calls) == 1:
+                return (
+                    [{"id": "a", "text": "Baxter wears a blue bandana", "category": "fact", "similarity": 0.91}],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            raise TimeoutError("1 (of 1) futures unfinished")
+
+        with patch.object(
+            mg,
+            "_recall_store_plan_timeout_s",
+            return_value=5.0,
+        ), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["What do you know about Baxter and his blue bandana?"],
+                {
+                    "query": "What do you know about Baxter and his blue bandana?",
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                {"ready": True, "needs_validation": True, "overlap_ratio": 0.5},
+                ["preserved_exact_low_overlap"],
+                "GENERAL",
+            ),
+        ), patch.object(
+            mg,
+            "_build_fast_drill_fallback_queries",
+            return_value=["What do you know about Baxter and his blue bandana?"],
+        ), patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            rows, meta = mg.recall_fast(
+                "What do you know about Baxter and his blue bandana?",
+                return_meta=True,
+            )
+
+        assert len(run_calls) == 2
+        assert run_calls[1]["planner_profile"] == "off"
+        assert rows[0]["text"] == "Baxter wears a blue bandana"
+        assert meta["quality_gate"]["fast_drill_candidate"] is True
+        assert meta["quality_gate"]["fast_drill_enabled"] is False
+        assert meta["quality_gate"]["fast_drill_skip_reason"] == "timeout"
+        assert meta["quality_gate"]["fast_drill_error_type"] == "TimeoutError"
 
     def test_recall_fast_does_not_use_keyword_fallback_when_fast_drill_disabled(self):
         import datastore.memorydb.memory_graph as mg
