@@ -9674,6 +9674,7 @@ def recall_fast(
                     gate_eval=gate_eval,
                     intent=gate_intent,
                     limit=effective_limit,
+                    include_relation_keywords=False,
                 )
                 _attach_recall_meta(rows, meta)
                 _trace_m15(
@@ -9698,6 +9699,7 @@ def recall_fast(
                         rows,
                         intent=gate_intent,
                         limit=effective_limit,
+                        include_relation_keywords=False,
                     ),
                 })
             phases = dict(meta.get("phases_ms") or {})
@@ -9707,7 +9709,13 @@ def recall_fast(
             meta["phases_ms"] = phases
             meta["stop_reason"] = "fast_drill_merged"
             meta["quality_gate"] = {
-                "evaluation": _evaluate_quality_gate_readiness(query, rows, intent=gate_intent, limit=effective_limit),
+                "evaluation": _evaluate_quality_gate_readiness(
+                    query,
+                    rows,
+                    intent=gate_intent,
+                    limit=effective_limit,
+                    include_relation_keywords=False,
+                ),
                 "fast_drill_candidate": True,
                 "fast_drill_reasons": fast_drill_reasons,
                 "fast_drill_enabled": True,
@@ -9719,6 +9727,7 @@ def recall_fast(
                 gate_eval=meta["quality_gate"]["evaluation"],
                 intent=gate_intent,
                 limit=effective_limit,
+                include_relation_keywords=False,
             )
     _attach_recall_meta(rows, meta)
     _trace_m15(
@@ -10229,7 +10238,13 @@ def recall(
         )
     top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
     turn1_coverage = _summarize_result_coverage(merged)
-    gate_eval = _evaluate_quality_gate_readiness(query, merged, intent=gate_intent, limit=limit)
+    gate_eval = _evaluate_quality_gate_readiness(
+        query,
+        merged,
+        intent=gate_intent,
+        limit=limit,
+        include_relation_keywords=not use_lightweight_config,
+    )
 
     drill_log.append({
         "turn": 1,
@@ -10313,6 +10328,7 @@ def recall(
                 gate_eval=gate_eval,
                 intent=gate_intent,
                 limit=limit,
+                include_relation_keywords=not use_lightweight_config,
             ),
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
@@ -10340,7 +10356,13 @@ def recall(
             break
 
         # Quality gate: stop if top results are strong enough
-        gate_eval = _evaluate_quality_gate_readiness(query, merged, intent=gate_intent, limit=limit)
+        gate_eval = _evaluate_quality_gate_readiness(
+            query,
+            merged,
+            intent=gate_intent,
+            limit=limit,
+            include_relation_keywords=not use_lightweight_config,
+        )
         candidate_quality_gate = top_score >= quality_gate and len(merged) >= limit
         if candidate_quality_gate and gate_eval.get("ready") and not gate_eval.get("needs_validation"):
             logger.debug("[recall] quality gate met (top=%.3f >= %.3f), stopping after turn %d", top_score, quality_gate, turn - 1)
@@ -10483,7 +10505,13 @@ def recall(
         top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
         turn_elapsed = (_time.monotonic() - turn_start) * 1000
         turn_coverage = _summarize_result_coverage(merged)
-        turn_gate_eval = _evaluate_quality_gate_readiness(query, merged, intent=gate_intent, limit=limit)
+        turn_gate_eval = _evaluate_quality_gate_readiness(
+            query,
+            merged,
+            intent=gate_intent,
+            limit=limit,
+            include_relation_keywords=not use_lightweight_config,
+        )
 
         drill_log.append({
             "turn": turn,
@@ -10546,7 +10574,13 @@ def recall(
         for turn in turn_phase_details
     )
     non_parallel_overhead_ms = max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms - total_post_merge_refine_ms)
-    final_gate_eval = _evaluate_quality_gate_readiness(query, final, intent=gate_intent, limit=limit)
+    final_gate_eval = _evaluate_quality_gate_readiness(
+        query,
+        final,
+        intent=gate_intent,
+        limit=limit,
+        include_relation_keywords=not use_lightweight_config,
+    )
     meta = {
         "mode": "deliberate",
         "query": query,
@@ -10581,6 +10615,7 @@ def recall(
             gate_eval=final_gate_eval,
             intent=gate_intent,
             limit=limit,
+            include_relation_keywords=not use_lightweight_config,
         ),
         "stop_reason": stop_reason,
         "bailout_counts": bailout_counts,
