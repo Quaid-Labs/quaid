@@ -1396,7 +1396,7 @@ class TestRecallBasic:
             )
             exact = mg.store(
                 "Baxter hides a sapphire tug ring beneath the pantry mat and rings a brass midnight triangle before bed",
-                owner_id="quaid",
+                owner_id="solomon-steadman",
                 skip_dedup=True,
                 created_at="2026-04-22T13:17:09",
             )

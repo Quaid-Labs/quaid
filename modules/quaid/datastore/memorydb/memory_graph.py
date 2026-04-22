@@ -8004,26 +8004,38 @@ def _search_nodes_by_query_terms(
         pattern = f"%{term}%"
         clauses.append("LOWER(n.name) LIKE ?")
         params.append(pattern)
-    owner_clause = "AND (n.owner_id = ? OR n.owner_id IS NULL)" if owner_id else ""
-    if owner_id:
-        params.append(owner_id)
-    params.append(max(limit * 8, 32))
+    def _fetch_rows(scoped_owner_id: Optional[str]) -> List[Any]:
+        fetch_params = list(params)
+        owner_clause = "AND (n.owner_id = ? OR n.owner_id IS NULL)" if scoped_owner_id else ""
+        if scoped_owner_id:
+            fetch_params.append(scoped_owner_id)
+        fetch_params.append(max(limit * 8, 32))
+        with graph._get_conn() as conn:
+            return conn.execute(
+                f"""
+                SELECT n.*
+                FROM nodes n
+                WHERE ({' OR '.join(clauses)})
+                  AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+                  AND n.deleted_at IS NULL
+                  AND n.superseded_by IS NULL
+                  {owner_clause}
+                ORDER BY COALESCE(n.created_at, '') DESC
+                LIMIT ?
+                """,
+                fetch_params,
+            ).fetchall()
 
-    with graph._get_conn() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT n.*
-            FROM nodes n
-            WHERE ({' OR '.join(clauses)})
-              AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
-              AND n.deleted_at IS NULL
-              AND n.superseded_by IS NULL
-              {owner_clause}
-            ORDER BY COALESCE(n.created_at, '') DESC
-            LIMIT ?
-            """,
-            params,
-        ).fetchall()
+    rows = _fetch_rows(owner_id)
+    if owner_id:
+        seen_rowids = {row["id"] for row in rows if "id" in row.keys()}
+        for row in _fetch_rows(None):
+            row_id = row["id"] if "id" in row.keys() else None
+            if row_id and row_id in seen_rowids:
+                continue
+            if row_id:
+                seen_rowids.add(row_id)
+            rows.append(row)
 
     scored: List[Tuple[Node, int, str]] = []
     for row in rows:
