@@ -5478,7 +5478,14 @@ def _recall_once(
     elif isinstance(privacy, str):
         privacy = [privacy]
     graph = get_graph()
-    active_domains = _active_domains_for_filter(graph)
+    requested_domain_filter = (
+        isinstance(domain, dict)
+        and any(
+            bool(v) and _normalize_domain_tag(k) and _normalize_domain_tag(k) != "all"
+            for k, v in domain.items()
+        )
+    )
+    active_domains = _active_domains_for_filter(graph) if (requested_domain_filter or domain_boost) else set()
     include_all_domains, included_domains = _normalize_domain_filter(
         domain,
         active_domains,
