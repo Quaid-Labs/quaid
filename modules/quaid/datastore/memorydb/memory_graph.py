@@ -4427,7 +4427,7 @@ def _vector_store_recall(
         limit=limit,
         min_similarity=min_similarity,
         use_routing=not fast_mode,
-        use_aliases=True,
+        use_aliases=not fast_mode,
         use_intent=True,
         use_multi_pass=not fast_mode,
         use_reranker=not fast_mode,
@@ -5935,26 +5935,29 @@ def _recall_once(
             best_ratio = best_overlap / max(1, len(query_terms))
             if best_ratio < 0.67:
                 _phase_t0 = _time.monotonic()
-                try:
-                    fts_rescue = graph.search_fts(clean_query, limit=max(search_limit, limit * 3), owner_id=owner_id)
-                except Exception as exc:
-                    if _is_fail_hard_mode():
-                        raise RuntimeError(
-                            "FTS lexical rescue failed during fast recall while failHard is enabled"
-                        ) from exc
-                    logger.warning("fast recall FTS lexical rescue failed; continuing without rescue: %s", exc)
-                    fts_rescue = []
                 term_rescue = _search_nodes_by_query_terms(
                     graph,
                     query_terms,
                     limit=max(search_limit, limit * 3),
                     owner_id=owner_id,
                 )
-                if term_rescue:
-                    fts_rescue = _append_missing_node_candidates(
-                        list(fts_rescue or []),
-                        term_rescue,
-                    )
+                if use_lightweight_config:
+                    fts_rescue = term_rescue
+                else:
+                    try:
+                        fts_rescue = graph.search_fts(clean_query, limit=max(search_limit, limit * 3), owner_id=owner_id)
+                    except Exception as exc:
+                        if _is_fail_hard_mode():
+                            raise RuntimeError(
+                                "FTS lexical rescue failed during fast recall while failHard is enabled"
+                            ) from exc
+                        logger.warning("fast recall FTS lexical rescue failed; continuing without rescue: %s", exc)
+                        fts_rescue = []
+                    if term_rescue:
+                        fts_rescue = _append_missing_node_candidates(
+                            list(fts_rescue or []),
+                            term_rescue,
+                        )
                 if fts_rescue:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
                         node.id: (node, score)
@@ -6015,26 +6018,29 @@ def _recall_once(
             )
             if latest_anchor_created:
                 _phase_t0 = _time.monotonic()
-                try:
-                    fts_anchor_hits = graph.search_fts(clean_query, limit=max(search_limit, limit * 4), owner_id=owner_id)
-                except Exception as exc:
-                    if _is_fail_hard_mode():
-                        raise RuntimeError(
-                            "FTS fresh-anchor rescue failed during fast recall while failHard is enabled"
-                        ) from exc
-                    logger.warning("fast recall FTS fresh-anchor rescue failed; continuing without rescue: %s", exc)
-                    fts_anchor_hits = []
                 term_anchor_hits = _search_nodes_by_query_terms(
                     graph,
                     explicit_anchor_terms,
                     limit=max(search_limit, limit * 4),
                     owner_id=owner_id,
                 )
-                if term_anchor_hits:
-                    fts_anchor_hits = _append_missing_node_candidates(
-                        list(fts_anchor_hits or []),
-                        term_anchor_hits,
-                    )
+                if use_lightweight_config:
+                    fts_anchor_hits = term_anchor_hits
+                else:
+                    try:
+                        fts_anchor_hits = graph.search_fts(clean_query, limit=max(search_limit, limit * 4), owner_id=owner_id)
+                    except Exception as exc:
+                        if _is_fail_hard_mode():
+                            raise RuntimeError(
+                                "FTS fresh-anchor rescue failed during fast recall while failHard is enabled"
+                            ) from exc
+                        logger.warning("fast recall FTS fresh-anchor rescue failed; continuing without rescue: %s", exc)
+                        fts_anchor_hits = []
+                    if term_anchor_hits:
+                        fts_anchor_hits = _append_missing_node_candidates(
+                            list(fts_anchor_hits or []),
+                            term_anchor_hits,
+                        )
                 if fts_anchor_hits:
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
                         node.id: (node, score)

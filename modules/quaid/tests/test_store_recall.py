@@ -1279,10 +1279,11 @@ class TestRecallBasic:
         assert rows
         assert rows[0]["text"] == "Baxter is a golden retriever who loves tennis balls"
 
-    def test_recall_fast_rescues_exact_fts_hit_when_vector_returns_generic_entity_rows(self, tmp_path):
+    def test_recall_fast_rescues_exact_direct_hit_when_vector_returns_generic_entity_rows(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
+        monkeypatch.setenv("MEMORY_DB_PATH", str(graph.db_path))
         fake_cfg = SimpleNamespace(
             retrieval=SimpleNamespace(
                 boost_recent=True,
@@ -1337,11 +1338,11 @@ class TestRecallBasic:
             assert tennis_node is not None
             assert exact_node is not None
 
-            with patch.object(graph, "search_hybrid", return_value=[
+            with patch.object(mg.MemoryGraph, "search_hybrid", return_value=[
                 (generic_node, 0.78),
                 (tennis_node, 0.75),
             ]), \
-                 patch.object(graph, "search_fts", return_value=[(exact_node, 1.0)]), \
+                 patch.object(mg.MemoryGraph, "search_fts", return_value=[]), \
                  patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
                 rows, meta = mg.recall_fast(
                     query,
