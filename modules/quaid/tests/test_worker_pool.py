@@ -159,6 +159,24 @@ class TestTimeout:
                 return_exceptions=False,
             )
 
+    def test_raised_timeout_retires_pool(self):
+        with pytest.raises(TimeoutError, match="pending_callable_indices"):
+            worker_pool.run_callables(
+                [lambda: time.sleep(0.3)],
+                max_workers=1,
+                pool_name="test-raised-timeout-retire",
+                timeout_seconds=0.01,
+                return_exceptions=False,
+            )
+
+        assert ("test-raised-timeout-retire", 1) not in worker_pool._POOLS
+        assert worker_pool.run_callables(
+            [lambda: "fresh"],
+            max_workers=1,
+            pool_name="test-raised-timeout-retire",
+            timeout_seconds=0.1,
+        ) == ["fresh"]
+
     def test_timeout_return_exceptions_stores_timeout_per_item(self):
         out = worker_pool.run_callables(
             [lambda: time.sleep(0.3), lambda: time.sleep(0.3)],
@@ -215,6 +233,26 @@ class TestTimeout:
             timeout_seconds=5.0,
         )
         assert out == ["done"]
+
+    def test_timeout_retires_pool_so_next_call_does_not_queue_behind_stuck_work(self):
+        out = worker_pool.run_callables(
+            [lambda: time.sleep(0.3) or "stuck"],
+            max_workers=1,
+            pool_name="test-timeout-retire",
+            timeout_seconds=0.01,
+            return_exceptions=True,
+        )
+
+        assert isinstance(out[0], TimeoutError)
+        assert ("test-timeout-retire", 1) not in worker_pool._POOLS
+
+        next_out = worker_pool.run_callables(
+            [lambda: "fresh"],
+            max_workers=1,
+            pool_name="test-timeout-retire",
+            timeout_seconds=0.1,
+        )
+        assert next_out == ["fresh"]
 
 
 # ---------------------------------------------------------------------------

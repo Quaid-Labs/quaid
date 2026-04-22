@@ -4,7 +4,7 @@ Covers:
 - hook_inject cursor seeding (rglob hit, rglob miss/fallback, idempotent, no session_id, empty cwd)
 - hook_session_init registry augmentation (projects_dir, registry extra, no duplicate)
 - hook_session_init TOOLS.md / AGENTS.md presence in output
-- hook_inject silent-fail on recall_fast exception
+- hook_inject fail-soft/fail-hard handling for recall_fast exceptions
 - hook_inject project-doc injection via projects_search_docs
 - hook_inject no crash on empty recall_fast result
 """
@@ -858,11 +858,13 @@ class TestHookInjectRecallResilience:
     def test_recall_fast_exception_does_not_crash(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
-        """hook_inject must not propagate exceptions from recall_fast."""
+        """hook_inject may degrade on recall_fast exceptions only when failHard is off."""
         from core import extraction_daemon
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
 
-        with patch("core.interface.api.recall_fast", side_effect=RuntimeError("LLM down")):
+        with patch("core.interface.api.recall_fast", side_effect=RuntimeError("LLM down")), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
             # Should complete without raising
             out, err = _run_hook_inject(
                 {
@@ -875,6 +877,27 @@ class TestHookInjectRecallResilience:
 
         # Error should appear on stderr, not propagate
         assert "LLM down" in err or True  # hook silences errors internally
+
+    def test_recall_fast_exception_surfaces_when_fail_hard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+
+        with patch("core.interface.api.recall_fast", side_effect=TimeoutError("recall branch timed out")), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            _out, err = _run_hook_inject(
+                {
+                    "prompt": "trigger recall timeout",
+                    "session_id": "sess-timeout-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert "recall branch timed out" in err
 
     def test_recall_fast_empty_list_no_output(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

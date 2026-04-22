@@ -924,6 +924,20 @@ def hook_inject(args):
             except Exception as mem_exc:
                 if _is_provider_failure(mem_exc):
                     raise
+                _write_hook_trace("hook.inject.recall_error", {
+                    "query": query[:160],
+                    "session_id": session_id,
+                    "error_type": type(mem_exc).__name__,
+                    "error": str(mem_exc)[:500],
+                })
+                try:
+                    from lib.fail_policy import is_fail_hard_enabled
+
+                    fail_hard = is_fail_hard_enabled()
+                except Exception:
+                    fail_hard = True
+                if fail_hard:
+                    raise
                 memories = []
                 recall_meta = None
             try:

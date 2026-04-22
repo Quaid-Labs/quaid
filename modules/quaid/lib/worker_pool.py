@@ -23,6 +23,16 @@ def _pool(pool_name: str, max_workers: int) -> ThreadPoolExecutor:
         return ex
 
 
+def _retire_pool(pool_name: str, max_workers: int, executor: ThreadPoolExecutor) -> None:
+    """Remove a timed-out executor so later calls do not queue behind stuck work."""
+    key = (str(pool_name or "default"), max(1, int(max_workers)))
+    with _POOL_GUARD:
+        current = _POOLS.get(key)
+        if current is executor:
+            _POOLS.pop(key, None)
+    executor.shutdown(wait=False, cancel_futures=True)
+
+
 def shutdown_worker_pools(wait: bool = False) -> None:
     """Shutdown and clear shared thread pools."""
     import sys
@@ -75,6 +85,7 @@ def run_callables(
     out: List[Any] = [None] * len(funcs)
     deadline = None if timeout_seconds is None else (time.monotonic() + max(0.0, float(timeout_seconds)))
     pending = set(fut_to_idx.keys())
+    timed_out = False
 
     while pending:
         if deadline is None:
@@ -82,6 +93,7 @@ def run_callables(
         else:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                timed_out = True
                 for fut in pending:
                     fut.cancel()
                 if return_exceptions:
@@ -92,6 +104,7 @@ def run_callables(
                         )
                     break
                 pending_indices = sorted(fut_to_idx[f] for f in pending)
+                _retire_pool(pool_name, worker_count, ex)
                 raise TimeoutError(
                     f"Parallel call timed out after {timeout_seconds}s "
                     f"(pending_callable_indices={pending_indices})"
@@ -116,5 +129,8 @@ def run_callables(
 
         if not progressed:
             break
+
+    if timed_out:
+        _retire_pool(pool_name, worker_count, ex)
 
     return out
