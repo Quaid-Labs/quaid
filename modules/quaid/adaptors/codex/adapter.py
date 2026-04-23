@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from lib.adapter import QuaidAdapter, read_env_file
+from lib.agent_notice import format_pending_notice_relay
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_id, instance_slug_from_project_dir
 
@@ -238,17 +239,13 @@ class CodexAdapter(QuaidAdapter):
         if not messages:
             _trace_m15("adapter.codex.pending.empty_after_filter", path=str(pending))
             return ""
-        body = "\n".join(f"• {message}" for message in messages)
         _trace_m15(
             "adapter.codex.pending.context",
             path=str(pending),
             messages_count=len(messages),
-            context_preview=body[:1000],
+            context_preview="\n".join(f"• {message}" for message in messages)[:1000],
         )
-        return (
-            "The following are pending notifications for the user — please relay them in your response:\n\n"
-            f"<quaid_system_message>\n{body}\n</quaid_system_message>"
-        )
+        return format_pending_notice_relay(messages)
 
     def get_last_channel(self, session_key: str = "") -> None:
         _ = session_key

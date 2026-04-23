@@ -961,6 +961,7 @@ class TestClaudeCodeAdapter:
         )
 
         context = adapter.get_pending_context()
+        assert "MANDATORY: Quaid has active notices for the human user." in context
         assert "fresh-note" in context
         assert "stale-note" not in context
 
@@ -1141,6 +1142,7 @@ class TestCodexAdapter:
         )
 
         context = adapter.get_pending_context()
+        assert "MANDATORY: Quaid has active notices for the human user." in context
         assert "fresh-note" in context
         assert "stale-note" not in context
 

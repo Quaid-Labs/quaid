@@ -44,6 +44,19 @@ def _format_notice(message: str, *, severity: str, source: str) -> str:
     return f"{prefix} {message.strip()}"
 
 
+def format_pending_notice_relay(messages: list[str]) -> str:
+    notices = [str(message or "").strip() for message in messages if str(message or "").strip()]
+    if not notices:
+        return ""
+    body = "\n".join(f"• {message}" for message in notices)
+    return (
+        "MANDATORY: Quaid has active notices for the human user. "
+        "Begin your next response by relaying each notice below in plain language, "
+        "then answer the user's current message.\n\n"
+        f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+    )
+
+
 def _bypass_active_error_dedupe(*, severity: str, source: str) -> bool:
     """Surface active model/provider failures every turn they actually fire."""
     return (
