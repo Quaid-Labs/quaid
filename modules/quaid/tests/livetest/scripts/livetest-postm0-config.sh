@@ -50,13 +50,13 @@ fi
 
 declare -a platforms
 if [[ "$1" == "all" ]]; then
-    platforms=(openclaw claude_code codex)
+    platforms=(openclaw claude-code codex)
 else
     for arg in "$@"; do
         case "$arg" in
-            oc|openclaw)    platforms+=(openclaw) ;;
-            cc|claude_code) platforms+=(claude_code) ;;
-            cdx|codex)      platforms+=(codex) ;;
+            oc|openclaw)                platforms+=(openclaw) ;;
+            cc|claude-code|claude_code) platforms+=(claude-code) ;;
+            cdx|codex)                  platforms+=(codex) ;;
             *)
                 echo "error: unknown platform '$arg'" >&2
                 exit 1
