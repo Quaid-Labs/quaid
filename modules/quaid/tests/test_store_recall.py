@@ -1601,6 +1601,28 @@ class TestRecallBasic:
              patch.object(mg, "_get_configured_injection_timeout_ms", return_value=3000):
             assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 3.0
 
+    def test_fast_lexical_anchor_planner_timeout_stays_within_preinject_budget(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._lexical_anchor_planner_timeout_s(
+            8000,
+            fast_context=True,
+            timeout_ms=3000,
+        ) == 0.75
+        assert mg._lexical_anchor_planner_timeout_s(
+            8000,
+            fast_context=False,
+            timeout_ms=3000,
+        ) == 8.0
+
+    def test_fast_drill_timeout_reserves_preinject_budget_tail(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._fast_drill_timeout_ms_from_remaining(3000) == 750
+        assert mg._fast_drill_timeout_ms_from_remaining(1000) == 750
+        assert mg._fast_drill_timeout_ms_from_remaining(900) == 650
+        assert mg._fast_drill_timeout_ms_from_remaining(749) is None
+
     def test_fast_anchor_priority_keeps_fresh_direct_hit_above_graph_context(self):
         import datastore.memorydb.memory_graph as mg
 

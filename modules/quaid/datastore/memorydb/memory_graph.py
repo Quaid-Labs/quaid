@@ -5731,7 +5731,11 @@ def _recall_once(
                 "miss_penalty_enabled": allow_anchor_miss_penalty,
             }
         else:
-            planner_timeout_s = max(0.2, min(_LEXICAL_ANCHOR_MAX_TIMEOUT_S, planner_timeout_ms / 1000.0))
+            planner_timeout_s = _lexical_anchor_planner_timeout_s(
+                planner_timeout_ms,
+                fast_context=use_lightweight_config,
+                timeout_ms=timeout_ms,
+            )
             query_anchor_terms, lexical_anchor_meta = _plan_query_anchor_terms(
                 clean_query,
                 limit=planner_anchor_limit,
@@ -7543,6 +7547,30 @@ def _resolve_lexical_anchor_limit(query: str, config_retrieval: Any) -> int:
 # r1420 hit failHard on lexical-anchor planning before this bounded 8s ceiling.
 _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS = 8000
 _LEXICAL_ANCHOR_MAX_TIMEOUT_S = 8.0
+_LEXICAL_ANCHOR_FAST_MAX_TIMEOUT_S = 0.75
+_LEXICAL_ANCHOR_FAST_RESERVE_MS = 250
+
+
+def _lexical_anchor_planner_timeout_s(
+    planner_timeout_ms: int,
+    *,
+    fast_context: bool,
+    timeout_ms: Optional[int],
+) -> float:
+    cap_s = _LEXICAL_ANCHOR_MAX_TIMEOUT_S
+    if fast_context:
+        cap_s = min(cap_s, _LEXICAL_ANCHOR_FAST_MAX_TIMEOUT_S)
+        if timeout_ms is not None:
+            try:
+                budget_ms = max(200.0, float(timeout_ms) - _LEXICAL_ANCHOR_FAST_RESERVE_MS)
+                cap_s = min(cap_s, budget_ms / 1000.0)
+            except (TypeError, ValueError):
+                pass
+    try:
+        requested_s = float(planner_timeout_ms) / 1000.0
+    except (TypeError, ValueError):
+        requested_s = cap_s
+    return max(0.2, min(cap_s, requested_s))
 
 
 def _plan_query_anchor_terms(
@@ -9074,6 +9102,24 @@ def _recall_planner_timeout_s(
     return max(0.1, min(default_cap, budget_s * 0.5))
 
 
+_FAST_DRILL_RESERVE_MS = 250
+_FAST_DRILL_MIN_TIMEOUT_MS = 500
+_FAST_DRILL_MAX_TIMEOUT_MS = 750
+_FAST_DRILL_MIN_REMAINING_MS = _FAST_DRILL_RESERVE_MS + _FAST_DRILL_MIN_TIMEOUT_MS
+
+
+def _fast_drill_timeout_ms_from_remaining(remaining_ms: Optional[int]) -> Optional[int]:
+    if remaining_ms is None:
+        return None
+    try:
+        usable_ms = int(remaining_ms) - _FAST_DRILL_RESERVE_MS
+    except (TypeError, ValueError):
+        return None
+    if usable_ms < _FAST_DRILL_MIN_TIMEOUT_MS:
+        return None
+    return min(_FAST_DRILL_MAX_TIMEOUT_MS, usable_ms)
+
+
 def _normalize_planned_stores(value: Any) -> List[str]:
     allowed = {"vector", "graph", "docs"}
     if not isinstance(value, list):
@@ -9529,7 +9575,7 @@ def recall_fast(
     fast_drill_enabled = "preserved_exact_low_overlap" in fast_drill_reasons
     fast_drill_skip_reason = None
     fast_drill_remaining_ms: Optional[int] = None
-    fast_drill_min_budget_ms = 3000
+    fast_drill_min_budget_ms = _FAST_DRILL_MIN_REMAINING_MS
     if recall_fast_deadline is not None:
         fast_drill_remaining_ms = int(round((recall_fast_deadline - _time.monotonic()) * 1000))
         if fast_drill_enabled and fast_drill_remaining_ms < fast_drill_min_budget_ms:
@@ -9562,6 +9608,36 @@ def recall_fast(
     )
 
     if should_fast_drill and fast_drill_enabled:
+        drill_initial_timeout_ms = timeout_ms
+        if recall_fast_deadline is not None:
+            fast_drill_remaining_ms = int(round((recall_fast_deadline - _time.monotonic()) * 1000))
+            drill_initial_timeout_ms = _fast_drill_timeout_ms_from_remaining(fast_drill_remaining_ms)
+            if drill_initial_timeout_ms is None:
+                meta["quality_gate"] = {
+                    "evaluation": gate_eval,
+                    "fast_drill_candidate": True,
+                    "fast_drill_reasons": fast_drill_reasons,
+                    "fast_drill_enabled": False,
+                    "fast_drill_skip_reason": "time_budget_exhausted",
+                    "fast_drill_remaining_ms": fast_drill_remaining_ms,
+                    "fast_drill_min_budget_ms": fast_drill_min_budget_ms,
+                }
+                meta["memory_quality"] = _summarize_memory_quality(
+                    query,
+                    rows,
+                    gate_eval=gate_eval,
+                    intent=gate_intent,
+                    limit=effective_limit,
+                    include_relation_keywords=False,
+                )
+                _attach_recall_meta(rows, meta)
+                _trace_m15(
+                    "memory_graph.recall_fast.exit",
+                    query=query,
+                    rows_count=len(rows or []),
+                    meta=meta,
+                )
+                return (rows, meta) if return_meta else rows
         _trace_m15(
             "memory_graph.recall_fast.fast_drill_considered",
             query=query,
@@ -9599,7 +9675,7 @@ def recall_fast(
                 "planned_project": planned_project,
             }
         else:
-            drill_budget_s = 1.2
+            drill_budget_s = min(1.2, max(0.1, float(drill_initial_timeout_ms or 1200) / 1000.0))
             _trace_m15(
                 "memory_graph.recall_fast.drill_planner_call",
                 query=query,
@@ -9644,10 +9720,36 @@ def recall_fast(
             fast_drill_meta = dict(drill_meta or {})
             fast_drill_meta.setdefault("planned_stores", list(planned_stores))
             fast_drill_meta.setdefault("planned_project", planned_project)
-            drill_timeout_ms = timeout_ms
+            drill_timeout_ms = drill_initial_timeout_ms
             if recall_fast_deadline is not None:
                 remaining = int(round((recall_fast_deadline - _time.monotonic()) * 1000))
-                drill_timeout_ms = max(500, remaining)
+                drill_timeout_ms = _fast_drill_timeout_ms_from_remaining(remaining)
+                if drill_timeout_ms is None:
+                    meta["quality_gate"] = {
+                        "evaluation": gate_eval,
+                        "fast_drill_candidate": True,
+                        "fast_drill_reasons": fast_drill_reasons,
+                        "fast_drill_enabled": False,
+                        "fast_drill_skip_reason": "time_budget_exhausted",
+                        "fast_drill_remaining_ms": remaining,
+                        "fast_drill_min_budget_ms": fast_drill_min_budget_ms,
+                    }
+                    meta["memory_quality"] = _summarize_memory_quality(
+                        query,
+                        rows,
+                        gate_eval=gate_eval,
+                        intent=gate_intent,
+                        limit=effective_limit,
+                        include_relation_keywords=False,
+                    )
+                    _attach_recall_meta(rows, meta)
+                    _trace_m15(
+                        "memory_graph.recall_fast.exit",
+                        query=query,
+                        rows_count=len(rows or []),
+                        meta=meta,
+                    )
+                    return (rows, meta) if return_meta else rows
             try:
                 drill_rows, drill_store_meta, drill_docs_bundle = _run_recall_store_plan(
                     query,
