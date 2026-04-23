@@ -1589,15 +1589,17 @@ class TestRecallBasic:
         branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
         assert branches[0].get("flags", {}).get("lexical_rescue_used") is True
 
-    def test_fast_recall_default_store_plan_timeout_is_live_safe(self):
+    def test_fast_recall_default_store_plan_timeout_matches_injection_budget(self):
         import datastore.memorydb.memory_graph as mg
 
+        # Pre-inject has a 3s hard cutoff by design. Confirm fast-mode default
+        # honors the configured injection budget and does not apply an 8s floor.
         with patch("config.get_config", side_effect=AssertionError("full config should not load")), \
              patch.object(mg, "_get_configured_injection_timeout_ms", return_value=8000):
             assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 8.0
         with patch("config.get_config", side_effect=AssertionError("full config should not load")), \
              patch.object(mg, "_get_configured_injection_timeout_ms", return_value=3000):
-            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 8.0
+            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 3.0
 
     def test_fast_anchor_priority_keeps_fresh_direct_hit_above_graph_context(self):
         import datastore.memorydb.memory_graph as mg

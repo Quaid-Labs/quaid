@@ -4862,15 +4862,12 @@ def _recall_store_plan_timeout_s(timeout_ms: Optional[int], *, fast_mode: bool) 
             pass
     if fast_mode:
         try:
-            raw = _get_configured_injection_timeout_ms(8000)
-            # Existing prerelease installs may still carry the old 3s generated
-            # config value. Keep the implicit hook budget live-safe unless the
-            # caller passed an explicit timeout_ms above.
-            return max(8.0, float(raw or 8000) / 1000.0)
+            raw = _get_configured_injection_timeout_ms(3000)
+            return max(0.5, float(raw or 3000) / 1000.0)
         except Exception:
             if _is_fail_hard_mode():
                 raise
-            return 8.0
+            return 3.0
     return 30.0
 
 

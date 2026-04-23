@@ -302,7 +302,7 @@ def get_retrieval_lightweight_config() -> SimpleNamespace:
     return SimpleNamespace(**retrieval)
 
 
-def get_injection_timeout_ms(default: int = 8000) -> int:
+def get_injection_timeout_ms(default: int = 3000) -> int:
     """Return retrieval.injection_timeout_ms without loading full config."""
     raw = getattr(get_retrieval_lightweight_config(), "injection_timeout_ms", default)
     try:
