@@ -18,23 +18,31 @@ non-trivial plan.
 
 - Dry-run completes within ~60 s and reports a non-empty plan.
 - `--apply` completes (first run can take 15–30 min because the janitor LLM
-  reviews accumulated memories across all instances); state advances for
-  reviewed rows from `pending` → `approved`.
-- Snippets, journals, and `PROJECT.log` entries appear under visible home
-  (`~/quaid/`) with fresh timestamps matching the apply window.
-- No duplicate or orphan snippet / journal rows; registry deletes propagate.
+  reviews accumulated memories across all instances). The graduation
+  direction is `approved → active`: newly extracted facts land as
+  `approved`, janitor promotes them to `active` after review. Check that
+  the `active` count grew and the `approved` count shrank.
+- Snippets, journals, and identity files under
+  `~/quaid/instances/<INSTANCE>/` show fresh-timestamp activity within the
+  apply window. Identity file line counts may go DOWN after janitor, not
+  up — janitor consolidates and prunes duplicates, not only appends.
+- No duplicate or orphan snippet / journal rows; registry deletes
+  propagate.
 
 ### Procedure
 
-1. **Pre-state capture.** Snapshot the current visible-home artifact counts
-   so you can diff after the apply:
+1. **Pre-state capture.** Snapshot per-instance visible-home artifact
+   counts so you can diff after the apply. Identity and snippet/journal
+   files live under `~/quaid/instances/<INSTANCE>/`, not a shared
+   `~/quaid/identity/` (that path does not exist on current builds).
 
    ```bash
-   ssh REMOTE_HOST "for f in ~/quaid/identity/SOUL.md ~/quaid/identity/USER.md \
-     ~/quaid/identity/ENVIRONMENT.md; do \
-     echo -n \"\$f: \"; wc -l < \"\$f\" 2>/dev/null || echo '(missing)'; done"
-   ssh REMOTE_HOST "ls ~/quaid/snippets/ 2>/dev/null | wc -l"
-   ssh REMOTE_HOST "ls ~/quaid/journals/ 2>/dev/null | wc -l"
+   ssh REMOTE_HOST "for f in SOUL.md USER.md ENVIRONMENT.md; do \
+     for i in ~/quaid/instances/*/; do \
+       echo -n \"\$i\$f: \"; wc -l < \"\$i\$f\" 2>/dev/null || echo '(missing)'; \
+     done; done"
+   ssh REMOTE_HOST "ls ~/quaid/instances/*/snippets 2>/dev/null | head -30"
+   ssh REMOTE_HOST "ls ~/quaid/instances/*/journals 2>/dev/null | head -30"
    ```
 
 2. **Dry-run.** Confirm the plan before applying:
@@ -55,33 +63,40 @@ non-trivial plan.
 
    Stream output; watch for per-batch progress.
 
-4. **Post-state verification.** Confirm the identity files grew and new
-   artifacts appeared:
+4. **Post-state verification.** Diff identity / snippet / journal files
+   against the pre-state snapshot. Identity line counts may go DOWN
+   (consolidation) or UP (new facts); both are legitimate. Snippet and
+   journal dirs should have fresh activity.
 
    ```bash
-   ssh REMOTE_HOST "for f in ~/quaid/identity/SOUL.md ~/quaid/identity/USER.md \
-     ~/quaid/identity/ENVIRONMENT.md; do \
-     echo -n \"\$f: \"; wc -l < \"\$f\"; done"
-   ssh REMOTE_HOST "tail -40 ~/quaid/journals/SOUL.md 2>/dev/null | head -20"
-   ssh REMOTE_HOST "ls ~/quaid/snippets/ | head -10"
+   ssh REMOTE_HOST "for f in SOUL.md USER.md ENVIRONMENT.md; do \
+     for i in ~/quaid/instances/*/; do \
+       echo -n \"\$i\$f: \"; wc -l < \"\$i\$f\" 2>/dev/null || echo '(missing)'; \
+     done; done"
+   ssh REMOTE_HOST "tail -40 ~/quaid/instances/*/journals/SOUL.md 2>/dev/null | head -20"
+   ssh REMOTE_HOST "ls -lt ~/quaid/instances/*/snippets 2>/dev/null | head -10"
    ```
 
    `PROJECT.log` entries for any linked projects should have fresh lines
    matching the apply window. The "Solomon runs a project called Quaid"
-   passing mention from the rolling transcript should have become a line in
-   either `misc--<instance>/PROJECT.log` or `quaid/PROJECT.log` depending on
-   whether a Quaid project was linked in the instance.
+   passing mention from the rolling transcript should have become a line
+   under either `~/quaid/projects/misc--<instance>/PROJECT.log` or
+   `~/quaid/projects/quaid/PROJECT.log` depending on whether a Quaid
+   project was linked in the instance.
 
-5. **State advancement.** Spot-check that reviewed rows advanced from
-   `pending` → `approved`:
+5. **State advancement (approved → active).** Spot-check that reviewed
+   rows graduated from `approved` to `active`. Newly extracted facts
+   start as `approved`; the janitor promotes them to `active`:
 
    ```bash
    ssh REMOTE_HOST "sqlite3 ~/.quaid/instances/\$INSTANCE/data/memory.db \
      \"SELECT status, COUNT(*) FROM nodes GROUP BY status;\""
    ```
 
-   Expect: the approved count grew compared to pre-apply; pending count
-   shrank. Raw counts vary by how much got extracted during M2.
+   Expect: `active` count grew compared to pre-apply; `approved` count
+   shrank. Raw counts vary by how much got extracted during M2. Apply
+   output should also print a `Graduated N memories from approved to
+   active` line.
 
 ### PWN vs FAIL
 
