@@ -158,10 +158,15 @@ print('CC hooks cleared')
 \""
     run_remote "clear CC adapter rules" \
         "rm -f ~/.claude/rules/quaid-projects.md && echo 'CC rules cleared'"
-    # Derive safe project dir path for clearing CC conversation history
-    CC_PROJ_SAFE="$(echo "$CC_PROJECT_DIR" | sed 's|^/||; s|/|-|g')"
-    run_remote "clear CC project conversation history" \
-        "rm -rf ~/.claude/projects/-${CC_PROJ_SAFE} && echo 'CC project history cleared'"
+    # Wipe entire ~/.claude/projects/ directory. Previous logic derived a single
+    # target from CC_PROJECT_DIR but macOS normalizes /tmp → /private/tmp in the
+    # project-dir-sanitized form Claude uses, so the targeted rm missed the
+    # actual directory (e.g. '-private-tmp-cc-livetest' vs '-tmp-cc-livetest').
+    # Stray project dirs from other sessions on the same VM also contaminate
+    # the post-install hook. Only the livetest uses CC on the VM, so full clear
+    # is safe.
+    run_remote "clear all CC project conversation history" \
+        "rm -rf ~/.claude/projects && echo 'CC project history cleared (entire projects/ dir)'"
 }
 
 wipe_cdx() {
