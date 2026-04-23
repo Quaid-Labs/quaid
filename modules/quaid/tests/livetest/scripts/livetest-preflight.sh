@@ -661,16 +661,36 @@ else
         if [[ -z "${SHARED_TOKEN:-}" ]]; then
             echo "  WARN  $LOCAL_SHARED_TOKEN_FILE first line is empty — shared auth credentials not updated"
         else
-            ssh "$REMOTE_HOST" 'mkdir -p ~/.quaid/shared/auth'
-            printf '%s\n' "$SHARED_TOKEN" | ssh "$REMOTE_HOST" 'python3 <<'"'"'PYEOF'"'"'
+            LOCAL_SHARED_TOKEN_TMP=""
+            cleanup_local_shared_token_tmp() {
+                if [[ -n "${LOCAL_SHARED_TOKEN_TMP:-}" ]]; then
+                    rm -f "$LOCAL_SHARED_TOKEN_TMP"
+                fi
+            }
+            trap cleanup_local_shared_token_tmp EXIT
+
+            LOCAL_SHARED_TOKEN_TMP="$(mktemp "${TMPDIR:-/tmp}/quaid-shared-token.XXXXXX")"
+            chmod 600 "$LOCAL_SHARED_TOKEN_TMP"
+            printf '%s\n' "$SHARED_TOKEN" > "$LOCAL_SHARED_TOKEN_TMP"
+            REMOTE_SHARED_TOKEN_TMP="$(ssh "$REMOTE_HOST" 'mkdir -p ~/.quaid/shared/auth && umask 077 && token_file="$(mktemp ~/.quaid/shared/auth/.shared-token.XXXXXX)" && chmod 600 "$token_file" && printf "%s\n" "$token_file"')"
+            scp "$LOCAL_SHARED_TOKEN_TMP" "$REMOTE_HOST:$REMOTE_SHARED_TOKEN_TMP"
+            ssh "$REMOTE_HOST" python3 - "$REMOTE_SHARED_TOKEN_TMP" <<'PYEOF'
 import json
 import os
 import pathlib
 import sys
 
-token = sys.stdin.readline().strip()
+token_path = pathlib.Path(sys.argv[1])
+try:
+    lines = token_path.read_text(encoding="utf-8").splitlines()
+    token = lines[0].strip() if lines else ""
+finally:
+    try:
+        token_path.unlink(missing_ok=True)
+    except Exception:
+        pass
 if not token:
-    raise SystemExit("empty token from stdin")
+    raise SystemExit("empty token from temp file")
 
 out_path = pathlib.Path.home() / ".quaid" / "shared" / "auth" / "credentials.json"
 payload = {
@@ -697,7 +717,9 @@ except Exception:
     raise
 out_path.chmod(0o600)
 print(f"  wrote {out_path}")
-PYEOF'
+PYEOF
+            rm -f "$LOCAL_SHARED_TOKEN_TMP"
+            LOCAL_SHARED_TOKEN_TMP=""
             echo "  $PASS  shared auth credentials copied to remote ~/.quaid/shared/auth/credentials.json"
         fi
     fi
