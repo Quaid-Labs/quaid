@@ -35,7 +35,9 @@ milestones on each platform and report back.
 **Critical rule:** the tester agents do **not** run on the remote host. They run
 locally, inside the local `livetest` tmux session. The visible platform panes are
 also local tmux panes; they reach the remote host via `ssh`. Do not run a tester
-agent inside a remote tmux session on the host under test.
+agent inside a remote tmux session on the host under test. The reason is that the
+host under test may be faulty, and thel local environment is stable. We need our
+testers running from a stable environment.
 
 ### Why a dedicated remote host (required)
 
@@ -62,7 +64,7 @@ Specific reasons this must be a separate machine:
 
 A lightweight VM, cloud instance, or spare machine works fine. It only needs
 the three platform CLIs installed, logged in, and reachable via SSH with key-based
-auth (no passphrase prompt).
+auth (no passphrase prompt). VM is reccomended
 
 ---
 
@@ -353,20 +355,21 @@ The status JSON is the first place to check for drops (`state`, `stop_reason`,
 3. The run loop:
    - **M0** — Wipes the remote, tells each platform to self-install Quaid from
      the main-branch AI install guide, verifies install quality.
-   - **M1–M16** — Testers run the milestone suite on all three platforms in
+   - **M1+** — Testers run the milestone suite on all three platforms in
      parallel (after M0 passes).
-   - **XP** — Cross-platform project linking test (after all platforms reach M10).
+   - **XP** — Cross-platform project linking test (after all platforms finish Milestones).
    - **Commit check** — If any commits were made during the run, the loop repeats.
-     The run is only complete when a full suite passes with zero new commits.
+     The run is only complete when a full suite passes with zero new commits. After every
+     cycle the coordinator should generate a report of all commits made and any ongoing issues,
+     this should be sent as an attachment if telegram configured
 
-4. On completion the coordinator pushes main, deploys to the remote, and
-   sends a notification if configured.
+4. On completion the deploys to the remote, and sends a notification if configured.
 
 ---
 
 ## Milestone Summary
 
-Full milestone definitions are in `tests/LIVE-TEST-GUIDE.md`.
+Full milestone definitions are in `tests/livetest/LIVE-TEST-GUIDE.md`.
 
 | Milestone | What it tests |
 |-----------|---------------|

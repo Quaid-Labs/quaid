@@ -2,7 +2,10 @@
 
 You are a **tester agent** for the Quaid live test suite. Your job is to execute
 milestones on one platform (OC, CC, or CDX), report results, and escalate issues
-to the coordinator. You do not fix code — that is the coordinator's job.
+to the coordinator. You do not fix code — that is the coordinator's job. You do
+not infer and diagnose, that is also the coordinator's job. You gather as much
+relevant data about a break as possible, and can make a suggestion but ultimate
+authority goes to the coordinator.
 
 The coordinator will tell you which platform you are testing and which tmux window
 you are running in when they send you this file. They will also send you the
@@ -65,7 +68,7 @@ At the start of every session:
 ## Milestone Execution
 
 Full milestone definitions (pass criteria, exact prompts, verification steps)
-are in `tests/LIVE-TEST-GUIDE.md`. Read that file for each milestone before
+are in `tests/livetest/LIVE-TEST-GUIDE.md`. Read the milestone in that guide before
 executing it — do not rely on summaries or memory of prior runs.
 
 The guide is the authoritative source. If the guide and these instructions
@@ -73,7 +76,7 @@ conflict, the guide wins.
 
 ### General pattern per milestone
 
-1. Read the milestone definition from `tests/LIVE-TEST-GUIDE.md`.
+1. Read the milestone definition from `tests/livetest/LIVE-TEST-GUIDE.md`.
 2. Read any platform-specific notes for that milestone in your platform supplement.
 3. Execute the required steps (send messages, wait for processing, run DB queries).
 4. Verify against the pass criteria.
@@ -127,6 +130,9 @@ For recall-quality contamination cases, check for rows matching things like:
 
 If the audit still finds contamination, stop and post an ISSUE instead of
 starting the rerun.
+
+Note that you should clear the context of a platform under test and allow for extraction
+to complete BEFORE cleaning contamination as the running context may be contaminated as well
 
 ### Daemon lifecycle — do NOT manually start before M1
 
@@ -205,6 +211,7 @@ coordinator listing:
 - why they look like system text
 - whether they appear adapter-specific or generic
 
+Note that agent derived summaries of system/hook chatter is valid and does not count as leakage.
 ---
 
 ## M0: Agent-Driven Install
@@ -215,7 +222,7 @@ yourself.
 ### Your steps
 
 1. **Wipe the existing Quaid install** on the remote for your platform's instance.
-   Follow the wipe procedure in `tests/LIVE-TEST-GUIDE.md` (Step 0 / wipe section).
+   Follow the wipe procedure in `tests/livetest/LIVE-TEST-GUIDE.md` (Step 0 / wipe section).
    Run all wipe commands via `ssh REMOTE_HOST '...'`.
 
 1a. **Wait for your turn** — installs are sequential in a randomly-rolled order
@@ -223,27 +230,30 @@ yourself.
     dry-run until the previous platform's M0 is confirmed PASS.
 
 1b. **Run the installer in dry-run mode** to validate the install plan before
-    handing off to the platform. Use `QUAID_INSTANCE` env var to set the silo
-    name and `--adapter` to set the platform type:
+    handing off to the platform. Instances are **path-derived** on first use —
+    do not set `QUAID_INSTANCE` in the dry-run. CC uses the project directory
+    (`/tmp/cc-livetest` → `claude-code-private-tmp-cc-livetest`), CDX uses its
+    project dir (`/private/tmp/cdx-livetest` → `codex-private-tmp-cdx-livetest`),
+    and OC derives `openclaw-main` from its own agent config.
 
     ```bash
     # OC tester
-    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=openclaw-main node setup-quaid.mjs \
+    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 node setup-quaid.mjs \
       --dry-run --adapter openclaw --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CC tester
-    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=claude-code-private-tmp-cc-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 node setup-quaid.mjs \
       --dry-run --adapter claude-code --owner-name OWNER_NAME --agent 2>&1 | tail -40'
 
     # CDX tester
-    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=codex-private-tmp-cdx-livetest node setup-quaid.mjs \
+    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 node setup-quaid.mjs \
       --dry-run --adapter codex --owner-name OWNER_NAME --agent 2>&1 | tail -40'
     ```
 
     Check the plan output:
     - `platform` matches your platform (openclaw / claude-code / codex)
     - hidden Quaid home is `~/.quaid` and visible Quaid files are under `~/quaid`
-    - `instanceId` matches your silo name (openclaw-main / claude-code-private-tmp-cc-livetest / codex-private-tmp-cdx-livetest)
+    - `instanceId` is the expected path-derived id for your platform
     - No fatal errors
 
     If the plan looks wrong, **stop and post an ISSUE to the coordinator mailbox** before
@@ -251,16 +261,21 @@ yourself.
 
     **If this is not the first platform installed this run** (i.e. another platform's
     M0 has already completed), the installer will block the install by default and print
-    `"second full install is blocked"`. Add `--add-instance` to the dry-run command and
+    `"second full install is blocked"`. Add `--add-platform` to the dry-run command and
     to the real install handoff message in step 2. Example for CC when CDX already installed:
 
     ```bash
-    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 QUAID_INSTANCE=claude-code-private-tmp-cc-livetest node setup-quaid.mjs \
-      --dry-run --adapter claude-code --owner-name OWNER_NAME --agent --add-instance 2>&1 | tail -40'
+    ssh REMOTE_HOST 'source ~/.zprofile >/dev/null 2>&1; cd ~/quaidcode/dev && QUAID_ALLOW_DEV_INSTALL=1 node setup-quaid.mjs \
+      --dry-run --adapter claude-code --owner-name OWNER_NAME --agent --add-platform 2>&1 | tail -40'
     ```
 
-    The dry-run will tell you whether the plan is valid. Then use `--add-instance` in
+    The dry-run will tell you whether the plan is valid. Then use `--add-platform` in
     the install message to the platform agent as well.
+
+    (Legacy note: older installer builds shipped this flag as `--add-instance`;
+    the rename to `--add-platform` is a pending installer follow-up. If the
+    installer rejects `--add-platform`, fall back to `--add-instance` once and
+    route the gap as an installer bug.)
 
 2. **Tell the platform to install** by sending it this message (swap in your values):
 
@@ -269,7 +284,6 @@ yourself.
    >
    > Use these parameters:
    > - Adapter/platform: PLATFORM
-   > - Instance name: INSTANCE_NAME
    > - Owner name: OWNER_NAME
    >
    > Quaid uses a fixed split layout: hidden `~/.quaid` plus visible `~/quaid`. Do not choose or pass a custom workspace path.

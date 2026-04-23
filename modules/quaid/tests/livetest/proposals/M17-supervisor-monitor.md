@@ -1,0 +1,397 @@
+# M17 Supervisor and Monitor Runtime Stability Proposal
+
+Status: proposal only. Do not paste into `LIVE-TEST-GUIDE.md` until Solomon approves.
+
+Purpose: formalize live validation for the supervisor, daemon monitor, project-docs worker, janitor worker, and transient SQLite setup-lock retry paths. This milestone checks normal production behavior: the runtime must stay alive, drain work, and avoid cross-instance resurrection or contamination without manual recovery.
+
+Run placement: run after M16 on every active lane. If any supervisor, daemon, adapter instance-discovery, tombstone, or SQLite setup-lock code changes during a run, repeat M17 before declaring the lane complete.
+
+## M17: Supervisor and Monitor Runtime Stability
+
+This milestone is coordinator-observed. Do not grade it from the agent's visible answer alone. A clean pass requires process, status, signal, and log evidence.
+
+Probe IDs:
+- OC: `M17-OC-SUP-<YYYYMMDD-HHMMSS>`
+- CC: `M17-CC-SUP-<YYYYMMDD-HHMMSS>`
+- CDX: `M17-CDX-SUP-<YYYYMMDD-HHMMSS>`
+
+Canary phrases:
+- OC: `orchid supervisor m17`
+- CC: `copper supervisor m17`
+- CDX: `river supervisor m17`
+
+Per-lane variables used below:
+
+```bash
+# OC
+LANE=oc
+INSTANCE=openclaw-main
+QCLI=/Users/admin/.openclaw/extensions/quaid/quaid
+SILO=/Users/admin/.quaid/instances/openclaw-main
+
+# CC
+LANE=cc
+INSTANCE=claude-code-private-tmp-cc-livetest
+QCLI=/Users/admin/.quaid/plugins/quaid/quaid
+SILO=/Users/admin/.quaid/instances/claude-code-private-tmp-cc-livetest
+
+# CDX
+LANE=cdx
+INSTANCE=codex-private-tmp-cdx-livetest
+QCLI=/Users/admin/.quaid/plugins/quaid/quaid
+SILO=/Users/admin/.quaid/instances/codex-private-tmp-cdx-livetest
+```
+
+Create an artifact directory before starting the probe:
+
+```bash
+LANE_UPPER=$(printf "%s" "$LANE" | tr '[:lower:]' '[:upper:]')
+PROBE_ID="M17-${LANE_UPPER}-SUP-$(date +%Y%m%d-%H%M%S)"
+ART="$HOME/m17-artifacts/$PROBE_ID"
+mkdir -p "$ART"
+echo "$PROBE_ID" > "$ART/probe-id.txt"
+echo "$INSTANCE" > "$ART/instance.txt"
+git -C /Users/admin/quaidcode/dev rev-parse HEAD 2>/dev/null > "$ART/dev-head.txt" || true
+```
+
+Common evidence capture:
+
+```bash
+# Status and process snapshot.
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-before.json" 2>&1 || true
+ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-before.txt" || true
+if [ -d "$SILO/data/extraction-signals" ]; then ls -1 "$SILO/data/extraction-signals"/* 2>/dev/null | sort; fi > "$ART/signals-before.txt" || true
+
+# Logs that must be attached or summarized in the run note.
+tail -200 "$SILO/logs/daemon/extraction-daemon.log" > "$ART/extraction-daemon-before.log" 2>&1 || true
+tail -200 "$SILO/logs/daemon/project-docs-supervisor.log" > "$ART/project-docs-supervisor-before.log" 2>&1 || true
+tail -200 "$SILO/logs/daemon/rolling-extraction.jsonl" > "$ART/rolling-before.jsonl" 2>&1 || true
+```
+
+### SUP-01: Bootstrap and Monitor Health
+
+Restart the lane daemon so the probe starts from known process state:
+
+```bash
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon stop 2>&1 | tee "$ART/daemon-stop.txt" || true
+sleep 2
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon start 2>&1 | tee "$ART/daemon-start.txt"
+sleep 10
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-after-start.json" 2>&1
+ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-after-start.txt" || true
+```
+
+Pass:
+- `daemon status --json` reports `running=true`.
+- The pid file under `$SILO/data/` points to a live process.
+- The supervisor or monitor process is present when expected for that lane.
+- There is no duplicate respawn loop for the same instance after 30 seconds.
+
+Fail:
+- `running=false` after start.
+- pid file is absent or stale.
+- supervisor exits immediately.
+- multiple replacement daemons appear without an explicit restart.
+
+### SUP-02: Hook-Driven Survival After Real Work
+
+Send a normal user turn with the lane canary, then force a lifecycle boundary that should write or drain work.
+
+OC:
+
+```bash
+/Users/admin/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "M17 supervisor canary: orchid supervisor m17. Remember that my greenhouse checklist includes misting the orchid shelf at 7am."
+sleep 20
+/Users/admin/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"
+```
+
+CC:
+
+Send in the active Claude Code pane:
+
+```text
+M17 supervisor canary: copper supervisor m17. Remember that my workshop checklist includes polishing the copper gauge every Friday.
+```
+
+Wait for the reply, then send `/clear` or `/reset` using the lane's normal lifecycle command.
+
+CDX:
+
+Send in the active Codex pane:
+
+```text
+M17 supervisor canary: river supervisor m17. Remember that my field checklist includes measuring the river marker every Monday.
+```
+
+Wait for the reply, then send `/new` or `/reset` using the lane's normal lifecycle command.
+
+After the lifecycle boundary:
+
+```bash
+sleep 90
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-after-hook.json" 2>&1 || true
+ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-after-hook.txt" || true
+if [ -d "$SILO/data/extraction-signals" ]; then ls -1 "$SILO/data/extraction-signals"/* 2>/dev/null | sort; fi > "$ART/signals-after-hook.txt" || true
+tail -300 "$SILO/logs/daemon/extraction-daemon.log" > "$ART/extraction-daemon-after-hook.log" 2>&1 || true
+tail -300 "$SILO/logs/daemon/rolling-extraction.jsonl" > "$ART/rolling-after-hook.jsonl" 2>&1 || true
+```
+
+Pass:
+- The hook returns normally and the agent remains usable.
+- The daemon remains running immediately after the lifecycle boundary and again after 90 seconds.
+- A new lifecycle or rolling extraction event appears for the M17 turn, or the signal queue drains to zero with log evidence that the turn was processed.
+- No log line says `supervisor exited; extraction daemon exiting` unless this was part of an explicit `daemon stop` step.
+
+Fail:
+- The hook hangs and never reaches `recall_done`, `docs_done`, or `context_emitted` when those traces are expected for the lane.
+- The daemon exits after recall or extraction completes.
+- pending signals accumulate and do not drain.
+- extraction is only completed by a timeout after a missing lifecycle signal, unless the lane-specific milestone explicitly expects timeout behavior.
+
+### SUP-03: SQLite Setup-Lock Canary
+
+This probe validates that transient SQLite setup locks do not kill the supervisor path. It should not mutate user content beyond normal status and recall reads.
+
+Run a small burst of env-qualified CLI commands while the daemon is active:
+
+```bash
+for i in 1 2 3 4 5; do
+  (
+    QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json >/tmp/m17-status-$LANE-$i.json 2>/tmp/m17-status-$LANE-$i.err || true
+  ) &
+  (
+    QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" health >/tmp/m17-health-$LANE-$i.txt 2>/tmp/m17-health-$LANE-$i.err || true
+  ) &
+  (
+    QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" recall "supervisor m17" >/tmp/m17-recall-$LANE-$i.txt 2>/tmp/m17-recall-$LANE-$i.err || true
+  ) &
+done
+wait
+cat /tmp/m17-*-$LANE-*.err > "$ART/sqlite-burst-stderr.txt" 2>/dev/null || true
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-after-sqlite-burst.json" 2>&1 || true
+tail -300 "$SILO/logs/daemon/extraction-daemon.log" > "$ART/extraction-daemon-after-sqlite-burst.log" 2>&1 || true
+```
+
+Pass:
+- Any transient `database is locked`, `database is busy`, or `locking protocol` setup error is retried and does not terminate the daemon or supervisor.
+- Non-transient database errors are not hidden. If present, mark FAIL and route to W1.
+- `daemon status --json` still reports running after the burst.
+
+Workaround-PWN:
+- The lane succeeds only after manually restarting the daemon after a lock-related exit.
+
+Fail:
+- The supervisor exits or daemon pid disappears during the burst.
+- The logs show an unhandled SQLite setup exception.
+- The CLI silently returns empty or misleading output after a setup failure without an error log.
+
+### SUP-04: Worker and Monitor Lifecycle
+
+This probe checks project docs supervisor, docs worker, janitor worker, and monitor behavior without relying on a deleted-instance cleanup path.
+
+Wake docs/project surfaces:
+
+```bash
+M17_DOC="/tmp/m17-supervisor-$LANE.md"
+printf '# M17 supervisor doc\nThe %s lane supervisor canary is active.\n' "$LANE" > "$M17_DOC"
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" registry register "$M17_DOC" --project quaid > "$ART/register-doc.txt" 2>&1 || true
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" docs update --apply > "$ART/docs-update.txt" 2>&1 || true
+sleep 30
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" docs list > "$ART/docs-list.txt" 2>&1 || true
+ps auxww | grep -E 'project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-workers-after-docs.txt" || true
+tail -300 "$SILO/logs/daemon/project-docs-supervisor.log" > "$ART/project-docs-supervisor-after-docs.log" 2>&1 || true
+rm -f "$M17_DOC"
+```
+
+Pass:
+- Docs worker starts if needed, completes or idles, and does not respawn in a tight loop.
+- Project docs supervisor remains alive or exits only by documented idle behavior while the extraction daemon remains healthy.
+- No worker creates a silo for a tombstoned or deleted misc instance.
+- `docs update --apply` either indexes the new document or reports a clear, non-fatal reason it did not.
+
+Fail:
+- `project_docs_worker` respawns repeatedly for the same instance.
+- A hidden silo is recreated for a deleted/tombstoned misc project.
+- Supervisor logs show unhandled tracebacks.
+- Worker failure takes down the extraction daemon.
+
+### SUP-05: Post-Recall Supervisor Survival
+
+This is the CDX M6 regression guard and should run on every lane.
+
+Ask a recall-triggering question for the M17 canary:
+
+OC:
+
+```bash
+/Users/admin/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "What do you remember about the M17 supervisor canary?"
+```
+
+CC/CDX: ask in the active pane:
+
+```text
+What do you remember about the M17 supervisor canary?
+```
+
+Then capture status at three points:
+
+```bash
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-post-recall-0s.json" 2>&1 || true
+ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-post-recall-0s.txt" || true
+sleep 60
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-post-recall-60s.json" 2>&1 || true
+ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-post-recall-60s.txt" || true
+sleep 120
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-post-recall-180s.json" 2>&1 || true
+ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-post-recall-180s.txt" || true
+tail -400 "$SILO/logs/daemon/extraction-daemon.log" > "$ART/extraction-daemon-post-recall.log" 2>&1 || true
+```
+
+Pass:
+- The answer can use recalled or injected context, but runtime grading is based on daemon evidence.
+- The daemon remains running at 0, 60, and 180 seconds after recall completion.
+- No supervisor self-shutdown appears after recall.
+- No orphan pid remains with a stale pid file.
+
+Fail:
+- Recall completes, then the supervisor exits.
+- pid file disappears without an explicit stop.
+- `running=false` at any post-recall checkpoint.
+
+### SUP-06: Restart and Drain
+
+This is an explicit restart probe. It is the only part of M17 where pid replacement is expected.
+
+```bash
+if [ -d "$SILO/data/extraction-signals" ]; then ls -1 "$SILO/data/extraction-signals"/* 2>/dev/null | sort; fi > "$ART/signals-before-restart.txt" || true
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon stop > "$ART/daemon-stop-final.txt" 2>&1 || true
+sleep 3
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon start > "$ART/daemon-start-final.txt" 2>&1
+sleep 60
+QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-after-restart.json" 2>&1 || true
+if [ -d "$SILO/data/extraction-signals" ]; then ls -1 "$SILO/data/extraction-signals"/* 2>/dev/null | sort; fi > "$ART/signals-after-restart.txt" || true
+ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-after-restart.txt" || true
+tail -400 "$SILO/logs/daemon/extraction-daemon.log" > "$ART/extraction-daemon-after-restart.log" 2>&1 || true
+```
+
+Pass:
+- Restart creates one live daemon for the lane instance.
+- Old pid is gone, new pid is live, pid file matches the new pid.
+- Pending signals drain or remain only for explicitly foreign/tombstoned instances with clear skip logs.
+- No old supervisor or worker process keeps writing to the lane after stop.
+
+Fail:
+- Old pid remains active and continues writing after stop.
+- New daemon cannot start because stale pid or SQLite lock state blocks it.
+- Restart creates duplicate daemons for the same instance.
+
+## Lane-Specific Notes
+
+### OC M17 Notes
+
+Use Matrix for the user-facing prompts. Do not use the OC TUI path for lifecycle verification unless the run is explicitly testing TUI behavior.
+
+Additional OC checks:
+
+```bash
+# Schema regression guard from Run 115 OC M1.
+sqlite3 /Users/admin/.quaid/instances/openclaw-main/data/memory.db "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('entity_aliases','embedding_cache','recall_log','nodes');" > "$ART/oc-schema-check.txt" 2>&1 || true
+ls -l /Users/admin/.quaid/instances/openclaw-main/memory.db > "$ART/oc-root-memorydb-check.txt" 2>&1 || true
+```
+
+OC pass addendum:
+- `entity_aliases`, `embedding_cache`, `recall_log`, and `nodes` exist in `$SILO/data/memory.db`.
+- No code path uses a root-level `$SILO/../memory.db` or `$SILO/memory.db` as the active store.
+- There is no stale gateway or dual gateway causing old hook code to serve the probe.
+
+### CC M17 Notes
+
+Use the active Claude Code pane. For lifecycle boundaries, prefer the same command shape used by the current M1-M16 lane run.
+
+Additional CC checks:
+
+```bash
+# Verify no hidden resurrection of deleted M13-style instances during this probe.
+python3 - <<'PY' > "$ART/cc-instance-list.txt" 2>&1
+import os, sys
+sys.path.insert(0, "/Users/admin/.quaid/plugins/quaid")
+os.environ["QUAID_HOME"] = "/Users/admin/.quaid"
+os.environ["QUAID_INSTANCE"] = "claude-code-private-tmp-cc-livetest"
+from adaptors.factory import create_adapter
+print(create_adapter("claude_code").list_agent_instance_ids())
+PY
+```
+
+CC pass addendum:
+- No tombstoned `claude-code-private-tmp-*` M13 instance reappears in adapter listing or process scan.
+- No hook remains stuck in `before_agent_start` or inject after the M17 canary query.
+- `/clear` or `/reset` transition does not leave the previous session buffer unflushed.
+
+### CDX M17 Notes
+
+Use the active Codex pane. CDX must include the post-recall survival probe because CDX M6 previously showed recall completing before supervisor shutdown.
+
+Additional CDX checks:
+
+```bash
+python3 - <<'PY' > "$ART/cdx-instance-list.txt" 2>&1
+import os, sys
+sys.path.insert(0, "/Users/admin/.quaid/plugins/quaid")
+os.environ["QUAID_HOME"] = "/Users/admin/.quaid"
+os.environ["QUAID_INSTANCE"] = "codex-private-tmp-cdx-livetest"
+from adaptors.factory import create_adapter
+print(create_adapter("codex").list_agent_instance_ids())
+PY
+
+# Foreign rollout contamination guard: cursors should not point at another instance's project path.
+if [ -d /Users/admin/.quaid/instances/codex-private-tmp-cdx-livetest/data/session-cursors ]; then ls -1 /Users/admin/.quaid/instances/codex-private-tmp-cdx-livetest/data/session-cursors/* 2>/dev/null | sort; fi > "$ART/cdx-cursors.txt" || true
+grep -R "claude-code-private-tmp\|openclaw-main\|cc-livetest" /Users/admin/.quaid/instances/codex-private-tmp-cdx-livetest/data/session-cursors > "$ART/cdx-foreign-cursor-grep.txt" 2>&1 || true
+```
+
+CDX pass addendum:
+- No foreign rollout cursor appears in the CDX instance.
+- No derived or tombstoned CDX M13 instance is resurrected.
+- Supervisor remains alive for at least 180 seconds after recall completion.
+
+## Clean PASS vs Workaround-PWN vs FAIL
+
+Clean PASS:
+- No manual daemon restart, stale-pid kill, signal deletion, DB repair, config reload, or pane Enter key intervention after the probe begins.
+- All SUP-01 through SUP-06 checks pass for the lane.
+- The canary is stored or recallable, and runtime evidence shows the daemon/supervisor processed the work.
+- `daemon status --json` is healthy at the final checkpoint.
+- No unhandled traceback appears in daemon, supervisor, worker, hook, or adapter logs.
+- Transient SQLite setup-lock messages, if any, are retried and the runtime remains healthy.
+- No cross-instance contamination or tombstoned-instance resurrection is observed.
+
+Workaround-PWN:
+- User-visible behavior eventually works, but only after manual recovery such as killing a stale daemon, restarting the daemon outside SUP-06, deleting signal files, repairing a DB, clearing a tombstone manually, or pressing Enter because a tmux message remained buffered.
+- The lane may continue if Solomon accepts the workaround, but the milestone is not a clean PASS and must produce a follow-up issue.
+
+FAIL:
+- Supervisor exits unexpectedly.
+- Daemon status is `running=false` outside explicit stop/start steps.
+- Hook/inject hangs and prevents the agent from responding.
+- SQLite setup-lock or schema errors crash the runtime.
+- Worker respawn loop recreates hidden silos or tombstoned misc instances.
+- Pending signals grow without drain or explanation.
+- Foreign instance sessions, cursors, docs, memories, or project links appear in the lane's silo.
+
+## Required Run Note
+
+For each lane, the tester should report:
+
+```text
+M17 <OC|CC|CDX> <PASS|WORKAROUND-PWN|FAIL>
+probe_id=<id>
+instance=<instance id>
+sha=<deployed sha>
+manual_intervention=<none|description>
+canary=<canary phrase>
+daemon_status_final=<running true/false summary>
+pending_signals_final=<count>
+artifact_dir=<path>
+notes=<supervisor/log/worker findings>
+```
+
+Attach or preserve the artifact directory. If artifacts are too large for pane output, send the directory path and a short summary first, then attach a tarball or selected logs through the normal coordinator channel.

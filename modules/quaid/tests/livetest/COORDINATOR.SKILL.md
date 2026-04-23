@@ -3,13 +3,16 @@
 You are the **coordinator** for a Quaid live test run. Your job is to manage the
 full run loop: wipe the remote, drive agent-driven install on each platform, run
 the milestone suite, fix infrastructure blockers, and loop until a full suite
-passes with zero new commits.
+passes with zero new commits. You are the central authority for the live test,
+the subagent testers cover surface but you are the final authority on if a
+perceived break is real and how to fix it. You are the problem solver, they are
+the problem finders.
 
 ---
 
 ## Iterative Live Testing — fail-fast with early clears + lagged regression
 
-**When the run is iterative (not a full ship validation) and a developer is
+**When the run is iterative (not a full milestone validation) and a developer is
 waiting on test results to keep building**, prioritize dev velocity by
 structuring the test as:
 
@@ -29,8 +32,8 @@ structuring the test as:
    C/D paths are no worse than always running the whole suite from scratch.
    The average path gets a major speedup; the worst path matches today's cost.
 
-**When to use:** any M17-style or post-Run-110 iterative feature-under-patch
-cycle where a dev is iterating on a single scope and waiting on W4 results to
+**When to use:** any iterative feature-under-patch
+cycle where a dev is iterating on a single scope and waiting on results to
 keep moving. NOT for ship validation (those run the full suite regardless).
 
 **When not to use:** full-run validation, release gates, push-main gates. Those
@@ -46,7 +49,7 @@ keep the standard end-to-end sequence.
 ## VM Management (tart)
 
 Live tests run on tart VMs cloned from a locked base snapshot. The base snapshot
-has OC, CC, CDX, Homebrew, Python 3.10, Node, Telegram, and SSH pre-configured.
+has OC, CC, CDX, Homebrew, Python 3.10, Node, Telegram, Matrix, and SSH pre-configured.
 No Quaid installed — M0 tests the installer.
 
 ```bash
@@ -179,130 +182,128 @@ feature under test and poison reset-dedupe markers.
 If `/new` does not trigger extraction, that is a bug to investigate and fix —
 not a condition to work around with manual signals.
 
-## Post-first-M0: Global Livetest Config
+## Post-first-M0: Livetest Config Overrides (per-platform)
 
-After the first M0 clears, inject test-specific config overrides — **GLOBAL ONLY,
-no per-platform or per-instance writes. MERGE — never overwrite — the global
-config file**:
+Write livetest overrides to the **per-platform** config files, not the global
+config. Platform configs supersede global for that platform only, so mid-run
+timing flips (e.g. dropping `inactivityTimeoutMinutes` for the M4 lane) don't
+contaminate the other lanes. Global-only overrides were the reason earlier runs
+had "settings getting stuck" on wrong milestones.
 
-The installer wrote `shared/config/global/config.json` during M0 with the
-exhaustive defaults (models, retrieval, decay, janitor, capture, etc.).
-Overwriting that file with a `>` redirect WIPES those defaults — leaving the
-runtime resolver unable to find `models.deepReasoning` etc., and the next
-inject hook fails with `RuntimeError: No model configured for tier deep`.
+**MERGE, never overwrite.** The installer wrote `shared/config/<platform>/config.json`
+during M0. Using `>` wipes the file and the next inject hook fails with
+`RuntimeError: No model configured for tier deep`.
 
-Use a deep-merge that keeps the installer defaults and only adjusts the
-livetest deltas:
+Files to merge into (apply the same overrides to each):
+
+- `~/.quaid/shared/config/openclaw/config.json`
+- `~/.quaid/shared/config/claude_code/config.json`
+- `~/.quaid/shared/config/codex/config.json`
+
+Overrides to apply at post-M0 (safe for all platforms, all milestones):
+
+- `livetest.enableExtractionBufferLog: true` — sanitizer/extraction buffer audits.
+- `capture.chunk_tokens: 1500` — livetest rolling-extraction standard
+  (production default 8000; smaller so rolling fires inside a test session).
+
+Do NOT apply `capture.inactivityTimeoutMinutes: 1` globally or run-wide.
+It gets flipped to `1` **only on the platform currently running M4**, and
+restored to `60` immediately after (see "M4 idle-timeout flip — per platform"
+below).
+
+Deep-merge Python one-liner, parameterized by platform:
 
 ```bash
-ssh admin@$VM_IP 'python3 << "PYEOF"
-import json, os
-p = os.path.expanduser("~/.quaid/shared/config/global/config.json")
+for platform in openclaw claude_code codex; do
+  ssh admin@$VM_IP "python3 << PYEOF
+import json, os, sys
+p = os.path.expanduser(f\"~/.quaid/shared/config/${platform}/config.json\")
 existing = json.load(open(p)) if os.path.exists(p) else {}
 overrides = {
-    "livetest": {"enableExtractionBufferLog": True},
-    "capture": {"chunk_tokens": 500, "inactivityTimeoutMinutes": 1}
+    'livetest': {'enableExtractionBufferLog': True},
+    'capture': {'chunk_tokens': 1500}
 }
 def merge(b, o):
     r = json.loads(json.dumps(b))
     for k, v in o.items():
         r[k] = merge(r.get(k, {}), v) if isinstance(v, dict) and isinstance(r.get(k), dict) else v
     return r
-json.dump(merge(existing, overrides), open(p, "w"), indent=2)
-print("merged global config:", p)
+json.dump(merge(existing, overrides), open(p, 'w'), indent=2)
+print('merged platform config:', p)
 PYEOF
-'
+"
+done
 ```
 
-This sets: extraction buffer logging (for sanitizer audits), chunk_tokens=500
-(the livetest standard; triggers rolling extraction in normal test sessions;
-production default is 8000), and inactivityTimeoutMinutes=1 (so idle extraction
-fires within ~1 min, enabling M4 and other idle-dependent milestones without a
-long wait; production default is 60). Do this once per run. Restart daemons after.
+Restart daemons on each platform after the merge so the new config is loaded.
 
-**Do NOT loop these writes per-platform or per-instance.** Since a0989f00e (thin
-platform configs) + 02fcd81b1 (lean instance bootstrap) + d9b964573 (JS-side
-layered resolution) landed, the resolver chain `instance > platform > global`
-correctly inherits unset keys from the global layer. A single write to
-`shared/config/global/config.json` propagates to OC, CC, and CDX automatically.
+### M4 idle-timeout flip — per platform
 
-If chunk_tokens or inactivityTimeoutMinutes don't appear to take effect during
-M3 (rolling) or M4 (timeout) milestones — instances behaving as if production
-defaults (8000 / 60) are still in force — that's the layered-resolver
-regression. The run is unfrozen pending fix:
+M4 is the only milestone that tests the idle-extraction path. For that one
+milestone only, on the **one platform** that is actively running M4:
 
-1. **Per-instance config overwriting global.** Inspect
-   `~/.quaid/instances/<name>/config.json` — should be lean
-   (`{instance.id, adapter.type, ...}`); if it inlines `capture` defaults,
-   route to W1 to keep the bootstrap write thin.
-2. **Per-platform config overwriting global.** Inspect
-   `~/.quaid/shared/config/<platform>/config.json` — should be thin (only
-   platform-specific overrides). If bloated, route to W1 — the installer
-   should write thin platform overrides only.
+1. Immediately before M4 on the active platform: set that platform's
+   `capture.inactivityTimeoutMinutes` to `1`, restart the lane's daemon.
+2. Run M4's idle-extraction probe.
+3. Immediately after M4 (pass or PWN), restore that platform's
+   `capture.inactivityTimeoutMinutes` to `60`, restart the daemon.
 
-Fix the regression, deploy, then boot a fresh frozen run.
+Do NOT flip the global config, and do NOT flip the config of any platform
+that is not currently running M4. If the global value is ever set to `1`,
+every lane's `/new` + hook turn-latency will race the timeout, and you'll
+get "extraction via timeout rolling_flush, not session_end" on every lane —
+which masks real lifecycle behavior and turns clean PASSes into PWN-note.
 
-**Important for testers interpreting rolling thresholds:** the rolling buffer
-counts POST-SANITIZATION transcript content (raw user prompts + agent responses
-with Quaid system/notification/context blocks stripped). Do NOT use hook
-`context_emitted` length as the token limiter — that's pre-sanitization and
-will always be much larger than the actual buffered count. Check
-`semantic_buffer_tokens` in the per-session rolling state file:
+```bash
+# Before M4 on platform $P (openclaw | claude_code | codex):
+ssh admin@$VM_IP "python3 << PYEOF
+import json, os
+p = os.path.expanduser(f'~/.quaid/shared/config/${P}/config.json')
+d = json.load(open(p)) if os.path.exists(p) else {}
+d.setdefault('capture', {})['inactivityTimeoutMinutes'] = 1
+json.dump(d, open(p, 'w'), indent=2)
+print('M4 idle=1 on', p)
+PYEOF
+"
+# restart that platform's daemon...
+
+# After M4 on platform $P:
+ssh admin@$VM_IP "python3 << PYEOF
+import json, os
+p = os.path.expanduser(f'~/.quaid/shared/config/${P}/config.json')
+d = json.load(open(p))
+d.setdefault('capture', {})['inactivityTimeoutMinutes'] = 60
+json.dump(d, open(p, 'w'), indent=2)
+print('M4 idle restored to 60 on', p)
+PYEOF
+"
+# restart that platform's daemon again...
+```
+
+### Rolling-threshold interpretation for tester reports
+
+The rolling buffer counts POST-SANITIZATION transcript content (raw prompts
+and agent responses with Quaid system/notification/context blocks stripped).
+Do NOT use hook `context_emitted` length as the token limiter — that's
+pre-sanitization and is always much larger than the actual buffered count.
+Check `semantic_buffer_tokens` in the per-session rolling state file:
 `~/.quaid/instances/<instance>/data/rolling-extraction/<session_id>.json`.
 
-## CC Auth Token
+## Auth credentials (handled by preflight)
 
-### Step 1 — Inject fresh `claude` CLI credentials from the coordinator machine
+Both the CC `claude` CLI credential and the shared Quaid auth credential are
+seeded by `livetest-preflight.sh` — steps `[7/8]` and `[7b/8]`. You do not copy
+them manually. Preflight reads the active auth-source path from its config and
+writes both the local `claude` credential onto the remote and the shared Quaid
+credential into `~/.quaid/shared/auth/credentials.json`. Wipe order is correct:
+preflight wipes `~/.quaid` first, then reseeds, so a post-preflight silo starts
+with live credentials.
 
-The CC platform reads Anthropic OAuth credentials from `~/.claude/.credentials.json`.
-The base snapshot bakes in a token that is already expired by the time a clone boots.
-**Do not rely on the baked token — always inject fresh credentials as part of preflight.**
-
-The coordinator machine's running CC instance always has a valid, auto-refreshed
-`~/.claude/.credentials.json`. Copy it directly to the VM after clone:
-
-```bash
-scp ~/.claude/.credentials.json admin@REMOTE_HOST:~/.claude/.credentials.json
-```
-
-Then verify:
-
-```bash
-ssh REMOTE_HOST 'source ~/.zprofile && claude auth status'
-```
-
-Expected output includes `"loggedIn": true`. If it does not, check that the
-coordinator machine's own CC session is authenticated before copying.
-
-### Step 2 — Pre-write the shared Quaid auth credential
-
-**Before handing off to the CC platform agent**, proactively write the Quaid CC
-shared credential so the first installer does not stop with an "Action Needed"
-credential note. The token source is `auth_token_file` in `livetest-config.json`:
-
-```bash
-TOKEN=$(cat ~/.tmp/cc-auth-token.txt | tr -d '[:space:]')
-ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && \
-  echo 'CC Quaid shared auth credential written'"
-```
-
-**`~/.tmp/cc-auth-token.txt` must contain the long-lived Yuni Anthropic OAuth key.**
-Short-lived session tokens expire within the lifetime of a VM clone and will cause
-credential failures mid-run. Before each run, ensure the file holds the Yuni key:
-
-```bash
-# Verify cc-auth-token.txt holds the Yuni long-lived key (not a session token)
-# Yuni key source: ~/quaidcode/anthtoken-yuni.md
-# Sol key source:  ~/quaidcode/anthtoken-sol.md
-YUNI=$(cat ~/quaidcode/anthtoken-yuni.md | tr -d '[:space:]')
-echo "$YUNI" > ~/.tmp/cc-auth-token.txt
-```
-
-This token is the single global Quaid credential used by all platforms (OC, CC, CDX).
-The installer should accept any one of `anthropic_oauth`, `anthropic_api`, `openai_oauth`,
-or `openai_api` — the Yuni `anthropic_oauth` key is the correct default.
-
-Note: the preflight wipes `~/.quaid`, so this pre-write must happen AFTER preflight completes.
+If preflight `[7b/8]` prints `empty token from stdin` or similar, fall back to
+writing the credential manually via `ssh REMOTE_HOST "quaid auth refresh --kind
+anthropic_oauth '$TOKEN'"` using the same token source preflight was pointed at.
+Route the stdin bug to W1 as a preflight fix rather than making the manual
+workaround load-bearing.
 
 NEVER write a placeholder token.
 
@@ -312,7 +313,7 @@ NEVER write a placeholder token.
 
 Read `tests/livetest/README.md` for the full architecture and prerequisites.
 
-Read `tests/LIVE-TEST-GUIDE.md` for the authoritative milestone definitions,
+Read `tests/livetest/LIVE-TEST-GUIDE.md` for the authoritative milestone definitions,
 XP procedure, and platform-specific notes. Do not substitute memory of prior
 runs for reading the current guide.
 
@@ -380,108 +381,47 @@ tests/livetest/scripts/tmux-mailbox.sh done "$COORDINATOR_PANE" <message-id>
 `livetest` is the canonical **local** tmux session name for all live-test work.
 This is a hard rule.
 
-- Use one window per platform: `CC`, `OC`, `CDX`.
-- Each platform window must be split into two panes.
-- Left pane: local tester agent.
-- Right pane: local SSH shell into the remote platform under test.
-- Do **not** run tester agents on the remote host.
-- Do **not** make a remote tmux session canonical for the run.
-
-If the host under test crashes, wedges, or installs broken code, the local tester
-must survive. Running the tester on the remote host violates that safety boundary.
-
-Do not run a one-off lane in a differently named session. Operator attach paths
-and monitoring screens depend on the local `tmux new-session -A -s livetest`
-workflow continuing to work.
-
-```bash
-tmux has-session -t livetest 2>/dev/null || tmux new-session -d -s livetest -n CC
-tmux list-windows -t livetest | grep -q 'CC$'  || tmux new-window -t livetest -n CC
-tmux list-windows -t livetest | grep -q 'OC$'  || tmux new-window -t livetest -n OC
-tmux list-windows -t livetest | grep -q 'CDX$' || tmux new-window -t livetest -n CDX
-
-for win in CC OC CDX; do
-  if [ "$(tmux list-panes -t livetest:$win | wc -l | tr -d ' ')" -lt 2 ]; then
-    tmux split-window -h -t livetest:$win
-  fi
-  tmux select-layout -t livetest:$win even-horizontal
-  tmux select-pane -t livetest:$win.0 -T "${win,,}-tester"
-  tmux select-pane -t livetest:$win.1 -T "${win,,}-platform"
-done
-```
+- Use one window per platform: `CC`, `OC`, `CDX`. Each has two panes — left
+  pane runs the local tester agent, right pane holds a local SSH shell into the
+  remote. Testers never run on the remote host.
+- `livetest-session-init.sh` (preflight setup helper) creates the session,
+  windows, and panes, launches the tester CLI in each left pane, opens the SSH
+  shells on the right, and starts the nudge loops. Run it once at the start of
+  a run.
+- On first message to each tester, send `TESTER.SKILL.md` plus the lane's
+  `TESTER.{OC,CC,CDX}.md` supplement, the tester's own pane address, and your
+  coordinator pane address (from `tmux.coordinator_pane` in config). Without
+  the coordinator pane, testers can't post into your mailbox.
 
 Scripts shipped with the livetest suite (relative to repo root):
-- `tests/livetest/scripts/livetest-preflight.sh` — safety checks + platform updates; early-exits on applied updates; otherwise wipe/sync/start
-- `tests/livetest/scripts/livetest-wipe.sh` — wipe Quaid from remote (called by preflight)
-- `tests/livetest/scripts/livetest-platform-start.sh` — start platform services on remote (called by preflight)
-- `tests/livetest/scripts/livetest-refresh-base.sh` — refresh locked base VM image from updated run VM
-- `tests/livetest/scripts/livetest-snapshot-preinstall.sh` — snapshot run VM after preflight and before M0 install
-- `tests/livetest/scripts/livetest-restore-preinstall.sh` — restore run VM from preinstall snapshot and re-rsync latest dev tree
-- `tests/livetest/scripts/tmux-msg.sh` — direct pane messaging for urgent interrupts and self-tests
-- `tests/livetest/scripts/tmux-mailbox.sh` — queue-backed mailbox for routine STATUS/ISSUE traffic
-- `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop
 
-Start a tester agent in each left pane using the CLI from your config
-(default `codex --yolo`). Start it from the tester agent workspace so the
-agent-local `AGENTS.md` is loaded, and keep repo paths explicit in the prompt:
+- `tests/livetest/scripts/livetest-preflight.sh` — safety checks, wipe, rsync
+  dev tree, seed auth credentials, start platform services.
+- `tests/livetest/scripts/livetest-session-init.sh` — create local `livetest`
+  tmux session with CC/OC/CDX windows + tester/ssh panes + nudge loops.
+- `tests/livetest/scripts/livetest-wipe.sh` — wipe Quaid on remote (called by
+  preflight).
+- `tests/livetest/scripts/livetest-platform-start.sh` — start platform services
+  on remote (called by preflight).
+- `tests/livetest/scripts/livetest-refresh-base.sh` — refresh locked base VM
+  image from an updated run VM.
+- `tests/livetest/scripts/livetest-snapshot-preinstall.sh` /
+  `livetest-restore-preinstall.sh` — snapshot/restore the post-preflight VM
+  state around M0 install retries.
+- `tests/livetest/scripts/tmux-msg.sh` — direct pane messaging.
+- `tests/livetest/scripts/tmux-mailbox.sh` — queue-backed mailbox for routine
+  STATUS/ISSUE traffic.
+- `tests/livetest/scripts/livetest-nudge.sh` — keepalive nudge loop (started by
+  session-init).
 
-```bash
-tmux send-keys -t livetest:CC.0  "cd /path/to/quaidcode/util/agents/codex-livetester && TESTER_CLI" Enter
-tmux send-keys -t livetest:OC.0  "cd /path/to/quaidcode/util/agents/codex-livetester && TESTER_CLI" Enter
-tmux send-keys -t livetest:CDX.0 "cd /path/to/quaidcode/util/agents/codex-livetester && TESTER_CLI" Enter
-```
+**Coordinator policy:** the active coordinator owns the live-test nudge loops
+started by session-init. Do not route tester nudge requests through window `5`
+(`claude-looper`); window `5` is reserved for `main`-session monitoring.
 
-On first message to each tester, send the contents of **both** the general skill
-file and the platform-specific supplement as the opening context:
-
-| Tester Pane | General | Platform supplement |
-|-------------|---------|-------------------|
-| `livetest:OC.0` | `TESTER.SKILL.md` | `TESTER.OC.md` |
-| `livetest:CC.0` | `TESTER.SKILL.md` | `TESTER.CC.md` |
-| `livetest:CDX.0` | `TESTER.SKILL.md` | `TESTER.CDX.md` |
-
-Also include in the opening message:
-- Which platform it is testing (OC, CC, or CDX)
-- Its own tmux pane address (e.g. `livetest:OC.0`)
-- **Your coordinator pane address** (from `tmux.coordinator_pane` in config)
-
-The tester uses your pane address as the mailbox target for all routine STATUS
-and ISSUE traffic. Without it, testers cannot post into your mailbox.
-
-Start nudge loops for each tester window (keeps agents active during long runs):
-```bash
-LIVETEST_DIR=tests/livetest/scripts
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:CC.0  -r "Run N" &; CC_NUDGE=$!
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:OC.0  -r "Run N" &; OC_NUDGE=$!
-$LIVETEST_DIR/livetest-nudge.sh -w livetest:CDX.0 -r "Run N" &; CDX_NUDGE=$!
-echo "Nudge PIDs: CC=$CC_NUDGE OC=$OC_NUDGE CDX=$CDX_NUDGE"
-```
-
-Coordinator policy:
-- The active coordinator owns these live-test nudge loops directly.
-- Do not route tester nudge requests through window `5` / `claude-looper`.
-- Window `5` is reserved for `main`-session monitoring, not `livetest:*` sessions.
-
-Kill nudges at run end:
-```bash
-kill $CC_NUDGE $OC_NUDGE $CDX_NUDGE 2>/dev/null
-```
-
-Open the platform interaction panes (SSH to remote, start platforms after install):
-
-```bash
-# These are populated after M0 install — do not start platforms before install
-tmux send-keys -t livetest:CC.1  "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CDX.1 "ssh REMOTE_HOST" Enter
-# OC uses Matrix DM — no TUI pane needed. OC.1 can be used for log monitoring:
-# tmux send-keys -t livetest:OC.1 "ssh REMOTE_HOST 'tail -f ~/.quaid/instances/OC_INSTANCE/logs/daemon.log'" Enter
-```
-
-If you find an active live-test lane running under a non-canonical **local**
-tmux session name, rename that local session back to `livetest` before continuing.
-
-If you find the tester itself running on the remote host, stop and correct it.
-That setup is invalid and unsafe.
+If you find an active live-test lane running under a non-canonical local tmux
+session name, rename it back to `livetest` before continuing. If you find the
+tester itself running on the remote host, stop and correct it — that setup is
+invalid and unsafe.
 
 ---
 
@@ -858,12 +798,6 @@ be fixed before proceeding to M1.
 
 ### Post-install coordinator steps (after M0 PASS, before M1)
 
-**Write CC auth credential** (required for daemon LLM calls):
-```bash
-TOKEN=$(cat CC_AUTH_TOKEN_FILE | tr -d '[:space:]')
-ssh REMOTE_HOST "quaid auth refresh --kind anthropic_oauth '$TOKEN' && echo 'Auth credential written'"
-```
-
 **Verify installer model policy** on each silo (HARD RULE — trust installer defaults):
 ```bash
 for INSTANCE in OC_INSTANCE CC_INSTANCE; do
@@ -878,10 +812,11 @@ assert models.get('deepReasoning') in ('gpt-5.4', 'claude-sonnet-4-6')
 done
 ```
 
-**Set live-test `chunk_tokens` and `inactivityTimeoutMinutes` GLOBAL ONLY** —
-see "Post-first-M0: Global Livetest Config" above. Do NOT loop per instance.
-Layered resolver (instance > platform > global) propagates the global write to
-all instances post-a0989f00e + 02fcd81b1.
+**Apply per-platform livetest overrides** — see the "Post-first-M0: Livetest
+Config Overrides (per-platform)" section above. Write `enableExtractionBufferLog`
+and `chunk_tokens=1500` into each platform's config (OC, CC, CDX); do NOT write
+`inactivityTimeoutMinutes` globally. The M4 idle-timeout flip is per-platform
+and only around M4 on the lane running that milestone.
 
 ---
 
@@ -891,7 +826,7 @@ Send start signals to all three tester windows after M0 passes on all platforms.
 All three run simultaneously. The run is not complete until all three reach M16 PASS.
 M16 runs immediately after M15 on each platform.
 
-For full milestone definitions, see `tests/LIVE-TEST-GUIDE.md`.
+For full milestone definitions, see `tests/livetest/LIVE-TEST-GUIDE.md`.
 
 ### The prime directive
 
@@ -955,7 +890,7 @@ If you can imagine a code change that would fix it — write it.
 ## Step 5 — XP (Cross-Platform Project Linking)
 
 Run after all three platforms reach M16 PASS. Full procedure in
-`tests/LIVE-TEST-GUIDE.md` under "Cross-Platform Project Linking Test."
+`tests/livetest/LIVE-TEST-GUIDE.md` under "Cross-Platform Project Linking Test."
 
 XP tests that all three platforms can share a project and recall each other's docs.
 
