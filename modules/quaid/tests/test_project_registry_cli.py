@@ -321,6 +321,16 @@ class TestCmdUnlink:
                 cli.cmd_unlink(_args(name="ghost"))
         assert exc_info.value.code == 1
 
+    def test_reserved_project_exits_with_one(self, capsys):
+        with patch(
+            "core.project_registry.unlink_project",
+            side_effect=ValueError("Cannot unlink reserved project: quaid"),
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_unlink(_args(name="quaid"))
+        assert exc_info.value.code == 1
+        assert "Cannot unlink reserved project: quaid" in capsys.readouterr().err
+
 
 # ---------------------------------------------------------------------------
 # cmd_delete
@@ -352,6 +362,28 @@ class TestCmdDelete:
             with pytest.raises(SystemExit) as exc_info:
                 cli.cmd_delete(_args(name="ghost"))
         assert exc_info.value.code == 1
+
+    def test_reserved_project_exits_with_one(self, capsys):
+        with patch("core.project_registry.get_project", return_value={"instances": []}), \
+             patch(
+                 "core.project_registry.delete_project",
+                 side_effect=ValueError("Cannot delete reserved project: quaid"),
+             ):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_delete(_args(name="quaid"))
+        assert exc_info.value.code == 1
+        assert "Cannot delete reserved project: quaid" in capsys.readouterr().err
+
+    def test_reserved_project_bypasses_visibility_check(self, capsys):
+        with patch("core.project_registry.get_project", side_effect=AssertionError("visibility check should be skipped")), \
+             patch(
+                 "core.project_registry.delete_project",
+                 side_effect=ValueError("Cannot delete reserved project: quaid"),
+             ):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_delete(_args(name="quaid"))
+        assert exc_info.value.code == 1
+        assert "Cannot delete reserved project: quaid" in capsys.readouterr().err
 
 
 class TestCmdStatus:

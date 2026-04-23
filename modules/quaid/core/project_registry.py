@@ -176,6 +176,16 @@ def _misc_project_name(instance_id: str) -> str:
     return f"misc--{instance}"
 
 
+def _is_reserved_project_name(name: str) -> bool:
+    project_name = str(name or "").strip()
+    return project_name == "quaid" or project_name.startswith("misc--")
+
+
+def _raise_if_reserved_project_mutation(name: str, operation: str) -> None:
+    if _is_reserved_project_name(name):
+        raise ValueError(f"Cannot {operation} reserved project: {name}")
+
+
 def is_misc_project_deleted(instance_id: str, *, quaid_home: Optional[Path] = None) -> bool:
     home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
     misc_name = _misc_project_name(instance_id)
@@ -619,6 +629,7 @@ def unlink_project(name: str) -> Dict[str, Any]:
     Raises:
         KeyError: If project not found.
     """
+    _raise_if_reserved_project_mutation(name, "unlink")
     with _registry_lock():
         registry = _load_registry()
         if name not in registry["projects"]:
@@ -692,6 +703,7 @@ def delete_project(name: str) -> None:
     Raises:
         KeyError: If project not found.
     """
+    _raise_if_reserved_project_mutation(name, "delete")
     quaid_home = _resolve_quaid_home()
     visible_home = _visible_home_from_hidden(quaid_home)
     tracking_base = quaid_tracking_dir(quaid_home)

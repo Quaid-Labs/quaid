@@ -236,33 +236,29 @@ class TestDeleteProject:
         assert not (failed_staging / "2-compact.json").exists()
         assert (visible_staging / "3-compact.json").exists()
 
-    def test_delete_misc_project_marks_registry_deleted_state(self, mock_adapter):
+    def test_misc_deleted_state_reflects_registry_marker(self, mock_adapter):
         _, tmp_path = mock_adapter
         instance_id = "claude-code-private-tmp-m13"
-        instance_root = tmp_path / "instances" / instance_id
-        instance_root.mkdir(parents=True)
-        with patch("lib.instance.instance_id", return_value=instance_id), \
-             patch("core.project_registry._sync_docs_registry_project"):
-            create_project(f"misc--{instance_id}", description="scratch")
-        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is False
-
-        delete_project(f"misc--{instance_id}")
-
-        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is True
-        registry = _load_registry(quaid_home=tmp_path)
-        assert f"misc--{instance_id}" in registry["deleted_projects"]
-
-        shutil.rmtree(instance_root)
+        _save_registry(
+            {
+                "projects": {},
+                "deleted_projects": {f"misc--{instance_id}": "2026-04-24T00:00:00+00:00"},
+            },
+            quaid_home=tmp_path,
+        )
 
         assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is True
 
     def test_recreate_misc_project_clears_deleted_registry_state(self, mock_adapter):
         _, tmp_path = mock_adapter
         instance_id = "claude-code-private-tmp-m13"
-        with patch("lib.instance.instance_id", return_value=instance_id), \
-             patch("core.project_registry._sync_docs_registry_project"):
-            create_project(f"misc--{instance_id}", description="scratch", initial_instance=instance_id)
-        delete_project(f"misc--{instance_id}")
+        _save_registry(
+            {
+                "projects": {},
+                "deleted_projects": {f"misc--{instance_id}": "2026-04-24T00:00:00+00:00"},
+            },
+            quaid_home=tmp_path,
+        )
         assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is True
 
         with patch("lib.instance.instance_id", return_value=instance_id), \
@@ -469,6 +465,22 @@ class TestUnlinkProject:
         loaded = get_project("my-app")
         assert "drop-instance" not in loaded["instances"]
 
+    @pytest.mark.parametrize(
+        ("project_name", "instance_name"),
+        [
+            ("quaid", "creator-instance"),
+            ("misc--claude-code-private-tmp-m13", "claude-code-private-tmp-m13"),
+        ],
+    )
+    def test_unlink_rejects_reserved_projects(self, mock_adapter, project_name, instance_name):
+        with patch("lib.instance.instance_id", return_value=instance_name), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            create_project(project_name, initial_instance=instance_name)
+
+        with patch("lib.instance.instance_id", return_value=instance_name):
+            with pytest.raises(ValueError, match="Cannot unlink reserved project"):
+                unlink_project(project_name)
+
 
 class TestDeleteProjectPurgesDb:
     def test_create_project_clears_delete_marker(self, mock_adapter):
@@ -505,6 +517,23 @@ class TestDeleteProjectPurgesDb:
         assert "my-app" not in list_projects()
         cleaned = json.loads(path.read_text(encoding="utf-8"))
         assert "my-app" not in cleaned.get("projects", {})
+
+    @pytest.mark.parametrize(
+        ("project_name", "instance_name"),
+        [
+            ("quaid", "creator-instance"),
+            ("misc--claude-code-private-tmp-m13", "claude-code-private-tmp-m13"),
+        ],
+    )
+    def test_delete_rejects_reserved_projects(self, mock_adapter, project_name, instance_name):
+        with patch("lib.instance.instance_id", return_value=instance_name), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            create_project(project_name, initial_instance=instance_name)
+
+        with pytest.raises(ValueError, match="Cannot delete reserved project"):
+            delete_project(project_name)
+
+        assert get_project(project_name) is not None
 
     def test_delete_hides_project_before_worker_cleanup(self, mock_adapter):
         """delete_project() should hide the project before slower monitor cleanup."""

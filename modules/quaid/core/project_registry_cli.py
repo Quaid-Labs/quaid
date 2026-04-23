@@ -203,18 +203,19 @@ def cmd_unlink(args):
         print(f"Unlinked from project '{args.name}' — remaining instances: {instances}")
         if args.json:
             print(json.dumps(entry, indent=2))
-    except KeyError as e:
+    except (KeyError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 
 def cmd_delete(args):
-    from core.project_registry import delete_project, get_project
-    _require_project_visible(args.name, get_project(args.name))
+    from core.project_registry import _is_reserved_project_name, delete_project, get_project
+    if not _is_reserved_project_name(args.name):
+        _require_project_visible(args.name, get_project(args.name))
     try:
         delete_project(args.name)
         print(f"Deleted project: {args.name}")
-    except KeyError as e:
+    except (KeyError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
