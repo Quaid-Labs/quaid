@@ -4,9 +4,9 @@ Canonical seed used across M2 (rolling + lifecycle extraction) and M3 (recall
 probes). Two chunks, sent to the agent with an ACK-only prefix so the agent
 doesn't spend time composing responses to the content.
 
-- **Chunk 1** is ~1400 tokens — below the `chunk_tokens=1500` rolling
+- **Chunk 1** is ~1300 tokens — below the `chunk_tokens=1500` rolling
   threshold, so rolling does not fire yet.
-- **Chunk 2** is ~200 tokens — cumulative ~1600 tokens, which trips rolling
+- **Chunk 2** is ~300 tokens — cumulative ~1600 tokens, which trips rolling
   extraction between the two chunks.
 - After both chunks, the tester fires the lane's `LIFECYCLE` command to
   flush the residual ~100 tokens via session_end extraction.
@@ -90,21 +90,55 @@ at Tan Tock Seng — last eye exam was November 2025, and my prescription
 hadn't changed since 2024. I take a walk after dinner most nights, usually
 around Marina Barrage.
 
+More workspace context, since we'll spend a lot of time together in it.
+The keyboard split is mounted on a Moft keyboard platform, and I use a
+Logitech MX Master 3S on the right side. My monitor stand is a custom
+walnut piece I had made by a local joinery called Fourtwenty Woodworks;
+they also did the live-edge desk in the reading nook. Lighting: a single
+overhead Dyson Lightcycle on the desk, and two warm Muji floor lamps in
+the corners. Backup drives: a pair of Samsung T9 SSDs that I rotate weekly
+into a fireproof safe under the desk.
+
+A bit more on routines: I do a ten-minute cold-plunge in the morning with
+an Ice Barrel I keep on the balcony — started that in 2024-09. Strength
+work is Tuesday and Friday at a gym called Hale Hale Fitness near the
+apartment; my coach is Marcus Yeo. Running is Wednesday and Saturday,
+usually the East Coast Park loop. My resting heart rate sits around 54
+and I have a Garmin Forerunner 265 for the metrics.
+
+On finances for context: the household handles money through a shared
+Wise account, and we keep a long-term savings line in a Vanguard
+FTSE-All-World ETF. Taxes are filed by an accountant named Priya Menon
+at Lotus Advisory; she's been handling my filings since the Singapore
+move in 2024.
+
+On reading groups: I'm in a history book club that meets the first Sunday
+of each month at the Basheer Graphic bookshop in Bras Basah; the current
+rotation is American twentieth-century social history. I also keep a
+shared Spotify with Yuni under a playlist we call "Late Evenings Only"
+which is where most of the ambient mixes live.
+
 ---
 
-## Chunk 2 (~200 tokens)
+## Chunk 2 (~300 tokens)
 
-Two more things for context, then I'll stop dumping.
+A few more things for context, then I'll stop dumping.
 
 Apartment's pet-free for now — Yuni is allergic to cats, so if we ever got
 anything it'd be a dog, and we've loosely discussed a golden retriever
 named Baxter as a someday-plan. No action on that yet.
 
-Also, when I'm writing longhand I mostly use a tangerine-cased notebook
-from the Lisbon papelaria Emília Rosa — `tangerine-emilia` is my mental
+When I'm writing longhand I mostly use a tangerine-cased notebook from
+the Lisbon papelaria Emília Rosa — `tangerine-emilia` is my mental
 codeword for it. The shop was a recommendation from Leah's husband Nathan.
 
-That's the end of the context dump.
+Community-wise, I sit on the advisory panel for a Singapore-based data
+nonprofit called Altitude Data, chaired by Renata Sim; meetings are
+quarterly and I took the 2026 seat from a retired colleague Peter Lim.
+My cycling commute bike is a steel-framed Brompton T-Line in racing green,
+serviced at Treknology Bikes on Orchard.
+
+That's the end of the context dump — no action on anything above.
 
 ---
 
