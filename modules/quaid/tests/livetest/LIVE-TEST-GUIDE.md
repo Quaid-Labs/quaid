@@ -92,8 +92,8 @@ Pane assignments:
 
 | Window | Agent | Role |
 |--------|-------|------|
-| `main:97` | codex-livetester (CC) | Drives CC milestones M0–M16 |
-| `main:98` | codex-livetester (OC) | Drives OC milestones M0–M16 |
+| `main:97` | codex-livetester (CC) | Drives CC through the milestone set (`ls tests/livetest/livetest-guide/`) |
+| `main:98` | codex-livetester (OC) | Drives OC through the milestone set (`ls tests/livetest/livetest-guide/`) |
 | `main:99` | live-test | OC verification pane (SSH + coordinator CLI; OC interaction via Matrix) |
 | `main:100` | CC-interact | Visible CC interaction pane (`claude`) |
 | `main:4` | claude-dev | Coordinator |
@@ -652,8 +652,8 @@ OC and CC run **in parallel**, not sequentially. The execution order is:
 
 1. **OC livetester (window 98)** starts M0 alone first.
 2. Once OC M0 passes, **CC livetester (window 97)** starts CC M0.
-3. Both livetester agents run their M0–M16 suites concurrently from that point.
-4. The run is not complete until **both** OC and CC have reached M16 PASS.
+3. Both livetester agents run the rest of the milestone set (see `tests/livetest/livetest-guide/` — `ls` it for the current list) concurrently from that point.
+4. The run is not complete until **both** OC and CC have passed every milestone in the guide.
 
 OC milestones use Matrix DM for all interaction (see OpenClaw section above).
 CC milestones play out in `main:100` (claude interactive).
@@ -2042,7 +2042,7 @@ they don't pollute later milestones or the post-test audit.
 
 ## Cross-Platform Project Linking Test (XP)
 
-Run this only after both OpenClaw and Claude Code have passed M1-M10. OC and CC only — CDX does not participate (CDX agents are path-derived; cross-platform linking is tested in the M8 + M13 flows for CDX). XP is coordinator-orchestrated, not a per-platform milestone number.
+Run this only after both OpenClaw and Claude Code have passed the project-system and multi-instance milestones (run `ls tests/livetest/livetest-guide/` for the current set; as of this writing that's through `M5.md`). CDX does not participate — CDX agents are path-derived; its equivalent project-linking behavior is covered under its project-system and silo-isolation milestone parts. XP is coordinator-orchestrated, not a per-platform milestone number.
 
 This is explicitly a user-behavior test. The agent should be able to discover
 how to link and use the project without being given function names.

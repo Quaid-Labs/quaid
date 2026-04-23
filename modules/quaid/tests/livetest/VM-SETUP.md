@@ -17,7 +17,7 @@ Coordinator (this machine)
 Each run:
 1. `livetest-vm.sh start` — clones base in ~5s, boots (~30s), waits for SSH
 2. Patches `livetest-config.json` with the VM's IP
-3. Run M0–M15 + XP normally (preflight, wipe, install, milestones)
+3. Run the milestone set (`ls tests/livetest/livetest-guide/`) + XP normally (preflight, wipe, install, milestones)
 4. `livetest-vm.sh stop` — destroys run clone, restores config
 
 The base image holds credentials (OC login, Codex login) across runs.
@@ -170,7 +170,7 @@ Base image tracking note:
 # Run preflight (now targets VM IP automatically)
 ./tests/livetest/scripts/livetest-preflight.sh
 
-# ... run milestones M0–M15 + XP ...
+# ... run milestones the milestone set (`ls tests/livetest/livetest-guide/`) + XP ...
 
 # Destroy the VM when done
 ./tests/livetest/scripts/livetest-vm.sh stop

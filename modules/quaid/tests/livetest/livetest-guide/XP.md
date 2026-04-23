@@ -2,7 +2,7 @@
 
 ## Cross-Platform Project Linking Test (XP)
 
-Run this only after both OpenClaw and Claude Code have passed M1-M10. OC and CC only — CDX does not participate (CDX agents are path-derived; cross-platform linking is tested in the M8 + M13 flows for CDX). XP is coordinator-orchestrated, not a per-platform milestone number.
+Run this only after both OpenClaw and Claude Code have passed the project-system and multi-instance milestones (run `ls tests/livetest/livetest-guide/` for the current set; as of this writing that's through `M5.md`). CDX does not participate — CDX agents are path-derived; its equivalent project-linking behavior is covered under its project-system and silo-isolation milestone parts. XP is coordinator-orchestrated, not a per-platform milestone number.
 
 This is explicitly a user-behavior test. The agent should be able to discover
 how to link and use the project without being given function names.

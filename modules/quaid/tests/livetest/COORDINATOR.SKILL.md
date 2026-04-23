@@ -820,13 +820,17 @@ and only around M4 on the lane running that milestone.
 
 ---
 
-## Step 4 — Run M1–M16 (Parallel)
+## Step 4 — Run milestones (Parallel)
 
 Send start signals to all three tester windows after M0 passes on all platforms.
-All three run simultaneously. The run is not complete until all three reach M16 PASS.
-M16 runs immediately after M15 on each platform.
+All three run simultaneously. The run is not complete until every lane has passed
+every milestone in the guide.
 
-For full milestone definitions, see `tests/livetest/LIVE-TEST-GUIDE.md`.
+The current milestone set lives under `tests/livetest/livetest-guide/`. Run
+`ls tests/livetest/livetest-guide/` for the authoritative list — milestones get
+added over time; do not hard-code a range in handoff prompts to testers. Per-
+milestone definitions are in the individual files (`M0.md`, `M1.md`, ...). Tester
+skill doc + platform supplements hold cross-cutting rules.
 
 ### The prime directive
 
@@ -925,7 +929,7 @@ Full suite passed with no code changes.
 **Before starting a new loop run: validate patches on the current VM first.**
 
 The VM is already provisioned and all instances are warm. Do not burn a full
-M0–M15 suite to verify a single bug fix. Instead:
+milestone suite to verify a single bug fix. Instead:
 
 1. Direct W1 (codex-dev) and W3 (codex-bench) to reproduce each bug on the
    current VM and validate the fix in place — targeted, not full suite.
@@ -954,7 +958,7 @@ Once targeted validation is complete and commits are staged:
 
 ## Post-Test Examination (after all milestones, before end-of-run report)
 
-Run this after all platforms have completed their milestone suites (M1–M16 + XP).
+Run this after all platforms have completed every milestone in `tests/livetest/livetest-guide/` (run `ls` there for the current list) plus `XP.md`.
 This catches system information leaking into user-visible logs and outputs.
 
 **Spawn Sonnet subagents** (one per platform, in parallel) to audit the buffered

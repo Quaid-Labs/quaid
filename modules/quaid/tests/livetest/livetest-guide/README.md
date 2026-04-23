@@ -13,16 +13,20 @@ Milestones consolidate tightly cross-fed surfaces into single multi-part files. 
 
 ## Milestones
 
-- [**M0 — Agent-Driven Install**](M0.md)
-- [**M1 — Extraction**](M1.md) — lifecycle signals (`/new`, `/reset`, `/clear`, `/compact`) + rolling extraction + timeout extraction.
-- [**M2 — Recall**](M2.md) — auto-inject + deliberate recall + graph traversal + date-range recall.
-- [**M3 — Project System + Docs CLI**](M3.md) — project CRUD + `quaid docs`/`doctor`/`stats` CLIs.
-- [**M4 — Janitor + Generated Artifacts**](M4.md) — janitor review cycle + snippet/journal/PROJECT.log generation.
-- [**M5 — Silo Isolation**](M5.md) — multi-agent within one instance + multi-instance separation.
-- [**M6 — Agent Notifications**](M6.md) — deferred notice surfacing + provider-outage fast path.
-- [**M7 — System Context Refresh on Lifecycle**](M7.md)
-- [**M8 — Supervisor and Monitor Runtime Stability**](M8.md)
-- [**XP — Cross-Platform Project Linking Test**](XP.md)
+`ls tests/livetest/livetest-guide/` is the source of truth for the current milestone set. Milestones get added as coverage grows; this index is a convenience snapshot, not an authoritative cap. Any agent should enumerate the directory for itself before planning a run.
+
+Current snapshot (run `ls` to confirm):
+
+- `M0.md` — Agent-Driven Install
+- `M1.md` — Extraction (lifecycle signals + rolling + timeout)
+- `M2.md` — Recall (auto-inject + deliberate + graph + date-range)
+- `M3.md` — Project System + Docs CLI
+- `M4.md` — Janitor + Generated Artifacts
+- `M5.md` — Silo Isolation (multi-agent + multi-instance)
+- `M6.md` — Agent Notifications (deferred + provider-outage)
+- `M7.md` — System Context Refresh on Lifecycle
+- `M8.md` — Supervisor and Monitor Runtime Stability
+- `XP.md` — Cross-Platform Project Linking Test
 
 ## Authoring rules
 
