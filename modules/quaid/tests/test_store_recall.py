@@ -4794,6 +4794,56 @@ class TestRecallFastHookInjectContract:
         assert meta["lexical_anchor"]["elapsed_ms"] == 17
         assert meta["phases_ms"]["lexical_anchor_planner_ms"] == 17
 
+    def test_recall_once_rescues_verbatim_anchor_fact_when_vector_cap_misses(self):
+        import datastore.memorydb.memory_graph as mg
+
+        exact = mg.Node(
+            id="niseko-fact",
+            type="Fact",
+            name="Solomon Steadman and Yuni skied in Niseko for four days in January 2024",
+            attributes={},
+        )
+        generic_rows = [
+            mg.Node(id=f"generic-{idx}", type="Fact", name=f"Generic unrelated memory {idx}", attributes={})
+            for idx in range(6)
+        ]
+        graph = MagicMock()
+        graph.search_hybrid.return_value = [(node, 0.95 - (idx * 0.01)) for idx, node in enumerate(generic_rows)]
+        graph.search_fts.return_value = [(exact, 2.0)]
+        lexical_meta = {
+            "used_llm": True,
+            "bailout_reason": None,
+            "elapsed_ms": 9,
+            "timeout_ms": 800,
+            "anchor_count": 1,
+            "source": "llm",
+        }
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(mg, "_plan_query_anchor_terms", return_value=(["niseko"], lexical_meta)), \
+             patch.object(mg, "_search_nodes_by_query_terms", return_value=[(exact, 1.0)]):
+            rows, meta = mg._recall_once(
+                "Niseko",
+                owner_id="quaid",
+                limit=5,
+                use_aliases=False,
+                use_routing=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                min_similarity=0.0,
+                track_access=False,
+                return_meta=True,
+            )
+
+        assert rows[0]["id"] == "niseko-fact"
+        assert "Niseko" in rows[0]["text"]
+        assert meta["counts"]["lexical_rescue_added"] == 1
+        assert meta["flags"]["lexical_rescue_used"] is True
+
     def test_recall_once_disables_fast_anchor_miss_penalty_without_explicit_anchor(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
@@ -5165,6 +5215,48 @@ class TestRecallFastHookInjectContract:
         assert payload["graph_results"][0]["direction"] == "in"
         assert payload["graph_results"][0]["graph_path"] == "Diana --parent_of--> Alice"
         assert payload["graph_results"][0]["text"] == "Diana --parent_of--> Alice"
+
+    def test_graph_aware_recall_resolves_hyphen_owner_and_includes_terminal_facts(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        solomon = mg.Node.create("Person", "Solomon Steadman")
+        yuni = mg.Node.create("Person", "Yuni")
+        kai = mg.Node.create("Person", "Kai")
+        mei = mg.Node.create("Person", "Mei")
+        ceramics = mg.Node.create(
+            "Fact",
+            "Mei runs a ceramics practice out of Kai and Mei's garage",
+        )
+        for node in (solomon, yuni, kai, mei, ceramics):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, yuni.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(kai.id, mei.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            payload = mg.graph_aware_recall(
+                "what does my partner's brother's wife do",
+                owner_id="solomon-steadman",
+                limit=8,
+                graph_depth=3,
+                candidate_pool=[],
+            )
+
+        attached = [
+            row for row in payload["graph_results"]
+            if row.get("via") == "graph_attached_fact"
+        ]
+        assert payload["source_breakdown"]["pronoun_resolved"] is True
+        assert attached
+        assert attached[0]["id"] == ceramics.id
+        assert "ceramics practice" in attached[0]["text"]
+        assert attached[0]["via_relation"] == "has_fact"
 
     def test_graph_aware_recall_does_not_relation_filter_multi_hop_depth(self, tmp_path):
         import datastore.memorydb.memory_graph as mg

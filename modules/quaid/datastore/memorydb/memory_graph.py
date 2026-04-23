@@ -2751,7 +2751,16 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
                 return graph._row_to_node(row)
 
     # Fallback: owner id itself may map to person name in graph.
-    for candidate in (owner_id, owner_id.replace("_", " ").title()):
+    owner_candidates = [
+        owner_id,
+        owner_id.replace("_", " ").title(),
+        re.sub(r"[-_]+", " ", owner_id).title(),
+    ]
+    seen_owner_candidates: set[str] = set()
+    for candidate in owner_candidates:
+        if not candidate or candidate in seen_owner_candidates:
+            continue
+        seen_owner_candidates.add(candidate)
         node = graph.find_node_by_name(candidate, type="Person")
         if node:
             return node
@@ -2942,6 +2951,64 @@ def _render_bidirectional_graph_text(
     return f"{anchor_name} → {relation} → {related_name}"
 
 
+def _graph_attached_fact_rows(
+    graph: "MemoryGraph",
+    *,
+    anchor_node: Node,
+    anchor_text: str,
+    anchor_score: float,
+    graph_path: str,
+    hop_depth: int,
+    seen_ids: set,
+    per_anchor_limit: int = 2,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not getattr(anchor_node, "id", None):
+        return rows
+    try:
+        edges = list(graph.get_edges(anchor_node.id, direction="both"))
+    except Exception:
+        return rows
+    for edge in edges:
+        if str(getattr(edge, "relation", "") or "") != "has_fact":
+            continue
+        fact_id = edge.target_id if edge.source_id == anchor_node.id else edge.source_id
+        if not fact_id or fact_id in seen_ids:
+            continue
+        try:
+            fact = graph.get_node(fact_id)
+        except Exception:
+            continue
+        if not fact or str(getattr(fact, "type", "") or "").lower() != "fact":
+            continue
+        seen_ids.add(fact.id)
+        fact_attrs = fact.attributes if isinstance(fact.attributes, dict) else {}
+        fact_score = max(0.60, min(0.91, float(anchor_score or 0.0) * 0.98))
+        rows.append({
+            "id": fact.id,
+            "text": _sanitize_for_context(fact.name),
+            "category": "fact",
+            "similarity": round(fact_score, 3),
+            "verified": fact.verified,
+            "pinned": fact.pinned,
+            "via": "graph_attached_fact",
+            "via_relation": "has_fact",
+            "hop_depth": int(hop_depth or 0) + 1,
+            "source_name": anchor_text,
+            "graph_path": f"{graph_path} --has_fact--> {fact.name}",
+            **_node_recall_temporal_fields(fact),
+            "domains": _domains_from_attrs(fact_attrs),
+            "project": fact_attrs.get("project"),
+            "source_type": fact_attrs.get("source_type"),
+            "extraction_confidence": getattr(fact, "extraction_confidence", None),
+            "privacy": getattr(fact, "privacy", None),
+            "owner_id": getattr(fact, "owner_id", None),
+        })
+        if len(rows) >= max(1, int(per_anchor_limit or 1)):
+            break
+    return rows
+
+
 def graph_aware_recall(
     query: str,
     owner_id: str = None,
@@ -3117,11 +3184,12 @@ def graph_aware_recall(
                     path,
                 )
 
+                graph_score = round(max(0.55, 0.92 - (0.08 * max(depth - 1, 0))), 3)
                 results["graph_results"].append({
                     "id": node.id,
                     "text": graph_path,
                     "category": "graph",
-                    "similarity": round(max(0.55, 0.92 - (0.08 * max(depth - 1, 0))), 3),
+                    "similarity": graph_score,
                     "name": node.name,
                     "type": node.type,
                     "relation": relation,
@@ -3132,6 +3200,15 @@ def graph_aware_recall(
                     "via": "graph",
                     "graph_path": graph_path,
                 })
+                results["graph_results"].extend(_graph_attached_fact_rows(
+                    graph,
+                    anchor_node=node,
+                    anchor_text=node.name,
+                    anchor_score=graph_score,
+                    graph_path=graph_path,
+                    hop_depth=depth,
+                    seen_ids=seen_ids,
+                ))
 
                 # Limit graph results
                 if len(results["graph_results"]) >= max_graph_results:
@@ -5913,6 +5990,108 @@ def _recall_once(
             _fts_fallback_used = True
         _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
 
+    # Deliberate exact-anchor rescue:
+    # single-token proper nouns can be present in FTS/LIKE but still miss the
+    # small vector candidate cap. Preserve verbatim memory rows before MMR so
+    # exact evidence is not displaced by semantically generic entity rows.
+    if include_lexical_anchor_shaping and query_anchor_terms and scored_results:
+        explicit_anchor_terms = _extract_explicit_query_anchor_terms(clean_query, limit=8)
+        verbatim_anchor_terms: List[str] = []
+        seen_anchor_terms: set[str] = set()
+        for raw_term in list(explicit_anchor_terms) + list(query_anchor_terms or []):
+            term = " ".join(str(raw_term or "").split()).strip().lower()
+            if not term or term in seen_anchor_terms:
+                continue
+            if not _text_contains_anchor_term(clean_query, term):
+                continue
+            seen_anchor_terms.add(term)
+            verbatim_anchor_terms.append(term)
+            if len(verbatim_anchor_terms) >= 8:
+                break
+
+        if verbatim_anchor_terms:
+            def _node_matches_verbatim_anchor(node: Node) -> bool:
+                searchable = _node_searchable_text(node)
+                return any(_text_contains_anchor_term(searchable, term) for term in verbatim_anchor_terms)
+
+            def _is_informative_anchor_node(node: Node) -> bool:
+                return str(getattr(node, "type", "") or "").strip().lower() not in {
+                    "person",
+                    "place",
+                    "organization",
+                    "entity",
+                }
+
+            top_has_exact_memory = any(
+                _node_matches_verbatim_anchor(node) and _is_informative_anchor_node(node)
+                for node, _score in scored_results[: max(1, limit)]
+            )
+            if not top_has_exact_memory:
+                _phase_t0 = _time.monotonic()
+                term_anchor_hits = _search_nodes_by_query_terms(
+                    graph,
+                    verbatim_anchor_terms,
+                    limit=max(search_limit, limit * 4),
+                    owner_id=owner_id,
+                )
+                if use_lightweight_config:
+                    fts_anchor_hits = term_anchor_hits
+                else:
+                    try:
+                        fts_anchor_hits = graph.search_fts(
+                            clean_query,
+                            limit=max(search_limit, limit * 4),
+                            owner_id=owner_id,
+                        )
+                    except Exception as exc:
+                        if _is_fail_hard_mode():
+                            raise RuntimeError(
+                                "FTS exact-anchor rescue failed during recall while failHard is enabled"
+                            ) from exc
+                        logger.warning("recall FTS exact-anchor rescue failed; continuing without rescue: %s", exc)
+                        fts_anchor_hits = []
+                    if term_anchor_hits:
+                        fts_anchor_hits = list(term_anchor_hits) + list(fts_anchor_hits or [])
+                if fts_anchor_hits:
+                    scored_by_id: Dict[str, Tuple[Node, float]] = {
+                        node.id: (node, score)
+                        for node, score in scored_results
+                        if getattr(node, "id", None)
+                    }
+                    passthrough: List[Tuple[Node, float]] = [
+                        (node, score)
+                        for node, score in scored_results
+                        if not getattr(node, "id", None)
+                    ]
+                    touched = False
+                    for node, fts_rank in fts_anchor_hits:
+                        if not getattr(node, "id", None) or not _node_matches_verbatim_anchor(node):
+                            continue
+                        rank = max(1.0, float(fts_rank or 1.0))
+                        informative = _is_informative_anchor_node(node)
+                        base_score = 0.96 if informative else 0.74
+                        rescue_score = min(
+                            1.0,
+                            max(
+                                float(min_similarity or 0.0),
+                                base_score + max(0.0, (5.0 - rank) * 0.008),
+                            ),
+                        )
+                        existing = scored_by_id.get(node.id)
+                        if existing is None:
+                            scored_by_id[node.id] = (node, rescue_score)
+                            _lexical_rescue_added += 1
+                            touched = True
+                        elif rescue_score > float(existing[1]):
+                            scored_by_id[node.id] = (node, rescue_score)
+                            _lexical_rescue_boosted += 1
+                            touched = True
+                    if touched:
+                        scored_results = list(scored_by_id.values()) + passthrough
+                        scored_results.sort(key=lambda x: x[1], reverse=True)
+                        _fts_fallback_used = True
+                _phase_ms["fts_fallback_ms"] += round((_time.monotonic() - _phase_t0) * 1000)
+
     # Fast hook lexical rescue:
     # deterministic pre-injection can get "good enough" vector rows for a broad
     # anchor (for example Baxter) while missing exact lexical details in a fresh
@@ -7997,6 +8176,14 @@ def _query_term_overlap(row: Dict[str, Any], query_terms: List[str]) -> int:
         return 0
     text = str((row or {}).get("text") or "").lower()
     return sum(1 for term in query_terms if term in text)
+
+
+def _text_contains_anchor_term(text: str, term: str) -> bool:
+    clean_term = " ".join(str(term or "").split()).strip().lower()
+    if not clean_term:
+        return False
+    clean_text = str(text or "").lower()
+    return bool(re.search(rf"(?<!\w){re.escape(clean_term)}(?!\w)", clean_text, flags=re.UNICODE))
 
 
 def _node_searchable_text(node: Node) -> str:
