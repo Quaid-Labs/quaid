@@ -4,6 +4,36 @@ Platform-specific notes for the CDX tester. Read this alongside `TESTER.SKILL.md
 
 ---
 
+## Lane variables
+
+Milestone files reference these; export them once at session start:
+
+```bash
+export LANE=cdx
+export LANE_UPPER=CDX
+export INSTANCE=codex-private-tmp-cdx-livetest
+export QCLI=~/.quaid/plugins/quaid/quaid
+export SILO=~/.quaid/instances/codex-private-tmp-cdx-livetest
+export LIFECYCLE="/new"  # CDX has no /clear or /compact hook
+```
+
+`SEND` mechanism: write directly into the CDX tmux pane with
+`tmux send-keys -t livetest:CDX.1 "<text>" Enter`.
+
+**CDX extraction window:** CDX extracts via rollout + session-transition
+hooks after the next lifecycle signal; wait ~2 min after `/new` before
+checking the DB.
+
+**CDX hook trace markers:** look for `hook.session.transition` on `/new` in
+`$SILO/logs/daemon/extraction-daemon.log`.
+
+**M7 (System Context Refresh) variant:** CDX has no compaction hook. M7's
+refresh trigger on CDX is `/new` instead of `/compact`. Use the same
+canary-append procedure, just fire `/new` where the milestone says to fire
+the refresh trigger.
+
+---
+
 ## Launch
 
 After M0 install, start the CDX interaction pane:

@@ -47,6 +47,9 @@ __pycache__/
 # Dynamic data (regenerated)
 spend.json
 data/
+# Livetest fixtures under livetest-guide/data are tracked
+!modules/quaid/tests/livetest/livetest-guide/data/
+!modules/quaid/tests/livetest/livetest-guide/data/**
 # Review/working files
 *-review.tsv
 *-review.jsonl

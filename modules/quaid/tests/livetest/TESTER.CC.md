@@ -4,6 +4,33 @@ Platform-specific notes for the CC tester. Read this alongside `TESTER.SKILL.md`
 
 ---
 
+## Lane variables
+
+Milestone files reference these; export them once at session start:
+
+```bash
+export LANE=cc
+export LANE_UPPER=CC
+export INSTANCE=claude-code-private-tmp-cc-livetest
+export QCLI=~/.quaid/plugins/quaid/quaid
+export SILO=~/.quaid/instances/claude-code-private-tmp-cc-livetest
+export LIFECYCLE="/clear"   # M2 Part A also uses /compact where supported
+```
+
+`SEND` mechanism: write directly into the CC tmux pane with
+`tmux send-keys -t livetest:CC "<text>" Enter`. CC does not have a Matrix
+surface — messages go in the visible pane only.
+
+**CC extraction window:** CC extracts asynchronously via `session_end` after
+`/exit` or `/clear`. Wait at least 2 minutes after the trigger before
+checking the DB.
+
+**CC hook trace markers:** look for `hook.session.ended` on `/exit` and
+`hook.session.cleared` on `/clear` in
+`$SILO/logs/daemon/extraction-daemon.log`.
+
+---
+
 ## Launch
 
 After M0 install, start the CC interaction pane:

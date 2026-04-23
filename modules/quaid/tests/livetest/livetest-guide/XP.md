@@ -1,176 +1,169 @@
-# XP: Cross-Platform Project Linking Test
+# XP: Cross-Platform Project Linking
 
-## Cross-Platform Project Linking Test (XP)
+Run this after every lane has passed all named milestones (M1 through M7).
+XP itself runs on the first two lanes that finish — the coordinator doesn't
+wait on the slowest lane to start. If OC is still running M7 when CC and CDX
+are done, XP runs between CC and CDX.
 
-Run this only after both OpenClaw and Claude Code have passed the project-system and multi-instance
-milestones (run `ls tests/livetest/livetest-guide/` for the current set; as of this writing that's
-through `M5.md`). CDX does not participate — CDX agents are path-derived; its equivalent
-project-linking behavior is covered under its project-system and silo-isolation milestone parts. XP
-is coordinator-orchestrated, not a per-platform milestone number.
+This is explicitly a user-behavior test. The agent on each platform should be
+able to discover how to link and use a cross-instance project without being
+given function names.
 
-This is explicitly a user-behavior test. The agent should be able to discover how to link and use
-the project without being given function names.
+Throughout the procedure, `PLATFORM1` is the first lane to finish; `PLATFORM2`
+is the second. Substitute the actual platform names before running.
 
-### Phase 1: Create the project and add a doc in OpenClaw
+## Phase 0 — Pick a shared project
 
-Prepare a source root:
+XP reuses the `livetest-agentmsg-<LANE>` projects M4 already created and
+re-registered at the end of Part A. Pick one as the shared target for XP —
+typically the one owned by `PLATFORM1`. The shared name is just
+`livetest-agentmsg-xp` (no lane suffix) so both instances can reference the
+same project without colliding on the per-lane suffix.
+
+Copy the source-root on the remote so both instances can resolve the same
+path:
 
 ```bash
-ssh REMOTE_HOST 'mkdir -p ~/quaid/projects/cross-live-test-src && cat > ~/quaid/projects/cross-live-test-src/main.py <<\"PY\"
-def harbor_status():
-    return "North pier beacon is offline"
-PY'
+ssh REMOTE_HOST 'cp -R \
+  ~/quaidcode/dev/modules/quaid/tests/livetest/livetest-guide/data/test-project \
+  ~/quaid/projects/livetest-agentmsg-xp-src'
 ```
 
-Ask OC naturally:
+## Phase 1 — Create and add a doc on PLATFORM1
 
-- `Can you create a project named cross-live-test for ~/quaid/projects/cross-live-test-src?`
-- `Do you see the existing cross-live-test project? Can we add a document to it?`
-- `Please add a project document that says the north pier beacon is offline and the maintenance
-  window starts at 02:15 UTC.`
+Ask the `PLATFORM1` agent naturally (no function names):
 
-Verify from shell:
+- `Can you create a project called livetest-agentmsg-xp pointing at`
+  `~/quaid/projects/livetest-agentmsg-xp-src?`
+- `Please register the README and the api.py file into that project.`
+- `Add a project document saying the north pier beacon is offline and the`
+  `maintenance window starts at 02:15 UTC.`
+
+Verify from the shell:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 registry list | grep livetest-agentmsg-xp"
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 docs list --project livetest-agentmsg-xp"
 ```
 
-If the doc file exists but is not listed, register it manually:
+If the doc exists on disk but is not listed, register manually:
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 registry register <path> \
+  --project livetest-agentmsg-xp"
 ```
 
-After the doc is registered, run `docs update --apply` to index it (new standalone docs with no
-existing chunks should be detected and indexed automatically — this is what M10 verifies):
+Force indexing on the PLATFORM1 instance:
 
 ```bash
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 docs update --apply"
 ```
 
-Expected output includes "Indexing new doc:" for the registered file. If it says "All docs
-up-to-date" instead, that is a regression — fall back to `janitor --task rag --apply` to unblock the
-test and report to claude-dev.
-
-Then verify recall:
+Verify recall on PLATFORM1:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 recall 'north pier beacon' \
+  '{\"stores\":[\"docs\"],\"project\":\"livetest-agentmsg-xp\"}'"
 ```
 
-Then ask OC:
+Then ask PLATFORM1 agent: `What does the cross-live project say about the
+beacon?`. The agent answers from the doc.
 
-- `What does the cross-live-test project doc say about the beacon?`
+## Phase 2 — Link the same project on PLATFORM2 and add a doc
 
-Pass:
-- OC can retrieve the doc content through Quaid
+Phase 2 assumes PLATFORM1 has landed. PLATFORM2 links to the existing
+project rather than creating fresh.
 
-### Phase 2: Link the same project in Claude Code and add a second doc
+Ask the `PLATFORM2` agent naturally:
 
-**Ordering**: Phase 2 assumes OC's Phase 1 has landed — CC LINKS to an existing `cross-live-test`
-rather than creating fresh. If OC is blocked upstream and CC reaches this milestone first, CC's
-natural-directive create will attach to the visible-home project dir under its own instance
-registry; the coordinator cross-registration step below (`Cross-link docs across instances`) handles
-the multi-instance linking regardless. Lane interleaving is expected.
+- `Do you see the existing livetest-agentmsg-xp project? Can we add a doc`
+  `to it?`
+- `Add a project document that says the codeword Ember Glass means pager`
+  `escalation level 2.`
 
-Ask CC naturally:
-
-- `Do you see the existing cross-live-test project? Can we add a document to it?`
-- `Please add another project document that says code word Ember Glass means pager escalation level
-  2.`
-
-Verify from shell:
+Verify from the shell:
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid registry list 2>&1 | grep cross-live-test'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid docs list --project cross-live-test 2>&1'
-ssh REMOTE_HOST 'cd ~/quaid && QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 registry list | grep livetest-agentmsg-xp"
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 docs list --project livetest-agentmsg-xp"
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 recall 'Ember Glass' \
+  '{\"stores\":[\"docs\"],\"project\":\"livetest-agentmsg-xp\"}'"
 ```
 
-Pass:
-- CC can use the existing project rather than needing a new one
-- CC can add a doc and Quaid can recall it
+Pass: PLATFORM2 uses the existing project rather than needing a new one;
+PLATFORM2 can add a doc and Quaid can recall it on that instance.
 
-### Cross-link docs across instances before Phase 3
+## Phase 3 — Cross-link docs across instances
 
-Each adapter maintains its own docs index. After both docs are registered, each instance only has
-its own doc indexed. Cross-link by registering each doc in the other instance, then run `docs update
---apply` on both. The daemon picks up doc changes lazily — always run `docs update --apply`
-explicitly rather than waiting, and wait for it to confirm indexing before proceeding to Phase 3.
+Each adapter maintains its own docs index. After both docs are registered,
+each instance only has its own doc indexed. Cross-link by registering each
+doc in the other instance's registry, then run `docs update --apply` on
+both.
 
-**Before running `docs update --apply`, sanity-check project registry for orphans.** `docs update
---apply` will recreate scaffold dirs for any project with a live registry entry, including leftovers
-from prior M13 runs where the project wasn't deleted. If `quaid project list` shows stale
-`misc--*-m13-test` entries, delete them first:
-
-```bash
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project list 2>&1 | grep -i m13 || echo "no m13 orphans"'
-# If any m13-test projects appear, run:
-# ssh REMOTE_HOST '... quaid project delete misc--<instance>-m13-test'
-```
+**Before `docs update --apply`, sanity-check project registry for orphans.**
+`docs update --apply` will recreate scaffold dirs for any project with a
+live registry entry, including leftovers from prior M5 Part B test runs. If
+`quaid project list` shows stale `misc--*-m5-test` entries, delete them
+first.
 
 ```bash
-# Register OC beacon doc in CC instance
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid registry register <path-to-beacon-doc> --project cross-live-test 2>&1'
-# Register CC Ember Glass doc in OC instance
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry register <path-to-ember-glass-doc> --project cross-live-test 2>&1'
+# Register PLATFORM1's beacon doc in PLATFORM2's instance
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 registry register \
+  <path-to-beacon-doc> --project livetest-agentmsg-xp"
 
-# Force index on both — wait for "Indexed" confirmation before continuing
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid docs update --apply 2>&1'
+# Register PLATFORM2's Ember Glass doc in PLATFORM1's instance
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 registry register \
+  <path-to-ember-glass-doc> --project livetest-agentmsg-xp"
+
+# Force index on both
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 docs update --apply"
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 docs update --apply"
 ```
 
 Verify cross-instance CLI recall before asking agents conversationally:
 
 ```bash
-# CC must find beacon (OC-added doc)
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-private-tmp-cc-livetest ~/.quaid/plugins/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
-# OC must find Ember Glass (CC-added doc)
-ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+# PLATFORM2 must find beacon (PLATFORM1-added doc)
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 recall 'north pier beacon' \
+  '{\"stores\":[\"docs\"],\"project\":\"livetest-agentmsg-xp\"}'"
+
+# PLATFORM1 must find Ember Glass (PLATFORM2-added doc)
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_1 \$QCLI_1 recall 'Ember Glass' \
+  '{\"stores\":[\"docs\"],\"project\":\"livetest-agentmsg-xp\"}'"
 ```
 
-If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the
-cross-link registration or indexing is not working and conversational Phase 3 will also fail.
+If either CLI recall fails after `docs update --apply`, stop and report to
+the coordinator — cross-link registration or indexing is not working and
+conversational Phase 4 will also fail.
 
-### Phase 3: Cross-recall both directions
+## Phase 4 — Cross-recall both directions
 
-Ask CC (use content-specific phrasing so the model matches the doc, not just PROJECT.md):
+Ask PLATFORM2 agent (content-specific phrasing so the model matches the doc
+instead of PROJECT.md):
 
-- `Can you search the cross-live-test project docs for anything about the north pier beacon?`
+- `Can you search the livetest-agentmsg-xp project docs for anything about`
+  `the north pier beacon?`
 
-If that still returns nothing, try more specific phrasing:
+Ask PLATFORM1 agent:
 
-- `What does the cross-live-test project say about the north pier beacon maintenance window?`
+- `Can you search the livetest-agentmsg-xp project docs for anything about`
+  `Ember Glass escalation?`
 
-Ask OC via Matrix:
+Optional provenance follow-up: `How did you know that?`
 
-```bash
-ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "Can you search the cross-live-test project docs for anything about Ember Glass escalation?"'
-```
+Note: the generic "What does the project say about X?" framing matches
+PROJECT.md in the vector index and misses content docs. Use docs-specific
+phrasing that names the concept explicitly.
 
-If no answer, try:
-```bash
-ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "What is the escalation code word Ember Glass in the cross-live-test project docs?"'
-```
+## Pass
 
-Optional provenance follow-up:
-```bash
-ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "How did you know that?"'
-```
+- PLATFORM2 answers from the PLATFORM1-added doc.
+- PLATFORM1 answers from the PLATFORM2-added doc.
+- Answers are grounded in Quaid project context, not raw disk browsing as
+  the first move.
 
-Note: The generic "What does the project say about X?" framing matches PROJECT.md in the vector
-index and misses content docs. Use docs-specific phrasing that names the concept explicitly so the
-model searches the docs store. Both prompts above are content-specific and reliably surface the
-right doc.
+## Fail
 
-Pass:
-- CC can answer from the OC-added doc
-- OC can answer from the CC-added doc
-- answers are grounded in Quaid project context, not raw disk browsing as the first move
-
-Fail:
-- either side cannot see the same project
-- either side cannot retrieve the other side's doc
-- the agent only succeeds when given explicit command names
-
+- Either side cannot see the same project.
+- Either side cannot retrieve the other side's doc.
+- Agents only succeed when given explicit command names.

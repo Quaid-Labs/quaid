@@ -3,8 +3,37 @@
 Platform-specific notes for the OC tester. Read this alongside `TESTER.SKILL.md`.
 
 OC is tested via **Matrix DM**, not the TUI. The Matrix server and OpenClaw
-gateway are already running on the VM as persistent services — no launch step
-needed. All OC messages are sent as Matrix DMs from the test bot to the OC bot.
+gateway are already running on the VM as persistent services — no launch
+step needed. All OC messages are sent as Matrix DMs from the test bot to the
+OC bot.
+
+---
+
+## Lane variables
+
+Milestone files reference these; export them once at session start:
+
+```bash
+export LANE=oc
+export LANE_UPPER=OC
+export INSTANCE=openclaw-main
+export QCLI=~/.openclaw/extensions/quaid/quaid
+export SILO=~/.quaid/instances/openclaw-main
+export LIFECYCLE="/new"  # Matrix-side /new or /reset; OC has no /clear
+```
+
+`SEND` mechanism: Matrix. Use the `matrix-send` script:
+
+```bash
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "<text>"
+```
+
+**OC extraction window:** OC extracts inline on the trigger, ~30–60 s after
+`/new` or `/reset`. Poll DB after ~60 s.
+
+**OC hook trace markers:** look for `hook.message.command_detected`
+(command=new|reset|compact) → `daemon.signal_written` (type=reset|compaction)
+in `$SILO/logs/daemon/extraction-daemon.log`.
 
 ---
 
