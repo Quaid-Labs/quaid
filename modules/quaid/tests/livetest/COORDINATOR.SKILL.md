@@ -184,6 +184,15 @@ not a condition to work around with manual signals.
 
 ## Post-first-M0: Livetest Config Overrides (per-platform)
 
+**GATE: this step is mandatory between M0 PASS and the first M1 brief.**
+Run `scripts/livetest-postm0-config.sh <cc|oc|cdx|all>` and verify that
+`capture.chunk_tokens` resolves to `1500` for every installed instance
+before dispatching any tester to M1. Missing this step makes M2 Part B
+(rolling extraction) impossible to pass because the 1500-token fixture
+cannot cross the production default of 8000 tokens.
+
+
+
 Write livetest overrides to the **per-platform** config files, not the global
 config. Platform configs supersede global for that platform only, so mid-run
 timing flips (e.g. dropping `inactivityTimeoutMinutes` for the M4 lane) don't
