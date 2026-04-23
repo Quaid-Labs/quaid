@@ -568,6 +568,65 @@ def test_pid_identity_rejects_unrelated_process(project_env):
     assert project_docs.read_supervisor_pid() is None
 
 
+def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    terminated = []
+    captured = {}
+
+    class _FakePopen:
+        pid = 33333
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+        def poll(self):
+            return None
+
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: None)
+    monkeypatch.setattr(project_docs, "_matching_supervisor_pids", lambda **_kwargs: [11111, 22222])
+    monkeypatch.setattr(project_docs, "_terminate_supervisor_pid", lambda pid, **_kwargs: terminated.append(pid))
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 33333)
+
+    assert project_docs.start_supervisor() == 33333
+    assert terminated == [11111, 22222]
+    assert captured["env"]["QUAID_HOME"] == str(project_docs.get_quaid_home())
+    assert "QUAID_INSTANCE" not in captured["env"]
+
+
+def test_stop_supervisor_kills_pidfile_target_and_matching_orphans(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs._write_pid_record(
+        project_docs.supervisor_pid_path(),
+        role=project_docs.SUPERVISOR_ROLE,
+        pid=11111,
+        token="pytest",
+    )
+
+    terminated = []
+    monitor_stops = []
+
+    monkeypatch.setattr(project_docs, "_pid_record_matches", lambda record, **_kwargs: True)
+    monkeypatch.setattr(project_docs, "_matching_supervisor_pids", lambda **_kwargs: [11111, 22222, 33333])
+    monkeypatch.setattr(project_docs, "_terminate_supervisor_pid", lambda pid, **_kwargs: terminated.append(pid))
+    monkeypatch.setattr(project_docs, "_worker_dir", lambda: project_docs.supervisor_dir() / "no-workers")
+
+    def _fake_stop_all_instance_monitors():
+        monitor_stops.append(True)
+
+    with patch("core.project_docs_supervisor.stop_all_instance_monitors", _fake_stop_all_instance_monitors):
+        assert project_docs.stop_supervisor() is True
+
+    assert terminated == [11111, 22222, 33333]
+    assert monitor_stops == [True]
+    assert not project_docs.supervisor_pid_path().exists()
+
+
 def test_project_docs_home_resolution_avoids_adapter_bootstrap(project_env):
     tmp_path, _src, _entry = project_env
     from core import project_docs

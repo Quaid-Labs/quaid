@@ -424,6 +424,49 @@ def _process_command(pid: int) -> str:
         return ""
 
 
+def _supervisor_command_matches(command: str) -> bool:
+    text = f" {str(command or '').strip()} "
+    if "project_docs_supervisor.py" in text and " run" in text:
+        return True
+    return "project_docs_cli.py" in text and " supervisor " in text and " run" in text
+
+
+def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]:
+    home = (quaid_home.resolve() if quaid_home is not None else get_quaid_home().resolve())
+    home_marker = f"QUAID_HOME={home}"
+    try:
+        result = subprocess.run(
+            ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    matches: List[int] = []
+    for raw in (result.stdout or "").splitlines():
+        line = str(raw or "").strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        command = parts[1]
+        if not _supervisor_command_matches(command):
+            continue
+        if home_marker not in command:
+            continue
+        if _pid_alive(pid):
+            matches.append(pid)
+    return sorted(set(matches))
+
+
 def _pid_record_matches(record: Dict[str, Any], *, role: str, project: Optional[str] = None) -> bool:
     pid = int(record.get("pid") or 0)
     if not _pid_alive(pid):
@@ -1269,6 +1312,27 @@ def _terminate_process(proc: subprocess.Popen, *, grace_seconds: float = 5.0) ->
         pass
 
 
+def _terminate_supervisor_pid(pid: int, *, grace_seconds: float = 5.0) -> None:
+    if pid <= 0 or not _pid_alive(pid):
+        return
+    try:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except Exception:
+            os.kill(pid, signal.SIGTERM)
+        deadline = time.time() + max(0.5, grace_seconds)
+        while time.time() < deadline:
+            if not _pid_alive(pid):
+                return
+            time.sleep(0.1)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except Exception:
+            os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def reap_child_processes() -> int:
     """Reap finished child processes when running as their supervisor parent."""
     reaped = 0
@@ -1306,12 +1370,22 @@ def ensure_supervisor_alive() -> int:
 def start_supervisor() -> int:
     with _exclusive_file_lock(_spawn_lock_path("supervisor")):
         existing = read_supervisor_pid()
-        if existing is not None:
+        matching = _matching_supervisor_pids()
+        if existing is not None and (not matching or matching == [existing]):
             return existing
+        if matching:
+            for pid in matching:
+                _terminate_supervisor_pid(pid)
+            try:
+                supervisor_pid_path().unlink(missing_ok=True)
+            except OSError:
+                pass
         supervisor_dir().mkdir(parents=True, exist_ok=True)
         log_path = supervisor_log_path()
         script = Path(__file__).parent / "project_docs_supervisor.py"
         env = dict(os.environ)
+        env["QUAID_HOME"] = str(get_quaid_home())
+        env.pop("QUAID_INSTANCE", None)
         env.setdefault("QUAID_SUPERVISOR_INTERVAL_SECONDS", "5")
         env["QUAID_SUPERVISOR_TOKEN"] = uuid.uuid4().hex
         with log_path.open("ab") as log_fh:
@@ -1339,26 +1413,22 @@ def stop_supervisor() -> bool:
     with _exclusive_file_lock(_spawn_lock_path("supervisor")):
         record = _read_pid_record(supervisor_pid_path())
         pid = int((record or {}).get("pid") or 0)
-        if not record:
-            return False
-        if not _pid_record_matches(record, role=SUPERVISOR_ROLE):
-            _unlink_pid_record_if_matches(supervisor_pid_path(), pid=pid, token=record.get("token"))
+        targets: List[int] = []
+        if record and _pid_record_matches(record, role=SUPERVISOR_ROLE):
+            targets.append(pid)
+        for match_pid in _matching_supervisor_pids():
+            if match_pid not in targets:
+                targets.append(match_pid)
+        if not targets:
+            if record:
+                try:
+                    supervisor_pid_path().unlink(missing_ok=True)
+                except OSError:
+                    pass
             return False
         try:
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except Exception:
-                os.kill(pid, signal.SIGTERM)
-            deadline = time.time() + 5.0
-            while time.time() < deadline:
-                if not _pid_alive(pid):
-                    break
-                time.sleep(0.1)
-            if _pid_alive(pid):
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except Exception:
-                    os.kill(pid, signal.SIGKILL)
+            for target_pid in targets:
+                _terminate_supervisor_pid(target_pid)
             if _worker_dir().is_dir():
                 for pid_file in sorted(_worker_dir().glob("*.pid")):
                     project = pid_file.stem
@@ -1373,8 +1443,10 @@ def stop_supervisor() -> bool:
                 logger.exception("Failed stopping supervisor-owned instance monitors")
             return True
         finally:
-            if not _pid_alive(pid):
-                _unlink_pid_record_if_matches(supervisor_pid_path(), pid=pid, token=record.get("token"))
+            try:
+                supervisor_pid_path().unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def start_worker(project: str) -> int:
