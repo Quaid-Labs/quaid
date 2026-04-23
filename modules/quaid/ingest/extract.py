@@ -621,7 +621,6 @@ def _salvage_truncated_extraction_payload(
         "soul_snippets": {},
         "journal_entries": {},
         "project_logs": {},
-        "_salvaged_truncated_response": True,
     }
 
 
@@ -702,7 +701,10 @@ def _repair_non_json_extraction_payload(
             label,
             chunk_index,
             exc,
+            exc_info=True,
         )
+        if is_fail_hard_enabled():
+            raise
         return None
 
 

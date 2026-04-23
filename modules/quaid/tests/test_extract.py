@@ -2240,6 +2240,61 @@ class TestLoadPrompt:
         assert "nothing_usable" in prompt
         assert "usable" in prompt
 
+    def test_truncated_array_scanner_stops_on_mid_string_truncation(self):
+        from ingest.extract import _complete_json_objects_from_array
+
+        fact_one = {
+            "text": "Maya keeps a red field notebook.",
+            "category": "fact",
+            "speaker": "user",
+            "domains": ["personal"],
+            "extraction_confidence": "high",
+        }
+        response = (
+            "["
+            f"{json.dumps(fact_one)},"
+            '{"text":"Maya wrote \\"'
+        )
+
+        scanned = _complete_json_objects_from_array(response, 1)
+
+        assert [fact["text"] for fact in scanned] == ["Maya keeps a red field notebook."]
+
+    def test_truncated_array_scanner_stops_on_mid_nested_object_truncation(self):
+        from ingest.extract import _complete_json_objects_from_array
+
+        fact_one = {
+            "text": "Maya keeps a red field notebook.",
+            "category": "fact",
+            "speaker": "user",
+            "domains": ["personal"],
+            "extraction_confidence": "high",
+        }
+        response = (
+            "["
+            f"{json.dumps(fact_one)},"
+            '{"text":"Maya mentors Ana","category":"fact","speaker":"user",'
+            '"domains":["personal"],"extraction_confidence":"medium","edges":['
+            '{"subject":"Maya","relation":"mentors","object":'
+        )
+
+        scanned = _complete_json_objects_from_array(response, 1)
+
+        assert [fact["text"] for fact in scanned] == ["Maya keeps a red field notebook."]
+
+    def test_truncated_array_scanner_returns_no_objects_for_single_truncated_object(self):
+        from ingest.extract import _complete_json_objects_from_array
+
+        response = (
+            "["
+            '{"text":"Maya keeps a red field notebook.","category":"fact","speaker":"user",'
+            '"domains":["personal"],"extraction_confidence":"high"'
+        )
+
+        scanned = _complete_json_objects_from_array(response, 1)
+
+        assert scanned == []
+
     def test_salvages_complete_facts_from_truncated_json_array(self):
         from ingest.extract import _salvage_truncated_extraction_payload
 
@@ -2277,8 +2332,21 @@ class TestLoadPrompt:
             "Maya keeps a red field notebook.",
             "Maya plans a Sunday canal walk.",
         ]
+        assert "_salvaged_truncated_response" not in salvaged
         assert telemetry["truncated_salvage_calls"] == 1
         assert telemetry["truncated_salvage_facts"] == 2
+
+    def test_salvage_returns_none_when_response_has_no_facts_array(self):
+        from ingest.extract import _salvage_truncated_extraction_payload
+
+        salvaged = _salvage_truncated_extraction_payload(
+            response_text="I remembered that Maya keeps a red field notebook.",
+            chunk_index="1",
+            label="salvage-test",
+            telemetry={},
+        )
+
+        assert salvaged is None
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extract_uses_truncated_json_salvage_before_repair(self, mock_llm):
@@ -2338,6 +2406,31 @@ class TestLoadPrompt:
         repair_prompt = mock_deep.call_args.kwargs["prompt"]
         assert "return chunk_assessment as needs_smaller_chunk" in repair_prompt
         assert mock_deep.call_args.kwargs["max_tokens"] >= 4096
+
+    @patch("ingest.extract.call_deep_reasoning", side_effect=RuntimeError("repair boom"))
+    def test_json_repair_raises_when_fail_hard_enabled(self, _mock_deep):
+        from ingest.extract import _repair_non_json_extraction_payload
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="repair boom"):
+                _repair_non_json_extraction_payload(
+                    response_text="not json",
+                    chunk_index="1",
+                    label="repair-test",
+                )
+
+    @patch("ingest.extract.call_deep_reasoning", side_effect=RuntimeError("repair boom"))
+    def test_json_repair_returns_none_when_fail_hard_disabled(self, _mock_deep):
+        from ingest.extract import _repair_non_json_extraction_payload
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+            repaired = _repair_non_json_extraction_payload(
+                response_text="not json",
+                chunk_index="1",
+                label="repair-test",
+            )
+
+        assert repaired is None
 
 
 # ---------------------------------------------------------------------------
