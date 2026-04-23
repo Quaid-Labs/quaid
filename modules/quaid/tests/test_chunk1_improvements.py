@@ -25,13 +25,24 @@ pytestmark = pytest.mark.regression
 # Helpers
 # ---------------------------------------------------------------------------
 
-_FAKE_EMBEDDING = [0.1] * 128
+def _fake_embedding_dim():
+    try:
+        from datastore.memorydb.memory_graph import _get_configured_embedding_dim
+        return int(_get_configured_embedding_dim())
+    except Exception:
+        return 768
 
 
-def _fake_get_embedding(text):
-    """Return a deterministic fake embedding based on text hash."""
+_FAKE_EMBEDDING = [0.1] * _fake_embedding_dim()
+
+
+def _fake_get_embedding(text, **_kwargs):
+    """Return a deterministic fake embedding matching the configured dimension."""
     h = hashlib.md5(text.encode()).digest()
-    return [float(b) / 255.0 for b in h] * 8  # 128-dim
+    base = [float(b) / 255.0 for b in h]
+    dim = _fake_embedding_dim()
+    repeats = (dim + len(base) - 1) // len(base)
+    return (base * repeats)[:dim]
 
 
 def _make_graph(tmp_path):

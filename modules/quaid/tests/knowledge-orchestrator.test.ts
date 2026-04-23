@@ -270,6 +270,8 @@ describe("knowledge orchestrator", () => {
       5,
       "quaid",
       ["PROJECT.md", "reference/memory-local-implementation.md"],
+      undefined,
+      undefined,
     );
     expect(results.length).toBe(1);
     expect(results[0].category).toBe("project");
@@ -308,6 +310,8 @@ describe("knowledge orchestrator", () => {
       5,
       "quaid",
       ["PROJECT.md"],
+      undefined,
+      undefined,
     );
   });
 
@@ -400,7 +404,14 @@ describe("knowledge orchestrator", () => {
     expect(callDeepRouter).toHaveBeenCalledTimes(1);
     // Single prepass policy: no extra fast-router fallback call.
     expect(callFastRouter).toHaveBeenCalledTimes(0);
-    expect(recallProjectStore).toHaveBeenCalledWith("quaid architecture docs", 5, "quaid", undefined);
+    expect(recallProjectStore).toHaveBeenCalledWith(
+      "quaid architecture docs",
+      5,
+      "quaid",
+      undefined,
+      undefined,
+      undefined,
+    );
     expect(results.length).toBe(1);
   });
 

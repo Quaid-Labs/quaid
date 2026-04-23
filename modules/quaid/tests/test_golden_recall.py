@@ -24,7 +24,15 @@ from datastore.memorydb.memory_graph import MemoryGraph, Node, recall
 # Deterministic fake embeddings with word-level signal
 # ---------------------------------------------------------------------------
 
-def _fake_get_embedding(text):
+def _fake_embedding_dim():
+    try:
+        from datastore.memorydb.memory_graph import _get_configured_embedding_dim
+        return int(_get_configured_embedding_dim())
+    except Exception:
+        return 768
+
+
+def _fake_get_embedding(text, **_kwargs):
     """Generate fake embeddings where similar texts get similar vectors.
 
     Uses position-independent word hashing (bag-of-words style) so that
@@ -35,12 +43,13 @@ def _fake_get_embedding(text):
     words = text.lower().split()
     # Strip common punctuation so "coffee," matches "coffee"
     words = [w.strip(".,;:!?'\"()[]") for w in words if w.strip(".,;:!?'\"()[]")]
-    base = [0.0] * 128
+    dim = _fake_embedding_dim()
+    base = [0.0] * dim
     for word in words:
         h = hashlib.md5(word.encode()).digest()
         for j, b in enumerate(h):
             # Position-independent: same word always affects same indices
-            idx = j % 128
+            idx = j % dim
             base[idx] += float(b) / 255.0
     # Normalize to unit vector
     mag = sum(x * x for x in base) ** 0.5
