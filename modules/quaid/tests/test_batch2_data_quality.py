@@ -28,10 +28,21 @@ pytestmark = pytest.mark.regression
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fake_get_embedding(text):
-    """Return a deterministic fake embedding based on text hash."""
+def _fake_embedding_dim():
+    try:
+        from datastore.memorydb.memory_graph import _get_configured_embedding_dim
+        return int(_get_configured_embedding_dim())
+    except Exception:
+        return 768
+
+
+def _fake_get_embedding(text, **_kwargs):
+    """Return a deterministic fake embedding matching the configured dimension."""
     h = hashlib.md5(text.encode()).digest()
-    return [float(b) / 255.0 for b in h] * 8  # 128-dim
+    base = [float(b) / 255.0 for b in h]
+    dim = _fake_embedding_dim()
+    repeats = (dim + len(base) - 1) // len(base)
+    return (base * repeats)[:dim]
 
 
 def _make_graph(tmp_path):
@@ -153,7 +164,7 @@ class TestEmbeddingCache:
         """Second call with same text returns cached embedding without Ollama call."""
         call_count = [0]
 
-        def _counting_embedding(text):
+        def _counting_embedding(text, **_kwargs):
             call_count[0] += 1
             return _fake_get_embedding(text)
 
@@ -175,7 +186,7 @@ class TestEmbeddingCache:
         """Different text should not return cached embedding."""
         call_count = [0]
 
-        def _counting_embedding(text):
+        def _counting_embedding(text, **_kwargs):
             call_count[0] += 1
             return _fake_get_embedding(text)
 
@@ -189,7 +200,7 @@ class TestEmbeddingCache:
         """Cache is in DB, so new MemoryGraph instance should find cached embeddings."""
         call_count = [0]
 
-        def _counting_embedding(text):
+        def _counting_embedding(text, **_kwargs):
             call_count[0] += 1
             return _fake_get_embedding(text)
 

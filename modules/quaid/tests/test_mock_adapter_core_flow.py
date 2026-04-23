@@ -20,9 +20,20 @@ import datastore.memorydb.memory_graph as memory_graph
 from lib.adapter import StandaloneAdapter
 
 
-def _fake_get_embedding(text: str) -> List[float]:
+def _fake_embedding_dim() -> int:
+    try:
+        from datastore.memorydb.memory_graph import _get_configured_embedding_dim
+        return int(_get_configured_embedding_dim())
+    except Exception:
+        return 768
+
+
+def _fake_get_embedding(text: str, **_kwargs) -> List[float]:
     h = hashlib.md5(text.encode()).digest()
-    return [float(b) / 255.0 for b in h] * 8  # 128-dim deterministic embedding
+    base = [float(b) / 255.0 for b in h]
+    dim = _fake_embedding_dim()
+    repeats = (dim + len(base) - 1) // len(base)
+    return (base * repeats)[:dim]
 
 
 class MockAdapter(StandaloneAdapter):

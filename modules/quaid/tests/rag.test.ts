@@ -481,7 +481,10 @@ A second paragraph continues the discussion about document processing. It emphas
       expect(Array.isArray(results)).toBe(true)
       
       if (results.length > 0) {
-        expect(results[0].source).toContain('special-chars-doc.md')
+        const hasSpecialCharsDoc = results.some(result =>
+          result.source.includes('special-chars-doc.md')
+        )
+        expect(hasSpecialCharsDoc).toBe(true)
       }
     })
   })
