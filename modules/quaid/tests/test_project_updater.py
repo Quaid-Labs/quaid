@@ -291,6 +291,28 @@ class TestAppendProjectLogs:
         assert metrics["history_logs_indexed"] == 0
         assert _INDEXED_DOC_PATHS == []
 
+    def test_can_append_project_log_without_updating_project_md(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+        before = project_md.read_text(encoding="utf-8")
+
+        metrics = append_project_logs(
+            {"test-project": ["Session 5: Worker queue append only"]},
+            trigger="Reset",
+            date_str="2026-03-06",
+            dry_run=False,
+            index_history=False,
+            update_project_md=False,
+        )
+
+        assert "Worker queue append only" in project_log.read_text(encoding="utf-8")
+        assert project_md.read_text(encoding="utf-8") == before
+        assert metrics["history_entries_written"] == 1
+        assert metrics["entries_written"] == 0
+
     def test_project_log_history_uses_quaid_now_when_date_not_passed(self, setup_env, monkeypatch):
         from datastore.docsdb.project_updater import append_project_logs
 

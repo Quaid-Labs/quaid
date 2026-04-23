@@ -36,6 +36,7 @@ def append_project_logs(
     dry_run: bool = False,
     *,
     index_history: bool = True,
+    update_project_md: bool = True,
 ):
     return _append_project_logs(
         project_logs,
@@ -43,6 +44,7 @@ def append_project_logs(
         date_str=date_str,
         dry_run=dry_run,
         index_history=index_history,
+        update_project_md=update_project_md,
     )
 
 

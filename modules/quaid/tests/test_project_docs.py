@@ -148,6 +148,7 @@ def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_
         session_id="session-queue",
     )
     project_log = Path(entry["canonical_path"]) / "PROJECT.log"
+    project_md = Path(entry["canonical_path"]) / "PROJECT.md"
 
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}) as update_docs, \
          patch("core.docs.updater.update_registered_docs", return_value=2) as update_registered, \
@@ -155,9 +156,10 @@ def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_
         result = project_docs.execute_update_once("demo")
 
     assert result["status"] == "fresh"
-    assert result["project_log_queue"]["entries_written"] == 1
+    assert result["project_log_queue"]["history_entries_written"] == 1
     assert project_log_queue.pending_project_log_count("demo") == 0
     assert "Queued project log milestone" in project_log.read_text(encoding="utf-8")
+    assert "Queued project log milestone" not in project_md.read_text(encoding="utf-8")
     state = project_docs.read_state("demo")
     assert state["project_log_offset"] == project_log.stat().st_size
     update_docs.assert_called_once()
@@ -181,6 +183,28 @@ def test_cleanup_project_state_removes_project_log_queue(project_env):
 
     assert removed["removed"] >= 1
     assert project_log_queue.pending_project_log_count("demo") == 0
+
+
+def test_execute_update_once_continues_after_failsoft_queue_item_error(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from datastore.docsdb import project_log_queue
+
+    project_log_queue.enqueue_project_logs({"demo": ["first queued item"]}, trigger="Reset")
+    project_log_queue.enqueue_project_logs({"demo": ["second queued item"]}, trigger="Reset")
+
+    with patch("core.docs.updater.append_project_logs", side_effect=[RuntimeError("synthetic append failure"), {"history_entries_written": 1}]) as append_logs, \
+         patch("core.docs.updater.update_registered_docs", return_value=0), \
+         patch("core.docs.updater.index_project_logs", return_value=0), \
+         patch("core.project_docs._fail_hard_enabled", return_value=False):
+        result = project_docs.execute_update_once("demo")
+
+    assert result["status"] == "error"
+    assert result["project_log_queue"]["errors"] == 1
+    assert result["project_log_queue"]["items_seen"] == 2
+    assert result["project_log_queue"]["items_committed"] == 1
+    assert append_logs.call_count == 2
+    assert project_log_queue.pending_project_log_count("demo") == 1
 
 
 def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):

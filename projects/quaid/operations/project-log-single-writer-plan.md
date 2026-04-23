@@ -138,17 +138,19 @@ Worker update sequence:
 
 1. Acquire `project_update_lock(project)`.
 2. Drain queued project-log items for the project in deterministic order.
-3. Commit drained entries to `PROJECT.log`.
-4. Update the `PROJECT.md` recent-log block using the same entries.
-5. Read `PROJECT.log` from the stored cursor.
-6. Run the existing project-docs update.
-7. Reindex registered docs and `PROJECT.log`.
-8. Advance `project_log_offset` only after successful apply/index.
-9. Mark queue items committed only after the visible-file commit and update
-   transaction succeeds.
+3. Commit drained entries to `PROJECT.log` only.
+4. Mark queue items committed after the append-only `PROJECT.log` write succeeds.
+5. Read `PROJECT.log` from the stored cursor, including the just-appended bytes.
+6. Run the existing project-docs update from that cursor slice.
+7. Let the project-docs update path be the sole `PROJECT.md` writer for those
+   entries; the queue drain must not also rewrite `PROJECT.md`.
+8. Reindex registered docs and `PROJECT.log`.
+9. Advance `project_log_offset` only after successful apply/index.
 
-If any visible-file write, docs update, or index step fails, leave queue items
-pending. This makes recovery deterministic on the next worker tick.
+If the append-only `PROJECT.log` write succeeds but the docs update or index step
+fails, the queue item should remain committed and the stored project-log cursor
+should remain old. On the next worker tick, the existing cursor mechanism will
+re-read the appended log bytes without duplicating the append.
 
 ## Staleness And Wakeup
 
@@ -205,8 +207,9 @@ Required tests:
 - queue write uses temp file plus atomic rename;
 - project status reports stale when pending queue items exist;
 - worker drain appends all queued entries exactly once;
-- worker drain updates `PROJECT.md` recent-log block without losing entries;
-- failed worker commit leaves queue items pending;
+- worker drain does not directly update `PROJECT.md`;
+- failed worker append leaves that queue item pending while later valid items can
+  still drain under fail-soft mode;
 - successful worker commit removes or marks queue items committed;
 - `project_log_offset` advances only after successful update/index;
 - `fail_hard=true` raises on queue/commit failure;
@@ -220,7 +223,8 @@ Live validation:
 3. Confirm all entries land as queue items.
 4. Confirm one project-docs worker drains and commits them.
 5. Confirm `PROJECT.log` contains every entry once.
-6. Confirm `PROJECT.md` recent-log block has no lost update.
+6. Confirm `PROJECT.md` is updated by the project-docs update path, not by the
+   queue drain itself.
 7. Confirm `quaid project status <project>` becomes fresh after the worker run.
 8. Confirm docs recall can retrieve the newly indexed `PROJECT.log` entries.
 

@@ -683,7 +683,7 @@ def _empty_project_log_queue_metrics() -> Dict[str, int]:
         "items_seen": 0,
         "items_committed": 0,
         "entries_seen": 0,
-        "entries_written": 0,
+        "history_entries_written": 0,
         "errors": 0,
     }
 
@@ -727,8 +727,9 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
                 date_str=str(item.get("date_str") or "") or None,
                 dry_run=dry_run,
                 index_history=False,
+                update_project_md=False,
             )
-            metrics["entries_written"] += int(commit_metrics.get("history_entries_written", 0) or 0)
+            metrics["history_entries_written"] += int(commit_metrics.get("history_entries_written", 0) or 0)
             if not dry_run:
                 project_log_queue.mark_project_log_queue_committed(name, [item_id])
             metrics["items_committed"] += 1
@@ -737,7 +738,7 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
             logger.warning("Failed committing project-log queue item %s for %s: %s", item_id, name, exc)
             if _fail_hard_enabled():
                 raise
-            break
+            continue
     return metrics
 
 
@@ -1050,9 +1051,6 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "trivial_skipped": 0,
                 "errors": 0,
             }
-            if project_log_queue_metrics.get("errors"):
-                metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
-            metrics["project_log_queue"] = project_log_queue_metrics
             registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
             index_count = 0
             project_log_index_count = 0
@@ -1074,9 +1072,9 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                     dry_run=dry_run,
                     force_project=name,
                 )
-                if project_log_queue_metrics.get("errors"):
-                    metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
-                metrics["project_log_queue"] = project_log_queue_metrics
+            if project_log_queue_metrics.get("errors"):
+                metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
+            metrics["project_log_queue"] = project_log_queue_metrics
             if not dry_run:
                 merge_progress(name, "sync_registry", "syncing visible project docs registry")
                 registry_sync = sync_project_docs_registry(name, entry)
