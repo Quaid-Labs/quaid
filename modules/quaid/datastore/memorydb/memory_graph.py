@@ -4883,6 +4883,21 @@ def _graph_store_recall(
         candidate_pool=candidate_pool,
     )
     combined = list(payload.get("direct_results", [])) + list(payload.get("graph_results", []))
+    try:
+        graph = get_graph()
+        _, anchor_expansions = _expand_high_confidence_entity_anchors(
+            graph,
+            query,
+            combined,
+            expansion_mode="cheap",
+            max_anchor_count=2,
+            expansion_limit_per_anchor=1,
+            allow_graph_rows=True,
+        )
+        if anchor_expansions:
+            combined.extend(anchor_expansions)
+    except Exception:
+        pass
     return (
         _validate_recall_result_rows(combined),
         dict(payload.get("meta") or {}),
@@ -8277,12 +8292,15 @@ def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except Exception:
         try:
-            return datetime.fromisoformat(raw[:10])
+            parsed = datetime.fromisoformat(raw[:10])
         except Exception:
             return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _date_part(value: Any) -> str:
@@ -11052,6 +11070,7 @@ def _expand_high_confidence_entity_anchors(
     expansion_mode: str = "cheap",
     max_anchor_count: int = 2,
     expansion_limit_per_anchor: int = 2,
+    allow_graph_rows: bool = False,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Expand top-K graph anchors with a bounded one-hop graph walk."""
     query_text = str(query or "").strip()
@@ -11068,15 +11087,26 @@ def _expand_high_confidence_entity_anchors(
         key=lambda item: float(item.get("similarity", 0.0) or 0.0),
         reverse=True,
     )[: max(0, int(limit or 0))]
-    anchors: List[Tuple[Dict[str, Any], float]] = []
+    anchors: List[Tuple[Dict[str, Any], float, str, Optional[List[str]]]] = []
     for row in ranked_rows:
-        if not _is_low_information_entity_result(row):
-            continue
         anchor_id = str(row.get("id") or "").strip()
-        anchor_text = " ".join(str(row.get("text", "")).split()).strip()
+        anchor_text = ""
+        relation_filter: Optional[List[str]] = None
+        if _is_low_information_entity_result(row):
+            anchor_text = " ".join(str(row.get("text", "")).split()).strip()
+        elif allow_graph_rows and (row.get("via_relation") or row.get("graph_path")) and anchor_id:
+            try:
+                anchor_node = graph.get_node(anchor_id)
+            except Exception:
+                anchor_node = None
+            if anchor_node and str(anchor_node.type or "").strip().lower() in _LOW_INFO_ENTITY_CATEGORIES:
+                anchor_text = " ".join(str(anchor_node.name or "").split()).strip()
+                relation_filter = ["has_fact"]
+        else:
+            continue
         if not anchor_id or not anchor_text:
             continue
-        anchors.append((row, float(row.get("similarity", 0.0) or 0.0)))
+        anchors.append((row, float(row.get("similarity", 0.0) or 0.0), anchor_text, relation_filter))
         if len(anchors) >= max_anchor_count:
             break
     if not anchors:
@@ -11085,9 +11115,8 @@ def _expand_high_confidence_entity_anchors(
     expanded: List[Dict[str, Any]] = []
     preserved_anchor_rows: List[Dict[str, Any]] = []
     seen_ids = {str(r.get("id") or "") for r in rows if str(r.get("id") or "")}
-    for anchor_row, anchor_score in anchors:
+    for anchor_row, anchor_score, anchor_text, relation_filter in anchors:
         anchor_id = str(anchor_row.get("id") or "").strip()
-        anchor_text = " ".join(str(anchor_row.get("text", "")).split()).strip()
         if not anchor_id or not anchor_text:
             continue
         preserved_anchor_rows.append(anchor_row)
@@ -11101,6 +11130,7 @@ def _expand_high_confidence_entity_anchors(
                 max_depth=1,
                 max_results=max_results,
                 intent=intent,
+                relations=relation_filter,
                 allow_llm_rerank=(expansion_mode != "cheap"),
             )
         except Exception:
@@ -11119,12 +11149,15 @@ def _expand_high_confidence_entity_anchors(
                 direction,
                 path,
             )
-            text = _render_bidirectional_graph_text(
-                anchor_text,
-                rel_node.name,
-                relation,
-                direction,
-            )
+            if relation == "has_fact" and str(rel_node.type or "").strip().lower() == "fact":
+                text = rel_node.name
+            else:
+                text = _render_bidirectional_graph_text(
+                    anchor_text,
+                    rel_node.name,
+                    relation,
+                    direction,
+                )
             expanded.append({
                 "text": _sanitize_for_context(text),
                 "category": rel_node.type.lower(),

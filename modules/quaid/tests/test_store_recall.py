@@ -4195,6 +4195,30 @@ class TestRecallFastHookInjectContract:
         assert gate["ready"] is False
         assert gate["needs_validation"] is True
 
+    def test_quality_gate_normalizes_mixed_naive_and_aware_temporal_markers(self):
+        import datastore.memorydb.memory_graph as mg
+
+        gate = mg._evaluate_quality_gate_readiness(
+            "When did Baxter's brass-midnight note land?",
+            [
+                {
+                    "text": "Baxter's brass-midnight note landed on April 20.",
+                    "category": "fact",
+                    "source_date": "2026-04-20",
+                },
+                {
+                    "text": "Baxter's brass-midnight note was reviewed on April 21.",
+                    "category": "fact",
+                    "created_at": "2026-04-21T08:30:00Z",
+                },
+            ],
+            intent="WHEN",
+            limit=2,
+        )
+
+        assert gate["temporal_rows"] == 2
+        assert gate["temporal_span_days"] == 1
+
     def test_memory_quality_marks_current_query_with_close_temporal_competitors_as_conflicted(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -5186,6 +5210,54 @@ class TestRecallFastHookInjectContract:
             )
 
         assert [row["id"] for row in rows] == ["fact-1", "alice"]
+        assert meta == {"source": "test"}
+        assert bundle is None
+
+    def test_graph_store_recall_expands_terminal_graph_entity_to_attached_fact(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        mei = mg.Node.create("Person", "Mei")
+        ceramics = mg.Node.create("Fact", "Mei runs a ceramics practice out of Kai and Mei's garage")
+        graph.add_node(mei, embed=False)
+        graph.add_node(ceramics, embed=False)
+        graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
+
+        payload = {
+            "direct_results": [],
+            "graph_results": [
+                {
+                    "id": mei.id,
+                    "text": "Solomon Steadman --spouse_of--> Yuni --sibling_of--> Kai --spouse_of--> Mei",
+                    "category": "graph",
+                    "similarity": 0.76,
+                    "via_relation": "spouse_of",
+                    "graph_path": "Solomon Steadman --spouse_of--> Yuni --sibling_of--> Kai --spouse_of--> Mei",
+                    "type": "Person",
+                },
+            ],
+            "meta": {"source": "test"},
+        }
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "graph_aware_recall", return_value=payload):
+            rows, meta, bundle = mg._graph_store_recall(
+                "what does my partner's brother's wife do",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.6,
+                domain=None,
+                domain_boost=None,
+                project=None,
+                depth=3,
+            )
+
+        by_id = {row["id"]: row for row in rows}
+        assert mei.id in by_id
+        assert ceramics.id in by_id
+        assert by_id[ceramics.id]["text"] == "Mei runs a ceramics practice out of Kai and Mei's garage"
+        assert by_id[ceramics.id]["via_relation"] == "has_fact"
+        assert by_id[ceramics.id]["via"] == "graph_anchor_expansion"
         assert meta == {"source": "test"}
         assert bundle is None
 
