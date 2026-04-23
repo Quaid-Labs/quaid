@@ -44,6 +44,14 @@ def _format_notice(message: str, *, severity: str, source: str) -> str:
     return f"{prefix} {message.strip()}"
 
 
+def _bypass_active_error_dedupe(*, severity: str, source: str) -> bool:
+    """Surface active model/provider failures every turn they actually fire."""
+    return (
+        _normalize_severity(severity) == "error"
+        and str(source or "").strip().lower() in {"provider", "llm_config"}
+    )
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -195,7 +203,9 @@ def notify_agent(
     state: dict[str, float] = {}
     now = time.time()
 
-    if dedupe_token and ttl_seconds > 0:
+    bypass_dedupe = _bypass_active_error_dedupe(severity=severity, source=source)
+
+    if dedupe_token and ttl_seconds > 0 and not bypass_dedupe:
         try:
             state_path = _state_path()
             state = _load_state(state_path)
@@ -269,7 +279,7 @@ def notify_agent(
         _trace_m15("agent_notice.notify.adapter_error", error=str(exc))
         return _fallback_to_deferred()
 
-    if ok and dedupe_token and ttl_seconds > 0 and not dry_run and state_path is not None:
+    if ok and dedupe_token and ttl_seconds > 0 and not dry_run and state_path is not None and not bypass_dedupe:
         try:
             state[dedupe_token] = now
             _store_state(state_path, state)

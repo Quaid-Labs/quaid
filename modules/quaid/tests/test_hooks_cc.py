@@ -1048,6 +1048,7 @@ class TestHookInjectRecallResilience:
 
         mock_adapter.notify.side_effect = _queue_pending
         mock_adapter.get_pending_context.side_effect = _drain_pending
+        monkeypatch.setattr("lib.agent_notice.get_adapter", lambda: mock_adapter)
         monkeypatch.setattr(
             "core.interface.hooks._get_pending_context",
             lambda: mock_adapter.get_pending_context(),

@@ -397,6 +397,77 @@ class TestNotifyAgent:
         sent_message = adapter.notify.call_args.args[0]
         assert sent_message.startswith("[Quaid warning]")
 
+    @pytest.mark.parametrize("source", ["provider", "llm_config"])
+    def test_does_not_dedupe_active_provider_errors(self, tmp_path, source):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
+        adapter.notify.return_value = True
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            assert notify_agent(
+                "configured model invalid-model-m6-probe does not exist",
+                severity="error",
+                source=source,
+                dedupe_key=f"{source}:invalid-model-m6-probe",
+                ttl_seconds=3600,
+            ) is True
+            assert notify_agent(
+                "configured model invalid-model-m6-probe does not exist",
+                severity="error",
+                source=source,
+                dedupe_key=f"{source}:invalid-model-m6-probe",
+                ttl_seconds=3600,
+            ) is True
+
+        assert adapter.notify.call_count == 2
+
+    def test_active_provider_error_notice_can_be_relayed_on_consecutive_turns(self, tmp_path):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
+
+        pending_notices = []
+
+        def _queue_pending(message, **_kwargs):
+            pending_notices.append(str(message))
+            return True
+
+        def _drain_pending():
+            if not pending_notices:
+                return ""
+            messages = list(pending_notices)
+            pending_notices.clear()
+            body = "\n".join(f"• {message}" for message in messages)
+            return (
+                "The following are pending notifications for the user — please relay them in your response:\n\n"
+                f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+            )
+
+        adapter.notify.side_effect = _queue_pending
+        adapter.get_pending_context.side_effect = _drain_pending
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            assert notify_agent(
+                "HTTP 404 configured model invalid-model-m6-probe does not exist",
+                severity="error",
+                source="provider",
+                dedupe_key="m6-provider-404",
+                ttl_seconds=900,
+            ) is True
+            first_turn = adapter.get_pending_context()
+            assert notify_agent(
+                "HTTP 404 configured model invalid-model-m6-probe does not exist",
+                severity="error",
+                source="provider",
+                dedupe_key="m6-provider-404",
+                ttl_seconds=900,
+            ) is True
+            second_turn = adapter.get_pending_context()
+
+        assert "invalid-model-m6-probe" in first_turn
+        assert "invalid-model-m6-probe" in second_turn
+
     def test_falls_back_to_deferred_when_notify_returns_false(self, tmp_path):
         adapter = MagicMock()
         adapter.data_dir.return_value = tmp_path
