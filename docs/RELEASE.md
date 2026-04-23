@@ -135,7 +135,7 @@ Flow:
 2. Run the full current test bar and fix issues as needed.
 3. The full bar includes:
    - unit and CI gates
-   - the full current live suite, as defined by [LIVE-TEST-GUIDE.md](../modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md)
+   - the full current live suite, as defined by [the live-test milestone guide](../modules/quaid/tests/livetest/livetest-guide/)
 4. After the suite is green, compare the cleared live-test SHA against current
    `HEAD`.
 5. Report the exact post-clear delta to the maintainer as:
@@ -202,7 +202,7 @@ The old e2e automation is deprecated and is not part of release truth.
   - unit evidence
   - CI evidence
   - XP evidence
-  - a full current live-suite clear, as defined by [LIVE-TEST-GUIDE.md](../modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md)
+  - a full current live-suite clear, as defined by [the live-test milestone guide](../modules/quaid/tests/livetest/livetest-guide/)
 - Do not treat `run-quaid-e2e.sh` or `run-quaid-e2e-matrix.sh` as a required pre-release gate.
 - If e2e is ever rebuilt, it should return as a new supported lane rather than a silently assumed one.
 

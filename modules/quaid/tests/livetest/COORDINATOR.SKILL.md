@@ -313,7 +313,7 @@ NEVER write a placeholder token.
 
 Read `tests/livetest/README.md` for the full architecture and prerequisites.
 
-Read `tests/livetest/LIVE-TEST-GUIDE.md` for the authoritative milestone definitions,
+Read `tests/livetest/livetest-guide/` for the authoritative milestone definitions,
 XP procedure, and platform-specific notes. Do not substitute memory of prior
 runs for reading the current guide.
 
@@ -894,7 +894,7 @@ If you can imagine a code change that would fix it — write it.
 ## Step 5 — XP (Cross-Platform Project Linking)
 
 Run after all three platforms reach M16 PASS. Full procedure in
-`tests/livetest/LIVE-TEST-GUIDE.md` under "Cross-Platform Project Linking Test."
+`tests/livetest/livetest-guide/` under "Cross-Platform Project Linking Test."
 
 XP tests that all three platforms can share a project and recall each other's docs.
 

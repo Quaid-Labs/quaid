@@ -250,15 +250,17 @@ CDX agents generally follow file-placement policy. If Phase 1 fails (agent
 writes files without creating a project), report as ISSUE — do not rule
 PASS-WITH-NOTE.
 
-### M12 — Multi-Agent Silo Verification
+### M5 Part A — Multi-Agent Silo Verification
 CDX uses `codex-private-tmp-cdx-livetest` as the instance ID (set via `QUAID_INSTANCE`).
 Runtime silo is at `~/.quaid/instances/codex-private-tmp-cdx-livetest/` (hidden).
-Follow the CDX M12 procedure in LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
+Follow the CDX Part A procedure in `livetest-guide/M5.md`. Never SKIP — all three
+platforms run M5.
 
-### M13 — Multi-Instance Verification
+### M5 Part B — Multi-Instance Verification
 CDX has no `make_instance` — isolation is verified by canary test between two
-`QUAID_INSTANCE` values (`codex-private-tmp-cdx-livetest` and `codex-m13test`). Follow the CDX
-M13 procedure in LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M13.
+`QUAID_INSTANCE` values (`codex-private-tmp-cdx-livetest` and `codex-m13test`).
+Follow the CDX Part B procedure in `livetest-guide/M5.md`. Never SKIP — all
+three platforms run M5.
 
 ### M16 — System Context Refresh on Lifecycle (CDX uses timeout, NOT /compact)
 

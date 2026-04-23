@@ -369,7 +369,7 @@ The status JSON is the first place to check for drops (`state`, `stop_reason`,
 
 ## Milestone Summary
 
-Full milestone definitions are in `tests/livetest/LIVE-TEST-GUIDE.md`.
+Full milestone definitions are in `tests/livetest/livetest-guide/`.
 
 | Milestone | What it tests |
 |-----------|---------------|

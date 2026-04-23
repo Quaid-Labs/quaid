@@ -254,7 +254,7 @@ if [[ "$MODE" == "full" ]]; then
   echo "[tests] Live validation"
   echo "================================================================"
   echo "[tests] NOTE: legacy e2e automation is deprecated and no longer part of test:all:full"
-  echo "[tests] Use modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md for authoritative host validation"
+  echo "[tests] Use modules/quaid/tests/livetest/livetest-guide/ for authoritative host validation"
 fi
 
 echo

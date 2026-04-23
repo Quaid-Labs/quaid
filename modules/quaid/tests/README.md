@@ -1,4 +1,6 @@
 # Tests
 
-- [LIVE-TEST-GUIDE.md](LIVE-TEST-GUIDE.md) — How to run and interpret the live validation test suite against a real adapter instance.
+- [livetest/livetest-guide/](livetest/livetest-guide/) — Per-milestone live-test
+  definitions. Driven by `livetest/COORDINATOR.SKILL.md` and
+  `livetest/TESTER.SKILL.md`.
 - [AUX-TESTS.md](AUX-TESTS.md) — Auxiliary test scenarios, edge cases, and manual test procedures.

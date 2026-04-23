@@ -30,7 +30,7 @@ Use this as the go/no-go gate for prelaunch and release candidates.
 ## 3) Live Validation Gates
 
 - Full current live suite passes, using:
-  - `modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md`
+  - `modules/quaid/tests/livetest/livetest-guide/`
 - Compatibility rows are written only after the live suite is green and the
   cleared runtime SHA is fixed.
 - If `HEAD` moved after the clear, list the exact post-clear delta for release
@@ -47,7 +47,7 @@ Use this as the go/no-go gate for prelaunch and release candidates.
 - Branch clean and pushed.
 - Release notes and known issues updated.
 - Full current live suite passes before release approval, using the current
-  definition in `modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md`.
+  definition in `modules/quaid/tests/livetest/livetest-guide/`.
 - After the live suite clears, compare the cleared SHA against current `HEAD`
   and list any post-clear changes for Solomon before release approval.
 - Compatibility rows are written for OpenClaw, Claude Code, and Codex, and only

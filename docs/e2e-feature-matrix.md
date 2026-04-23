@@ -1,7 +1,7 @@
 # Quaid E2E Feature Matrix
 
 Deprecated: this describes the historical e2e runner. Quaid release truth now
-comes from the live-test workflow in `modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md`.
+comes from the live-test workflow in `modules/quaid/tests/livetest/livetest-guide/`.
 Do not use this matrix as a release gate.
 
 This matrix records what `modules/quaid/scripts/run-quaid-e2e.sh` validated historically.

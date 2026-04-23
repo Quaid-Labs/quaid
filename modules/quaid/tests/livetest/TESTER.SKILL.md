@@ -58,17 +58,42 @@ At the start of every session:
 - **Never delete Quaid data** unless the coordinator explicitly tells you to.
 - All destructive operations (wipe steps) require a preview first.
 - If you cannot resolve an issue, message the coordinator — do not guess at fixes.
-- All commands on the remote host run via `ssh REMOTE_HOST '...'`.
+- All commands on the remote host run via `ssh REMOTE_HOST '...'` (where `REMOTE_HOST` resolves from `livetest-config.json` — do not substitute a hardcoded hostname). Before any install or uninstall command, confirm you're pointing at the intended host with `ssh REMOTE_HOST hostname`.
 - **Never run install or setup commands locally** — always via SSH to the remote.
-- **Never move the tester agent itself onto the remote host.** The tester must
-  remain local so host-under-test failures do not take down the runner.
+- **Never move the tester agent itself onto the remote host.** The tester must remain local so host-under-test failures do not take down the runner.
+
+## Test-Integrity Principles
+
+This suite is black-box:
+
+- No direct function calls, imports into runtime codepaths, or mocks.
+- No code edits during the live test.
+- All agent interaction happens through a visible tmux pane so the system is exercised the way a real user would exercise it.
+
+A failure is a signal. Fix what is broken — do not make the test easier to pass. Wrong responses to a failure include:
+
+- Relaxing a criterion because it is hard to satisfy.
+- Hardcoding env vars or instance names to force a specific identity.
+- Skipping safety checks because they fail in the test environment.
+- Disabling a code path because it causes a timeout.
+- Ruling PASS-WITH-NOTE to avoid doing work.
+
+Additional hygiene:
+
+- Start each run from a clean install unless the coordinator explicitly says to skip it. The post-M0 VM is reusable for targeted patch validation; a full suite should always reinstall.
+- Live-test runs execute against the `main` branch. Verify the remote checkout before installing.
+- Do not use hidden helper wrappers for agent interaction. Use the visible tmux pane so the pathway the user would use is the pathway under test.
+- Lower model cost before testing: try the fast tier first, step up only if quality is too degraded to run the test reliably.
+- Send ISSUE messages only when something breaks or the environment is unclear. Routine milestone status goes via STATUS. After a fix, re-run the failed milestone — never mark it done without re-verification.
+- For live testing, `quaid janitor --apply --approve` is pre-approved; run it directly if a milestone or docs/RAG verification needs it.
+- For capability tests, speak to the platform agent like a real user would. Do not spoon-feed function names or CLI subcommands unless the milestone is explicitly testing a slash command (`/new`, `/clear`, `/reset`, `/compact`).
 
 ---
 
 ## Milestone Execution
 
 Full milestone definitions (pass criteria, exact prompts, verification steps)
-are in `tests/livetest/LIVE-TEST-GUIDE.md`. Read the milestone in that guide before
+are in `tests/livetest/livetest-guide/`. Read the milestone in that guide before
 executing it — do not rely on summaries or memory of prior runs.
 
 The guide is the authoritative source. If the guide and these instructions
@@ -76,7 +101,7 @@ conflict, the guide wins.
 
 ### General pattern per milestone
 
-1. Read the milestone definition from `tests/livetest/LIVE-TEST-GUIDE.md`.
+1. Read the milestone definition from `tests/livetest/livetest-guide/`.
 2. Read any platform-specific notes for that milestone in your platform supplement.
 3. Execute the required steps (send messages, wait for processing, run DB queries).
 4. Verify against the pass criteria.

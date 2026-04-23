@@ -28,7 +28,7 @@ Recommended framing:
 - Final release approval still requires:
   - full current test bar
   - full current live suite clear, using the current definition in
-    `modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md`
+    `modules/quaid/tests/livetest/livetest-guide/`
   - release evidence recorded for `unit`, `ci`, and `xp`
   - SHA comparison between the cleared run and current `HEAD`, with Solomon
     deciding whether any post-clear changes are acceptable

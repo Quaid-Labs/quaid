@@ -2,10 +2,14 @@
 
 ## Cross-Platform Project Linking Test (XP)
 
-Run this only after both OpenClaw and Claude Code have passed the project-system and multi-instance milestones (run `ls tests/livetest/livetest-guide/` for the current set; as of this writing that's through `M5.md`). CDX does not participate — CDX agents are path-derived; its equivalent project-linking behavior is covered under its project-system and silo-isolation milestone parts. XP is coordinator-orchestrated, not a per-platform milestone number.
+Run this only after both OpenClaw and Claude Code have passed the project-system and multi-instance
+milestones (run `ls tests/livetest/livetest-guide/` for the current set; as of this writing that's
+through `M5.md`). CDX does not participate — CDX agents are path-derived; its equivalent
+project-linking behavior is covered under its project-system and silo-isolation milestone parts. XP
+is coordinator-orchestrated, not a per-platform milestone number.
 
-This is explicitly a user-behavior test. The agent should be able to discover
-how to link and use the project without being given function names.
+This is explicitly a user-behavior test. The agent should be able to discover how to link and use
+the project without being given function names.
 
 ### Phase 1: Create the project and add a doc in OpenClaw
 
@@ -22,7 +26,8 @@ Ask OC naturally:
 
 - `Can you create a project named cross-live-test for ~/quaid/projects/cross-live-test-src?`
 - `Do you see the existing cross-live-test project? Can we add a document to it?`
-- `Please add a project document that says the north pier beacon is offline and the maintenance window starts at 02:15 UTC.`
+- `Please add a project document that says the north pier beacon is offline and the maintenance
+  window starts at 02:15 UTC.`
 
 Verify from shell:
 
@@ -44,9 +49,9 @@ existing chunks should be detected and indexed automatically — this is what M1
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
 ```
 
-Expected output includes "Indexing new doc:" for the registered file. If it says "All docs up-to-date"
-instead, that is a regression — fall back to `janitor --task rag --apply` to unblock the test and
-report to claude-dev.
+Expected output includes "Indexing new doc:" for the registered file. If it says "All docs
+up-to-date" instead, that is a regression — fall back to `janitor --task rag --apply` to unblock the
+test and report to claude-dev.
 
 Then verify recall:
 
@@ -63,17 +68,17 @@ Pass:
 
 ### Phase 2: Link the same project in Claude Code and add a second doc
 
-**Ordering**: Phase 2 assumes OC's Phase 1 has landed — CC LINKS to an existing
-`cross-live-test` rather than creating fresh. If OC is blocked upstream and CC
-reaches this milestone first, CC's natural-directive create will attach to the
-visible-home project dir under its own instance registry; the coordinator
-cross-registration step below (`Cross-link docs across instances`) handles the
-multi-instance linking regardless. Lane interleaving is expected.
+**Ordering**: Phase 2 assumes OC's Phase 1 has landed — CC LINKS to an existing `cross-live-test`
+rather than creating fresh. If OC is blocked upstream and CC reaches this milestone first, CC's
+natural-directive create will attach to the visible-home project dir under its own instance
+registry; the coordinator cross-registration step below (`Cross-link docs across instances`) handles
+the multi-instance linking regardless. Lane interleaving is expected.
 
 Ask CC naturally:
 
 - `Do you see the existing cross-live-test project? Can we add a document to it?`
-- `Please add another project document that says code word Ember Glass means pager escalation level 2.`
+- `Please add another project document that says code word Ember Glass means pager escalation level
+  2.`
 
 Verify from shell:
 
@@ -89,16 +94,15 @@ Pass:
 
 ### Cross-link docs across instances before Phase 3
 
-Each adapter maintains its own docs index. After both docs are registered, each instance
-only has its own doc indexed. Cross-link by registering each doc in the other instance,
-then run `docs update --apply` on both. The daemon picks up doc changes lazily — always
-run `docs update --apply` explicitly rather than waiting, and wait for it to confirm
-indexing before proceeding to Phase 3.
+Each adapter maintains its own docs index. After both docs are registered, each instance only has
+its own doc indexed. Cross-link by registering each doc in the other instance, then run `docs update
+--apply` on both. The daemon picks up doc changes lazily — always run `docs update --apply`
+explicitly rather than waiting, and wait for it to confirm indexing before proceeding to Phase 3.
 
-**Before running `docs update --apply`, sanity-check project registry for orphans.**
-`docs update --apply` will recreate scaffold dirs for any project with a live registry
-entry, including leftovers from prior M13 runs where the project wasn't deleted. If
-`quaid project list` shows stale `misc--*-m13-test` entries, delete them first:
+**Before running `docs update --apply`, sanity-check project registry for orphans.** `docs update
+--apply` will recreate scaffold dirs for any project with a live registry entry, including leftovers
+from prior M13 runs where the project wasn't deleted. If `quaid project list` shows stale
+`misc--*-m13-test` entries, delete them first:
 
 ```bash
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project list 2>&1 | grep -i m13 || echo "no m13 orphans"'
@@ -126,7 +130,8 @@ ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=claude-code-priva
 ssh REMOTE_HOST 'QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
-If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the cross-link registration or indexing is not working and conversational Phase 3 will also fail.
+If either CLI recall fails after `docs update --apply`, stop and report to claude-dev — the
+cross-link registration or indexing is not working and conversational Phase 3 will also fail.
 
 ### Phase 3: Cross-recall both directions
 
@@ -154,15 +159,15 @@ Optional provenance follow-up:
 ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "How did you know that?"'
 ```
 
-Note: The generic "What does the project say about X?" framing matches PROJECT.md in the vector index
-and misses content docs. Use docs-specific phrasing that names the concept explicitly so the model
-searches the docs store. Both prompts above are content-specific and reliably surface the right doc.
+Note: The generic "What does the project say about X?" framing matches PROJECT.md in the vector
+index and misses content docs. Use docs-specific phrasing that names the concept explicitly so the
+model searches the docs store. Both prompts above are content-specific and reliably surface the
+right doc.
 
 Pass:
 - CC can answer from the OC-added doc
 - OC can answer from the CC-added doc
-- answers are grounded in Quaid project context, not raw disk browsing as the
-  first move
+- answers are grounded in Quaid project context, not raw disk browsing as the first move
 
 Fail:
 - either side cannot see the same project

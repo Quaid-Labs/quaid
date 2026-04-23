@@ -205,14 +205,14 @@ use `/model` in-session — it writes model-switch metadata into the transcript 
 the first real user turn, which freezes the cursor and silently skips extraction.
 Sonnet is already active from launch; no model switch needed for M8.
 
-### M12 — Multi-Agent Silo Verification
+### M5 Part A — Multi-Agent Silo Verification
 CC uses `claude-code-private-tmp-cc-livetest` as the instance ID. Runtime silo is at
-`~/.quaid/instances/claude-code-private-tmp-cc-livetest/` (hidden). Follow the CC M12
-procedure in LIVE-TEST-GUIDE.md. Never SKIP — all three platforms run M12.
+`~/.quaid/instances/claude-code-private-tmp-cc-livetest/` (hidden). Follow the CC
+Part A procedure in `livetest-guide/M5.md`. Never SKIP — all three platforms run M5.
 
-### M13 — Multi-Instance Verification
-CC-only milestone. Verifies CC **auto-provisioning** from a new project PWD
-creates a properly isolated silo at first hook use.
+### M5 Part B — Multi-Instance Verification
+CC Part B verifies **auto-provisioning** from a new project PWD creates a
+properly isolated silo at first hook use.
 
 **Do not** call `quaid claudecode make_instance` directly — it's hook-internal
 only. To test multi-instance, just launch Claude in a new project dir and

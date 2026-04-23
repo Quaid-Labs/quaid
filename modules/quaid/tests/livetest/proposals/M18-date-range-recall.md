@@ -1,6 +1,6 @@
 # M18 Proposal: Date-Range Recall Live Test
 
-Status: PROPOSAL ONLY. Do not merge into `LIVE-TEST-GUIDE.md` until Solomon reviews the procedure.
+Status: PROPOSAL ONLY. Do not merge into `livetest-guide/` until Solomon reviews the procedure.
 
 ## Purpose
 
@@ -391,7 +391,7 @@ Attach or preserve:
 - The top recall rows for each failing probe.
 - Any warnings or tracebacks.
 
-## Integration Into LIVE-TEST-GUIDE.md
+## Integration Into livetest-guide/
 
 If approved, add this as a new M18 section after the current temporal / multi-instance milestones. The final guide version should keep the same shape as M13:
 

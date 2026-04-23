@@ -58,7 +58,7 @@ This document defines the current test stack, execution commands, and pass/fail 
 ### 6) Live Validation (authoritative)
 - Purpose: validate real install, host integration, extraction, retrieval, and maintenance behavior on the supported hosts.
 - Source of truth:
-  - `modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md`
+  - `modules/quaid/tests/livetest/livetest-guide/`
 - Notes:
   - Live validation is the release-truth lane for OpenClaw, Claude Code, and Codex.
   - Compatibility rows are written from accepted live clears, not from legacy e2e automation.
@@ -171,7 +171,7 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
 - Python regression tier passes.
 
 ### Live validation pass criteria
-- The current live suite in `modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md` passes on the supported hosts.
+- The current live suite in `modules/quaid/tests/livetest/livetest-guide/` passes on the supported hosts.
 - The cleared runtime SHA is recorded and matched against the intended release target.
 - Compatibility rows are written from that accepted clear.
 

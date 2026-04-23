@@ -158,7 +158,7 @@ to coordinator with the exact model name that was rejected — do not retry the
 install. The coordinator must resolve the gateway model configuration first.
 
 After M0, post-M0 config (chunk_tokens, models) is applied to the OC instance
-just as for CC and CDX. See `LIVE-TEST-GUIDE.md` post-M0 steps.
+just as for CC and CDX. See `COORDINATOR.SKILL.md` post-M0 steps.
 
 ### M1 — Extraction via `/new`
 Send a message to seed a memorable fact, build 2–3 exchanges, then:

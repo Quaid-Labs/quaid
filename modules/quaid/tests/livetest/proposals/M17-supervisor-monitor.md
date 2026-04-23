@@ -1,6 +1,6 @@
 # M17 Supervisor and Monitor Runtime Stability Proposal
 
-Status: proposal only. Do not paste into `LIVE-TEST-GUIDE.md` until Solomon approves.
+Status: proposal only. Do not paste into `livetest-guide/` until Solomon approves.
 
 Purpose: formalize live validation for the supervisor, daemon monitor, project-docs worker, janitor worker, and transient SQLite setup-lock retry paths. This milestone checks normal production behavior: the runtime must stay alive, drain work, and avoid cross-instance resurrection or contamination without manual recovery.
 

@@ -1,7 +1,7 @@
 # Quaid E2E Roadmap
 
 Deprecated: this documents the historical e2e lane. Quaid release truth now
-comes from the live-test workflow in `modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md`.
+comes from the live-test workflow in `modules/quaid/tests/livetest/livetest-guide/`.
 Do not treat this roadmap as an active release plan.
 
 This document captured the historical plan for E2E expansion by risk and release impact.

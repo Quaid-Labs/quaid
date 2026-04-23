@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 cat >&2 <<'EOF'
 [e2e] DEPRECATED: nightly-full-suite.sh depended on the retired e2e lane and is intentionally disabled.
-[e2e] For ongoing validation, use the live-test workflow in modules/quaid/tests/livetest/LIVE-TEST-GUIDE.md.
+[e2e] For ongoing validation, use the live-test workflow in modules/quaid/tests/livetest/livetest-guide/.
 EOF
 exit 2
 
