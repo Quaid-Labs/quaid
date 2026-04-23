@@ -4615,17 +4615,28 @@ def _docs_source_matches_filters(source_file: str, docs: Optional[List[str]]) ->
 def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[str]) -> bool:
     if not project:
         return True
+    inferred_project: Optional[str] = None
     infer_project = getattr(rag, "infer_project_for_source", None)
     if callable(infer_project):
         try:
-            return str(infer_project(source_file) or "") == str(project)
+            inferred = str(infer_project(source_file) or "").strip()
+            if inferred:
+                inferred_project = inferred
         except Exception:
             pass
     project_token = str(project or "").strip().lower()
     if not project_token:
         return True
     normalized = str(source_file or "").replace("\\", "/").lower()
-    return f"/{project_token}/" in normalized or normalized.endswith(f"/{project_token}/project.log")
+    path_match = (
+        f"/{project_token}/" in normalized
+        or normalized.startswith(f"{project_token}/")
+        or normalized.endswith(f"/{project_token}/project.log")
+        or normalized == f"{project_token}/project.log"
+    )
+    if path_match:
+        return True
+    return inferred_project == str(project)
 
 
 def _docs_infer_project_for_source(rag: Any, source_file: str) -> Optional[str]:

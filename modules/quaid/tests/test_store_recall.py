@@ -3872,6 +3872,68 @@ class TestRecallFastHookInjectContract:
         assert bundle["telemetry"]["date_to"] == "2026-04-20"
         assert meta["counts"]["final_results"] == 1
 
+    def test_docs_store_recall_falls_back_to_path_match_when_legacy_project_inference_is_empty(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        db_path = tmp_path / "docs.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE doc_chunks (
+                    source_file TEXT,
+                    chunk_index INTEGER,
+                    content TEXT,
+                    section_header TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                (
+                    "projects/livetest-agentmsg-cc/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2023-02-14T10:00:00] plog-amber-valentine-2023",
+                            "- [2024-01-18T08:00:00] plog-jasper-retreat-2024",
+                        ]
+                    ),
+                    None,
+                ),
+            )
+
+        class LegacyDocsRAG:
+            def __init__(self):
+                self.db_path = db_path
+
+            def search_docs_bundle(self, query, limit=5, project=None):
+                raise AssertionError("date-bounded recall must not use legacy unbounded bundle")
+
+            def search_docs(self, query, limit=5, min_similarity=0.3, project=None, docs=None):
+                raise AssertionError("date-bounded recall must not use legacy unbounded search_docs")
+
+            def infer_project_for_source(self, source_file):
+                return None
+
+            def infer_project_from_chunks(self, chunks):
+                return "livetest-agentmsg-cc" if chunks else None
+
+        with patch("datastore.docsdb.rag.DocsRAG", return_value=LegacyDocsRAG()):
+            rows, meta, bundle = mg._docs_store_recall(
+                "plog",
+                limit=5,
+                project="livetest-agentmsg-cc",
+                date_from="2023-01-01",
+                date_to="2023-12-31",
+            )
+
+        docs_text = "\n".join(row["text"] for row in rows)
+        assert "plog-amber-valentine-2023" in docs_text
+        assert "plog-jasper-retreat-2024" not in docs_text
+        assert bundle["telemetry"]["date_from"] == "2023-01-01"
+        assert bundle["telemetry"]["date_to"] == "2023-12-31"
+        assert meta["counts"]["final_results"] == 1
+
     def test_store_registry_requires_recall_fast_contract(self):
         import datastore.memorydb.memory_graph as mg
 
