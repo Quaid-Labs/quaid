@@ -11851,15 +11851,6 @@ def store(
     return _with_dedup_telemetry(result)
 
 
-def _resolve_cli_store_status(text: str, explicit_status: Optional[str]) -> Optional[str]:
-    """Default manual CLI stores to approved without bypassing injection review."""
-    if explicit_status is not None and str(explicit_status).strip():
-        return str(explicit_status).strip()
-    if _check_injection_blocklist(text):
-        return None
-    return "approved"
-
-
 def create_edge(
     subject_name: str,
     relation: str,
@@ -13169,7 +13160,7 @@ if __name__ == "__main__":
                     session_id=args.session_id,
                     skip_dedup=args.skip_dedup,
                     speaker=args.speaker,
-                    status=_resolve_cli_store_status(args.text, args.status),
+                    status=args.status,
                     knowledge_type=args.knowledge_type,
                     keywords=args.keywords,
                     source_type=args.source_type,
