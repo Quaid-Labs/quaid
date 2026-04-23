@@ -14,6 +14,21 @@ class _StopDaemonLoop(Exception):
     pass
 
 
+class _OwnedTestAdapterMixin:
+    def owns_session_path(self, path, session_id=""):
+        return True
+
+    def quaid_home(self):
+        home = os.environ.get("QUAID_HOME", "").strip()
+        return Path(home).resolve() if home else Path.cwd()
+
+    def visible_home(self):
+        home = self.quaid_home()
+        if home.name.startswith(".") and len(home.name) > 1:
+            return home.with_name(home.name[1:])
+        return home
+
+
 def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     signal_payload = {"session_id": "sess-1", "type": "reset"}
     marked = []
@@ -324,7 +339,7 @@ def test_ensure_discovered_session_cursors_repairs_broken_existing_cursor(monkey
         encoding="utf-8",
     )
 
-    class _Adapter:
+    class _Adapter(_OwnedTestAdapterMixin):
         def get_sessions_dir(self):
             return sessions_dir
 
@@ -351,7 +366,7 @@ def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch
     canonical.write_text('{"role":"user","content":"fresh fact"}\n', encoding="utf-8")
     checkpoint.write_text('{"role":"user","content":"stale checkpoint"}\n', encoding="utf-8")
 
-    class _Adapter:
+    class _Adapter(_OwnedTestAdapterMixin):
         def get_sessions_dir(self):
             return sessions_dir
 
@@ -381,7 +396,7 @@ def test_ensure_discovered_session_cursors_skips_foreign_adapter_transcripts(mon
     owned.write_text('{"role":"user","content":"owned"}\n', encoding="utf-8")
     foreign.write_text('{"role":"user","content":"foreign"}\n', encoding="utf-8")
 
-    class _Adapter:
+    class _Adapter(_OwnedTestAdapterMixin):
         def get_sessions_dir(self):
             return sessions_dir
 
@@ -505,7 +520,7 @@ def test_process_signal_skips_foreign_adapter_transcript(monkeypatch, tmp_path):
         },
     )
 
-    class _Adapter:
+    class _Adapter(_OwnedTestAdapterMixin):
         def owns_session_path(self, path, session_id=""):
             return False
 
@@ -552,7 +567,7 @@ def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypa
 
     captured = {}
 
-    class _Adapter:
+    class _Adapter(_OwnedTestAdapterMixin):
         def owns_session_path(self, path, session_id=""):
             return True
 
@@ -706,7 +721,7 @@ def test_check_idle_sessions_advances_internal_session_cursor_to_eof(monkeypatch
     real_adapter = sys.modules.get("lib.adapter")
     fake_adapter_mod = types.ModuleType("lib.adapter")
 
-    class _FakeAdapter:
+    class _FakeAdapter(_OwnedTestAdapterMixin):
         def parse_session_jsonl(self, path):
             assert path == transcript_path
             return ""
@@ -747,7 +762,7 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
 
     captured = {}
 
-    class _FakeAdapter:
+    class _FakeAdapter(_OwnedTestAdapterMixin):
         def instance_root(self):
             return tmp_path / "instances" / "pytest-runner"
 
@@ -858,7 +873,7 @@ def test_process_signal_harvests_subagent_when_parent_cursor_at_eof(monkeypatch,
 
     captured = {}
 
-    class _FakeAdapter:
+    class _FakeAdapter(_OwnedTestAdapterMixin):
         def instance_root(self):
             return tmp_path / "instances" / "pytest-runner"
 
@@ -962,7 +977,7 @@ def test_process_signal_persists_adapter_discovered_subagent_before_harvest(monk
 
     captured = {}
 
-    class _FakeAdapter:
+    class _FakeAdapter(_OwnedTestAdapterMixin):
         def instance_root(self):
             return tmp_path / "instances" / "pytest-runner"
 
@@ -1095,7 +1110,7 @@ def test_process_signal_advances_internal_session_cursor_to_eof(monkeypatch, tmp
 
     fake_adapter_mod = types.ModuleType("lib.adapter")
 
-    class _FakeAdapter:
+    class _FakeAdapter(_OwnedTestAdapterMixin):
         def parse_session_jsonl(self, path):
             assert path == transcript_path
             return ""
@@ -1244,7 +1259,7 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
     real_adapter = sys.modules.get("lib.adapter")
     fake_adapter_mod = types.ModuleType("lib.adapter")
 
-    class _FakeAdapter:
+    class _FakeAdapter(_OwnedTestAdapterMixin):
         def parse_session_jsonl(self, path):
             text = Path(path).read_text(encoding="utf-8")
             if "alpacas" in text and "kiln studio" in text:
@@ -1360,7 +1375,7 @@ def test_process_signal_unfreezes_internal_cursor_when_real_turn_arrives_after_s
 
     fake_adapter_mod = types.ModuleType("lib.adapter")
 
-    class _FakeAdapter:
+    class _FakeAdapter(_OwnedTestAdapterMixin):
         def parse_session_jsonl(self, path):
             text = Path(path).read_text(encoding="utf-8")
             if "alpacas" in text and "kiln studio" in text:
@@ -1559,6 +1574,7 @@ def test_check_idle_sessions_treats_file_growth_past_eof_cursor_as_new_content(m
 
 def test_index_one_stale_doc_resolves_relative_registry_paths_from_workspace(monkeypatch, tmp_path):
     from core import project_docs
+    from core.docs import updater as docs_updater
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -1569,6 +1585,9 @@ def test_index_one_stale_doc_resolves_relative_registry_paths_from_workspace(mon
     indexed = []
 
     class _RegistryStub:
+        def reconcile_global_project_registry(self):
+            return None
+
         def list_docs(self):
             return [{"file_path": "docs/fresh.md", "registered_at": "2026-04-12T00:00:00Z"}]
 
@@ -1581,7 +1600,12 @@ def test_index_one_stale_doc_resolves_relative_registry_paths_from_workspace(mon
             return 1
 
     monkeypatch.setattr("config._workspace_root", lambda: workspace)
-    monkeypatch.setitem(sys.modules, "datastore.docsdb.registry", types.SimpleNamespace(DocsRegistry=lambda: _RegistryStub()))
+    monkeypatch.setattr(docs_updater, "_linked_projects_for_current_instance", lambda: ([], True))
+    monkeypatch.setitem(
+        sys.modules,
+        "datastore.docsdb.registry",
+        types.SimpleNamespace(DocsRegistry=lambda *args, **kwargs: _RegistryStub()),
+    )
     monkeypatch.setitem(sys.modules, "datastore.docsdb.rag", types.SimpleNamespace(DocsRAG=lambda: _RagStub()))
 
     try:
@@ -1901,7 +1925,7 @@ class TestSignalRoundTrip:
             encoding="utf-8",
         )
 
-        class _Adapter:
+        class _Adapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, _path):
                 return (
                     "User: I keep an emergency brass key under the west porch planter.\n"
@@ -2190,7 +2214,7 @@ class TestCheckIdleSessions:
 
         captured = []
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def get_sessions_dir(self):
                 return sessions_dir
 
@@ -2316,7 +2340,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 return "User: My cat Luna sleeps on the windowsill every afternoon."
 
@@ -2431,7 +2455,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 _ = path
                 return ""
@@ -2481,7 +2505,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 _ = path
                 return "Hello"
@@ -2544,7 +2568,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 _ = path
                 return "Hello"
@@ -2596,7 +2620,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 return "User: hi"
 
@@ -2649,7 +2673,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 messages = []
                 for raw in path.read_text(encoding="utf-8").splitlines():
@@ -2727,7 +2751,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 rows = []
                 for raw in path.read_text(encoding="utf-8").splitlines():
@@ -2851,7 +2875,7 @@ class TestRollingExtraction:
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 rows = []
                 for raw in path.read_text(encoding="utf-8").splitlines():
@@ -2996,7 +3020,7 @@ class TestRollingExtraction:
         fake_adapter_mod = types.ModuleType("lib.adapter")
         if real_adapter is not None:
             fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
 
@@ -3282,7 +3306,7 @@ class TestRollingExtraction:
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
 
@@ -3466,7 +3490,7 @@ class TestRollingExtraction:
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
 
@@ -3659,7 +3683,7 @@ class TestRollingExtraction:
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
 
@@ -3857,7 +3881,7 @@ class TestRollingExtraction:
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
 
@@ -4018,7 +4042,7 @@ class TestRollingExtraction:
         fake_adapter_mod = types.ModuleType("lib.adapter")
         if real_adapter is not None:
             fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
 
@@ -4632,7 +4656,7 @@ class TestProcessSignalRetryOnException:
 
         # Make the adapter raise
         fake_adapter_mod = types.ModuleType("lib.adapter")
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 raise RuntimeError("extraction kaboom from adapter")
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
@@ -4940,7 +4964,7 @@ class TestReadTranscriptSlice:
         ) + "\n"
         t.write_text(machine_a + machine_b + user_line + assistant_line, encoding="utf-8")
 
-        class _FakeAdapter:
+        class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
                 from adaptors.codex.adapter import CodexAdapter
 
