@@ -844,6 +844,28 @@ If the latter — stop. Wrong responses to failures:
 - Skipping a safety check because it causes a timeout
 - Ruling PASS-WITH-NOTE to avoid doing work
 
+### Watchpoints — things to actively check for
+
+- **Tester must STATUS after every milestone.** Every pass, PWN, or fail ruling
+  results in one STATUS (or ISSUE) message to the coordinator mailbox. This is
+  a MUST, not a SHOULD. If you advance a tester to the next milestone without
+  having received a STATUS from it, something went wrong — either the tester
+  made the ruling internally but did not post, or the mailbox notification did
+  not surface. In either case, stop and reconcile before advancing.
+- **Tester must not auto-advance.** After a milestone passes the tester must
+  wait for coordinator `ACK + next milestone` before moving on. If you see a
+  tester starting the next milestone on its own, rein it in and require
+  explicit boundaries — otherwise you lose the ability to gate on fix-deploys
+  between milestones.
+- **Silence is not passing.** If a tester has been quiet past the expected
+  duration for a milestone (see per-milestone expected windows in the guide),
+  nudge it for a STATUS before assuming work is in flight. A common failure
+  mode is the tester hangs on a subprocess and posts nothing.
+- **Mailbox notification dedupe.** The mailbox suppresses repeat notifications
+  until you ACK the prior item. If notifications go quiet unexpectedly, check
+  `tmux-mailbox.sh status "$COORDINATOR_PANE"` — there may be an un-ACKed
+  item holding the queue.
+
 ### Coordinator responsibilities during the run
 
 - Monitor the mailbox, not just the pane scrollback. Handle one pending item at a time:

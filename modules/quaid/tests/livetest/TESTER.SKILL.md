@@ -105,7 +105,10 @@ conflict, the guide wins.
 2. Read any platform-specific notes for that milestone in your platform supplement.
 3. Execute the required steps (send messages, wait for processing, run DB queries).
 4. Verify against the pass criteria.
-5. Post a STATUS item to the coordinator mailbox.
+5. **MUST** post a STATUS item to the coordinator mailbox. Every milestone
+   ruling — PASS, PWN, or FAIL — ends with a STATUS (or ISSUE) message.
+   Do not silently note the result and continue. Do not advance to the next
+   milestone without an explicit coordinator ACK.
 6. If it fails: post an ISSUE item and wait for the coordinator's response.
 
 ### Quality-Retry Rule Before Escalation
