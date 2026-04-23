@@ -16,9 +16,20 @@ from datastore.memorydb.memory_graph import MemoryGraph, Node
 from datastore.memorydb.maintenance_ops import JanitorMetrics, review_pending_memories
 
 
-def _fake_get_embedding(text: str):
+def _fake_embedding_dim():
+    try:
+        from datastore.memorydb.memory_graph import _get_configured_embedding_dim
+        return int(_get_configured_embedding_dim())
+    except Exception:
+        return 768
+
+
+def _fake_get_embedding(text: str, **_kwargs):
     h = hashlib.md5(text.encode()).digest()
-    return [float(b) / 255.0 for b in h] * 8  # 128-dim
+    base = [float(b) / 255.0 for b in h]
+    dim = _fake_embedding_dim()
+    repeats = (dim + len(base) - 1) // len(base)
+    return (base * repeats)[:dim]
 
 
 def _make_graph(tmp_path: Path) -> MemoryGraph:

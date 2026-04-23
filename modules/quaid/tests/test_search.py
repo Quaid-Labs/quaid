@@ -21,10 +21,21 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fake_get_embedding(text):
-    """Return a deterministic fake embedding based on text hash."""
+def _fake_embedding_dim():
+    try:
+        from datastore.memorydb.memory_graph import _get_configured_embedding_dim
+        return int(_get_configured_embedding_dim())
+    except Exception:
+        return 768
+
+
+def _fake_get_embedding(text, **_kwargs):
+    """Return a deterministic fake embedding matching the configured dimension."""
     h = hashlib.md5(text.encode()).digest()
-    return [float(b) / 255.0 for b in h] * 8  # 128-dim
+    base = [float(b) / 255.0 for b in h]
+    dim = _fake_embedding_dim()
+    repeats = (dim + len(base) - 1) // len(base)
+    return (base * repeats)[:dim]
 
 
 def _make_graph_with_data(tmp_path, items=None):
@@ -216,7 +227,7 @@ class TestSearchSemantic:
                     return False
 
             with patch.object(graph, "_get_conn", return_value=_Ctx()):
-                out = graph._search_vec([0.1] * 128, 5, None, None, None, 0.0, None, None)
+                out = graph._search_vec([0.1] * _fake_embedding_dim(), 5, None, None, None, 0.0, None, None)
 
             assert out == []
             assert len(calls) >= 2
@@ -298,7 +309,7 @@ class TestSearchSemantic:
 
             with patch.object(graph, "_get_conn", return_value=_BrokenCtx()), \
                  patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
-                out = graph._search_brute_force([0.1] * 128, None, None, None, 0.0, None, None)
+                out = graph._search_brute_force([0.1] * _fake_embedding_dim(), None, None, None, 0.0, None, None)
             assert out == []
 
     def test_brute_force_query_error_raises_when_fail_hard_enabled(self, tmp_path):
@@ -319,7 +330,7 @@ class TestSearchSemantic:
             with patch.object(graph, "_get_conn", return_value=_BrokenCtx()), \
                  patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
                 with pytest.raises(RuntimeError, match="fail-hard mode"):
-                    graph._search_brute_force([0.1] * 128, None, None, None, 0.0, None, None)
+                    graph._search_brute_force([0.1] * _fake_embedding_dim(), None, None, None, 0.0, None, None)
 
 
 # ---------------------------------------------------------------------------
