@@ -271,6 +271,26 @@ class TestAppendProjectLogs:
         assert metrics["history_logs_indexed"] == 1
         assert metrics["history_chunks_indexed"] == 2
 
+    def test_can_skip_project_log_indexing_for_worker_owned_commit(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+
+        metrics = append_project_logs(
+            {"test-project": ["Session 5: Queued by project-docs worker"]},
+            trigger="Reset",
+            date_str="2026-03-06",
+            dry_run=False,
+            index_history=False,
+        )
+
+        assert project_log.exists()
+        assert "Queued by project-docs worker" in project_log.read_text(encoding="utf-8")
+        assert metrics["history_entries_written"] == 1
+        assert metrics["history_logs_indexed"] == 0
+        assert _INDEXED_DOC_PATHS == []
+
     def test_project_log_history_uses_quaid_now_when_date_not_passed(self, setup_env, monkeypatch):
         from datastore.docsdb.project_updater import append_project_logs
 

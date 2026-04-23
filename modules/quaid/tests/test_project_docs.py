@@ -119,6 +119,70 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["last_registry_sync"]["project_md_refreshed"] in (0, 1)
 
 
+def test_project_status_reports_pending_project_log_queue(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from datastore.docsdb import project_log_queue
+
+    metrics = project_log_queue.enqueue_project_logs(
+        {"demo": ["Queued project log milestone"]},
+        trigger="Reset",
+    )
+
+    assert metrics["entries_queued"] == 1
+    status = project_docs.project_status("demo")
+    assert status["status"] == "stale"
+    assert status["fresh"] is False
+    assert status["project_log_queue_pending"] == 1
+
+
+def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_env):
+    _tmp_path, _src, entry = project_env
+    from core import project_docs
+    from datastore.docsdb import project_log_queue
+
+    project_log_queue.enqueue_project_logs(
+        {"demo": ["Queued project log milestone"]},
+        trigger="Reset",
+        date_str="2026-04-23T08:00:00",
+        session_id="session-queue",
+    )
+    project_log = Path(entry["canonical_path"]) / "PROJECT.log"
+
+    with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}) as update_docs, \
+         patch("core.docs.updater.update_registered_docs", return_value=2) as update_registered, \
+         patch("core.docs.updater.index_project_logs", return_value=1) as index_project_logs:
+        result = project_docs.execute_update_once("demo")
+
+    assert result["status"] == "fresh"
+    assert result["project_log_queue"]["entries_written"] == 1
+    assert project_log_queue.pending_project_log_count("demo") == 0
+    assert "Queued project log milestone" in project_log.read_text(encoding="utf-8")
+    state = project_docs.read_state("demo")
+    assert state["project_log_offset"] == project_log.stat().st_size
+    update_docs.assert_called_once()
+    assert "Queued project log milestone" in update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"][0]
+    update_registered.assert_called_once_with(project="demo", dry_run=False, protected_names={"PROJECT.log"})
+    index_project_logs.assert_called_once_with(project="demo")
+
+
+def test_cleanup_project_state_removes_project_log_queue(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from datastore.docsdb import project_log_queue
+
+    project_log_queue.enqueue_project_logs(
+        {"demo": ["Queued project log milestone"]},
+        trigger="Reset",
+    )
+
+    assert project_docs.has_project_state("demo") is True
+    removed = project_docs.cleanup_project_state("demo")
+
+    assert removed["removed"] >= 1
+    assert project_log_queue.pending_project_log_count("demo") == 0
+
+
 def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
     _tmp_path, src, _entry = project_env
     from core import project_docs

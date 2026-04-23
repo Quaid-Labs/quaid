@@ -34,8 +34,16 @@ def append_project_logs(
     trigger: str = "Compaction",
     date_str: str | None = None,
     dry_run: bool = False,
+    *,
+    index_history: bool = True,
 ):
-    return _append_project_logs(project_logs, trigger=trigger, date_str=date_str, dry_run=dry_run)
+    return _append_project_logs(
+        project_logs,
+        trigger=trigger,
+        date_str=date_str,
+        dry_run=dry_run,
+        index_history=index_history,
+    )
 
 
 def update_registered_docs(

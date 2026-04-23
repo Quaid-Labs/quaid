@@ -259,6 +259,14 @@ def cleanup_project_state(project: str) -> Dict[str, int]:
             removed += 1
         except OSError:
             logger.warning("Failed removing project-docs state file for %s: %s", name, path)
+    try:
+        from datastore.docsdb import project_log_queue
+
+        removed += int(project_log_queue.cleanup_project_log_queue(name).get("removed", 0) or 0)
+    except Exception as exc:
+        logger.warning("Failed removing project-log queue state for %s: %s", name, exc)
+        if _fail_hard_enabled():
+            raise
     return {"removed": removed}
 
 
@@ -286,6 +294,15 @@ def has_project_state(project: str) -> bool:
     for pattern in temp_patterns:
         if any(pattern.parent.glob(pattern.name)):
             return True
+    try:
+        from datastore.docsdb import project_log_queue
+
+        if project_log_queue.pending_project_log_count(name) > 0:
+            return True
+    except Exception as exc:
+        logger.warning("Failed checking project-log queue state for %s: %s", name, exc)
+        if _fail_hard_enabled():
+            raise
     return False
 
 
@@ -649,6 +666,81 @@ def _current_project_log_size(entry: Dict[str, Any], project: Optional[str] = No
         raise RuntimeError(f"failed to stat PROJECT.log at {log_path}: {exc}") from exc
 
 
+def _pending_project_log_queue_count(project: str) -> int:
+    try:
+        from datastore.docsdb import project_log_queue
+
+        return int(project_log_queue.pending_project_log_count(project) or 0)
+    except Exception as exc:
+        logger.warning("Failed checking project-log queue for %s: %s", project, exc)
+        if _fail_hard_enabled():
+            raise
+        return 0
+
+
+def _empty_project_log_queue_metrics() -> Dict[str, int]:
+    return {
+        "items_seen": 0,
+        "items_committed": 0,
+        "entries_seen": 0,
+        "entries_written": 0,
+        "errors": 0,
+    }
+
+
+def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[str, int]:
+    """Commit queued project-log entries under the project-docs worker lock."""
+    name = validate_project_name(project)
+    metrics = _empty_project_log_queue_metrics()
+    try:
+        from datastore.docsdb import project_log_queue
+        from core.docs import updater as docs_updater
+
+        items = project_log_queue.drain_project_log_queue(name)
+    except Exception as exc:
+        metrics["errors"] += 1
+        logger.warning("Failed draining project-log queue for %s: %s", name, exc)
+        if _fail_hard_enabled():
+            raise
+        return metrics
+
+    for item in items:
+        item_id = str(item.get("id") or "").strip()
+        entries = [str(entry).strip() for entry in (item.get("entries") or []) if str(entry).strip()]
+        metrics["items_seen"] += 1
+        metrics["entries_seen"] += len(entries)
+        if not item_id:
+            metrics["errors"] += 1
+            if _fail_hard_enabled():
+                raise RuntimeError(f"project-log queue item missing id for {name}")
+            logger.warning("Skipping project-log queue item without id for %s", name)
+            continue
+        if not entries:
+            if not dry_run:
+                project_log_queue.mark_project_log_queue_committed(name, [item_id])
+            metrics["items_committed"] += 1
+            continue
+        try:
+            commit_metrics = docs_updater.append_project_logs(
+                {name: entries},
+                trigger=str(item.get("trigger") or "CLI"),
+                date_str=str(item.get("date_str") or "") or None,
+                dry_run=dry_run,
+                index_history=False,
+            )
+            metrics["entries_written"] += int(commit_metrics.get("history_entries_written", 0) or 0)
+            if not dry_run:
+                project_log_queue.mark_project_log_queue_committed(name, [item_id])
+            metrics["items_committed"] += 1
+        except Exception as exc:
+            metrics["errors"] += 1
+            logger.warning("Failed committing project-log queue item %s for %s: %s", item_id, name, exc)
+            if _fail_hard_enabled():
+                raise
+            break
+    return metrics
+
+
 def pending_source_changes(project: str, entry: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     name = validate_project_name(project)
     entry = entry or get_project_entry(name)
@@ -690,8 +782,9 @@ def project_status(project: str) -> Dict[str, Any]:
             source_error = str(exc)
     log_offset = int(state.get("project_log_offset") or 0)
     log_size = _current_project_log_size(entry, project=name)
+    log_queue_pending = _pending_project_log_queue_count(name)
     log_pending = max(0, log_size - min(log_offset, log_size))
-    stale = bool(req) or bool(changes) or shadow_cursor_pending or log_pending > 0
+    stale = bool(req) or bool(changes) or shadow_cursor_pending or log_pending > 0 or log_queue_pending > 0
     status_value = "stale" if stale else "fresh"
     if source_error and not stale:
         status_value = "error"
@@ -714,6 +807,7 @@ def project_status(project: str) -> Dict[str, Any]:
         "project_log_cursor": log_offset,
         "project_log_size": log_size,
         "project_log_bytes_pending": log_pending,
+        "project_log_queue_pending": log_queue_pending,
         "worker_pid": worker_pid,
         "worker_heartbeat": worker_heartbeat,
         "worker_log_path": str(log_path),
@@ -941,6 +1035,8 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             state = read_state(name)
             log_offset = int(state.get("project_log_offset") or 0)
             docs_cursor_head = state.get("last_shadow_commit")
+            merge_progress(name, "commit_project_log_queue", "committing queued PROJECT.log entries")
+            project_log_queue_metrics = _commit_queued_project_logs(name, dry_run=dry_run)
             merge_progress(name, "read_project_log", "reading PROJECT.log cursor", project_log_offset=log_offset)
             log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset, project=name)
             merge_progress(name, "snapshot", "snapshotting source changes")
@@ -954,6 +1050,9 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "trivial_skipped": 0,
                 "errors": 0,
             }
+            if project_log_queue_metrics.get("errors"):
+                metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
+            metrics["project_log_queue"] = project_log_queue_metrics
             registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
             index_count = 0
             project_log_index_count = 0
@@ -975,6 +1074,9 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                     dry_run=dry_run,
                     force_project=name,
                 )
+                if project_log_queue_metrics.get("errors"):
+                    metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
+                metrics["project_log_queue"] = project_log_queue_metrics
             if not dry_run:
                 merge_progress(name, "sync_registry", "syncing visible project docs registry")
                 registry_sync = sync_project_docs_registry(name, entry)
@@ -1029,6 +1131,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "request_id": request_id,
                 "snapshot": snapshot,
                 "project_log_entries": len(log_entries),
+                "project_log_queue": project_log_queue_metrics,
                 "metrics": metrics,
                 "registry_sync": registry_sync,
                 "indexed_docs": index_count,
@@ -1350,6 +1453,7 @@ def format_status(status: Dict[str, Any]) -> str:
     if status.get("source_error"):
         lines.append(f"Source tracking error: {status.get('source_error')}")
     lines.append(f"Pending PROJECT.log bytes: {status.get('project_log_bytes_pending', 0)}")
+    lines.append(f"Pending PROJECT.log queue items: {status.get('project_log_queue_pending', 0)}")
     if status.get("pending_request"):
         req = status["pending_request"]
         lines.append(f"Pending force request: {req.get('request_id')} at {req.get('requested_at')}")

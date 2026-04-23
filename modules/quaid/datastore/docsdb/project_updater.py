@@ -222,6 +222,8 @@ def append_project_logs(
     trigger: str = "Compaction",
     date_str: Optional[str] = None,
     dry_run: bool = False,
+    *,
+    index_history: bool = True,
 ) -> Dict[str, int]:
     """Append project log bullets to per-project PROJECT.md files.
 
@@ -408,7 +410,8 @@ def append_project_logs(
                         if history_written > 0:
                             metrics["projects_history_only"] += 1
                             metrics["history_entries_written"] += history_written
-                            _index_written_history_log(project_name, project_md)
+                            if index_history:
+                                _index_written_history_log(project_name, project_md)
                             print(
                                 f"[project-log] project={project_name} history_only_entries={history_written} "
                                 f"file={project_md.with_name(PROJECT_HISTORY_FILENAME)} dry_run={dry_run}"
@@ -419,7 +422,8 @@ def append_project_logs(
             history_written = _append_project_history_log(project_md, history_entries)
             if history_written > 0:
                 metrics["history_entries_written"] += history_written
-                _index_written_history_log(project_name, project_md)
+                if index_history:
+                    _index_written_history_log(project_name, project_md)
 
         lines = [f"- {today} [{trigger}] {entry}" for entry in entries_for_write]
         content = project_md.read_text(encoding="utf-8")

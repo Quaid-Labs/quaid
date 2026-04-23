@@ -3407,6 +3407,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             journals_count=journals_count,
             project_logs_seen=int(project_log_metrics.get("entries_seen", 0) or 0),
             project_logs_written=int(project_log_metrics.get("entries_written", 0) or 0),
+            project_logs_queued=int(project_log_metrics.get("entries_queued", 0) or 0),
+            project_log_queue_failures=int(project_log_metrics.get("queue_failures", 0) or 0),
             project_logs_projects_updated=int(project_log_metrics.get("projects_updated", 0) or 0),
             extract_wall_seconds=round(extract_wall, 3),
             publish_wall_seconds=round(publish_wall, 3),

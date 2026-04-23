@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.llm_clients import call_deep_reasoning, call_fast_reasoning, parse_json_response
 from config import get_config
 from core.services.memory_service import get_memory_service
-from core.docs.updater import append_project_logs
+from datastore.docsdb.project_log_queue import enqueue_project_logs
 from core.lifecycle import soul_snippets as soul_snippets_runtime
 from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,
@@ -2022,24 +2022,29 @@ def apply_extracted_payloads(
             "Reset" if "reset" in label.lower() else "CLI"
         )
         try:
-            log_metrics = append_project_logs(
+            log_metrics = enqueue_project_logs(
                 result["project_logs"],
                 trigger=trigger,
                 date_str=_project_log_date_for_payload(session_id),
+                session_id=session_id,
+                owner_id=owner_id,
+                source_instance=os.environ.get("QUAID_INSTANCE"),
+                source_adapter=os.environ.get("QUAID_ADAPTER_TYPE"),
                 dry_run=dry_run,
             )
             result["project_log_metrics"] = log_metrics
             logger.info(
-                "[extract] %s: project logs seen=%d written=%d projects_updated=%d unknown=%d missing=%d",
+                "[extract] %s: project logs seen=%d queued=%d projects_queued=%d failures=%d",
                 label,
                 int(log_metrics.get("entries_seen", 0)),
-                int(log_metrics.get("entries_written", 0)),
-                int(log_metrics.get("projects_updated", 0)),
-                int(log_metrics.get("projects_unknown", 0)),
-                int(log_metrics.get("projects_missing_file", 0)),
+                int(log_metrics.get("entries_queued", 0)),
+                int(log_metrics.get("projects_queued", 0)),
+                int(log_metrics.get("queue_failures", 0)),
             )
         except Exception as exc:
-            logger.warning("[extract] %s: project log append failed: %s", label, exc, exc_info=True)
+            logger.warning("[extract] %s: project log enqueue failed: %s", label, exc, exc_info=True)
+            if is_fail_hard_enabled():
+                raise
 
     if dry_run:
         logger.info(
