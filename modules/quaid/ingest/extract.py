@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.llm_clients import call_deep_reasoning, call_fast_reasoning, parse_json_response
+from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from core.services.memory_service import get_memory_service
 from datastore.docsdb.project_log_queue import enqueue_project_logs
@@ -89,10 +89,12 @@ class _LazyMemoryService:
 _memory = _LazyMemoryService()
 
 DEFAULT_EXTRACT_WALL_SECONDS = 2400.0
+DEFAULT_EXTRACT_OUTPUT_TOKENS = 16384
 EXTRACT_RETRY_TARGET_TOKENS = 8000
 MIN_EXTRACT_RETRY_TOKENS = 4000
 MAX_EXTRACT_SPLIT_DEPTH = 4
 DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE = 100
+MIN_REPAIR_OUTPUT_TOKENS = 4096
 _SOUL_SNIPPETS_MODULE = None
 
 
@@ -171,6 +173,34 @@ def _get_extract_publish_batch_size() -> int:
         )
         return DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE
     return max(1, size)
+
+
+def _model_max_output_tokens(tier: str, default: int) -> int:
+    """Read the configured model output cap without hiding failHard errors."""
+    try:
+        return max(1, int(get_config().models.max_output(tier)))
+    except Exception:
+        if is_fail_hard_enabled():
+            raise
+        logger.warning(
+            "[extract] failed to resolve %s max_output; defaulting to %d",
+            tier,
+            default,
+        )
+        return int(default)
+
+
+def _extraction_max_output_tokens() -> int:
+    return _model_max_output_tokens("deep", DEFAULT_EXTRACT_OUTPUT_TOKENS)
+
+
+def _repair_max_output_tokens(response_text: str) -> int:
+    """Give JSON repair enough budget to rewrite the original malformed payload."""
+    needed = estimate_tokens(response_text or "") + 1024
+    return min(
+        _model_max_output_tokens("deep", DEFAULT_EXTRACT_OUTPUT_TOKENS),
+        max(MIN_REPAIR_OUTPUT_TOKENS, needed),
+    )
 
 
 def _publish_trace_enabled() -> bool:
@@ -503,18 +533,110 @@ def _build_extraction_user_message(chunk: str, carry_context: str = "") -> str:
     return "\n".join(parts)
 
 
+_FACTS_ARRAY_RE = re.compile(r'"facts"\s*:\s*\[')
+
+
+def _complete_json_objects_from_array(text: str, start: int) -> List[Dict[str, Any]]:
+    """Return complete JSON objects from an array prefix, ignoring a cut-off tail."""
+    objects: List[Dict[str, Any]] = []
+    idx = start
+    length = len(text)
+    while idx < length:
+        while idx < length and text[idx] in " \t\r\n,":
+            idx += 1
+        if idx >= length or text[idx] == "]":
+            break
+        if text[idx] != "{":
+            idx += 1
+            continue
+
+        obj_start = idx
+        depth = 0
+        in_string = False
+        escape = False
+        closed = False
+        while idx < length:
+            char = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+            else:
+                if char == '"':
+                    in_string = True
+                elif char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        raw_obj = text[obj_start : idx + 1]
+                        try:
+                            parsed = json.loads(raw_obj)
+                        except json.JSONDecodeError:
+                            parsed = parse_json_response(raw_obj)
+                        if isinstance(parsed, dict):
+                            objects.append(parsed)
+                        idx += 1
+                        closed = True
+                        break
+            idx += 1
+        if not closed:
+            break
+    return objects
+
+
+def _salvage_truncated_extraction_payload(
+    *,
+    response_text: str,
+    chunk_index: str,
+    label: str,
+    telemetry: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Recover fully-formed facts from a response truncated inside the facts array."""
+    match = _FACTS_ARRAY_RE.search(response_text or "")
+    if not match:
+        return None
+    facts = [
+        fact
+        for fact in _complete_json_objects_from_array(response_text, match.end())
+        if isinstance(fact.get("text"), str) and fact.get("text", "").strip()
+    ]
+    if not facts:
+        return None
+    if isinstance(telemetry, dict):
+        telemetry["truncated_salvage_calls"] = int(telemetry.get("truncated_salvage_calls", 0) or 0) + 1
+        telemetry["truncated_salvage_facts"] = int(telemetry.get("truncated_salvage_facts", 0) or 0) + len(facts)
+    logger.warning(
+        "[extract] %s chunk %s: salvaged %d complete fact(s) from truncated JSON response",
+        label,
+        chunk_index,
+        len(facts),
+    )
+    return {
+        "chunk_assessment": "usable",
+        "facts": facts,
+        "soul_snippets": {},
+        "journal_entries": {},
+        "project_logs": {},
+        "_salvaged_truncated_response": True,
+    }
+
+
 def _repair_non_json_extraction_payload(
     *,
     response_text: str,
-    chunk_index: int,
+    chunk_index: str,
     label: str,
     telemetry: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Best-effort one-pass repair when extractor LLM returns prose.
 
     Some gateway/model combinations occasionally return plain text despite the
-    JSON-only contract. Try a single fast-model normalization pass before
-    giving up on the chunk.
+    JSON-only contract. Use the deep tier with enough output headroom to avoid
+    repairing a large broken response through a smaller truncation window.
     """
     prompt = (
         "Convert the following assistant output into STRICT JSON with this shape:\n"
@@ -546,11 +668,11 @@ def _repair_non_json_extraction_payload(
         f"{response_text}"
     )
     try:
-        repaired_text, repair_duration = call_fast_reasoning(
+        repaired_text, repair_duration = call_deep_reasoning(
             prompt=prompt,
             system_prompt="Return valid JSON only. No markdown. No prose.",
-            max_tokens=2048,
-            timeout=120.0,
+            max_tokens=_repair_max_output_tokens(response_text),
+            timeout=180.0,
         )
         if not repaired_text:
             logger.warning(
@@ -1067,6 +1189,8 @@ def _merge_extract_telemetry(target: Dict[str, Any], source: Dict[str, Any]) -> 
         "chunk_calls",
         "deep_calls",
         "repair_calls",
+        "truncated_salvage_calls",
+        "truncated_salvage_facts",
         "assessment_usable",
         "assessment_nothing_usable",
         "assessment_needs_smaller_chunk",
@@ -1232,7 +1356,7 @@ def _extract_chunk_payloads(
     response_text, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=system_prompt,
-        max_tokens=6144,
+        max_tokens=_extraction_max_output_tokens(),
         timeout=max(1.0, remaining),
     )
 
@@ -1250,14 +1374,21 @@ def _extract_chunk_payloads(
             chunk_label,
             response_text,
         )
-        if isinstance(telemetry, dict):
-            telemetry["repair_calls"] = int(telemetry.get("repair_calls", 0) or 0) + 1
-        parsed = _repair_non_json_extraction_payload(
+        parsed = _salvage_truncated_extraction_payload(
             response_text=response_text,
             chunk_index=chunk_label,
             label=label,
             telemetry=telemetry,
         )
+        if not isinstance(parsed, dict):
+            if isinstance(telemetry, dict):
+                telemetry["repair_calls"] = int(telemetry.get("repair_calls", 0) or 0) + 1
+            parsed = _repair_non_json_extraction_payload(
+                response_text=response_text,
+                chunk_index=chunk_label,
+                label=label,
+                telemetry=telemetry,
+            )
     if isinstance(parsed, dict):
         parsed, dropped = _filter_chunk_facts_against_carry(parsed, carry_facts)
         if dropped:
@@ -2126,10 +2257,13 @@ def extract_from_transcript(
                 "root_chunks": 0, "split_events": 0, "split_child_chunks": 0,
                 "leaf_chunks": 0, "max_split_depth": 0,
                 "chunk_calls": 0, "deep_calls": 0, "repair_calls": 0,
+                "truncated_salvage_calls": 0,
+                "truncated_salvage_facts": 0,
                 "assessment_usable": 0,
                 "assessment_nothing_usable": 0,
                 "assessment_needs_smaller_chunk": 0,
                 "unclassified_empty_payloads": 0,
+                "carry_duplicate_facts_dropped": 0,
                 "circuit_breaker": breaker.status,
             }
     except Exception:
@@ -2163,12 +2297,14 @@ def extract_from_transcript(
         "chunk_calls": 0,
         "deep_calls": 0,
         "repair_calls": 0,
+        "truncated_salvage_calls": 0,
+        "truncated_salvage_facts": 0,
         "assessment_usable": 0,
         "assessment_nothing_usable": 0,
-                "assessment_needs_smaller_chunk": 0,
-                "unclassified_empty_payloads": 0,
-                "carry_duplicate_facts_dropped": 0,
-            }
+        "assessment_needs_smaller_chunk": 0,
+        "unclassified_empty_payloads": 0,
+        "carry_duplicate_facts_dropped": 0,
+    }
 
     if not transcript or not transcript.strip():
         logger.info(f"[extract] {label}: empty transcript, nothing to extract")
@@ -2299,12 +2435,14 @@ def extract_from_transcript(
                     "chunk_calls": 0,
                     "deep_calls": 0,
                     "repair_calls": 0,
+                    "truncated_salvage_calls": 0,
+                    "truncated_salvage_facts": 0,
                     "assessment_usable": 0,
                     "assessment_nothing_usable": 0,
-        "assessment_needs_smaller_chunk": 0,
-        "unclassified_empty_payloads": 0,
-        "carry_duplicate_facts_dropped": 0,
-    }
+                    "assessment_needs_smaller_chunk": 0,
+                    "unclassified_empty_payloads": 0,
+                    "carry_duplicate_facts_dropped": 0,
+                }
                 future = executor.submit(_process_root_chunk, ci, chunk, [], local_telemetry)
                 future_map[future] = (ci, local_telemetry)
             for future in concurrent.futures.as_completed(future_map):

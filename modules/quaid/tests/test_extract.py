@@ -516,27 +516,28 @@ class TestExtractFromTranscript:
 
         assert result["facts_stored"] == 0
 
-    @patch("ingest.extract.call_fast_reasoning")
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
-    def test_unparseable_response_uses_json_repair(self, mock_store, mock_llm, mock_fast):
+    def test_unparseable_response_uses_json_repair(self, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
-        mock_llm.return_value = ("I remembered that your mother is Wendy.", 1.0)
-        mock_fast.return_value = (json.dumps({
-            "facts": [
-                {
-                    "text": "User's mother is Wendy",
-                    "category": "fact",
-                    "speaker": "user",
-                    "domains": ["personal"],
-                    "extraction_confidence": "high",
-                }
-            ],
-            "soul_snippets": {},
-            "journal_entries": {},
-            "project_logs": {},
-        }), 0.5)
+        mock_llm.side_effect = [
+            ("I remembered that your mother is Wendy.", 1.0),
+            (json.dumps({
+                "facts": [
+                    {
+                        "text": "User's mother is Wendy",
+                        "category": "fact",
+                        "speaker": "user",
+                        "domains": ["personal"],
+                        "extraction_confidence": "high",
+                    }
+                ],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+            }), 0.5),
+        ]
         mock_store.return_value = {"id": "n1", "status": "created"}
 
         result = extract_from_transcript(
@@ -545,7 +546,8 @@ class TestExtractFromTranscript:
         )
 
         assert result["facts_stored"] == 1
-        mock_fast.assert_called_once()
+        assert result["repair_calls"] == 1
+        assert mock_llm.call_count == 2
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_explicit_nothing_usable_payload_counts_as_processed(self, mock_llm):
@@ -2238,11 +2240,82 @@ class TestLoadPrompt:
         assert "nothing_usable" in prompt
         assert "usable" in prompt
 
-    @patch("ingest.extract.call_fast_reasoning")
-    def test_json_repair_prompt_prefers_needs_smaller_chunk_for_truncated_dense_output(self, mock_fast):
+    def test_salvages_complete_facts_from_truncated_json_array(self):
+        from ingest.extract import _salvage_truncated_extraction_payload
+
+        fact_one = {
+            "text": "Maya keeps a red field notebook.",
+            "category": "fact",
+            "speaker": "user",
+            "domains": ["personal"],
+            "extraction_confidence": "high",
+        }
+        fact_two = {
+            "text": "Maya plans a Sunday canal walk.",
+            "category": "fact",
+            "speaker": "user",
+            "domains": ["personal"],
+            "extraction_confidence": "medium",
+        }
+        response = (
+            "```json\n"
+            '{"chunk_assessment":"usable","facts":['
+            f"{json.dumps(fact_one)},{json.dumps(fact_two)},"
+            '{"text":"Maya has a truncated fact","category":"fact","extraction_confidence":'
+        )
+        telemetry = {}
+
+        salvaged = _salvage_truncated_extraction_payload(
+            response_text=response,
+            chunk_index="1",
+            label="salvage-test",
+            telemetry=telemetry,
+        )
+
+        assert salvaged["chunk_assessment"] == "usable"
+        assert [fact["text"] for fact in salvaged["facts"]] == [
+            "Maya keeps a red field notebook.",
+            "Maya plans a Sunday canal walk.",
+        ]
+        assert telemetry["truncated_salvage_calls"] == 1
+        assert telemetry["truncated_salvage_facts"] == 2
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extract_uses_truncated_json_salvage_before_repair(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        fact = {
+            "text": "Maya stores her binoculars in a green case.",
+            "category": "fact",
+            "speaker": "user",
+            "domains": ["personal"],
+            "extraction_confidence": "high",
+        }
+        mock_llm.return_value = (
+            '{"chunk_assessment":"usable","facts":['
+            f"{json.dumps(fact)},"
+            '{"text":"unfinished","extraction_confidence":',
+            0.4,
+        )
+
+        result = extract_from_transcript(
+            transcript="User: Maya stores her binoculars in a green case.",
+            owner_id="test",
+            label="salvage-test",
+            dry_run=True,
+        )
+
+        assert result["facts_planned"] == 1
+        assert result["raw_facts"][0]["text"] == "Maya stores her binoculars in a green case."
+        assert result["truncated_salvage_calls"] == 1
+        assert result["truncated_salvage_facts"] == 1
+        assert result["repair_calls"] == 0
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_json_repair_prompt_prefers_needs_smaller_chunk_for_truncated_dense_output(self, mock_deep):
         from ingest.extract import _repair_non_json_extraction_payload
 
-        mock_fast.return_value = (
+        mock_deep.return_value = (
             json.dumps(
                 {
                     "chunk_assessment": "needs_smaller_chunk",
@@ -2257,13 +2330,14 @@ class TestLoadPrompt:
 
         repaired = _repair_non_json_extraction_payload(
             response_text="```json\n{\"facts\": [{\"text\": \"truncated",
-            chunk_index=1,
+            chunk_index="1",
             label="repair-test",
         )
 
         assert repaired["chunk_assessment"] == "needs_smaller_chunk"
-        repair_prompt = mock_fast.call_args.kwargs["prompt"]
+        repair_prompt = mock_deep.call_args.kwargs["prompt"]
         assert "return chunk_assessment as needs_smaller_chunk" in repair_prompt
+        assert mock_deep.call_args.kwargs["max_tokens"] >= 4096
 
 
 # ---------------------------------------------------------------------------
