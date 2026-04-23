@@ -5350,6 +5350,15 @@ def _normalize_domains(values: Any) -> List[str]:
     return out
 
 
+def _sanitize_domains_for_project(values: Any, project: Optional[str]) -> List[str]:
+    """Drop a redundant project slug from domains when project metadata is explicit."""
+    out = _normalize_domains(values)
+    project_domain = _normalize_domain_tag(project)
+    if not project_domain:
+        return out
+    return [domain for domain in out if domain != project_domain]
+
+
 def _domains_from_attrs(attrs: Any) -> List[str]:
     """Read normalized domains from attrs."""
     if not isinstance(attrs, dict):
@@ -11581,7 +11590,7 @@ def store(
         if source_type not in {"user", "assistant", "subagent", "both", "tool", "import"}:
             source_type = None
     project = _normalize_project_tag(project)
-    domains = _normalize_domains(domains)
+    domains = _sanitize_domains_for_project(domains, project)
 
     # Default speaker attribution for assistant-originated facts when omitted.
     if (not speaker) and source_type == "assistant":
@@ -13477,6 +13486,8 @@ if __name__ == "__main__":
                     d.strip() for d in str(getattr(args, "domains", "") or "").split(",")
                     if d.strip()
                 ]
+                project_tag = _normalize_project_tag(getattr(args, 'project', None))
+                parsed_domains = _sanitize_domains_for_project(parsed_domains, project_tag)
                 result = store(
                     args.text,
                     category=args.category,
@@ -13495,7 +13506,7 @@ if __name__ == "__main__":
                     keywords=args.keywords,
                     source_type=args.source_type,
                     domains=parsed_domains,
-                    project=getattr(args, 'project', None),
+                    project=project_tag,
                     created_at=getattr(args, 'created_at', None),
                     accessed_at=getattr(args, 'accessed_at', None),
                 )
@@ -13503,16 +13514,17 @@ if __name__ == "__main__":
                 # Apply on ALL statuses (created, duplicate, updated) — dedup
                 # returns existing node ID, and we still want to tag it.
                 tag_node_id = result.get("id") or result.get("existing_id")
-                if tag_node_id and (args.project or parsed_domains or args.sensitivity):
+                if tag_node_id and (project_tag or parsed_domains or args.sensitivity):
                     graph = get_graph()
                     node = graph.get_node(tag_node_id)
                     if node:
                         attrs = node.attributes if isinstance(node.attributes, dict) else {}
-                        if args.project:
-                            attrs["project"] = _normalize_project_tag(args.project)
+                        if project_tag:
+                            attrs["project"] = project_tag
                         if parsed_domains:
-                            attrs["domains"] = _normalize_domains(
-                                (attrs.get("domains") or []) + parsed_domains
+                            attrs["domains"] = _sanitize_domains_for_project(
+                                (attrs.get("domains") or []) + parsed_domains,
+                                project_tag,
                             )
                         if args.sensitivity:
                             attrs["sensitivity"] = args.sensitivity

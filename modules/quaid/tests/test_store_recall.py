@@ -868,6 +868,23 @@ class TestStoreBasic:
             attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
             assert attrs.get("domains") == ["technical"]
 
+    def test_store_drops_redundant_project_slug_from_domains(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store(
+                "Maya proposed a cost estimation feature for the recipe app MVP",
+                owner_id="maya",
+                skip_dedup=True,
+                project="recipe-app",
+                domains=["project", "recipe-app"],
+            )
+            node = graph.get_node(result["id"])
+            attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
+            assert attrs.get("project") == "recipe-app"
+            assert attrs.get("domains") == ["project"]
+
     def test_store_preserves_privacy(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
