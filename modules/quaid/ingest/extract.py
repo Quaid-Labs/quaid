@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from core.services.memory_service import get_memory_service
-from datastore.docsdb.project_log_queue import enqueue_project_logs
+from core.docs.updater import enqueue_project_logs
 from core.lifecycle import soul_snippets as soul_snippets_runtime
 from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,

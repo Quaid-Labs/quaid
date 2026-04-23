@@ -106,7 +106,12 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     update_docs.assert_called_once()
     assert update_docs.call_args.kwargs["force_project"] == "demo"
     assert update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"]
-    update_registered.assert_called_once_with(project="demo", dry_run=False, protected_names={"PROJECT.log"})
+    update_registered.assert_called_once_with(
+        project="demo",
+        dry_run=False,
+        protected_names={"PROJECT.log"},
+        index_project_logs_after=False,
+    )
     index_project_logs.assert_called_once_with(project="demo")
     assert not project_docs.request_path("demo").exists()
     state = project_docs.read_state("demo")
@@ -164,7 +169,12 @@ def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_
     assert state["project_log_offset"] == project_log.stat().st_size
     update_docs.assert_called_once()
     assert "Queued project log milestone" in update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"][0]
-    update_registered.assert_called_once_with(project="demo", dry_run=False, protected_names={"PROJECT.log"})
+    update_registered.assert_called_once_with(
+        project="demo",
+        dry_run=False,
+        protected_names={"PROJECT.log"},
+        index_project_logs_after=False,
+    )
     index_project_logs.assert_called_once_with(project="demo")
 
 

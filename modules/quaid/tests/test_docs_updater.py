@@ -936,12 +936,11 @@ class TestCmdUpdateStaleNeverIndexed:
             monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
             monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
             monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
-            monkeypatch.setattr(
-                "core.docs.updater.index_project_logs",
-                lambda project=None: indexed_projects.append(project) or 1,
+            count = updater.cmd_update_stale(
+                dry_run=False,
+                project="quaid",
+                project_log_indexer=lambda project=None: indexed_projects.append(project) or 1,
             )
-
-            count = updater.cmd_update_stale(dry_run=False, project="quaid")
 
             assert count == 1
             assert indexed_projects == ["quaid"]

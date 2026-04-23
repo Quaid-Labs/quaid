@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from datastore.docsdb import updater as _updater
+from datastore.docsdb import project_log_queue as _project_log_queue
 from datastore.docsdb.project_updater import append_project_logs as _append_project_logs
 
 logger = logging.getLogger(__name__)
@@ -48,13 +49,59 @@ def append_project_logs(
     )
 
 
+def enqueue_project_logs(
+    project_logs: dict[str, list[str]],
+    *,
+    trigger: str = "CLI",
+    date_str: str | None = None,
+    session_id: str | None = None,
+    owner_id: str | None = None,
+    source_instance: str | None = None,
+    source_adapter: str | None = None,
+    dry_run: bool = False,
+):
+    return _project_log_queue.enqueue_project_logs(
+        project_logs,
+        trigger=trigger,
+        date_str=date_str,
+        session_id=session_id,
+        owner_id=owner_id,
+        source_instance=source_instance,
+        source_adapter=source_adapter,
+        dry_run=dry_run,
+    )
+
+
+def pending_project_log_count(project: str) -> int:
+    return int(_project_log_queue.pending_project_log_count(project) or 0)
+
+
+def drain_project_log_queue(project: str):
+    return _project_log_queue.drain_project_log_queue(project)
+
+
+def mark_project_log_queue_committed(project: str, item_ids: list[str]) -> dict[str, int]:
+    return _project_log_queue.mark_project_log_queue_committed(project, item_ids)
+
+
+def cleanup_project_log_queue(project: str) -> dict[str, int]:
+    return _project_log_queue.cleanup_project_log_queue(project)
+
+
 def update_registered_docs(
     project: str | None = None,
     dry_run: bool = False,
     protected_names: set[str] | None = None,
+    *,
+    index_project_logs_after: bool = True,
 ) -> int:
     """Update/reindex registered docs, optionally scoped to one project."""
-    return _updater.cmd_update_stale(dry_run=dry_run, project=project, protected_names=protected_names)
+    return _updater.cmd_update_stale(
+        dry_run=dry_run,
+        project=project,
+        protected_names=protected_names,
+        project_log_indexer=index_project_logs if index_project_logs_after else None,
+    )
 
 
 def _project_log_paths(project: str | None = None) -> list[str]:
@@ -308,6 +355,11 @@ __all__ = [
     "check_staleness",
     "cmd_update_from_transcript",
     "append_project_logs",
+    "enqueue_project_logs",
+    "pending_project_log_count",
+    "drain_project_log_queue",
+    "mark_project_log_queue_committed",
+    "cleanup_project_log_queue",
     "update_registered_docs",
     "index_project_logs",
     "index_one_stale_registered_doc",

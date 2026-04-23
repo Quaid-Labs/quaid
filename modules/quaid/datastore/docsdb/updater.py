@@ -41,7 +41,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import get_config
 from lib.fail_policy import is_fail_hard_enabled
@@ -1527,6 +1527,7 @@ def cmd_update_stale(
     trivial_only: bool = False,
     project: Optional[str] = None,
     protected_names: Optional[set[str]] = None,
+    project_log_indexer: Optional[Callable[..., int]] = None,
 ) -> int:
     """CLI: update all stale docs from git diffs. Returns count of updated docs.
 
@@ -1536,6 +1537,8 @@ def cmd_update_stale(
             Significant changes will be skipped with a warning.
         project: If set, only process docs belonging to this project.
         protected_names: Basenames that must never be modified by stale-doc writes.
+        project_log_indexer: Core-supplied callback for append-only PROJECT.log
+            indexing. Datastore code must not import core to resolve project scope.
     """
     protected_names = {str(name) for name in (protected_names or set()) if str(name or "").strip()}
     stale = check_staleness(project=project)
@@ -1679,7 +1682,11 @@ def cmd_update_stale(
             raise
         logger.warning("never-indexed doc scan failed: %s", e)
 
-    project_logs_indexed = _index_append_only_project_logs(project=project, dry_run=dry_run)
+    project_logs_indexed = _index_append_only_project_logs(
+        project=project,
+        dry_run=dry_run,
+        project_log_indexer=project_log_indexer,
+    )
 
     if not stale and not updated and not newly_indexed and not never_indexable and not project_logs_indexed:
         print("All docs up-to-date.")
@@ -1688,19 +1695,16 @@ def cmd_update_stale(
     return updated + newly_indexed + project_logs_indexed
 
 
-def _index_append_only_project_logs(project: Optional[str], dry_run: bool) -> int:
+def _index_append_only_project_logs(
+    project: Optional[str],
+    dry_run: bool,
+    project_log_indexer: Optional[Callable[..., int]],
+) -> int:
     """Index append-only PROJECT.log files from the legacy docs update CLI path."""
-    if dry_run:
+    if dry_run or project_log_indexer is None:
         return 0
     try:
-        from core.docs.updater import index_project_logs
-    except Exception as exc:
-        logger.warning("PROJECT.log indexing unavailable from docs update: %s", exc)
-        if is_fail_hard_enabled():
-            raise
-        return 0
-    try:
-        count = int(index_project_logs(project=project) or 0)
+        count = int(project_log_indexer(project=project) or 0)
     except Exception as exc:
         logger.warning("PROJECT.log indexing failed from docs update: %s", exc)
         if is_fail_hard_enabled():

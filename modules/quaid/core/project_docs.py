@@ -260,9 +260,9 @@ def cleanup_project_state(project: str) -> Dict[str, int]:
         except OSError:
             logger.warning("Failed removing project-docs state file for %s: %s", name, path)
     try:
-        from datastore.docsdb import project_log_queue
+        from core.docs import updater as docs_updater
 
-        removed += int(project_log_queue.cleanup_project_log_queue(name).get("removed", 0) or 0)
+        removed += int(docs_updater.cleanup_project_log_queue(name).get("removed", 0) or 0)
     except Exception as exc:
         logger.warning("Failed removing project-log queue state for %s: %s", name, exc)
         if _fail_hard_enabled():
@@ -295,9 +295,9 @@ def has_project_state(project: str) -> bool:
         if any(pattern.parent.glob(pattern.name)):
             return True
     try:
-        from datastore.docsdb import project_log_queue
+        from core.docs import updater as docs_updater
 
-        if project_log_queue.pending_project_log_count(name) > 0:
+        if docs_updater.pending_project_log_count(name) > 0:
             return True
     except Exception as exc:
         logger.warning("Failed checking project-log queue state for %s: %s", name, exc)
@@ -668,9 +668,9 @@ def _current_project_log_size(entry: Dict[str, Any], project: Optional[str] = No
 
 def _pending_project_log_queue_count(project: str) -> int:
     try:
-        from datastore.docsdb import project_log_queue
+        from core.docs import updater as docs_updater
 
-        return int(project_log_queue.pending_project_log_count(project) or 0)
+        return int(docs_updater.pending_project_log_count(project) or 0)
     except Exception as exc:
         logger.warning("Failed checking project-log queue for %s: %s", project, exc)
         if _fail_hard_enabled():
@@ -693,10 +693,9 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
     name = validate_project_name(project)
     metrics = _empty_project_log_queue_metrics()
     try:
-        from datastore.docsdb import project_log_queue
         from core.docs import updater as docs_updater
 
-        items = project_log_queue.drain_project_log_queue(name)
+        items = docs_updater.drain_project_log_queue(name)
     except Exception as exc:
         metrics["errors"] += 1
         logger.warning("Failed draining project-log queue for %s: %s", name, exc)
@@ -717,7 +716,7 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
             continue
         if not entries:
             if not dry_run:
-                project_log_queue.mark_project_log_queue_committed(name, [item_id])
+                docs_updater.mark_project_log_queue_committed(name, [item_id])
             metrics["items_committed"] += 1
             continue
         try:
@@ -731,7 +730,7 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
             )
             metrics["history_entries_written"] += int(commit_metrics.get("history_entries_written", 0) or 0)
             if not dry_run:
-                project_log_queue.mark_project_log_queue_committed(name, [item_id])
+                docs_updater.mark_project_log_queue_committed(name, [item_id])
             metrics["items_committed"] += 1
         except Exception as exc:
             metrics["errors"] += 1
@@ -1085,6 +1084,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                             project=name,
                             dry_run=False,
                             protected_names={PROJECT_LOG},
+                            index_project_logs_after=False,
                         ) or 0
                     )
                     project_log_index_count = int(docs_updater.index_project_logs(project=name) or 0)
