@@ -360,8 +360,8 @@ class TestInstanceManagerBase:
         mock_link_project.assert_called_once_with("quaid", instance_id="claude-code-proj")
         mock_sync_docs.assert_not_called()
 
-    def test_ensure_registered_projects_respects_deleted_misc_tombstone(self, tmp_path):
-        from core.project_registry import mark_misc_auto_create_disabled
+    def test_ensure_registered_projects_respects_deleted_misc_project(self, tmp_path):
+        from core.project_registry import create_project, delete_project
         from lib.instance_manager import InstanceManager
 
         adapter = MagicMock()
@@ -376,7 +376,16 @@ class TestInstanceManagerBase:
         instance_root = tmp_path / "instances" / instance_id
         instance_root.mkdir(parents=True)
         (instance_root / "stale.txt").write_text("old silo\n", encoding="utf-8")
-        mark_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
+        with patch.dict(
+            os.environ,
+            {
+                "QUAID_HOME": str(tmp_path),
+                "QUAID_VISIBLE_HOME": str(tmp_path / "visible"),
+            },
+            clear=False,
+        ), patch("core.project_registry._sync_docs_registry_project"):
+            create_project(f"misc--{instance_id}", description="scratch", initial_instance=instance_id)
+            delete_project(f"misc--{instance_id}")
         shutil.rmtree(instance_root)
 
         with patch.object(mgr, "_ensure_shared_quaid_project") as mock_shared, \

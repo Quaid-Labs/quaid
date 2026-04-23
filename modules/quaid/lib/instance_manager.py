@@ -218,7 +218,7 @@ class InstanceManager:
         from core.project_registry import (
             create_project as _cp,
             get_project as _gp,
-            is_misc_auto_create_disabled as _misc_deleted,
+            is_misc_project_deleted as _misc_deleted,
             link_project as _lp,
             _sync_docs_registry_project,
         )

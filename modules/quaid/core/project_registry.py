@@ -169,56 +169,18 @@ def _misc_project_instance_id(project_name: str) -> Optional[str]:
     return instance or None
 
 
-def _misc_auto_create_tombstone_path(quaid_home: Path, instance_id: str) -> Path:
+def _misc_project_name(instance_id: str) -> str:
     from lib.instance import validate_instance_id
 
     instance = validate_instance_id(str(instance_id or "").strip())
-    # Keep delete state outside the per-instance silo so cleanup cannot erase it.
-    return quaid_home / "data" / "project-bootstrap" / "disabled-auto-misc" / f"{instance}.json"
+    return f"misc--{instance}"
 
 
-def _legacy_misc_auto_create_tombstone_path(quaid_home: Path, instance_id: str) -> Path:
-    from lib.instance import validate_instance_id
-
-    instance = validate_instance_id(str(instance_id or "").strip())
-    return quaid_home / "instances" / instance / "data" / "project-bootstrap" / "skip-auto-misc-project"
-
-
-def mark_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> Path:
+def is_misc_project_deleted(instance_id: str, *, quaid_home: Optional[Path] = None) -> bool:
     home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
-    marker = _misc_auto_create_tombstone_path(home, instance_id)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(
-        json.dumps(
-            {
-                "instance_id": str(instance_id).strip(),
-                "disabled_at": datetime.now(tz=timezone.utc).isoformat(),
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return marker
-
-
-def clear_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> None:
-    home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
-    for marker in (
-        _misc_auto_create_tombstone_path(home, instance_id),
-        _legacy_misc_auto_create_tombstone_path(home, instance_id),
-    ):
-        try:
-            marker.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
-def is_misc_auto_create_disabled(instance_id: str, *, quaid_home: Optional[Path] = None) -> bool:
-    home = quaid_home.resolve() if quaid_home is not None else _resolve_quaid_home()
-    return (
-        _misc_auto_create_tombstone_path(home, instance_id).is_file()
-        or _legacy_misc_auto_create_tombstone_path(home, instance_id).is_file()
-    )
+    misc_name = _misc_project_name(instance_id)
+    registry = _load_registry(quaid_home=home)
+    return misc_name in (registry.get("deleted_projects") or {})
 
 
 def _is_path_for_deleted_project(raw_path: str, *, project_name: str, canonical: Optional[Path]) -> bool:
@@ -350,9 +312,10 @@ def _cleanup_staged_project_events(
     return removed
 
 
-def _load_registry() -> Dict[str, Any]:
+def _load_registry(*, quaid_home: Optional[Path] = None) -> Dict[str, Any]:
     """Load the registry file. Returns empty structure if missing/corrupt."""
-    path = _registry_path()
+    home = quaid_home.resolve() if quaid_home is not None else None
+    path = (home / "project-registry.json") if home is not None else _registry_path()
     if not path.is_file():
         return {"projects": {}, "deleted_projects": {}}
     try:
@@ -367,13 +330,14 @@ def _load_registry() -> Dict[str, Any]:
         return {"projects": {}, "deleted_projects": {}}
 
 
-def _save_registry(data: Dict[str, Any]) -> None:
+def _save_registry(data: Dict[str, Any], *, quaid_home: Optional[Path] = None) -> None:
     """Atomically write the registry file.
 
     Callers that do read-modify-write updates must hold _registry_lock()
     across the full mutation cycle so they do not race on stale reads.
     """
-    path = _registry_path()
+    home = quaid_home.resolve() if quaid_home is not None else None
+    path = (home / "project-registry.json") if home is not None else _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = path.with_suffix(".tmp")
@@ -553,9 +517,6 @@ def create_project(
 
         registry["projects"][name] = entry
         _save_registry(registry)
-        misc_instance = _misc_project_instance_id(name)
-        if misc_instance:
-            clear_misc_auto_create_disabled(misc_instance, quaid_home=quaid_home)
     try:
         _sync_docs_registry_project(
             name,
@@ -791,18 +752,6 @@ def delete_project(name: str) -> None:
             _safe_remove_project_dir(candidate, allowed_roots)
         except Exception as e:
             logger.warning("Failed to remove project directory for %s (%s): %s", name, candidate, e)
-
-    misc_instance = _misc_project_instance_id(name)
-    if misc_instance:
-        try:
-            mark_misc_auto_create_disabled(misc_instance, quaid_home=quaid_home)
-        except Exception as e:
-            logger.warning(
-                "Failed to persist misc auto-create tombstone for %s (%s): %s",
-                name,
-                misc_instance,
-                e,
-            )
 
     # Project docs workers are supervisor-owned. Deleting a project must stop
     # the worker and remove queued force-update state so deleted projects do

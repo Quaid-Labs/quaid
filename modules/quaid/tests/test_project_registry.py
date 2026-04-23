@@ -9,14 +9,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.project_registry import (
-    clear_misc_auto_create_disabled,
     create_project,
     delete_project,
     get_project,
-    is_misc_auto_create_disabled,
+    is_misc_project_deleted,
     link_project,
     list_projects,
-    mark_misc_auto_create_disabled,
     unlink_project,
     update_project,
     projects_with_source_root,
@@ -238,7 +236,7 @@ class TestDeleteProject:
         assert not (failed_staging / "2-compact.json").exists()
         assert (visible_staging / "3-compact.json").exists()
 
-    def test_delete_misc_project_sets_auto_create_tombstone(self, mock_adapter):
+    def test_delete_misc_project_marks_registry_deleted_state(self, mock_adapter):
         _, tmp_path = mock_adapter
         instance_id = "claude-code-private-tmp-m13"
         instance_root = tmp_path / "instances" / instance_id
@@ -246,53 +244,48 @@ class TestDeleteProject:
         with patch("lib.instance.instance_id", return_value=instance_id), \
              patch("core.project_registry._sync_docs_registry_project"):
             create_project(f"misc--{instance_id}", description="scratch")
-        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is False
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is False
 
         delete_project(f"misc--{instance_id}")
 
-        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is True
-        marker = tmp_path / "data" / "project-bootstrap" / "disabled-auto-misc" / f"{instance_id}.json"
-        assert marker.is_file()
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is True
+        registry = _load_registry(quaid_home=tmp_path)
+        assert f"misc--{instance_id}" in registry["deleted_projects"]
 
         shutil.rmtree(instance_root)
 
-        assert marker.is_file()
-        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is True
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is True
 
-    def test_recreate_misc_project_clears_auto_create_tombstone(self, mock_adapter):
+    def test_recreate_misc_project_clears_deleted_registry_state(self, mock_adapter):
         _, tmp_path = mock_adapter
         instance_id = "claude-code-private-tmp-m13"
-        marker = mark_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
-        assert marker.is_file()
+        with patch("lib.instance.instance_id", return_value=instance_id), \
+             patch("core.project_registry._sync_docs_registry_project"):
+            create_project(f"misc--{instance_id}", description="scratch", initial_instance=instance_id)
+        delete_project(f"misc--{instance_id}")
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is True
 
         with patch("lib.instance.instance_id", return_value=instance_id), \
              patch("core.project_registry._sync_docs_registry_project"):
             create_project(f"misc--{instance_id}", description="scratch", initial_instance=instance_id)
 
-        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is False
-        assert not marker.exists()
-        clear_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is False
+        assert get_project(f"misc--{instance_id}") is not None
 
-    def test_legacy_misc_auto_create_tombstone_is_honored_and_cleared(self, mock_adapter):
+    def test_is_misc_project_deleted_reads_target_quaid_home(self, mock_adapter):
         _, tmp_path = mock_adapter
         instance_id = "claude-code-private-tmp-m13"
-        legacy_marker = (
-            tmp_path
-            / "instances"
-            / instance_id
-            / "data"
-            / "project-bootstrap"
-            / "skip-auto-misc-project"
+        other_home = tmp_path.with_name(f"{tmp_path.name}-other")
+        _save_registry(
+            {
+                "projects": {},
+                "deleted_projects": {f"misc--{instance_id}": "2026-04-24T00:00:00+00:00"},
+            },
+            quaid_home=other_home,
         )
-        legacy_marker.parent.mkdir(parents=True)
-        legacy_marker.write_text("legacy\n", encoding="utf-8")
 
-        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is True
-
-        clear_misc_auto_create_disabled(instance_id, quaid_home=tmp_path)
-
-        assert not legacy_marker.exists()
-        assert is_misc_auto_create_disabled(instance_id, quaid_home=tmp_path) is False
+        assert is_misc_project_deleted(instance_id, quaid_home=other_home) is True
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is False
 
 
 class TestListAndQuery:

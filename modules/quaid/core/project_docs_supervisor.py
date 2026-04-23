@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import project_docs
-from core.project_registry import is_misc_auto_create_disabled, list_projects
+from core.project_registry import is_misc_project_deleted, list_projects
 from lib.instance import list_instances, quaid_home, validate_instance_id
 
 _STOP = False
@@ -129,9 +129,9 @@ def _read_instance_daemon_pid(instance: str) -> int | None:
     return None
 
 
-def _instance_is_tombstoned(instance: str) -> bool:
+def _instance_misc_project_deleted(instance: str) -> bool:
     try:
-        return bool(is_misc_auto_create_disabled(instance, quaid_home=quaid_home()))
+        return bool(is_misc_project_deleted(instance, quaid_home=quaid_home()))
     except Exception:
         if _fail_hard_enabled():
             raise
@@ -143,7 +143,7 @@ def _live_instances_for_supervisor() -> tuple[set[str], set[str]]:
     inactive = {
         instance
         for instance in all_instances
-        if _instance_is_tombstoned(instance) or project_docs.is_instance_monitor_disabled(instance)
+        if _instance_misc_project_deleted(instance) or project_docs.is_instance_monitor_disabled(instance)
     }
     return all_instances - inactive, inactive
 
@@ -176,8 +176,8 @@ def _wait_for_instance_pid(
 
 def _start_instance_monitor(instance: str) -> int:
     name = validate_instance_id(instance)
-    if _instance_is_tombstoned(name):
-        raise RuntimeError(f"refusing to start monitor for tombstoned instance {name}")
+    if _instance_misc_project_deleted(name):
+        raise RuntimeError(f"refusing to start monitor for deleted misc instance {name}")
     if project_docs.is_instance_monitor_disabled(name):
         raise RuntimeError(f"refusing to start monitor for disabled instance {name}")
     existing = _read_instance_daemon_pid(name)
@@ -232,8 +232,8 @@ def _janitor_check_interval_seconds() -> float:
 
 def _start_janitor_worker(instance: str) -> subprocess.Popen:
     name = validate_instance_id(instance)
-    if _instance_is_tombstoned(name):
-        raise RuntimeError(f"refusing to start janitor worker for tombstoned instance {name}")
+    if _instance_misc_project_deleted(name):
+        raise RuntimeError(f"refusing to start janitor worker for deleted misc instance {name}")
     if project_docs.is_instance_monitor_disabled(name):
         raise RuntimeError(f"refusing to start janitor worker for disabled instance {name}")
     script = Path(__file__).parent / "janitor_worker.py"
@@ -250,8 +250,8 @@ def _start_janitor_worker(instance: str) -> subprocess.Popen:
 
 
 def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
-    live, tombstoned = _live_instances_for_supervisor()
-    for instance in sorted(tombstoned):
+    live, inactive_instances = _live_instances_for_supervisor()
+    for instance in sorted(inactive_instances):
         try:
             _stop_instance_monitor(instance)
         except Exception:
@@ -279,9 +279,9 @@ def _maintain_janitor_workers(
     now: float,
     check_interval: float,
 ) -> None:
-    live, tombstoned = _live_instances_for_supervisor()
+    live, inactive_instances = _live_instances_for_supervisor()
     for instance, proc in list(janitor_workers.items()):
-        if instance in tombstoned:
+        if instance in inactive_instances:
             janitor_workers.pop(instance, None)
             project_docs._terminate_process(proc)
             last_janitor_checks.pop(instance, None)

@@ -7,6 +7,14 @@ import subprocess
 import pytest
 
 
+def _mark_deleted_misc_project(tmp_path, instance_id: str) -> None:
+    from core.project_registry import _load_registry, _save_registry
+
+    registry = _load_registry(quaid_home=tmp_path)
+    registry.setdefault("deleted_projects", {})[f"misc--{instance_id}"] = "2026-04-24T00:00:00+00:00"
+    _save_registry(registry, quaid_home=tmp_path)
+
+
 def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
@@ -24,6 +32,7 @@ def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatc
     monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", lambda: None)
     monkeypatch.setattr(supervisor, "list_instances", lambda: ["alpha", "beta"])
     monkeypatch.setattr(supervisor, "list_projects", lambda: {})
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
     monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
     monkeypatch.setattr(supervisor, "_start_instance_monitor", lambda name: started_instances.append(name) or 100)
     monkeypatch.setattr(supervisor, "_start_janitor_worker", lambda name: started_janitors.append(name) or _DoneProc())
@@ -42,6 +51,7 @@ def test_supervisor_stops_removed_instance_monitor(monkeypatch):
     known = {"old": 123}
 
     monkeypatch.setattr(supervisor, "list_instances", lambda: [])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
     monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda name: stopped.append(name) or True)
 
     supervisor._maintain_instance_monitors(known)
@@ -50,9 +60,8 @@ def test_supervisor_stops_removed_instance_monitor(monkeypatch):
     assert known == {}
 
 
-def test_supervisor_stops_tombstoned_instance_monitor(monkeypatch, tmp_path):
+def test_supervisor_stops_deleted_misc_instance_monitor(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
-    from core.project_registry import mark_misc_auto_create_disabled
 
     started = []
     stopped = []
@@ -67,7 +76,7 @@ def test_supervisor_stops_tombstoned_instance_monitor(monkeypatch, tmp_path):
     monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
     monkeypatch.setattr(supervisor, "_start_instance_monitor", lambda name: started.append(name) or 111)
     monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda name: stopped.append(name) or True)
-    mark_misc_auto_create_disabled("claude-code-dead", quaid_home=tmp_path)
+    _mark_deleted_misc_project(tmp_path, "claude-code-dead")
 
     supervisor._maintain_instance_monitors(known)
 
@@ -88,7 +97,7 @@ def test_supervisor_stops_disabled_instance_monitor(monkeypatch):
         "list_instances",
         lambda: ["claude-code-live", "claude-code-paused"],
     )
-    monkeypatch.setattr(supervisor, "_instance_is_tombstoned", lambda _name: False)
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
     monkeypatch.setattr(
         supervisor.project_docs,
         "is_instance_monitor_disabled",
@@ -105,15 +114,14 @@ def test_supervisor_stops_disabled_instance_monitor(monkeypatch):
     assert known == {"claude-code-live": 111}
 
 
-def test_start_instance_monitor_refuses_tombstoned_instance(monkeypatch, tmp_path):
+def test_start_instance_monitor_refuses_deleted_misc_instance(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
-    from core.project_registry import mark_misc_auto_create_disabled
 
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
     monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
-    mark_misc_auto_create_disabled("claude-code-dead", quaid_home=tmp_path)
+    _mark_deleted_misc_project(tmp_path, "claude-code-dead")
 
-    with pytest.raises(RuntimeError, match="tombstoned instance"):
+    with pytest.raises(RuntimeError, match="deleted misc instance"):
         supervisor._start_instance_monitor("claude-code-dead")
 
     assert not (tmp_path / "instances" / "claude-code-dead").exists()
@@ -122,7 +130,7 @@ def test_start_instance_monitor_refuses_tombstoned_instance(monkeypatch, tmp_pat
 def test_start_instance_monitor_refuses_disabled_instance(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
-    monkeypatch.setattr(supervisor, "_instance_is_tombstoned", lambda _name: False)
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
     monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: True)
     monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
 
@@ -230,7 +238,7 @@ def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, 
 def test_start_janitor_worker_refuses_disabled_instance(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
-    monkeypatch.setattr(supervisor, "_instance_is_tombstoned", lambda _name: False)
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
     monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: True)
 
     with pytest.raises(RuntimeError, match="disabled instance"):
@@ -247,6 +255,7 @@ def test_janitor_worker_throttles_per_instance(monkeypatch):
             return None
 
     monkeypatch.setattr(supervisor, "list_instances", lambda: ["alpha"])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
     monkeypatch.setattr(supervisor, "_start_janitor_worker", lambda name: starts.append(name) or _RunningProc())
 
     workers: dict[str, subprocess.Popen] = {}
@@ -258,9 +267,8 @@ def test_janitor_worker_throttles_per_instance(monkeypatch):
     assert "alpha" in workers
 
 
-def test_supervisor_stops_tombstoned_janitor_worker(monkeypatch, tmp_path):
+def test_supervisor_stops_deleted_misc_janitor_worker(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
-    from core.project_registry import mark_misc_auto_create_disabled
 
     starts = []
     terminated = []
@@ -280,7 +288,7 @@ def test_supervisor_stops_tombstoned_janitor_worker(monkeypatch, tmp_path):
     monkeypatch.setattr(supervisor, "_start_janitor_worker", lambda name: starts.append(name) or _RunningProc())
     monkeypatch.setattr(supervisor.project_docs, "_terminate_process", lambda proc: terminated.append(proc))
     monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: reaped.append(True) or 0)
-    mark_misc_auto_create_disabled("claude-code-dead", quaid_home=tmp_path)
+    _mark_deleted_misc_project(tmp_path, "claude-code-dead")
 
     workers: dict[str, subprocess.Popen] = {"claude-code-dead": dead_proc}
     checks: dict[str, float] = {"claude-code-dead": 10.0}

@@ -267,14 +267,14 @@ class ClaudeCodeAdapter(QuaidAdapter):
         """
         def _is_deleted_misc_instance(instance_id: str) -> bool:
             try:
-                from core.project_registry import is_misc_auto_create_disabled
+                from core.project_registry import is_misc_project_deleted
 
-                return bool(is_misc_auto_create_disabled(instance_id, quaid_home=self.quaid_home()))
+                return bool(is_misc_project_deleted(instance_id, quaid_home=self.quaid_home()))
             except Exception as exc:
                 if is_fail_hard_enabled():
                     raise
                 print(
-                    "[adapter][WARN] Could not check deleted misc tombstone "
+                    "[adapter][WARN] Could not check deleted misc project state "
                     f"for {instance_id}: {exc}",
                     file=sys.stderr,
                 )

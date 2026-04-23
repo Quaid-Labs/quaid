@@ -41,6 +41,14 @@ def _make_oc_adapter(tmp_path: Path):
     return _OcAdapterWithHome(tmp_path)
 
 
+def _mark_deleted_misc_project(tmp_path: Path, instance_id: str) -> None:
+    from core.project_registry import _load_registry, _save_registry
+
+    registry = _load_registry(quaid_home=tmp_path)
+    registry.setdefault("deleted_projects", {})[f"misc--{instance_id}"] = "2026-04-24T00:00:00+00:00"
+    _save_registry(registry, quaid_home=tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # 1. Prefix derivation
 # ---------------------------------------------------------------------------
@@ -135,15 +143,10 @@ class TestListAgentInstanceIds:
         assert ids == ["claude-code-myproject"]
 
     def test_cc_skips_deleted_misc_instance_from_scan(self, monkeypatch, tmp_path):
-        from core.project_registry import mark_misc_auto_create_disabled
-
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-main")
         (tmp_path / "instances" / "claude-code-main").mkdir(parents=True)
         (tmp_path / "instances" / "claude-code-private-tmp-quaid-m13-test").mkdir(parents=True)
-        mark_misc_auto_create_disabled(
-            "claude-code-private-tmp-quaid-m13-test",
-            quaid_home=tmp_path,
-        )
+        _mark_deleted_misc_project(tmp_path, "claude-code-private-tmp-quaid-m13-test")
 
         adapter = _make_cc_adapter(tmp_path)
         ids = adapter.list_agent_instance_ids()
@@ -151,13 +154,8 @@ class TestListAgentInstanceIds:
         assert ids == ["claude-code-main"]
 
     def test_cc_skips_deleted_misc_current_instance(self, monkeypatch, tmp_path):
-        from core.project_registry import mark_misc_auto_create_disabled
-
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-quaid-m13-test")
-        mark_misc_auto_create_disabled(
-            "claude-code-private-tmp-quaid-m13-test",
-            quaid_home=tmp_path,
-        )
+        _mark_deleted_misc_project(tmp_path, "claude-code-private-tmp-quaid-m13-test")
 
         adapter = _make_cc_adapter(tmp_path)
         ids = adapter.list_agent_instance_ids()
@@ -165,15 +163,10 @@ class TestListAgentInstanceIds:
         assert ids == []
 
     def test_cdx_skips_deleted_misc_instance_from_scan(self, monkeypatch, tmp_path):
-        from core.project_registry import mark_misc_auto_create_disabled
-
         monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
         (tmp_path / "instances" / "codex-private-tmp-cdx-livetest").mkdir(parents=True)
         (tmp_path / "instances" / "codex-private-tmp-cdx-m13-test").mkdir(parents=True)
-        mark_misc_auto_create_disabled(
-            "codex-private-tmp-cdx-m13-test",
-            quaid_home=tmp_path,
-        )
+        _mark_deleted_misc_project(tmp_path, "codex-private-tmp-cdx-m13-test")
 
         adapter = _make_cdx_adapter(tmp_path)
         ids = adapter.list_agent_instance_ids()
@@ -181,13 +174,8 @@ class TestListAgentInstanceIds:
         assert ids == ["codex-private-tmp-cdx-livetest"]
 
     def test_cdx_skips_deleted_misc_current_instance(self, monkeypatch, tmp_path):
-        from core.project_registry import mark_misc_auto_create_disabled
-
         monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-m13-test")
-        mark_misc_auto_create_disabled(
-            "codex-private-tmp-cdx-m13-test",
-            quaid_home=tmp_path,
-        )
+        _mark_deleted_misc_project(tmp_path, "codex-private-tmp-cdx-m13-test")
 
         adapter = _make_cdx_adapter(tmp_path)
         ids = adapter.list_agent_instance_ids()
