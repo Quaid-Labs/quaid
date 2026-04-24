@@ -60,6 +60,10 @@ function _hasQuaidRuntimeSentinel(candidateRoot) {
   const root = _normalizeWorkspacePath(candidateRoot);
   return fs.existsSync(path.join(root, "core", "lifecycle", "janitor.py"));
 }
+function _looksLikeQuaidHomeRoot(candidateRoot) {
+  const root = _normalizeWorkspacePath(candidateRoot);
+  return fs.existsSync(path.join(root, "instances")) || fs.existsSync(path.join(root, "shared"));
+}
 function _resolveWorkspace() {
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
@@ -69,6 +73,8 @@ function _resolveWorkspace() {
   if (envQuaidWorkspace) {
     return _normalizeWorkspacePath(envQuaidWorkspace);
   }
+  const hiddenHome = path.join(os.homedir(), ".quaid");
+  const visibleHome = path.join(os.homedir(), "quaid");
   try {
     const cfgPath = _resolveOpenClawConfigPath();
     if (fs.existsSync(cfgPath)) {
@@ -83,18 +89,26 @@ function _resolveWorkspace() {
       const mainAgent = list.find((a) => a?.id === "main" || a?.default === true);
       const ws = String(mainAgent?.workspace || cfg?.agents?.defaults?.workspace || "").trim();
       if (ws) {
-        return _normalizeWorkspacePath(ws);
+        const resolvedWs = _normalizeWorkspacePath(ws);
+        if (_looksLikeQuaidHomeRoot(resolvedWs)) {
+          return resolvedWs;
+        }
+        if (fs.existsSync(hiddenHome)) {
+          return _normalizeWorkspacePath(hiddenHome);
+        }
+        if (_looksLikeQuaidHomeRoot(visibleHome)) {
+          return _normalizeWorkspacePath(visibleHome);
+        }
+        return resolvedWs;
       }
     }
   } catch (err) {
     console.error("[quaid][startup] workspace resolution failed:", err?.message || String(err));
   }
-  const hiddenHome = path.join(os.homedir(), ".quaid");
   if (fs.existsSync(hiddenHome)) {
     return _normalizeWorkspacePath(hiddenHome);
   }
-  const visibleHome = path.join(os.homedir(), "quaid");
-  if (fs.existsSync(path.join(visibleHome, "instances")) || fs.existsSync(path.join(visibleHome, "shared"))) {
+  if (_looksLikeQuaidHomeRoot(visibleHome)) {
     return _normalizeWorkspacePath(visibleHome);
   }
   const moduleRoot = _resolveAdapterModuleRoot();

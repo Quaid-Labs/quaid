@@ -1201,6 +1201,46 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("prefers ~/.quaid home over configured agent workspace when the config workspace is not a Quaid home", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-ws-home-over-agent-"));
+    const hiddenHome = path.join(home, ".quaid");
+    const agentWorkspace = path.join(home, ".openclaw", "agents", "main", "workspace");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.join(hiddenHome, "shared", "config", "global"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances"), { recursive: true });
+    fs.mkdirSync(agentWorkspace, { recursive: true });
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        agents: {
+          list: [{ id: "main", workspace: agentWorkspace }],
+        },
+        env: { vars: { PATH: "/usr/bin:/bin" } },
+      }),
+      "utf8",
+    );
+
+    const prev = {
+      HOME: process.env.HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      QUAID_HOME: process.env.QUAID_HOME,
+      QUAID_WORKSPACE: process.env.QUAID_WORKSPACE,
+    };
+    process.env.HOME = home;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    delete process.env.QUAID_HOME;
+    delete process.env.QUAID_WORKSPACE;
+    try {
+      expect(__test.resolveWorkspace()).toBe(path.resolve(hiddenHome));
+    } finally {
+      if (prev.HOME === undefined) delete process.env.HOME; else process.env.HOME = prev.HOME;
+      if (prev.OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH; else process.env.OPENCLAW_CONFIG_PATH = prev.OPENCLAW_CONFIG_PATH;
+      if (prev.QUAID_HOME === undefined) delete process.env.QUAID_HOME; else process.env.QUAID_HOME = prev.QUAID_HOME;
+      if (prev.QUAID_WORKSPACE === undefined) delete process.env.QUAID_WORKSPACE; else process.env.QUAID_WORKSPACE = prev.QUAID_WORKSPACE;
+    }
+  });
+
   it("falls back to process cwd on extension installs when ~/.quaid does not exist yet", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-ws-cwd-"));
     const openClawConfigPath = path.join(home, ".openclaw", "openclaw.json");
