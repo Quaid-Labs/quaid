@@ -648,11 +648,17 @@ function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): n
 function queueDeferredNoticeForAgent(
   agentLabel: string,
   message: string,
-  *,
-  kind = "agent_notice",
-  priority = "normal",
-  source = "quaid",
-  dedupeKey = "",
+  {
+    kind = "agent_notice",
+    priority = "normal",
+    source = "quaid",
+    dedupeKey = "",
+  }: {
+    kind?: string;
+    priority?: string;
+    source?: string;
+    dedupeKey?: string;
+  } = {},
 ): boolean {
   const instanceId = getInstanceId(agentLabel);
   const script = [
