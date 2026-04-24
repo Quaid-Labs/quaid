@@ -3461,11 +3461,12 @@ def register_lifecycle_routines(registry, result_factory) -> None:
     registry.register("datastore_cleanup", _run_datastore_cleanup)
 
 
-def _ollama_healthy(timeout: float = 0.2) -> bool:
-    """Fast health check — can Ollama respond within timeout?
+def _ollama_healthy(timeout: float = 0.5, retry_timeout: float = 2.5) -> bool:
+    """Fast-but-stable health check for the embedding provider.
 
-    Hits /api/tags (lightest endpoint). Caches result for 30s to avoid
-    per-recall overhead. Returns False if Ollama is unreachable.
+    Hits /api/tags (the lightest endpoint). Healthy results stay cached for
+    30s; unhealthy results are cached briefly so a transient slow response
+    does not poison fail-hard recall for the next 30s.
     """
     # In test environments with mock embeddings, always report healthy
     # (search_hybrid handles mock embeddings internally)
@@ -3479,15 +3480,23 @@ def _ollama_healthy(timeout: float = 0.2) -> bool:
         cache = _ollama_healthy._cache
         if isinstance(cache, tuple) and len(cache) == 2:
             ts, result = cache
-            if now - ts < 30:
+            ttl = 30 if result else 2
+            if now - ts < ttl:
                 return bool(result)
-    try:
-        url = get_ollama_url()
-        req = urllib.request.Request(f"{url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            healthy = resp.status == 200
-    except Exception:
-        healthy = False
+
+    def _probe(request_timeout: float) -> bool:
+        try:
+            url = get_ollama_url()
+            req = urllib.request.Request(f"{url}/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=request_timeout) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    healthy = _probe(timeout)
+    if not healthy and retry_timeout > timeout:
+        healthy = _probe(retry_timeout)
+
     _ollama_healthy._cache = (now, healthy)
     return healthy
 

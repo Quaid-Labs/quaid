@@ -5,6 +5,7 @@ import sys
 import json
 import struct
 import sqlite3
+import urllib.error
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -79,6 +80,55 @@ def test_print_recall_results_handles_docs_rows_without_id(capsys):
     assert "[0.95] [docs]" in captured.out
     assert "The carillon procedure lives in the test doc." in captured.out
     assert "|ID:/tmp/m10-test-doc.md:3|" in captured.out
+
+
+def test_ollama_healthy_retries_before_marking_provider_unhealthy():
+    import datastore.memorydb.memory_graph as mg
+
+    if hasattr(mg._ollama_healthy, "_cache"):
+        delattr(mg._ollama_healthy, "_cache")
+
+    response = MagicMock()
+    response.__enter__.return_value.status = 200
+    response.__exit__.return_value = False
+
+    try:
+        with patch("datastore.memorydb.memory_graph.get_ollama_url", return_value="http://127.0.0.1:11434"), \
+             patch("datastore.memorydb.memory_graph.urllib.request.urlopen", side_effect=[TimeoutError("slow"), response]) as mock_urlopen:
+            assert mg._ollama_healthy() is True
+            assert mock_urlopen.call_count == 2
+    finally:
+        if hasattr(mg._ollama_healthy, "_cache"):
+            delattr(mg._ollama_healthy, "_cache")
+
+
+def test_ollama_healthy_rechecks_false_cache_quickly():
+    import datastore.memorydb.memory_graph as mg
+
+    if hasattr(mg._ollama_healthy, "_cache"):
+        delattr(mg._ollama_healthy, "_cache")
+
+    response = MagicMock()
+    response.__enter__.return_value.status = 200
+    response.__exit__.return_value = False
+
+    try:
+        with patch("datastore.memorydb.memory_graph.get_ollama_url", return_value="http://127.0.0.1:11434"), \
+             patch("datastore.memorydb.memory_graph.time.monotonic", side_effect=[100.0, 103.1]), \
+             patch(
+                 "datastore.memorydb.memory_graph.urllib.request.urlopen",
+                 side_effect=[
+                     urllib.error.URLError("down"),
+                     urllib.error.URLError("still down"),
+                     response,
+                 ],
+             ) as mock_urlopen:
+            assert mg._ollama_healthy() is False
+            assert mg._ollama_healthy() is True
+            assert mock_urlopen.call_count == 3
+    finally:
+        if hasattr(mg._ollama_healthy, "_cache"):
+            delattr(mg._ollama_healthy, "_cache")
 
 
 # ---------------------------------------------------------------------------
