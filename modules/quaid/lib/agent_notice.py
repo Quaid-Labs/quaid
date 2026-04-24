@@ -69,6 +69,11 @@ def pending_notice_source(message: str) -> str:
     return str(match.group(1) or "").strip().lower()
 
 
+def should_persist_pending_notice(source: str) -> bool:
+    token = str(source or "").strip().lower()
+    return token in {"provider", "llm_config"}
+
+
 def dedupe_pending_notice_messages(messages: list[str]) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()

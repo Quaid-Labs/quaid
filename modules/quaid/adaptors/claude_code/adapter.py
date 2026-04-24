@@ -23,6 +23,7 @@ from lib.agent_notice import (
     dedupe_pending_notice_messages,
     format_pending_notice_relay,
     pending_notice_source,
+    should_persist_pending_notice,
 )
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_slug_from_project_dir
@@ -162,6 +163,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
             return ""
 
         messages = []
+        sticky_entries = {}
         try:
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
@@ -182,11 +184,27 @@ class ClaudeCodeAdapter(QuaidAdapter):
                             if (now - entry_dt).total_seconds() > max_age_seconds:
                                 expired += 1
                                 continue
-                        messages.append(entry.get("message", ""))
+                        message = str(entry.get("message") or "").strip()
+                        source = str(entry.get("source") or "").strip().lower() or pending_notice_source(message)
+                        if message:
+                            messages.append(message)
+                            if should_persist_pending_notice(source):
+                                sticky_entries[(source, message)] = {
+                                    "message": message,
+                                    "ts": str(entry.get("ts") or "").strip() or _now_iso(),
+                                    "source": source,
+                                }
                     except (json.JSONDecodeError, ValueError):
                         malformed += 1
                         continue
-            pending.unlink(missing_ok=True)
+            if sticky_entries:
+                with open(pending, "w", encoding="utf-8") as f:
+                    for entry in sticky_entries.values():
+                        f.write(json.dumps(entry) + "\n")
+                unlinked = False
+            else:
+                pending.unlink(missing_ok=True)
+                unlinked = True
             _trace_m15(
                 "adapter.claude_code.pending.drain",
                 path=str(pending),
@@ -194,7 +212,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 messages_count=len([m for m in messages if m]),
                 expired=expired,
                 malformed=malformed,
-                unlinked=True,
+                unlinked=unlinked,
+                sticky_count=len(sticky_entries),
                 messages=[m for m in messages if m],
             )
         except Exception as e:

@@ -17,6 +17,7 @@ from lib.agent_notice import (
     dedupe_pending_notice_messages,
     format_pending_notice_relay,
     pending_notice_source,
+    should_persist_pending_notice,
 )
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_id, instance_slug_from_project_dir
@@ -206,6 +207,7 @@ class CodexAdapter(QuaidAdapter):
 
             now = datetime.now(timezone.utc)
             messages = []
+            sticky_entries = {}
             total_lines = 0
             expired = 0
             malformed = 0
@@ -229,7 +231,21 @@ class CodexAdapter(QuaidAdapter):
                     message = str(entry.get("message") or "").strip()
                     if message:
                         messages.append(message)
-            pending.unlink(missing_ok=True)
+                        source = str(entry.get("source") or "").strip().lower() or pending_notice_source(message)
+                        if should_persist_pending_notice(source):
+                            sticky_entries[(source, message)] = {
+                                "message": message,
+                                "ts": ts or _now_iso(),
+                                "source": source,
+                            }
+            if sticky_entries:
+                with open(pending, "w", encoding="utf-8") as handle:
+                    for entry in sticky_entries.values():
+                        handle.write(json.dumps(entry) + "\n")
+                unlinked = False
+            else:
+                pending.unlink(missing_ok=True)
+                unlinked = True
             _trace_m15(
                 "adapter.codex.pending.drain",
                 path=str(pending),
@@ -237,7 +253,8 @@ class CodexAdapter(QuaidAdapter):
                 messages_count=len(messages),
                 expired=expired,
                 malformed=malformed,
-                unlinked=True,
+                unlinked=unlinked,
+                sticky_count=len(sticky_entries),
                 messages=messages,
             )
         except Exception as exc:

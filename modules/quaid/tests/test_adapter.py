@@ -986,6 +986,46 @@ class TestClaudeCodeAdapter:
         assert context.count("repeat-note") == 1
         assert context.count("other-note") == 1
 
+    def test_pending_context_preserves_active_provider_notices(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-provider")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "message": "[Quaid error] [provider] HTTP 404 invalid-model-m6-probe",
+                    "source": "provider",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        first = adapter.get_pending_context()
+        second = adapter.get_pending_context()
+
+        assert "invalid-model-m6-probe" in first
+        assert "invalid-model-m6-probe" in second
+        assert pending_path.is_file()
+
+    def test_pending_context_drains_non_provider_notices(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-normal")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            json.dumps({"message": "[Quaid warning] [janitor] review ready", "source": "janitor"}) + "\n",
+            encoding="utf-8",
+        )
+
+        first = adapter.get_pending_context()
+        second = adapter.get_pending_context()
+
+        assert "review ready" in first
+        assert second == ""
+        assert not pending_path.exists()
+
     def test_parse_session_jsonl_strips_local_command_wrapper_blocks(self, tmp_path):
         path = tmp_path / "claude-local-command.jsonl"
         path.write_text(
@@ -1187,6 +1227,46 @@ class TestCodexAdapter:
         context = adapter.get_pending_context()
         assert context.count("repeat-note") == 1
         assert context.count("other-note") == 1
+
+    def test_pending_context_preserves_active_provider_notices(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-provider")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "message": "[Quaid error] [provider] HTTP 404 invalid-model-m6-probe",
+                    "source": "provider",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        first = adapter.get_pending_context()
+        second = adapter.get_pending_context()
+
+        assert "invalid-model-m6-probe" in first
+        assert "invalid-model-m6-probe" in second
+        assert pending_path.is_file()
+
+    def test_pending_context_drains_non_provider_notices(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-normal")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            json.dumps({"message": "[Quaid warning] [janitor] review ready", "source": "janitor"}) + "\n",
+            encoding="utf-8",
+        )
+
+        first = adapter.get_pending_context()
+        second = adapter.get_pending_context()
+
+        assert "review ready" in first
+        assert second == ""
+        assert not pending_path.exists()
 
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".codex" / "sessions"
