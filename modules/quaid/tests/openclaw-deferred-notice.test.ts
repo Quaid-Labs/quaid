@@ -195,6 +195,8 @@ describe("openclaw deferred notices", () => {
     expect(systemContext).toContain("silver lantern");
     expect(systemContext).toContain("[Quaid Notice Relay Required]");
     expect(systemContext).toContain("<quaid_system_message>");
+    expect(String(result?.prependContext || "")).toContain("silver lantern");
+    expect(String(result?.prependContext || "")).toContain("[Quaid Notice Relay Required]");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -242,6 +244,8 @@ describe("openclaw deferred notices", () => {
     const systemContext = combinedSystemContext(result);
     expect(systemContext).toContain("Deferred drain prompt-build path");
     expect(systemContext).toContain("[Quaid Notice Relay Required]");
+    expect(String(result?.prependContext || "")).toContain("Deferred drain prompt-build path");
+    expect(String(result?.prependContext || "")).toContain("[Quaid Notice Relay Required]");
 
     warn.mockRestore();
     log.mockRestore();

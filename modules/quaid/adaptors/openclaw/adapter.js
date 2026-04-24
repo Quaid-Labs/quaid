@@ -3208,6 +3208,10 @@ ${projectPlacementContext}` : projectPlacementContext;
       };
       const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
       if (deferredNoticeContext) {
+        // OC Matrix variants can drop appendSystemContext mutations. Mirror
+        // mandatory notice relays into prependContext so the agent still sees
+        // them on the turn that drained the queue.
+        prependContextParts.push(deferredNoticeContext);
         appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${deferredNoticeContext}` : deferredNoticeContext;
@@ -3415,6 +3419,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         console.error("[quaid] Auto-injection error:", error);
         if (isImmediateProviderFailure(error)) {
           const notice = buildImmediateProviderNotice(error, "fast");
+          prependContextParts.push(notice);
           appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${notice}` : notice;
