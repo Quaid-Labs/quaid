@@ -665,6 +665,7 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     assert terminated == [11111, 22222]
     assert captured["env"]["QUAID_HOME"] == str(project_docs.get_quaid_home())
     assert "QUAID_INSTANCE" not in captured["env"]
+    assert captured["env"]["QUAID_SUPERVISOR_BOOT"] == "1"
 
 
 def test_stop_supervisor_kills_pidfile_target_and_matching_orphans(project_env, monkeypatch):

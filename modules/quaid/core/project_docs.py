@@ -1465,6 +1465,7 @@ def start_supervisor() -> int:
         env = dict(os.environ)
         env["QUAID_HOME"] = str(get_quaid_home())
         env.pop("QUAID_INSTANCE", None)
+        env["QUAID_SUPERVISOR_BOOT"] = "1"
         env.setdefault("QUAID_SUPERVISOR_INTERVAL_SECONDS", "5")
         env["QUAID_SUPERVISOR_TOKEN"] = uuid.uuid4().hex
         with log_path.open("ab") as log_fh:

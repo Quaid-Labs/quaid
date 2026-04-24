@@ -1428,7 +1428,11 @@ class TestConfigPathResolution:
             calls = []
 
             def _fake_initialize_plugin_runtime(**_kwargs):
-                return object(), [], []
+                class _FakeRegistry:
+                    def get(self, _plugin_id):
+                        return None
+
+                return _FakeRegistry(), [], []
 
             def _fake_run_plugin_contract_surface(**kwargs):
                 surface = kwargs.get("surface")
@@ -1447,6 +1451,53 @@ class TestConfigPathResolution:
                 ("init", ()),
                 ("config", ("broken.plugin",)),
                 ("tool_runtime", ("broken.plugin",)),
+            ]
+        finally:
+            config._config = old_config
+
+    def test_supervisor_boot_skips_plugin_executable_surfaces(self, tmp_path, monkeypatch):
+        import config
+
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "plugins": {
+                    "enabled": True,
+                    "strict": True,
+                    "apiVersion": 1,
+                    "paths": [],
+                    "slots": {
+                        "adapter": "adapter.plugin",
+                        "ingest": ["ingest.plugin"],
+                        "datastores": ["memorydb.core", "docsdb.core"],
+                    },
+                }
+            }))
+            calls = []
+
+            def _fake_initialize_plugin_runtime(**_kwargs):
+                return object(), [], []
+
+            def _fake_run_plugin_contract_surface(**kwargs):
+                surface = kwargs.get("surface")
+                calls.append((surface, tuple(sorted(kwargs.get("skip_plugin_ids") or []))))
+                return [], []
+
+            monkeypatch.setenv("QUAID_SUPERVISOR_BOOT", "1")
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("core.runtime.plugins.initialize_plugin_runtime", side_effect=_fake_initialize_plugin_runtime), \
+                 patch("core.runtime.events.validate_declared_event_contract", return_value=[]), \
+                 patch("core.runtime.plugins.run_plugin_contract_surface", side_effect=_fake_run_plugin_contract_surface):
+                cfg = load_config()
+                assert cfg.plugins.enabled is True
+
+            expected = ("adapter.plugin", "docsdb.core", "ingest.plugin", "memorydb.core")
+            assert calls == [
+                ("init", expected),
+                ("config", expected),
+                ("tool_runtime", expected),
             ]
         finally:
             config._config = old_config

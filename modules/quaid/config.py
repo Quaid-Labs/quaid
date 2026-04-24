@@ -60,6 +60,12 @@ def _default_deep_reasoning_model_classes() -> Dict[str, str]:
 def _default_fast_reasoning_model_classes() -> Dict[str, str]:
     return {}
 
+
+def _truthy_env(name: str) -> bool:
+    value = str(os.environ.get(name, "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _workspace_root() -> Path:
     """Get workspace root from runtime context."""
     return get_workspace_dir()
@@ -104,6 +110,34 @@ def _config_paths() -> list:
         _platform_shared_config_path(),
         _global_shared_config_path(),
     ]
+
+
+def _collect_active_plugin_ids(active_slots: Dict[str, Any]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def _add(value: Any) -> None:
+        name = str(value or "").strip()
+        if not name or name in seen:
+            return
+        seen.add(name)
+        out.append(name)
+
+    _add((active_slots or {}).get("adapter"))
+    for value in list((active_slots or {}).get("ingest") or []):
+        _add(value)
+    for value in list((active_slots or {}).get("datastores") or []):
+        _add(value)
+    return out
+
+
+def _plugin_boot_skip_ids(active_slots: Dict[str, Any], *, surface: str) -> List[str]:
+    mode = str(surface or "").strip().lower()
+    if mode not in {"init", "config", "tool_runtime"}:
+        return []
+    if not _truthy_env("QUAID_SUPERVISOR_BOOT"):
+        return []
+    return _collect_active_plugin_ids(active_slots)
 
 
 @dataclass
@@ -1630,6 +1664,7 @@ def _load_config_inner() -> MemoryConfig:
             plugin_config=plugins.config,
             workspace_root=str(_quaid_home()),
             strict=plugins.strict,
+            skip_plugin_ids=_plugin_boot_skip_ids(active_slots, surface="init"),
         )
         plugin_errors.extend(init_errors)
         plugin_warnings.extend(init_warnings)
@@ -1641,6 +1676,7 @@ def _load_config_inner() -> MemoryConfig:
             m = re.search(r"Plugin '([^']+)' init hook failed", str(msg))
             if m:
                 failed_init_plugin_ids.add(m.group(1).strip())
+        failed_init_plugin_ids.update(_plugin_boot_skip_ids(active_slots, surface="config"))
         cfg_errors, cfg_warnings = run_plugin_contract_surface(
             registry=registry,
             slots=active_slots,
@@ -1664,7 +1700,9 @@ def _load_config_inner() -> MemoryConfig:
             plugin_config=plugins.config,
             workspace_root=str(_quaid_home()),
             strict=plugins.strict,
-            skip_plugin_ids=sorted(failed_init_plugin_ids),
+            skip_plugin_ids=sorted(
+                failed_init_plugin_ids.union(_plugin_boot_skip_ids(active_slots, surface="tool_runtime"))
+            ),
         )
         plugin_errors.extend(tool_runtime_errors)
         plugin_warnings.extend(tool_runtime_warnings)
