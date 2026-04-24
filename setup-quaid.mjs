@@ -37,6 +37,10 @@ import {
 } from "./lib/install-config-hydration.mjs";
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
+import {
+  captureOpenClawMatrixConfig,
+  restoreOpenClawMatrixConfig,
+} from "./lib/openclaw-matrix-config.mjs";
 import { sanitizeOpenClawNativeMemoryPlugins } from "./lib/openclaw-plugin-sanitizer.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 import {
@@ -2595,12 +2599,32 @@ function _sanitizeOpenClawNativeMemoryPlugins() {
   }
 }
 
-async function _reassertOpenClawPostRestartState(context = "gateway restart") {
+function _captureOpenClawMatrixConfig() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    return captureOpenClawMatrixConfig(cfgPath);
+  } catch {
+    return null;
+  }
+}
+
+function _restoreOpenClawMatrixConfig(snapshot) {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    return restoreOpenClawMatrixConfig(cfgPath, snapshot);
+  } catch {
+    return { changed: false, reason: "restore-failed" };
+  }
+}
+
+async function _reassertOpenClawPostRestartState(context = "gateway restart", matrixSnapshot = null) {
   if (!_isPlatform("openclaw")) return false;
   const cli = canRun("openclaw") ? "openclaw" : "";
   if (!cli) return false;
 
   const changedBits = [];
+  const matrixRestore = _restoreOpenClawMatrixConfig(matrixSnapshot);
+  if (matrixRestore.changed) changedBits.push("matrix-channel");
   if (_ensureOpenClawPluginsAllowQuaid()) changedBits.push("plugins.allow");
   if (_sanitizeOpenClawNativeMemoryPlugins()) changedBits.push("native-memory-plugins");
   if (_sanitizeOpenClawQuaidPluginEntry()) changedBits.push("plugins.entries.quaid");
@@ -4561,6 +4585,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
+  const preservedOpenClawMatrixConfig = _isPlatform("openclaw") ? _captureOpenClawMatrixConfig() : null;
   // Installer creates only shared/runtime state. Per-instance silos are created
   // on first hook use, once the adapter has the real instance ID.
   const resolvedInstanceId = String(process.env.QUAID_INSTANCE || "").trim();
@@ -4598,7 +4623,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       const restart = spawnSync("openclaw", ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
         await waitForGatewayWarmup(30_000);
-        await _reassertOpenClawPostRestartState("runtime env reconcile");
+        await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawMatrixConfig);
       } else {
         log.warn("OpenClaw gateway restart after runtime env reconcile failed.");
       }
@@ -4833,14 +4858,14 @@ except Exception as e:
       log.info("Reconciled ai.openclaw.gateway launch agent env for Quaid");
     }
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 60_000);
-    await _reassertOpenClawPostRestartState("plugin registration");
+    await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawMatrixConfig);
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-registration sanitizer", 60_000);
     s.message("Finalizing OpenClaw hook configuration...");
     enableRequiredOpenClawHooks();
     // enableRequiredOpenClawHooks writes openclaw.json directly, which may trigger a gateway
     // config reload. Give the gateway time to settle before proceeding.
     await waitForGatewayWarmup(30_000);
-    await _reassertOpenClawPostRestartState("hook configuration");
+    await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawMatrixConfig);
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
     s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
