@@ -590,10 +590,72 @@ def get_project_entry(project: str) -> Dict[str, Any]:
     return dict(entry)
 
 
+def _adapter_type_from_instance_name(instance_name: str) -> str:
+    name = str(instance_name or "").strip().lower()
+    if name.startswith("claude-code-") or name == "claude-code":
+        return "claude-code"
+    if name.startswith("codex-") or name == "codex":
+        return "codex"
+    if name.startswith("openclaw-") or name == "openclaw":
+        return "openclaw"
+    if name.startswith("standalone-") or name == "standalone":
+        return "standalone"
+    return ""
+
+
+def _project_runtime_hints(entry: Dict[str, Any], request: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str]]:
+    from lib.instance import validate_instance_id
+
+    chosen_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip() or str(
+        (request or {}).get("requested_instance") or ""
+    ).strip()
+    if not chosen_instance:
+        linked_instances: List[str] = []
+        for raw in list(entry.get("instances") or []):
+            try:
+                linked_instances.append(validate_instance_id(str(raw or "").strip()))
+            except Exception:
+                continue
+        linked_instances = sorted(set(linked_instances))
+        if len(linked_instances) == 1:
+            chosen_instance = linked_instances[0]
+
+    chosen_adapter = str(os.environ.get("QUAID_ADAPTER_TYPE", "") or "").strip().lower() or str(
+        (request or {}).get("requested_adapter_type") or ""
+    ).strip().lower()
+    if not chosen_adapter and chosen_instance:
+        chosen_adapter = _adapter_type_from_instance_name(chosen_instance)
+
+    return (chosen_instance or None, chosen_adapter or None)
+
+
+@contextlib.contextmanager
+def _project_runtime_context(entry: Dict[str, Any], request: Optional[Dict[str, Any]] = None) -> Iterator[None]:
+    chosen_instance, chosen_adapter = _project_runtime_hints(entry, request=request)
+    original_instance = os.environ.get("QUAID_INSTANCE")
+    original_adapter = os.environ.get("QUAID_ADAPTER_TYPE")
+    try:
+        if original_instance is None and chosen_instance:
+            os.environ["QUAID_INSTANCE"] = chosen_instance
+        if original_adapter is None and chosen_adapter:
+            os.environ["QUAID_ADAPTER_TYPE"] = chosen_adapter
+        yield
+    finally:
+        if original_instance is None:
+            os.environ.pop("QUAID_INSTANCE", None)
+        elif chosen_instance is not None:
+            os.environ["QUAID_INSTANCE"] = original_instance
+        if original_adapter is None:
+            os.environ.pop("QUAID_ADAPTER_TYPE", None)
+        elif chosen_adapter is not None:
+            os.environ["QUAID_ADAPTER_TYPE"] = original_adapter
+
+
 def request_update(project: str, *, reason: str = "manual", requested_by: str = "cli") -> Dict[str, Any]:
     """Persist an async force-update request for a project docs worker."""
     name = validate_project_name(project)
-    get_project_entry(name)
+    entry = get_project_entry(name)
+    requested_instance, requested_adapter_type = _project_runtime_hints(entry)
     req = {
         "project": name,
         "request_id": f"{int(time.time() * 1000)}-{os.getpid()}",
@@ -601,6 +663,8 @@ def request_update(project: str, *, reason: str = "manual", requested_by: str = 
         "requested_by": requested_by,
         "reason": reason,
         "status": "pending",
+        "requested_instance": requested_instance,
+        "requested_adapter_type": requested_adapter_type,
     }
     _atomic_write_json(request_path(name), req)
     merge_state(
@@ -882,116 +946,118 @@ def pending_source_changes(project: str, entry: Optional[Dict[str, Any]] = None)
 def project_status(project: str) -> Dict[str, Any]:
     name = validate_project_name(project)
     entry = get_project_entry(name)
-    state = read_state(name)
-    req = read_update_request(name)
-    worker_pid = read_worker_pid(name)
-    worker_heartbeat = read_worker_heartbeat(name)
-    log_path = worker_log_path(name)
-    supervisor_pid = read_supervisor_pid()
-    sg = _shadow_git(name, entry)
-    current_shadow_head = sg.current_head() if sg is not None else None
-    docs_cursor_head = state.get("last_shadow_commit")
-    shadow_cursor_pending = bool(current_shadow_head and current_shadow_head != docs_cursor_head)
-    source_error = None
-    if sg is None:
-        changes = []
-    else:
-        try:
-            changes = pending_source_changes(name, entry)
-        except RuntimeError as exc:
-            logger.warning("Project docs status source check failed for %s: %s", name, exc)
+    with _project_runtime_context(entry):
+        state = read_state(name)
+        req = read_update_request(name)
+        worker_pid = read_worker_pid(name)
+        worker_heartbeat = read_worker_heartbeat(name)
+        log_path = worker_log_path(name)
+        supervisor_pid = read_supervisor_pid()
+        sg = _shadow_git(name, entry)
+        current_shadow_head = sg.current_head() if sg is not None else None
+        docs_cursor_head = state.get("last_shadow_commit")
+        shadow_cursor_pending = bool(current_shadow_head and current_shadow_head != docs_cursor_head)
+        source_error = None
+        if sg is None:
             changes = []
-            source_error = str(exc)
-    log_offset = int(state.get("project_log_offset") or 0)
-    log_size = _current_project_log_size(entry, project=name)
-    log_queue_pending = _pending_project_log_queue_count(name)
-    log_pending = max(0, log_size - min(log_offset, log_size))
-    stale = bool(req) or bool(changes) or shadow_cursor_pending or log_pending > 0 or log_queue_pending > 0
-    status_value = "stale" if stale else "fresh"
-    if source_error and not stale:
-        status_value = "error"
-    fresh = status_value == "fresh"
-    return {
-        "project": name,
-        "registered": True,
-        "status": status_value,
-        "fresh": fresh,
-        "source_root": entry.get("source_root"),
-        "canonical_path": entry.get("canonical_path"),
-        "source_error": source_error,
-        "pending_request": req,
-        "pending_source_changes": changes,
-        "pending_source_change_count": len(changes),
-        "current_shadow_head": current_shadow_head,
-        "docs_cursor_head": docs_cursor_head,
-        "shadow_cursor_pending": shadow_cursor_pending,
-        "project_log_offset": log_offset,
-        "project_log_cursor": log_offset,
-        "project_log_size": log_size,
-        "project_log_bytes_pending": log_pending,
-        "project_log_queue_pending": log_queue_pending,
-        "worker_pid": worker_pid,
-        "worker_heartbeat": worker_heartbeat,
-        "worker_log_path": str(log_path),
-        "worker_log_tail": read_worker_log_tail(name, max_lines=40),
-        "supervisor_pid": supervisor_pid,
-        "last_update_status": state.get("status"),
-        "last_update_started_at": state.get("last_started_at"),
-        "last_update_completed_at": state.get("last_completed_at"),
-        "last_update_error": state.get("last_error"),
-        "phase": state.get("phase"),
-        "progress": state.get("progress") or {},
-        "state": state,
-    }
+        else:
+            try:
+                changes = pending_source_changes(name, entry)
+            except RuntimeError as exc:
+                logger.warning("Project docs status source check failed for %s: %s", name, exc)
+                changes = []
+                source_error = str(exc)
+        log_offset = int(state.get("project_log_offset") or 0)
+        log_size = _current_project_log_size(entry, project=name)
+        log_queue_pending = _pending_project_log_queue_count(name)
+        log_pending = max(0, log_size - min(log_offset, log_size))
+        stale = bool(req) or bool(changes) or shadow_cursor_pending or log_pending > 0 or log_queue_pending > 0
+        status_value = "stale" if stale else "fresh"
+        if source_error and not stale:
+            status_value = "error"
+        fresh = status_value == "fresh"
+        return {
+            "project": name,
+            "registered": True,
+            "status": status_value,
+            "fresh": fresh,
+            "source_root": entry.get("source_root"),
+            "canonical_path": entry.get("canonical_path"),
+            "source_error": source_error,
+            "pending_request": req,
+            "pending_source_changes": changes,
+            "pending_source_change_count": len(changes),
+            "current_shadow_head": current_shadow_head,
+            "docs_cursor_head": docs_cursor_head,
+            "shadow_cursor_pending": shadow_cursor_pending,
+            "project_log_offset": log_offset,
+            "project_log_cursor": log_offset,
+            "project_log_size": log_size,
+            "project_log_bytes_pending": log_pending,
+            "project_log_queue_pending": log_queue_pending,
+            "worker_pid": worker_pid,
+            "worker_heartbeat": worker_heartbeat,
+            "worker_log_path": str(log_path),
+            "worker_log_tail": read_worker_log_tail(name, max_lines=40),
+            "supervisor_pid": supervisor_pid,
+            "last_update_status": state.get("status"),
+            "last_update_started_at": state.get("last_started_at"),
+            "last_update_completed_at": state.get("last_completed_at"),
+            "last_update_error": state.get("last_error"),
+            "phase": state.get("phase"),
+            "progress": state.get("progress") or {},
+            "state": state,
+        }
 
 
 def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
     name = validate_project_name(project)
     entry = get_project_entry(name)
-    sg = _shadow_git(name, entry)
-    source_error = None
-    if sg is None:
-        changes = []
-    else:
-        try:
-            changes = pending_source_changes(name, entry)
-        except RuntimeError as exc:
-            logger.warning("Project docs diff source check failed for %s: %s", name, exc)
+    with _project_runtime_context(entry):
+        sg = _shadow_git(name, entry)
+        source_error = None
+        if sg is None:
             changes = []
-            source_error = str(exc)
-    diff_text = ""
-    state = read_state(name)
-    docs_cursor_head = state.get("last_shadow_commit")
-    if sg is not None:
-        committed_snapshot = sg.committed_snapshot_since(docs_cursor_head)
-        if committed_snapshot is not None:
-            changes = [
-                {"status": c.status, "path": c.path, "old_path": c.old_path}
-                for c in committed_snapshot.changes
-            ] + changes
-            committed_diff = sg.committed_diff_since(docs_cursor_head, full=full) or ""
-            if committed_diff:
-                diff_text = committed_diff
-        try:
-            pending_diff = sg.pending_diff(full=full) or ""
-            if pending_diff:
-                diff_text = f"{diff_text}\n{pending_diff}".strip() if diff_text else pending_diff
-        except Exception as exc:
-            logger.exception("Failed reading pending source diff for project %s", name)
-            raise RuntimeError(f"failed to read pending source diff for {name}: {exc}") from exc
-    log_offset = int(state.get("project_log_offset") or 0)
-    log_lines, _, log_size = _read_project_log_since(entry, log_offset, project=name)
-    return {
-        "project": name,
-        "full": bool(full),
-        "changes": changes,
-        "change_count": len(changes),
-        "diff": diff_text,
-        "project_log_entries": log_lines,
-        "project_log_entry_count": len(log_lines),
-        "project_log_size": log_size,
-        "source_error": source_error,
-    }
+        else:
+            try:
+                changes = pending_source_changes(name, entry)
+            except RuntimeError as exc:
+                logger.warning("Project docs diff source check failed for %s: %s", name, exc)
+                changes = []
+                source_error = str(exc)
+        diff_text = ""
+        state = read_state(name)
+        docs_cursor_head = state.get("last_shadow_commit")
+        if sg is not None:
+            committed_snapshot = sg.committed_snapshot_since(docs_cursor_head)
+            if committed_snapshot is not None:
+                changes = [
+                    {"status": c.status, "path": c.path, "old_path": c.old_path}
+                    for c in committed_snapshot.changes
+                ] + changes
+                committed_diff = sg.committed_diff_since(docs_cursor_head, full=full) or ""
+                if committed_diff:
+                    diff_text = f"{diff_text}\n{committed_diff}".strip() if diff_text else committed_diff
+            try:
+                pending_diff = sg.pending_diff(full=full) or ""
+                if pending_diff:
+                    diff_text = f"{diff_text}\n{pending_diff}".strip() if diff_text else pending_diff
+            except Exception as exc:
+                logger.exception("Failed reading pending source diff for project %s", name)
+                raise RuntimeError(f"failed to read pending source diff for {name}: {exc}") from exc
+        log_offset = int(state.get("project_log_offset") or 0)
+        log_lines, _, log_size = _read_project_log_since(entry, log_offset, project=name)
+        return {
+            "project": name,
+            "full": bool(full),
+            "changes": changes,
+            "change_count": len(changes),
+            "diff": diff_text,
+            "project_log_entries": log_lines,
+            "project_log_entry_count": len(log_lines),
+            "project_log_size": log_size,
+            "source_error": source_error,
+        }
 
 
 def snapshot_project(project: str, entry: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -1154,67 +1220,68 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
         merge_state(name, {"status": "updating", "last_started_at": started, "last_error": None})
         merge_progress(name, "starting", "project-docs update started")
         try:
-            state = read_state(name)
-            log_offset = int(state.get("project_log_offset") or 0)
-            docs_cursor_head = state.get("last_shadow_commit")
-            merge_progress(name, "commit_project_log_queue", "committing queued PROJECT.log entries")
-            project_log_queue_metrics = _commit_queued_project_logs(name, dry_run=dry_run)
-            merge_progress(name, "read_project_log", "reading PROJECT.log cursor", project_log_offset=log_offset)
-            log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset, project=name)
-            merge_progress(name, "snapshot", "snapshotting source changes")
-            snapshot_project(name, entry)
-            snapshot = committed_shadow_snapshot_since_cursor(name, entry, docs_cursor_head)
-            snapshots = [snapshot] if snapshot else []
-            metrics: Dict[str, Any] = {
-                "projects_checked": 0,
-                "docs_updated": 0,
-                "docs_skipped": 0,
-                "trivial_skipped": 0,
-                "errors": 0,
-            }
-            registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
-            index_count = 0
-            project_log_index_count = 0
-            from core.docs_updater_hook import update_project_docs
-            from core.docs import updater as docs_updater
+            with _project_runtime_context(entry, request=request):
+                state = read_state(name)
+                log_offset = int(state.get("project_log_offset") or 0)
+                docs_cursor_head = state.get("last_shadow_commit")
+                merge_progress(name, "commit_project_log_queue", "committing queued PROJECT.log entries")
+                project_log_queue_metrics = _commit_queued_project_logs(name, dry_run=dry_run)
+                merge_progress(name, "read_project_log", "reading PROJECT.log cursor", project_log_offset=log_offset)
+                log_entries, _old_log_offset, log_size = _read_project_log_since(entry, log_offset, project=name)
+                merge_progress(name, "snapshot", "snapshotting source changes")
+                snapshot_project(name, entry)
+                snapshot = committed_shadow_snapshot_since_cursor(name, entry, docs_cursor_head)
+                snapshots = [snapshot] if snapshot else []
+                metrics: Dict[str, Any] = {
+                    "projects_checked": 0,
+                    "docs_updated": 0,
+                    "docs_skipped": 0,
+                    "trivial_skipped": 0,
+                    "errors": 0,
+                }
+                registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
+                index_count = 0
+                project_log_index_count = 0
+                from core.docs_updater_hook import update_project_docs
+                from core.docs import updater as docs_updater
 
-            if snapshots or log_entries or request:
-                merge_progress(
-                    name,
-                    "update_docs",
-                    "running project docs update",
-                    snapshot_changes=len((snapshot or {}).get("changes") or []),
-                    project_log_entries=len(log_entries),
-                    request_id=request_id,
-                )
-                metrics = update_project_docs(
-                    snapshots,
-                    extraction_result={"project_logs": {name: log_entries}},
-                    dry_run=dry_run,
-                    force_project=name,
-                )
-            if project_log_queue_metrics.get("errors"):
-                metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
-            metrics["project_log_queue"] = project_log_queue_metrics
-            if not dry_run:
-                merge_progress(name, "sync_registry", "syncing visible project docs registry")
-                registry_sync = sync_project_docs_registry(name, entry)
-                try:
-                    merge_progress(name, "index_docs", "indexing registered project docs")
-                    index_count = int(
-                        docs_updater.update_registered_docs(
-                            project=name,
-                            dry_run=False,
-                            protected_names={PROJECT_LOG},
-                            index_project_logs_after=False,
-                        ) or 0
+                if snapshots or log_entries or request:
+                    merge_progress(
+                        name,
+                        "update_docs",
+                        "running project docs update",
+                        snapshot_changes=len((snapshot or {}).get("changes") or []),
+                        project_log_entries=len(log_entries),
+                        request_id=request_id,
                     )
-                    project_log_index_count = int(docs_updater.index_project_logs(project=name) or 0)
-                except Exception as exc:
-                    if _fail_hard_enabled():
-                        raise
-                    metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1
-                    metrics["index_error"] = str(exc)
+                    metrics = update_project_docs(
+                        snapshots,
+                        extraction_result={"project_logs": {name: log_entries}},
+                        dry_run=dry_run,
+                        force_project=name,
+                    )
+                if project_log_queue_metrics.get("errors"):
+                    metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
+                metrics["project_log_queue"] = project_log_queue_metrics
+                if not dry_run:
+                    merge_progress(name, "sync_registry", "syncing visible project docs registry")
+                    registry_sync = sync_project_docs_registry(name, entry)
+                    try:
+                        merge_progress(name, "index_docs", "indexing registered project docs")
+                        index_count = int(
+                            docs_updater.update_registered_docs(
+                                project=name,
+                                dry_run=False,
+                                protected_names={PROJECT_LOG},
+                                index_project_logs_after=False,
+                            ) or 0
+                        )
+                        project_log_index_count = int(docs_updater.index_project_logs(project=name) or 0)
+                    except Exception as exc:
+                        if _fail_hard_enabled():
+                            raise
+                        metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1
+                        metrics["index_error"] = str(exc)
             completed = utc_now()
             next_state = {
                 "status": "fresh" if not metrics.get("errors") else "error",

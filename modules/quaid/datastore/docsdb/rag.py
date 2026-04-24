@@ -106,8 +106,8 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
     except Exception as exc:
         if is_fail_hard_enabled():
             raise RuntimeError("Failed to resolve current instance project scope for shared docs recall.") from exc
-        logger.warning("shared docs recall could not resolve active instance scope; failing closed: %s", exc)
-        return [], True
+        logger.warning("shared docs recall could not resolve active instance scope: %s", exc)
+        return [], False
 
 
 def _rag_config():

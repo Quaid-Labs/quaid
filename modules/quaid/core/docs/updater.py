@@ -112,24 +112,24 @@ def _project_log_paths(project: str | None = None) -> list[str]:
             raise
         return []
 
-    linked_projects, scope_resolved = _linked_projects_for_current_instance()
-    if not scope_resolved:
-        message = "cannot resolve instance linkage for PROJECT.log indexing"
-        if _fail_hard_enabled():
-            raise RuntimeError(message)
-        logger.warning(
-            "[project-docs] %s; skipping PROJECT.log indexing to avoid cross-instance contamination",
-            message,
-        )
-        return []
-    if project and str(project) not in linked_projects:
-        return []
-
     try:
         if project:
+            linked_projects, scope_resolved = _linked_projects_for_current_instance()
+            if scope_resolved and str(project) not in linked_projects:
+                return []
             entry = get_project(str(project))
             projects = {str(project): entry} if entry else {}
         else:
+            linked_projects, scope_resolved = _linked_projects_for_current_instance()
+            if not scope_resolved:
+                message = "cannot resolve instance linkage for PROJECT.log indexing"
+                if _fail_hard_enabled():
+                    raise RuntimeError(message)
+                logger.warning(
+                    "[project-docs] %s; skipping PROJECT.log indexing to avoid cross-instance contamination",
+                    message,
+                )
+                return []
             projects = list_projects()
             projects = {
                 name: entry

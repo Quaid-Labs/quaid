@@ -47,6 +47,50 @@ def test_request_update_writes_hidden_state(project_env):
     assert state["pending_request_id"] == request["request_id"]
 
 
+def test_request_update_records_runtime_context(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+
+    assert request["requested_instance"] == "codex-private-tmp-cdx-livetest"
+    assert request["requested_adapter_type"] == "codex"
+
+
+def test_project_runtime_context_uses_request_instance(monkeypatch):
+    from core import project_docs
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+
+    with project_docs._project_runtime_context(
+        {"instances": []},
+        request={"requested_instance": "claude-code-private-tmp-cc-livetest"},
+    ):
+        assert os.environ.get("QUAID_INSTANCE") == "claude-code-private-tmp-cc-livetest"
+        assert os.environ.get("QUAID_ADAPTER_TYPE") == "claude-code"
+
+    assert "QUAID_INSTANCE" not in os.environ
+    assert "QUAID_ADAPTER_TYPE" not in os.environ
+
+
+def test_project_runtime_context_uses_single_linked_instance(monkeypatch):
+    from core import project_docs
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+
+    with project_docs._project_runtime_context({"instances": ["codex-private-tmp-cdx-livetest"]}):
+        assert os.environ.get("QUAID_INSTANCE") == "codex-private-tmp-cdx-livetest"
+        assert os.environ.get("QUAID_ADAPTER_TYPE") == "codex"
+
+    assert "QUAID_INSTANCE" not in os.environ
+    assert "QUAID_ADAPTER_TYPE" not in os.environ
+
+
 def test_request_janitor_run_writes_hidden_state_and_blocks_parallel_requests(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     from core import project_docs
@@ -490,16 +534,29 @@ def test_index_project_logs_skips_when_instance_scope_unresolved(project_env, mo
     project_log = Path(entry["canonical_path"]) / "PROJECT.log"
     project_log.write_text("- [2026-04-20T00:00:00] Demo milestone\n", encoding="utf-8")
 
+    indexed = []
+
+    class FakeRag:
+        def needs_reindex_many(self, paths):
+            return {path: True for path in paths}
+
+        def index_document(self, file_path):
+            indexed.append(file_path)
+            return 1
+
     def should_not_discover_projects():
         raise AssertionError("PROJECT.log discovery should fail closed when scope is unresolved")
 
+    monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", FakeRag)
     monkeypatch.setattr(updater, "_linked_projects_for_current_instance", lambda: (set(), False))
     monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: False)
     monkeypatch.setattr("core.project_registry.list_projects", should_not_discover_projects)
+    monkeypatch.setattr("core.project_registry.get_project", lambda name: entry if name == "demo" else None)
     caplog.set_level(logging.WARNING, logger="core.docs.updater")
 
     assert updater.index_project_logs() == 0
-    assert updater.index_project_logs(project="demo") == 0
+    assert updater.index_project_logs(project="demo") == 1
+    assert indexed == [str(project_log.resolve())]
     assert "cross-instance contamination" in caplog.text
 
 
