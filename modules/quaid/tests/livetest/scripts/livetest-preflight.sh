@@ -8,7 +8,7 @@
 #   4. Upgrades platform CLIs on the remote
 #   5. Wipes Quaid from the remote (full wipe by default)
 #   6. Syncs the latest dev tree to the remote
-#   7. Injects the CC API key into remote ~/.claude/settings.json
+#   7. Seeds shared auth and OC Matrix channel config on the remote
 #   8. Starts platform services on the remote
 #
 # The remote host will have Quaid wiped and reinstalled repeatedly during a run.
@@ -722,6 +722,257 @@ PYEOF
             LOCAL_SHARED_TOKEN_TMP=""
             echo "  $PASS  shared auth credentials copied to remote ~/.quaid/shared/auth/credentials.json"
         fi
+    fi
+fi
+
+# --- Step 7c: Seed OC Matrix channel + helper config ---
+echo ""
+echo "[7c/8] Seeding OC Matrix config on remote..."
+OC_ENABLED="$(read_config platforms.oc.enabled)"
+if [[ "$OC_ENABLED" != "True" && "$OC_ENABLED" != "true" ]]; then
+    echo "  (skipped — OC platform not enabled in config)"
+elif [[ "$DRY_RUN" == "1" ]]; then
+    echo "  [dry-run] would read $REMOTE_HOST:~/matrix-local/matrix-credentials.json + matrix-room.json"
+    echo "            then write ~/.openclaw/openclaw.json channels.matrix and scripts/.matrix-config"
+else
+    MATRIX_SEED_OUTPUT="$(ssh "$REMOTE_HOST" python3 <<'PYEOF'
+import json
+import os
+import pathlib
+import urllib.parse
+
+
+def _read_json(path: pathlib.Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _extract_nested(mapping, *path):
+    current = mapping
+    for key in path:
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(key)
+    return current
+
+
+def _extract_first(mapping, *candidates):
+    for candidate in candidates:
+        if isinstance(candidate, tuple):
+            value = _extract_nested(mapping, *candidate)
+        else:
+            value = mapping.get(candidate) if isinstance(mapping, dict) else ""
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _merge_allowlist(existing, *values):
+    merged = []
+    seen = set()
+    for source in (existing or []), values:
+        for raw in source:
+            text = str(raw or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+    return merged
+
+
+def _is_private_homeserver(raw: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    if host.startswith("192.168.") or host.startswith("10.") or host.startswith("172.16.") or host.startswith("172.17.") or host.startswith("172.18.") or host.startswith("172.19.") or host.startswith("172.2") or host.startswith("172.30.") or host.startswith("172.31."):
+        return True
+    return False
+
+
+home = pathlib.Path.home()
+creds_path = home / "matrix-local" / "matrix-credentials.json"
+room_path = home / "matrix-local" / "matrix-room.json"
+openclaw_path = home / ".openclaw" / "openclaw.json"
+
+if not creds_path.exists():
+    raise SystemExit(f"missing Matrix credentials file: {creds_path}")
+if not room_path.exists():
+    raise SystemExit(f"missing Matrix room file: {room_path}")
+if not openclaw_path.exists():
+    raise SystemExit(f"missing OpenClaw config: {openclaw_path}")
+
+creds = _read_json(creds_path)
+room_cfg = _read_json(room_path)
+openclaw_cfg = _read_json(openclaw_path)
+
+homeserver = _extract_first(
+    creds,
+    "homeserver",
+    "homeserverUrl",
+    "baseUrl",
+    ("matrix", "homeserver"),
+    ("server", "url"),
+) or "http://127.0.0.1:8008"
+access_token = _extract_first(
+    creds,
+    "access_token",
+    "accessToken",
+    "token",
+    ("tokens", "access_token"),
+    ("tokens", "accessToken"),
+    ("auth", "access_token"),
+    ("auth", "accessToken"),
+)
+user_id = _extract_first(
+    creds,
+    "user_id",
+    "userId",
+    ("user", "id"),
+    ("account", "user_id"),
+)
+room_id = _extract_first(
+    room_cfg,
+    "room_id",
+    "roomId",
+    "id",
+    ("room", "room_id"),
+    ("room", "roomId"),
+)
+
+if not access_token:
+    raise SystemExit(f"could not extract Matrix access token from {creds_path}")
+if not room_id:
+    raise SystemExit(f"could not extract Matrix room id from {room_path}")
+
+plugins = openclaw_cfg.setdefault("plugins", {})
+allow = plugins.setdefault("allow", [])
+if not isinstance(allow, list):
+    allow = []
+    plugins["allow"] = allow
+if "matrix" not in allow:
+    allow.append("matrix")
+
+entries = plugins.setdefault("entries", {})
+if not isinstance(entries, dict):
+    entries = {}
+    plugins["entries"] = entries
+matrix_entry = entries.get("matrix")
+if not isinstance(matrix_entry, dict):
+    matrix_entry = {}
+entries["matrix"] = matrix_entry
+matrix_entry["enabled"] = True
+
+channels = openclaw_cfg.setdefault("channels", {})
+if not isinstance(channels, dict):
+    channels = {}
+    openclaw_cfg["channels"] = channels
+matrix_cfg = channels.get("matrix")
+if not isinstance(matrix_cfg, dict):
+    matrix_cfg = {}
+    channels["matrix"] = matrix_cfg
+
+matrix_cfg["enabled"] = True
+matrix_cfg["homeserver"] = homeserver.rstrip("/")
+matrix_cfg["accessToken"] = access_token
+if user_id:
+    matrix_cfg["userId"] = user_id
+if _is_private_homeserver(homeserver):
+    matrix_cfg["allowPrivateNetwork"] = True
+matrix_cfg["autoJoin"] = "allowlist"
+matrix_cfg["autoJoinAllowlist"] = _merge_allowlist(matrix_cfg.get("autoJoinAllowlist"), room_id)
+matrix_cfg["groupPolicy"] = "allowlist"
+matrix_cfg["groupAllowFrom"] = _merge_allowlist(
+    matrix_cfg.get("groupAllowFrom"),
+    "@quaid-test-bot:localhost",
+)
+dm_cfg = matrix_cfg.get("dm")
+if not isinstance(dm_cfg, dict):
+    dm_cfg = {}
+matrix_cfg["dm"] = dm_cfg
+dm_cfg["policy"] = "allowlist"
+dm_cfg["allowFrom"] = _merge_allowlist(
+    dm_cfg.get("allowFrom"),
+    "@quaid-test-bot:localhost",
+)
+groups_cfg = matrix_cfg.get("groups")
+if not isinstance(groups_cfg, dict):
+    groups_cfg = {}
+matrix_cfg["groups"] = groups_cfg
+room_entry = groups_cfg.get(room_id)
+if not isinstance(room_entry, dict):
+    room_entry = {}
+groups_cfg[room_id] = room_entry
+room_entry["enabled"] = True
+room_entry["allow"] = True
+room_entry["requireMention"] = False
+
+helper_paths = [
+    home / "quaidcode" / "dev" / "modules" / "quaid" / "tests" / "livetest" / "scripts" / ".matrix-config",
+    home / "quaidcode" / "util" / "scripts" / ".matrix-config",
+]
+
+
+def _write_text_atomic(path: pathlib.Path, content: str) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = ""
+    try:
+        current = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        current = ""
+    if current == content:
+        return False
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    path.chmod(0o600)
+    return True
+
+
+openclaw_json = json.dumps(openclaw_cfg, indent=2) + "\n"
+openclaw_changed = _write_text_atomic(openclaw_path, openclaw_json)
+
+helper_payload = (
+    f"MATRIX_HOMESERVER={homeserver.rstrip('/')}\n"
+    f"MATRIX_ACCESS_TOKEN={access_token}\n"
+    f"MATRIX_ROOM_ID={room_id}\n"
+)
+helper_changed = False
+for helper_path in helper_paths:
+    helper_changed = _write_text_atomic(helper_path, helper_payload) or helper_changed
+
+print(json.dumps({
+    "openclaw_changed": openclaw_changed,
+    "helper_changed": helper_changed,
+    "homeserver": homeserver.rstrip("/"),
+    "room_id": room_id,
+}))
+PYEOF
+)"
+    MATRIX_OPENCLAW_CHANGED="$(python3 -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("openclaw_changed") else "0")' "$MATRIX_SEED_OUTPUT")"
+    MATRIX_HELPER_CHANGED="$(python3 -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("helper_changed") else "0")' "$MATRIX_SEED_OUTPUT")"
+    MATRIX_ROOM_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("room_id",""))' "$MATRIX_SEED_OUTPUT")"
+    MATRIX_HOMESERVER="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("homeserver",""))' "$MATRIX_SEED_OUTPUT")"
+    if [[ "$MATRIX_OPENCLAW_CHANGED" == "1" || "$MATRIX_HELPER_CHANGED" == "1" ]]; then
+        echo "  $PASS  OC Matrix config seeded (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID)"
+    else
+        echo "  $PASS  OC Matrix config already present (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID)"
+    fi
+    if [[ "$MATRIX_OPENCLAW_CHANGED" == "1" ]]; then
+        ssh "$REMOTE_HOST" 'launchctl kickstart -k "gui/$(id -u)/ai.openclaw.gateway" >/dev/null 2>&1 || openclaw gateway restart >/dev/null 2>&1 || true'
+        echo "  $PASS  requested OpenClaw gateway restart to pick up channels.matrix changes"
     fi
 fi
 
