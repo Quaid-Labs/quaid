@@ -965,6 +965,27 @@ class TestClaudeCodeAdapter:
         assert "fresh-note" in context
         assert "stale-note" not in context
 
+    def test_pending_context_dedupes_identical_messages(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-dedupe")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"message": "repeat-note"}),
+                    json.dumps({"message": "repeat-note"}),
+                    json.dumps({"message": "other-note"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        context = adapter.get_pending_context()
+        assert context.count("repeat-note") == 1
+        assert context.count("other-note") == 1
+
     def test_parse_session_jsonl_strips_local_command_wrapper_blocks(self, tmp_path):
         path = tmp_path / "claude-local-command.jsonl"
         path.write_text(
@@ -1145,6 +1166,27 @@ class TestCodexAdapter:
         assert "MANDATORY: Quaid has active notices for the human user." in context
         assert "fresh-note" in context
         assert "stale-note" not in context
+
+    def test_pending_context_dedupes_identical_messages(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-dedupe")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"message": "repeat-note"}),
+                    json.dumps({"message": "repeat-note"}),
+                    json.dumps({"message": "other-note"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        context = adapter.get_pending_context()
+        assert context.count("repeat-note") == 1
+        assert context.count("other-note") == 1
 
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".codex" / "sessions"

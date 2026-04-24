@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Optional
 
 from lib.adapter import QuaidAdapter, read_env_file
-from lib.agent_notice import format_pending_notice_relay
+from lib.agent_notice import (
+    dedupe_pending_notice_messages,
+    format_pending_notice_relay,
+    pending_notice_source,
+)
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_id, instance_slug_from_project_dir
 
@@ -173,8 +177,12 @@ class CodexAdapter(QuaidAdapter):
         try:
             pending = self._pending_notifications_path()
             pending.parent.mkdir(parents=True, exist_ok=True)
+            entry_payload = {"message": message, "ts": _now_iso()}
+            source = pending_notice_source(message)
+            if source:
+                entry_payload["source"] = source
             with open(pending, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps({"message": message, "ts": _now_iso()}) + "\n")
+                handle.write(json.dumps(entry_payload) + "\n")
             _trace_m15(
                 "adapter.codex.notify.write",
                 path=str(pending),
@@ -236,6 +244,7 @@ class CodexAdapter(QuaidAdapter):
             _trace_m15("adapter.codex.pending.error", path=str(pending), error=str(exc))
             print(f"[notify] Failed to drain Codex notifications: {exc}", file=sys.stderr)
             return ""
+        messages = dedupe_pending_notice_messages(messages)
         if not messages:
             _trace_m15("adapter.codex.pending.empty_after_filter", path=str(pending))
             return ""

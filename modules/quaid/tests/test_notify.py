@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
+from lib.agent_notice import clear_pending_notices_by_source
 from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
@@ -501,6 +502,34 @@ class TestNotifyAgent:
         assert len(requests) == 1
         assert requests[0]["priority"] == "normal"
         assert "[Quaid warning] [janitor] janitor summary" in requests[0]["message"]
+
+    def test_clear_pending_notices_by_source_prunes_provider_rows(self, tmp_path, monkeypatch):
+        from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-clear-pending")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"message": "[Quaid error] [provider] invalid-model-a"}),
+                    json.dumps({"message": "[Quaid error] [llm_config] invalid-model-b"}),
+                    json.dumps({"message": "[Quaid warning] [janitor] nightly summary"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            removed = clear_pending_notices_by_source(sources={"provider", "llm_config"})
+
+        assert removed == 2
+        remaining = pending_path.read_text(encoding="utf-8")
+        assert "invalid-model-a" not in remaining
+        assert "invalid-model-b" not in remaining
+        assert "nightly summary" in remaining
 
 
 class TestDeferredNotifyCli:

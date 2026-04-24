@@ -181,6 +181,19 @@ _pricing_error_logged: bool = False
 _pricing_lock = threading.Lock()
 
 
+def reset_model_config_cache() -> None:
+    """Clear cached model/pricing state so it re-resolves from current config."""
+    global _models_loaded, _fast_reasoning_model, _deep_reasoning_model
+    global _pricing_loaded, _pricing_error_logged
+    with _model_config_lock:
+        _models_loaded = False
+        _fast_reasoning_model = ""
+        _deep_reasoning_model = ""
+    with _pricing_lock:
+        _pricing_loaded = False
+        _pricing_error_logged = False
+
+
 def _load_pricing():
     """Merge config pricing into the default table (once)."""
     global _pricing_loaded, _pricing_error_logged
@@ -717,6 +730,12 @@ def call_llm(system_prompt: str, user_message: str,
                 duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
                 response_preview=(result.text or "")[:1000],
             )
+            try:
+                from lib.agent_notice import clear_pending_notices_by_source
+
+                clear_pending_notices_by_source(sources={"provider", "llm_config"})
+            except Exception:
+                pass
             return result.text, result.duration
         except Exception as e:
             last_error = e

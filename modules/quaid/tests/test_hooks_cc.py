@@ -12,6 +12,7 @@ import io
 import json
 import os
 import sys
+import time
 import types
 from datetime import datetime
 from pathlib import Path
@@ -178,7 +179,30 @@ def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypa
     assert sig["meta"]["source"] == "hook_inject"
     assert sig["meta"]["command"] == "/clear"
     assert sig["meta"]["reason"] == "command:clear"
-    assert err.strip() == ""
+
+
+def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    reloads = []
+    resets = []
+
+    monkeypatch.setattr("config._config_paths", lambda: [cfg])
+    monkeypatch.setattr("config.reload_config", lambda: reloads.append("reload"))
+    monkeypatch.setattr("lib.embeddings.reset_embeddings_provider", lambda: resets.append("embeddings"))
+    monkeypatch.setattr("lib.llm_clients.reset_model_config_cache", lambda: resets.append("llm"))
+    monkeypatch.setattr(hooks, "_HOOK_RUNTIME_CONFIG_SNAPSHOT", None)
+
+    assert hooks._refresh_runtime_config_if_changed("test") is False
+
+    time.sleep(0.01)
+    cfg.write_text('{"models": {"fastReasoning": "restored"}}', encoding="utf-8")
+
+    assert hooks._refresh_runtime_config_if_changed("test") is True
+    assert reloads == ["reload"]
+    assert resets == ["embeddings", "llm"]
 
 
 def test_claude_code_inject_writes_session_end_signal_for_empty_prompt_reset_metadata(

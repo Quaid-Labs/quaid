@@ -197,7 +197,15 @@ def get_embedding(text: str, *, timeout_s: Optional[float] = None) -> Optional[L
 
     Set MOCK_EMBEDDINGS=1 to use deterministic fakes for testing.
     """
-    return _call_embed(get_embeddings_provider(), text, timeout_s)
+    result = _call_embed(get_embeddings_provider(), text, timeout_s)
+    if result is not None:
+        try:
+            from lib.agent_notice import clear_pending_notices_by_source
+
+            clear_pending_notices_by_source(sources={"embeddings"})
+        except Exception:
+            pass
+    return result
 
 
 def _embedding_parallel_workers(task_name: str = "embeddings", default: int = 4) -> int:
@@ -265,6 +273,12 @@ def get_embeddings(
         try:
             out = list(embed_many(unique_items))
             if len(out) == len(unique_items):
+                try:
+                    from lib.agent_notice import clear_pending_notices_by_source
+
+                    clear_pending_notices_by_source(sources={"embeddings"})
+                except Exception:
+                    pass
                 return _fan_out(out)
         except Exception:
             if not return_exceptions:
@@ -283,6 +297,13 @@ def get_embeddings(
         pool_name=pool_name,
         return_exceptions=return_exceptions,
     )
+    if any(result is not None and not isinstance(result, Exception) for result in unique_results):
+        try:
+            from lib.agent_notice import clear_pending_notices_by_source
+
+            clear_pending_notices_by_source(sources={"embeddings"})
+        except Exception:
+            pass
     return _fan_out(unique_results)
 
 

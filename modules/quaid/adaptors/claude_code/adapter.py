@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import Optional
 
 from lib.adapter import QuaidAdapter, read_env_file
-from lib.agent_notice import format_pending_notice_relay
+from lib.agent_notice import (
+    dedupe_pending_notice_messages,
+    format_pending_notice_relay,
+    pending_notice_source,
+)
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_slug_from_project_dir
 
@@ -124,7 +128,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
         try:
             pending = self._pending_notifications_path()
             pending.parent.mkdir(parents=True, exist_ok=True)
-            entry = json.dumps({"message": message, "ts": _now_iso()})
+            entry_payload = {"message": message, "ts": _now_iso()}
+            source = pending_notice_source(message)
+            if source:
+                entry_payload["source"] = source
+            entry = json.dumps(entry_payload)
             with open(pending, "a", encoding="utf-8") as f:
                 f.write(entry + "\n")
             _trace_m15(
@@ -193,7 +201,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
             _trace_m15("adapter.claude_code.pending.error", path=str(pending), error=str(e))
             print(f"[notify] Failed to drain pending notifications: {e}", file=sys.stderr)
 
-        notes = [m for m in messages if m]
+        notes = dedupe_pending_notice_messages(messages)
         if not notes:
             _trace_m15("adapter.claude_code.pending.empty_after_filter", path=str(pending))
             return ""

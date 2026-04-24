@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
+_HOOK_RUNTIME_CONFIG_SNAPSHOT: tuple[tuple[str, int], ...] | None = None
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -189,6 +190,82 @@ def _format_deferred_notice_relay(messages: List[str]) -> str:
         "Begin your next response by relaying each notice below in plain language, then answer the user's current message.\n\n"
         f"<quaid_system_message>\n{body}\n</quaid_system_message>"
     )
+
+
+def _runtime_config_snapshot() -> tuple[tuple[str, int], ...]:
+    try:
+        from config import _config_paths
+
+        snapshot: list[tuple[str, int]] = []
+        for raw_path in _config_paths():
+            path = Path(raw_path)
+            try:
+                mtime_ns = path.stat().st_mtime_ns if path.exists() else -1
+            except OSError:
+                mtime_ns = -1
+            snapshot.append((str(path), int(mtime_ns)))
+        return tuple(snapshot)
+    except Exception:
+        return tuple()
+
+
+def _reset_runtime_resolution_caches() -> None:
+    try:
+        from lib.embeddings import reset_embeddings_provider
+
+        reset_embeddings_provider()
+    except Exception:
+        pass
+    try:
+        from lib.llm_clients import reset_model_config_cache
+
+        reset_model_config_cache()
+    except Exception:
+        try:
+            import lib.llm_clients as llm_clients
+
+            llm_clients._models_loaded = False
+            llm_clients._fast_reasoning_model = ""
+            llm_clients._deep_reasoning_model = ""
+            llm_clients._pricing_loaded = False
+        except Exception:
+            pass
+
+
+def _refresh_runtime_config_if_changed(reason: str) -> bool:
+    global _HOOK_RUNTIME_CONFIG_SNAPSHOT
+    snapshot = _runtime_config_snapshot()
+    if not snapshot:
+        return False
+    if _HOOK_RUNTIME_CONFIG_SNAPSHOT is None:
+        _HOOK_RUNTIME_CONFIG_SNAPSHOT = snapshot
+        return False
+    if snapshot == _HOOK_RUNTIME_CONFIG_SNAPSHOT:
+        return False
+    try:
+        from config import reload_config
+
+        reload_config()
+        _reset_runtime_resolution_caches()
+    except Exception as exc:
+        _write_hook_trace(
+            "hook.runtime_config.reload_failed",
+            {
+                "reason": reason,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:500],
+            },
+        )
+        return False
+    _HOOK_RUNTIME_CONFIG_SNAPSHOT = snapshot
+    _write_hook_trace(
+        "hook.runtime_config.reloaded",
+        {
+            "reason": reason,
+            "paths": [path for path, _mtime in snapshot],
+        },
+    )
+    return True
 
 
 def _safe_agent_error(exc: Exception) -> str:
@@ -692,6 +769,7 @@ def hook_inject(args):
     except (json.JSONDecodeError, ValueError):
         return
     _ensure_hook_instance_ready(hook_input)
+    _refresh_runtime_config_if_changed("hook_inject")
 
     session_id = _extract_hook_session_id(hook_input)
     query = hook_input.get("prompt", "").strip()
@@ -1986,6 +2064,7 @@ def hook_session_init(args):
     except (json.JSONDecodeError, ValueError):
         hook_input = {}
     _ensure_hook_instance_ready(hook_input)
+    _refresh_runtime_config_if_changed("hook_session_init")
 
     current_session_id = _extract_hook_session_id(hook_input)
     _seed_turn_based_refresh_state(current_session_id)

@@ -4,6 +4,7 @@ import base64
 import contextlib
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ _STATE_FILE = "agent-notice-state.json"
 _DEFERRED_FILE = "delayed-llm-requests.json"
 _STATE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _MAX_DEFERRED_NOTICES = 500
+_NOTICE_SOURCE_RE = re.compile(r"^\s*\[Quaid(?: [^\]]+)?\]\s*\[([^\]]+)\]", flags=re.IGNORECASE)
 
 
 def _trace_m15(event: str, **fields: Any) -> None:
@@ -55,6 +57,28 @@ def format_pending_notice_relay(messages: list[str]) -> str:
         "then answer the user's current message.\n\n"
         f"<quaid_system_message>\n{body}\n</quaid_system_message>"
     )
+
+
+def pending_notice_source(message: str) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return ""
+    match = _NOTICE_SOURCE_RE.match(text)
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip().lower()
+
+
+def dedupe_pending_notice_messages(messages: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in list(messages or []):
+        message = str(raw or "").strip()
+        if not message or message in seen:
+            continue
+        seen.add(message)
+        deduped.append(message)
+    return deduped
 
 
 def _bypass_active_error_dedupe(*, severity: str, source: str) -> bool:
@@ -300,6 +324,73 @@ def notify_agent(
             logger.warning("Failed recording agent notice dedupe key=%s: %s", dedupe_token, exc)
 
     return ok
+
+
+def clear_pending_notices_by_source(*, sources: set[str] | list[str] | tuple[str, ...]) -> int:
+    target_sources = {
+        str(source or "").strip().lower()
+        for source in (sources or [])
+        if str(source or "").strip()
+    }
+    if not target_sources:
+        return 0
+
+    adapter = get_adapter()
+    pending_getter = getattr(adapter, "_pending_notifications_path", None)
+    if not callable(pending_getter):
+        return 0
+
+    try:
+        pending_path = Path(pending_getter())
+    except Exception as exc:
+        logger.warning("Failed resolving pending notification path: %s", exc)
+        return 0
+    if not pending_path.is_file():
+        return 0
+
+    removed = 0
+    kept_entries: list[dict[str, Any]] = []
+    malformed_lines: list[str] = []
+    try:
+        for raw_line in pending_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                malformed_lines.append(line)
+                continue
+            if not isinstance(entry, dict):
+                malformed_lines.append(line)
+                continue
+            message = str(entry.get("message") or "").strip()
+            entry_source = str(entry.get("source") or "").strip().lower() or pending_notice_source(message)
+            if entry_source in target_sources:
+                removed += 1
+                continue
+            kept_entries.append(entry)
+    except Exception as exc:
+        logger.warning("Failed reading pending notifications for cleanup: %s", exc)
+        return 0
+
+    if removed <= 0:
+        return 0
+
+    if kept_entries or malformed_lines:
+        rows = [json.dumps(entry, sort_keys=True) for entry in kept_entries] + malformed_lines
+        pending_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    else:
+        pending_path.unlink(missing_ok=True)
+    _trace_m15(
+        "agent_notice.pending.clear_by_source",
+        path=str(pending_path),
+        removed=removed,
+        kept=len(kept_entries),
+        malformed=len(malformed_lines),
+        sources=sorted(target_sources),
+    )
+    return removed
 
 
 def queue_deferred_notice(
