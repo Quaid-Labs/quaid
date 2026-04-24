@@ -28,6 +28,7 @@ PROJECT_LOG = "PROJECT.log"
 UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
 SUPERVISOR_ROLE = "project-docs-supervisor"
 WORKER_ROLE = "project-docs-worker"
+_DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
 
 logger = logging.getLogger(__name__)
 
@@ -1530,6 +1531,8 @@ def start_supervisor() -> int:
         log_path = supervisor_log_path()
         script = Path(__file__).parent / "project_docs_supervisor.py"
         env = dict(os.environ)
+        for key in _DB_OVERRIDE_ENV_KEYS:
+            env.pop(key, None)
         env["QUAID_HOME"] = str(get_quaid_home())
         env.pop("QUAID_INSTANCE", None)
         env["QUAID_SUPERVISOR_BOOT"] = "1"
@@ -1610,6 +1613,8 @@ def start_worker(project: str) -> int:
         log_path = worker_log_path(name)
         script = Path(__file__).parent / "project_docs_worker.py"
         env = dict(os.environ)
+        for key in _DB_OVERRIDE_ENV_KEYS:
+            env.pop(key, None)
         env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
         env["QUAID_PROJECT_DOCS_WORKER_TOKEN"] = uuid.uuid4().hex
         supervisor_pid = read_supervisor_pid()

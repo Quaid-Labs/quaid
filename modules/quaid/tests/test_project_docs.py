@@ -768,6 +768,11 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
             return None
 
     monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
+    monkeypatch.setenv(
+        "MEMORY_ARCHIVE_DB_PATH",
+        str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory_archive.db"),
+    )
     monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: None)
     monkeypatch.setattr(project_docs, "_matching_supervisor_pids", lambda **_kwargs: [11111, 22222])
     monkeypatch.setattr(project_docs, "_terminate_supervisor_pid", lambda pid, **_kwargs: terminated.append(pid))
@@ -778,7 +783,42 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     assert terminated == [11111, 22222]
     assert captured["env"]["QUAID_HOME"] == str(project_docs.get_quaid_home())
     assert "QUAID_INSTANCE" not in captured["env"]
+    assert "MEMORY_DB_PATH" not in captured["env"]
+    assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
     assert captured["env"]["QUAID_SUPERVISOR_BOOT"] == "1"
+
+
+def test_start_worker_strips_inherited_memory_db_overrides(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    captured = {}
+
+    class _FakePopen:
+        pid = 44444
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+        def poll(self):
+            return None
+
+    monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
+    monkeypatch.setenv(
+        "MEMORY_ARCHIVE_DB_PATH",
+        str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory_archive.db"),
+    )
+    monkeypatch.setattr(project_docs, "project_is_registered_for_worker", lambda _name: True)
+    monkeypatch.setattr(project_docs, "read_worker_pid", lambda _name: None)
+    monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: 12345)
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 44444)
+
+    assert project_docs.start_worker("demo") == 44444
+    assert "MEMORY_DB_PATH" not in captured["env"]
+    assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
+    assert captured["env"]["QUAID_SUPERVISOR_PID"] == "12345"
+    assert captured["env"]["QUAID_PROJECT_DOCS_WORKER_TOKEN"]
 
 
 def test_stop_supervisor_kills_pidfile_target_and_matching_orphans(project_env, monkeypatch):
