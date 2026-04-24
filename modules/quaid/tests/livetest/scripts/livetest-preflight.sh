@@ -818,6 +818,9 @@ homeserver = _extract_first(
 ) or "http://127.0.0.1:8008"
 access_token = _extract_first(
     creds,
+    ("openclaw-bot", "access_token"),
+    ("openclaw-bot", "accessToken"),
+    ("openclaw-bot", "token"),
     "access_token",
     "accessToken",
     "token",
@@ -880,6 +883,11 @@ matrix_cfg["accessToken"] = access_token
 if user_id:
     matrix_cfg["userId"] = user_id
 if _is_private_homeserver(homeserver):
+    network_cfg = matrix_cfg.get("network")
+    if not isinstance(network_cfg, dict):
+        network_cfg = {}
+        matrix_cfg["network"] = network_cfg
+    network_cfg["dangerouslyAllowPrivateNetwork"] = True
     matrix_cfg["allowPrivateNetwork"] = True
 matrix_cfg["autoJoin"] = "allowlist"
 matrix_cfg["autoJoinAllowlist"] = _merge_allowlist(matrix_cfg.get("autoJoinAllowlist"), room_id)
