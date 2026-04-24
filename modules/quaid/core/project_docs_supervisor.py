@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import project_docs
-from core.project_registry import is_misc_project_deleted, list_projects
+from core.project_registry import is_misc_project_deleted, list_projects, list_projects_raw
 from lib.instance import list_instances, quaid_home, validate_instance_id
 
 _STOP = False
@@ -228,6 +228,16 @@ def _stop_instance_monitor(instance: str) -> bool:
 
 def _janitor_check_interval_seconds() -> float:
     return _interval_from_env("QUAID_SUPERVISOR_JANITOR_CHECK_INTERVAL_SECONDS", 900.0)
+
+
+def _dispatcher_only_mode() -> bool:
+    return bool(os.environ.get("QUAID_SUPERVISOR_BOOT", "").strip()) or not bool(
+        os.environ.get("QUAID_INSTANCE", "").strip()
+    )
+
+
+def _supervisor_projects() -> Dict[str, Dict[str, object]]:
+    return list_projects_raw() if _dispatcher_only_mode() else list_projects()
 
 
 def _start_janitor_worker(instance: str) -> subprocess.Popen:
@@ -494,7 +504,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             logging.getLogger(__name__).warning("janitor worker tick failed: %s", exc)
             if _fail_hard_enabled():
                 raise
-        projects = list_projects()
+        projects = _supervisor_projects()
         live = set(projects.keys())
         stale_after = project_docs.worker_stale_after_seconds(interval)
         for project in sorted(live):
@@ -525,7 +535,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             except Exception:
                 pass
             known_workers.pop(project, None)
-        if now - last_auto_register_check > auto_register_interval:
+        if not _dispatcher_only_mode() and now - last_auto_register_check > auto_register_interval:
             try:
                 project_docs.auto_register_project_docs()
             except Exception as exc:
@@ -535,7 +545,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 if _fail_hard_enabled():
                     raise
             last_auto_register_check = now
-        if now - last_stale_doc_check > stale_doc_interval:
+        if not _dispatcher_only_mode() and now - last_stale_doc_check > stale_doc_interval:
             try:
                 project_docs.index_one_stale_registered_doc()
             except Exception as exc:

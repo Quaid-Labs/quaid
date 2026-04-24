@@ -44,6 +44,44 @@ def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatc
     assert started_janitors == ["alpha", "beta"]
 
 
+def test_supervisor_boot_mode_skips_docs_ticks_and_uses_raw_project_listing(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    calls: list[str] = []
+
+    monkeypatch.setenv("QUAID_SUPERVISOR_BOOT", "1")
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
+    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
+    monkeypatch.setattr(supervisor.project_docs, "reap_stale_worker", lambda _project, *, stale_after_seconds: False)
+    monkeypatch.setattr(supervisor.project_docs, "start_worker", lambda _project: 123)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "auto_register_project_docs",
+        lambda: (_ for _ in ()).throw(AssertionError("docs auto-register should be skipped")),
+    )
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "index_one_stale_registered_doc",
+        lambda: (_ for _ in ()).throw(AssertionError("stale-doc index should be skipped")),
+    )
+    monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
+    monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
+    monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        supervisor,
+        "list_projects",
+        lambda: (_ for _ in ()).throw(AssertionError("dispatcher boot should not reconcile projects")),
+    )
+    monkeypatch.setattr(supervisor, "list_projects_raw", lambda: calls.append("raw") or {"demo": {}})
+
+    assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
+    assert calls == ["raw"]
+
+
 def test_supervisor_stops_removed_instance_monitor(monkeypatch):
     from core import project_docs_supervisor as supervisor
 

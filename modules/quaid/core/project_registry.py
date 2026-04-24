@@ -399,6 +399,11 @@ def _reconcile_docs_registry_projects() -> None:
 def list_projects() -> Dict[str, Dict[str, Any]]:
     """Return all registered projects."""
     _reconcile_docs_registry_projects()
+    return list_projects_raw()
+
+
+def list_projects_raw() -> Dict[str, Dict[str, Any]]:
+    """Return registered projects without docs-registry reconciliation."""
     with _registry_lock():
         data = _load_registry()
         deleted = set((data.get("deleted_projects") or {}).keys())
