@@ -74,6 +74,12 @@ beacon?`. The agent answers from the doc.
 Phase 2 assumes PLATFORM1 has landed. PLATFORM2 links to the existing
 project rather than creating fresh.
 
+Important: before PLATFORM2 links it, `quaid project list/show` on
+PLATFORM2 may not display `livetest-agentmsg-xp` yet. That is normal. The
+Phase 2 action is for the agent to link the known shared project name and
+then use it. Do not fail early just because the unlinked PLATFORM2 instance
+cannot already list it.
+
 Ask the `PLATFORM2` agent naturally:
 
 - `Do you see the existing livetest-agentmsg-xp project? Can we add a doc`
@@ -89,6 +95,9 @@ ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 docs list --project livete
 ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 recall 'Ember Glass' \
   '{\"stores\":[\"docs\"],\"project\":\"livetest-agentmsg-xp\"}'"
 ```
+
+These checks run after the PLATFORM2 agent has linked the shared project and
+added the doc.
 
 Pass: PLATFORM2 uses the existing project rather than needing a new one;
 PLATFORM2 can add a doc and Quaid can recall it on that instance.
