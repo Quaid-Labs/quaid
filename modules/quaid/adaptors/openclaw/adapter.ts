@@ -3810,16 +3810,33 @@ const quaidPlugin = {
         const ctx = args?.[1];
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const messageCount = Array.isArray(event?.messages) ? event.messages.length : 0;
+        const ctxMessageCount = Array.isArray(ctx?.messages) ? ctx.messages.length : 0;
+        const eventMessageTextLen = String(
+          facade.getMessageText(event?.message || event) ||
+          event?.text ||
+          event?.content ||
+          "",
+        ).trim().length;
+        const bodyLen = String(event?.body || "").trim().length;
+        const cleanedBodyLen = String(event?.cleanedBody || "").trim().length;
+        const promptLen = String(event?.prompt || "").trim().length;
+        const cachedUserLen = String(lastUserMessageQuery?.text || "").trim().length;
         writeHookTrace("hook.debug.invoke", {
           registration_type: registrationType,
           hook_event: eventName,
           session_id: sessionId,
           message_count: messageCount,
+          ctx_message_count: ctxMessageCount,
+          event_message_text_len: eventMessageTextLen,
+          body_len: bodyLen,
+          cleaned_body_len: cleanedBodyLen,
+          prompt_len: promptLen,
+          cached_user_len: cachedUserLen,
           has_event: Boolean(event),
           has_ctx: Boolean(ctx),
         });
         console.log(
-          `[quaid][debug][hook.invoke] registration=${registrationType} event=${eventName} session=${sessionId || "unknown"} messages=${messageCount}`
+          `[quaid][debug][hook.invoke] registration=${registrationType} event=${eventName} session=${sessionId || "unknown"} messages=${messageCount} ctx_messages=${ctxMessageCount} event_text_len=${eventMessageTextLen} body_len=${bodyLen} cleaned_body_len=${cleanedBodyLen} prompt_len=${promptLen} cached_user_len=${cachedUserLen}`
         );
         try {
           const out = await handler(...args);
