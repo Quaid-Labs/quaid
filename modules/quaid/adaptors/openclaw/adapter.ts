@@ -1072,6 +1072,29 @@ function resolveSessionKeyForSessionId(sessionId: string): string {
   return "";
 }
 
+function resolveProjectDocsRefreshKey(event: any, ctx: any, fallbackSessionId = ""): string {
+  const directKey = firstNonEmptyString(
+    ctx?.sessionKey,
+    event?.sessionKey,
+    event?.targetSessionKey,
+    ctx?.session?.sessionKey,
+    event?.session?.sessionKey,
+    ctx?.context?.sessionKey,
+    event?.context?.sessionKey,
+  );
+  if (directKey) {
+    return directKey;
+  }
+  const sessionId = firstNonEmptyString(
+    ctx?.sessionId,
+    event?.sessionId,
+    ctx?.session?.id,
+    event?.session?.id,
+    fallbackSessionId,
+  );
+  return firstNonEmptyString(resolveSessionKeyForSessionId(sessionId), sessionId);
+}
+
 function firstNonEmptyString(...values: unknown[]): string {
   for (const value of values) {
     const text = String(value || "").trim();
@@ -3964,13 +3987,13 @@ notify_user(${JSON.stringify(message)})
     //      gated by a Set. Belongs in before_agent_start when OC adds support.
     //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
-    const maybeArmCompactionContextRefresh = (sessionId: string, source: string) => {
-      const sid = String(sessionId || "").trim();
-      if (!sid) return;
+    const maybeArmCompactionContextRefresh = (refreshKey: string, source: string) => {
+      const key = String(refreshKey || "").trim();
+      if (!key) return;
       if (getContextRefreshStrategy(getMemoryConfig()) !== "compaction") return;
-      const wasTracked = projectDocsInjectedSessions.delete(sid);
+      const wasTracked = projectDocsInjectedSessions.delete(key);
       writeHookTrace("hook.context_refresh.compaction_armed", {
-        session_id: sid,
+        refresh_key: key,
         source,
         was_tracked: wasTracked,
       });
@@ -4018,12 +4041,14 @@ notify_user(${JSON.stringify(message)})
         });
       }
       if (isSystemEnabled("projects")) {
-        const sessionKeyDocs = promptSessionId;
+        const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
         writeHookTrace("hook.docs_gate_check", {
           session_id: sessionKeyDocs,
           in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
           event_session_id: String(event?.sessionId || ""),
           ctx_session_id: String(ctx?.sessionId || ""),
+          event_session_key: String(event?.sessionKey || event?.targetSessionKey || ""),
+          ctx_session_key: String(ctx?.sessionKey || ""),
         });
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
@@ -5631,7 +5656,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (!sessionId || isInternalSessionContext(event, ctx)) {
           return;
         }
-        maybeArmCompactionContextRefresh(sessionId, "command:compact");
+        maybeArmCompactionContextRefresh(
+          resolveProjectDocsRefreshKey(event, ctx, sessionId),
+          "command:compact",
+        );
         if (!isSystemEnabled("memory")) {
           return;
         }
@@ -5693,7 +5721,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (!sessionId || isInternalSessionContext(event, ctx)) {
           return;
         }
-        maybeArmCompactionContextRefresh(sessionId, "session:compact:before");
+        maybeArmCompactionContextRefresh(
+          resolveProjectDocsRefreshKey(event, ctx, sessionId),
+          "session:compact:before",
+        );
         if (!isSystemEnabled("memory")) {
           return;
         }
@@ -6275,7 +6306,10 @@ notify_memory_extraction(
           || (conversationMessages.length === 0 ? fallbackInteractiveSessionId : "")
           || facade.extractSessionId(messages, ctx)
           || "";
-        maybeArmCompactionContextRefresh(extractionSessionId, "before_compaction");
+        maybeArmCompactionContextRefresh(
+          resolveProjectDocsRefreshKey(event, ctx, extractionSessionId),
+          "before_compaction",
+        );
         writeHookTrace("hook.before_compaction.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",

@@ -422,11 +422,15 @@ function deliverDeferredNoticesViaChannel(agentLabel, reason) {
   const instanceId = getInstanceId(agentLabel);
   const notifyScript = path.join(PYTHON_PLUGIN_ROOT, "core", "runtime", "notify.py");
   try {
-    const result = spawnSync(PYTHON_BIN, [notifyScript, "--deferred-deliver", "--limit", "50", "--json"], {
-      encoding: "utf8",
-      timeout: 3e4,
-      env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
-    });
+    const result = spawnSync(
+      PYTHON_BIN,
+      [notifyScript, "--deferred-deliver", "--limit", "50", "--json"],
+      {
+        encoding: "utf8",
+        timeout: 3e4,
+        env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
+      }
+    );
     if (result.error || result.status !== 0) {
       writeHookTrace("deferred_notice.delivery_error", {
         instance_id: instanceId,
@@ -779,6 +783,28 @@ function resolveSessionKeyForSessionId(sessionId) {
     }
   }
   return "";
+}
+function resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId = "") {
+  const directKey = firstNonEmptyString(
+    ctx?.sessionKey,
+    event?.sessionKey,
+    event?.targetSessionKey,
+    ctx?.session?.sessionKey,
+    event?.session?.sessionKey,
+    ctx?.context?.sessionKey,
+    event?.context?.sessionKey
+  );
+  if (directKey) {
+    return directKey;
+  }
+  const sessionId = firstNonEmptyString(
+    ctx?.sessionId,
+    event?.sessionId,
+    ctx?.session?.id,
+    event?.session?.id,
+    fallbackSessionId
+  );
+  return firstNonEmptyString(resolveSessionKeyForSessionId(sessionId), sessionId);
 }
 function firstNonEmptyString(...values) {
   for (const value of values) {
@@ -3174,13 +3200,13 @@ notify_user(${JSON.stringify(message)})
       return { prependContext: event.prependContext };
     };
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
-    const maybeArmCompactionContextRefresh = (sessionId, source) => {
-      const sid = String(sessionId || "").trim();
-      if (!sid) return;
+    const maybeArmCompactionContextRefresh = (refreshKey, source) => {
+      const key = String(refreshKey || "").trim();
+      if (!key) return;
       if (getContextRefreshStrategy(getMemoryConfig2()) !== "compaction") return;
-      const wasTracked = projectDocsInjectedSessions.delete(sid);
+      const wasTracked = projectDocsInjectedSessions.delete(key);
       writeHookTrace("hook.context_refresh.compaction_armed", {
-        session_id: sid,
+        refresh_key: key,
         source,
         was_tracked: wasTracked
       });
@@ -3216,12 +3242,14 @@ ${queuedStartupOverride}` : queuedStartupOverride;
         });
       }
       if (isSystemEnabled2("projects")) {
-        const sessionKeyDocs = promptSessionId;
+        const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
         writeHookTrace("hook.docs_gate_check", {
           session_id: sessionKeyDocs,
           in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
           event_session_id: String(event?.sessionId || ""),
-          ctx_session_id: String(ctx?.sessionId || "")
+          ctx_session_id: String(ctx?.sessionId || ""),
+          event_session_key: String(event?.sessionKey || event?.targetSessionKey || ""),
+          ctx_session_key: String(ctx?.sessionKey || "")
         });
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
@@ -4525,7 +4553,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (!sessionId || isInternalSessionContext(event, ctx)) {
           return;
         }
-        maybeArmCompactionContextRefresh(sessionId, "command:compact");
+        maybeArmCompactionContextRefresh(
+          resolveProjectDocsRefreshKey(event, ctx, sessionId),
+          "command:compact"
+        );
         if (!isSystemEnabled2("memory")) {
           return;
         }
@@ -4587,7 +4618,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (!sessionId || isInternalSessionContext(event, ctx)) {
           return;
         }
-        maybeArmCompactionContextRefresh(sessionId, "session:compact:before");
+        maybeArmCompactionContextRefresh(
+          resolveProjectDocsRefreshKey(event, ctx, sessionId),
+          "session:compact:before"
+        );
         if (!isSystemEnabled2("memory")) {
           return;
         }
@@ -5074,7 +5108,10 @@ notify_memory_extraction(
         const conversationMessages = facade.filterConversationMessages(messages);
         const fallbackInteractiveSessionId = currentInteractiveSession?.sessionId || "";
         const extractionSessionId = sessionId || (conversationMessages.length === 0 ? fallbackInteractiveSessionId : "") || facade.extractSessionId(messages, ctx) || "";
-        maybeArmCompactionContextRefresh(extractionSessionId, "before_compaction");
+        maybeArmCompactionContextRefresh(
+          resolveProjectDocsRefreshKey(event, ctx, extractionSessionId),
+          "before_compaction"
+        );
         writeHookTrace("hook.before_compaction.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",

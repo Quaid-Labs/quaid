@@ -837,4 +837,105 @@ describe("openclaw deferred notices", () => {
     error.mockRestore();
     removeTempDir(fixture.home);
   });
+
+  it("re-arms project context injection when before_compaction uses a different session id on the same session key", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-compaction-refresh-key-home-",
+      "openclaw-main",
+      "[Quaid] compaction refresh session-key fixture",
+    );
+    fs.writeFileSync(
+      path.join(fixture.visibleHome, "projects", "quaid", "TOOLS.md"),
+      "# TOOLS\nCompaction refresh canary: mortimer-fern\n",
+      "utf8",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const beforeCompactionCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforeCompactionCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const beforeCompactionHandler = beforeCompactionCall?.[1];
+    const sessionKey = "agent:main:matrix:room-mortimer";
+    const promptCtx = {
+      sessionId: "session-visible-room",
+      sessionKey,
+      agentId: "main",
+      trigger: "user",
+    };
+
+    const first = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "first",
+        messages: [{ role: "user", content: "first" }],
+        sessionId: promptCtx.sessionId,
+        sessionKey,
+      },
+      promptCtx,
+    );
+    expect(combinedSystemContext(first)).toContain("Compaction refresh canary: mortimer-fern");
+
+    const second = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "second",
+        messages: [{ role: "user", content: "second" }],
+        sessionId: promptCtx.sessionId,
+        sessionKey,
+      },
+      promptCtx,
+    );
+    expect(combinedSystemContext(second)).not.toContain("Compaction refresh canary: mortimer-fern");
+
+    await beforeCompactionHandler(
+      {
+        messages: [],
+        sessionId: "session-compaction-worker",
+        sessionKey,
+      },
+      {
+        sessionId: "session-compaction-worker",
+        sessionKey,
+        agentId: "main",
+        trigger: "system",
+      },
+    );
+
+    const third = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "third",
+        messages: [{ role: "user", content: "third" }],
+        sessionId: promptCtx.sessionId,
+        sessionKey,
+      },
+      promptCtx,
+    );
+    expect(combinedSystemContext(third)).toContain("Compaction refresh canary: mortimer-fern");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
 });
