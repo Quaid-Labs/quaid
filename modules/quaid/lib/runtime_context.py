@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from lib.adapter import get_adapter
+from lib.adapter import get_adapter, peek_adapter
 from lib.agent_notice import (
     deliver_deferred_notices as _deliver_deferred_notices,
     drain_deferred_notices as _drain_deferred_notices,
@@ -77,12 +77,19 @@ def get_adapter_instance() -> "QuaidAdapter":
     return get_adapter()
 
 
+def _active_adapter_instance() -> "QuaidAdapter | None":
+    return peek_adapter()
+
+
 def get_workspace_dir() -> Path:
     """Return the active hidden instance root directory.
 
     This is the per-instance hidden silo (QUAID_HOME/instances/QUAID_INSTANCE),
     not the visible root. Config, data, logs, and runtime state resolve here.
     """
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.instance_root()
     env_root = _env_instance_root()
     if env_root is not None:
         return env_root
@@ -94,6 +101,9 @@ def get_workspace_dir() -> Path:
 
 def get_quaid_home() -> Path:
     """Return the hidden QUAID_HOME root (not the per-instance silo)."""
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.quaid_home()
     env_home = _env_quaid_home()
     if env_home is not None:
         return env_home
@@ -101,6 +111,9 @@ def get_quaid_home() -> Path:
 
 
 def get_visible_workspace_dir() -> Path:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.visible_instance_root()
     env_root = _env_visible_instance_root()
     if env_root is not None:
         return env_root
@@ -111,6 +124,9 @@ def get_visible_workspace_dir() -> Path:
 
 
 def get_visible_quaid_home() -> Path:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.visible_home()
     env_home = _env_visible_quaid_home()
     if env_home is not None:
         return env_home

@@ -1870,6 +1870,11 @@ def get_adapter() -> QuaidAdapter:
     return adapter
 
 
+def peek_adapter() -> Optional[QuaidAdapter]:
+    """Return the currently installed adapter singleton without resolving one."""
+    return _adapter
+
+
 def _bootstrap_instance_env(adapter: QuaidAdapter) -> None:
     """Set QUAID_INSTANCE from adapter.get_instance_name() if not already set.
 
