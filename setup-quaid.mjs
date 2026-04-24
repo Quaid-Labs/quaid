@@ -37,6 +37,7 @@ import {
 } from "./lib/install-config-hydration.mjs";
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
+import { sanitizeOpenClawNativeMemoryPlugins } from "./lib/openclaw-plugin-sanitizer.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 import {
   SHARED_AUTH_KIND_LABELS,
@@ -2585,6 +2586,39 @@ function _ensureOpenClawDefaultAgentModel() {
   }
 }
 
+function _sanitizeOpenClawNativeMemoryPlugins() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    return !!sanitizeOpenClawNativeMemoryPlugins(cfgPath).changed;
+  } catch {
+    return false;
+  }
+}
+
+async function _reassertOpenClawPostRestartState(context = "gateway restart") {
+  if (!_isPlatform("openclaw")) return false;
+  const cli = canRun("openclaw") ? "openclaw" : "";
+  if (!cli) return false;
+
+  const changedBits = [];
+  if (_ensureOpenClawPluginsAllowQuaid()) changedBits.push("plugins.allow");
+  if (_sanitizeOpenClawNativeMemoryPlugins()) changedBits.push("native-memory-plugins");
+  if (_sanitizeOpenClawQuaidPluginEntry()) changedBits.push("plugins.entries.quaid");
+
+  if (changedBits.length === 0) return false;
+
+  log.info(
+    `Re-sanitized OpenClaw config after ${context}: ${changedBits.join(", ")}. Restarting gateway to apply changes.`,
+  );
+  const restartRes = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
+  if (restartRes.status !== 0) {
+    const msg = renderCliFailure(restartRes, 30_000);
+    log.warn(`gateway restart after ${context} re-sanitize exited non-zero: ${msg || "unknown"}`);
+  }
+  await waitForGatewayWarmup(30_000);
+  return true;
+}
+
 function _registerOpenClawQuaidPlugin(pluginPath) {
   const cli = canRun("openclaw") ? "openclaw" : "";
   if (!cli) return { ok: false, reason: "OpenClaw CLI not found" };
@@ -4564,6 +4598,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       const restart = spawnSync("openclaw", ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
         await waitForGatewayWarmup(30_000);
+        await _reassertOpenClawPostRestartState("runtime env reconcile");
       } else {
         log.warn("OpenClaw gateway restart after runtime env reconcile failed.");
       }
@@ -4798,11 +4833,15 @@ except Exception as e:
       log.info("Reconciled ai.openclaw.gateway launch agent env for Quaid");
     }
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 60_000);
+    await _reassertOpenClawPostRestartState("plugin registration");
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-registration sanitizer", 60_000);
     s.message("Finalizing OpenClaw hook configuration...");
     enableRequiredOpenClawHooks();
     // enableRequiredOpenClawHooks writes openclaw.json directly, which may trigger a gateway
     // config reload. Give the gateway time to settle before proceeding.
     await waitForGatewayWarmup(30_000);
+    await _reassertOpenClawPostRestartState("hook configuration");
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
     s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
 

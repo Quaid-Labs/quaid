@@ -182,6 +182,7 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const runtimeEnvReconciled = _ensureOpenClawRuntimeInstanceEnv(resolvedInstanceId);");
     expect(setupText).toContain("Reconciled OpenClaw runtime instance env to");
     expect(setupText).toContain('spawnSync("openclaw", ["gateway", "restart"]');
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("runtime env reconcile");');
   });
 
   it("OpenClaw add-instance reconciles plugin registration and fails loudly if still missing", () => {
@@ -259,6 +260,19 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("Dirent.isDirectory() and does not follow");
     expect(setupText).toContain("_copyOpenClawPluginSource(stagedPluginPath, extensionDir);");
     expect(setupText).toContain("failed to provision extension directory");
+  });
+
+  it("OpenClaw installer re-sanitizes native memory plugins after gateway reloads", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain('import { sanitizeOpenClawNativeMemoryPlugins } from "./lib/openclaw-plugin-sanitizer.mjs";');
+    expect(setupText).toContain("function _sanitizeOpenClawNativeMemoryPlugins()");
+    expect(setupText).toContain("async function _reassertOpenClawPostRestartState(context = \"gateway restart\")");
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration");');
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration");');
+    expect(setupText).toContain("native-memory-plugins");
+    expect(setupText).toContain("Restarting gateway to apply changes.");
   });
 
   it("OpenClaw shared config seeds transcript mirror prefixes for lean instance layering", () => {
