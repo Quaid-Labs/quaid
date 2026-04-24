@@ -607,27 +607,57 @@ def _adapter_type_from_instance_name(instance_name: str) -> str:
 def _project_runtime_hints(entry: Dict[str, Any], request: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str]]:
     from lib.instance import validate_instance_id
 
-    chosen_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip() or str(
-        (request or {}).get("requested_instance") or ""
-    ).strip()
-    if not chosen_instance:
-        linked_instances: List[str] = []
-        for raw in list(entry.get("instances") or []):
-            try:
-                linked_instances.append(validate_instance_id(str(raw or "").strip()))
-            except Exception:
-                continue
-        linked_instances = sorted(set(linked_instances))
-        if len(linked_instances) == 1:
-            chosen_instance = linked_instances[0]
+    linked_instances: List[str] = []
+    for raw in list(entry.get("instances") or []):
+        try:
+            linked_instances.append(validate_instance_id(str(raw or "").strip()))
+        except Exception:
+            continue
+    linked_instances = sorted(set(linked_instances))
 
-    chosen_adapter = str(os.environ.get("QUAID_ADAPTER_TYPE", "") or "").strip().lower() or str(
-        (request or {}).get("requested_adapter_type") or ""
-    ).strip().lower()
+    requested_instance = str((request or {}).get("requested_instance") or "").strip()
+    ambient_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    chosen_instance = requested_instance or (linked_instances[0] if len(linked_instances) == 1 else "") or ambient_instance
+
+    chosen_adapter = str((request or {}).get("requested_adapter_type") or "").strip().lower()
+    if not chosen_adapter and chosen_instance:
+        chosen_adapter = _adapter_type_from_instance_name(chosen_instance)
+    if not chosen_adapter:
+        chosen_adapter = str(os.environ.get("QUAID_ADAPTER_TYPE", "") or "").strip().lower()
     if not chosen_adapter and chosen_instance:
         chosen_adapter = _adapter_type_from_instance_name(chosen_instance)
 
     return (chosen_instance or None, chosen_adapter or None)
+
+
+def _cross_instance_db_override_owner(raw_path: Optional[str], *, target_instance: Optional[str]) -> Optional[str]:
+    path_text = str(raw_path or "").strip()
+    instance = str(target_instance or "").strip()
+    if not path_text or not instance or path_text == ":memory:":
+        return None
+    home = get_quaid_home()
+    try:
+        rel = Path(path_text).expanduser().resolve(strict=False).relative_to(
+            (home / "instances").resolve(strict=False)
+        )
+    except (OSError, ValueError):
+        return None
+    parts = rel.parts
+    if len(parts) < 3 or parts[1] != "data":
+        return None
+    owner = str(parts[0] or "").strip()
+    if not owner or owner == instance:
+        return None
+    if parts[2] not in {
+        "memory.db",
+        "memory.sqlite",
+        "memory.sqlite3",
+        "memory_archive.db",
+        "memory_archive.sqlite",
+        "memory_archive.sqlite3",
+    }:
+        return None
+    return owner
 
 
 @contextlib.contextmanager
@@ -635,11 +665,18 @@ def _project_runtime_context(entry: Dict[str, Any], request: Optional[Dict[str, 
     chosen_instance, chosen_adapter = _project_runtime_hints(entry, request=request)
     original_instance = os.environ.get("QUAID_INSTANCE")
     original_adapter = os.environ.get("QUAID_ADAPTER_TYPE")
+    cleared_overrides: Dict[str, str] = {}
     try:
-        if original_instance is None and chosen_instance:
+        if chosen_instance:
             os.environ["QUAID_INSTANCE"] = chosen_instance
-        if original_adapter is None and chosen_adapter:
+        if chosen_adapter:
             os.environ["QUAID_ADAPTER_TYPE"] = chosen_adapter
+        effective_instance = chosen_instance or original_instance
+        for key in _DB_OVERRIDE_ENV_KEYS:
+            raw = os.environ.get(key)
+            if _cross_instance_db_override_owner(raw, target_instance=effective_instance):
+                cleared_overrides[key] = str(raw)
+                os.environ.pop(key, None)
         yield
     finally:
         if original_instance is None:
@@ -650,13 +687,20 @@ def _project_runtime_context(entry: Dict[str, Any], request: Optional[Dict[str, 
             os.environ.pop("QUAID_ADAPTER_TYPE", None)
         elif chosen_adapter is not None:
             os.environ["QUAID_ADAPTER_TYPE"] = original_adapter
+        for key, value in cleared_overrides.items():
+            os.environ[key] = value
 
 
 def request_update(project: str, *, reason: str = "manual", requested_by: str = "cli") -> Dict[str, Any]:
     """Persist an async force-update request for a project docs worker."""
     name = validate_project_name(project)
     entry = get_project_entry(name)
-    requested_instance, requested_adapter_type = _project_runtime_hints(entry)
+    requested_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    requested_adapter_type = str(os.environ.get("QUAID_ADAPTER_TYPE", "") or "").strip().lower()
+    if not requested_instance:
+        requested_instance, requested_adapter_type = _project_runtime_hints(entry)
+    elif not requested_adapter_type:
+        requested_adapter_type = _adapter_type_from_instance_name(requested_instance)
     req = {
         "project": name,
         "request_id": f"{int(time.time() * 1000)}-{os.getpid()}",

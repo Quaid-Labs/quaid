@@ -91,6 +91,40 @@ def test_project_runtime_context_uses_single_linked_instance(monkeypatch):
     assert "QUAID_ADAPTER_TYPE" not in os.environ
 
 
+def test_project_runtime_context_overrides_ambient_instance(monkeypatch):
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
+
+    with project_docs._project_runtime_context({"instances": ["codex-private-tmp-cdx-livetest"]}):
+        assert os.environ.get("QUAID_INSTANCE") == "codex-private-tmp-cdx-livetest"
+        assert os.environ.get("QUAID_ADAPTER_TYPE") == "codex"
+
+    assert os.environ.get("QUAID_INSTANCE") == "openclaw-main"
+    assert os.environ.get("QUAID_ADAPTER_TYPE") == "openclaw"
+
+
+def test_project_runtime_context_clears_cross_instance_db_overrides(monkeypatch, tmp_path):
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
+    foreign_db = tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"
+    foreign_archive = tmp_path / "instances" / "openclaw-main" / "data" / "memory_archive.db"
+    monkeypatch.setenv("MEMORY_DB_PATH", str(foreign_db))
+    monkeypatch.setenv("MEMORY_ARCHIVE_DB_PATH", str(foreign_archive))
+
+    with project_docs._project_runtime_context({"instances": ["codex-private-tmp-cdx-livetest"]}):
+        assert os.environ.get("QUAID_INSTANCE") == "codex-private-tmp-cdx-livetest"
+        assert "MEMORY_DB_PATH" not in os.environ
+        assert "MEMORY_ARCHIVE_DB_PATH" not in os.environ
+
+    assert os.environ.get("MEMORY_DB_PATH") == str(foreign_db)
+    assert os.environ.get("MEMORY_ARCHIVE_DB_PATH") == str(foreign_archive)
+
+
 def test_request_janitor_run_writes_hidden_state_and_blocks_parallel_requests(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     from core import project_docs
