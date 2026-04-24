@@ -231,6 +231,10 @@ def _janitor_check_interval_seconds() -> float:
 
 
 def _start_janitor_worker(instance: str) -> subprocess.Popen:
+    return _spawn_janitor_worker(instance, command="scheduler-once")
+
+
+def _spawn_janitor_worker(instance: str, *, command: str) -> subprocess.Popen:
     name = validate_instance_id(instance)
     if _instance_misc_project_deleted(name):
         raise RuntimeError(f"refusing to start janitor worker for deleted misc instance {name}")
@@ -240,13 +244,127 @@ def _start_janitor_worker(instance: str) -> subprocess.Popen:
     env = _instance_child_env(name)
     with _janitor_worker_log_path(name).open("ab") as log_fh:
         return subprocess.Popen(
-            [sys.executable, str(script), "scheduler-once"],
+            [sys.executable, str(script), str(command)],
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
             start_new_session=False,
             env=env,
         )
+
+
+def _requested_janitor_instances(request: Dict[str, object]) -> tuple[list[str], list[str]]:
+    live, inactive = _live_instances_for_supervisor()
+    all_instances = set(list_instances())
+    scope = str(request.get("scope") or "all").strip().lower()
+    if scope == "instance":
+        raw = validate_instance_id(str(request.get("instance") or ""))
+        if raw in live:
+            return [raw], []
+        if raw in inactive:
+            return [], [f"instance {raw} is disabled or deleted"]
+        if raw in all_instances:
+            return [], [f"instance {raw} is not eligible for janitor"]
+        return [], [f"instance {raw} was not found"]
+    return sorted(live), []
+
+
+def _start_requested_janitor_run(
+    request: Dict[str, object],
+    scheduled_workers: Dict[str, subprocess.Popen],
+    on_demand_workers: Dict[str, subprocess.Popen],
+) -> Dict[str, object] | None:
+    targets, errors = _requested_janitor_instances(request)
+    worker_pids: Dict[str, int] = {}
+    started_instances: list[str] = []
+    request_errors = list(errors)
+    for instance in targets:
+        scheduled = scheduled_workers.get(instance)
+        if scheduled is not None and scheduled.poll() is None:
+            request_errors.append(f"instance {instance} already has a scheduled janitor worker")
+            continue
+        try:
+            proc = _spawn_janitor_worker(instance, command="run-all-once")
+            on_demand_workers[instance] = proc
+            started_instances.append(instance)
+            worker_pids[instance] = int(getattr(proc, "pid", 0) or 0)
+        except Exception as exc:
+            request_errors.append(f"failed to start janitor worker for {instance}: {exc}")
+            if _fail_hard_enabled():
+                raise RuntimeError(f"failed to start janitor worker for {instance}") from exc
+    payload = dict(request)
+    payload["instances"] = targets
+    payload["started_instances"] = started_instances
+    payload["worker_pids"] = worker_pids
+    payload["errors"] = request_errors
+    payload["started_at"] = project_docs.utc_now()
+    payload["completed_at"] = None
+    payload["exit_codes"] = {}
+    if on_demand_workers:
+        payload["status"] = "running"
+        project_docs.write_janitor_request(payload)
+        return {
+            "request_id": payload.get("request_id"),
+            "errors": list(request_errors),
+            "targets": list(targets),
+            "started_instances": list(started_instances),
+        }
+    payload["status"] = "failed" if request_errors else "completed"
+    payload["completed_at"] = project_docs.utc_now()
+    project_docs.write_janitor_request(payload)
+    return None
+
+
+def _maintain_on_demand_janitor_request(
+    active_request: Dict[str, object] | None,
+    scheduled_workers: Dict[str, subprocess.Popen],
+    on_demand_workers: Dict[str, subprocess.Popen],
+) -> Dict[str, object] | None:
+    if active_request is None:
+        request = project_docs.read_janitor_request()
+        if not request:
+            return None
+        status = str(request.get("status") or "").strip().lower()
+        if status == "running":
+            payload = dict(request)
+            errors = list(payload.get("errors") or [])
+            errors.append("supervisor restarted before janitor request completed")
+            payload["errors"] = errors
+            payload["status"] = "failed"
+            payload["completed_at"] = project_docs.utc_now()
+            project_docs.write_janitor_request(payload)
+            return None
+        if status != "pending":
+            return None
+        return _start_requested_janitor_run(request, scheduled_workers, on_demand_workers)
+
+    exit_codes: Dict[str, int] = {}
+    all_done = True
+    for instance, proc in list(on_demand_workers.items()):
+        code = proc.poll()
+        if code is None:
+            all_done = False
+            continue
+        exit_codes[instance] = int(code)
+        on_demand_workers.pop(instance, None)
+        project_docs.reap_child_processes()
+    if not all_done:
+        return active_request
+
+    request_id = str(active_request.get("request_id") or "").strip()
+    payload = project_docs.read_janitor_request() or {}
+    if str(payload.get("request_id") or "").strip() != request_id:
+        payload = {"request_id": request_id}
+    errors = list(active_request.get("errors") or [])
+    for instance, code in exit_codes.items():
+        if code != 0:
+            errors.append(f"instance {instance} janitor exited rc={code}")
+    payload["status"] = "failed" if errors else "completed"
+    payload["completed_at"] = project_docs.utc_now()
+    payload["errors"] = errors
+    payload["exit_codes"] = {str(k): int(v) for k, v in sorted(exit_codes.items())}
+    project_docs.write_janitor_request(payload)
+    return None
 
 
 def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
@@ -278,7 +396,9 @@ def _maintain_janitor_workers(
     *,
     now: float,
     check_interval: float,
+    busy_instances: set[str] | None = None,
 ) -> None:
+    busy = set(busy_instances or ())
     live, inactive_instances = _live_instances_for_supervisor()
     for instance, proc in list(janitor_workers.items()):
         if instance in inactive_instances:
@@ -290,6 +410,8 @@ def _maintain_janitor_workers(
             janitor_workers.pop(instance, None)
             project_docs.reap_child_processes()
     for instance in sorted(live):
+        if instance in busy:
+            continue
         proc = janitor_workers.get(instance)
         if proc is not None and proc.poll() is None:
             continue
@@ -327,6 +449,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
     known_workers: Dict[str, int] = {}
     known_instances: Dict[str, int] = {}
     janitor_workers: Dict[str, subprocess.Popen] = {}
+    on_demand_janitor_workers: Dict[str, subprocess.Popen] = {}
+    active_janitor_request: Dict[str, object] | None = None
     last_janitor_checks: Dict[str, float] = {}
     last_stale_doc_check = 0.0
     last_auto_register_check = 0.0
@@ -345,11 +469,24 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             if _fail_hard_enabled():
                 raise
         try:
+            active_janitor_request = _maintain_on_demand_janitor_request(
+                active_janitor_request,
+                janitor_workers,
+                on_demand_janitor_workers,
+            )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning("janitor request tick failed: %s", exc)
+            if _fail_hard_enabled():
+                raise
+        try:
             _maintain_janitor_workers(
                 janitor_workers,
                 last_janitor_checks,
                 now=now,
                 check_interval=janitor_check_interval,
+                busy_instances=set(on_demand_janitor_workers.keys()),
             )
         except Exception as exc:
             import logging
@@ -426,6 +563,18 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
     for proc in list(janitor_workers.values()):
         project_docs._terminate_process(proc)
         project_docs.reap_child_processes()
+    for proc in list(on_demand_janitor_workers.values()):
+        project_docs._terminate_process(proc)
+        project_docs.reap_child_processes()
+    if active_janitor_request is not None:
+        payload = project_docs.read_janitor_request() or {}
+        if str(payload.get("request_id") or "").strip() == str(active_janitor_request.get("request_id") or "").strip():
+            errors = list(payload.get("errors") or [])
+            errors.append("supervisor stopped before janitor request completed")
+            payload["errors"] = errors
+            payload["status"] = "failed"
+            payload["completed_at"] = project_docs.utc_now()
+            project_docs.write_janitor_request(payload)
     project_docs.clear_supervisor_pid_for_current_process()
     return 0
 

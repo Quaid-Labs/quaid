@@ -122,6 +122,10 @@ def supervisor_log_path() -> Path:
     return supervisor_dir() / "supervisor.log"
 
 
+def janitor_request_path() -> Path:
+    return supervisor_dir() / "janitor-request.json"
+
+
 def instance_monitor_disabled_dir() -> Path:
     return project_docs_root() / "instance-monitors-disabled"
 
@@ -638,6 +642,73 @@ def wait_for_request(project: str, request_id: str, *, timeout_seconds: float = 
             return state
         time.sleep(0.25)
     raise TimeoutError(f"Timed out waiting for project docs update request {request_id}")
+
+
+def read_janitor_request() -> Optional[Dict[str, Any]]:
+    req = _read_json(janitor_request_path(), None)
+    return req if isinstance(req, dict) else None
+
+
+def write_janitor_request(request: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(request or {})
+    payload["updated_at"] = utc_now()
+    _atomic_write_json(janitor_request_path(), payload)
+    return payload
+
+
+def clear_janitor_request(request_id: Optional[str] = None) -> None:
+    req = read_janitor_request()
+    if request_id and req and req.get("request_id") != request_id:
+        return
+    try:
+        janitor_request_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def request_janitor_run(
+    *,
+    instance: Optional[str] = None,
+    reason: str = "manual",
+    requested_by: str = "cli",
+) -> Dict[str, Any]:
+    """Persist an async supervisor-owned janitor request."""
+    from lib.instance import validate_instance_id
+
+    with _exclusive_file_lock(_spawn_lock_path("janitor-request")):
+        existing = read_janitor_request()
+        if existing and str(existing.get("status") or "").strip() in {"pending", "running"}:
+            raise RuntimeError(
+                "Janitor request already in progress "
+                f"({existing.get('request_id') or 'unknown request'})"
+            )
+        req = {
+            "request_id": f"{int(time.time() * 1000)}-{os.getpid()}",
+            "requested_at": utc_now(),
+            "requested_by": str(requested_by or "cli").strip() or "cli",
+            "reason": str(reason or "manual").strip() or "manual",
+            "scope": "instance" if instance else "all",
+            "instance": validate_instance_id(instance) if instance else None,
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "exit_codes": {},
+            "errors": [],
+        }
+        return write_janitor_request(req)
+
+
+def wait_for_janitor_request(request_id: str, *, timeout_seconds: float = 300.0) -> Dict[str, Any]:
+    deadline = time.time() + max(0.1, float(timeout_seconds))
+    while time.time() < deadline:
+        req = read_janitor_request()
+        if req and req.get("request_id") == request_id and str(req.get("status") or "").strip() in {
+            "completed",
+            "failed",
+        }:
+            return req
+        time.sleep(0.25)
+    raise TimeoutError(f"Timed out waiting for janitor request {request_id}")
 
 
 def _shadow_git(project: str, entry: Dict[str, Any]):

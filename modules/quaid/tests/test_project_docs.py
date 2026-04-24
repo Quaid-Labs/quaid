@@ -47,6 +47,45 @@ def test_request_update_writes_hidden_state(project_env):
     assert state["pending_request_id"] == request["request_id"]
 
 
+def test_request_janitor_run_writes_hidden_state_and_blocks_parallel_requests(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    from core import project_docs
+
+    request = project_docs.request_janitor_run(instance="alpha", reason="manual-test", requested_by="pytest")
+
+    assert request["scope"] == "instance"
+    assert request["instance"] == "alpha"
+    request_file = tmp_path / "data" / "project-docs" / "supervisor" / "janitor-request.json"
+    payload = json.loads(request_file.read_text(encoding="utf-8"))
+    assert payload["request_id"] == request["request_id"]
+    assert payload["status"] == "pending"
+
+    with pytest.raises(RuntimeError, match="already in progress"):
+        project_docs.request_janitor_run(reason="second-request", requested_by="pytest")
+
+
+def test_wait_for_janitor_request_returns_final_record(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    from core import project_docs
+
+    request = project_docs.request_janitor_run(reason="manual-test", requested_by="pytest")
+    project_docs.write_janitor_request(
+        {
+            **request,
+            "status": "completed",
+            "started_at": project_docs.utc_now(),
+            "completed_at": project_docs.utc_now(),
+            "exit_codes": {"alpha": 0},
+            "errors": [],
+        }
+    )
+
+    result = project_docs.wait_for_janitor_request(request["request_id"], timeout_seconds=0.5)
+
+    assert result["status"] == "completed"
+    assert result["exit_codes"] == {"alpha": 0}
+
+
 def test_status_and_diff_report_pending_source_change(project_env):
     _tmp_path, src, _entry = project_env
     from core import project_docs

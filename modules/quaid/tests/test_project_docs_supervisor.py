@@ -235,6 +235,77 @@ def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, 
     assert env["QUAID_INSTANCE"] == "claude-code-private-tmp-cc-livetest"
 
 
+def test_start_requested_janitor_run_starts_all_live_instances(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    starts = []
+
+    class _RunningProc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def poll(self):
+            return None
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: ["alpha", "beta"])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(
+        supervisor,
+        "_spawn_janitor_worker",
+        lambda name, *, command: starts.append((name, command)) or _RunningProc(100 + len(starts)),
+    )
+
+    request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
+    active = supervisor._maintain_on_demand_janitor_request(None, {}, {})
+
+    assert active is not None
+    assert starts == [("alpha", "run-all-once"), ("beta", "run-all-once")]
+    payload = project_docs.read_janitor_request()
+    assert payload["request_id"] == request["request_id"]
+    assert payload["status"] == "running"
+    assert payload["started_instances"] == ["alpha", "beta"]
+
+
+def test_requested_janitor_run_completes_single_instance(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    starts = []
+
+    class _DoneProc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: ["alpha", "beta"])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+    monkeypatch.setattr(
+        supervisor,
+        "_spawn_janitor_worker",
+        lambda name, *, command: starts.append((name, command)) or _DoneProc(321),
+    )
+
+    request = project_docs.request_janitor_run(instance="beta", reason="pytest", requested_by="pytest")
+    workers: dict[str, subprocess.Popen] = {}
+    active = supervisor._maintain_on_demand_janitor_request(None, {}, workers)
+    active = supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+
+    assert active is None
+    assert starts == [("beta", "run-all-once")]
+    payload = project_docs.read_janitor_request()
+    assert payload["request_id"] == request["request_id"]
+    assert payload["status"] == "completed"
+    assert payload["exit_codes"] == {"beta": 0}
+
+
 def test_start_janitor_worker_refuses_disabled_instance(monkeypatch):
     from core import project_docs_supervisor as supervisor
 

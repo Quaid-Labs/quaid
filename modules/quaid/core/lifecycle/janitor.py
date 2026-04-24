@@ -1752,8 +1752,50 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         "applied_changes": applied_changes
     }
 
+def _supervisor_janitor_wait_timeout_seconds() -> float:
+    return float(max(300, int(MAX_EXECUTION_TIME) + 60))
 
-if __name__ == "__main__":
+
+def _can_route_supervisor_janitor(args: argparse.Namespace, *, dry_run: bool) -> bool:
+    return (
+        str(getattr(args, "task", "") or "").strip() == "all"
+        and not bool(dry_run)
+        and not bool(getattr(args, "full_scan", False))
+        and not bool(getattr(args, "force_distill", False))
+        and int(getattr(args, "time_budget", 0) or 0) == 0
+        and getattr(args, "token_budget", None) is None
+        and int(getattr(args, "stage_item_cap", 0) or 0) == 0
+        and not bool(getattr(args, "no_resume_checkpoint", False))
+    )
+
+
+def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
+    from core import project_docs
+
+    supervisor_pid = project_docs.ensure_supervisor_alive()
+    request = project_docs.request_janitor_run(
+        instance=instance,
+        reason="janitor-cli-apply",
+        requested_by="janitor-cli",
+    )
+    scope = f"instance {instance}" if instance else "all live instances"
+    print(f"[janitor] Queued supervisor-owned janitor request for {scope}")
+    print(f"[janitor] Request ID: {request['request_id']}")
+    print(f"[janitor] Supervisor PID: {supervisor_pid}")
+    result = project_docs.wait_for_janitor_request(
+        request["request_id"],
+        timeout_seconds=_supervisor_janitor_wait_timeout_seconds(),
+    )
+    status = str(result.get("status") or "unknown").strip() or "unknown"
+    print(f"[janitor] Request status: {status}")
+    errors = list(result.get("errors") or [])
+    if errors:
+        for error in errors:
+            print(f"[janitor] Error: {error}", file=sys.stderr)
+    return 0 if status == "completed" else 1
+
+
+def main(argv: Optional[List[str]] = None) -> int:
     _refresh_runtime_state()
     parser = argparse.ArgumentParser(description="Memory Janitor (Optimized)")
     parser.add_argument("--task", choices=JANITOR_TASK_CHOICES,
@@ -1761,6 +1803,12 @@ if __name__ == "__main__":
     parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
     parser.add_argument("--approve", action="store_true",
                         help="Confirm apply when janitor.applyMode is set to 'ask'")
+    parser.add_argument(
+        "--instance",
+        type=str,
+        default="",
+        help="Run supervisor-owned janitor for one instance (requires --task all --apply)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Report only, no changes (default)")
     parser.add_argument("--full-scan", action="store_true", help="Force full scan instead of incremental")
     parser.add_argument("--force-distill", action="store_true",
@@ -1782,7 +1830,7 @@ if __name__ == "__main__":
         help="Disable janitor checkpoint resume behavior for this run."
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Resolve token budget precedence: CLI > config > environment fallback.
     try:
@@ -1814,6 +1862,16 @@ if __name__ == "__main__":
     dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
     if apply_policy_warning:
         print(f"[policy] {apply_policy_warning}")
+    requested_instance = str(getattr(args, "instance", "") or "").strip()
+    if requested_instance and not _can_route_supervisor_janitor(args, dry_run=dry_run):
+        print(
+            "Error: --instance requires the supervisor-owned path "
+            "(use --task all --apply without extra janitor override flags).",
+            file=sys.stderr,
+        )
+        return 1
+    if _can_route_supervisor_janitor(args, dry_run=dry_run):
+        return _run_supervisor_janitor_request(instance=requested_instance or None)
     incremental = not args.full_scan
 
     result = run_task_optimized(args.task, dry_run=dry_run, incremental=incremental,
@@ -1853,4 +1911,8 @@ if __name__ == "__main__":
         pass
 
     # Exit with error code if janitor failed
-    exit(0 if result["success"] else 1)
+    return 0 if result["success"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

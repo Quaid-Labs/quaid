@@ -85,7 +85,7 @@ Additional hygiene:
 - Do not use hidden helper wrappers for agent interaction. Use the visible tmux pane so the pathway the user would use is the pathway under test.
 - Lower model cost before testing: try the fast tier first, step up only if quality is too degraded to run the test reliably.
 - Send ISSUE messages only when something breaks or the environment is unclear. Routine milestone status goes via STATUS. After a fix, re-run the failed milestone — never mark it done without re-verification.
-- For live testing, `quaid janitor --apply --approve` is pre-approved; run it directly if a milestone or docs/RAG verification needs it.
+- For live testing, `quaid janitor --apply --approve` is pre-approved; run it directly if a milestone or docs/RAG verification needs it. On current main, the `--task all --apply` shape routes through the supervisor-owned multi-instance path by default.
 - For capability tests, speak to the platform agent like a real user would. Do not spoon-feed function names or CLI subcommands unless the milestone is explicitly testing a slash command (`/new`, `/clear`, `/reset`, `/compact`).
 
 ---

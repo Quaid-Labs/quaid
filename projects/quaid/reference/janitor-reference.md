@@ -40,8 +40,12 @@ eligibility tick, and exits. If the supervisor disappears while a janitor worker
 is active, the worker exits through its supervisor watchdog.
 
 Manual `quaid janitor ...` commands still run the janitor directly for
-operator-initiated maintenance. The automatic background path should be treated
-as supervisor-owned.
+operator-initiated maintenance except for the `--task all --apply` path. That
+default maintenance command now queues a supervisor-owned immediate janitor
+request so it runs across all live instances with the same instance isolation
+rules as the scheduled path. `quaid janitor --task all --apply --instance
+<name>` uses the same supervisor path but scopes it to one instance. Other
+task-specific or dry-run janitor invocations still execute directly.
 
 ## Concurrency Lock
 

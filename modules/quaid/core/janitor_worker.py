@@ -63,16 +63,26 @@ def run_scheduler_once() -> int:
     return 0
 
 
+def run_all_once() -> int:
+    from core.lifecycle.janitor import run_task_optimized
+
+    result = run_task_optimized(task="all", dry_run=False)
+    return 0 if bool(result.get("success")) else 1
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
     parser = argparse.ArgumentParser(description="Quaid supervisor-owned janitor worker")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("scheduler-once", help="Run one scheduled janitor eligibility tick")
+    sub.add_parser("run-all-once", help="Run one immediate janitor maintenance pass")
     args = parser.parse_args()
     _start_supervisor_watchdog()
     if args.command == "scheduler-once":
         raise SystemExit(run_scheduler_once())
+    if args.command == "run-all-once":
+        raise SystemExit(run_all_once())
     parser.print_help()
     raise SystemExit(1)
 
