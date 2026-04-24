@@ -1715,6 +1715,19 @@ def _index_append_only_project_logs(
     return count
 
 
+def _resolve_cli_project_log_indexer() -> Optional[Callable[..., int]]:
+    """Resolve the core-owned PROJECT.log indexer for CLI entrypoints."""
+    try:
+        from core.docs import updater as core_updater
+
+        return core_updater.index_project_logs
+    except Exception as exc:
+        logger.warning("Failed loading PROJECT.log indexer for docs update CLI: %s", exc)
+        if is_fail_hard_enabled():
+            raise
+        return None
+
+
 def cmd_update_from_transcript(transcript_path: str, dry_run: bool = True, max_docs: int = 3) -> int:
     """CLI: update docs from a conversation transcript. Returns count updated."""
     transcript_file = Path(transcript_path)
@@ -2155,7 +2168,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
     registry.register("docs_cleanup", _run_docs_cleanup)
 
 
-if __name__ == "__main__":
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Documentation Auto-Updater")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -2201,40 +2214,53 @@ if __name__ == "__main__":
     cleanup_parser.add_argument("doc_path", nargs="?", help="Specific doc to clean (optional)")
     cleanup_parser.add_argument("--apply", action="store_true", help="Apply changes")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
-        sys.exit(1)
+        return 1
 
     if args.command == "check":
         cmd_check(json_output=args.json)
+        return 0
     elif args.command == "update":
         dry_run = not args.apply
         cmd_update(args.doc_path, dry_run=dry_run)
-        sys.exit(0)
+        return 0
     elif args.command == "update-stale":
         dry_run = not args.apply
-        cmd_update_stale(dry_run=dry_run, trivial_only=args.trivial_only,
-                         project=getattr(args, "project", None))
-        sys.exit(0)
+        cmd_update_stale(
+            dry_run=dry_run,
+            trivial_only=args.trivial_only,
+            project=getattr(args, "project", None),
+            project_log_indexer=_resolve_cli_project_log_indexer(),
+        )
+        return 0
     elif args.command == "update-from-transcript":
         dry_run = not args.apply
         count = cmd_update_from_transcript(
             args.transcript, dry_run=dry_run, max_docs=args.max_docs
         )
-        sys.exit(0 if count > 0 else 1)
+        return 0 if count > 0 else 1
     elif args.command == "changelog":
         cmd_changelog(limit=args.limit, json_output=args.json)
+        return 0
     elif args.command == "cleanup-check":
         cmd_cleanup_check(json_output=args.json)
+        return 0
     elif args.command == "classify-change":
         if args.diff:
             diff_text = args.diff
         else:
             diff_text = sys.stdin.read()
         cmd_classify_change(diff_text)
+        return 0
     elif args.command == "cleanup":
         dry_run = not args.apply
         count = cmd_cleanup(doc_path=args.doc_path, dry_run=dry_run)
-        sys.exit(0 if count > 0 else 1)
+        return 0 if count > 0 else 1
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -945,6 +945,28 @@ class TestCmdUpdateStaleNeverIndexed:
             assert count == 1
             assert indexed_projects == ["quaid"]
 
+    def test_update_stale_cli_main_wires_project_log_indexer(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            captured = {}
+
+            def fake_cmd_update_stale(**kwargs):
+                captured.update(kwargs)
+                return 0
+
+            sentinel_indexer = object()
+            monkeypatch.setattr(updater, "cmd_update_stale", fake_cmd_update_stale)
+            monkeypatch.setattr(updater, "_resolve_cli_project_log_indexer", lambda: sentinel_indexer)
+
+            rc = updater.main(["update-stale", "--apply", "--project", "quaid"])
+
+            assert rc == 0
+            assert captured["dry_run"] is False
+            assert captured["trivial_only"] is False
+            assert captured["project"] == "quaid"
+            assert captured["project_log_indexer"] is sentinel_indexer
+
     def test_reindexes_registry_doc_when_timestamp_exists_but_chunks_are_missing(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
             from datastore.docsdb import updater
