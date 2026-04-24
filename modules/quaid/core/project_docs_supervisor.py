@@ -400,6 +400,8 @@ def _maintain_on_demand_janitor_request(
 
 def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
     live, inactive_instances = _live_instances_for_supervisor()
+    from core import extraction_daemon as _extraction_daemon
+
     for instance in sorted(inactive_instances):
         try:
             _stop_instance_monitor(instance)
@@ -408,6 +410,20 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
         known_instances.pop(instance, None)
     for instance in sorted(live):
         pid = _read_instance_daemon_pid(instance)
+        matching = _extraction_daemon._matching_daemon_pids(quaid_home=quaid_home(), instance=instance)
+        if pid is not None and len(matching) > 1:
+            logging.getLogger(__name__).warning(
+                "reconciling duplicate extraction daemons for %s: pidfile=%s matches=%s",
+                instance,
+                pid,
+                ",".join(str(match) for match in matching),
+            )
+            try:
+                _stop_instance_monitor(instance)
+            except Exception:
+                pass
+            known_instances.pop(instance, None)
+            pid = None
         if pid is None:
             pid = _start_instance_monitor(instance)
         known_instances[instance] = pid

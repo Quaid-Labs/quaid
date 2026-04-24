@@ -249,6 +249,27 @@ def test_stop_instance_monitor_kills_pidfile_target_and_matching_orphans(monkeyp
     assert terminated == [111, 222]
 
 
+def test_maintain_instance_monitors_reconciles_duplicate_live_daemons(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+    from core import extraction_daemon
+
+    started = []
+    stopped = []
+    known = {"codex-private-tmp-cdx-livetest": 8452}
+
+    monkeypatch.setattr(supervisor, "_live_instances_for_supervisor", lambda: ({"codex-private-tmp-cdx-livetest"}, set()))
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: 8452)
+    monkeypatch.setattr(supervisor, "_start_instance_monitor", lambda name: started.append(name) or 9001)
+    monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda name: stopped.append(name) or True)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [8424, 8452])
+
+    supervisor._maintain_instance_monitors(known)
+
+    assert stopped == ["codex-private-tmp-cdx-livetest"]
+    assert started == ["codex-private-tmp-cdx-livetest"]
+    assert known == {"codex-private-tmp-cdx-livetest": 9001}
+
+
 def test_wait_for_instance_pid_accepts_concurrent_live_monitor(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
