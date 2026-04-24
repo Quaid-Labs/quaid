@@ -83,3 +83,31 @@ def test_get_deferred_notice_status_passes_through_options():
 
     mock_status.assert_called_once_with(limit=7, include_items=True)
     assert payload["pending_count"] == 1
+
+
+def test_runtime_context_uses_env_homes_without_adapter(monkeypatch, tmp_path):
+    from lib import runtime_context
+
+    hidden = tmp_path / ".quaid"
+    visible = tmp_path / "quaid"
+    monkeypatch.setenv("QUAID_HOME", str(hidden))
+    monkeypatch.delenv("QUAID_VISIBLE_HOME", raising=False)
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+    with patch.object(runtime_context, "get_adapter", side_effect=AssertionError("adapter should not be used")):
+        assert runtime_context.get_quaid_home() == hidden.resolve()
+        assert runtime_context.get_visible_quaid_home() == visible.resolve()
+
+
+def test_runtime_context_uses_env_instance_roots_without_adapter(monkeypatch, tmp_path):
+    from lib import runtime_context
+
+    hidden = tmp_path / ".quaid"
+    visible = tmp_path / "quaid"
+    monkeypatch.setenv("QUAID_HOME", str(hidden))
+    monkeypatch.delenv("QUAID_VISIBLE_HOME", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "alpha")
+
+    with patch.object(runtime_context, "get_adapter", side_effect=AssertionError("adapter should not be used")):
+        assert runtime_context.get_workspace_dir() == (hidden / "instances" / "alpha").resolve()
+        assert runtime_context.get_visible_workspace_dir() == (visible / "instances" / "alpha").resolve()

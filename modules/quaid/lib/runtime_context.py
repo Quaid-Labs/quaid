@@ -7,6 +7,7 @@ datastore, and ingestor code does not import adapter internals directly.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -37,6 +38,40 @@ def _trace_m15(event: str, **fields) -> None:
         pass
 
 
+def _env_quaid_home() -> Path | None:
+    raw = str(os.environ.get("QUAID_HOME", "") or "").strip()
+    return Path(raw).expanduser().resolve() if raw else None
+
+
+def _env_visible_quaid_home() -> Path | None:
+    explicit = str(os.environ.get("QUAID_VISIBLE_HOME", "") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    hidden = _env_quaid_home()
+    if hidden is None:
+        return None
+    name = hidden.name
+    if name.startswith(".") and len(name) > 1:
+        return hidden.with_name(name[1:])
+    return hidden
+
+
+def _env_instance_root() -> Path | None:
+    hidden = _env_quaid_home()
+    instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    if hidden is None or not instance:
+        return None
+    return hidden / "instances" / instance
+
+
+def _env_visible_instance_root() -> Path | None:
+    visible = _env_visible_quaid_home()
+    instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    if visible is None or not instance:
+        return None
+    return visible / "instances" / instance
+
+
 def get_adapter_instance() -> "QuaidAdapter":
     return get_adapter()
 
@@ -47,19 +82,37 @@ def get_workspace_dir() -> Path:
     This is the per-instance hidden silo (QUAID_HOME/instances/QUAID_INSTANCE),
     not the visible root. Config, data, logs, and runtime state resolve here.
     """
+    env_root = _env_instance_root()
+    if env_root is not None:
+        return env_root
+    env_home = _env_quaid_home()
+    if env_home is not None:
+        return env_home
     return get_adapter().instance_root()
 
 
 def get_quaid_home() -> Path:
     """Return the hidden QUAID_HOME root (not the per-instance silo)."""
+    env_home = _env_quaid_home()
+    if env_home is not None:
+        return env_home
     return get_adapter().quaid_home()
 
 
 def get_visible_workspace_dir() -> Path:
+    env_root = _env_visible_instance_root()
+    if env_root is not None:
+        return env_root
+    env_home = _env_visible_quaid_home()
+    if env_home is not None:
+        return env_home
     return get_adapter().visible_instance_root()
 
 
 def get_visible_quaid_home() -> Path:
+    env_home = _env_visible_quaid_home()
+    if env_home is not None:
+        return env_home
     return get_adapter().visible_home()
 
 
