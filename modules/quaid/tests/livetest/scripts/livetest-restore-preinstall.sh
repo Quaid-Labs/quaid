@@ -143,8 +143,6 @@ rsync -a --checksum \
     --exclude='.ruff_cache/' --exclude='pytest-home/' \
     --exclude='release-promote-compatibility-work-*/' \
     --exclude='modules/quaid/tmp-lifecycle-*/' \
-    --exclude='/data/*.db' --exclude='/data/*.sqlite' --exclude='/data/*.sqlite3' \
-    --exclude='/instances/*/data/*.db' --exclude='/instances/*/data/*.sqlite' --exclude='/instances/*/data/*.sqlite3' \
     "$DEV_ROOT/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
 
 echo ""

@@ -127,10 +127,64 @@ wipe_oc() {
     echo "--- OC wipe ---"
     run_remote "kill OC-instance extraction daemons" \
         "for pid in \$(pgrep -f extraction_daemon.py 2>/dev/null); do if ps eww \$pid 2>/dev/null | grep -q 'QUAID_INSTANCE=$OC_INSTANCE'; then kill -9 \$pid 2>/dev/null; fi; done; echo 'OC-instance daemons killed'"
-    run_remote "wipe OC silo + extensions" \
-        "rm -rf $WORKSPACE/instances/$OC_INSTANCE && rm -rf ~/.openclaw/extensions/quaid && echo 'OC silo + extensions wiped'"
-    run_remote "clear OC session transcripts" \
-        "rm -rf ~/.openclaw/agents/main/sessions/ && echo 'OC sessions cleared'"
+    run_remote "wipe OC silo + extension + native memory state" \
+        "python3 - <<'PYEOF'
+from pathlib import Path
+import json
+import os
+import shutil
+
+workspace = Path(os.path.expanduser('$WORKSPACE'))
+oc_instance = '$OC_INSTANCE'
+home = Path.home()
+cfg_path = home / '.openclaw' / 'openclaw.json'
+
+targets = [
+    workspace / 'instances' / oc_instance,
+    home / '.openclaw' / 'extensions' / 'quaid',
+    home / '.openclaw' / 'agents' / 'main' / 'sessions',
+    home / '.openclaw' / 'workspace' / 'memory',
+    home / '.openclaw' / 'workspace' / 'git-commits',
+]
+
+workspace_candidates = []
+try:
+    cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+except Exception:
+    cfg = {}
+
+agents = cfg.get('agents') if isinstance(cfg, dict) else {}
+defaults = agents.get('defaults') if isinstance(agents, dict) else {}
+default_workspace = defaults.get('workspace') if isinstance(defaults, dict) else None
+if isinstance(default_workspace, str) and default_workspace.strip():
+    workspace_candidates.append(default_workspace.strip())
+
+agent_list = agents.get('list') if isinstance(agents, dict) else []
+if isinstance(agent_list, list):
+    for entry in agent_list:
+        if not isinstance(entry, dict):
+            continue
+        raw = entry.get('workspace')
+        if isinstance(raw, str) and raw.strip():
+            workspace_candidates.append(raw.strip())
+
+for raw in workspace_candidates:
+    resolved = Path(os.path.expanduser(raw))
+    if not resolved.is_absolute():
+        resolved = (cfg_path.parent / resolved).resolve()
+    targets.append(resolved / 'memory')
+    targets.append(resolved / 'git-commits')
+
+seen = set()
+for target in targets:
+    key = str(target)
+    if key in seen:
+        continue
+    seen.add(key)
+    shutil.rmtree(target, ignore_errors=True)
+
+print('OC silo, sessions, extension, and native memory state wiped')
+PYEOF"
 }
 
 wipe_cc() {

@@ -596,8 +596,6 @@ else
             --exclude='.ruff_cache/' --exclude='pytest-home/' \
             --exclude='release-promote-compatibility-work-*/' \
             --exclude='modules/quaid/tmp-lifecycle-*/' \
-            --exclude='/data/*.db' --exclude='/data/*.sqlite' --exclude='/data/*.sqlite3' \
-            --exclude='/instances/*/data/*.db' --exclude='/instances/*/data/*.sqlite' --exclude='/instances/*/data/*.sqlite3' \
             "$LOCAL_DEV/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
         # Do not pre-seed ~/.quaid/plugins/quaid before M0 install.
         # A plugin/runtime copy in place before the installer runs can cause the
