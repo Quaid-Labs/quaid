@@ -853,6 +853,34 @@ If the latter — stop. Wrong responses to failures:
 - Skipping a safety check because it causes a timeout
 - Ruling PASS-WITH-NOTE to avoid doing work
 
+### Foundational-milestone FAIL halts the lane
+
+Milestones are ordered foundational-first. **M1 (supervisor/monitor)** and
+**M2 (extraction)** are load-bearing for every milestone below them.
+A real FAIL at M1 or M2 **halts that lane**. Do not brief the tester past
+the failed milestone. Every subsequent "PASS" against an empty / corrupt
+DB is artifact of no content — recall returns nothing to rank, silo
+separation holds trivially, notifications fire against empty state, and
+you've generated false green signal that buries the actual blocker.
+
+Concrete rules:
+
+- On M1 or M2 FAIL, post HALT to the tester. Do not send the next-milestone
+  brief.
+- Set the dashboard for every downstream milestone to
+  `INCONCLUSIVE-post-M<N>-fail`, not PASS. Do not carry forward prior
+  readings — DB state has changed.
+- Route bug URGENT, not async. Foundational bugs don't wait for "when
+  convenient."
+- Other lanes may continue in parallel. GLOBAL and XP still wait on all
+  lanes at M7.
+- After the fix lands, hot-deploy and **retry from the FAILED milestone**
+  (usually M2 Part A), not from where the tester happened to be when
+  halted.
+- Quality PWNs at M3+ (recall ranking drift, agent-behavior initiative,
+  minor doc-dated tolerances) are NOT covered by this rule — those are
+  downstream quality notes that don't invalidate the foundation.
+
 ### Watchpoints — things to actively check for
 
 - **Tester must STATUS after every milestone.** Every pass, PWN, or fail ruling
