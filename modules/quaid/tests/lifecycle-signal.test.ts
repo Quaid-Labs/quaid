@@ -763,6 +763,52 @@ describe("lifecycle signal detection", () => {
     expect(recovered?.text).toBe("Sparrow marks the kiln with a cobalt crescent.");
   });
 
+  it("recovers a fresh cached user message when OC prompt-build payload is otherwise empty", () => {
+    const nowMs = 450_000;
+    const latestUserMessage = "Tell me what you remember about Juniper's kiln notes.";
+
+    const recovered = __test.selectMissingUserMessageRecoveryMessage(
+      {
+        prompt: "",
+        body: "",
+        cleanedBody: "",
+        messages: [],
+      },
+      {
+        text: latestUserMessage,
+        seenAtMs: nowMs - 2_000,
+        sessionId: "session-visible-room",
+      },
+      nowMs,
+      "session-visible-room",
+    );
+
+    expect(recovered?.text).toBe(latestUserMessage);
+    const override = __test.buildMissingUserMessageOverride(recovered);
+    expect(override).toContain("Missing User Message Recovery");
+    expect(override).toContain(latestUserMessage);
+  });
+
+  it("does not recover a cached user message when usable prompt payload already exists", () => {
+    const nowMs = 460_000;
+
+    const recovered = __test.selectMissingUserMessageRecoveryMessage(
+      {
+        prompt: "What do you remember about Juniper's kiln notes?",
+        messages: [],
+      },
+      {
+        text: "stale fallback prompt that should not override real payload",
+        seenAtMs: nowMs - 1_000,
+        sessionId: "session-visible-room",
+      },
+      nowMs,
+      "session-visible-room",
+    );
+
+    expect(recovered).toBe(null);
+  });
+
   it("uses the instance silo db path for adapter python calls", () => {
     expect(__test.resolveAdapterMemoryDbPath(
       "/tmp/quaid-home",
