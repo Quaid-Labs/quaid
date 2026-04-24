@@ -2664,6 +2664,27 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     transcript_path,
                 )
                 break
+        if (not transcript_path or not os.path.isfile(transcript_path)) and adapter is not None:
+            _get_session_path = getattr(adapter, "get_session_path", None)
+            if callable(_get_session_path):
+                try:
+                    _adapter_path = _get_session_path(session_id)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] failed resolving adapter transcript path for %s: %s",
+                        label,
+                        session_id,
+                        exc,
+                    )
+                else:
+                    _adapter_path_str = str(_adapter_path or "").strip()
+                    if _adapter_path_str and os.path.isfile(_adapter_path_str):
+                        transcript_path = _adapter_path_str
+                        logger.info(
+                            "[%s] transcript path missing/invalid; using adapter fallback: %s",
+                            label,
+                            transcript_path,
+                        )
 
     if not transcript_path or not os.path.isfile(transcript_path):
         # OC /new renames the session file to .jsonl.reset.<timestamp> — check for that backup.

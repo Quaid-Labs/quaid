@@ -628,6 +628,104 @@ def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypa
     assert "stone arch" in captured.get("transcript", "")
 
 
+def test_process_signal_uses_adapter_resolved_transcript_when_signal_path_missing(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+
+    transcript_path = tmp_path / "adapter-fallback.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"user","content":"The recovery phrase is cobalt-postage-oc."}\n'
+            '{"role":"assistant","content":"I will remember the cobalt-postage-oc phrase."}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_cursor",
+        lambda _sid: {
+            "line_offset": 0,
+            "transcript_path": "",
+            "internal": False,
+            "transcript_size_bytes": 0,
+        },
+    )
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "pytest-runner"
+
+        def get_session_path(self, session_id):
+            assert session_id == "sess-adapter-fallback"
+            captured["adapter_resolved"] = True
+            return transcript_path
+
+        def parse_session_jsonl(self, path):
+            captured["path"] = str(path)
+            return (
+                "User: The recovery phrase is cobalt-postage-oc.\n"
+                "Assistant: I will remember the cobalt-postage-oc phrase."
+            )
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    try:
+        def _fake_extract_from_transcript(transcript, **kwargs):
+            captured["transcript"] = transcript
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [],
+                "facts": [],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", _fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda *_args, **_kwargs: {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "facts": [],
+                "snippets_updated": 0,
+                "journal_updated": 0,
+                "project_logs_updated": 0,
+                "project_logs_projects_updated": 0,
+                "project_logs_seen": 0,
+            },
+        )
+
+        extraction_daemon.process_signal(
+            {
+                "session_id": "sess-adapter-fallback",
+                "type": "reset",
+                "transcript_path": str(tmp_path / "missing.jsonl"),
+                "_signal_path": str(tmp_path / "sig.json"),
+            }
+        )
+    finally:
+        reset_adapter()
+
+    assert captured.get("adapter_resolved") is True
+    assert "cobalt-postage-oc" in captured.get("transcript", "")
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
