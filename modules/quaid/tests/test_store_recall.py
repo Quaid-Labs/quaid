@@ -2461,6 +2461,65 @@ class TestRecallTelemetry:
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 60.0
 
+    def test_single_structural_exact_query_recognizes_hyphenated_codeword(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._is_single_structural_exact_query("walnut-umbrella-7142") is True
+        assert mg._is_single_structural_exact_query("tamarind-lighthouse-3317") is True
+        assert mg._is_single_structural_exact_query("Who is Linda in relation to Maya?") is False
+        assert mg._is_single_structural_exact_query("Baxter") is False
+
+    def test_deliberate_recall_routes_single_structural_query_through_bounded_fast_path(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        monkeypatch.setenv("MEMORY_DB_PATH", str(graph.db_path))
+        fake_cfg = SimpleNamespace(
+            retrieval=SimpleNamespace(
+                boost_recent=True,
+                boost_frequent=True,
+                composite_relevance_weight=0.60,
+                composite_recency_weight=0.20,
+                composite_frequency_weight=0.15,
+                recency_decay_days=90,
+                reranker_enabled=False,
+                multi_pass_gate=0.70,
+                use_hyde=False,
+            )
+        )
+
+        node_id = graph.add_node(
+            mg.Node.create(
+                "fact",
+                "walnut-umbrella-7142 retrieval canary marker",
+                owner_id="quaid",
+                status="approved",
+            )
+        )
+        exact_node = graph.get_node(node_id)
+        assert exact_node is not None
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._get_retrieval_lightweight_config", return_value=fake_cfg.retrieval), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+             patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("exact codeword path should not call LLM")), \
+             patch.object(mg.MemoryGraph, "search_hybrid", return_value=[(exact_node, 0.93)]), \
+             patch.object(mg.MemoryGraph, "search_fts", return_value=[]):
+            rows, meta = mg.recall(
+                "walnut-umbrella-7142",
+                owner_id="quaid",
+                return_meta=True,
+            )
+
+        assert rows
+        assert rows[0]["id"] == node_id
+        assert meta["turns"] == 1
+        assert meta["turn_details"][0]["planner"]["bailout_reason"] == "single_structural_exact_query"
+        assert meta["turn_details"][0]["planner"]["planned_stores"] == ["vector"]
+        assert meta["turn_details"][0]["planner"]["planner_profile"] == "fast"
+
     def test_plan_fanout_queries_keeps_default_docs_when_llm_downgrades_project_asof(self):
         import datastore.memorydb.memory_graph as mg
 

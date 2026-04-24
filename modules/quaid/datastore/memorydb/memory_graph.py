@@ -7730,6 +7730,30 @@ def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[
     return out
 
 
+def _is_single_structural_exact_query(query: str) -> bool:
+    """Return True for one-token exact codeword lookups.
+
+    These queries are usually operational canaries or human-provided handles.
+    They benefit from a bounded direct lookup path, not the full deliberate
+    drill/reranker loop.
+    """
+    clean = " ".join(str(query or "").split()).strip()
+    if not clean:
+        return False
+    tokens = re.findall(r"[\w][\w._'-]*", clean, flags=re.UNICODE)
+    if len(tokens) != 1:
+        return False
+    token = tokens[0].strip(".,;:!?\"'“”¿¡").lower()
+    if len(token) < 8:
+        return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._'-]*", token):
+        return False
+    if not (re.search(r"[-._']", token) or re.search(r"\d", token)):
+        return False
+    alnum = re.sub(r"[^a-z0-9]", "", token)
+    return len(alnum) >= 6
+
+
 def _resolve_lexical_anchor_limit(query: str, config_retrieval: Any) -> int:
     """Resolve lexical anchor planner cap from config or query shape.
 
@@ -10399,6 +10423,77 @@ def recall(
                 return ([], _empty_meta) if return_meta else []
         except Exception:
             pass
+
+    if (
+        not use_lightweight_config
+        and int(max_turns or 1) > 1
+        and use_multi_pass
+        and _is_single_structural_exact_query(query)
+    ):
+        fast_timeout_ms = timeout_ms
+        if fast_timeout_ms is None:
+            try:
+                fast_timeout_ms = int(round(_recall_store_plan_timeout_s(None, fast_mode=True) * 1000))
+            except Exception:
+                fast_timeout_ms = 3000
+        exact_planner_meta = {
+            "query": query,
+            "timeout_ms": fast_timeout_ms,
+            "used_llm": False,
+            "bailout_reason": "single_structural_exact_query",
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "query_shape": "narrow",
+            "fanout_budget": 1,
+            "token_count": 1,
+            "named_entity_tokens": 0,
+            "shape_signals": ["structural_exact"],
+            "planner_profile": "fast",
+            "planned_stores": ["vector"],
+            "planned_project": project,
+        }
+        return recall(
+            query=query,
+            limit=limit,
+            privacy=privacy,
+            owner_id=owner_id,
+            min_similarity=min_similarity,
+            use_routing=True,
+            use_aliases=False,
+            use_intent=use_intent,
+            use_multi_pass=False,
+            use_reranker=False,
+            current_session_id=current_session_id,
+            compaction_time=compaction_time,
+            date_from=date_from,
+            date_to=date_to,
+            source_channel=source_channel,
+            source_conversation_id=source_conversation_id,
+            source_author_id=source_author_id,
+            actor_id=actor_id,
+            subject_entity_id=subject_entity_id,
+            viewer_entity_id=viewer_entity_id,
+            participant_entity_ids=participant_entity_ids,
+            include_unscoped=include_unscoped,
+            debug=debug,
+            domain=domain,
+            domain_boost=domain_boost,
+            project=project,
+            low_signal_retry=False,
+            max_turns=1,
+            timeout_ms=fast_timeout_ms,
+            planner_profile="fast",
+            include_graph_traversal=False,
+            include_co_session=False,
+            include_mmr=False,
+            include_lexical_anchor_shaping=True,
+            lexical_anchor_planner_mode="deterministic",
+            use_lightweight_config=True,
+            track_access=track_access,
+            return_meta=return_meta,
+            planned_queries=[query],
+            planner_meta=exact_planner_meta,
+        )
 
     # Load config
     overall_timeout_ms = timeout_ms
