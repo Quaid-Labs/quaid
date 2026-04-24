@@ -738,6 +738,137 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
+  it("delivers startup-invalid model config on the first user turn", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const home = makeTempDir("quaid-oc-provider-startup-invalid-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+    const configPath = path.join(hiddenHome, "instances", "openclaw-livetest", "config.json");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+
+    writeJson(configPath, {
+      adapter: { type: "openclaw" },
+      systems: { memory: true, projects: false },
+      retrieval: { failHard: false, autoInject: true, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "invalid-model-startup-xyzzy",
+        fastReasoning: "invalid-model-startup-xyzzy",
+      },
+      plugins: { strict: false },
+    });
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-livetest",
+        },
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: any, init: any) => {
+      expect(String(init?.headers?.["x-openclaw-model"] || "")).toContain("invalid-model-startup-xyzzy");
+      return {
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: { message: "model not found" } }),
+      } as any;
+    });
+
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-livetest");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const result = await beforePromptBuildCall?.[1](
+      {
+        prependContext: "",
+        prompt: "What do you remember about my family?",
+        messages: [{ role: "user", content: "What do you remember about my family?" }],
+        sessionId: "session-provider-startup-invalid",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-provider-startup-invalid",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(String(result?.prependContext || "")).not.toContain("[Quaid error] [provider]");
+    expect(String(result?.appendSystemContext || "")).not.toContain("[Quaid error] [provider]");
+
+    const noticeFile = path.join(
+      hiddenHome,
+      "instances",
+      "openclaw-livetest",
+      ".runtime",
+      "notes",
+      "delayed-llm-requests.json",
+    );
+    let payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    let pending = Array.isArray(payload?.requests)
+      ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    expect(pending.length).toBeGreaterThan(0);
+    expect(String(pending[0]?.message || "")).toContain("[provider]");
+
+    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    );
+    expect(deferredReplyCall).toBeTruthy();
+    await deferredReplyCall?.[1](
+      { sessionId: "session-provider-startup-invalid", sessionKey: "agent:main:tui-main" },
+      {
+        sessionId: "session-provider-startup-invalid",
+        sessionKey: "agent:main:tui-main",
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    pending = Array.isArray(payload?.requests)
+      ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    const delivered = Array.isArray(payload?.requests)
+      ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "delivered")
+      : [];
+    expect(pending).toHaveLength(0);
+    expect(delivered.length).toBeGreaterThan(0);
+    expect(String(delivered[0]?.message || "")).toContain("[provider]");
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(home);
+  });
+
   it("re-arms project context injection after before_compaction under default strategy", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(

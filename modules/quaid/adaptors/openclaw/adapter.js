@@ -2211,8 +2211,8 @@ function currentPromptModelConfigFingerprint() {
     return "";
   }
 }
-function markPromptModelConfigChecked() {
-  promptModelConfigFingerprint = currentPromptModelConfigFingerprint();
+function resetPromptModelConfigTracking() {
+  promptModelConfigFingerprint = "";
   promptModelConfigNotice = "";
 }
 async function validatePromptModelConfigIfChanged(agentLabel) {
@@ -3032,7 +3032,7 @@ const quaidPlugin = {
   register(api) {
     console.log("[quaid] Registering local graph memory plugin");
     runStartupSelfCheck();
-    markPromptModelConfigChecked();
+    resetPromptModelConfigTracking();
     const strictContracts = facade.isPluginStrictMode();
     const contractDecl = loadAdapterContractDeclarations(strictContracts);
     if (contractDecl.enabled) {

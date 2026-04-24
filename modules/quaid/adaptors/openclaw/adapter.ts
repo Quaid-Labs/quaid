@@ -2779,8 +2779,11 @@ function currentPromptModelConfigFingerprint(): string {
   }
 }
 
-function markPromptModelConfigChecked(): void {
-  promptModelConfigFingerprint = currentPromptModelConfigFingerprint();
+function resetPromptModelConfigTracking(): void {
+  // Force one live validation on the first user turn for each plugin process.
+  // Otherwise a process that starts under already-broken model config can treat
+  // that fingerprint as "already checked" and never surface the outage.
+  promptModelConfigFingerprint = "";
   promptModelConfigNotice = "";
 }
 
@@ -3789,7 +3792,7 @@ const quaidPlugin = {
 
     // Fail fast on model/provider/config mismatches so runtime doesn't degrade silently.
     runStartupSelfCheck();
-    markPromptModelConfigChecked();
+    resetPromptModelConfigTracking();
     const strictContracts = facade.isPluginStrictMode();
     const contractDecl = loadAdapterContractDeclarations(strictContracts);
     if (contractDecl.enabled) {
