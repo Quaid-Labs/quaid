@@ -726,6 +726,89 @@ def test_process_signal_uses_adapter_resolved_transcript_when_signal_path_missin
     assert "cobalt-postage-oc" in captured.get("transcript", "")
 
 
+def test_process_signal_clamps_same_path_cursor_when_oc_transcript_shrinks_in_place(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+
+    transcript_path = tmp_path / "same-path-shrink.jsonl"
+    transcript_path.write_text(
+        "\n".join(
+            f'{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"line {idx}"}}]}}}}'
+            for idx in range(8)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+
+    captured = {"read_offsets": [], "write_cursor": []}
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_cursor",
+        lambda _sid: {
+            "line_offset": 10,
+            "transcript_path": str(transcript_path),
+            "internal": False,
+            "transcript_size_bytes": transcript_path.stat().st_size + 50,
+        },
+    )
+    monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: {})
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_acquire_session_processing_lock", lambda _key: 1)
+    monkeypatch.setattr(extraction_daemon, "_release_session_processing_lock", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda _sig: captured.setdefault("processed", True))
+    monkeypatch.setattr(extraction_daemon, "write_context_refresh_timeout_marker", lambda _sid: None)
+    monkeypatch.setattr(extraction_daemon, "write_rolling_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_cursor",
+        lambda session_id, line_offset, transcript_path, **kwargs: captured["write_cursor"].append(
+            {
+                "session_id": session_id,
+                "line_offset": line_offset,
+                "transcript_path": transcript_path,
+                **kwargs,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_transcript_slice",
+        lambda path, from_line: captured["read_offsets"].append(from_line) or [],
+    )
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            return "line"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    try:
+        extraction_daemon.process_signal(
+            {
+                "session_id": "417369e6-a300-417a-84ff-6193ed154420",
+                "type": "timeout",
+                "transcript_path": str(transcript_path),
+                "_signal_path": str(tmp_path / "sig.json"),
+            }
+        )
+    finally:
+        reset_adapter()
+
+    assert captured["read_offsets"] == [8]
+    assert captured["write_cursor"][-1]["line_offset"] == 8
+    assert captured["write_cursor"][-1]["transcript_path"] == str(transcript_path)
+    assert captured.get("processed") is True
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")

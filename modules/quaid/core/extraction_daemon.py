@@ -2920,12 +2920,28 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             cursor_offset = 0
 
     total_lines = count_transcript_lines(transcript_path)
+    cursor_clamped_to_eof = False
     if cursor_offset > total_lines:
-        logger.warning(
-            "[%s] session %s: cursor offset %d > file length %d (file truncated?), resetting cursor",
-            label, session_id, cursor_offset, total_lines,
+        same_transcript_source = (
+            bool(cursor_transcript)
+            and bool(transcript_path)
+            and _canonicalize_transcript_source_path(cursor_transcript)
+            == _canonicalize_transcript_source_path(transcript_path)
         )
-        cursor_offset = 0
+        if same_transcript_source and signal_type != "reset":
+            logger.warning(
+                "[%s] session %s: cursor offset %d > file length %d on unchanged transcript source, "
+                "clamping cursor to EOF to avoid replay",
+                label, session_id, cursor_offset, total_lines,
+            )
+            cursor_offset = total_lines
+            cursor_clamped_to_eof = True
+        else:
+            logger.warning(
+                "[%s] session %s: cursor offset %d > file length %d (file truncated?), resetting cursor",
+                label, session_id, cursor_offset, total_lines,
+            )
+            cursor_offset = 0
 
     chunk_budget = _get_capture_chunk_tokens()
     chunk_line_budget = _get_capture_chunk_max_lines()
@@ -3008,6 +3024,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 lock_owner_key=lock_owner_key,
                 lock_fd=lock_fd,
                 cursor_key=lock_owner_key,
+                next_cursor_offset=cursor_offset if cursor_clamped_to_eof else None,
                 emit_noop_metric=lambda: _emit_noop_flush_metric("no_new_content"),
             )
             return
