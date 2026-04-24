@@ -317,18 +317,6 @@ function resolveAgentLabelFromSessionKey(sessionKey) {
   return String(parts[1] || "").trim().toLowerCase();
 }
 function resolveHookAgentLabel(event, ctx) {
-  const explicitCandidates = [
-    ctx?.agentId,
-    event?.agentId,
-    ctx?.agent?.id,
-    event?.agent?.id
-  ];
-  for (const candidate of explicitCandidates) {
-    const label = String(candidate || "").trim().toLowerCase();
-    if (label) {
-      return label;
-    }
-  }
   const keyCandidates = [
     ctx?.sessionKey,
     ctx?.targetSessionKey,
@@ -337,6 +325,18 @@ function resolveHookAgentLabel(event, ctx) {
   ];
   for (const candidate of keyCandidates) {
     const label = resolveAgentLabelFromSessionKey(candidate);
+    if (label) {
+      return label;
+    }
+  }
+  const explicitCandidates = [
+    ctx?.agentId,
+    event?.agentId,
+    ctx?.agent?.id,
+    event?.agent?.id
+  ];
+  for (const candidate of explicitCandidates) {
+    const label = String(candidate || "").trim().toLowerCase();
     if (label) {
       return label;
     }
@@ -5473,6 +5473,7 @@ const __test = {
   extractOpenAICodexText: _extractOpenAICodexText,
   buildOpenAICodexOAuthBody: _buildOpenAICodexOAuthBody,
   resolveConfiguredLLMTransport: _resolveConfiguredLLMTransport,
+  resolveHookAgentLabel,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,

@@ -501,6 +501,17 @@ describe("lifecycle signal detection", () => {
     expect(otherAgent).not.toBe(first);
   });
 
+  it("prefers session-key agent label over conflicting explicit agent ids", () => {
+    const label = __test.resolveHookAgentLabel(
+      {
+        agentId: "m5r121second",
+        sessionKey: "agent:main:matrix:direct:@quaid-test-bot:localhost",
+      },
+      {},
+    );
+    expect(label).toBe("main");
+  });
+
   it("uses graph and a bounded subprocess timeout for auto-inject queries", () => {
     const direct = __test.buildAutoInjectRecallOptions(
       "What do you know about my dog Baxter?",
