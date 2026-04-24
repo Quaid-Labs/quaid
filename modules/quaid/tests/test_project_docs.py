@@ -424,6 +424,35 @@ def test_index_project_logs_uses_managed_dir_when_canonical_path_missing(project
     assert indexed == [str(managed_log.resolve())]
 
 
+def test_index_project_logs_uses_managed_dir_without_adapter(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core.docs import updater
+
+    managed_log = tmp_path / "projects" / "demo" / "PROJECT.log"
+    managed_log.parent.mkdir(parents=True, exist_ok=True)
+    managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
+
+    indexed = []
+
+    class FakeRag:
+        def needs_reindex_many(self, paths):
+            return {path: True for path in paths}
+
+        def index_document(self, file_path):
+            indexed.append(file_path)
+            return 1
+
+    monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", FakeRag)
+    monkeypatch.setattr(updater, "_linked_projects_for_current_instance", lambda: ({"demo"}, True))
+    monkeypatch.setattr("core.project_registry.get_project", lambda name: {"source_root": None})
+
+    reset_adapter()
+    monkeypatch.setattr("lib.runtime_context.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter should not be used")))
+
+    assert updater.index_project_logs(project="demo") == 1
+    assert indexed == [str(managed_log.resolve())]
+
+
 def test_index_project_logs_uses_managed_dir_when_canonical_log_missing(project_env, monkeypatch):
     tmp_path, _src, _entry = project_env
     from core.docs import updater
@@ -508,6 +537,33 @@ def test_project_status_counts_project_log_without_canonical_path(project_env, m
     assert status["project_log_size"] == managed_log.stat().st_size
     assert status["project_log_bytes_pending"] == managed_log.stat().st_size
     assert diff["source_error"] is None
+    assert diff["project_log_entry_count"] == 1
+    assert "Managed milestone" in diff["project_log_entries"][0]
+
+
+def test_project_status_counts_project_log_without_adapter(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    managed_log = tmp_path / "projects" / "demo" / "PROJECT.log"
+    managed_log.parent.mkdir(parents=True, exist_ok=True)
+    managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "core.project_registry.get_project",
+        lambda name: {"source_root": None, "description": "Demo"},
+    )
+
+    reset_adapter()
+    monkeypatch.setattr("lib.runtime_context.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter should not be used")))
+
+    status = project_docs.project_status("demo")
+    diff = project_docs.project_diff("demo")
+
+    assert status["status"] == "stale"
+    assert status["source_error"] is None
+    assert status["project_log_size"] == managed_log.stat().st_size
+    assert status["project_log_bytes_pending"] == managed_log.stat().st_size
     assert diff["project_log_entry_count"] == 1
     assert "Managed milestone" in diff["project_log_entries"][0]
 

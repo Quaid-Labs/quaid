@@ -134,18 +134,42 @@ def get_visible_quaid_home() -> Path:
 
 
 def get_projects_dir() -> Path:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.projects_dir()
+    env_home = _env_visible_quaid_home()
+    if env_home is not None:
+        return env_home / "projects"
     return get_adapter().projects_dir()
 
 
 def get_identity_dir() -> Path:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.identity_dir()
+    env_root = _env_visible_instance_root()
+    if env_root is not None:
+        return env_root
     return get_adapter().identity_dir()
 
 
 def get_data_dir() -> Path:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.data_dir()
+    env_root = _env_instance_root()
+    if env_root is not None:
+        return env_root / "data"
     return get_adapter().data_dir()
 
 
 def get_logs_dir() -> Path:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.logs_dir()
+    env_root = _env_instance_root()
+    if env_root is not None:
+        return env_root / "logs"
     return get_adapter().logs_dir()
 
 

@@ -111,3 +111,7 @@ def test_runtime_context_uses_env_instance_roots_without_adapter(monkeypatch, tm
     with patch.object(runtime_context, "get_adapter", side_effect=AssertionError("adapter should not be used")):
         assert runtime_context.get_workspace_dir() == (hidden / "instances" / "alpha").resolve()
         assert runtime_context.get_visible_workspace_dir() == (visible / "instances" / "alpha").resolve()
+        assert runtime_context.get_data_dir() == (hidden / "instances" / "alpha" / "data").resolve()
+        assert runtime_context.get_logs_dir() == (hidden / "instances" / "alpha" / "logs").resolve()
+        assert runtime_context.get_identity_dir() == (visible / "instances" / "alpha").resolve()
+        assert runtime_context.get_projects_dir() == (visible / "projects").resolve()
