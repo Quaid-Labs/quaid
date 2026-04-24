@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 
 from lib.adapter import get_adapter
 from lib.agent_notice import (
+    deliver_deferred_notices as _deliver_deferred_notices,
     drain_deferred_notices as _drain_deferred_notices,
     format_deferred_notice_hint as _format_deferred_notice_hint,
     get_deferred_notice_status as _get_deferred_notice_status,
@@ -263,6 +264,19 @@ def list_deferred_notices(
 
 def drain_deferred_notices(*, limit: int = 50) -> List[Dict]:
     return _drain_deferred_notices(limit=limit)
+
+
+def deliver_deferred_notices(
+    *,
+    limit: int = 50,
+    channel_override: Optional[str] = None,
+    dry_run: bool = False,
+) -> List[Dict]:
+    return _deliver_deferred_notices(
+        limit=limit,
+        channel_override=channel_override,
+        dry_run=dry_run,
+    )
 
 
 def get_deferred_notice_status(

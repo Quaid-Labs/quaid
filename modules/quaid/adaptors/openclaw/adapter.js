@@ -11,7 +11,6 @@ import {
 import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
 import { spawnDetachedScript } from "../../core/spawn-detached-script.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
-import { drainPendingRequests } from "./delayed-requests.js";
 import {
   assertDeclaredRegistration,
   normalizeDeclaredExports,
@@ -62,7 +61,7 @@ function _hasQuaidRuntimeSentinel(candidateRoot) {
 }
 function _looksLikeQuaidHomeRoot(candidateRoot) {
   const root = _normalizeWorkspacePath(candidateRoot);
-  return fs.existsSync(path.join(root, "instances")) || fs.existsSync(path.join(root, "shared"));
+  return fs.existsSync(path.join(root, "shared")) || fs.existsSync(path.join(root, "config", "config.json"));
 }
 function _resolveWorkspace() {
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
@@ -419,53 +418,103 @@ function ensureAgentInstanceProvisioned(agentLabel, reason) {
     return false;
   }
 }
-function delayedRequestsPathForInstance(instanceId) {
-  const normalized = String(instanceId || "").trim();
-  return normalized ? path.join(WORKSPACE, "instances", normalized, ".runtime", "notes", "delayed-llm-requests.json") : path.join(WORKSPACE, ".runtime", "notes", "delayed-llm-requests.json");
-}
-function formatDeferredNoticeRelayContext(drained) {
-  const messages = drained.map((item) => String(item?.message || "").trim()).filter(Boolean);
-  if (!messages.length) {
-    return "";
-  }
-  const body = messages.map((message) => `\u2022 ${message}`).join("\n");
-  return [
-    "<quaid_system_message>",
-    "[Quaid Notice Relay Required]",
-    "The following notices were queued for the human user and have just been drained. Begin your next reply by briefly relaying each notice below, then answer the user's current message.",
-    "",
-    body,
-    "</quaid_system_message>"
-  ].join("\n");
-}
-function drainDeferredNoticeItems(agentLabel, reason) {
+function deliverDeferredNoticesViaChannel(agentLabel, reason) {
   const instanceId = getInstanceId(agentLabel);
-  const requestsPath = delayedRequestsPathForInstance(instanceId);
+  const notifyScript = path.join(PYTHON_PLUGIN_ROOT, "core", "runtime", "notify.py");
   try {
-    const drained = drainPendingRequests(requestsPath, 50, `drained by ${reason}`);
-    if (!drained.length) {
-      return [];
-    }
-    writeHookTrace("deferred_notice.drained", {
-      instance_id: instanceId,
-      agent_label: agentLabel,
-      reason,
-      count: drained.length,
-      kinds: drained.map((item) => String(item?.kind || "general")).slice(0, 8)
+    const result = spawnSync(PYTHON_BIN, [notifyScript, "--deferred-deliver", "--limit", "50", "--json"], {
+      encoding: "utf8",
+      timeout: 3e4,
+      env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
     });
-    return drained;
+    if (result.error || result.status !== 0) {
+      writeHookTrace("deferred_notice.delivery_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || "")
+      });
+      return 0;
+    }
+    let payload = {};
+    try {
+      payload = JSON.parse(String(result.stdout || "{}"));
+    } catch (parseErr) {
+      writeHookTrace("deferred_notice.delivery_parse_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        stdout: String(result.stdout || "").trim().slice(0, 500),
+        error: String(parseErr?.message || parseErr)
+      });
+      return 0;
+    }
+    const delivered = Math.max(0, Number(payload?.delivered || 0) || 0);
+    if (delivered > 0) {
+      writeHookTrace("deferred_notice.delivered", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        count: delivered,
+        kinds: Array.isArray(payload?.items) ? payload.items.map((item) => String(item?.kind || "general")).slice(0, 8) : []
+      });
+    }
+    return delivered;
   } catch (err) {
-    writeHookTrace("deferred_notice.error", {
+    writeHookTrace("deferred_notice.delivery_error", {
       instance_id: instanceId,
       agent_label: agentLabel,
       reason,
       error: String(err?.message || err)
     });
-    return [];
+    return 0;
   }
 }
-function drainDeferredNoticeRelayContext(agentLabel, reason) {
-  return formatDeferredNoticeRelayContext(drainDeferredNoticeItems(agentLabel, reason));
+function queueDeferredNoticeForAgent(agentLabel, message, {
+  kind = "agent_notice",
+  priority = "normal",
+  source = "quaid",
+  dedupeKey = ""
+} = {}) {
+  const instanceId = getInstanceId(agentLabel);
+  const script = [
+    "import sys",
+    `sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})`,
+    "from core.runtime.notify import queue_deferred_notice",
+    `dedupe_key = ${JSON.stringify(dedupeKey || "")}`,
+    `raise SystemExit(0 if queue_deferred_notice(${JSON.stringify(message)}, kind=${JSON.stringify(kind)}, priority=${JSON.stringify(priority)}, source=${JSON.stringify(source)}, dedupe_key=dedupe_key or None) else 1)`
+  ].join("\n");
+  try {
+    const result = spawnSync(PYTHON_BIN, ["-c", script], {
+      encoding: "utf8",
+      timeout: 3e4,
+      env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
+    });
+    if (result.error || result.status !== 0) {
+      writeHookTrace("deferred_notice.queue_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        kind,
+        source,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || "")
+      });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    writeHookTrace("deferred_notice.queue_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      kind,
+      source,
+      error: String(err?.message || err)
+    });
+    return false;
+  }
 }
 function runSubagentHookCommand(command, payload, agentLabel) {
   const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
@@ -2140,12 +2189,20 @@ function markPromptModelConfigChecked() {
   promptModelConfigFingerprint = currentPromptModelConfigFingerprint();
   promptModelConfigNotice = "";
 }
-async function validatePromptModelConfigIfChanged() {
+async function validatePromptModelConfigIfChanged(agentLabel) {
   const fingerprint = currentPromptModelConfigFingerprint();
   if (!fingerprint) {
     return "";
   }
   if (fingerprint === promptModelConfigFingerprint) {
+    if (promptModelConfigNotice) {
+      queueDeferredNoticeForAgent(agentLabel, promptModelConfigNotice, {
+        kind: "provider",
+        priority: "high",
+        source: "provider",
+        dedupeKey: `prompt-model-config:${fingerprint}`
+      });
+    }
     return promptModelConfigNotice;
   }
   promptModelConfigFingerprint = fingerprint;
@@ -2160,12 +2217,18 @@ async function validatePromptModelConfigIfChanged() {
     );
     writeHookTrace("hook.before_prompt_build.model_config_validated", {});
   } catch (err) {
-    promptModelConfigNotice = buildImmediateProviderNotice(err, "fast");
+    promptModelConfigNotice = buildProviderErrorNoticeMessage(err, "fast");
+    queueDeferredNoticeForAgent(agentLabel, promptModelConfigNotice, {
+      kind: "provider",
+      priority: "high",
+      source: "provider",
+      dedupeKey: `prompt-model-config:${fingerprint}`
+    });
     writeHookTrace("hook.before_prompt_build.model_config_error", {
       error: String(err?.message || err).slice(0, 240)
     });
   }
-  return promptModelConfigNotice;
+  return "";
 }
 function getOpenClawSessionsPath() {
   const primary = path.join(_openClawRootDir(), "agents", "main", "sessions", "sessions.json");
@@ -2505,12 +2568,16 @@ function isImmediateProviderFailure(err) {
   const text = String(err?.message || err || "").toLowerCase();
   return text.includes("language model provider") || text.includes("check fastreasoning/deepreasoning") || text.includes("provider unavailable after") || text.includes("llm proxy error") || text.includes("[quaid][llm]") && text.includes("model=");
 }
-function buildImmediateProviderNotice(err, tier = "fast") {
+function buildProviderErrorNoticeMessage(err, tier = "fast") {
   const raw = String(err?.message || err || "").replace(/\s+/g, " ").trim();
   const detail = raw.length > 280 ? `${raw.slice(0, 277).trim()}...` : raw;
+  return `[Quaid error] [provider] Quaid could not access its ${tier} language model provider. ${detail}`;
+}
+function buildImmediateProviderNotice(err, tier = "fast") {
+  const message = buildProviderErrorNoticeMessage(err, tier);
   return `<quaid_system_message>
 NOTICE: Include the following Quaid error in your response verbatim.
-\u2022 [Quaid error] [provider] Quaid could not access its ${tier} language model provider. ${detail}
+\u2022 ${message}
 </quaid_system_message>`;
 }
 async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 6e5) {
@@ -3220,16 +3287,6 @@ ${projectPlacementContext}` : projectPlacementContext;
           ...appendSystemContext ? { appendSystemContext } : {}
         };
       };
-      const deferredNoticeContext = drainDeferredNoticeRelayContext(promptAgentLabel, "before_prompt_build");
-      if (deferredNoticeContext) {
-        // OC Matrix variants can drop appendSystemContext mutations. Mirror
-        // mandatory notice relays into prependContext so the agent still sees
-        // them on the turn that drained the queue.
-        prependContextParts.push(deferredNoticeContext);
-        appendSystemContext = appendSystemContext ? `${appendSystemContext}
-
-${deferredNoticeContext}` : deferredNoticeContext;
-      }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
       try {
@@ -3297,7 +3354,7 @@ ${deferredNoticeContext}` : deferredNoticeContext;
           });
         } else {
           turnPromise = (async () => {
-            const modelConfigNotice2 = await validatePromptModelConfigIfChanged();
+            const modelConfigNotice2 = await validatePromptModelConfigIfChanged(promptAgentLabel);
             let deadlineTimer;
             const deadline = new Promise((resolve) => {
               deadlineTimer = setTimeout(() => {
@@ -3431,16 +3488,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
-        if (isImmediateProviderFailure(error)) {
-          const notice = buildImmediateProviderNotice(error, "fast");
-          prependContextParts.push(notice);
-          appendSystemContext = appendSystemContext ? `${appendSystemContext}
-
-${notice}` : notice;
-          writeHookTrace("hook.before_prompt_build.provider_error", {
-            error: String(error?.message || error).slice(0, 240)
-          });
-        }
       }
       return withDocs({ prependContext: event.prependContext || void 0 });
     };
@@ -3452,6 +3499,15 @@ ${notice}` : notice;
     registerInternalHookChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection-registerHook",
       priority: 10
+    });
+    onChecked("before_agent_reply", async (event, ctx) => {
+      if (isInternalSessionContext(event, ctx)) return;
+      if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
+      const promptAgentLabel = resolveHookAgentLabel(event, ctx);
+      deliverDeferredNoticesViaChannel(promptAgentLabel, "before_agent_reply");
+    }, {
+      name: "deferred-notice-channel-relay",
+      priority: 110
     });
     onChecked("before_agent_reply", async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
@@ -5482,7 +5538,7 @@ const __test = {
   stripExecCompletedHeartbeatInstructions,
   selectQueuedStartupRecoveryMessage,
   buildQueuedStartupUserMessageOverride,
-  formatDeferredNoticeRelayContext,
+  deliverDeferredNoticesViaChannel,
   extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
   extractOpenAICodexText: _extractOpenAICodexText,
   buildOpenAICodexOAuthBody: _buildOpenAICodexOAuthBody,

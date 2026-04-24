@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
 from lib.agent_notice import (
+    deliver_deferred_notices,
     drain_deferred_notices,
     format_deferred_notice_hint,
     get_deferred_notice_status,
@@ -209,3 +211,36 @@ def test_drain_marks_requests_delivered(clean_adapter):
     pending = [item for item in requests if item["status"] == "pending"]
     assert len(delivered) == 1
     assert len(pending) == 1
+
+
+def test_deliver_deferred_notices_marks_only_successful_sends(clean_adapter):
+    queue_deferred_notice("first", kind="janitor_summary", priority="low")
+    queue_deferred_notice("second", kind="provider", priority="high")
+
+    with patch("lib.runtime_context.send_notification", side_effect=[True, False]) as mock_send:
+        delivered = deliver_deferred_notices(limit=10)
+
+    assert [item["kind"] for item in delivered] == ["provider"]
+    assert mock_send.call_count == 2
+
+    requests = _read_requests(clean_adapter)
+    delivered_items = [item for item in requests if item["status"] == "delivered"]
+    pending_items = [item for item in requests if item["status"] == "pending"]
+    assert len(delivered_items) == 1
+    assert delivered_items[0]["kind"] == "provider"
+    assert len(pending_items) == 1
+    assert pending_items[0]["kind"] == "janitor_summary"
+
+
+def test_deliver_deferred_notices_dry_run_keeps_items_pending(clean_adapter):
+    queue_deferred_notice("first", kind="janitor_summary", priority="low")
+
+    with patch("lib.runtime_context.send_notification", return_value=True) as mock_send:
+        delivered = deliver_deferred_notices(limit=10, dry_run=True)
+
+    assert delivered == []
+    mock_send.assert_called_once()
+
+    requests = _read_requests(clean_adapter)
+    assert len(requests) == 1
+    assert requests[0]["status"] == "pending"

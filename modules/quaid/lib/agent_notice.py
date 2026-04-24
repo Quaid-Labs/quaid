@@ -465,6 +465,90 @@ def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
     return out
 
 
+def deliver_deferred_notices(
+    *,
+    limit: int = 50,
+    channel_override: Optional[str] = None,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    path = _deferred_path()
+    target = list_deferred_notices(status="pending", limit=limit)
+    _trace_m15(
+        "deferred_notice.deliver.start",
+        path=str(path),
+        limit=limit,
+        target_count=len(target),
+        dry_run=dry_run,
+        channel_override=str(channel_override or ""),
+    )
+    if not target:
+        return []
+
+    try:
+        from lib.runtime_context import send_notification as _send_notification
+    except Exception as exc:
+        logger.warning("Failed importing notification sender for deferred delivery: %s", exc)
+        _trace_m15("deferred_notice.deliver.import_error", error=str(exc))
+        return []
+
+    delivered_ids: set[str] = set()
+    for item in target:
+        item_id = str(item.get("id") or "").strip()
+        message = str(item.get("message") or "").strip()
+        if not item_id or not message:
+            continue
+        try:
+            sent = bool(
+                _send_notification(
+                    message,
+                    channel_override=channel_override,
+                    dry_run=dry_run,
+                )
+            )
+        except Exception as exc:
+            logger.warning("Failed delivering deferred notice %s: %s", item_id, exc)
+            _trace_m15("deferred_notice.deliver.error", id=item_id, error=str(exc))
+            continue
+        if sent and not dry_run:
+            delivered_ids.add(item_id)
+
+    if not delivered_ids:
+        _trace_m15("deferred_notice.deliver.none", path=str(path), dry_run=dry_run)
+        return []
+
+    delivered_at = _now_iso()
+    delivered: list[dict[str, Any]] = []
+    with _file_lock(_deferred_lock_path(path)):
+        payload = _read_json(path, {"version": 1, "requests": []})
+        requests = payload.get("requests")
+        if not isinstance(requests, list):
+            return []
+        updated: list[dict[str, Any]] = []
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "")
+            if item_id in delivered_ids and str(item.get("status") or "pending").strip().lower() == "pending":
+                updated_item = dict(item)
+                updated_item["status"] = "delivered"
+                updated_item["delivered_at"] = delivered_at
+                updated.append(updated_item)
+                delivered.append(updated_item)
+            else:
+                updated.append(item)
+        updated.sort(key=lambda item: str(item.get("created_at") or ""))
+        _write_json(path, {"version": 1, "requests": _trim_deferred_notices(updated)})
+
+    out = _sort_deferred_notices(delivered)
+    _trace_m15(
+        "deferred_notice.deliver.done",
+        path=str(path),
+        count=len(out),
+        ids=[str(item.get("id") or "") for item in out],
+    )
+    return out
+
+
 def get_deferred_notice_status(
     *,
     limit: int = 500,

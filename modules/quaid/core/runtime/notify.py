@@ -27,6 +27,7 @@ if str(_MODULE_ROOT) not in sys.path:
 from lib.adapter import ChannelInfo
 from lib.fail_policy import is_fail_hard_enabled
 from lib.runtime_context import (
+    deliver_deferred_notices as _ctx_deliver_deferred_notices,
     drain_deferred_notices as _ctx_drain_deferred_notices,
     format_deferred_notice_hint as _ctx_format_deferred_notice_hint,
     get_deferred_notice_status as _ctx_get_deferred_notice_status,
@@ -268,6 +269,19 @@ def list_deferred_notices(
 
 def drain_deferred_notices(*, limit: int = 50) -> list:
     return _ctx_drain_deferred_notices(limit=limit)
+
+
+def deliver_deferred_notices(
+    *,
+    limit: int = 50,
+    dry_run: bool = False,
+    channel_override: Optional[str] = None,
+) -> list:
+    return _ctx_deliver_deferred_notices(
+        limit=limit,
+        dry_run=dry_run,
+        channel_override=channel_override,
+    )
 
 
 def get_deferred_notice_status(
@@ -739,6 +753,11 @@ def main():
         help="Drain pending deferred notices for explicit relay"
     )
     parser.add_argument(
+        "--deferred-deliver",
+        action="store_true",
+        help="Deliver pending deferred notices via the active notification channel"
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=50,
@@ -752,8 +771,13 @@ def main():
 
     args = parser.parse_args()
 
-    if args.deferred_status and args.deferred_drain:
-        parser.error("--deferred-status and --deferred-drain are mutually exclusive")
+    selected_deferred_modes = sum(
+        1
+        for flag in (args.deferred_status, args.deferred_drain, args.deferred_deliver)
+        if flag
+    )
+    if selected_deferred_modes > 1:
+        parser.error("--deferred-status, --deferred-drain, and --deferred-deliver are mutually exclusive")
 
     if args.deferred_status:
         status = get_deferred_notice_status(limit=args.limit, include_items=True)
@@ -797,6 +821,29 @@ def main():
             return
         print("")
         for item in drained:
+            created_at = str(item.get("created_at") or "").strip()
+            priority = str(item.get("priority") or "normal").strip() or "normal"
+            kind = str(item.get("kind") or "unknown").strip() or "unknown"
+            message = str(item.get("message") or "").strip()
+            print(f"[{priority}] {kind} {created_at}")
+            print(message)
+            print("")
+        return
+
+    if args.deferred_deliver:
+        delivered = deliver_deferred_notices(limit=args.limit, dry_run=args.dry_run)
+        payload = {
+            "delivered": len(delivered),
+            "items": delivered,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return
+        print(f"Delivered deferred notices: {len(delivered)}")
+        if not delivered:
+            return
+        print("")
+        for item in delivered:
             created_at = str(item.get("created_at") or "").strip()
             priority = str(item.get("priority") or "normal").strip() or "normal"
             kind = str(item.get("kind") or "unknown").strip() or "unknown"
