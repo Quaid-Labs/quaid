@@ -143,15 +143,22 @@ class TestRegisterAndGet:
         assert entry["title"] == "Test Doc"
         assert entry["state"] == "active"
 
-    def test_register_upsert(self, setup_env):
+    def test_register_upsert_same_project(self, setup_env):
         r = _get_registry()
         id1 = r.register("docs/test.md", project="proj-a", title="V1")
-        id2 = r.register("docs/test.md", project="proj-b", title="V2")
+        id2 = r.register("docs/test.md", project="proj-a", title="V2")
         # Same row updated
         assert id1 == id2
         entry = r.get("docs/test.md")
-        assert entry["project"] == "proj-b"
+        assert entry["project"] == "proj-a"
         assert entry["title"] == "V2"
+
+    def test_register_rejects_cross_project_reassign(self, setup_env):
+        r = _get_registry()
+        r.register("docs/test.md", project="proj-a", title="V1")
+
+        with pytest.raises(ValueError, match="Use move-file to reassign ownership explicitly"):
+            r.register("docs/test.md", project="proj-b", title="V2")
 
     def test_register_with_source_files(self, setup_env):
         r = _get_registry()

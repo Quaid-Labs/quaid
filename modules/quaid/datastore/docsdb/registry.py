@@ -893,6 +893,7 @@ class DocsRegistry:
         provenance_confidence: Optional[float] = None,
         registered_by: str = "system",
         link_current_instance: bool = True,
+        allow_project_reassign: bool = False,
     ) -> int:
         """Register a document in the registry. Returns the row ID."""
         if not file_path or not file_path.strip():
@@ -912,6 +913,20 @@ class DocsRegistry:
             link_current_instance=link_current_instance,
         )
         with get_connection(self.db_path) as conn:
+            existing = conn.execute(
+                "SELECT project, state FROM doc_registry WHERE file_path = ?",
+                (file_path,),
+            ).fetchone()
+            if (
+                existing
+                and existing[1] == "active"
+                and existing[0] != project
+                and not allow_project_reassign
+            ):
+                raise ValueError(
+                    f"File '{file_path}' is already registered to project '{existing[0]}'. "
+                    "Use move-file to reassign ownership explicitly."
+                )
             conn.execute("""
                 INSERT INTO doc_registry
                     (file_path, project, asset_type, title, description, tags,
@@ -1759,6 +1774,7 @@ class DocsRegistry:
             description=entry.get("description"),
             auto_update=entry.get("auto_update", False),
             source_files=entry.get("source_files") or None,
+            allow_project_reassign=True,
         )
 
         result = {"moved": True, "new_path": file_path}
