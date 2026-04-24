@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from lib.fail_policy import is_fail_hard_enabled
 
@@ -53,18 +53,44 @@ def _validate_project(project: str) -> str:
     return name
 
 
-def _normalize_entries(entries: Iterable[Any]) -> List[str]:
-    out: List[str] = []
-    seen: set[str] = set()
+def _normalize_entry_timestamp(raw: Any) -> Optional[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        text = f"{text}T23:59:59"
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat(timespec="seconds")
+    except ValueError:
+        return None
+
+
+def _normalize_entries(entries: Iterable[Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str]] = set()
     for entry in entries or []:
-        text = str(entry or "").strip()
+        if isinstance(entry, dict):
+            text = entry.get("text", entry.get("entry", entry.get("note", "")))
+            created_at = (
+                _normalize_entry_timestamp(entry.get("created_at"))
+                or _normalize_entry_timestamp(entry.get("timestamp"))
+                or _normalize_entry_timestamp(entry.get("date"))
+            )
+        else:
+            text = entry
+            created_at = None
+        text = str(text or "").strip()
         if not text:
             continue
         text = re.sub(r"\s+", " ", text)
-        if text in seen:
+        key = (text, str(created_at or ""))
+        if key in seen:
             continue
-        seen.add(text)
-        out.append(text)
+        seen.add(key)
+        item: Dict[str, Any] = {"text": text}
+        if created_at:
+            item["created_at"] = created_at
+        out.append(item)
     return out
 
 
@@ -103,7 +129,7 @@ def _metrics() -> Dict[str, int]:
 
 
 def enqueue_project_logs(
-    project_logs: Dict[str, List[str]],
+    project_logs: Dict[str, List[Any]],
     *,
     trigger: str,
     date_str: Optional[str] = None,

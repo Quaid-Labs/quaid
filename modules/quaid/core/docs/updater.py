@@ -31,7 +31,7 @@ def cmd_update_from_transcript(transcript_path: str, dry_run: bool = False, max_
 
 
 def append_project_logs(
-    project_logs: dict[str, list[str]],
+    project_logs: dict[str, list[object]],
     trigger: str = "Compaction",
     date_str: str | None = None,
     dry_run: bool = False,
@@ -50,7 +50,7 @@ def append_project_logs(
 
 
 def enqueue_project_logs(
-    project_logs: dict[str, list[str]],
+    project_logs: dict[str, list[Any]],
     *,
     trigger: str = "CLI",
     date_str: str | None = None,

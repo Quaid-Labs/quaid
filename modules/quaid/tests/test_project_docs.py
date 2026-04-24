@@ -178,6 +178,37 @@ def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_
     index_project_logs.assert_called_once_with(project="demo")
 
 
+def test_execute_update_once_preserves_structured_project_log_entry_dates(project_env):
+    _tmp_path, _src, entry = project_env
+    from core import project_docs
+    from datastore.docsdb import project_log_queue
+
+    project_log_queue.enqueue_project_logs(
+        {
+            "demo": [
+                {"text": "Started retry middleware rollout", "created_at": "2026-03-01T09:15:00"},
+                {"text": "Added error banner", "created_at": "2026-03-05"},
+            ]
+        },
+        trigger="Compaction",
+        date_str="2026-04-23T08:00:00",
+        session_id="session-queue",
+    )
+    project_log = Path(entry["canonical_path"]) / "PROJECT.log"
+
+    with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
+         patch("core.docs.updater.update_registered_docs", return_value=2), \
+         patch("core.docs.updater.index_project_logs", return_value=1):
+        result = project_docs.execute_update_once("demo")
+
+    assert result["status"] == "fresh"
+    assert result["project_log_queue"]["history_entries_written"] == 2
+    assert project_log_queue.pending_project_log_count("demo") == 0
+    project_log_text = project_log.read_text(encoding="utf-8")
+    assert "- [2026-03-01T09:15:00] Started retry middleware rollout" in project_log_text
+    assert "- [2026-03-05T23:59:59] Added error banner" in project_log_text
+
+
 def test_cleanup_project_state_removes_project_log_queue(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

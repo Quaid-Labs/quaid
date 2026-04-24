@@ -20,7 +20,7 @@ import sys
 logger = logging.getLogger(__name__)
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import get_config
 import datastore.docsdb.registry as docs_registry
@@ -218,7 +218,7 @@ def _index_project_history_log(log_path: Path, *, project_name: str, trigger: st
     )
     return chunks
 def append_project_logs(
-    project_logs: Dict[str, List[str]],
+    project_logs: Dict[str, List[Any]],
     trigger: str = "Compaction",
     date_str: Optional[str] = None,
     dry_run: bool = False,
@@ -254,13 +254,14 @@ def append_project_logs(
     cfg = get_config()
     registry = docs_registry.DocsRegistry()
     effective_now = _project_log_now(date_str)
-    today = effective_now.date().isoformat()
     marker_begin = PROJECT_LOG_BEGIN
     marker_end = PROJECT_LOG_END
     recent_limit = _project_md_recent_log_limit()
     session_prefix_re = re.compile(r"^\s*Session\s+\d+\s*(?:\([^)]*\))?\s*:\s*", flags=re.IGNORECASE)
 
     def _normalize_log_entry(raw: object) -> str:
+        if isinstance(raw, dict):
+            raw = raw.get("text", raw.get("entry", raw.get("note", "")))
         text = str(raw or "").strip()
         if not text:
             return ""
@@ -268,15 +269,58 @@ def append_project_logs(
         text = session_prefix_re.sub("", text)
         return re.sub(r"\s+", " ", text).strip()
 
-    def _append_project_history_log(project_md_path: Path, entries: List[str]) -> int:
+    def _normalize_entry_timestamp(raw: object) -> Optional[str]:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            text = f"{text}T23:59:59"
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat(timespec="seconds")
+        except ValueError:
+            return None
+
+    def _normalize_log_record(raw: object) -> Optional[Dict[str, str]]:
+        text = _normalize_log_entry(raw)
+        if not text:
+            return None
+        created_at = None
+        if isinstance(raw, dict):
+            created_at = (
+                _normalize_entry_timestamp(raw.get("created_at"))
+                or _normalize_entry_timestamp(raw.get("timestamp"))
+                or _normalize_entry_timestamp(raw.get("date"))
+            )
+        if not created_at:
+            created_at = effective_now.isoformat(timespec="seconds")
+        return {
+            "text": text,
+            "created_at": created_at,
+            "day": created_at[:10],
+        }
+
+    def _dedupe_visible_log_records(entries: List[object]) -> List[Dict[str, str]]:
+        deduped: List[Dict[str, str]] = []
+        seen: set[Tuple[str, str]] = set()
+        for raw in entries:
+            record = _normalize_log_record(raw)
+            if not record:
+                continue
+            key = (record["text"], record["day"])
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(record)
+        return deduped
+
+    def _append_project_history_log(project_md_path: Path, entries: List[object]) -> int:
         """Append normalized project log entries to PROJECT.log (no dedupe/folding)."""
-        normalized = [_normalize_log_entry(x) for x in entries]
+        normalized = [_normalize_log_record(x) for x in entries]
         normalized = [x for x in normalized if x]
         if not normalized:
             return 0
         log_path = project_md_path.with_name(PROJECT_HISTORY_FILENAME)
-        ts = effective_now.isoformat(timespec="seconds")
-        lines = [f"- [{ts}] {item}" for item in normalized]
+        lines = [f"- [{record['created_at']}] {record['text']}" for record in normalized]
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
         return len(lines)
@@ -313,9 +357,7 @@ def append_project_logs(
 
     for project_name, raw_entries in project_logs.items():
         metrics["projects_seen"] += 1
-        entries = [_normalize_log_entry(e) for e in (raw_entries or [])]
-        entries = [e for e in entries if e]
-        entries = list(dict.fromkeys(entries))
+        entries = _dedupe_visible_log_records(list(raw_entries or []))
         metrics["entries_seen"] += len(entries)
         if not entries:
             continue
@@ -367,11 +409,20 @@ def append_project_logs(
                     print(f"[project-log] unknown project: {project_name}")
                     continue
                 prefix = f"[from deleted/unknown project {project_name}] "
-                entries_for_write = [f"{prefix}{entry}" for entry in entries]
+                entries_for_write = [
+                    {
+                        **entry,
+                        "text": f"{prefix}{entry['text']}",
+                    }
+                    for entry in entries
+                ]
                 history_entries = [
-                    f"{prefix}{normalized}"
-                    for normalized in (_normalize_log_entry(entry) for entry in (raw_entries or []))
-                    if normalized
+                    {
+                        **record,
+                        "text": f"{prefix}{record['text']}",
+                    }
+                    for record in (_normalize_log_record(entry) for entry in (raw_entries or []))
+                    if record
                 ]
                 project_md = reroute_md
                 print(
@@ -429,7 +480,7 @@ def append_project_logs(
         if not update_project_md:
             continue
 
-        lines = [f"- {today} [{trigger}] {entry}" for entry in entries_for_write]
+        lines = [f"- {entry['day']} [{trigger}] {entry['text']}" for entry in entries_for_write]
         content = project_md.read_text(encoding="utf-8")
         if marker_begin in content and marker_end in content:
             pattern = re.compile(

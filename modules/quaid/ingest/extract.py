@@ -64,6 +64,97 @@ def _project_log_date_for_payload(session_id: str) -> Optional[str]:
     return None
 
 
+def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
+    """Normalize extractor timestamps to stable ISO strings when possible."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return f"{raw}T23:59:59"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.isoformat(timespec="seconds")
+
+
+def _timestamp_sort_key(value: Any) -> Tuple[int, str]:
+    """Return a comparison key that prefers earlier valid timestamps."""
+    normalized = _normalize_extracted_timestamp(value)
+    if not normalized:
+        return (1, "")
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return (1, normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (0, parsed.astimezone(timezone.utc).isoformat(timespec="seconds"))
+
+
+def _prefer_earlier_timestamp(first: Any, second: Any) -> Optional[str]:
+    """Pick the earliest valid timestamp, preferring any valid value over missing."""
+    a = _normalize_extracted_timestamp(first)
+    b = _normalize_extracted_timestamp(second)
+    if a and b:
+        return a if _timestamp_sort_key(a) <= _timestamp_sort_key(b) else b
+    return a or b
+
+
+def _normalize_fact_temporal_hint(
+    fact: Dict[str, Any],
+    *,
+    default_created_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Normalize fact created_at and backfill with a session/date hint when absent."""
+    normalized = dict(fact or {})
+    created_at = _normalize_extracted_timestamp(normalized.get("created_at"))
+    if not created_at:
+        created_at = _normalize_extracted_timestamp(default_created_at)
+    if created_at:
+        normalized["created_at"] = created_at
+    else:
+        normalized.pop("created_at", None)
+    return normalized
+
+
+def _normalize_project_log_entries(
+    entries: Any,
+    *,
+    default_created_at: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Normalize project log payloads into structured text/date entries."""
+    fallback_created_at = _normalize_extracted_timestamp(default_created_at)
+    normalized: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str]] = set()
+    if not isinstance(entries, list):
+        return normalized
+    for raw in entries:
+        if isinstance(raw, dict):
+            text = raw.get("text", raw.get("entry", raw.get("note", "")))
+            created_at = (
+                _normalize_extracted_timestamp(raw.get("created_at"))
+                or _normalize_extracted_timestamp(raw.get("timestamp"))
+                or _normalize_extracted_timestamp(raw.get("date"))
+                or fallback_created_at
+            )
+        else:
+            text = raw
+            created_at = fallback_created_at
+        text = str(text or "").strip()
+        if not text:
+            continue
+        key = (text, str(created_at or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        entry: Dict[str, Any] = {"text": text}
+        if created_at:
+            entry["created_at"] = created_at
+        normalized.append(entry)
+    return normalized
+
+
 class _LazyMemoryService:
     def _svc(self):
         from core.services.memory_service import get_memory_service as _runtime_get_memory_service
@@ -644,6 +735,7 @@ def _repair_non_json_extraction_payload(
         '  "facts": [\n'
         "    {\n"
         '      "text": string,\n'
+        '      "created_at": optional string,\n'
         '      "category": string,\n'
         '      "domains": [string],\n'
         '      "extraction_confidence": "high"|"medium"|"low",\n'
@@ -655,7 +747,7 @@ def _repair_non_json_extraction_payload(
         "  ],\n"
         '  "soul_snippets": {"SOUL.md": [string], "USER.md": [string], "ENVIRONMENT.md": [string]},\n'
         '  "journal_entries": {"SOUL.md": string, "USER.md": string, "ENVIRONMENT.md": string},\n'
-        '  "project_logs": {string: [string]}\n'
+        '  "project_logs": {string: [string|{"text": string, "created_at": optional string}]}\n'
         "}\n"
         "Rules:\n"
         "- Return JSON only.\n"
@@ -843,6 +935,12 @@ def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, 
 
     if _confidence_rank(other.get("extraction_confidence")) > _confidence_rank(merged.get("extraction_confidence")):
         merged["extraction_confidence"] = other.get("extraction_confidence")
+
+    merged_created_at = _prefer_earlier_timestamp(merged.get("created_at"), other.get("created_at"))
+    if merged_created_at:
+        merged["created_at"] = merged_created_at
+    else:
+        merged.pop("created_at", None)
 
     return merged
 
@@ -1041,6 +1139,7 @@ def _slim_carry_fact(fact: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "keywords",
         "privacy",
         "domains",
+        "created_at",
     ):
         value = fact.get(key)
         if value:
@@ -1087,6 +1186,7 @@ def _render_carry_line(fact: Dict[str, Any]) -> str:
     speaker = str(fact.get("speaker", fact.get("source", "")) or "").strip().lower()
     conf = str(fact.get("extraction_confidence", "medium") or "medium").strip().lower()
     project = str(fact.get("project", "") or "").strip()
+    created_at = str(fact.get("created_at", "") or "").strip()
 
     meta_bits = [category]
     if speaker and speaker != "unknown":
@@ -1095,6 +1195,8 @@ def _render_carry_line(fact: Dict[str, Any]) -> str:
         meta_bits.append(conf)
     if project:
         meta_bits.append(f"project:{project}")
+    if created_at:
+        meta_bits.append(f"date:{created_at[:10]}")
     line = f"- [{', '.join(meta_bits)}] {text}"
 
     edges = fact.get("edges", [])
@@ -1212,10 +1314,11 @@ def _merge_parsed_payloads(
     all_facts: List[Dict[str, Any]],
     all_snippets: Dict[str, List[str]],
     all_journal: Dict[str, str],
-    all_project_logs: Dict[str, List[str]],
+    all_project_logs: Dict[str, List[Dict[str, Any]]],
     result: Dict[str, Any],
     chunk_label: str,
     label: str,
+    session_date_hint: Optional[str] = None,
 ) -> None:
     """Merge extracted payloads into top-level accumulators in chunk order."""
     for parsed in payloads:
@@ -1231,7 +1334,12 @@ def _merge_parsed_payloads(
                 if not isinstance(raw_fact.get("text"), str):
                     invalid_fact_count += 1
                     continue
-                valid_facts.append(raw_fact)
+                valid_facts.append(
+                    _normalize_fact_temporal_hint(
+                        raw_fact,
+                        default_created_at=session_date_hint,
+                    )
+                )
             if invalid_fact_count:
                 logger.warning(
                     f"[extract] {label} chunk {chunk_label}: skipped {invalid_fact_count} invalid fact payload(s)"
@@ -1251,9 +1359,10 @@ def _merge_parsed_payloads(
                 all_journal[file] = (all_journal[file] + "\n\n" + entry) if file in all_journal else entry
 
         for project_name, items in (parsed.get("project_logs", {}) or {}).items():
-            if not isinstance(items, list):
-                continue
-            cleaned = [str(it).strip() for it in items if isinstance(it, str) and str(it).strip()]
+            cleaned = _normalize_project_log_entries(
+                items,
+                default_created_at=session_date_hint,
+            )
             if cleaned:
                 all_project_logs.setdefault(str(project_name), []).extend(cleaned)
 
@@ -1298,7 +1407,7 @@ def _synthesize_user_snippets_from_facts(
 def _synthesize_project_logs_from_facts(
     facts: List[Dict[str, Any]],
     published_facts: List[Dict[str, Any]],
-) -> Dict[str, List[str]]:
+) -> Dict[str, List[Dict[str, Any]]]:
     """Fallback project log lines from project-tagged published facts.
 
     Carry-only flushes can arrive with facts already staged/published by other
@@ -1306,7 +1415,7 @@ def _synthesize_project_logs_from_facts(
     successfully published facts preserves PROJECT.log updates without requiring
     another extraction pass.
     """
-    synthesized: Dict[str, List[str]] = {}
+    synthesized: Dict[str, List[Dict[str, Any]]] = {}
     fact_rows = [fact for fact in (facts or []) if isinstance(fact, dict)]
     published_rows = [entry for entry in (published_facts or []) if isinstance(entry, dict)]
     for fact, entry in zip(fact_rows, published_rows):
@@ -1317,9 +1426,13 @@ def _synthesize_project_logs_from_facts(
         text = str(fact.get("text", "") or "").strip()
         if not project_name or not text:
             continue
-        synthesized.setdefault(project_name, []).append(text)
+        log_entry: Dict[str, Any] = {"text": text}
+        created_at = _normalize_extracted_timestamp(fact.get("created_at"))
+        if created_at:
+            log_entry["created_at"] = created_at
+        synthesized.setdefault(project_name, []).append(log_entry)
     return {
-        project_name: list(dict.fromkeys(entries))
+        project_name: _normalize_project_log_entries(entries)
         for project_name, entries in synthesized.items()
         if entries
     }
@@ -1504,11 +1617,26 @@ def apply_extracted_payloads(
     allowed_domains: Optional[set[str]] = None,
 ) -> Dict[str, Any]:
     """Store/publish a previously extracted raw payload bundle."""
-    facts = list(result.get("raw_facts", []) or [])
+    session_date_hint = _project_log_date_for_payload(session_id or "")
+    facts = [
+        _normalize_fact_temporal_hint(
+            fact,
+            default_created_at=session_date_hint,
+        )
+        if isinstance(fact, dict)
+        else fact
+        for fact in list(result.get("raw_facts", []) or [])
+    ]
     facts, collapsed_duplicates = _collapse_duplicate_payload_facts(facts)
     all_snippets = dict(result.get("raw_snippets", {}) or {})
     all_journal = dict(result.get("raw_journal", {}) or {})
-    all_project_logs = dict(result.get("raw_project_logs", {}) or {})
+    all_project_logs = {
+        str(project_name): _normalize_project_log_entries(
+            items,
+            default_created_at=session_date_hint,
+        )
+        for project_name, items in dict(result.get("raw_project_logs", {}) or {}).items()
+    }
     if allowed_domains is None:
         try:
             retrieval_cfg = get_config().retrieval
@@ -2130,35 +2258,42 @@ def apply_extracted_payloads(
         for filename, text in result["journal"].items():
             _load_soul_snippets_module().write_journal_entry(filename, text, trigger=trigger)
 
-    if isinstance(all_project_logs, dict):
-        for project_name, items in all_project_logs.items():
-            cleaned = [s.strip() for s in items if isinstance(s, str) and s.strip()]
+    normalized_project_logs = all_project_logs if isinstance(all_project_logs, dict) else {}
+
+    if isinstance(normalized_project_logs, dict):
+        for project_name, items in normalized_project_logs.items():
+            cleaned = [str(item.get("text", "") or "").strip() for item in items if isinstance(item, dict)]
+            cleaned = [s for s in cleaned if s]
             if cleaned:
                 result["project_logs"][project_name] = cleaned
 
-    if not result["project_logs"]:
+    if not normalized_project_logs:
         synthesized_project_logs = _synthesize_project_logs_from_facts(
             facts,
             result.get("facts", []),
         )
         if synthesized_project_logs:
-            result["project_logs"] = synthesized_project_logs
+            normalized_project_logs = synthesized_project_logs
+            result["project_logs"] = {
+                project_name: [str(item.get("text", "") or "").strip() for item in items if isinstance(item, dict)]
+                for project_name, items in normalized_project_logs.items()
+            }
             logger.info(
                 "[extract] %s: synthesized project logs from %d fact(s) across %d project(s)",
                 label,
-                sum(len(v) for v in synthesized_project_logs.values()),
-                len(synthesized_project_logs),
+                sum(len(v) for v in normalized_project_logs.values()),
+                len(normalized_project_logs),
             )
 
-    if result["project_logs"]:
+    if normalized_project_logs:
         trigger = "Compaction" if "compaction" in label.lower() else (
             "Reset" if "reset" in label.lower() else "CLI"
         )
         try:
             log_metrics = enqueue_project_logs(
-                result["project_logs"],
+                normalized_project_logs,
                 trigger=trigger,
-                date_str=_project_log_date_for_payload(session_id),
+                date_str=session_date_hint,
                 session_id=session_id,
                 owner_id=owner_id,
                 source_instance=os.environ.get("QUAID_INSTANCE"),
@@ -2382,7 +2517,8 @@ def extract_from_transcript(
     all_facts: List[Dict] = []
     all_snippets: Dict[str, List[str]] = {}
     all_journal: Dict[str, str] = {}
-    all_project_logs: Dict[str, List[str]] = {}
+    all_project_logs: Dict[str, List[Dict[str, Any]]] = {}
+    session_date_hint = _project_log_date_for_payload(session_id or "")
     # carry_facts enables cross-invocation carryover: the daemon passes in
     # facts from previous extraction runs in the same session so chunk
     # context is maintained across compaction boundaries.
@@ -2465,6 +2601,7 @@ def extract_from_transcript(
                 result=result,
                 chunk_label=str(ci + 1),
                 label=label,
+                session_date_hint=session_date_hint,
             )
     else:
         result["parallel_root_workers"] = 1
@@ -2495,6 +2632,7 @@ def extract_from_transcript(
                 result=result,
                 chunk_label=str(ci + 1),
                 label=label,
+                session_date_hint=session_date_hint,
             )
 
     result["raw_facts"] = list(all_facts)

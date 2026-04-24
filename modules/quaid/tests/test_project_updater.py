@@ -330,6 +330,36 @@ class TestAppendProjectLogs:
         assert "- 2026-03-07 [Reset] Added migration notes" in project_md.read_text()
         assert "- [2026-03-07T15:30:00] Added migration notes" in project_log.read_text()
 
+    def test_structured_project_logs_preserve_per_entry_dates(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+
+        metrics = append_project_logs(
+            {
+                "test-project": [
+                    {"text": "Shipped retry middleware", "created_at": "2026-03-01T09:15:00"},
+                    {"text": "Added error banner", "created_at": "2026-03-05"},
+                ]
+            },
+            trigger="Compaction",
+            date_str="2026-03-07",
+            dry_run=False,
+        )
+
+        assert metrics["entries_seen"] == 2
+        assert metrics["entries_written"] == 2
+        content = project_md.read_text(encoding="utf-8")
+        assert "- 2026-03-01 [Compaction] Shipped retry middleware" in content
+        assert "- 2026-03-05 [Compaction] Added error banner" in content
+
+        history = project_log.read_text(encoding="utf-8")
+        assert "- [2026-03-01T09:15:00] Shipped retry middleware" in history
+        assert "- [2026-03-05T23:59:59] Added error banner" in history
+        assert "2026-03-07T23:59:59" not in history
+
     def test_appends_into_existing_project_log_block(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs
 

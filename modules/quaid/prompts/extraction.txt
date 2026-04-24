@@ -163,6 +163,7 @@ Respond with JSON only:
       "text": "the extracted fact",
       "speaker": "user|agent",
       "source": "user|agent|subagent|both|tool",
+      "created_at": "optional ISO timestamp or YYYY-MM-DD from the transcript message that introduced the fact",
       "category": "fact|preference|decision|relationship",
       "extraction_confidence": "high|medium|low",
       "domains": ["personal", "technical"],
@@ -186,7 +187,10 @@ Respond with JSON only:
     "ENVIRONMENT.md": ""
   },
   "project_logs": {
-    "recipe-app": ["short note 1", "short note 2"],
+    "recipe-app": [
+      {"text": "short note 1", "created_at": "optional ISO timestamp or YYYY-MM-DD from the transcript message that introduced the change"},
+      {"text": "short note 2"}
+    ],
     "portfolio-site": []
   }
 }
@@ -242,13 +246,14 @@ IMPORTANT: Journal entries are OPTIONAL. Most conversations warrant ZERO entries
 
 Include a "project_logs" object for concise project-context notes that belong in PROJECT.md.
 - Keys are project ids (for example "recipe-app", "portfolio-site")
-- Values are arrays of short strings (1-2 lines each)
+- Values are arrays of short strings or objects with {"text", "created_at"}.
 - Use only concrete state/context from this conversation: decisions, blockers, scope updates, follow-ups
+- When the transcript gives a date or timestamp for the project change, prefer the object form and include that exact source-time in created_at.
 - Preserve exact callable/config/test/schema details when present: command names, endpoints, filenames, table/field names, constants/enums, counts, versions, and full short value lists. Cite every item when an exact list has 20 or fewer items. Do not collapse an available exact list into "etc.", "plus more", or "full set".
 - If no project context exists, return {}
 
 Update output JSON format:
-- Add: "project_logs": {"project-id": ["note 1", "note 2"]}
+- Add: "project_logs": {"project-id": [{"text": "note 1", "created_at": "2026-03-11T23:59:59"}, {"text": "note 2"}]}
 
 If the chunk genuinely contains nothing worth capturing, still return valid JSON and set:
 - "chunk_assessment": "nothing_usable"

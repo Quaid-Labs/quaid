@@ -4292,6 +4292,57 @@ class TestRollingExtraction:
         assert fact["extraction_confidence"] == "high"
         assert sorted(fact["domains"]) == ["health", "personal"]
 
+    def test_merge_staged_payloads_preserves_project_log_entry_dates(self):
+        state = {
+            "raw_facts": [],
+            "raw_project_logs": {
+                "recipe-app": [
+                    {
+                        "text": "Shipped retry middleware",
+                        "created_at": "2026-03-01T09:15:00",
+                    }
+                ]
+            },
+            "rolling_batches": 1,
+            "payload_duplicate_facts_collapsed": 0,
+        }
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {
+                "recipe-app": [
+                    {
+                        "text": "Shipped retry middleware",
+                        "created_at": "2026-03-01T09:15:00",
+                    },
+                    {
+                        "text": "Added error banner",
+                        "created_at": "2026-03-05",
+                    },
+                ]
+            },
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "carry_duplicate_facts_dropped": 0,
+        }
+
+        merged = extraction_daemon.merge_staged_payloads(state, payload)
+
+        assert merged["rolling_batches"] == 2
+        assert merged["raw_project_logs"] == {
+            "recipe-app": [
+                {
+                    "text": "Shipped retry middleware",
+                    "created_at": "2026-03-01T09:15:00",
+                },
+                {
+                    "text": "Added error banner",
+                    "created_at": "2026-03-05T23:59:59",
+                },
+            ]
+        }
+
     def test_merge_staged_payloads_collapses_semantic_duplicate_fact_across_batches(self, monkeypatch):
         import datastore.memorydb.memory_graph as memory_graph
         import lib.similarity as similarity

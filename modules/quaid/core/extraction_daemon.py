@@ -1125,6 +1125,54 @@ def _merge_unique_strings(existing: List[str], incoming: List[str]) -> List[str]
     return combined
 
 
+def _normalize_project_log_timestamp(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return f"{raw}T23:59:59"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.isoformat(timespec="seconds")
+
+
+def _normalize_project_log_entry(raw: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(raw, dict):
+        text = raw.get("text", raw.get("entry", raw.get("note", "")))
+        created_at = (
+            _normalize_project_log_timestamp(raw.get("created_at"))
+            or _normalize_project_log_timestamp(raw.get("timestamp"))
+            or _normalize_project_log_timestamp(raw.get("date"))
+        )
+    else:
+        text = raw
+        created_at = None
+    text = str(text or "").strip()
+    if not text:
+        return None
+    entry: Dict[str, Any] = {"text": text}
+    if created_at:
+        entry["created_at"] = created_at
+    return entry
+
+
+def _merge_project_log_entries(existing: Any, incoming: Any) -> List[Dict[str, Any]]:
+    combined: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str]] = set()
+    for raw in list(existing or []) + list(incoming or []):
+        entry = _normalize_project_log_entry(raw)
+        if not entry:
+            continue
+        key = (str(entry.get("text", "")), str(entry.get("created_at", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append(entry)
+    return combined
+
+
 def _warm_payload_embeddings(facts: List[Dict[str, Any]]) -> Dict[str, int]:
     """Front-load embeddings into cache so final publish stays mostly cache-hit."""
     texts: List[str] = []
@@ -1423,9 +1471,9 @@ def merge_staged_payloads(state: Dict[str, Any], payload_result: Dict[str, Any])
     merged["raw_journal"] = journal
     project_logs = dict(merged.get("raw_project_logs", {}) or {})
     for project_name, items in (payload_result.get("raw_project_logs", {}) or {}).items():
-        project_logs[str(project_name)] = _merge_unique_strings(
+        project_logs[str(project_name)] = _merge_project_log_entries(
             project_logs.get(str(project_name), []),
-            list(items or []),
+            list(items or []) if isinstance(items, list) else [],
         )
     merged["raw_project_logs"] = project_logs
     merged["rolling_batches"] = int(merged.get("rolling_batches", 0) or 0) + 1
@@ -1609,9 +1657,9 @@ def build_flush_payload(state: Dict[str, Any], tail_result: Optional[Dict[str, A
         else:
             combined["raw_journal"][filename] = text.strip()
     for project_name, items in (tail_result.get("raw_project_logs", {}) or {}).items():
-        combined["raw_project_logs"][str(project_name)] = _merge_unique_strings(
+        combined["raw_project_logs"][str(project_name)] = _merge_project_log_entries(
             combined["raw_project_logs"].get(str(project_name), []),
-            list(items or []),
+            list(items or []) if isinstance(items, list) else [],
         )
     for key in (
         "chunks_processed",
@@ -1639,14 +1687,14 @@ def build_flush_payload(state: Dict[str, Any], tail_result: Optional[Dict[str, A
 
 
 def _merge_unique_project_logs(
-    existing: Dict[str, List[str]],
-    incoming: Dict[str, List[str]],
-) -> Dict[str, List[str]]:
+    existing: Dict[str, Any],
+    incoming: Dict[str, Any],
+) -> Dict[str, List[Dict[str, Any]]]:
     merged = dict(existing or {})
     for project_name, items in (incoming or {}).items():
-        merged[str(project_name)] = _merge_unique_strings(
+        merged[str(project_name)] = _merge_project_log_entries(
             merged.get(str(project_name), []),
-            list(items or []),
+            list(items or []) if isinstance(items, list) else [],
         )
     return merged
 

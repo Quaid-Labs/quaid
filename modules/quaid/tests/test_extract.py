@@ -956,7 +956,7 @@ class TestExtractFromTranscript:
         }
         assert applied["project_log_metrics"]["entries_queued"] == 1
         mock_enqueue_project_logs.assert_called_once_with(
-            {"quaid": ["Added a hello_world.py scratch helper for the live test"]},
+            {"quaid": [{"text": "Added a hello_world.py scratch helper for the live test"}]},
             trigger="CLI",
             date_str=None,
             session_id="sess-project-log",
@@ -1012,10 +1012,89 @@ class TestExtractFromTranscript:
         )
 
         mock_enqueue_project_logs.assert_called_once_with(
-            {"recipe-app": ["Added tests/recipe.test.js"]},
+            {
+                "recipe-app": [
+                    {
+                        "text": "Added tests/recipe.test.js",
+                        "created_at": "2026-03-11T23:59:59",
+                    }
+                ]
+            },
             trigger="Compaction",
             date_str="2026-03-11",
             session_id="day-runtime-2026-03-11",
+            owner_id="test",
+            source_instance=os.environ.get("QUAID_INSTANCE"),
+            source_adapter=os.environ.get("QUAID_ADAPTER_TYPE"),
+            dry_run=False,
+        )
+
+    @patch("ingest.extract.enqueue_project_logs")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_facts_inherit_session_date_when_missing_created_at(
+        self,
+        mock_store,
+        mock_enqueue_project_logs,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+        mock_enqueue_project_logs.return_value = {
+            "projects_seen": 1,
+            "entries_seen": 1,
+            "entries_queued": 1,
+            "entries_written": 0,
+            "projects_queued": 1,
+            "queue_failures": 0,
+        }
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Recipe app added centralized retry middleware",
+                    "category": "fact",
+                    "speaker": "assistant",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "project": "recipe-app",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="daemon-compaction",
+            session_id="session-2026-03-12",
+            dry_run=False,
+        )
+
+        assert mock_store.call_args.kwargs["created_at"] == "2026-03-12T23:59:59"
+        assert payload["project_log_metrics"]["entries_queued"] == 1
+        mock_enqueue_project_logs.assert_called_once_with(
+            {
+                "recipe-app": [
+                    {
+                        "text": "Recipe app added centralized retry middleware",
+                        "created_at": "2026-03-12T23:59:59",
+                    }
+                ]
+            },
+            trigger="Compaction",
+            date_str="2026-03-12",
+            session_id="session-2026-03-12",
             owner_id="test",
             source_instance=os.environ.get("QUAID_INSTANCE"),
             source_adapter=os.environ.get("QUAID_ADAPTER_TYPE"),

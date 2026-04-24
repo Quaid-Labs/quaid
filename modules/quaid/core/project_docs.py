@@ -748,7 +748,15 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
 
     for item in items:
         item_id = str(item.get("id") or "").strip()
-        entries = [str(entry).strip() for entry in (item.get("entries") or []) if str(entry).strip()]
+        entries = [
+            entry
+            for entry in (item.get("entries") or [])
+            if (
+                str(entry.get("text", "")).strip()
+                if isinstance(entry, dict)
+                else str(entry).strip()
+            )
+        ]
         metrics["items_seen"] += 1
         metrics["entries_seen"] += len(entries)
         if not item_id:
