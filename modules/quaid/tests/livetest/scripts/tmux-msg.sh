@@ -211,12 +211,16 @@ _user_busy() {
 _submit_message() {
     tmux send-keys -l -t "$PANE" -- "$MESSAGE"
     sleep 0.3
-    # Use several enter-equivalent keys for compatibility across pane types.
-    tmux send-keys -t "$PANE" Enter
-    sleep 0.05
-    tmux send-keys -t "$PANE" C-m
-    sleep 0.05
-    tmux send-keys -t "$PANE" C-j
+    # Different TUIs honor different submit keys. Try them one at a time and
+    # stop as soon as the draft buffer actually clears; otherwise a working
+    # Enter followed by extra submit/newline keys can seed the next draft.
+    local key
+    for key in Enter C-m C-j; do
+        tmux send-keys -t "$PANE" "$key"
+        sleep 0.15
+        _pane_has_draft || return 0
+    done
+    return 0
 }
 
 # --- Wait for user to finish ---
@@ -258,11 +262,11 @@ _submit_message
 for _attempt in 1 2 3; do
     sleep 0.2
     _pane_has_draft || break
-    tmux send-keys -t "$PANE" Enter
-    sleep 0.05
-    tmux send-keys -t "$PANE" C-m
-    sleep 0.05
-    tmux send-keys -t "$PANE" C-j
+    for _key in Enter C-m C-j; do
+        tmux send-keys -t "$PANE" "$_key"
+        sleep 0.15
+        _pane_has_draft || break 2
+    done
 done
 
 if _pane_has_draft; then
