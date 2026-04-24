@@ -406,6 +406,42 @@ def test_requested_janitor_run_completes_single_instance(monkeypatch, tmp_path):
     assert payload["exit_codes"] == {"beta": 0}
 
 
+def test_requested_janitor_run_accumulates_exit_codes_across_polls(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    class _StepProc:
+        def __init__(self, pid, codes):
+            self.pid = pid
+            self._codes = list(codes)
+
+        def poll(self):
+            if self._codes:
+                return self._codes.pop(0)
+            return 0
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+
+    request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
+    workers: dict[str, subprocess.Popen] = {
+        "alpha": _StepProc(101, [0]),
+        "beta": _StepProc(202, [None, 0]),
+    }
+    active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
+
+    active = supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+    assert active is not None
+    assert active["exit_codes"] == {"alpha": 0}
+    payload = project_docs.read_janitor_request()
+    assert payload["exit_codes"] == {"alpha": 0}
+
+    active = supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+    assert active is None
+    payload = project_docs.read_janitor_request()
+    assert payload["status"] == "completed"
+    assert payload["exit_codes"] == {"alpha": 0, "beta": 0}
+
+
 def test_start_janitor_worker_refuses_disabled_instance(monkeypatch):
     from core import project_docs_supervisor as supervisor
 

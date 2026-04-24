@@ -369,6 +369,9 @@ def _maintain_on_demand_janitor_request(
             return None
         return _start_requested_janitor_run(request, scheduled_workers, on_demand_workers)
 
+    accumulated_exit_codes = {
+        str(k): int(v) for k, v in dict(active_request.get("exit_codes") or {}).items()
+    }
     exit_codes: Dict[str, int] = {}
     all_done = True
     for instance, proc in list(on_demand_workers.items()):
@@ -379,7 +382,17 @@ def _maintain_on_demand_janitor_request(
         exit_codes[instance] = int(code)
         on_demand_workers.pop(instance, None)
         project_docs.reap_child_processes()
+    if exit_codes:
+        accumulated_exit_codes.update({str(k): int(v) for k, v in exit_codes.items()})
     if not all_done:
+        if exit_codes:
+            request_id = str(active_request.get("request_id") or "").strip()
+            payload = project_docs.read_janitor_request() or {}
+            if str(payload.get("request_id") or "").strip() == request_id:
+                payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
+                project_docs.write_janitor_request(payload)
+        active_request = dict(active_request)
+        active_request["exit_codes"] = dict(accumulated_exit_codes)
         return active_request
 
     request_id = str(active_request.get("request_id") or "").strip()
@@ -387,13 +400,13 @@ def _maintain_on_demand_janitor_request(
     if str(payload.get("request_id") or "").strip() != request_id:
         payload = {"request_id": request_id}
     errors = list(active_request.get("errors") or [])
-    for instance, code in exit_codes.items():
+    for instance, code in accumulated_exit_codes.items():
         if code != 0:
             errors.append(f"instance {instance} janitor exited rc={code}")
     payload["status"] = "failed" if errors else "completed"
     payload["completed_at"] = project_docs.utc_now()
     payload["errors"] = errors
-    payload["exit_codes"] = {str(k): int(v) for k, v in sorted(exit_codes.items())}
+    payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
     project_docs.write_janitor_request(payload)
     return None
 

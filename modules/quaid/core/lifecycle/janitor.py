@@ -38,7 +38,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
-from lib.config import get_db_path
 from core.runtime.logger import janitor_logger, rotate_logs
 from config import get_config
 from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineContext, RoutineResult
@@ -76,8 +75,6 @@ from lib.runtime_context import (
 )
 from lib.fail_policy import is_fail_hard_enabled
 
-# Configuration — resolved from config system
-DB_PATH = get_db_path()
 def _workspace() -> Path:
     return get_workspace_dir()
 
@@ -90,14 +87,14 @@ def _logs_dir() -> Path:
 _LIFECYCLE_REGISTRY = None
 
 # Thresholds - now loaded from config.json
-_cfg = get_config()
-DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold  # Lower bound for "might be duplicate"
-DUPLICATE_MAX_SIM = _cfg.janitor.dedup.high_similarity_threshold  # Upper bound (auto-reject above)
-CONTRADICTION_MIN_SIM = _cfg.janitor.contradiction.min_similarity  # Minimum similarity for contradiction checks
-CONTRADICTION_MAX_SIM = _cfg.janitor.contradiction.max_similarity  # Maximum similarity for contradiction checks
-CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days  # Start decaying after this many days unused
-CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0  # Convert percent to decimal
-MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
+_cfg = None
+DUPLICATE_MIN_SIM = 0.85  # Lower bound for "might be duplicate"
+DUPLICATE_MAX_SIM = 0.94  # Upper bound (auto-reject above)
+CONTRADICTION_MIN_SIM = 0.2  # Minimum similarity for contradiction checks
+CONTRADICTION_MAX_SIM = 0.95  # Maximum similarity for contradiction checks
+CONFIDENCE_DECAY_DAYS = 90
+CONFIDENCE_DECAY_RATE = 0.10
+MAX_EXECUTION_TIME = 120 * 60
 
 # Fixed values (not in config)
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
@@ -144,6 +141,9 @@ def _refresh_runtime_state() -> None:
 def _ensure_runtime_state() -> None:
     """Keep config-derived globals current for helper-only call paths."""
     global _cfg
+    if _cfg is None:
+        _refresh_runtime_state()
+        return
     latest_cfg = get_config()
     if latest_cfg is not _cfg:
         _refresh_runtime_state()
@@ -526,6 +526,33 @@ def _resolve_apply_mode(args_apply: bool, args_approve: bool) -> tuple[bool, Opt
             "approval required by janitor.applyMode=ask. "
             "Re-run with --approve to apply changes."
         )
+    return True, f"unknown janitor.applyMode={mode}; running dry-run for safety."
+
+
+def _resolve_apply_mode_lightweight(args_apply: bool, args_approve: bool) -> tuple[bool, Optional[str]]:
+    """Resolve apply policy without requiring instance-bound config bootstrap."""
+    if not args_apply:
+        return True, None
+
+    try:
+        from lib.config import _load_lightweight_config  # type: ignore[attr-defined]
+
+        raw = _load_lightweight_config()
+    except Exception:
+        if is_fail_hard_enabled():
+            raise
+        raw = {}
+
+    janitor_cfg = raw.get("janitor", {}) if isinstance(raw, dict) else {}
+    mode = str(janitor_cfg.get("apply_mode", "auto") or "auto").strip().lower()
+    if mode == "auto":
+        return False, None
+    if mode == "dry_run":
+        return True, "apply blocked by janitor.applyMode=dry_run; running dry-run only."
+    if mode == "ask":
+        if args_approve:
+            return False, None
+        return True, "approval required by janitor.applyMode=ask. Re-run with --approve to apply changes."
     return True, f"unknown janitor.applyMode={mode}; running dry-run for safety."
 
 
@@ -1796,7 +1823,6 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    _refresh_runtime_state()
     parser = argparse.ArgumentParser(description="Memory Janitor (Optimized)")
     parser.add_argument("--task", choices=JANITOR_TASK_CHOICES,
                        default="all", help="Task to run")
@@ -1832,6 +1858,22 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args = parser.parse_args(argv)
 
+    requested_instance = str(getattr(args, "instance", "") or "").strip()
+    pre_dry_run, pre_apply_policy_warning = _resolve_apply_mode_lightweight(args.apply, args.approve)
+    if requested_instance and not _can_route_supervisor_janitor(args, dry_run=pre_dry_run):
+        print(
+            "Error: --instance requires the supervisor-owned path "
+            "(use --task all --apply without extra janitor override flags).",
+            file=sys.stderr,
+        )
+        return 1
+    if _can_route_supervisor_janitor(args, dry_run=pre_dry_run):
+        if pre_apply_policy_warning:
+            print(f"[policy] {pre_apply_policy_warning}")
+        return _run_supervisor_janitor_request(instance=requested_instance or None)
+
+    _refresh_runtime_state()
+
     # Resolve token budget precedence: CLI > config > environment fallback.
     try:
         config_token_budget = int(getattr(_cfg.janitor, "token_budget", 0) or 0)
@@ -1862,7 +1904,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
     if apply_policy_warning:
         print(f"[policy] {apply_policy_warning}")
-    requested_instance = str(getattr(args, "instance", "") or "").strip()
     if requested_instance and not _can_route_supervisor_janitor(args, dry_run=dry_run):
         print(
             "Error: --instance requires the supervisor-owned path "
