@@ -30,6 +30,7 @@ CONFIG_PATH="$CONFIG_DEFAULT"
 DEV_ROOT="$HOME/quaidcode/dev"
 BOOT_TIMEOUT=180
 DRY_RUN=0
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -70,13 +71,35 @@ wait_for_ip() {
 wait_for_ssh() {
     local ip="$1" elapsed=0
     while [[ "$elapsed" -lt "$BOOT_TIMEOUT" ]]; do
-        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "${SSH_USER}@${ip}" 'echo ok' 2>/dev/null | grep -q ok; then
+        if ssh "${SSH_OPTS[@]}" "${SSH_USER}@${ip}" 'echo ok' 2>/dev/null | grep -q ok; then
             return 0
         fi
         sleep 5
         elapsed=$((elapsed + 5))
     done
     return 1
+}
+
+verify_preinstall_state() {
+    local remote_host="$1" label="$2"
+    ssh "${SSH_OPTS[@]}" "$remote_host" python3 - "$label" <<'PYEOF'
+import pathlib
+import sys
+
+label = sys.argv[1]
+home = pathlib.Path.home()
+required = [
+    home / "quaidcode" / "dev" / "setup-quaid.mjs",
+    home / ".quaid" / "shared" / "auth" / "credentials.json",
+]
+missing = [str(path) for path in required if not path.is_file()]
+if missing:
+    print(f"{label}: missing required preinstall files:", file=sys.stderr)
+    for path in missing:
+        print(f"  {path}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"{label}: verified preinstall state")
+PYEOF
 }
 
 patch_config_host() {
@@ -144,6 +167,7 @@ rsync -a --checksum \
     --exclude='release-promote-compatibility-work-*/' \
     --exclude='modules/quaid/tmp-lifecycle-*/' \
     "$DEV_ROOT/" "$REMOTE_HOST:~/quaidcode/dev/" 2>&1 | tail -3
+verify_preinstall_state "$REMOTE_HOST" "after-restore" || die "Restored run VM is missing required preinstall state"
 
 echo ""
 echo "Restore complete."

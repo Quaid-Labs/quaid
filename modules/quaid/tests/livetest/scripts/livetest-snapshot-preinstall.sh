@@ -27,6 +27,7 @@ SSH_USER="admin"
 CONFIG_PATH="$CONFIG_DEFAULT"
 BOOT_TIMEOUT=180
 DRY_RUN=0
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -66,13 +67,40 @@ wait_for_ip() {
 wait_for_ssh() {
     local ip="$1" elapsed=0
     while [[ "$elapsed" -lt "$BOOT_TIMEOUT" ]]; do
-        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "${SSH_USER}@${ip}" 'echo ok' 2>/dev/null | grep -q ok; then
+        if ssh "${SSH_OPTS[@]}" "${SSH_USER}@${ip}" 'echo ok' 2>/dev/null | grep -q ok; then
             return 0
         fi
         sleep 5
         elapsed=$((elapsed + 5))
     done
     return 1
+}
+
+verify_preinstall_state() {
+    local remote_host="$1" label="$2"
+    ssh "${SSH_OPTS[@]}" "$remote_host" python3 - "$label" <<'PYEOF'
+import pathlib
+import sys
+
+label = sys.argv[1]
+home = pathlib.Path.home()
+required = [
+    home / "quaidcode" / "dev" / "setup-quaid.mjs",
+    home / ".quaid" / "shared" / "auth" / "credentials.json",
+]
+missing = [str(path) for path in required if not path.is_file()]
+if missing:
+    print(f"{label}: missing required preinstall files:", file=sys.stderr)
+    for path in missing:
+        print(f"  {path}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"{label}: verified preinstall state")
+PYEOF
+}
+
+flush_remote_state() {
+    local remote_host="$1"
+    ssh "${SSH_OPTS[@]}" "$remote_host" 'sync && sleep 1 && sync'
 }
 
 patch_config_host() {
@@ -105,11 +133,19 @@ if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] would stop '$RUN_NAME' if running"
     echo "[dry-run] would delete existing '$SNAPSHOT_NAME' if present"
     echo "[dry-run] would clone '$RUN_NAME' -> '$SNAPSHOT_NAME'"
+    echo "[dry-run] would verify setup-quaid.mjs + shared auth before stop and after restart"
+    echo "[dry-run] would flush guest filesystems before stopping '$RUN_NAME'"
     echo "[dry-run] would restart '$RUN_NAME' and patch config remote.host"
     exit 0
 fi
 
 if [[ "$(vm_state "$RUN_NAME")" == "running" ]]; then
+    CURRENT_VM_IP="$(wait_for_ip "$RUN_NAME")" || die "Run VM '$RUN_NAME' did not report an IP before snapshot."
+    CURRENT_REMOTE_HOST="${SSH_USER}@${CURRENT_VM_IP}"
+    wait_for_ssh "$CURRENT_VM_IP" || die "SSH not ready on $CURRENT_REMOTE_HOST before snapshot"
+    verify_preinstall_state "$CURRENT_REMOTE_HOST" "before-snapshot" || die "Run VM is missing required preinstall state before snapshot"
+    echo "Flushing guest state before snapshot..."
+    flush_remote_state "$CURRENT_REMOTE_HOST" || die "Could not flush guest state before snapshot"
     echo "Stopping run VM '$RUN_NAME'..."
     tart stop "$RUN_NAME"
 fi
@@ -132,6 +168,7 @@ VM_IP="$(wait_for_ip "$RUN_NAME")" || die "Run VM did not get an IP within ${BOO
 wait_for_ssh "$VM_IP" || die "SSH not ready on ${SSH_USER}@${VM_IP}"
 
 patch_config_host "$CONFIG_PATH" "${SSH_USER}@${VM_IP}"
+verify_preinstall_state "${SSH_USER}@${VM_IP}" "after-restart" || die "Run VM lost required preinstall state across snapshot/restart"
 
 echo ""
 echo "Preinstall snapshot ready: $SNAPSHOT_NAME"
