@@ -775,6 +775,26 @@ def test_process_signal_uses_adapter_resolved_transcript_when_signal_path_missin
     assert "cobalt-postage-oc" in captured.get("transcript", "")
 
 
+def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():
+    summary = extraction_daemon._summarize_fact_result_buckets([
+        {"status": "duplicate", "reason": "Already stored"},
+        {"status": "skipped", "reason": "too short (need 3+ words)"},
+        {"status": "skipped", "reason": "unsupported domains: ['weird']"},
+        {"status": "stored"},
+    ])
+
+    assert summary["status_counts"] == {
+        "duplicate": 1,
+        "skipped": 2,
+        "stored": 1,
+    }
+    assert summary["skip_buckets"] == {
+        "duplicate": 1,
+        "too short (need 3+ words)": 1,
+        "unsupported domains": 1,
+    }
+
+
 def test_process_signal_clamps_same_path_cursor_when_oc_transcript_shrinks_in_place(monkeypatch, tmp_path):
     from lib.adapter import set_adapter, reset_adapter
 
@@ -3250,6 +3270,16 @@ class TestRollingExtraction:
         fake_adapter_mod = types.ModuleType("lib.adapter")
         if real_adapter is not None:
             fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
+            fake_adapter_mod.quaid_projects_dir = getattr(
+                real_adapter,
+                "quaid_projects_dir",
+                lambda: tmp_path / "projects",
+            )
+            fake_adapter_mod.quaid_tracking_dir = getattr(
+                real_adapter,
+                "quaid_tracking_dir",
+                lambda: tmp_path / "tracking",
+            )
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
@@ -3441,6 +3471,8 @@ class TestRollingExtraction:
             assert flush_metric["staged_facts"] == 1
             assert flush_metric["carry_facts_final"] == 1
             assert flush_metric["carry_duplicate_facts_dropped"] == 2
+            assert flush_metric["fact_status_counts"] == {"stored": 1}
+            assert flush_metric["skip_buckets"] == {}
             assert flush_metric["payload_duplicate_facts_collapsed"] == 0
             assert flush_metric["snippets_count"] == 1
             assert flush_metric["journals_count"] == 1

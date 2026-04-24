@@ -2319,6 +2319,13 @@ class TestLoadPrompt:
         assert "nothing_usable" in prompt
         assert "usable" in prompt
 
+    def test_prompt_requires_full_sentence_facts_not_bare_fragments(self):
+        from ingest.extract import _load_extraction_prompt
+
+        prompt = _load_extraction_prompt()
+        assert "complete, self-contained statement of at least 3 words" in prompt
+        assert "Never emit a bare name, lone codeword, or noun fragment as a fact" in prompt
+
     def test_truncated_array_scanner_stops_on_mid_string_truncation(self):
         from ingest.extract import _complete_json_objects_from_array
 

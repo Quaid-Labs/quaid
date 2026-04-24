@@ -57,6 +57,8 @@ WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
 QUALITY RULES:
 - Use the user's name as subject, third person
 - Each fact must be self-contained and understandable without context
+- Each fact text must be a complete, self-contained statement of at least 3 words.
+- Never emit a bare name, lone codeword, or noun fragment as a fact. If the transcript only gives a name/codeword, wrap it in the explicit relationship/event stated in the transcript.
 - Be specific: "User likes spicy Thai food" > "User likes food"
 - Favor specific facts over generalities.
 - Preserve concrete anchors from the transcript whenever available: names, organizations, places, dates, times, numbers, and version identifiers.

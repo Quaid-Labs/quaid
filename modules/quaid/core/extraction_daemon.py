@@ -1926,6 +1926,37 @@ def write_rolling_metric(event: str, session_id: str, **data: Any) -> None:
         logger.warning("rolling metric write failed for %s: %s", session_id, exc)
 
 
+def _bucket_fact_reason(status: str, reason: str) -> str:
+    status_text = str(status or "").strip().lower()
+    reason_text = str(reason or "").strip()
+    if status_text == "duplicate":
+        return "duplicate"
+    if status_text == "blocked":
+        return "blocked"
+    if reason_text.startswith("unsupported domains"):
+        return "unsupported domains"
+    if reason_text:
+        return reason_text
+    return status_text or "unknown"
+
+
+def _summarize_fact_result_buckets(facts: Any) -> Dict[str, Dict[str, int]]:
+    status_counts: Dict[str, int] = {}
+    skip_buckets: Dict[str, int] = {}
+    for fact in list(facts or []):
+        if not isinstance(fact, dict):
+            continue
+        status = str(fact.get("status", "") or "").strip().lower() or "unknown"
+        status_counts[status] = int(status_counts.get(status, 0) or 0) + 1
+        if status in {"duplicate", "skipped", "blocked", "failed"}:
+            bucket = _bucket_fact_reason(status, str(fact.get("reason", "") or ""))
+            skip_buckets[bucket] = int(skip_buckets.get(bucket, 0) or 0) + 1
+    return {
+        "status_counts": status_counts,
+        "skip_buckets": skip_buckets,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Transcript reading
 # ---------------------------------------------------------------------------
@@ -3463,6 +3494,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         facts_stored = result.get("facts_stored", 0)
         facts_skipped = result.get("facts_skipped", 0)
         edges_created = result.get("edges_created", 0)
+        fact_bucket_summary = _summarize_fact_result_buckets(result.get("facts"))
         snippets_count = sum(
             len(v)
             for v in (result.get("snippets", {}) or {}).values()
@@ -3472,6 +3504,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         project_log_metrics = dict(result.get("project_log_metrics", {}) or {})
         logger.info("[%s] session %s: %d stored, %d skipped, %d edges",
                     label, session_id, facts_stored, facts_skipped, edges_created)
+        if fact_bucket_summary["skip_buckets"]:
+            logger.info(
+                "[%s] session %s: skip detail %s",
+                label,
+                session_id,
+                json.dumps(fact_bucket_summary["skip_buckets"], sort_keys=True),
+            )
 
         try:
             from core.runtime.notify import notify_memory_extraction
@@ -3563,6 +3602,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             final_facts_stored=facts_stored,
             final_facts_skipped=facts_skipped,
             final_edges_created=edges_created,
+            fact_status_counts=fact_bucket_summary["status_counts"],
+            skip_buckets=fact_bucket_summary["skip_buckets"],
             snippets_count=snippets_count,
             journals_count=journals_count,
             project_logs_seen=int(project_log_metrics.get("entries_seen", 0) or 0),
