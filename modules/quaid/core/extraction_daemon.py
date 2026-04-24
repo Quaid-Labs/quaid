@@ -4405,6 +4405,19 @@ def start_daemon() -> int:
         # Re-check PID under lock
         existing = read_pid()
         if existing is not None:
+            matching = _matching_daemon_pids()
+            extras = [pid for pid in matching if pid != existing]
+            if extras:
+                logger.warning(
+                    "reaping %d extra extraction daemon(s) while keeping pidfile target %s for home=%s instance=%s: %s",
+                    len(extras),
+                    existing,
+                    _quaid_home(),
+                    _instance_id(),
+                    ",".join(str(pid) for pid in extras),
+                )
+                for pid in extras:
+                    _terminate_daemon_pid(pid)
             return existing
         matching = _matching_daemon_pids()
         if len(matching) == 1:

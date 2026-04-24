@@ -284,6 +284,28 @@ def test_start_daemon_adopts_matching_live_worker_without_pidfile(monkeypatch, t
     assert adopted == [8424]
 
 
+def test_start_daemon_reaps_matching_orphans_even_when_pidfile_target_alive(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    terminated = []
+
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: 8452)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [8424, 8452])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_terminate_daemon_pid",
+        lambda pid, **_kwargs: terminated.append(pid) or True,
+    )
+    monkeypatch.setattr(
+        extraction_daemon.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")),
+    )
+
+    assert extraction_daemon.start_daemon() == 8452
+    assert terminated == [8424]
+
+
 def test_stop_daemon_kills_pidfile_target_and_matching_orphans(monkeypatch):
     terminated = []
     removed = []
