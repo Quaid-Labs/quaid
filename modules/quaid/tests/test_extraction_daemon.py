@@ -266,6 +266,55 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
 
 
+def test_start_daemon_adopts_matching_live_worker_without_pidfile(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    adopted = []
+
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [8424])
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda pid: adopted.append(pid))
+    monkeypatch.setattr(
+        extraction_daemon.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")),
+    )
+
+    assert extraction_daemon.start_daemon() == 8424
+    assert adopted == [8424]
+
+
+def test_stop_daemon_kills_pidfile_target_and_matching_orphans(monkeypatch):
+    terminated = []
+    removed = []
+
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: 111)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [111, 222])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_terminate_daemon_pid",
+        lambda pid, **_kwargs: terminated.append(pid) or True,
+    )
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: removed.append(True))
+
+    assert extraction_daemon.stop_daemon() is True
+    assert terminated == [111, 222]
+    assert removed == [True]
+
+
+def test_remove_pid_if_matches_preserves_newer_pidfile(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    pid_path.write_text("8452", encoding="utf-8")
+
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+
+    extraction_daemon._remove_pid_if_matches(8424)
+    assert pid_path.read_text(encoding="utf-8").strip() == "8452"
+
+    extraction_daemon._remove_pid_if_matches(8452)
+    assert not pid_path.exists()
+
+
 def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")

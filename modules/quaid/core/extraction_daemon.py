@@ -38,6 +38,7 @@ import tempfile
 import time
 import traceback
 import uuid
+from io import StringIO
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -429,6 +430,65 @@ def _is_daemon_process(pid: int) -> bool:
         return True
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _all_process_commands_with_env() -> list[tuple[int, str]]:
+    """Return (pid, command-with-env) rows for process scanning."""
+    try:
+        result = subprocess.run(
+            ["ps", "eww", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        rows: list[tuple[int, str]] = []
+        for raw_line in StringIO(result.stdout).read().splitlines():
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            try:
+                pid = int(parts[0])
+            except (IndexError, ValueError):
+                continue
+            command = parts[1] if len(parts) > 1 else ""
+            rows.append((pid, command))
+        return rows
+    except Exception:
+        return []
+
+
+def _matching_daemon_pids(
+    *,
+    quaid_home: Path | str | None = None,
+    instance: str | None = None,
+) -> list[int]:
+    """Return live extraction-daemon worker PIDs for this home+instance."""
+    home = str(quaid_home or _quaid_home()).strip()
+    instance_id = str(instance or _instance_id()).strip()
+    if not home or not instance_id:
+        return []
+    matches: list[int] = []
+    for pid, command in _all_process_commands_with_env():
+        if pid <= 0 or pid == os.getpid():
+            continue
+        if "extraction_daemon.py" not in command or "_worker" not in command:
+            continue
+        if f"QUAID_HOME={home}" not in command:
+            continue
+        if f"QUAID_INSTANCE={instance_id}" not in command:
+            continue
+        if _pid_alive(pid):
+            matches.append(pid)
+    return sorted(set(matches))
+
+
 def _supervisor_alive() -> bool:
     raw = os.environ.get("QUAID_SUPERVISOR_PID", "").strip()
     if not raw:
@@ -472,6 +532,20 @@ def write_pid(pid: int) -> None:
 def remove_pid() -> None:
     try:
         _pid_path().unlink()
+    except OSError:
+        pass
+
+
+def _remove_pid_if_matches(expected_pid: int) -> None:
+    pid_file = _pid_path()
+    try:
+        current = int(pid_file.read_text().strip())
+    except (OSError, ValueError):
+        return
+    if current != int(expected_pid):
+        return
+    try:
+        pid_file.unlink()
     except OSError:
         pass
 
@@ -4237,6 +4311,23 @@ def ensure_alive() -> int:
     return start_daemon()
 
 
+def _terminate_daemon_pid(pid: int, *, grace_seconds: float = 10.0) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.time() + max(0.1, grace_seconds)
+        while time.time() < deadline:
+            if not _pid_alive(pid):
+                return True
+            time.sleep(0.5)
+        if _pid_alive(pid):
+            os.kill(pid, signal.SIGKILL)
+        return not _pid_alive(pid)
+    except OSError:
+        return True
+
+
 def start_daemon() -> int:
     """Start the daemon as a background process. Returns child PID.
 
@@ -4274,6 +4365,21 @@ def start_daemon() -> int:
         existing = read_pid()
         if existing is not None:
             return existing
+        matching = _matching_daemon_pids()
+        if len(matching) == 1:
+            write_pid(matching[0])
+            return matching[0]
+        if matching:
+            logger.warning(
+                "reaping %d matching extraction daemon(s) before spawn for home=%s instance=%s: %s",
+                len(matching),
+                _quaid_home(),
+                _instance_id(),
+                ",".join(str(pid) for pid in matching),
+            )
+            for pid in matching:
+                _terminate_daemon_pid(pid)
+            remove_pid()
 
         # Spawn daemon worker via subprocess.Popen instead of double-fork.
         # double-fork inherits the calling process's Python state (sys.modules,
@@ -4341,26 +4447,21 @@ def stop_daemon() -> bool:
                 fail_hard = bool(is_fail_hard_enabled())
             if fail_hard:
                 raise
+    targets: list[int] = []
     pid = read_pid()
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, signal.SIGTERM)
-        # Wait up to 10s for clean shutdown
-        for _ in range(20):
-            time.sleep(0.5)
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                remove_pid()
-                return True
-        # Force kill if still alive
-        os.kill(pid, signal.SIGKILL)
-        remove_pid()
-        return True
-    except OSError:
+    if pid is not None:
+        targets.append(pid)
+    for match_pid in _matching_daemon_pids():
+        if match_pid not in targets:
+            targets.append(match_pid)
+    if not targets:
         remove_pid()
         return False
+    stopped = False
+    for target_pid in targets:
+        stopped = _terminate_daemon_pid(target_pid) or stopped
+    remove_pid()
+    return stopped
 
 
 def daemon_status() -> Dict[str, Any]:
@@ -4434,7 +4535,7 @@ def main():
         except Exception as _e:
             logger.error("daemon crashed: %s", _e, exc_info=True)
         finally:
-            remove_pid()
+            _remove_pid_if_matches(os.getpid())
             os._exit(0)
     else:
         parser.print_help()

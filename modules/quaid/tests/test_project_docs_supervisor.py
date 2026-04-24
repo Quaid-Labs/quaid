@@ -208,6 +208,47 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
     assert env["QUAID_DAEMON"] == "1"
 
 
+def test_start_instance_monitor_adopts_matching_live_daemon_without_pidfile(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from core import extraction_daemon
+
+    adopted = []
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [8424])
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda pid: adopted.append(pid))
+    monkeypatch.setattr(
+        supervisor.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")),
+    )
+
+    assert supervisor._start_instance_monitor("codex-private-tmp-cdx-livetest") == 8424
+    assert adopted == [8424]
+
+
+def test_stop_instance_monitor_kills_pidfile_target_and_matching_orphans(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from core import extraction_daemon
+
+    terminated = []
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: 111)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [111, 222])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_terminate_daemon_pid",
+        lambda pid, **_kwargs: terminated.append(pid) or True,
+    )
+
+    assert supervisor._stop_instance_monitor("codex-private-tmp-cdx-livetest") is True
+    assert terminated == [111, 222]
+
+
 def test_wait_for_instance_pid_accepts_concurrent_live_monitor(monkeypatch):
     from core import project_docs_supervisor as supervisor
 

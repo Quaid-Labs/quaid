@@ -9,6 +9,7 @@ workers apply docs updates, and janitor workers run bounded maintenance ticks.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 import signal
@@ -183,6 +184,25 @@ def _start_instance_monitor(instance: str) -> int:
     existing = _read_instance_daemon_pid(name)
     if existing is not None:
         return existing
+    from core import extraction_daemon as _extraction_daemon
+
+    matching = _extraction_daemon._matching_daemon_pids(quaid_home=quaid_home(), instance=name)
+    if len(matching) == 1:
+        _extraction_daemon.write_pid(matching[0])
+        return matching[0]
+    if matching:
+        logging.getLogger(__name__).warning(
+            "reaping %d matching extraction daemon(s) before supervisor spawn for %s: %s",
+            len(matching),
+            name,
+            ",".join(str(pid) for pid in matching),
+        )
+        for pid in matching:
+            _extraction_daemon._terminate_daemon_pid(pid)
+        try:
+            _instance_daemon_pid_path(name).unlink(missing_ok=True)
+        except OSError:
+            pass
     script = Path(__file__).parent / "extraction_daemon.py"
     env = _instance_child_env(name, daemon=True)
     with _instance_daemon_log_path(name).open("ab") as log_fh:
@@ -203,26 +223,27 @@ def _start_instance_monitor(instance: str) -> int:
 
 def _stop_instance_monitor(instance: str) -> bool:
     name = validate_instance_id(instance)
+    from core import extraction_daemon as _extraction_daemon
+
+    targets: list[int] = []
     pid = _read_instance_daemon_pid(name)
-    if pid is None:
+    if pid is not None:
+        targets.append(pid)
+    for match_pid in _extraction_daemon._matching_daemon_pids(quaid_home=quaid_home(), instance=name):
+        if match_pid not in targets:
+            targets.append(match_pid)
+    if not targets:
+        try:
+            _instance_daemon_pid_path(name).unlink(missing_ok=True)
+        except OSError:
+            pass
         return False
+    for target_pid in targets:
+        _extraction_daemon._terminate_daemon_pid(target_pid)
     try:
-        os.kill(pid, signal.SIGTERM)
-        deadline = time.time() + 10.0
-        while time.time() < deadline:
-            if not _pid_alive(pid):
-                break
-            time.sleep(0.1)
-        if _pid_alive(pid):
-            os.kill(pid, signal.SIGKILL)
+        _instance_daemon_pid_path(name).unlink(missing_ok=True)
     except OSError:
         pass
-    finally:
-        if not _pid_alive(pid):
-            try:
-                _instance_daemon_pid_path(name).unlink(missing_ok=True)
-            except OSError:
-                pass
     return True
 
 
