@@ -3593,11 +3593,13 @@ async function step1_preflight() {
     if (responsesEndpointChanged || agentModelChanged || runtimeEnvChanged) {
       s.message("Restarting OpenClaw gateway...");
       const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
-      if (restart.status === 0) {
-        s.message("Waiting for gateway to come online...");
-        await waitForGatewayWarmup(30_000);
-        await _reassertOpenClawPostRestartState("preflight config reconcile", _preinstallOpenClawManagedState);
+      if (restart.status !== 0) {
+        const detail = String(restart.stderr || restart.stdout || "").trim();
+        log.warn(`OpenClaw gateway restart during preflight exited non-zero (will verify health next): ${detail || "unknown"}`);
       }
+      s.message("Waiting for gateway to come online...");
+      await waitForGatewayWarmup(30_000);
+      await _reassertOpenClawPostRestartState("preflight config reconcile", _preinstallOpenClawManagedState);
     }
     _ensureOpenClawCompactionModeDefault();
     s.stop(C.green("OpenClaw") + " gateway running");
@@ -4926,12 +4928,12 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     if (runtimeEnvReconciled) {
       log.info(`Reconciled OpenClaw runtime instance env to ${resolvedInstanceId}`);
       const restart = spawnSync("openclaw", ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
-      if (restart.status === 0) {
-        await waitForGatewayWarmup(30_000);
-        await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);
-      } else {
-        log.warn("OpenClaw gateway restart after runtime env reconcile failed.");
+      if (restart.status !== 0) {
+        const detail = String(restart.stderr || restart.stdout || "").trim();
+        log.warn(`OpenClaw gateway restart after runtime env reconcile exited non-zero (will verify health next): ${detail || "unknown"}`);
       }
+      await waitForGatewayWarmup(30_000);
+      await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);
     }
   }
   if (_isPlatform("claude-code")) {
