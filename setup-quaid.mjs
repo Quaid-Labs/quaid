@@ -2663,17 +2663,8 @@ function sanitizeNativeMemoryPlugins(parsed, changedBits) {
   }
   if (!isRecord(plugins.entries)) plugins.entries = {};
   for (const pluginId of nativeIds) {
-    const current = plugins.entries[pluginId];
-    if (!isRecord(current)) {
-      if (current !== undefined) {
-        plugins.entries[pluginId] = { disabled: true };
-        changedBits.push(\`plugins.entries.\${pluginId}\`);
-      }
-      continue;
-    }
-    if (current.disabled !== true || Object.prototype.hasOwnProperty.call(current, "enabled")) {
-      delete current.enabled;
-      current.disabled = true;
+    if (Object.prototype.hasOwnProperty.call(plugins.entries, pluginId)) {
+      delete plugins.entries[pluginId];
       changedBits.push(\`plugins.entries.\${pluginId}\`);
     }
   }

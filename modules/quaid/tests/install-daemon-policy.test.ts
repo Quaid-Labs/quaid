@@ -309,6 +309,8 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);');
     expect(setupText).toContain("native-memory-plugins");
+    expect(setupText).not.toContain('plugins.entries[pluginId] = { disabled: true }');
+    expect(setupText).not.toContain("current.disabled !== true");
     expect(setupText).toContain("Restarting gateway to apply changes.");
   });
 

@@ -14,7 +14,7 @@ function writeJson(filePath: string, value: unknown): void {
 }
 
 describe("OpenClaw native memory plugin sanitizer", () => {
-  it("removes native memory plugins from allow, disables their entries, and rebinds memory slot to quaid", () => {
+  it("removes native memory plugins from allow and entries, and rebinds memory slot to quaid", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-sanitize-"));
     const cfgPath = path.join(root, "openclaw.json");
     writeJson(cfgPath, {
@@ -38,12 +38,12 @@ describe("OpenClaw native memory plugin sanitizer", () => {
 
     expect(result.changed).toBe(true);
     expect(result.removedAllow.sort()).toEqual([...OPENCLAW_NATIVE_MEMORY_PLUGIN_IDS].sort());
-    expect(result.disabledEntries.sort()).toEqual([...OPENCLAW_NATIVE_MEMORY_PLUGIN_IDS].sort());
+    expect(result.removedEntries.sort()).toEqual([...OPENCLAW_NATIVE_MEMORY_PLUGIN_IDS].sort());
     expect(result.reboundMemorySlot).toBe(true);
     expect(cfg.plugins.allow).toEqual(["quaid", "matrix", "openai"]);
-    expect(cfg.plugins.entries["active-memory"].disabled).toBe(true);
-    expect(cfg.plugins.entries["memory-core"].disabled).toBe(true);
-    expect(cfg.plugins.entries["memory-wiki"].disabled).toBe(true);
+    expect(cfg.plugins.entries["active-memory"]).toBeUndefined();
+    expect(cfg.plugins.entries["memory-core"]).toBeUndefined();
+    expect(cfg.plugins.entries["memory-wiki"]).toBeUndefined();
     expect(cfg.plugins.entries.quaid.enabled).toBe(true);
     expect(cfg.plugins.entries.matrix.enabled).toBe(true);
     expect(cfg.plugins.slots.memory).toBe("quaid");
@@ -59,7 +59,6 @@ describe("OpenClaw native memory plugin sanitizer", () => {
         entries: {
           quaid: { enabled: true },
           matrix: { enabled: true },
-          "memory-core": { disabled: true },
         },
         slots: {
           memory: "quaid",
@@ -99,7 +98,7 @@ describe("OpenClaw native memory plugin sanitizer", () => {
 
     expect(result.changed).toBe(true);
     expect(cfg.plugins.allow).toEqual(["quaid", "matrix"]);
-    expect(cfg.plugins.entries["active-memory"].disabled).toBe(true);
+    expect(cfg.plugins.entries["active-memory"]).toBeUndefined();
     expect(cfg.plugins.entries.matrix.enabled).toBe(true);
     expect(cfg.plugins.slots.memory).toBe("quaid");
     fs.rmSync(root, { recursive: true, force: true });
