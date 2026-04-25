@@ -1810,6 +1810,42 @@ class TestCodexAdapter:
         assert "pending Quaid notice" not in transcript
         assert "Tell me about Baxter." in transcript
 
+    def test_parse_session_jsonl_strips_openclaw_self_memory_acknowledgement(self, tmp_path):
+        path = tmp_path / "rollout-openclaw-memory-ack.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "Quick one to remember: my workshop safe codeword is cobalt-postage-oc.",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "Got it, I have remembered cobalt-postage-oc and saved it in "
+                                    "memory/2026-04-25-1909.md / openclaw-workspace."
+                                ),
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "cobalt-postage-oc" in transcript
+        assert "saved it in memory/" not in transcript
+        assert "I have remembered" not in transcript
+
     def test_resolve_stop_hook_signal_returns_none_for_regular_turn(self, tmp_path):
         path = tmp_path / "rollout-regular-turn.jsonl"
         path.write_text(

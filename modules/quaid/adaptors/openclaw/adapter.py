@@ -560,6 +560,11 @@ class OpenClawAdapter(QuaidAdapter):
         value = super().sanitize_transcript_text(text)
         if not value:
             return ""
+        lowered = value.lower()
+        if "i have remembered" in lowered and (
+            "saved in memory/" in lowered or "openclaw-workspace" in lowered
+        ):
+            return ""
         value = self._OC_INTERNAL_CONTEXT_RE.sub("", value)
         value = self._OC_UNTRUSTED_METADATA_RE.sub("", value)
         value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
