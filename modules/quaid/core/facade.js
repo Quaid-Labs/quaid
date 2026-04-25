@@ -905,6 +905,17 @@ function createQuaidFacade(deps) {
     }
     return "";
   }
+  function extractChannelFromSessionKey(sessionKey) {
+    const key = String(sessionKey || "").trim().toLowerCase();
+    if (!key) return "";
+    if (key.startsWith("agent:")) {
+      const parts = key.split(":").filter(Boolean);
+      if (parts.length >= 3) {
+        return String(parts[2] || "").trim().toLowerCase();
+      }
+    }
+    return "";
+  }
   function readMessagesFromSessionJsonl(sessionFile) {
     const content = fs.readFileSync(sessionFile, "utf8");
     const lines = content.trim().split("\n");
@@ -2636,7 +2647,8 @@ ${lines.join("\n")}
       maxInjectionIdsPerSession
     } = params;
     if (!Array.isArray(allMemories) || allMemories.length === 0) return null;
-    const currentOwner = resolveOwner();
+    const sessionKey = extractSessionKey(eventMessages, context);
+    const currentOwner = resolveOwner(void 0, extractChannelFromSessionKey(sessionKey));
     const filtered = filterMemoriesByPrivacy(allMemories, currentOwner);
     if (!filtered.length) return null;
     const uniqueSessionId = extractSessionId(eventMessages || [], context);
@@ -2665,7 +2677,7 @@ ${formatted}` : formatted;
       maxInjectionIdsPerSession,
       {
         visibleTurnCount,
-        sessionKey: extractSessionKey(eventMessages, context)
+        sessionKey
       }
     );
     return { prependContext, toInject, uniqueSessionId };

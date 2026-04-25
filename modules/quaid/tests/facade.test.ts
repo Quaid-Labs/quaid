@@ -1392,6 +1392,43 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext resolves owner from matrix session channel", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-owner-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        users: {
+          defaultOwner: "quaid",
+          identities: {
+            owner: {
+              channels: { matrix: ["*"] },
+            },
+          },
+        },
+      })),
+    }));
+    const baseMemories = [
+      { text: "public fact", category: "fact", similarity: 0.9 },
+      { text: "owner private", category: "fact", similarity: 0.85, privacy: "private", ownerId: "owner" },
+      { text: "other private", category: "fact", similarity: 0.8, privacy: "private", ownerId: "alice" },
+    ];
+
+    const result = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-owner", sessionKey: "agent:main:matrix:room-alpha" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.toInject.map((m) => m.text)).toEqual(["public fact", "owner private"]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("prepareAutoInjectionContext re-injects for a fresh conversation restart on the same session id", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-reset-"));
     await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });

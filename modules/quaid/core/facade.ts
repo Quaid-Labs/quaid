@@ -1451,6 +1451,18 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return "";
   }
 
+  function extractChannelFromSessionKey(sessionKey: string): string {
+    const key = String(sessionKey || "").trim().toLowerCase();
+    if (!key) return "";
+    if (key.startsWith("agent:")) {
+      const parts = key.split(":").filter(Boolean);
+      if (parts.length >= 3) {
+        return String(parts[2] || "").trim().toLowerCase();
+      }
+    }
+    return "";
+  }
+
   function readMessagesFromSessionJsonl(sessionFile: string): any[] {
     const content = fs.readFileSync(sessionFile, "utf8");
     const lines = content.trim().split("\n");
@@ -3484,7 +3496,8 @@ ${lines.join("\n")}
       maxInjectionIdsPerSession,
     } = params;
     if (!Array.isArray(allMemories) || allMemories.length === 0) return null;
-    const currentOwner = resolveOwner();
+    const sessionKey = extractSessionKey(eventMessages, context);
+    const currentOwner = resolveOwner(undefined, extractChannelFromSessionKey(sessionKey));
     const filtered = filterMemoriesByPrivacy(allMemories, currentOwner);
     if (!filtered.length) return null;
 
@@ -3520,7 +3533,7 @@ ${lines.join("\n")}
       maxInjectionIdsPerSession,
       {
         visibleTurnCount,
-        sessionKey: extractSessionKey(eventMessages, context),
+        sessionKey,
       },
     );
     return { prependContext, toInject, uniqueSessionId };
