@@ -1167,6 +1167,34 @@ function selectMissingUserMessageRecoveryMessage(
   return { text: text.slice(0, 1_000), ageMs };
 }
 
+function selectTranscriptTailRecoveryMessage(
+  currentSessionId?: string,
+): { text: string; sessionId: string } | null {
+  const sessionId = String(currentSessionId || "").trim();
+  if (!sessionId) return null;
+  const transcriptPath = preferredTranscriptPathForSession(sessionId, "");
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
+  const messages = parseSessionMessagesJsonl(transcriptPath);
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  if (isInternalTranscriptMessages(messages)) return null;
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const message = messages[idx];
+    if (String(message?.role || "").trim().toLowerCase() !== "user") continue;
+    const rawText = String(
+      message?.content
+      || message?.text
+      || message?.message
+      || facade.getMessageText(message)
+      || ""
+    ).trim();
+    const text = scrubAutoInjectQuery(rawText).slice(0, 500);
+    if (text.length < 3 || text.startsWith("/")) continue;
+    if (_isInternalMaintenanceMessageText(text)) continue;
+    return { text, sessionId };
+  }
+  return null;
+}
+
 function buildMissingUserMessageOverride(recovered: { text: string; ageMs: number } | null): string | undefined {
   if (!recovered) return undefined;
   return [
@@ -1236,6 +1264,15 @@ function selectAutoInjectQuery(
     return {
       query: lastUserMessageQuery.text.slice(0, 500),
       source: "message_received_cache",
+      rawPrompt,
+    };
+  }
+
+  const transcriptTailRecovery = selectTranscriptTailRecoveryMessage(currentSessionId);
+  if (transcriptTailRecovery) {
+    return {
+      query: transcriptTailRecovery.text,
+      source: "transcript_tail",
       rawPrompt,
     };
   }

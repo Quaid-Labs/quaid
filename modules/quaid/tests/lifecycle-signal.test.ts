@@ -609,6 +609,44 @@ describe("lifecycle signal detection", () => {
     expect(selected.source).toBe("message_received_cache");
   });
 
+  it("falls back to the tracked transcript tail when hook payload and cache are empty", async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-tail-"));
+    const sessionId = "sess-tail-recovery";
+    const sessionFile = path.join(baseDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "user_message",
+            message: "[Sat 2026-04-26 08:00 GMT+8] What grinder do I use for my espresso setup?",
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      isolatedTest.rememberSessionTranscriptPath(sessionId, sessionFile, "test");
+      const selected = isolatedTest.selectAutoInjectQuery(
+        {
+          prompt: "",
+          messages: [],
+        },
+        null,
+        10_000,
+        sessionId,
+      );
+      expect(selected.query).toBe("What grinder do I use for my espresso setup?");
+      expect(selected.source).toBe("transcript_tail");
+    } finally {
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+
   it("keys duplicate auto-inject hook surfaces by agent and normalized query", () => {
     const first = __test.autoInjectTurnKey("main", "What do you know about my dog Baxter?");
     const duplicate = __test.autoInjectTurnKey("main", "  what   do you know about my dog Baxter? ");
