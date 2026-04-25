@@ -177,7 +177,7 @@ class TestIndexDocument:
             chunk_texts,
             pool_name="rag_embeddings",
             task_name="rag",
-            timeout_s=20.0,
+            timeout_s=60.0,
         )
 
         with sqlite3.connect(rag.db_path) as conn:

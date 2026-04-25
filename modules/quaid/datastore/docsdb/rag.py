@@ -134,7 +134,10 @@ def _docs_embedding_timeout_seconds() -> float:
         global_timeout = 120.0
     if global_timeout <= 0:
         global_timeout = 120.0
-    return min(20.0, global_timeout)
+    # Docs indexing is maintenance/background work, not an interactive hook path.
+    # Keep a bounded timeout, but allow slower Ollama startup/model-load latencies
+    # on live-test VMs before we fail hard and abort reindexing.
+    return min(60.0, global_timeout)
 
 
 def _docs_recall_telemetry_enabled() -> bool:
