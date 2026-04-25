@@ -349,6 +349,22 @@ describe("install daemon policy", () => {
     expect(currentCaptureInFinal).toBeGreaterThan(persistedInFinal);
   });
 
+  it("OpenClaw install acquires a host-level config lock before preflight writes", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function _ensureOpenClawHostConfigLock()");
+    expect(setupText).toContain('const lockFile = path.join(openClawRoot, ".quaid-installer.lock");');
+    expect(setupText).toContain("Another installer is already mutating the host OpenClaw config.");
+    expect(setupText).toContain("_ensureOpenClawHostConfigLock();");
+
+    const lockCall = setupText.indexOf("_ensureOpenClawHostConfigLock();");
+    const preflightHook = setupText.indexOf('runAdapterInstallHook(resolvedInstallerPlatform(), "preinstall");');
+    expect(lockCall).toBeGreaterThan(-1);
+    expect(preflightHook).toBeGreaterThan(-1);
+    expect(lockCall).toBeLessThan(preflightHook);
+  });
+
   it("OpenClaw shared config seeds transcript mirror prefixes for lean instance layering", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

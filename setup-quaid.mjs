@@ -682,6 +682,7 @@ let _existingInstallDetected = false;
 let _chainedPlatformInstall = false;
 let _chainedPlatformQueue = [];
 let _sharedCredentialSelection = "unset";
+let _releaseOpenClawHostLock = null;
 
 function _refreshAdapterManifests() {
   try {
@@ -3346,6 +3347,8 @@ async function step1_preflight() {
   } else {
     s.start(`Checking ${resolvedInstallerPlatform() || "installer"} environment...`);
   }
+
+  _ensureOpenClawHostConfigLock();
 
   const installState = detectExistingInstallState();
   _existingInstallDetected = !!installState.hasInstall;
@@ -6934,6 +6937,59 @@ function formatPreInstallSurvey(plan) {
   return lines.join("\n");
 }
 
+function _acquireExclusiveInstallLock(lockFile) {
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  fs.writeFileSync(lockFile, new Date().toISOString(), { flag: "wx" });
+  const release = () => {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {
+      // ignore
+    }
+  };
+  process.on("exit", release);
+  process.on("SIGINT", () => {
+    release();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    release();
+    process.exit(143);
+  });
+  return release;
+}
+
+function _ensureOpenClawHostConfigLock() {
+  if (DRY_RUN || _releaseOpenClawHostLock) return;
+  if (!_isPlatform("openclaw")) return;
+
+  const openClawRoot = path.join(os.homedir(), ".openclaw");
+  const lockFile = path.join(openClawRoot, ".quaid-installer.lock");
+  try {
+    _releaseOpenClawHostLock = _acquireExclusiveInstallLock(
+      lockFile,
+      path.join(openClawRoot, "openclaw.json"),
+    );
+  } catch (lockErr) {
+    if (lockErr.code === "EEXIST") {
+      const lockedAt = (() => {
+        try {
+          return fs.readFileSync(lockFile, "utf8").trim();
+        } catch {
+          return "unknown";
+        }
+      })();
+      console.error("\n[x] Another installer is already mutating the host OpenClaw config.");
+      console.error(`    Config:    ${path.join(openClawRoot, "openclaw.json")}`);
+      console.error(`    Lock file: ${lockFile}`);
+      console.error(`    Started:   ${lockedAt}`);
+      console.error("    Wait for the active installer to finish, or delete the stale lock file if it crashed.");
+      process.exit(1);
+    }
+    console.warn(`[warn] Could not acquire OpenClaw host config lock (${lockErr.message}); proceeding without lock.`);
+  }
+}
+
 // =============================================================================
 // Main
 // =============================================================================
@@ -6941,13 +6997,10 @@ async function main() {
   // --- Installer lock: prevent concurrent runs against the same workspace ---
   // Dry-run writes nothing, so it does not need exclusive access.
   const LOCK_FILE = path.join(RUNTIME_DIR, ".installer.lock");
-  let _lockAcquired = false;
   if (DRY_RUN) {
     // Skip lock in dry-run mode — no writes, no need to block concurrent installs.
   } else try {
-    fs.mkdirSync(RUNTIME_DIR, { recursive: true });
-    fs.writeFileSync(LOCK_FILE, new Date().toISOString(), { flag: "wx" }); // exclusive create
-    _lockAcquired = true;
+    _acquireExclusiveInstallLock(LOCK_FILE);
   } catch (lockErr) {
     if (lockErr.code === "EEXIST") {
       const lockedAt = (() => { try { return fs.readFileSync(LOCK_FILE, "utf8").trim(); } catch { return "unknown"; } })();
@@ -6959,12 +7012,6 @@ async function main() {
     }
     // Non-EEXIST (e.g. permissions) — warn but continue without lock
     console.warn(`[warn] Could not acquire installer lock (${lockErr.message}); proceeding without lock.`);
-  }
-  if (_lockAcquired) {
-    const _releaseLock = () => { try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ } };
-    process.on("exit", _releaseLock);
-    process.on("SIGINT",  () => { _releaseLock(); process.exit(130); });
-    process.on("SIGTERM", () => { _releaseLock(); process.exit(143); });
   }
   // --- End installer lock ---
 
