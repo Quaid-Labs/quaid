@@ -182,7 +182,8 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const runtimeEnvReconciled = _ensureOpenClawRuntimeInstanceEnv(resolvedInstanceId);");
     expect(setupText).toContain("Reconciled OpenClaw runtime instance env to");
     expect(setupText).toContain('spawnSync("openclaw", ["gateway", "restart"]');
-    expect(setupText).toContain("const preservedOpenClawManagedState = _isPlatform(\"openclaw\") ? _captureOpenClawManagedState() : null;");
+    expect(setupText).toContain("const preservedOpenClawManagedState = _isPlatform(\"openclaw\")");
+    expect(setupText).toContain("composeOpenClawManagedStateSnapshots(");
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);');
   });
 
@@ -320,6 +321,10 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('spawnSync("launchctl", ["kickstart", "-k", GATEWAY_SERVICE], { stdio: "pipe" });');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);');
+    expect(setupText).toContain("_preinstallOpenClawManagedState = _captureOpenClawManagedState();");
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("preflight config reconcile", _preinstallOpenClawManagedState);');
+    expect(setupText).toContain("composeOpenClawManagedStateSnapshots(");
+    expect(setupText).toContain("_preinstallOpenClawManagedState,");
     expect(setupText).toContain("_captureOpenClawManagedState(),");
     expect(setupText).toContain("preservedOpenClawManagedState,");
     expect(setupText).toContain("let postHookReadyError = null;");

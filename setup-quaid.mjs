@@ -336,6 +336,7 @@ if (INSTALL_ALL_PLATFORMS && (FORCED_ADAPTER_TYPE || INSTALL_ARGS.claudeCode)) {
 
 const FIXED_QUAID_HOME = path.resolve(path.join(os.homedir(), ".quaid"));
 const FIXED_VISIBLE_HOME = path.resolve(path.join(os.homedir(), "quaid"));
+let _preinstallOpenClawManagedState = null;
 
 function _normalizeInstallPath(raw) {
   const value = String(raw || "").trim();
@@ -3575,6 +3576,9 @@ async function step1_preflight() {
 
     // --- Onboarding / agents list ---
     const cfgCli = "openclaw";
+    if (!_preinstallOpenClawManagedState) {
+      _preinstallOpenClawManagedState = _captureOpenClawManagedState();
+    }
     s.message("Checking OpenClaw agent configuration...");
     let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
     if (!hasAgent) {
@@ -3592,6 +3596,7 @@ async function step1_preflight() {
       if (restart.status === 0) {
         s.message("Waiting for gateway to come online...");
         await waitForGatewayWarmup(30_000);
+        await _reassertOpenClawPostRestartState("preflight config reconcile", _preinstallOpenClawManagedState);
       }
     }
     _ensureOpenClawCompactionModeDefault();
@@ -4880,7 +4885,12 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
-  const preservedOpenClawManagedState = _isPlatform("openclaw") ? _captureOpenClawManagedState() : null;
+  const preservedOpenClawManagedState = _isPlatform("openclaw")
+    ? composeOpenClawManagedStateSnapshots(
+        _captureOpenClawManagedState(),
+        _preinstallOpenClawManagedState,
+      )
+    : null;
   // Installer creates only shared/runtime state. Per-instance silos are created
   // on first hook use, once the adapter has the real instance ID.
   const resolvedInstanceId = String(process.env.QUAID_INSTANCE || "").trim();
