@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 # Ensure plugin root is on the path
@@ -1591,3 +1592,22 @@ class TestLightweightLibConfig:
 
         with patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
             assert get_ollama_url() == "http://localhost:11434"
+
+    def test_db_paths_use_env_home_without_instance(self, tmp_path, monkeypatch):
+        from lib.config import get_archive_db_path, get_db_path
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+        monkeypatch.delenv("MEMORY_ARCHIVE_DB_PATH", raising=False)
+        fake_cfg = SimpleNamespace(
+            database=SimpleNamespace(
+                path="data/memory.db",
+                archive_path="data/memory_archive.db",
+            )
+        )
+
+        with patch("config.get_config", return_value=fake_cfg), \
+             patch("lib.adapter.get_adapter", side_effect=AssertionError("adapter should not be used")):
+            assert get_db_path() == (tmp_path / "data" / "memory.db").resolve()
+            assert get_archive_db_path() == (tmp_path / "data" / "memory_archive.db").resolve()

@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 def _workspace_root() -> Path:
-    """Get workspace root from adapter (lazy to avoid circular import at module load)."""
+    """Get hidden workspace root, preferring env home when no instance is active."""
+    env_home = os.environ.get("QUAID_HOME", "").strip()
+    env_instance = os.environ.get("QUAID_INSTANCE", "").strip()
+    if env_home and not env_instance:
+        return Path(env_home).expanduser().resolve()
     from lib.adapter import get_adapter
     root = get_adapter().instance_root()
     if isinstance(root, Path):
