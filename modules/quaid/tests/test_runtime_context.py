@@ -115,3 +115,18 @@ def test_runtime_context_uses_env_instance_roots_without_adapter(monkeypatch, tm
         assert runtime_context.get_logs_dir() == (hidden / "instances" / "alpha" / "logs").resolve()
         assert runtime_context.get_identity_dir() == (visible / "instances" / "alpha").resolve()
         assert runtime_context.get_projects_dir() == (visible / "projects").resolve()
+
+
+def test_runtime_context_uses_env_home_data_and_logs_without_instance(monkeypatch, tmp_path):
+    from lib import runtime_context
+
+    hidden = tmp_path / ".quaid"
+    visible = tmp_path / "quaid"
+    monkeypatch.setenv("QUAID_HOME", str(hidden))
+    monkeypatch.delenv("QUAID_VISIBLE_HOME", raising=False)
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+    with patch.object(runtime_context, "get_adapter", side_effect=AssertionError("adapter should not be used")):
+        assert runtime_context.get_data_dir() == (hidden / "data").resolve()
+        assert runtime_context.get_logs_dir() == (hidden / "logs").resolve()
+        assert runtime_context.get_projects_dir() == (visible / "projects").resolve()

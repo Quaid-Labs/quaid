@@ -160,6 +160,9 @@ def get_data_dir() -> Path:
     env_root = _env_instance_root()
     if env_root is not None:
         return env_root / "data"
+    env_home = _env_quaid_home()
+    if env_home is not None:
+        return env_home / "data"
     return get_adapter().data_dir()
 
 
@@ -170,6 +173,9 @@ def get_logs_dir() -> Path:
     env_root = _env_instance_root()
     if env_root is not None:
         return env_root / "logs"
+    env_home = _env_quaid_home()
+    if env_home is not None:
+        return env_home / "logs"
     return get_adapter().logs_dir()
 
 

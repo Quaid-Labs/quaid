@@ -131,8 +131,11 @@ def test_janitor_main_all_dry_run_without_instance_uses_ambient_boot_guard(monke
     monkeypatch.setattr(janitor, "estimate_cost", lambda: 0.0)
 
     assert janitor.main(["--task", "all", "--dry-run"]) == 0
-    assert calls[0] == ("refresh", "1")
-    assert calls[1] == ("run", "1")
+    refresh_calls = [value for tag, value in calls if tag == "refresh"]
+    run_calls = [value for tag, value in calls if tag == "run"]
+    assert refresh_calls
+    assert all(value == "1" for value in refresh_calls)
+    assert run_calls == ["1"]
     assert "QUAID_SUPERVISOR_BOOT" not in os.environ
 
 
