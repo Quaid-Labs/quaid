@@ -159,6 +159,20 @@ export type AutoInjectionPreparation = {
   uniqueSessionId: string;
 };
 
+type InjectionLogMemoryDetail = {
+  id?: string;
+  text: string;
+  similarity?: number;
+  via?: string;
+  category?: string;
+};
+
+type InjectionLogWriteOptions = {
+  visibleTurnCount?: number;
+  sessionKey?: string;
+  timestamp?: string;
+};
+
 export type ProjectContextOptions = {
   cwd?: string;
 };
@@ -301,6 +315,7 @@ export type QuaidFacade = {
     previousKeys: string[],
     memories: MemoryResult[],
     maxEntries: number,
+    options?: InjectionLogWriteOptions,
   ) => string[];
   resetInjectionDedupAfterCompaction: (sessionId: string) => void;
   queueCompactionExtractionSummary: (
@@ -1415,6 +1430,27 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return extractSessionId(messages, ctx);
   }
 
+  function extractSessionKey(messages: unknown[], ctx: unknown): string {
+    const context = (ctx && typeof ctx === "object") ? ctx as Record<string, unknown> : {};
+    const direct = String(context.sessionKey || context.targetSessionKey || "").trim();
+    if (direct) return direct;
+    const messageList = Array.isArray(messages) ? messages : [];
+    for (let index = messageList.length - 1; index >= 0; index -= 1) {
+      const message = messageList[index];
+      if (!message || typeof message !== "object") continue;
+      const row = message as Record<string, unknown>;
+      const key = String(
+        row.sessionKey
+        || row.targetSessionKey
+        || (row.context as Record<string, unknown> | undefined)?.sessionKey
+        || (row.message as Record<string, unknown> | undefined)?.sessionKey
+        || "",
+      ).trim();
+      if (key) return key;
+    }
+    return "";
+  }
+
   function readMessagesFromSessionJsonl(sessionFile: string): any[] {
     const content = fs.readFileSync(sessionFile, "utf8");
     const lines = content.trim().split("\n");
@@ -2069,10 +2105,36 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function loadInjectedMemoryKeys(sessionId: string): string[] {
     const logData = readInjectionLog(sessionId);
-    const rawInjected = logData.injected ?? logData.memoryTexts;
+    const rawInjected = logData.dedupInjected
+      ?? logData.injectedKeys
+      ?? (
+        Array.isArray(logData.injected)
+        && logData.injected.every((item) => typeof item === "string")
+          ? logData.injected
+          : undefined
+      )
+      ?? logData.memoryTexts;
     return Array.isArray(rawInjected)
       ? rawInjected.map((item) => String(item || "").trim()).filter(Boolean)
       : [];
+  }
+
+  function buildInjectionLogMemoryDetails(memories: MemoryResult[]): InjectionLogMemoryDetail[] {
+    return (Array.isArray(memories) ? memories : [])
+      .map((memory) => {
+        const text = String(memory?.text || "").trim();
+        if (!text) return null;
+        return {
+          id: typeof memory?.id === "string" && memory.id.trim() ? memory.id.trim() : undefined,
+          text,
+          similarity: Number.isFinite(Number(memory?.similarity))
+            ? Number(Number(memory?.similarity).toFixed(3))
+            : undefined,
+          via: typeof memory?.via === "string" && memory.via.trim() ? memory.via.trim() : undefined,
+          category: typeof memory?.category === "string" && memory.category.trim() ? memory.category.trim() : undefined,
+        } satisfies InjectionLogMemoryDetail;
+      })
+      .filter((detail): detail is InjectionLogMemoryDetail => Boolean(detail));
   }
 
   function saveInjectedMemoryKeys(
@@ -2080,19 +2142,30 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     previousKeys: string[],
     memories: MemoryResult[],
     maxEntries: number,
-    visibleTurnCount?: number,
+    options: InjectionLogWriteOptions = {},
   ): string[] {
     const newKeys = memories.map((m) => m.id || m.text);
     const merged = [...previousKeys, ...newKeys]
       .map((k) => String(k || "").trim())
       .filter(Boolean)
       .slice(-Math.max(1, Number(maxEntries) || 1));
+    const timestamp = String(options.timestamp || new Date().toISOString());
+    const injectedMemoriesDetail = buildInjectionLogMemoryDetails(memories);
     const payload: Record<string, unknown> = {
-      injected: merged,
-      lastInjectedAt: new Date().toISOString(),
+      uniqueSessionId: sessionId,
+      sessionKey: String(options.sessionKey || "").trim() || undefined,
+      timestamp,
+      lastInjectedAt: timestamp,
+      dedupInjected: merged,
+      injected: injectedMemoriesDetail,
+      injectedTexts: injectedMemoriesDetail.map((detail) => detail.text),
+      memoriesInjected: injectedMemoriesDetail.length,
+      totalMemoriesInSession: merged.length,
+      injectedMemoriesDetail,
+      newlyInjected: injectedMemoriesDetail,
     };
-    if (Number.isFinite(Number(visibleTurnCount)) && Number(visibleTurnCount) >= 0) {
-      payload.visibleTurnCount = Number(visibleTurnCount);
+    if (Number.isFinite(Number(options.visibleTurnCount)) && Number(options.visibleTurnCount) >= 0) {
+      payload.visibleTurnCount = Number(options.visibleTurnCount);
     }
     writeInjectionLog(sessionId, payload);
     pruneInjectionLogFiles();
@@ -2104,7 +2177,13 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     writeInjectionLog(sessionId, {
       ...current,
       lastCompactionAt: new Date().toISOString(),
+      dedupInjected: [],
       injected: [],
+      injectedTexts: [],
+      injectedMemoriesDetail: [],
+      newlyInjected: [],
+      memoriesInjected: 0,
+      totalMemoriesInSession: 0,
       memoryTexts: [],
     }, true);
   }
@@ -3439,7 +3518,10 @@ ${lines.join("\n")}
       previouslyInjected,
       toInject,
       maxInjectionIdsPerSession,
-      visibleTurnCount,
+      {
+        visibleTurnCount,
+        sessionKey: extractSessionKey(eventMessages, context),
+      },
     );
     return { prependContext, toInject, uniqueSessionId };
   }

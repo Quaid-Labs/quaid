@@ -655,6 +655,34 @@ describe("lifecycle signal detection", () => {
     expect(facadeOpts.datastores).toEqual(["vector_basic", "graph"]);
   });
 
+  it("writes preinject evidence entries under daemon logs", () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-preinject-log-"));
+    const entry = __test.buildPreinjectEvidenceEntry({
+      sessionId: "sess-preinject-1",
+      sessionKey: "agent:main:matrix:room-grinder",
+      query: "What grinder do I use for my espresso setup?",
+      source: "event_text_scrubbed",
+      recallResults: [
+        { id: "m1", text: "Espresso setup uses a Baratza Encore grinder", similarity: 0.96, via: "vector", category: "fact" },
+      ],
+      injectedResults: [
+        { id: "m1", text: "Espresso setup uses a Baratza Encore grinder", similarity: 0.96, via: "vector", category: "fact" },
+      ],
+      diagnostics: { mode: "preinject" },
+    });
+    const logPath = __test.appendPreinjectEvidenceLog(entry, logsDir);
+    const lines = fs.readFileSync(logPath, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]);
+    expect(parsed.sessionId).toBe("sess-preinject-1");
+    expect(parsed.sessionKey).toBe("agent:main:matrix:room-grinder");
+    expect(parsed.injectedCount).toBe(1);
+    expect(parsed.injected[0].text).toContain("Baratza Encore");
+    expect(parsed.recallCount).toBe(1);
+    expect(parsed.diagnostics).toEqual({ mode: "preinject" });
+    fs.rmSync(logsDir, { recursive: true, force: true });
+  });
+
   it("strips queued OC session-startup wrapper text from raw prompt queries", () => {
     const selected = __test.selectAutoInjectQuery(
       {

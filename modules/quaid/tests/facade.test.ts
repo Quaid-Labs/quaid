@@ -1338,10 +1338,21 @@ describe("QuaidFacade", () => {
         { text: "beta", category: "fact", similarity: 0.8 },
       ],
       100,
-      2,
+      { visibleTurnCount: 2, sessionKey: "agent:main:matrix:room-alpha" },
     );
     expect(merged).toEqual(["alpha", "beta"]);
     expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual(["alpha", "beta"]);
+    const injectionLog = JSON.parse(await readFile(facade.getInjectionLogPath("sess-1"), "utf8"));
+    expect(injectionLog.uniqueSessionId).toBe("sess-1");
+    expect(injectionLog.sessionKey).toBe("agent:main:matrix:room-alpha");
+    expect(injectionLog.memoriesInjected).toBe(2);
+    expect(injectionLog.totalMemoriesInSession).toBe(2);
+    expect(injectionLog.dedupInjected).toEqual(["alpha", "beta"]);
+    expect(injectionLog.injectedMemoriesDetail).toEqual([
+      { text: "alpha", similarity: 0.9, category: "fact" },
+      { text: "beta", similarity: 0.8, category: "fact" },
+    ]);
+    expect(injectionLog.newlyInjected).toEqual(injectionLog.injectedMemoriesDetail);
     facade.resetInjectionDedupAfterCompaction("sess-1");
     expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual([]);
     await rm(workspace, { recursive: true, force: true });

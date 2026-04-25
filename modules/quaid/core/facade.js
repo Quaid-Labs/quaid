@@ -889,6 +889,22 @@ function createQuaidFacade(deps) {
     }
     return extractSessionId(messages, ctx);
   }
+  function extractSessionKey(messages, ctx) {
+    const context = ctx && typeof ctx === "object" ? ctx : {};
+    const direct = String(context.sessionKey || context.targetSessionKey || "").trim();
+    if (direct) return direct;
+    const messageList = Array.isArray(messages) ? messages : [];
+    for (let index = messageList.length - 1; index >= 0; index -= 1) {
+      const message = messageList[index];
+      if (!message || typeof message !== "object") continue;
+      const row = message;
+      const key = String(
+        row.sessionKey || row.targetSessionKey || row.context?.sessionKey || row.message?.sessionKey || ""
+      ).trim();
+      if (key) return key;
+    }
+    return "";
+  }
   function readMessagesFromSessionJsonl(sessionFile) {
     const content = fs.readFileSync(sessionFile, "utf8");
     const lines = content.trim().split("\n");
@@ -1457,18 +1473,42 @@ function createQuaidFacade(deps) {
   }
   function loadInjectedMemoryKeys(sessionId) {
     const logData = readInjectionLog(sessionId);
-    const rawInjected = logData.injected ?? logData.memoryTexts;
+    const rawInjected = logData.dedupInjected ?? logData.injectedKeys ?? (Array.isArray(logData.injected) && logData.injected.every((item) => typeof item === "string") ? logData.injected : void 0) ?? logData.memoryTexts;
     return Array.isArray(rawInjected) ? rawInjected.map((item) => String(item || "").trim()).filter(Boolean) : [];
   }
-  function saveInjectedMemoryKeys(sessionId, previousKeys, memories, maxEntries, visibleTurnCount) {
+  function buildInjectionLogMemoryDetails(memories) {
+    return (Array.isArray(memories) ? memories : []).map((memory) => {
+      const text = String(memory?.text || "").trim();
+      if (!text) return null;
+      return {
+        id: typeof memory?.id === "string" && memory.id.trim() ? memory.id.trim() : void 0,
+        text,
+        similarity: Number.isFinite(Number(memory?.similarity)) ? Number(Number(memory?.similarity).toFixed(3)) : void 0,
+        via: typeof memory?.via === "string" && memory.via.trim() ? memory.via.trim() : void 0,
+        category: typeof memory?.category === "string" && memory.category.trim() ? memory.category.trim() : void 0
+      };
+    }).filter((detail) => Boolean(detail));
+  }
+  function saveInjectedMemoryKeys(sessionId, previousKeys, memories, maxEntries, options = {}) {
     const newKeys = memories.map((m) => m.id || m.text);
     const merged = [...previousKeys, ...newKeys].map((k) => String(k || "").trim()).filter(Boolean).slice(-Math.max(1, Number(maxEntries) || 1));
+    const timestamp = String(options.timestamp || (/* @__PURE__ */ new Date()).toISOString());
+    const injectedMemoriesDetail = buildInjectionLogMemoryDetails(memories);
     const payload = {
-      injected: merged,
-      lastInjectedAt: (/* @__PURE__ */ new Date()).toISOString()
+      uniqueSessionId: sessionId,
+      sessionKey: String(options.sessionKey || "").trim() || void 0,
+      timestamp,
+      lastInjectedAt: timestamp,
+      dedupInjected: merged,
+      injected: injectedMemoriesDetail,
+      injectedTexts: injectedMemoriesDetail.map((detail) => detail.text),
+      memoriesInjected: injectedMemoriesDetail.length,
+      totalMemoriesInSession: merged.length,
+      injectedMemoriesDetail,
+      newlyInjected: injectedMemoriesDetail
     };
-    if (Number.isFinite(Number(visibleTurnCount)) && Number(visibleTurnCount) >= 0) {
-      payload.visibleTurnCount = Number(visibleTurnCount);
+    if (Number.isFinite(Number(options.visibleTurnCount)) && Number(options.visibleTurnCount) >= 0) {
+      payload.visibleTurnCount = Number(options.visibleTurnCount);
     }
     writeInjectionLog(sessionId, payload);
     pruneInjectionLogFiles();
@@ -1479,7 +1519,13 @@ function createQuaidFacade(deps) {
     writeInjectionLog(sessionId, {
       ...current,
       lastCompactionAt: (/* @__PURE__ */ new Date()).toISOString(),
+      dedupInjected: [],
       injected: [],
+      injectedTexts: [],
+      injectedMemoriesDetail: [],
+      newlyInjected: [],
+      memoriesInjected: 0,
+      totalMemoriesInSession: 0,
       memoryTexts: []
     }, true);
   }
@@ -2617,7 +2663,10 @@ ${formatted}` : formatted;
       previouslyInjected,
       toInject,
       maxInjectionIdsPerSession,
-      visibleTurnCount
+      {
+        visibleTurnCount,
+        sessionKey: extractSessionKey(eventMessages, context)
+      }
     );
     return { prependContext, toInject, uniqueSessionId };
   }

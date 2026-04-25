@@ -241,6 +241,7 @@ const QUAID_NOTIFY_DIR = path.join(QUAID_RUNTIME_DIR, "notify");
 const QUAID_LOGS_DIR = path.join(QUAID_INSTANCE_ROOT, "logs");
 const QUAID_TIMEOUT_LOG_DIR = path.join(QUAID_LOGS_DIR, "session-timeout");
 const QUAID_HOOK_TRACE_PATH = path.join(QUAID_LOGS_DIR, "quaid-hook-trace.jsonl");
+const QUAID_PREINJECT_LOG_PATH = path.join(QUAID_LOGS_DIR, "daemon", "preinject.jsonl");
 const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_RUNTIME_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "pending-approval-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
@@ -2105,6 +2106,46 @@ function summarizeRecallDiagnostics(diagnostics) {
     }
   };
 }
+function buildPreinjectEvidenceDetails(memories) {
+  return (Array.isArray(memories) ? memories : []).map((row) => {
+    const text = String(row?.text || "").trim();
+    if (!text) return null;
+    return {
+      id: typeof row?.id === "string" && row.id.trim() ? row.id.trim() : void 0,
+      text,
+      similarity: Number.isFinite(Number(row?.similarity)) ? Number(Number(row.similarity).toFixed(3)) : void 0,
+      category: typeof row?.category === "string" && row.category.trim() ? row.category.trim() : void 0,
+      via: typeof row?.via === "string" && row.via.trim() ? row.via.trim() : void 0
+    };
+  }).filter((detail) => Boolean(detail));
+}
+function buildPreinjectEvidenceEntry(params) {
+  const recallDetails = buildPreinjectEvidenceDetails(params.recallResults);
+  const injectedDetails = buildPreinjectEvidenceDetails(params.injectedResults);
+  return {
+    ts: (/* @__PURE__ */ new Date()).toISOString(),
+    sessionId: String(params.sessionId || "").trim() || "unknown",
+    sessionKey: String(params.sessionKey || "").trim() || void 0,
+    query: String(params.query || "").trim(),
+    source: String(params.source || "").trim(),
+    recallCount: recallDetails.length,
+    recall: recallDetails,
+    injectedCount: injectedDetails.length,
+    injected: injectedDetails,
+    diagnostics: params.diagnostics || null
+  };
+}
+function appendPreinjectEvidenceLog(entry, logsDir = QUAID_LOGS_DIR) {
+  const logPath = logsDir === QUAID_LOGS_DIR ? QUAID_PREINJECT_LOG_PATH : path.join(logsDir, "daemon", "preinject.jsonl");
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, `${_jsonSafe(entry)}
+`, "utf8");
+  } catch (err) {
+    console.warn(`[quaid][preinject] write failed: ${String(err?.message || err)}`);
+  }
+  return logPath;
+}
 function _envTimeoutMs(name, fallbackMs) {
   const raw = Number(process.env[name] || "");
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -3752,6 +3793,14 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
           );
         }
         const { allMemories, recallDiagnostics, injection, modelConfigNotice } = await turnPromise;
+        const preinjectSessionId = facade.extractSessionId(eventMessages, ctx);
+        const preinjectSessionKey = firstNonEmptyString(
+          event?.sessionKey,
+          ctx?.sessionKey,
+          event?.targetSessionKey,
+          ctx?.targetSessionKey,
+          resolveSessionKeyForSessionId(preinjectSessionId)
+        );
         if (modelConfigNotice) {
           prependContextParts.push(modelConfigNotice);
           appendSystemContext = appendSystemContext ? `${appendSystemContext}
@@ -3767,6 +3816,15 @@ ${modelConfigNotice}` : modelConfigNotice;
           });
         }
         if (!injection) {
+          appendPreinjectEvidenceLog(buildPreinjectEvidenceEntry({
+            sessionId: preinjectSessionId,
+            sessionKey: preinjectSessionKey,
+            query,
+            source: querySource,
+            recallResults: allMemories,
+            injectedResults: [],
+            diagnostics: recallDiagnostics
+          }));
           writeHookTrace("hook.before_prompt_build.injection_skipped", {
             query: query.slice(0, 80),
             source: querySource,
@@ -3778,6 +3836,15 @@ ${modelConfigNotice}` : modelConfigNotice;
           return withDocs({ prependContext: event.prependContext });
         }
         const { toInject, prependContext: memoriesBlock } = injection;
+        appendPreinjectEvidenceLog(buildPreinjectEvidenceEntry({
+          sessionId: preinjectSessionId,
+          sessionKey: preinjectSessionKey,
+          query,
+          source: querySource,
+          recallResults: allMemories,
+          injectedResults: toInject,
+          diagnostics: recallDiagnostics
+        }));
         writeHookTrace("hook.before_prompt_build.injection_ready", {
           query: query.slice(0, 80),
           source: querySource,
@@ -5827,13 +5894,13 @@ notify_memory_extraction(
             return;
           }
           const responseData = {
-            sessionId: logData.uniqueSessionId,
-            sessionKey: logData.sessionKey,
-            timestamp: logData.timestamp,
-            memoriesInjected: logData.memoriesInjected,
-            totalMemoriesInSession: logData.totalMemoriesInSession,
-            injectedMemoriesDetail: logData.injectedMemoriesDetail || [],
-            newlyInjected: logData.newlyInjected || []
+            sessionId: logData.uniqueSessionId || sessionId,
+            sessionKey: logData.sessionKey || resolveSessionKeyForSessionId(sessionId),
+            timestamp: logData.timestamp || logData.lastInjectedAt,
+            memoriesInjected: Number(logData.memoriesInjected ?? (Array.isArray(logData.injectedMemoriesDetail) ? logData.injectedMemoriesDetail.length : Array.isArray(logData.injected) ? logData.injected.length : 0)),
+            totalMemoriesInSession: Number(logData.totalMemoriesInSession ?? (Array.isArray(logData.dedupInjected) ? logData.dedupInjected.length : 0)),
+            injectedMemoriesDetail: logData.injectedMemoriesDetail || logData.injected || [],
+            newlyInjected: logData.newlyInjected || logData.injected || []
           };
           const headers = {
             "Content-Type": "application/json"
@@ -5929,6 +5996,8 @@ const __test = {
   isMainInteractiveSessionKey,
   selectNewKeyFanoutTarget,
   resolveLifecycleFlushSessionCandidate,
+  buildPreinjectEvidenceEntry,
+  appendPreinjectEvidenceLog,
   NEW_KEY_FALLBACK_DELAY_MS
 };
 export {
