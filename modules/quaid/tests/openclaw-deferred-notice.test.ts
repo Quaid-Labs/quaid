@@ -155,7 +155,7 @@ afterEach(() => {
 });
 
 describe("openclaw deferred notices", () => {
-  it("delivers deferred notices from before_agent_reply without mutating prompt context", async () => {
+  it("delivers deferred notices through before_prompt_build relay context", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
@@ -177,11 +177,6 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
-    );
-    expect(deferredReplyCall).toBeTruthy();
-
     const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
@@ -193,16 +188,9 @@ describe("openclaw deferred notices", () => {
     );
 
     const systemContext = combinedSystemContext(result);
-    expect(systemContext).not.toContain("silver lantern");
-    expect(systemContext).not.toContain("[Quaid Notice Relay Required]");
-    expect(String(result?.prependContext || "")).not.toContain("silver lantern");
-    expect(String(result?.prependContext || "")).not.toContain("[Quaid Notice Relay Required]");
-
-    const relayResult = await deferredReplyCall?.[1](
-      { sessionId: "session-main-visible", sessionKey: "agent:main:tui-main" },
-      { sessionId: "session-main-visible", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
-    );
-    expect(relayResult).toBeUndefined();
+    expect(systemContext).toContain("MANDATORY: Quaid has active notices for the human user.");
+    expect(systemContext).toContain("silver lantern is ready");
+    expect(String(result?.prependContext || "")).toContain("silver lantern is ready");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -220,7 +208,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("delivers deferred notices from the install-bound instance on before_agent_reply", async () => {
+  it("delivers deferred notices from the install-bound instance during before_prompt_build", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
@@ -253,19 +241,9 @@ describe("openclaw deferred notices", () => {
     );
 
     const systemContext = combinedSystemContext(result);
-    expect(systemContext).not.toContain("Deferred drain prompt-build path");
-    expect(systemContext).not.toContain("[Quaid Notice Relay Required]");
-    expect(String(result?.prependContext || "")).not.toContain("Deferred drain prompt-build path");
-    expect(String(result?.prependContext || "")).not.toContain("[Quaid Notice Relay Required]");
-
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
-    );
-    expect(deferredReplyCall).toBeTruthy();
-    await deferredReplyCall?.[1](
-      { sessionId: "session-main-deferred", sessionKey: "agent:main:tui-main" },
-      { sessionId: "session-main-deferred", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
-    );
+    expect(systemContext).toContain("Deferred drain prompt-build path");
+    expect(systemContext).toContain("MANDATORY: Quaid has active notices for the human user.");
+    expect(String(result?.prependContext || "")).toContain("Deferred drain prompt-build path");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -373,17 +351,9 @@ describe("openclaw deferred notices", () => {
     );
 
     const systemContext = combinedSystemContext(result);
-    expect(systemContext).not.toContain("Janitor summary");
-    expect(systemContext).not.toContain("[Quaid Notice Relay Required]");
-
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
-    );
-    expect(deferredReplyCall).toBeTruthy();
-    await deferredReplyCall?.[1](
-      { sessionId: "session-main-1", sessionKey: "agent:main:tui-main" },
-      { sessionId: "session-main-1", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
-    );
+    expect(systemContext).toContain("Janitor summary: 3 memories reviewed");
+    expect(systemContext).toContain("MANDATORY: Quaid has active notices for the human user.");
+    expect(String(result?.prependContext || "")).toContain("Janitor summary: 3 memories reviewed");
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -397,7 +367,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
-  it("uses the install-bound main instance for deferred notice channel delivery", async () => {
+  it("uses the install-bound main instance for deferred notice relay injection", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const home = makeTempDir("quaid-oc-deferred-bound-home-");
@@ -471,16 +441,16 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
-    expect(deferredReplyCall).toBeTruthy();
+    expect(beforePromptBuildCall).toBeTruthy();
 
-    const result = await deferredReplyCall?.[1](
-      { sessionId: "session-main-bound", sessionKey: "agent:main:tui-main" },
+    const result = await beforePromptBuildCall?.[1](
+      { prompt: "Hey, what is up?", sessionId: "session-main-bound", sessionKey: "agent:main:tui-main" },
       { sessionId: "session-main-bound", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
     );
-    expect(result).toBeUndefined();
+    expect(String(result?.prependContext || "")).toContain("livetest main queue");
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -495,7 +465,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
-  it("delivers deferred notices even when a stale lock file is present", async () => {
+  it("delivers deferred notices in before_prompt_build even when a stale lock file is present", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const home = makeTempDir("quaid-oc-deferred-stale-lock-home-");
@@ -574,17 +544,17 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
-    expect(deferredReplyCall).toBeTruthy();
+    expect(beforePromptBuildCall).toBeTruthy();
 
-    const result = await deferredReplyCall?.[1](
-      { sessionId: "session-main-stale-lock", sessionKey: "agent:main:tui-main" },
+    const result = await beforePromptBuildCall?.[1](
+      { prompt: "Hey, what is up?", sessionId: "session-main-stale-lock", sessionKey: "agent:main:tui-main" },
       { sessionId: "session-main-stale-lock", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
     );
 
-    expect(result).toBeUndefined();
+    expect(String(result?.prependContext || "")).toContain("stale lock recovery");
     expect(fs.existsSync(lockPath)).toBe(true);
 
     const drained = JSON.parse(fs.readFileSync(noticeFile, "utf8"));

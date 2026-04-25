@@ -476,6 +476,70 @@ function deliverDeferredNoticesViaChannel(agentLabel, reason) {
     return 0;
   }
 }
+function drainDeferredNoticeRelayContextForAgent(agentLabel, reason) {
+  const instanceId = getInstanceId(agentLabel);
+  const script = [
+    "import json, sys",
+    `sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})`,
+    "from lib.agent_notice import drain_deferred_notices, format_pending_notice_relay",
+    "drained = drain_deferred_notices(limit=50)",
+    "messages = [str(item.get('message') or '').strip() for item in list(drained or []) if isinstance(item, dict) and str(item.get('message') or '').strip()]",
+    "relay = format_pending_notice_relay(messages) if messages else ''",
+    "kinds = [str(item.get('kind') or '').strip() for item in list(drained or []) if isinstance(item, dict)]",
+    "print(json.dumps({'drained': len(drained), 'relay': relay, 'kinds': kinds}))"
+  ].join("\n");
+  try {
+    const result = spawnSync(PYTHON_BIN, ["-c", script], {
+      encoding: "utf8",
+      timeout: 3e4,
+      env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
+    });
+    if (result.error || result.status !== 0) {
+      writeHookTrace("deferred_notice.relay_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || "")
+      });
+      return "";
+    }
+    let payload = {};
+    try {
+      payload = JSON.parse(String(result.stdout || "{}"));
+    } catch (parseErr) {
+      writeHookTrace("deferred_notice.relay_parse_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        stdout: String(result.stdout || "").trim().slice(0, 500),
+        error: String(parseErr?.message || parseErr)
+      });
+      return "";
+    }
+    const relay = String(payload?.relay || "").trim();
+    const drained = Math.max(0, Number(payload?.drained || 0) || 0);
+    if (relay) {
+      writeHookTrace("deferred_notice.relay_context", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        count: drained,
+        kinds: Array.isArray(payload?.kinds) ? payload.kinds.slice(0, 8) : []
+      });
+    }
+    return relay;
+  } catch (err) {
+    writeHookTrace("deferred_notice.relay_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      error: String(err?.message || err)
+    });
+    return "";
+  }
+}
 function clearDeferredNoticesForAgent(agentLabel, reason, sources = ["provider", "llm_config"]) {
   const instanceId = getInstanceId(agentLabel);
   const normalizedSources = Array.from(
@@ -3534,8 +3598,6 @@ ${projectPlacementContext}` : projectPlacementContext;
           ...appendSystemContext ? { appendSystemContext } : {}
         };
       };
-      const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
-      if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
       try {
         let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
           event,
@@ -3578,6 +3640,18 @@ ${projectPlacementContext}` : projectPlacementContext;
         if (facade.isInternalMaintenancePrompt(query)) {
           return withDocs({ prependContext: event.prependContext });
         }
+        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
+          promptAgentLabel,
+          "before_prompt_build"
+        );
+        if (deferredNoticeRelayContext) {
+          prependContextParts.push(deferredNoticeRelayContext);
+          appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
+        }
+        const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
+        if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
         if (facade.isLowQualityQuery(query)) {
           return withDocs({ prependContext: event.prependContext });
         }
