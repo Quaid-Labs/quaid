@@ -201,8 +201,8 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const runtimeEnvReconciled = _ensureOpenClawRuntimeInstanceEnv(resolvedInstanceId);");
     expect(setupText).toContain("Reconciled OpenClaw runtime instance env to");
     expect(setupText).toContain('spawnSync("openclaw", ["gateway", "restart"]');
-    expect(setupText).toContain("const preservedOpenClawManagedState = _isPlatform(\"openclaw\") ? _captureOpenClawManagedState() : null;");
-    expect(setupText).toContain('await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);');
+    expect(setupText).toContain("const preservedOpenClawMatrixConfig = _isPlatform(\"openclaw\") ? _captureOpenClawMatrixConfig() : null;");
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawMatrixConfig);');
   });
 
   it("OpenClaw add-instance reconciles plugin registration and fails loudly if still missing", () => {
@@ -314,32 +314,28 @@ describe("install daemon policy", () => {
 
     expect(setupText).toContain('import { sanitizeOpenClawNativeMemoryPlugins } from "./lib/openclaw-plugin-sanitizer.mjs";');
     expect(setupText).toContain("function _sanitizeOpenClawNativeMemoryPlugins()");
-    expect(setupText).toContain("async function _reassertOpenClawPostRestartState(context = \"gateway restart\", managedSnapshot = null)");
-    expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);');
-    expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);');
+    expect(setupText).toContain("async function _reassertOpenClawPostRestartState(context = \"gateway restart\", matrixSnapshot = null)");
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawMatrixConfig);');
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawMatrixConfig);');
     expect(setupText).toContain("native-memory-plugins");
     expect(setupText).not.toContain('plugins.entries[pluginId] = { disabled: true }');
     expect(setupText).not.toContain("current.disabled !== true");
     expect(setupText).toContain("Restarting gateway to apply changes.");
   });
 
-  it("OpenClaw installer preserves managed OC state across restart points and installs a drift guard", () => {
+  it("OpenClaw installer preserves matrix channel config across its own restart points", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
     expect(setupText).toContain('import {');
-    expect(setupText).toContain('captureOpenClawManagedState,');
-    expect(setupText).toContain('restoreOpenClawManagedState,');
-    expect(setupText).toContain("function _captureOpenClawManagedState()");
-    expect(setupText).toContain("function _restoreOpenClawManagedState(snapshot)");
-    expect(setupText).toContain("const stateRestore = _restoreOpenClawManagedState(managedSnapshot);");
-    expect(setupText).toContain("function _persistOpenClawManagedState(snapshot)");
-    expect(setupText).toContain("function _installOpenClawManagedStateGuard()");
-    expect(setupText).toContain("ai.openclaw.quaid-config-guard");
-    expect(setupText).toContain("managed-openclaw.json");
-    expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);');
-    expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);');
-    expect(setupText).toContain('Installed OpenClaw managed-state guard');
+    expect(setupText).toContain('captureOpenClawMatrixConfig,');
+    expect(setupText).toContain('restoreOpenClawMatrixConfig,');
+    expect(setupText).toContain("function _captureOpenClawMatrixConfig()");
+    expect(setupText).toContain("function _restoreOpenClawMatrixConfig(snapshot)");
+    expect(setupText).toContain("const matrixRestore = _restoreOpenClawMatrixConfig(matrixSnapshot);");
+    expect(setupText).toContain("changedBits.push(\"matrix-channel\")");
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawMatrixConfig);');
+    expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawMatrixConfig);');
   });
 
   it("OpenClaw install acquires a host-level config lock before preflight writes", () => {

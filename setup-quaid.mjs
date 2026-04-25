@@ -38,11 +38,9 @@ import {
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
 import {
-  captureOpenClawManagedState,
-  readOpenClawManagedStateSnapshot,
-  restoreOpenClawManagedState,
-  writeOpenClawManagedStateSnapshot,
-} from "./lib/openclaw-managed-state.mjs";
+  captureOpenClawMatrixConfig,
+  restoreOpenClawMatrixConfig,
+} from "./lib/openclaw-matrix-config.mjs";
 import { sanitizeOpenClawNativeMemoryPlugins } from "./lib/openclaw-plugin-sanitizer.mjs";
 import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 import {
@@ -2546,313 +2544,32 @@ function _sanitizeOpenClawNativeMemoryPlugins() {
   }
 }
 
-function _openClawManagedStatePath() {
-  return path.join(WORKSPACE, "shared", "config", "openclaw", "managed-openclaw.json");
-}
-
-function _openClawManagedStateGuardScriptPath() {
-  return path.join(WORKSPACE, "scripts", "openclaw-config-guard.mjs");
-}
-
-function _openClawManagedStateGuardLogDir() {
-  return path.join(WORKSPACE, "logs", "openclaw");
-}
-
-function _captureOpenClawManagedState() {
+function _captureOpenClawMatrixConfig() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   try {
-    return captureOpenClawManagedState(cfgPath);
+    return captureOpenClawMatrixConfig(cfgPath);
   } catch {
     return null;
   }
 }
 
-function _restoreOpenClawManagedState(snapshot) {
+function _restoreOpenClawMatrixConfig(snapshot) {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   try {
-    return restoreOpenClawManagedState(cfgPath, snapshot);
+    return restoreOpenClawMatrixConfig(cfgPath, snapshot);
   } catch {
     return { changed: false, reason: "restore-failed" };
   }
 }
 
-function _persistOpenClawManagedState(snapshot) {
-  try {
-    const snapshotPath = _openClawManagedStatePath();
-    fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
-    return writeOpenClawManagedStateSnapshot(snapshotPath, snapshot);
-  } catch {
-    return false;
-  }
-}
-
-function _loadPersistedOpenClawManagedState() {
-  try {
-    return readOpenClawManagedStateSnapshot(_openClawManagedStatePath());
-  } catch {
-    return null;
-  }
-}
-
-function _buildOpenClawManagedStateGuardScript() {
-  const workspaceJson = JSON.stringify(WORKSPACE);
-  return `#!/usr/bin/env node
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { spawnSync } from "node:child_process";
-
-const WORKSPACE = ${workspaceJson};
-const CONFIG_PATH = path.join(os.homedir(), ".openclaw", "openclaw.json");
-const SNAPSHOT_PATH = path.join(WORKSPACE, "shared", "config", "openclaw", "managed-openclaw.json");
-const STATE_PATH = path.join(WORKSPACE, "shared", "config", "openclaw", "managed-openclaw.guard-state.json");
-
-function isRecord(value) {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function normalizeAllow(value) {
-  return Array.isArray(value)
-    ? value.map((entry) => String(entry || "").trim()).filter(Boolean)
-    : [];
-}
-
-function readJson(filePath) {
-  if (!fs.existsSync(filePath)) return null;
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function writeJsonAtomically(filePath, value) {
-  const tmpPath = \`\${filePath}.tmp-\${process.pid}-\${Date.now()}\`;
-  try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(tmpPath, \`\${JSON.stringify(value, null, 2)}\\n\`, "utf8");
-    fs.renameSync(tmpPath, filePath);
-  } finally {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {}
-  }
-}
-
-function ensureAllowId(plugins, pluginId, changedBits) {
-  const allow = normalizeAllow(plugins.allow);
-  if (allow.includes(pluginId)) return;
-  allow.push(pluginId);
-  plugins.allow = allow;
-  changedBits.push(\`plugins.allow:\${pluginId}\`);
-}
-
-function sanitizeNativeMemoryPlugins(parsed, changedBits) {
-  if (!isRecord(parsed.plugins)) parsed.plugins = {};
-  const plugins = parsed.plugins;
-  const nativeIds = ["active-memory", "memory-core", "memory-wiki"];
-  const allow = normalizeAllow(plugins.allow);
-  const nextAllow = allow.filter((entry) => !nativeIds.includes(entry));
-  if (nextAllow.length !== allow.length) {
-    plugins.allow = nextAllow;
-    changedBits.push("plugins.allow:native-memory");
-  }
-  if (!isRecord(plugins.entries)) plugins.entries = {};
-  for (const pluginId of nativeIds) {
-    if (Object.prototype.hasOwnProperty.call(plugins.entries, pluginId)) {
-      delete plugins.entries[pluginId];
-      changedBits.push(\`plugins.entries.\${pluginId}\`);
-    }
-  }
-  if (!isRecord(plugins.slots)) plugins.slots = {};
-  if (String(plugins.slots.memory || "").trim() !== "quaid") {
-    plugins.slots.memory = "quaid";
-    changedBits.push("plugins.slots.memory");
-  }
-}
-
-function reconcile(parsed, snapshot) {
-  const changedBits = [];
-  if (!isRecord(parsed.plugins)) parsed.plugins = {};
-  const plugins = parsed.plugins;
-
-  for (const pluginId of Array.isArray(snapshot.requiredAllow) ? snapshot.requiredAllow : []) {
-    ensureAllowId(plugins, String(pluginId || "").trim(), changedBits);
-  }
-
-  if (isRecord(snapshot.entries)) {
-    if (!isRecord(plugins.entries)) plugins.entries = {};
-    for (const [pluginId, entry] of Object.entries(snapshot.entries)) {
-      if (!isRecord(entry)) continue;
-      const current = isRecord(plugins.entries[pluginId]) ? plugins.entries[pluginId] : null;
-      const currentRaw = current ? JSON.stringify(current) : "";
-      const nextRaw = JSON.stringify(entry);
-      if (currentRaw !== nextRaw) {
-        plugins.entries[pluginId] = cloneJson(entry);
-        changedBits.push(\`plugins.entries.\${pluginId}\`);
-      }
-    }
-  }
-
-  if (isRecord(snapshot.channels) && isRecord(snapshot.channels.matrix)) {
-    if (!isRecord(parsed.channels)) parsed.channels = {};
-    const current = isRecord(parsed.channels.matrix) ? parsed.channels.matrix : null;
-    const currentRaw = current ? JSON.stringify(current) : "";
-    const nextRaw = JSON.stringify(snapshot.channels.matrix);
-    if (currentRaw !== nextRaw) {
-      parsed.channels.matrix = cloneJson(snapshot.channels.matrix);
-      changedBits.push("channels.matrix");
-    }
-  }
-
-  if (isRecord(snapshot.agents)) {
-    const defaultPrimary = String(snapshot.agents.defaultPrimary || "").trim();
-    if (defaultPrimary) {
-      if (!isRecord(parsed.agents)) parsed.agents = {};
-      if (!isRecord(parsed.agents.defaults)) parsed.agents.defaults = {};
-      if (!isRecord(parsed.agents.defaults.model)) parsed.agents.defaults.model = {};
-      if (String(parsed.agents.defaults.model.primary || "").trim() !== defaultPrimary) {
-        parsed.agents.defaults.model.primary = defaultPrimary;
-        changedBits.push("agents.defaults.model.primary");
-      }
-    }
-
-    const listPrimaries = isRecord(snapshot.agents.listPrimaries) ? snapshot.agents.listPrimaries : {};
-    if (!isRecord(parsed.agents)) parsed.agents = {};
-    if (!Array.isArray(parsed.agents.list)) parsed.agents.list = [];
-    for (const agent of parsed.agents.list) {
-      if (!isRecord(agent)) continue;
-      const agentId = String(agent.id || "").trim();
-      const desired = String(listPrimaries[agentId] || "").trim();
-      if (!agentId || !desired) continue;
-      if (!isRecord(agent.model)) agent.model = {};
-      if (String(agent.model.primary || "").trim() !== desired) {
-        agent.model.primary = desired;
-        changedBits.push(\`agents.list.\${agentId}.model.primary\`);
-      }
-    }
-  }
-
-  sanitizeNativeMemoryPlugins(parsed, changedBits);
-  return changedBits;
-}
-
-const snapshot = readJson(SNAPSHOT_PATH);
-const parsed = readJson(CONFIG_PATH);
-if (!snapshot || !parsed) process.exit(0);
-
-const changedBits = reconcile(parsed, snapshot);
-if (changedBits.length === 0) process.exit(0);
-
-writeJsonAtomically(CONFIG_PATH, parsed);
-
-const now = Date.now();
-const state = readJson(STATE_PATH) || {};
-const lastRestartMs = Number(state.lastRestartMs || 0);
-const restartCooldownMs = 15000;
-if (now - lastRestartMs >= restartCooldownMs) {
-  const restart = spawnSync("openclaw", ["gateway", "restart"], { stdio: "pipe" });
-  state.lastRestartMs = now;
-  state.lastRestartStatus = Number(restart.status || 0);
-  state.lastChangedBits = changedBits;
-  writeJsonAtomically(STATE_PATH, state);
-} else {
-  state.lastChangedBits = changedBits;
-  writeJsonAtomically(STATE_PATH, state);
-}
-`;
-}
-
-function _installOpenClawManagedStateGuard() {
-  if (!_isPlatform("openclaw")) return false;
-  if (process.platform !== "darwin") return false;
-
-  const scriptPath = _openClawManagedStateGuardScriptPath();
-  const logDir = _openClawManagedStateGuardLogDir();
-  const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", "ai.openclaw.quaid-config-guard.plist");
-  const outPath = path.join(logDir, "config-guard.log");
-  const errPath = path.join(logDir, "config-guard.err.log");
-  const guiTarget = `gui/${process.getuid()}`;
-  const serviceTarget = `${guiTarget}/ai.openclaw.quaid-config-guard`;
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>ai.openclaw.quaid-config-guard</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${process.execPath}</string>
-    <string>${scriptPath}</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key>
-    <string>${os.homedir()}</string>
-    <key>PATH</key>
-    <string>${process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"}</string>
-    <key>QUAID_HOME</key>
-    <string>${WORKSPACE}</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StartInterval</key>
-  <integer>30</integer>
-  <key>WatchPaths</key>
-  <array>
-    <string>${path.join(os.homedir(), ".openclaw", "openclaw.json")}</string>
-  </array>
-  <key>StandardOutPath</key>
-  <string>${outPath}</string>
-  <key>StandardErrorPath</key>
-  <string>${errPath}</string>
-</dict>
-</plist>
-`;
-
-  try {
-    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.mkdirSync(logDir, { recursive: true });
-    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
-    fs.writeFileSync(scriptPath, _buildOpenClawManagedStateGuardScript(), { encoding: "utf8", mode: 0o755 });
-    fs.chmodSync(scriptPath, 0o755);
-    if (fs.existsSync(plistPath)) {
-      spawnSync("launchctl", ["bootout", guiTarget, plistPath], { stdio: "pipe" });
-      spawnSync("launchctl", ["unload", plistPath], { stdio: "pipe" });
-    }
-    fs.writeFileSync(plistPath, plist, "utf8");
-    spawnSync("launchctl", ["enable", serviceTarget], { stdio: "pipe" });
-    let load = spawnSync("launchctl", ["bootstrap", guiTarget, plistPath], { stdio: "pipe" });
-    if (load.status !== 0) {
-      load = spawnSync("launchctl", ["load", plistPath], { stdio: "pipe" });
-    }
-    if (load.status !== 0) {
-      const detail = String(load.stderr || load.stdout || "").trim();
-      log.warn(`failed to install OpenClaw config guard: ${detail || "unknown error"}`);
-      return false;
-    }
-    const kick = spawnSync("launchctl", ["kickstart", "-k", serviceTarget], { stdio: "pipe" });
-    const probe = spawnSync("launchctl", ["print", serviceTarget], { stdio: "pipe" });
-    if (probe.status !== 0) {
-      const detail = String(probe.stderr || probe.stdout || kick.stderr || kick.stdout || "").trim();
-      log.warn(`OpenClaw config guard failed to register in launchctl: ${detail || "unknown error"}`);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    log.warn(`failed to install OpenClaw config guard: ${String(err?.message || err)}`);
-    return false;
-  }
-}
-
-async function _reassertOpenClawPostRestartState(context = "gateway restart", managedSnapshot = null) {
+async function _reassertOpenClawPostRestartState(context = "gateway restart", matrixSnapshot = null) {
   if (!_isPlatform("openclaw")) return false;
   const cli = canRun("openclaw") ? "openclaw" : "";
   if (!cli) return false;
 
   const changedBits = [];
-  const stateRestore = _restoreOpenClawManagedState(managedSnapshot);
-  if (stateRestore.changed) changedBits.push(...(stateRestore.changedBits || []));
+  const matrixRestore = _restoreOpenClawMatrixConfig(matrixSnapshot);
+  if (matrixRestore.changed) changedBits.push("matrix-channel");
   if (_ensureOpenClawPluginsAllowQuaid()) changedBits.push("plugins.allow");
   if (_sanitizeOpenClawNativeMemoryPlugins()) changedBits.push("native-memory-plugins");
   if (_sanitizeOpenClawQuaidPluginEntry()) changedBits.push("plugins.entries.quaid");
@@ -4785,7 +4502,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
-  const preservedOpenClawManagedState = _isPlatform("openclaw") ? _captureOpenClawManagedState() : null;
+  const preservedOpenClawMatrixConfig = _isPlatform("openclaw") ? _captureOpenClawMatrixConfig() : null;
   // Installer creates only shared/runtime state. Per-instance silos are created
   // on first hook use, once the adapter has the real instance ID.
   const resolvedInstanceId = String(process.env.QUAID_INSTANCE || "").trim();
@@ -4823,7 +4540,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       const restart = spawnSync("openclaw", ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (restart.status === 0) {
         await waitForGatewayWarmup(30_000);
-        await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);
+        await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawMatrixConfig);
       } else {
         log.warn("OpenClaw gateway restart after runtime env reconcile failed.");
       }
@@ -5058,21 +4775,14 @@ except Exception as e:
       log.info("Reconciled ai.openclaw.gateway launch agent env for Quaid");
     }
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 60_000);
-    await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);
+    await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawMatrixConfig);
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-registration sanitizer", 60_000);
     s.message("Finalizing OpenClaw hook configuration...");
     enableRequiredOpenClawHooks();
     // enableRequiredOpenClawHooks writes openclaw.json directly, which may trigger a gateway
     // config reload. Give the gateway time to settle before proceeding.
     await waitForGatewayWarmup(30_000);
-    await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);
-    const finalManagedState = _captureOpenClawManagedState() || preservedOpenClawManagedState || _loadPersistedOpenClawManagedState();
-    if (finalManagedState && _persistOpenClawManagedState(finalManagedState)) {
-      log.info("Persisted OpenClaw managed state snapshot for drift recovery");
-    }
-    if (_installOpenClawManagedStateGuard()) {
-      log.info("Installed OpenClaw managed-state guard");
-    }
+    await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawMatrixConfig);
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
     s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
