@@ -250,6 +250,10 @@ class SessionTimeoutManager {
             () => reject(new Error(`session-timeout extraction timed out after ${timeoutMs}ms`)),
             timeoutMs
           );
+          const timerHandle = timer;
+          if (typeof timerHandle?.unref === "function") {
+            timerHandle.unref();
+          }
         })
       ]);
     } finally {
@@ -349,6 +353,10 @@ class SessionTimeoutManager {
       });
       this.queueExtractionFromSession(sid, fallback, tmFired);
     }, delayMs);
+    const timerHandle = this.timer;
+    if (typeof timerHandle?.unref === "function") {
+      timerHandle.unref();
+    }
   }
   async extractSessionFromSourceDirect(sessionId, label, fallbackMessages, signalMeta) {
     if (!sessionId) return false;

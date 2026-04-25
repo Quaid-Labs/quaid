@@ -120,6 +120,41 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect((manager as any).timer).toBeNull();
   });
 
+  it("unrefs scheduled timers so they do not pin process shutdown", async () => {
+    const workspace = makeWorkspace("quaid-timeout-unref-");
+    const source = createSourceState();
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 1,
+      source,
+      extract: async () => {
+        // no-op
+      },
+    });
+
+    const handles: Array<{ unref: ReturnType<typeof vi.fn> }> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((((..._args: any[]) => {
+      const handle = { unref: vi.fn() };
+      handles.push(handle);
+      return handle as any;
+    }) as typeof setTimeout));
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation((() => undefined) as typeof clearTimeout);
+
+    manager.onAgentEnd(
+      [
+        { role: "user", content: "remember this", timestamp: Date.now() },
+        { role: "assistant", content: "ok", timestamp: Date.now() + 1 },
+      ],
+      "session-unref",
+    );
+    expect(handles).toHaveLength(1);
+    expect(handles[0]?.unref).toHaveBeenCalledTimes(1);
+
+    await (manager as any).runExtractWithTimeout([], "session-unref", "Test");
+    expect(handles).toHaveLength(2);
+    expect(handles[1]?.unref).toHaveBeenCalledTimes(1);
+  });
+
   it("requires explicit lifecycle evidence before transcript-update reset extraction", async () => {
     const workspace = makeWorkspace("quaid-timeout-signal-");
     const source = createSourceState();
