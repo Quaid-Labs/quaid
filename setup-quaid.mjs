@@ -6512,9 +6512,24 @@ function _stabilizePostInstallExtractionState(instanceId = "") {
   return summary;
 }
 
+function _resolveOpenClawGatewayPort() {
+  const envPort = String(process.env.OPENCLAW_GATEWAY_PORT || "").trim();
+  if (/^[0-9]+$/.test(envPort)) return envPort;
+  try {
+    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const cfgPort = String(parsed?.gateway?.port || "").trim();
+    if (/^[0-9]+$/.test(cfgPort)) return cfgPort;
+  } catch {
+    // fall through to default
+  }
+  return "18789";
+}
+
 function _gatewayHttpCode(pathname, method = "GET", body = null) {
   if (!canRun("curl")) return 0;
-  const rawPort = String(process.env.OPENCLAW_GATEWAY_PORT || "18789").trim();
+  const rawPort = _resolveOpenClawGatewayPort();
   const port = /^[0-9]+$/.test(rawPort) ? rawPort : "18789";
   const url = `http://127.0.0.1:${port}${pathname}`;
   const args = ["-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2", "-X", method, url];

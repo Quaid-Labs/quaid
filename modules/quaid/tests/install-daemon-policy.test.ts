@@ -163,6 +163,16 @@ describe("install daemon policy", () => {
     expect(preflightBlock).not.toContain("runCliWithTimeout(bin, args, 8_000)");
   });
 
+  it("OpenClaw gateway health checks resolve the port from config before falling back to defaults", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function _resolveOpenClawGatewayPort()");
+    expect(setupText).toContain('const envPort = String(process.env.OPENCLAW_GATEWAY_PORT || "").trim();');
+    expect(setupText).toContain('const cfgPort = String(parsed?.gateway?.port || "").trim();');
+    expect(setupText).toContain('const rawPort = _resolveOpenClawGatewayPort();');
+  });
+
   it("OpenClaw hook symbol grep is diagnostic after the version gate", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
