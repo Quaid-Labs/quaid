@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 from types import SimpleNamespace
 
@@ -137,6 +139,60 @@ def test_janitor_main_all_dry_run_without_instance_uses_ambient_boot_guard(monke
     assert all(value == "1" for value in refresh_calls)
     assert run_calls == ["1"]
     assert "QUAID_SUPERVISOR_BOOT" not in os.environ
+
+
+def test_ambient_instance_graph_summary_aggregates_registered_instances(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+    monkeypatch.delenv("MEMORY_ARCHIVE_DB_PATH", raising=False)
+
+    def _seed_instance(name: str, *, statuses: list[str], confidences: list[float], edge_count: int) -> None:
+        instance_root = tmp_path / "instances" / name
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(json.dumps({}), encoding="utf-8")
+        db_path = instance_root / "data" / "memory.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE nodes (id TEXT, status TEXT, confidence REAL)")
+            conn.execute("CREATE TABLE edges (id TEXT)")
+            for idx, (status, confidence) in enumerate(zip(statuses, confidences), start=1):
+                conn.execute(
+                    "INSERT INTO nodes (id, status, confidence) VALUES (?, ?, ?)",
+                    (f"{name}-n{idx}", status, confidence),
+                )
+            for idx in range(edge_count):
+                conn.execute("INSERT INTO edges (id) VALUES (?)", (f"{name}-e{idx}",))
+
+    _seed_instance(
+        "claude-code-private-tmp-cc-livetest",
+        statuses=["pending", "active"],
+        confidences=[1.0, 1.0],
+        edge_count=2,
+    )
+    _seed_instance(
+        "codex-private-tmp-cdx-livetest",
+        statuses=["pending", "pending", "approved"],
+        confidences=[0.0, 0.0, 0.0],
+        edge_count=1,
+    )
+
+    janitor = _fresh_import_janitor()
+    summary = janitor._ambient_instance_graph_summary()
+
+    assert summary is not None
+    assert summary["instance_count"] == 2
+    assert summary["pending_nodes"] == 3
+    assert summary["total_nodes"] == 5
+    assert summary["total_edges"] == 3
+    assert summary["pending_nodes_by_instance"] == {
+        "claude-code-private-tmp-cc-livetest": 1,
+        "codex-private-tmp-cdx-livetest": 2,
+    }
+    assert summary["errors"] == []
+    assert summary["avg_confidence"] == 0.4
 
 
 def test_janitor_main_rejects_instance_with_direct_only_flags(monkeypatch, tmp_path, capsys):

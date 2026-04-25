@@ -30,6 +30,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -829,6 +830,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     graph = get_graph()
     metrics = JanitorMetrics()
+    ambient_graph_summary = (
+        _ambient_instance_graph_summary()
+        if dry_run and not bool(str(os.environ.get("QUAID_INSTANCE", "") or "").strip())
+        else None
+    )
 
     # Initialize metadata tracking
     init_janitor_metadata(graph)
@@ -1201,15 +1207,28 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             # report pending node counts so dry-run completes quickly.
             if stage_dry_run:
                 result = RoutineResult()
-                try:
-                    with graph._get_conn() as _conn:
-                        pending = _conn.execute(
-                            "SELECT COUNT(*) FROM nodes WHERE status = 'pending'"
-                        ).fetchone()[0]
+                if ambient_graph_summary is not None:
+                    pending = int(ambient_graph_summary.get("pending_nodes", 0) or 0)
                     result.metrics["pending_nodes"] = pending
-                    print(f"  [dry-run] {stage}: {pending} pending nodes would be processed")
-                except Exception:
-                    print(f"  [dry-run] {stage}: (could not count pending nodes)")
+                    result.metrics["pending_nodes_by_instance"] = dict(
+                        ambient_graph_summary.get("pending_nodes_by_instance", {}) or {}
+                    )
+                    print(
+                        f"  [dry-run] {stage}: {pending} pending nodes would be processed "
+                        f"across {ambient_graph_summary.get('instance_count', 0)} instances"
+                    )
+                    for error in ambient_graph_summary.get("errors", []) or []:
+                        print(f"  [dry-run] {stage}: warning: {error}")
+                else:
+                    try:
+                        with graph._get_conn() as _conn:
+                            pending = _conn.execute(
+                                "SELECT COUNT(*) FROM nodes WHERE status = 'pending'"
+                            ).fetchone()[0]
+                        result.metrics["pending_nodes"] = pending
+                        print(f"  [dry-run] {stage}: {pending} pending nodes would be processed")
+                    except Exception:
+                        print(f"  [dry-run] {stage}: (could not count pending nodes)")
                 return result
 
             stage_cap = _stage_item_cap(stage)
@@ -1579,12 +1598,22 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # --- Health Snapshot ---
         if task == "all":
             try:
-                health = graph.get_health_metrics()
-                summary = record_health_snapshot(graph, health)
-                print(
-                    f"[Health Snapshot] Recorded: {summary['total']} nodes, "
-                    f"{summary['total_edges']} edges, avg conf {summary['avg_confidence']:.3f}"
-                )
+                if ambient_graph_summary is not None:
+                    print(
+                        f"[Health Snapshot] Aggregate: {ambient_graph_summary['total_nodes']} nodes, "
+                        f"{ambient_graph_summary['total_edges']} edges, "
+                        f"avg conf {ambient_graph_summary['avg_confidence']:.3f} "
+                        f"across {ambient_graph_summary['instance_count']} instances"
+                    )
+                    for error in ambient_graph_summary.get("errors", []) or []:
+                        print(f"[Health Snapshot] Warning: {error}")
+                else:
+                    health = graph.get_health_metrics()
+                    summary = record_health_snapshot(graph, health)
+                    print(
+                        f"[Health Snapshot] Recorded: {summary['total']} nodes, "
+                        f"{summary['total_edges']} edges, avg conf {summary['avg_confidence']:.3f}"
+                    )
             except Exception as e:
                 print(f"[Health Snapshot] Failed: {e}")
 
@@ -1895,6 +1924,93 @@ def _ambient_boot_guard(*, enabled: bool):
             os.environ.pop("QUAID_SUPERVISOR_BOOT", None)
         else:
             os.environ["QUAID_SUPERVISOR_BOOT"] = original
+
+
+@contextlib.contextmanager
+def _temporary_env_values(overrides: Dict[str, Optional[str]]):
+    sentinel = object()
+    previous: Dict[str, object] = {}
+    for key, value in overrides.items():
+        previous[key] = os.environ.get(key, sentinel)
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = str(value)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is sentinel:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = str(value)
+
+
+def _ambient_instance_graph_summary() -> Optional[Dict[str, Any]]:
+    """Aggregate dry-run graph counts across all registered instances."""
+    if str(os.environ.get("QUAID_INSTANCE", "") or "").strip():
+        return None
+
+    from lib.config import get_db_path_lightweight
+    from lib.instance import list_instances
+
+    instance_ids = list_instances()
+    summary: Dict[str, Any] = {
+        "instance_count": len(instance_ids),
+        "pending_nodes": 0,
+        "total_nodes": 0,
+        "total_edges": 0,
+        "avg_confidence": 0.0,
+        "pending_nodes_by_instance": {},
+        "errors": [],
+    }
+    confidence_total = 0.0
+
+    for instance_id in instance_ids:
+        try:
+            with _temporary_env_values(
+                {
+                    "QUAID_INSTANCE": instance_id,
+                    "QUAID_ADAPTER_TYPE": None,
+                    "MEMORY_DB_PATH": None,
+                    "MEMORY_ARCHIVE_DB_PATH": None,
+                }
+            ):
+                db_path = get_db_path_lightweight()
+            if not db_path.is_file():
+                summary["errors"].append(
+                    f"{instance_id}: missing memory db at {db_path}"
+                )
+                continue
+            with sqlite3.connect(db_path) as conn:
+                pending = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM nodes WHERE status = 'pending'"
+                    ).fetchone()[0]
+                    or 0
+                )
+                total_nodes = int(
+                    conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] or 0
+                )
+                total_edges = int(
+                    conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0] or 0
+                )
+                avg_conf = float(
+                    conn.execute("SELECT AVG(confidence) FROM nodes").fetchone()[0] or 0.0
+                )
+        except Exception as exc:
+            summary["errors"].append(f"{instance_id}: {exc}")
+            continue
+
+        summary["pending_nodes_by_instance"][instance_id] = pending
+        summary["pending_nodes"] += pending
+        summary["total_nodes"] += total_nodes
+        summary["total_edges"] += total_edges
+        confidence_total += avg_conf * total_nodes
+
+    if summary["total_nodes"] > 0:
+        summary["avg_confidence"] = confidence_total / float(summary["total_nodes"])
+    return summary
 
 
 def main(argv: Optional[List[str]] = None) -> int:

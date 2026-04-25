@@ -143,7 +143,7 @@ def _janitor_embedding_timeout_seconds() -> float:
         global_timeout = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
     except Exception:
         global_timeout = 120.0
-    return max(5.0, min(global_timeout, 60.0))
+    return max(5.0, global_timeout)
 
 
 def _owner_display_name() -> str:

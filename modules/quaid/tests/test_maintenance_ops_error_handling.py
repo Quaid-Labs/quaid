@@ -183,7 +183,10 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
     assert "UPDATE contradictions" in apply_sql
 
 
-def test_backfill_embeddings_vec_upsert_failure_warns_and_continues():
+def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)
+
     class _Conn:
         def execute(self, sql, params=()):
             text = str(sql).strip().upper()
@@ -215,7 +218,43 @@ def test_backfill_embeddings_vec_upsert_failure_warns_and_continues():
     assert out["found"] == 1
     assert out["embedded"] == 1
     assert metrics.summary()["warnings"] >= 1
-    get_embedding.assert_called_once_with("alpha node", timeout_s=60.0)
+    get_embedding.assert_called_once_with("alpha node", timeout_s=120.0)
+
+
+def test_backfill_embeddings_uses_global_timeout_when_janitor_override_unset(monkeypatch):
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                return _DummyResult(rows=[{"id": "n1", "name": "alpha node"}])
+            if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
+                return _DummyResult(rows=[(0,)])
+            if text.startswith("SELECT COUNT(*) FROM NODES"):
+                return _DummyResult(rows=[(1,)])
+            if text.startswith("SELECT ROWID, NAME FROM NODES ORDER BY ROWID DESC LIMIT 1"):
+                return _DummyResult(rows=[(1, "alpha node")])
+            if text.startswith("SELECT ROWID FROM NODES_FTS WHERE ROWID = ?"):
+                return _DummyResult(rows=[(1,)])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("OLLAMA_EMBED_TIMEOUT_S", "85")
+    metrics = maintenance_ops.JanitorMetrics()
+    graph = _Graph()
+
+    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]) as get_embedding, \
+         patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
+         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
+        out = maintenance_ops.backfill_embeddings(graph, metrics, dry_run=False)
+
+    assert out["found"] == 1
+    assert out["embedded"] == 1
+    get_embedding.assert_called_once_with("alpha node", timeout_s=85.0)
 
 
 def test_backfill_embeddings_uses_env_override_timeout(monkeypatch):
