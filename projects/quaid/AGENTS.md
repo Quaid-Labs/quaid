@@ -22,7 +22,7 @@ When a `<injected_memories>` block appears in your context, it contains facts au
 
 ## File Placement — MANDATORY RULES
 
-**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, or anywhere under `~/quaid/` or `~/.quaid/` except through Quaid's own managed flows.** Quaid home is not a dumping ground. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
+**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, anywhere under `~/quaid/` or `~/.quaid/`, or into OpenClaw's native workspace memory paths such as `~/.openclaw/workspace/memory/` or `~/.openclaw/workspace/journal/` except through Quaid's own managed flows.** Quaid home and OpenClaw native memory folders are not dumping grounds. Every file must either live in a tracked project or be written at a real working path and immediately registered into one.
 
 **Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
 
@@ -47,6 +47,8 @@ When a `<injected_memories>` block appears in your context, it contains facts au
    quaid registry register ~/my-scripts/tool.py --project <name>
    ```
    Always tell the user the file is tracked via the registry even though it lives outside the project directory.
+
+**OpenClaw-specific rule:** never satisfy "remember this" or "save this for later" by writing markdown into `~/.openclaw/workspace/memory/`, `~/.openclaw/workspace/journal/`, or any similar native OpenClaw memory folder. Durable memory belongs in Quaid extraction / recall flows, not host-native memory files.
 
 **Example — user asks for a throwaway script:**
 > "Can you write a quick hello world script?"
