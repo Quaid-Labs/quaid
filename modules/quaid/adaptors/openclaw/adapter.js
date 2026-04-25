@@ -4835,7 +4835,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     repairSessionCursorPathsFromQuaidEventLogs();
     purgeInternalSessionArtifacts();
     startSessionIndexWatcher();
-    onChecked("before_agent_start", async (event, ctx) => {
+    const beforeAgentStartSessionTransitionHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
       if (!newSessionId) return;
@@ -4966,8 +4966,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
-    }, {
+    };
+    onChecked("before_agent_start", beforeAgentStartSessionTransitionHandler, {
       name: "before-agent-start-session-transition",
+      priority: 5
+    });
+    registerInternalHookChecked("before_agent_start", beforeAgentStartSessionTransitionHandler, {
+      name: "before-agent-start-session-transition-registerHook",
       priority: 5
     });
     async function recallMemories(opts) {

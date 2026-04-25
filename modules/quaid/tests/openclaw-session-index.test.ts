@@ -349,6 +349,10 @@ describe("openclaw session_index watcher", () => {
       call[0] === "before_agent_start" && call[2]?.name === "before-agent-start-session-transition"
     )?.[1];
     expect(typeof beforeAgentStart).toBe("function");
+    const beforeAgentStartRegisterHook = api.registerHook.mock.calls.find((call: any[]) =>
+      call[0] === "before_agent_start" && call[2]?.name === "before-agent-start-session-transition-registerHook"
+    );
+    expect(beforeAgentStartRegisterHook).toBeTruthy();
 
     await beforeAgentStart(
       { sessionId: newSessionId, sessionKey: "agent:main:tui-new" },

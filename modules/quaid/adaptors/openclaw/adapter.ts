@@ -6020,7 +6020,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // messages in that session in the current gateway lifetime — recorded in
     // sessionLastActivityMs. This avoids mtime-based guessing and false positives
     // from prior-run sessions that the watcher never actively watched this boot.
-    onChecked("before_agent_start", async (event: any, ctx: any) => {
+    const beforeAgentStartSessionTransitionHandler = async (event: any, ctx: any) => {
       if (isInternalSessionContext(event, ctx)) return;
       const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
       if (!newSessionId) return;
@@ -6197,8 +6197,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
 
-    }, {
+    };
+    onChecked("before_agent_start", beforeAgentStartSessionTransitionHandler, {
       name: "before-agent-start-session-transition",
+      priority: 5,
+    });
+    registerInternalHookChecked("before_agent_start", beforeAgentStartSessionTransitionHandler, {
+      name: "before-agent-start-session-transition-registerHook",
       priority: 5,
     });
 
