@@ -4829,7 +4829,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
     onChecked("before_agent_reply", async (event: any, ctx: any) => {
       if (isInternalSessionContext(event, ctx)) return;
-      if (String(ctx?.trigger || "user").trim().toLowerCase() !== "user") return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
       deliverDeferredNoticesViaChannel(promptAgentLabel, "before_agent_reply");
     }, {

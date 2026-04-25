@@ -599,6 +599,51 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
+  it("delivers deferred notices from before_agent_reply even when trigger is non-user", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-non-user-trigger-home-",
+      "openclaw-main",
+      "[Quaid] Deferred notice on non-user reply trigger.",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    );
+    expect(deferredReplyCall).toBeTruthy();
+
+    const relayResult = await deferredReplyCall?.[1](
+      { sessionId: "session-main-non-user", sessionKey: "agent:main:tui-main" },
+      { sessionId: "session-main-non-user", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "assistant" },
+    );
+    expect(relayResult).toBeUndefined();
+
+    const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    const pending = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    expect(pending).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("delivers changed invalid model config through deferred channel notices", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const home = makeTempDir("quaid-oc-provider-drift-home-");
