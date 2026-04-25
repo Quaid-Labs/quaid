@@ -668,6 +668,58 @@ def mark_signal_processed(signal_data: Dict[str, Any]) -> None:
         pass
 
 
+def _preserve_missing_transcript_signal_for_retry(
+    signal_data: Dict[str, Any],
+    *,
+    session_id: str,
+    signal_type: str,
+    transcript_path: str,
+    label: str,
+    max_wait_seconds: float = 45.0,
+) -> bool:
+    """Keep a lifecycle signal on disk briefly when transcript flush lags hook fire."""
+    sig_path = str(signal_data.get("_signal_path") or "").strip()
+    if not sig_path:
+        return False
+    try:
+        first_seen_default = float(time.time())
+        existing_meta = dict(signal_data.get("meta") or {})
+        first_seen = float(existing_meta.get("missing_transcript_first_seen_at") or 0.0) or first_seen_default
+        attempts = int(existing_meta.get("missing_transcript_attempts", 0) or 0) + 1
+        age_seconds = max(0.0, float(time.time()) - first_seen)
+        if age_seconds > float(max_wait_seconds):
+            return False
+        existing_meta.update({
+            "missing_transcript_first_seen_at": first_seen,
+            "missing_transcript_last_seen_at": float(time.time()),
+            "missing_transcript_attempts": attempts,
+            "missing_transcript_last_path": str(transcript_path or ""),
+        })
+        payload = dict(signal_data)
+        payload.pop("_signal_path", None)
+        payload["meta"] = existing_meta
+        _atomic_write(Path(sig_path), json.dumps(payload))
+        logger.info(
+            "[%s] session %s: transcript missing for %s; preserving signal for retry "
+            "(attempt=%d age=%.1fs path=%s)",
+            label,
+            session_id,
+            signal_type,
+            attempts,
+            age_seconds,
+            str(transcript_path or ""),
+        )
+        return True
+    except Exception as exc:
+        logger.debug(
+            "[%s] session %s: could not preserve missing-transcript signal for retry: %s",
+            label,
+            session_id,
+            exc,
+        )
+        return False
+
+
 def _finalize_no_payload_signal(
     *,
     session_id: str,
@@ -2849,6 +2901,15 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 _reset_found = True
                 logger.info("[%s] transcript renamed to reset backup, using: %s", label, transcript_path)
         if not _reset_found:
+            if signal_type in ("reset", "session_end", "compaction") and _preserve_missing_transcript_signal_for_retry(
+                signal_data,
+                session_id=session_id,
+                signal_type=signal_type,
+                transcript_path=str(transcript_path or ""),
+                label=label,
+            ):
+                _release_session_processing_lock(lock_owner_key, lock_fd)
+                return
             logger.warning("[%s] transcript not found: %s", label, transcript_path)
             mark_signal_processed(signal_data)
             _release_session_processing_lock(lock_owner_key, lock_fd)

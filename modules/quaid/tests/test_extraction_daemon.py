@@ -2177,6 +2177,62 @@ class TestSignalRoundTrip:
         assert signals[1]["transcript_path"] == "/rolling.jsonl"
         assert signals[1]["meta"] == {"reason": "chunk_budget"}
 
+    def test_preserve_missing_transcript_signal_for_retry_updates_meta(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: 100.0)
+
+        sig_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-retry",
+            transcript_path="",
+            meta={"reason": "session_closed"},
+        )
+        signal_data = extraction_daemon.read_pending_signals()[0]
+
+        kept = extraction_daemon._preserve_missing_transcript_signal_for_retry(
+            signal_data,
+            session_id="sess-retry",
+            signal_type="session_end",
+            transcript_path="",
+            label="test",
+        )
+
+        assert kept is True
+        payload = json.loads(sig_path.read_text(encoding="utf-8"))
+        assert payload["meta"]["reason"] == "session_closed"
+        assert payload["meta"]["missing_transcript_first_seen_at"] == 100.0
+        assert payload["meta"]["missing_transcript_last_seen_at"] == 100.0
+        assert payload["meta"]["missing_transcript_attempts"] == 1
+        assert payload["meta"]["missing_transcript_last_path"] == ""
+
+    def test_preserve_missing_transcript_signal_for_retry_stops_after_budget(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: 200.0)
+
+        extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id="sess-expire",
+            transcript_path="",
+            meta={
+                "missing_transcript_first_seen_at": 100.0,
+                "missing_transcript_attempts": 3,
+            },
+        )
+        signal_data = extraction_daemon.read_pending_signals()[0]
+
+        kept = extraction_daemon._preserve_missing_transcript_signal_for_retry(
+            signal_data,
+            session_id="sess-expire",
+            signal_type="reset",
+            transcript_path="",
+            label="test",
+            max_wait_seconds=45.0,
+        )
+
+        assert kept is False
+
     def test_session_processing_lock_is_exclusive_per_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
