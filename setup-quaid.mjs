@@ -2994,10 +2994,6 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   // before the direct install-record bypass has a chance to run.
   removeStaleExtensionDir();
   _sanitizeOpenClawPluginInstallSources();
-  _sanitizeOpenClawQuaidPluginEntry();
-  _removeOpenClawPluginsAllowQuaid();
-  _sanitizeOpenClawMemorySlot();
-
   // OpenClaw plugin discovery reads Dirent.isDirectory() and does not follow
   // symlinked extension directories. Keep a real directory at extensionDir.
   try {
@@ -3584,9 +3580,6 @@ async function step1_preflight() {
     if (!hasAgent) {
       hasAgent = _ensureAgentsList(cfgCli, detectWorkspaceFromCli());
     }
-    _sanitizeOpenClawMemorySlot();
-    _sanitizeOpenClawQuaidPluginEntry();
-    _removeOpenClawPluginsAllowQuaid();
     const _ocRuntimeInstance = resolvedInstallerInstanceId();
     const runtimeEnvChanged = _ocRuntimeInstance
       ? _ensureOpenClawRuntimeInstanceEnv(_ocRuntimeInstance)

@@ -220,6 +220,30 @@ describe("install daemon policy", () => {
     expect(setupText).not.toContain("fs.cpSync(stagedPluginPath, extensionDir, { recursive: true, dereference: true })");
   });
 
+  it("OpenClaw install no longer strips managed state before the install succeeds", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    const preflightStart = setupText.indexOf('s.message("Checking OpenClaw agent configuration...");');
+    const preflightEnd = setupText.indexOf("    _ensureOpenClawCompactionModeDefault();");
+    expect(preflightStart).toBeGreaterThan(-1);
+    expect(preflightEnd).toBeGreaterThan(preflightStart);
+    const preflightBlock = setupText.slice(preflightStart, preflightEnd);
+    expect(preflightBlock).not.toContain("_sanitizeOpenClawMemorySlot();");
+    expect(preflightBlock).not.toContain("_sanitizeOpenClawQuaidPluginEntry();");
+    expect(preflightBlock).not.toContain("_removeOpenClawPluginsAllowQuaid();");
+
+    const precleanStart = setupText.indexOf("// Pre-clean stale extension/config before direct repair.");
+    const precleanEnd = setupText.indexOf("// OpenClaw plugin discovery reads Dirent.isDirectory()");
+    expect(precleanStart).toBeGreaterThan(-1);
+    expect(precleanEnd).toBeGreaterThan(precleanStart);
+    const precleanBlock = setupText.slice(precleanStart, precleanEnd);
+    expect(precleanBlock).toContain("_sanitizeOpenClawPluginInstallSources();");
+    expect(precleanBlock).not.toContain("_sanitizeOpenClawMemorySlot();");
+    expect(precleanBlock).not.toContain("_sanitizeOpenClawQuaidPluginEntry();");
+    expect(precleanBlock).not.toContain("_removeOpenClawPluginsAllowQuaid();");
+  });
+
   it("OpenClaw validation treats plugin-list visibility as diagnostic after direct registration passes", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
