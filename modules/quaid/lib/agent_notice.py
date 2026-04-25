@@ -341,61 +341,77 @@ def clear_pending_notices_by_source(*, sources: set[str] | list[str] | tuple[str
         return 0
 
     adapter = get_adapter()
+    candidate_paths: list[Path] = []
+
     pending_getter = getattr(adapter, "_pending_notifications_path", None)
-    if not callable(pending_getter):
-        return 0
+    if callable(pending_getter):
+        try:
+            candidate_paths.append(Path(pending_getter()))
+        except Exception as exc:
+            logger.warning("Failed resolving pending notification path: %s", exc)
 
-    try:
-        pending_path = Path(pending_getter())
-    except Exception as exc:
-        logger.warning("Failed resolving pending notification path: %s", exc)
-        return 0
-    if not pending_path.is_file():
-        return 0
+    data_dir_getter = getattr(adapter, "data_dir", None)
+    if callable(data_dir_getter):
+        try:
+            data_dir = Path(data_dir_getter())
+            candidate_paths.extend(sorted(data_dir.glob("*-pending-notifications.jsonl")))
+        except Exception as exc:
+            logger.warning("Failed enumerating pending notification directory: %s", exc)
 
-    removed = 0
-    kept_entries: list[dict[str, Any]] = []
-    malformed_lines: list[str] = []
-    try:
-        for raw_line in pending_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except Exception:
-                malformed_lines.append(line)
-                continue
-            if not isinstance(entry, dict):
-                malformed_lines.append(line)
-                continue
-            message = str(entry.get("message") or "").strip()
-            entry_source = str(entry.get("source") or "").strip().lower() or pending_notice_source(message)
-            if entry_source in target_sources:
-                removed += 1
-                continue
-            kept_entries.append(entry)
-    except Exception as exc:
-        logger.warning("Failed reading pending notifications for cleanup: %s", exc)
-        return 0
+    seen_paths: set[Path] = set()
+    total_removed = 0
+    for pending_path in candidate_paths:
+        pending_path = Path(pending_path)
+        if pending_path in seen_paths:
+            continue
+        seen_paths.add(pending_path)
+        if not pending_path.is_file():
+            continue
 
-    if removed <= 0:
-        return 0
+        removed = 0
+        kept_entries: list[dict[str, Any]] = []
+        malformed_lines: list[str] = []
+        try:
+            for raw_line in pending_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    malformed_lines.append(line)
+                    continue
+                if not isinstance(entry, dict):
+                    malformed_lines.append(line)
+                    continue
+                message = str(entry.get("message") or "").strip()
+                entry_source = str(entry.get("source") or "").strip().lower() or pending_notice_source(message)
+                if entry_source in target_sources:
+                    removed += 1
+                    continue
+                kept_entries.append(entry)
+        except Exception as exc:
+            logger.warning("Failed reading pending notifications for cleanup: %s", exc)
+            continue
 
-    if kept_entries or malformed_lines:
-        rows = [json.dumps(entry, sort_keys=True) for entry in kept_entries] + malformed_lines
-        pending_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
-    else:
-        pending_path.unlink(missing_ok=True)
-    _trace_m15(
-        "agent_notice.pending.clear_by_source",
-        path=str(pending_path),
-        removed=removed,
-        kept=len(kept_entries),
-        malformed=len(malformed_lines),
-        sources=sorted(target_sources),
-    )
-    return removed
+        if removed <= 0:
+            continue
+
+        if kept_entries or malformed_lines:
+            rows = [json.dumps(entry, sort_keys=True) for entry in kept_entries] + malformed_lines
+            pending_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        else:
+            pending_path.unlink(missing_ok=True)
+        total_removed += removed
+        _trace_m15(
+            "agent_notice.pending.clear_by_source",
+            path=str(pending_path),
+            removed=removed,
+            kept=len(kept_entries),
+            malformed=len(malformed_lines),
+            sources=sorted(target_sources),
+        )
+    return total_removed
 
 
 def queue_deferred_notice(

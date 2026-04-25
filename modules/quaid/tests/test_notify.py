@@ -531,6 +531,34 @@ class TestNotifyAgent:
         assert "invalid-model-b" not in remaining
         assert "nightly summary" in remaining
 
+    def test_clear_pending_notices_by_source_scrubs_adapter_files_under_instance_data_dir(self, tmp_path):
+        class _StandaloneLikeAdapter:
+            def data_dir(self):
+                return tmp_path / "instances" / "codex-test" / "data"
+
+        adapter = _StandaloneLikeAdapter()
+        pending_dir = adapter.data_dir()
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        codex_pending = pending_dir / "codex-pending-notifications.jsonl"
+        codex_pending.write_text(
+            "\n".join(
+                [
+                    json.dumps({"message": "[Quaid error] [provider] stale-provider"}),
+                    json.dumps({"message": "[Quaid warning] [janitor] nightly summary"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            removed = clear_pending_notices_by_source(sources={"provider"})
+
+        assert removed == 1
+        remaining = codex_pending.read_text(encoding="utf-8")
+        assert "stale-provider" not in remaining
+        assert "nightly summary" in remaining
+
 
 class TestDeferredNotifyCli:
     def test_deferred_status_cli_uses_wrapper_with_options(self, monkeypatch, capsys):
