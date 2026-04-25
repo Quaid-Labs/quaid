@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   captureOpenClawManagedState,
+  composeOpenClawManagedStateSnapshots,
   readOpenClawManagedStateSnapshot,
   restoreOpenClawManagedState,
   writeOpenClawManagedStateSnapshot,
@@ -86,6 +87,67 @@ describe("OpenClaw managed state", () => {
     expect(cfg.channels.matrix.enabled).toBe(true);
     expect(cfg.agents.defaults.model.primary).toBe("anthropic/claude-haiku-4-5");
     expect(cfg.agents.list[0].model.primary).toBe("anthropic/claude-haiku-4-5");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("composes preserved managed state over later drifted captures", () => {
+    const snapshot = composeOpenClawManagedStateSnapshots(
+      {
+        requiredAllow: ["quaid", "matrix"],
+        entries: {
+          quaid: { enabled: true },
+          matrix: { enabled: true },
+        },
+        channels: {
+          matrix: { enabled: true, homeserver: "http://127.0.0.1:8008" },
+        },
+        agents: {
+          defaultPrimary: "openai-codex/gpt-5.4",
+        },
+      },
+      {
+        requiredAllow: ["quaid", "matrix"],
+        entries: {
+          matrix: { enabled: false },
+        },
+        channels: {
+          matrix: { enabled: false },
+        },
+        agents: {},
+      },
+    );
+
+    expect(snapshot?.entries.matrix.enabled).toBe(true);
+    expect(snapshot?.channels.matrix.enabled).toBe(true);
+    expect(snapshot?.agents.defaultPrimary).toBe("openai-codex/gpt-5.4");
+  });
+
+  it("captures managed defaults from agent list when defaults.model.primary is absent", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-managed-"));
+    const cfgPath = path.join(root, "openclaw.json");
+    writeJson(cfgPath, {
+      agents: {
+        list: [
+          { id: "main", default: true, model: { primary: "openai-codex/gpt-5.4" } },
+        ],
+      },
+      plugins: {
+        allow: ["quaid", "matrix"],
+        entries: {
+          quaid: { enabled: true },
+          matrix: { enabled: false, disabled: true },
+        },
+      },
+      channels: {
+        matrix: { enabled: true },
+      },
+    });
+
+    const snapshot = captureOpenClawManagedState(cfgPath);
+
+    expect(snapshot?.agents.defaultPrimary).toBe("openai-codex/gpt-5.4");
+    expect(snapshot?.entries.matrix.enabled).toBe(true);
+    expect(snapshot?.entries.matrix.disabled).toBeUndefined();
     fs.rmSync(root, { recursive: true, force: true });
   });
 

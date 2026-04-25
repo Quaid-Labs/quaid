@@ -39,6 +39,7 @@ import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-de
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
 import {
   captureOpenClawManagedState,
+  composeOpenClawManagedStateSnapshots,
   readOpenClawManagedStateSnapshot,
   restoreOpenClawManagedState,
   writeOpenClawManagedStateSnapshot,
@@ -5149,7 +5150,11 @@ except Exception as e:
     // config reload. Give the gateway time to settle before proceeding.
     await waitForGatewayWarmup(30_000);
     await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);
-    const finalManagedState = _captureOpenClawManagedState() || preservedOpenClawManagedState || _loadPersistedOpenClawManagedState();
+    const finalManagedState = composeOpenClawManagedStateSnapshots(
+      preservedOpenClawManagedState,
+      _captureOpenClawManagedState(),
+      _loadPersistedOpenClawManagedState(),
+    );
     if (finalManagedState && _persistOpenClawManagedState(finalManagedState)) {
       log.info("Persisted OpenClaw managed state snapshot for drift recovery");
     }
