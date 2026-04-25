@@ -199,24 +199,14 @@ ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-sen
 Wait 60s, then verify via FTS direct check — use `sqlite3 ... nodes_fts` rather
 than `quaid recall` for exact keyword lookup. Use `rowid` not `id` as the column.
 
-### M4 — Timeout Extraction and Compaction
+### M2 Part C — Timeout Extraction and Compaction
 
 OC is the only platform with both. Procedure:
 
-1. Set timeout to 1 minute and restart the gateway:
+1. Set timeout to 1 minute through Quaid config, then restart the OC gateway service:
    ```bash
-   ssh REMOTE_HOST 'python3 - <<\"PY\"
-import json
-from pathlib import Path
-p = Path.home() / ".quaid" / "instances" / "OC_INSTANCE" / "config.json"
-d = json.loads(p.read_text()) if p.exists() else {}
-d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 1
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(json.dumps(d, indent=2))
-print("OC_INSTANCE inactivityTimeoutMinutes=1")
-PY'
-   ssh REMOTE_HOST 'pkill -f openclaw-gateway; sleep 2; \
-     nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &'
+   ssh REMOTE_HOST '$QCLI config set capture.inactivityTimeoutMinutes 1'
+   ssh REMOTE_HOST 'openclaw gateway restart || true'
    ssh REMOTE_HOST 'for i in $(seq 1 30); do \
      curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break \
      || sleep 2; done'
@@ -232,20 +222,14 @@ PY'
 
 4. Restore and restart:
    ```bash
-   ssh REMOTE_HOST 'python3 - <<\"PY\"
-import json
-from pathlib import Path
-p = Path.home() / ".quaid" / "instances" / "OC_INSTANCE" / "config.json"
-d = json.loads(p.read_text()) if p.exists() else {}
-d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 60
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(json.dumps(d, indent=2))
-print("OC_INSTANCE inactivityTimeoutMinutes=60")
-PY'
-   # Restart gateway again.
+   ssh REMOTE_HOST '$QCLI config set capture.inactivityTimeoutMinutes 60'
+   ssh REMOTE_HOST 'openclaw gateway restart || true'
+   ssh REMOTE_HOST 'for i in $(seq 1 30); do \
+     curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break \
+     || sleep 2; done'
    ```
 
-**M4 PASS criteria (OC):** Timeout fact extracted and stored. Daemon log shows
+**M2 Part C PASS criteria (OC):** Timeout fact extracted and stored. Daemon log shows
 `timeout_extract` signal processed.
 
 ### M7 Phase 3 — Multi-hop Graph Traversal
