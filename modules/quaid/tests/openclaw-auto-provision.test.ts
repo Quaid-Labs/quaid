@@ -79,6 +79,72 @@ afterEach(() => {
 });
 
 describe("openclaw auto-provision", () => {
+  it("unrefs the session index watcher interval on register", async () => {
+    const home = makeTempDir("quaid-oc-watcher-unref-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    writeJson(path.join(hiddenHome, "instances", "openclaw-main", "config.json"), {
+      adapter: { type: "openclaw" },
+      retrieval: { failHard: false, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      plugins: { strict: false },
+    });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-main", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-main", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-main",
+        },
+      },
+    });
+
+    const unref = vi.fn();
+    const fakeTimer = { unref } as any;
+    const originalSetInterval = global.setInterval;
+    const setIntervalSpy = vi.spyOn(global, "setInterval").mockImplementation(((fn: any, ms?: any, ...args: any[]) => {
+      const scheduled = originalSetInterval(fn, ms, ...args);
+      clearInterval(scheduled);
+      return fakeTimer;
+    }) as typeof global.setInterval);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { plugin } = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    expect(setIntervalSpy).toHaveBeenCalled();
+    expect(unref).toHaveBeenCalledOnce();
+
+    setIntervalSpy.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
   it("auto-provisions a non-default agent silo on first before_agent_start hook touch", async () => {
     vi.useFakeTimers();
     const home = makeTempDir("quaid-oc-autoprov-home-");

@@ -5755,6 +5755,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       };
       void tickSessionIndex();
       sessionIndexWatcherTimer = setInterval(tickSessionIndex, SESSION_INDEX_POLL_MS);
+      if (typeof (sessionIndexWatcherTimer as any)?.unref === "function") {
+        (sessionIndexWatcherTimer as any).unref();
+      }
       writeHookTrace("session_index.watcher_started", {
         poll_ms: SESSION_INDEX_POLL_MS,
         sessions_path: getOpenClawSessionsPath(),
