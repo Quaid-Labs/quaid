@@ -41,23 +41,6 @@ from typing import List, Dict, Any, Tuple, Optional
 from core.runtime.logger import janitor_logger, rotate_logs
 from config import get_config
 from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineContext, RoutineResult
-from core.lifecycle.datastore_runtime import (
-    get_graph,
-    JanitorMetrics,
-    backfill_edges,
-    backfill_embeddings,
-    checkpoint_wal,
-    count_nodes_by_status,
-    get_update_check_cache,
-    get_last_run_time,
-    graduate_approved_to_active,
-    init_janitor_metadata,
-    list_recent_fact_texts,
-    record_health_snapshot,
-    record_janitor_run,
-    write_update_check_cache,
-    is_benchmark_mode,
-)
 from lib.llm_clients import (
     reset_token_usage,
     get_token_usage,
@@ -74,6 +57,81 @@ from lib.runtime_context import (
     get_llm_provider,
 )
 from lib.fail_policy import is_fail_hard_enabled
+
+
+_DATASTORE_RUNTIME = None
+
+
+def _datastore_runtime():
+    """Import datastore runtime lazily so no-instance supervisor routing stays lightweight."""
+    global _DATASTORE_RUNTIME
+    if _DATASTORE_RUNTIME is None:
+        from core.lifecycle import datastore_runtime as runtime
+
+        _DATASTORE_RUNTIME = runtime
+    return _DATASTORE_RUNTIME
+
+
+class JanitorMetrics:
+    def __new__(cls, *args, **kwargs):
+        return _datastore_runtime().JanitorMetrics(*args, **kwargs)
+
+
+def get_graph(*args, **kwargs):
+    return _datastore_runtime().get_graph(*args, **kwargs)
+
+
+def backfill_edges(*args, **kwargs):
+    return _datastore_runtime().backfill_edges(*args, **kwargs)
+
+
+def backfill_embeddings(*args, **kwargs):
+    return _datastore_runtime().backfill_embeddings(*args, **kwargs)
+
+
+def checkpoint_wal(*args, **kwargs):
+    return _datastore_runtime().checkpoint_wal(*args, **kwargs)
+
+
+def count_nodes_by_status(*args, **kwargs):
+    return _datastore_runtime().count_nodes_by_status(*args, **kwargs)
+
+
+def get_update_check_cache(*args, **kwargs):
+    return _datastore_runtime().get_update_check_cache(*args, **kwargs)
+
+
+def get_last_run_time(*args, **kwargs):
+    return _datastore_runtime().get_last_run_time(*args, **kwargs)
+
+
+def graduate_approved_to_active(*args, **kwargs):
+    return _datastore_runtime().graduate_approved_to_active(*args, **kwargs)
+
+
+def init_janitor_metadata(*args, **kwargs):
+    return _datastore_runtime().init_janitor_metadata(*args, **kwargs)
+
+
+def list_recent_fact_texts(*args, **kwargs):
+    return _datastore_runtime().list_recent_fact_texts(*args, **kwargs)
+
+
+def record_health_snapshot(*args, **kwargs):
+    return _datastore_runtime().record_health_snapshot(*args, **kwargs)
+
+
+def record_janitor_run(*args, **kwargs):
+    return _datastore_runtime().record_janitor_run(*args, **kwargs)
+
+
+def write_update_check_cache(*args, **kwargs):
+    return _datastore_runtime().write_update_check_cache(*args, **kwargs)
+
+
+def is_benchmark_mode(*args, **kwargs):
+    return _datastore_runtime().is_benchmark_mode(*args, **kwargs)
+
 
 def _workspace() -> Path:
     return get_workspace_dir()

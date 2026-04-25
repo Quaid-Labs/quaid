@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
+import sys
+
+
+def _fresh_import_janitor():
+    for name in (
+        "core.lifecycle.janitor",
+        "core.lifecycle.datastore_runtime",
+        "datastore.memorydb.maintenance_ops",
+    ):
+        sys.modules.pop(name, None)
+    return importlib.import_module("core.lifecycle.janitor")
 
 
 def test_janitor_worker_run_all_once_bypasses_schedule_gate(monkeypatch, tmp_path):
@@ -62,7 +74,7 @@ def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, t
     monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
 
     from core import project_docs
-    from core.lifecycle import janitor
+    janitor = _fresh_import_janitor()
 
     calls = []
 
