@@ -371,6 +371,71 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("prefers richer before_reset hook payload over a stale preserved transcript", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-before-reset-payload-"));
+    const homeDir = path.join(baseDir, "home");
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawRoot = path.join(homeDir, ".openclaw");
+    const sessionsDir = path.join(openClawRoot, "agents", "main", "sessions");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const sessionId = "b609c1f6-883e-4a58-b285-0f4eaee04481";
+    const transcriptPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", id: sessionId }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "Hey, hello." } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+
+      const preserved = isolatedTest.preserveLifecycleTranscript(
+        sessionId,
+        transcriptPath,
+        [
+          { role: "assistant", content: "ACK" },
+          {
+            role: "user",
+            content: [
+              "Apartment's pet-free for now, but we'd name a golden retriever Baxter.",
+              "The tangerine-cased notebook codeword is tangerine-emilia from Emília Rosa.",
+            ].join("\n"),
+          },
+          { role: "assistant", content: "Hello again." },
+        ],
+        "before_reset",
+      );
+
+      expect(preserved.usedHookPayload).toBe(true);
+      expect(preserved.transcriptPath).toBeTruthy();
+      const preservedText = fs.readFileSync(String(preserved.transcriptPath), "utf8");
+      expect(preservedText).toContain("Baxter");
+      expect(preservedText).toContain("tangerine-emilia");
+      const parsed = isolatedTest.parseSessionMessagesJsonl(String(preserved.transcriptPath));
+      expect(parsed.some((message: any) => String(message.content || "").includes("Baxter"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("trusts explicit transcript-update session mappings for physical OC filenames", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-map-"));
     const quaidHome = path.join(baseDir, ".quaid");
@@ -443,6 +508,58 @@ describe("lifecycle signal detection", () => {
     } finally {
       try { fs.unlinkSync(eventLogFile); } catch {}
       try { fs.unlinkSync(transcriptFile); } catch {}
+    }
+  });
+
+  it("allows before_reset to force a second reset signal after an earlier early write", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-forced-reset-signal-"));
+    const homeDir = path.join(baseDir, "home");
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(homeDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(homeDir, ".openclaw", "agents", "main", "sessions");
+    const sessionId = "c9aa1111-2222-4333-8444-555555555555";
+    const transcriptPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "Baxter is the dog name." } })}\n`,
+      "utf8",
+    );
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-04-25T01:21:42.000Z"));
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+
+      isolatedTest.rememberSessionTranscriptPath(sessionId, transcriptPath, "test");
+      const firstSignal = isolatedTest.writeDaemonSignal(sessionId, "reset", { source: "message:received" });
+      expect(firstSignal).toBeTruthy();
+
+      vi.advanceTimersByTime(1);
+      const secondSignal = isolatedTest.writeDaemonSignal(sessionId, "reset", {
+        source: "before_reset",
+        bypass_recent_reset_dedup: true,
+      });
+      expect(secondSignal).toBeTruthy();
+      expect(secondSignal).not.toBe(firstSignal);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
     }
   });
 

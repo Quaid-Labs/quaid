@@ -2031,6 +2031,96 @@ function preserveSessionTranscript(sessionId: string, preferredPath: string | nu
   }
 }
 
+function normalizeConversationTranscriptMessages(messages: any[]): Array<{ role: "user" | "assistant"; content: string }> {
+  const normalized: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const role = String(message?.role || "").trim().toLowerCase();
+    if (role !== "user" && role !== "assistant") continue;
+    const text = preprocessTranscriptText(extractSessionMessageText(message)).trim();
+    if (!text) continue;
+    normalized.push({ role, content: text });
+  }
+  return normalized;
+}
+
+function conversationTranscriptCharCount(messages: any[]): number {
+  return normalizeConversationTranscriptMessages(messages).reduce(
+    (sum, message) => sum + String(message.content || "").trim().length,
+    0,
+  );
+}
+
+function persistHookPayloadTranscript(
+  sessionId: string,
+  messages: any[],
+  reason: string,
+): string | null {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return null;
+  const normalized = normalizeConversationTranscriptMessages(messages);
+  if (!normalized.length) return null;
+  const destPath = getPreservedSessionFile(sid);
+  const payload = normalized
+    .map((message) => JSON.stringify({
+      type: "message",
+      message: {
+        role: message.role,
+        content: message.content,
+      },
+    }))
+    .join("\n") + "\n";
+  try {
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.writeFileSync(destPath, payload, "utf8");
+    sessionTranscriptPaths.set(sid, destPath);
+    writeHookTrace("session_index.transcript_preserved_from_hook_payload", {
+      session_id: sid,
+      reason,
+      dest_path: destPath,
+      message_count: normalized.length,
+      char_count: payload.length,
+    });
+    return destPath;
+  } catch (err: unknown) {
+    writeHookTrace("session_index.transcript_preserve_hook_payload_error", {
+      session_id: sid,
+      reason,
+      error: String((err as Error)?.message || err),
+    });
+    return null;
+  }
+}
+
+function preserveLifecycleTranscript(
+  sessionId: string,
+  preferredPath: string | null | undefined,
+  conversationMessages: any[],
+  reason: string,
+): { transcriptPath: string | null; usedHookPayload: boolean } {
+  const preservedPath = preserveSessionTranscript(sessionId, preferredPath, reason);
+  const hookPayloadChars = conversationTranscriptCharCount(conversationMessages);
+  if (hookPayloadChars <= 0) {
+    return {
+      transcriptPath: preservedPath,
+      usedHookPayload: false,
+    };
+  }
+  const preservedChars = preservedPath
+    ? conversationTranscriptCharCount(parseSessionMessagesJsonl(preservedPath))
+    : 0;
+  if (preservedChars >= hookPayloadChars) {
+    return {
+      transcriptPath: preservedPath,
+      usedHookPayload: false,
+    };
+  }
+  const hookPayloadPath = persistHookPayloadTranscript(sessionId, conversationMessages, reason);
+  return {
+    transcriptPath: hookPayloadPath || preservedPath,
+    usedHookPayload: Boolean(hookPayloadPath),
+  };
+}
+
 function extractSessionMessageText(message: any): string {
   if (!message) return "";
   if (typeof message.text === "string") return message.text;
@@ -2214,11 +2304,12 @@ function writeDaemonSignal(
   // session ID.
   if (signalType === "reset") {
     const RECENT_RESET_SUPPRESS_MS = 5 * 60 * 1000;
+    const bypassRecentResetDedup = Boolean(meta?.bypass_recent_reset_dedup);
     // In-process dedup: check Map before hitting the filesystem. Prevents bursts
     // within a single process from writing multiple signals before the marker
     // file is visible to concurrent callers.
     const _inProcLast = _recentResetSignalsWritten.get(sessionId);
-    if (_inProcLast !== undefined && Date.now() - _inProcLast < RECENT_RESET_SUPPRESS_MS) {
+    if (!bypassRecentResetDedup && _inProcLast !== undefined && Date.now() - _inProcLast < RECENT_RESET_SUPPRESS_MS) {
       console.log(`[quaid][daemon-signal] suppressed duplicate reset signal for session=${sessionId} (in-process dedup)`);
       writeHookTrace("session_index.signal_suppressed", { reason: "in_process_dedup", session_id: sessionId });
       return null;
@@ -2226,7 +2317,7 @@ function writeDaemonSignal(
     const markerPath = path.join(signalDir, `.last_reset_signal.${sessionId}`);
     try {
       const markerStat = fs.statSync(markerPath);
-      if (Date.now() - markerStat.mtimeMs < RECENT_RESET_SUPPRESS_MS) {
+      if (!bypassRecentResetDedup && Date.now() - markerStat.mtimeMs < RECENT_RESET_SUPPRESS_MS) {
         console.log(`[quaid][daemon-signal] suppressed duplicate reset signal for session=${sessionId} (recent marker exists)`);
         writeHookTrace("session_index.signal_suppressed", { reason: "recent_reset_marker", session_id: sessionId });
         return null;
@@ -6607,9 +6698,10 @@ notify_memory_extraction(
         // Snapshot the transcript synchronously before OC tears it down.
         // writeDaemonSignal (called inside doExtraction) reads sessionTranscriptPaths,
         // which preserveSessionTranscript updates to point at the preserved copy.
-        preserveSessionTranscript(
+        const preserved = preserveLifecycleTranscript(
           extractionSessionId,
           preferredTranscriptPathForSession(extractionSessionId, preferredTranscriptPath),
+          conversationMessages,
           "before_reset",
         );
 
@@ -6629,11 +6721,13 @@ notify_memory_extraction(
                 reason: String(reason || "unknown"),
                 event_message_count: messages.length,
                 conversation_message_count: conversationMessages.length,
+                ...(preserved.usedHookPayload ? { bypass_recent_reset_dedup: true } : {}),
               });
               console.log(`[quaid][signal] daemon signal reset session=${extractionSessionId}`);
               writeHookTrace("hook.before_reset.signal_queued", {
                 extraction_session_id: extractionSessionId,
                 reason: String(reason || "unknown"),
+                used_hook_payload_transcript: preserved.usedHookPayload,
               });
             } else {
               console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${extractionSessionId}`);
@@ -6973,6 +7067,8 @@ export const __test = {
   rememberSessionTranscriptPath,
   transcriptPathExplicitlyMatchesSession,
   preferredTranscriptPathForSession,
+  persistHookPayloadTranscript,
+  preserveLifecycleTranscript,
   writeDaemonSignal,
   looksLikeQuaidEventLogTranscript,
   preserveSessionTranscript,
