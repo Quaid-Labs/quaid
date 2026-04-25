@@ -645,6 +645,125 @@ function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): n
   }
 }
 
+function drainDeferredNoticesForAgent(agentLabel: string, reason: string): number {
+  const instanceId = getInstanceId(agentLabel);
+  const notifyScript = path.join(PYTHON_PLUGIN_ROOT, "core", "runtime", "notify.py");
+  try {
+    const result = spawnSync(
+      PYTHON_BIN,
+      [notifyScript, "--deferred-drain", "--limit", "50", "--json"],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: buildPythonEnv({ QUAID_INSTANCE: instanceId }) as NodeJS.ProcessEnv,
+      },
+    );
+    if (result.error || result.status !== 0) {
+      writeHookTrace("deferred_notice.drain_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || ""),
+      });
+      return 0;
+    }
+    let payload: { drained?: number; items?: Array<{ kind?: string }> } = {};
+    try {
+      payload = JSON.parse(String(result.stdout || "{}"));
+    } catch (parseErr: unknown) {
+      writeHookTrace("deferred_notice.drain_parse_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        stdout: String(result.stdout || "").trim().slice(0, 500),
+        error: String((parseErr as Error)?.message || parseErr),
+      });
+      return 0;
+    }
+    const drained = Math.max(0, Number(payload?.drained || 0) || 0);
+    if (drained > 0) {
+      writeHookTrace("deferred_notice.drained", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        count: drained,
+        kinds: Array.isArray(payload?.items)
+          ? payload.items.map((item) => String(item?.kind || "general")).slice(0, 8)
+          : [],
+      });
+    }
+    return drained;
+  } catch (err: unknown) {
+    writeHookTrace("deferred_notice.drain_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      error: String((err as Error)?.message || err),
+    });
+    return 0;
+  }
+}
+
+function deliverNoticeToSession(
+  agentLabel: string,
+  sessionKey: string,
+  message: string,
+  reason: string,
+): boolean {
+  const instanceId = getInstanceId(agentLabel);
+  const script = [
+    "import os, sys",
+    `sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})`,
+    "from core.runtime.notify import get_last_channel, send_direct_notification",
+    `session_key = ${JSON.stringify(String(sessionKey || "").trim())}`,
+    `message = ${JSON.stringify(String(message || "").trim())}`,
+    "if os.environ.get('QUAID_DISABLE_NOTIFICATIONS'):",
+    "    raise SystemExit(0)",
+    "info = get_last_channel(session_key) or get_last_channel('')",
+    "if not info:",
+    "    raise SystemExit(1)",
+    "raise SystemExit(0 if send_direct_notification(message, channel=info.channel, target=info.target, account=getattr(info, 'account_id', None)) else 1)",
+  ].join("\n");
+  try {
+    const result = spawnSync(PYTHON_BIN, ["-c", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: buildPythonEnv({ QUAID_INSTANCE: instanceId }) as NodeJS.ProcessEnv,
+    });
+    const delivered = !result.error && result.status === 0;
+    if (!delivered) {
+      writeHookTrace("deferred_notice.direct_delivery_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        session_key: String(sessionKey || "").trim(),
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || ""),
+      });
+    } else {
+      writeHookTrace("deferred_notice.direct_delivered", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        session_key: String(sessionKey || "").trim(),
+      });
+    }
+    return delivered;
+  } catch (err: unknown) {
+    writeHookTrace("deferred_notice.direct_delivery_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      session_key: String(sessionKey || "").trim(),
+      error: String((err as Error)?.message || err),
+    });
+    return false;
+  }
+}
+
 function queueDeferredNoticeForAgent(
   agentLabel: string,
   message: string,
@@ -2969,7 +3088,7 @@ function resetPromptModelConfigTracking(): void {
   promptModelConfigNotice = "";
 }
 
-async function validatePromptModelConfigIfChanged(agentLabel: string): Promise<string> {
+async function validatePromptModelConfigIfChanged(agentLabel: string, sessionKey: string): Promise<string> {
   const fingerprint = currentPromptModelConfigFingerprint();
   if (!fingerprint) {
     return "";
@@ -2982,6 +3101,9 @@ async function validatePromptModelConfigIfChanged(agentLabel: string): Promise<s
         source: "provider",
         dedupeKey: `prompt-model-config:${fingerprint}`,
       });
+      if (deliverNoticeToSession(agentLabel, sessionKey, promptModelConfigNotice, "prompt_model_config_repeat")) {
+        drainDeferredNoticesForAgent(agentLabel, "prompt_model_config_repeat");
+      }
     }
     return promptModelConfigNotice;
   }
@@ -3005,6 +3127,9 @@ async function validatePromptModelConfigIfChanged(agentLabel: string): Promise<s
       source: "provider",
       dedupeKey: `prompt-model-config:${fingerprint}`,
     });
+    if (deliverNoticeToSession(agentLabel, sessionKey, promptModelConfigNotice, "prompt_model_config_error")) {
+      drainDeferredNoticesForAgent(agentLabel, "prompt_model_config_error");
+    }
     writeHookTrace("hook.before_prompt_build.model_config_error", {
       error: String((err as Error)?.message || err).slice(0, 240),
     });
@@ -4438,7 +4563,10 @@ notify_user(${JSON.stringify(message)})
           });
         } else {
           turnPromise = (async (): Promise<AutoInjectTurnOutcome> => {
-            const modelConfigNotice = await validatePromptModelConfigIfChanged(promptAgentLabel);
+            const modelConfigNotice = await validatePromptModelConfigIfChanged(
+              promptAgentLabel,
+              String(event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "").trim(),
+            );
             let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
             const deadline = new Promise<[any[]]>(resolve => {
               deadlineTimer = setTimeout(() => {

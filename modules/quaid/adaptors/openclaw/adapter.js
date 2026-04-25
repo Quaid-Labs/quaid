@@ -476,6 +476,116 @@ function deliverDeferredNoticesViaChannel(agentLabel, reason) {
     return 0;
   }
 }
+function drainDeferredNoticesForAgent(agentLabel, reason) {
+  const instanceId = getInstanceId(agentLabel);
+  const notifyScript = path.join(PYTHON_PLUGIN_ROOT, "core", "runtime", "notify.py");
+  try {
+    const result = spawnSync(
+      PYTHON_BIN,
+      [notifyScript, "--deferred-drain", "--limit", "50", "--json"],
+      {
+        encoding: "utf8",
+        timeout: 3e4,
+        env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
+      }
+    );
+    if (result.error || result.status !== 0) {
+      writeHookTrace("deferred_notice.drain_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || "")
+      });
+      return 0;
+    }
+    let payload = {};
+    try {
+      payload = JSON.parse(String(result.stdout || "{}"));
+    } catch (parseErr) {
+      writeHookTrace("deferred_notice.drain_parse_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        stdout: String(result.stdout || "").trim().slice(0, 500),
+        error: String(parseErr?.message || parseErr)
+      });
+      return 0;
+    }
+    const drained = Math.max(0, Number(payload?.drained || 0) || 0);
+    if (drained > 0) {
+      writeHookTrace("deferred_notice.drained", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        count: drained,
+        kinds: Array.isArray(payload?.items) ? payload.items.map((item) => String(item?.kind || "general")).slice(0, 8) : []
+      });
+    }
+    return drained;
+  } catch (err) {
+    writeHookTrace("deferred_notice.drain_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      error: String(err?.message || err)
+    });
+    return 0;
+  }
+}
+function deliverNoticeToSession(agentLabel, sessionKey, message, reason) {
+  const instanceId = getInstanceId(agentLabel);
+  const script = [
+    "import os, sys",
+    `sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})`,
+    "from core.runtime.notify import get_last_channel, send_direct_notification",
+    `session_key = ${JSON.stringify(String(sessionKey || "").trim())}`,
+    `message = ${JSON.stringify(String(message || "").trim())}`,
+    "if os.environ.get('QUAID_DISABLE_NOTIFICATIONS'):",
+    "    raise SystemExit(0)",
+    "info = get_last_channel(session_key) or get_last_channel('')",
+    "if not info:",
+    "    raise SystemExit(1)",
+    "raise SystemExit(0 if send_direct_notification(message, channel=info.channel, target=info.target, account=getattr(info, 'account_id', None)) else 1)"
+  ].join("\n");
+  try {
+    const result = spawnSync(PYTHON_BIN, ["-c", script], {
+      encoding: "utf8",
+      timeout: 3e4,
+      env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
+    });
+    const delivered = !result.error && result.status === 0;
+    if (!delivered) {
+      writeHookTrace("deferred_notice.direct_delivery_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        session_key: String(sessionKey || "").trim(),
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || "")
+      });
+    } else {
+      writeHookTrace("deferred_notice.direct_delivered", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        session_key: String(sessionKey || "").trim()
+      });
+    }
+    return delivered;
+  } catch (err) {
+    writeHookTrace("deferred_notice.direct_delivery_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      session_key: String(sessionKey || "").trim(),
+      error: String(err?.message || err)
+    });
+    return false;
+  }
+}
 function queueDeferredNoticeForAgent(agentLabel, message, {
   kind = "agent_notice",
   priority = "normal",
@@ -2344,7 +2454,7 @@ function resetPromptModelConfigTracking() {
   promptModelConfigFingerprint = "";
   promptModelConfigNotice = "";
 }
-async function validatePromptModelConfigIfChanged(agentLabel) {
+async function validatePromptModelConfigIfChanged(agentLabel, sessionKey) {
   const fingerprint = currentPromptModelConfigFingerprint();
   if (!fingerprint) {
     return "";
@@ -2357,6 +2467,9 @@ async function validatePromptModelConfigIfChanged(agentLabel) {
         source: "provider",
         dedupeKey: `prompt-model-config:${fingerprint}`
       });
+      if (deliverNoticeToSession(agentLabel, sessionKey, promptModelConfigNotice, "prompt_model_config_repeat")) {
+        drainDeferredNoticesForAgent(agentLabel, "prompt_model_config_repeat");
+      }
     }
     return promptModelConfigNotice;
   }
@@ -2379,6 +2492,9 @@ async function validatePromptModelConfigIfChanged(agentLabel) {
       source: "provider",
       dedupeKey: `prompt-model-config:${fingerprint}`
     });
+    if (deliverNoticeToSession(agentLabel, sessionKey, promptModelConfigNotice, "prompt_model_config_error")) {
+      drainDeferredNoticesForAgent(agentLabel, "prompt_model_config_error");
+    }
     writeHookTrace("hook.before_prompt_build.model_config_error", {
       error: String(err?.message || err).slice(0, 240)
     });
@@ -3537,7 +3653,10 @@ ${projectPlacementContext}` : projectPlacementContext;
           });
         } else {
           turnPromise = (async () => {
-            const modelConfigNotice2 = await validatePromptModelConfigIfChanged(promptAgentLabel);
+            const modelConfigNotice2 = await validatePromptModelConfigIfChanged(
+              promptAgentLabel,
+              String(event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "").trim()
+            );
             let deadlineTimer;
             const deadline = new Promise((resolve) => {
               deadlineTimer = setTimeout(() => {

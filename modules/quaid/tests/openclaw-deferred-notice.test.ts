@@ -704,24 +704,8 @@ describe("openclaw deferred notices", () => {
       "notes",
       "delayed-llm-requests.json",
     );
-    let payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
-    let pending = Array.isArray(payload?.requests)
-      ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
-      : [];
-    expect(pending.length).toBeGreaterThan(0);
-    expect(String(pending[0]?.message || "")).toContain("[provider]");
-
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
-    );
-    expect(deferredReplyCall).toBeTruthy();
-    await deferredReplyCall?.[1](
-      { sessionId: "session-provider-drift", sessionKey: "agent:main:tui-main" },
-      { sessionId: "session-provider-drift", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
-    );
-
-    payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
-    pending = Array.isArray(payload?.requests)
+    const payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    const pending = Array.isArray(payload?.requests)
       ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
       : [];
     const delivered = Array.isArray(payload?.requests)
@@ -830,29 +814,8 @@ describe("openclaw deferred notices", () => {
       "notes",
       "delayed-llm-requests.json",
     );
-    let payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
-    let pending = Array.isArray(payload?.requests)
-      ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
-      : [];
-    expect(pending.length).toBeGreaterThan(0);
-    expect(String(pending[0]?.message || "")).toContain("[provider]");
-
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
-    );
-    expect(deferredReplyCall).toBeTruthy();
-    await deferredReplyCall?.[1](
-      { sessionId: "session-provider-startup-invalid", sessionKey: "agent:main:tui-main" },
-      {
-        sessionId: "session-provider-startup-invalid",
-        sessionKey: "agent:main:tui-main",
-        agentId: "main",
-        trigger: "user",
-      },
-    );
-
-    payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
-    pending = Array.isArray(payload?.requests)
+    const payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    const pending = Array.isArray(payload?.requests)
       ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
       : [];
     const delivered = Array.isArray(payload?.requests)
