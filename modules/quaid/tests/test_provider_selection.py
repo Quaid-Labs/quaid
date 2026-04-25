@@ -225,8 +225,8 @@ class TestEmbeddingsProviderSelection:
             def embed(self, text):
                 raise AssertionError("embed() should not be called when embed_many succeeds")
 
-            def embed_many(self, texts):
-                self.calls.append(list(texts))
+            def embed_many(self, texts, *, timeout_s=None):
+                self.calls.append((list(texts), timeout_s))
                 return [[float(idx)] for idx, _ in enumerate(texts, start=1)]
 
         provider = _BatchProvider()
@@ -234,11 +234,11 @@ class TestEmbeddingsProviderSelection:
         set_embeddings_provider(provider)
 
         try:
-            out = get_embeddings(["alpha", "beta", "alpha"])
+            out = get_embeddings(["alpha", "beta", "alpha"], timeout_s=7.5)
         finally:
             reset_embeddings_provider()
 
-        assert provider.calls == [["alpha", "beta"]]
+        assert provider.calls == [(["alpha", "beta"], 7.5)]
         assert out == [[1.0], [2.0], [1.0]]
 
     def test_embedding_workers_use_separate_parallel_setting(self, monkeypatch):

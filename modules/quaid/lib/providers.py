@@ -1605,7 +1605,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                 ) from e
         return None
 
-    def embed_many(self, texts: List[str]) -> List[Optional[List[float]]]:
+    def embed_many(self, texts: List[str], *, timeout_s: Optional[float] = None) -> List[Optional[List[float]]]:
         items = list(texts or [])
         if not items:
             return []
@@ -1617,10 +1617,11 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         if batch_size <= 0:
             batch_size = 16
 
-        try:
-            timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
-        except Exception:
-            timeout_s = 120.0
+        if timeout_s is None:
+            try:
+                timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
+            except Exception:
+                timeout_s = 120.0
         if timeout_s <= 0:
             timeout_s = 120.0
 

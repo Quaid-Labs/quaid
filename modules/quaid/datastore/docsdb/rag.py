@@ -119,6 +119,24 @@ def _rag_config():
         return None
 
 
+def _docs_embedding_timeout_seconds() -> float:
+    raw = str(os.environ.get("QUAID_DOCS_EMBED_TIMEOUT_SECONDS", "") or "").strip()
+    if raw:
+        try:
+            timeout = float(raw)
+            if timeout > 0:
+                return timeout
+        except Exception:
+            logger.warning("Invalid QUAID_DOCS_EMBED_TIMEOUT_SECONDS=%r; using default docs embedding timeout", raw)
+    try:
+        global_timeout = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
+    except Exception:
+        global_timeout = 120.0
+    if global_timeout <= 0:
+        global_timeout = 120.0
+    return min(20.0, global_timeout)
+
+
 def _docs_recall_telemetry_enabled() -> bool:
     """Enable verbose docs recall telemetry via opt-in env flag."""
     raw = str(os.getenv("QUAID_RECALL_TELEMETRY", "") or "").strip().lower()
@@ -801,6 +819,7 @@ class DocsRAG:
             chunk_texts,
             pool_name="rag_embeddings",
             task_name="rag",
+            timeout_s=_docs_embedding_timeout_seconds(),
         )
         prepared_chunks = []
         for i, (chunk_text, embedding) in enumerate(zip(chunk_texts, embeddings)):

@@ -192,6 +192,26 @@ def _call_embed(provider: EmbeddingsProvider, text: str, timeout_s: Optional[flo
     return embed(text)
 
 
+def _call_embed_many(
+    provider: EmbeddingsProvider,
+    texts: Sequence[str],
+    timeout_s: Optional[float],
+) -> List[Optional[List[float]]]:
+    embed_many = provider.embed_many
+    if timeout_s is None:
+        return list(embed_many(texts))
+    try:
+        params = inspect.signature(embed_many).parameters
+        accepts_timeout = "timeout_s" in params or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+        )
+    except (TypeError, ValueError):
+        accepts_timeout = True
+    if accepts_timeout:
+        return list(embed_many(texts, timeout_s=timeout_s))
+    return list(embed_many(texts))
+
+
 def get_embedding(text: str, *, timeout_s: Optional[float] = None) -> Optional[List[float]]:
     """Get embedding for text using the current provider.
 
@@ -239,6 +259,7 @@ def get_embeddings(
     pool_name: str = "embeddings",
     task_name: str = "embeddings",
     return_exceptions: bool = False,
+    timeout_s: Optional[float] = None,
 ) -> List[Any]:
     """Get embeddings for many texts with a bounded worker pool.
 
@@ -271,7 +292,7 @@ def get_embeddings(
     embed_many = getattr(provider, "embed_many", None)
     if callable(embed_many):
         try:
-            out = list(embed_many(unique_items))
+            out = _call_embed_many(provider, unique_items, timeout_s)
             if len(out) == len(unique_items):
                 try:
                     from lib.agent_notice import clear_pending_notices_by_source
@@ -290,7 +311,7 @@ def get_embeddings(
         if max_workers is None
         else max(1, int(max_workers))
     )
-    calls = [(lambda chunk_text=text: (lambda: provider.embed(chunk_text)))() for text in unique_items]
+    calls = [(lambda chunk_text=text: (lambda: _call_embed(provider, chunk_text, timeout_s)))() for text in unique_items]
     unique_results = run_callables(
         calls,
         max_workers=min(worker_count, len(unique_items)),
