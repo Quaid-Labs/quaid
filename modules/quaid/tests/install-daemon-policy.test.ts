@@ -286,12 +286,19 @@ describe("install daemon policy", () => {
   it("OpenClaw installer reconciles launchd env for the gateway service", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const fnStart = setupText.indexOf('function _ensureOpenClawGatewayLaunchAgentEnv(instanceId = "")');
+    const fnEnd = setupText.indexOf("function _sanitizeOpenClawQuaidPluginEntry()", fnStart);
+    const fnSlice = setupText.slice(fnStart, fnEnd);
 
     expect(setupText).toContain('function _ensureOpenClawGatewayLaunchAgentEnv(instanceId = "")');
     expect(setupText).toContain('function _resolveOpenClawGatewayEnvInstanceId(instanceId = "")');
     expect(setupText).toContain('path.join(os.homedir(), "Library", "LaunchAgents", "ai.openclaw.gateway.plist")');
-    expect(setupText).toContain('QUAID_HOME: WORKSPACE');
-    expect(setupText).toContain('QUAID_INSTANCE: resolvedInstance');
+    expect(fnSlice).toContain('QUAID_HOME: WORKSPACE');
+    expect(fnSlice).toContain('QUAID_VISIBLE_HOME: VISIBLE_HOME');
+    expect(fnSlice).toContain('QUAID_INSTANCE: resolvedInstance');
+    expect(fnSlice).toContain('const obsoleteEnvKeys = ["OPENCLAW_WORKSPACE"];');
+    expect(fnSlice).toContain('Delete :EnvironmentVariables:${key}');
+    expect(fnSlice).not.toContain('OPENCLAW_WORKSPACE: WORKSPACE');
     expect(setupText).toContain('if (fromVars && fromVars !== "openclaw") return fromVars;');
     expect(setupText).toContain('if (selectedLabel) return `openclaw-${selectedLabel}`;');
     expect(setupText).toContain('return "openclaw-main";');

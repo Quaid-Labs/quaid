@@ -2309,9 +2309,9 @@ function _ensureOpenClawGatewayLaunchAgentEnv(instanceId = "") {
   const expected = {
     QUAID_HOME: WORKSPACE,
     QUAID_VISIBLE_HOME: VISIBLE_HOME,
-    OPENCLAW_WORKSPACE: WORKSPACE,
     QUAID_INSTANCE: resolvedInstance,
   };
+  const obsoleteEnvKeys = ["OPENCLAW_WORKSPACE"];
 
   let changed = false;
   const ensureEnvDict = _runPlistBuddyCommand(plistPath, "Print :EnvironmentVariables");
@@ -2335,6 +2335,17 @@ function _ensureOpenClawGatewayLaunchAgentEnv(instanceId = "") {
     if (write.status !== 0) {
       const detail = String(write.stderr || write.stdout || "").trim();
       throw new Error(`could not set EnvironmentVariables:${key} in ${plistPath}: ${detail || "unknown error"}`);
+    }
+    changed = true;
+  }
+
+  for (const key of obsoleteEnvKeys) {
+    const current = _runPlistBuddyCommand(plistPath, `Print :EnvironmentVariables:${key}`);
+    if (current.status !== 0) continue;
+    const removed = _runPlistBuddyCommand(plistPath, `Delete :EnvironmentVariables:${key}`);
+    if (removed.status !== 0) {
+      const detail = String(removed.stderr || removed.stdout || "").trim();
+      throw new Error(`could not delete EnvironmentVariables:${key} in ${plistPath}: ${detail || "unknown error"}`);
     }
     changed = true;
   }
