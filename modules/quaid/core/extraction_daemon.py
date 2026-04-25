@@ -4303,6 +4303,25 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 def ensure_alive() -> int:
     """Ensure the daemon is running. Start it if not. Returns PID."""
     if os.environ.get("QUAID_SUPERVISOR_DISABLE", "").strip() != "1":
+        explicit_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+        if explicit_instance:
+            try:
+                from lib.adapter import get_adapter
+                get_adapter()
+            except Exception as exc:
+                logger.warning(
+                    "instance bootstrap before supervisor handoff failed for %s: %s",
+                    explicit_instance,
+                    exc,
+                )
+                try:
+                    from lib.fail_policy import is_fail_hard_enabled
+                except Exception:
+                    fail_hard = False
+                else:
+                    fail_hard = bool(is_fail_hard_enabled())
+                if fail_hard:
+                    raise
         try:
             from core.project_docs import ensure_supervisor_alive
             from core import project_docs

@@ -152,6 +152,38 @@ def test_ensure_alive_uses_supervisor_pid_startup_budget(monkeypatch):
     assert enabled == ["claude-code-livetest"]
 
 
+def test_ensure_alive_bootstraps_explicit_instance_before_supervisor(monkeypatch):
+    now = {"value": 100.0}
+    steps = []
+
+    def fake_read_pid():
+        return 4444 if now["value"] >= 101.0 else None
+
+    def fake_sleep(seconds):
+        now["value"] += max(1.0, float(seconds))
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.delenv("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", fake_read_pid)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now["value"])
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: steps.append("bootstrap") or object())
+    monkeypatch.setattr("core.project_docs.ensure_supervisor_alive", lambda: steps.append("ensure") or 1111)
+    monkeypatch.setattr(
+        "core.project_docs.enable_instance_monitor",
+        lambda instance: steps.append(f"enable:{instance}"),
+    )
+    monkeypatch.setattr("core.project_docs.pid_startup_wait_seconds", lambda: 30.0)
+
+    assert extraction_daemon.ensure_alive() == 4444
+    assert steps == [
+        "bootstrap",
+        "enable:claude-code-private-tmp-cc-livetest",
+        "ensure",
+    ]
+
+
 def test_stop_daemon_disables_supervisor_instance_monitor(monkeypatch):
     disabled = []
 
