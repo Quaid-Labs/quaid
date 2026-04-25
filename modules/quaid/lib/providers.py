@@ -129,6 +129,21 @@ def _read_response_body_with_deadline(resp, *, read_timeout_s: float, chunk_size
     return bytes(body)
 
 
+def _embedding_deadline(timeout_s: Optional[float], default_s: float = 120.0) -> tuple[float, float]:
+    """Return (effective_timeout_s, deadline_monotonic) for embedding calls."""
+    try:
+        effective = float(timeout_s) if timeout_s is not None else float(default_s)
+    except Exception:
+        effective = float(default_s)
+    if effective <= 0:
+        effective = float(default_s)
+    return effective, (time.monotonic() + effective)
+
+
+def _remaining_embedding_timeout(deadline: float) -> float:
+    return max(0.05, deadline - time.monotonic())
+
+
 def _is_anthropic_oauth_token(token: str) -> bool:
     return str(token or "").strip().startswith("sk-ant-oat")
 
@@ -1522,14 +1537,15 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         retries = 0 if explicit_timeout else 1
         last_error = None
         call_started = time.monotonic()
+        default_timeout_s = 120.0
         if timeout_s is None:
             try:
-                timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
+                default_timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
             except Exception:
-                timeout_s = 120.0
-        if timeout_s <= 0:
-            timeout_s = 120.0
+                default_timeout_s = 120.0
+        timeout_s, deadline = _embedding_deadline(timeout_s, default_timeout_s)
         for attempt in range(retries + 1):
+            request_timeout_s = _remaining_embedding_timeout(deadline)
             request_started = time.monotonic()
             try:
                 text_value = str(text or "")
@@ -1551,13 +1567,13 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     timeout_s,
                     attempt + 1,
                 )
-                with _urlopen_with_local_proxy_bypass(req, timeout=timeout_s) as resp:
+                with _urlopen_with_local_proxy_bypass(req, timeout=request_timeout_s) as resp:
                     logger.info(
                         "ollama.embed.headers received batch_size=%d elapsed_ms=%d",
                         1,
                         int((time.monotonic() - request_started) * 1000),
                     )
-                    body_bytes = _read_response_body_with_deadline(resp, read_timeout_s=timeout_s)
+                    body_bytes = _read_response_body_with_deadline(resp, read_timeout_s=request_timeout_s)
                     logger.info(
                         "ollama.embed.body_read batch_size=%d body_len=%d elapsed_ms=%d",
                         1,
@@ -1577,8 +1593,8 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     return None
             except (urllib.error.URLError, TimeoutError, OSError, ConnectionError) as e:
                 last_error = e
-                if attempt < retries:
-                    time.sleep(0.2 * (2 ** attempt))
+                if attempt < retries and time.monotonic() < deadline:
+                    time.sleep(min(0.2 * (2 ** attempt), max(0.0, deadline - time.monotonic())))
                     continue
                 break
             except Exception as e:
@@ -1617,15 +1633,16 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         if batch_size <= 0:
             batch_size = 16
 
+        explicit_timeout = timeout_s is not None
+        default_timeout_s = 120.0
         if timeout_s is None:
             try:
-                timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
+                default_timeout_s = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
             except Exception:
-                timeout_s = 120.0
-        if timeout_s <= 0:
-            timeout_s = 120.0
+                default_timeout_s = 120.0
+        timeout_s, deadline = _embedding_deadline(timeout_s, default_timeout_s)
 
-        retries = 1
+        retries = 0 if explicit_timeout else 1
         retryable_errors = (urllib.error.URLError, TimeoutError, OSError, ConnectionError)
         call_started = time.monotonic()
 
@@ -1634,6 +1651,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
             batch_chars = sum(len(str(item or "")) for item in batch)
             batch_started = time.monotonic()
             for attempt in range(retries + 1):
+                request_timeout_s = _remaining_embedding_timeout(deadline)
                 request_started = time.monotonic()
                 try:
                     data = json.dumps({
@@ -1651,16 +1669,16 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                         len(batch),
                         self._model,
                         batch_chars,
-                        timeout_s,
+                        request_timeout_s,
                         attempt + 1,
                     )
-                    with _urlopen_with_local_proxy_bypass(req, timeout=timeout_s) as resp:
+                    with _urlopen_with_local_proxy_bypass(req, timeout=request_timeout_s) as resp:
                         logger.info(
                             "ollama.embed.headers received batch_size=%d elapsed_ms=%d",
                             len(batch),
                             int((time.monotonic() - request_started) * 1000),
                         )
-                        body_bytes = _read_response_body_with_deadline(resp, read_timeout_s=timeout_s)
+                        body_bytes = _read_response_body_with_deadline(resp, read_timeout_s=request_timeout_s)
                         logger.info(
                             "ollama.embed.body_read batch_size=%d body_len=%d elapsed_ms=%d",
                             len(batch),
@@ -1682,8 +1700,8 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                         return embeddings
                 except retryable_errors as e:
                     batch_error = e
-                    if attempt < retries:
-                        time.sleep(0.2 * (2 ** attempt))
+                    if attempt < retries and time.monotonic() < deadline:
+                        time.sleep(min(0.2 * (2 ** attempt), max(0.0, deadline - time.monotonic())))
                         continue
                     break
                 except Exception as e:
@@ -1691,7 +1709,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     break
             if batch_error is None:
                 return []
-            if len(batch) > 1 and isinstance(batch_error, retryable_errors):
+            if len(batch) > 1 and isinstance(batch_error, retryable_errors) and time.monotonic() < deadline:
                 split_at = max(1, len(batch) // 2)
                 logger.warning(
                     "ollama.embed.split batch_len=%d split_at=%d reason=%s",

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import io
+import itertools
 import queue
 import time
 import urllib.error
@@ -1661,6 +1662,27 @@ class TestOllamaEmbeddingsProvider:
             result = p.embed_many(["first", "second"])
 
         assert result == []
+
+    def test_embed_many_stops_recursive_split_after_explicit_budget_expires(self, monkeypatch):
+        p = OllamaEmbeddingsProvider()
+        monkeypatch.setenv("OLLAMA_EMBED_BATCH_SIZE", "4")
+
+        seen_batches = []
+
+        def _fake_urlopen(req, timeout):
+            payload = json.loads(req.data.decode("utf-8"))
+            seen_batches.append((list(payload["input"]), timeout))
+            raise TimeoutError("timed out")
+
+        monotonic_values = itertools.chain([0.0, 0.0, 0.0, 0.0, 6.0], itertools.repeat(6.0))
+
+        with patch("lib.providers.urllib.request.urlopen", side_effect=_fake_urlopen), \
+             patch("lib.providers.time.monotonic", side_effect=lambda: next(monotonic_values)), \
+             patch("lib.providers.is_fail_hard_enabled", return_value=False):
+            result = p.embed_many(["a", "bb", "ccc", "dddd"], timeout_s=5.0)
+
+        assert result == []
+        assert seen_batches == [(["a", "bb", "ccc", "dddd"], 5.0)]
 
     def test_embed_many_raises_on_error_when_failhard_enabled(self):
         p = OllamaEmbeddingsProvider()
