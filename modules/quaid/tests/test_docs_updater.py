@@ -967,6 +967,19 @@ class TestCmdUpdateStaleNeverIndexed:
             assert captured["project"] == "quaid"
             assert captured["project_log_indexer"] is sentinel_indexer
 
+    def test_update_stale_raises_for_missing_explicit_project(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            class _FakeRegistry:
+                def list_projects(self):
+                    return [{"name": "quaid"}]
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+
+            with pytest.raises(RuntimeError, match="Project not found for docs update: missing-proj"):
+                updater.cmd_update_stale(dry_run=False, project="missing-proj")
+
     def test_reindexes_registry_doc_when_timestamp_exists_but_chunks_are_missing(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
             from datastore.docsdb import updater

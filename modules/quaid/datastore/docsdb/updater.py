@@ -1541,6 +1541,20 @@ def cmd_update_stale(
             indexing. Datastore code must not import core to resolve project scope.
     """
     protected_names = {str(name) for name in (protected_names or set()) if str(name or "").strip()}
+    project_name = str(project or "").strip() or None
+    registry = None
+    if project_name:
+        from datastore.docsdb.registry import DocsRegistry
+
+        registry = DocsRegistry()
+        visible_projects = {
+            str(entry.get("name") or "").strip()
+            for entry in registry.list_projects()
+            if str(entry.get("name") or "").strip()
+        }
+        if project_name not in visible_projects:
+            raise RuntimeError(f"Project not found for docs update: {project_name}")
+    project = project_name
     stale = check_staleness(project=project)
     purposes = get_doc_purposes()
     updated = 0
@@ -1587,9 +1601,11 @@ def cmd_update_stale(
     newly_indexed = 0
     never_indexable = 0
     try:
-        from datastore.docsdb.registry import DocsRegistry
         from datastore.docsdb.rag import DocsRAG
-        registry = DocsRegistry()
+        if registry is None:
+            from datastore.docsdb.registry import DocsRegistry
+
+            registry = DocsRegistry()
         rag = DocsRAG()
         all_docs = registry.list_docs(project=project)
         registry_paths: List[str] = []
