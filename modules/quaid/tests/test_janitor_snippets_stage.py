@@ -673,6 +673,79 @@ class TestJanitorCompleteSuccessFlag:
         assert complete_events[-1]["success"] is True
 
 
+def test_snippets_and_journal_tasks_print_summary(monkeypatch, tmp_path, capsys):
+    _patch_janitor_base(monkeypatch, tmp_path)
+
+    from core.lifecycle.janitor_lifecycle import RoutineResult
+
+    def _fake_run(self, name, ctx):
+        if name == "snippets":
+            return RoutineResult(
+                metrics={
+                    "snippets_folded": 2,
+                    "snippets_rewritten": 1,
+                    "snippets_discarded": 3,
+                    "snippets_skipped_at_limit": 4,
+                },
+            )
+        if name == "journal":
+            return RoutineResult(
+                metrics={
+                    "journal_additions": 5,
+                    "journal_edits": 6,
+                    "journal_recovered_edits": 7,
+                    "journal_entries_distilled": 8,
+                },
+            )
+        return RoutineResult(
+            metrics={
+                "memories_reviewed": 0, "memories_deleted": 0,
+                "memories_fixed": 0, "review_carryover": 0,
+                "review_coverage_ratio_pct": 100,
+                "decay_reviewed": 0, "decay_review_deleted": 0,
+                "decay_review_extended": 0, "decay_review_pinned": 0,
+                "snippets_folded": 0, "snippets_rewritten": 0,
+                "snippets_discarded": 0, "snippets_skipped_at_limit": 0,
+                "journal_additions": 0, "journal_edits": 0,
+                "journal_recovered_edits": 0, "journal_entries_distilled": 0,
+                "temporal_found": 0, "temporal_fixed": 0,
+                "dedup_reviewed": 0, "dedup_confirmed": 0, "dedup_reversed": 0,
+                "duplicates_merged": 0, "memories_decayed": 0,
+                "memories_deleted_by_decay": 0, "decay_queued": 0,
+            },
+        )
+
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.LifecycleRegistry.run", _fake_run)
+
+    janitor._run_task_optimized_inner(
+        "snippets",
+        dry_run=False,
+        incremental=True,
+        time_budget=0,
+        force_distill=False,
+        user_approved=False,
+        resume_checkpoint=False,
+    )
+    snippets_out = capsys.readouterr().out
+    assert "Review decisions: 2 folded, 1 rewritten, 3 discarded" in snippets_out
+    assert "Skipped at file limit: 4" in snippets_out
+    assert "not new snippet-file counts" in snippets_out
+
+    janitor._run_task_optimized_inner(
+        "journal",
+        dry_run=False,
+        incremental=True,
+        time_budget=0,
+        force_distill=False,
+        user_approved=False,
+        resume_checkpoint=False,
+    )
+    journal_out = capsys.readouterr().out
+    assert "Distillation results: 5 additions, 6 edits, 7 recovered edits" in journal_out
+    assert "Source journal entries distilled: 8" in journal_out
+    assert "Journal files live under:" in journal_out
+
+
 # ---------------------------------------------------------------------------
 # Tests: apply_mode=ask → core_markdown_writes approval queued
 # ---------------------------------------------------------------------------

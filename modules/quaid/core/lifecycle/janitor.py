@@ -52,6 +52,7 @@ from lib.llm_clients import (
 )
 from lib.runtime_context import (
     get_workspace_dir,
+    get_visible_workspace_dir,
     get_data_dir,
     get_logs_dir,
     get_repo_slug,
@@ -1501,6 +1502,19 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             applied_changes["snippets_folded"] = lifecycle_result.metrics.get("snippets_folded", 0)
             applied_changes["snippets_rewritten"] = lifecycle_result.metrics.get("snippets_rewritten", 0)
             applied_changes["snippets_discarded"] = lifecycle_result.metrics.get("snippets_discarded", 0)
+            snippets_skipped = lifecycle_result.metrics.get("snippets_skipped_at_limit", 0)
+            print(
+                "  Review decisions: "
+                f"{applied_changes['snippets_folded']} folded, "
+                f"{applied_changes['snippets_rewritten']} rewritten, "
+                f"{applied_changes['snippets_discarded']} discarded"
+            )
+            if snippets_skipped:
+                print(f"  Skipped at file limit: {snippets_skipped}")
+            print(
+                "  Note: snippet counts are review decisions / core markdown changes, "
+                "not new snippet-file counts."
+            )
             metrics.end_task("snippets")
             print(f"Task completed in {metrics.task_duration('snippets'):.2f}s\n")
 
@@ -1529,6 +1543,18 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             applied_changes["journal_edits"] = lifecycle_result.metrics.get("journal_edits", 0)
             applied_changes["journal_recovered_edits"] = lifecycle_result.metrics.get("journal_recovered_edits", 0)
             applied_changes["journal_entries_distilled"] = lifecycle_result.metrics.get("journal_entries_distilled", 0)
+            print(
+                "  Distillation results: "
+                f"{applied_changes['journal_additions']} additions, "
+                f"{applied_changes['journal_edits']} edits, "
+                f"{applied_changes['journal_recovered_edits']} recovered edits"
+            )
+            print(
+                f"  Source journal entries distilled: {applied_changes['journal_entries_distilled']}"
+            )
+            print(
+                f"  Journal files live under: {get_visible_workspace_dir() / 'journal'}"
+            )
             metrics.end_task("journal")
             print(f"Task completed in {metrics.task_duration('journal'):.2f}s\n")
 
