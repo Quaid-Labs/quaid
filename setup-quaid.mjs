@@ -5176,11 +5176,22 @@ except Exception as e:
     if (finalManagedState && _persistOpenClawManagedState(finalManagedState)) {
       log.info("Persisted OpenClaw managed state snapshot for drift recovery");
     }
-    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
-    if (_installOpenClawManagedStateGuard()) {
+    let postHookReadyError = null;
+    try {
+      await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
+    } catch (err) {
+      postHookReadyError = err;
+    }
+    const guardInstalled = _installOpenClawManagedStateGuard();
+    if (guardInstalled) {
       log.info("Installed OpenClaw managed-state guard");
     }
-    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-guard activation", 60_000);
+    if (postHookReadyError) {
+      throw postHookReadyError;
+    }
+    if (guardInstalled) {
+      await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-guard activation", 60_000);
+    }
     s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
 
