@@ -202,6 +202,28 @@ def test_status_includes_worker_log_tail(project_env):
     assert "line-49" in rendered
 
 
+def test_format_status_hides_stale_last_error_when_project_is_fresh():
+    from core import project_docs
+
+    rendered = project_docs.format_status(
+        {
+            "project": "demo",
+            "status": "fresh",
+            "pending_source_change_count": 0,
+            "project_log_bytes_pending": 0,
+            "project_log_queue_pending": 0,
+            "supervisor_pid": None,
+            "worker_pid": None,
+            "progress": {},
+            "state": {
+                "last_completed_at": "2026-04-25T00:00:00Z",
+                "last_error": "QUAID_INSTANCE environment variable is not set",
+            },
+        }
+    )
+    assert "Last error:" not in rendered
+
+
 def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(project_env):
     tmp_path, src, entry = project_env
     from core import project_docs

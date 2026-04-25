@@ -1735,7 +1735,8 @@ def format_status(status: Dict[str, Any]) -> str:
     state = status.get("state") or {}
     if state.get("last_completed_at"):
         lines.append(f"Last completed: {state.get('last_completed_at')}")
-    if state.get("last_error"):
+    show_last_error = str(status.get("status") or "").strip().lower() != "fresh"
+    if show_last_error and state.get("last_error"):
         lines.append(f"Last error: {state.get('last_error')}")
     tail = status.get("worker_log_tail") or []
     if tail:
