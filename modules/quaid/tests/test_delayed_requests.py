@@ -145,6 +145,32 @@ def test_completed_request_not_deduped(clean_adapter):
     assert len(_read_requests(clean_adapter)) == 2
 
 
+def test_delivered_janitor_request_deduped(clean_adapter):
+    queue_deferred_notice("msg", kind="janitor_summary", priority="low", source="janitor")
+    path = _notes_path(clean_adapter)
+    payload = json.loads(path.read_text())
+    payload["requests"][0]["status"] = "delivered"
+    payload["requests"][0]["delivered_at"] = "2026-04-26T00:00:00Z"
+    path.write_text(json.dumps(payload))
+
+    second = queue_deferred_notice("msg", kind="janitor_summary", priority="low", source="janitor")
+    assert second is False
+    assert len(_read_requests(clean_adapter)) == 1
+
+
+def test_delivered_provider_request_not_deduped(clean_adapter):
+    queue_deferred_notice("msg", kind="provider", priority="high", source="provider")
+    path = _notes_path(clean_adapter)
+    payload = json.loads(path.read_text())
+    payload["requests"][0]["status"] = "delivered"
+    payload["requests"][0]["delivered_at"] = "2026-04-26T00:00:00Z"
+    path.write_text(json.dumps(payload))
+
+    second = queue_deferred_notice("msg", kind="provider", priority="high", source="provider")
+    assert second is True
+    assert len(_read_requests(clean_adapter)) == 2
+
+
 # ---------------------------------------------------------------------------
 # Recovery from malformed/corrupt file
 # ---------------------------------------------------------------------------

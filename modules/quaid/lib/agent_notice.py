@@ -509,14 +509,26 @@ def queue_deferred_notice(
         for item in requests:
             if not isinstance(item, dict):
                 continue
-            if item.get("status") != "pending":
+            if str(item.get("dedupe_key") or item.get("id") or "").strip() != dedupe_token:
                 continue
-            if str(item.get("dedupe_key") or item.get("id") or "").strip() == dedupe_token:
+            item_status = str(item.get("status") or "pending").strip().lower() or "pending"
+            item_source = str(item.get("source") or notice_source).strip().lower() or notice_source.lower()
+            if item_status == "pending":
                 _trace_m15(
                     "deferred_notice.queue.deduped",
                     path=str(path),
                     dedupe_key=dedupe_token,
                     existing_id=str(item.get("id") or ""),
+                    existing_status=item_status,
+                )
+                return False
+            if item_status == "delivered" and not should_persist_pending_notice(item_source):
+                _trace_m15(
+                    "deferred_notice.queue.deduped",
+                    path=str(path),
+                    dedupe_key=dedupe_token,
+                    existing_id=str(item.get("id") or ""),
+                    existing_status=item_status,
                 )
                 return False
 
