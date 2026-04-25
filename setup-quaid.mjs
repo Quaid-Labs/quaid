@@ -2717,13 +2717,14 @@ function sanitizeNativeMemoryPlugins(parsed, changedBits) {
     const current = plugins.entries[pluginId];
     if (!isRecord(current)) {
       if (current !== undefined) {
-        plugins.entries[pluginId] = { enabled: false };
+        plugins.entries[pluginId] = { disabled: true };
         changedBits.push(\`plugins.entries.\${pluginId}\`);
       }
       continue;
     }
-    if (current.enabled !== false) {
-      current.enabled = false;
+    if (current.disabled !== true || Object.prototype.hasOwnProperty.call(current, "enabled")) {
+      delete current.enabled;
+      current.disabled = true;
       changedBits.push(\`plugins.entries.\${pluginId}\`);
     }
   }
