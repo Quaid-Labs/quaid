@@ -1846,6 +1846,44 @@ class TestCodexAdapter:
         assert "saved it in memory/" not in transcript
         assert "I have remembered" not in transcript
 
+    def test_parse_session_jsonl_strips_openclaw_durable_memory_refusal(self, tmp_path):
+        path = tmp_path / "rollout-openclaw-memory-refusal.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "My Friday ritual is roasting pumpkin seeds with the codeword "
+                                    "walnut-umbrella-7142."
+                                ),
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "I won't store that as durable memory unless you want me to."
+                                ),
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "walnut-umbrella-7142" in transcript
+        assert "durable memory" not in transcript
+        assert "won't store that" not in transcript
+
     def test_resolve_stop_hook_signal_returns_none_for_regular_turn(self, tmp_path):
         path = tmp_path / "rollout-regular-turn.jsonl"
         path.write_text(

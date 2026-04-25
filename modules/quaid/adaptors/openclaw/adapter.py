@@ -63,6 +63,22 @@ class OpenClawAdapter(QuaidAdapter):
     def installer_cli_candidates(cls) -> list[str]:
         return ["openclaw"]
 
+    @staticmethod
+    def _is_host_memory_policy_reply(role: str, text: str) -> bool:
+        normalized_role = str(role or "").strip().lower()
+        lowered = str(text or "").strip().lower()
+        if normalized_role != "assistant" or not lowered:
+            return False
+        if "i have remembered" in lowered and (
+            "saved in memory/" in lowered or "openclaw-workspace" in lowered
+        ):
+            return True
+        if "durable memory" in lowered and (
+            "won't store that" in lowered or "unless you want me to" in lowered
+        ):
+            return True
+        return False
+
     def _openclaw_config_path_candidates(self) -> list[Path]:
         """OpenClaw config candidates, honoring OPENCLAW_CONFIG_PATH first."""
         candidates: list[Path] = []
@@ -617,10 +633,7 @@ class OpenClawAdapter(QuaidAdapter):
                         if payload_type in ("user_message", "agent_message"):
                             role = "user" if payload_type == "user_message" else "assistant"
                             text = str(payload.get("message", "")).strip()
-                            lowered = text.lower()
-                            if role == "assistant" and "i have remembered" in lowered and (
-                                "saved in memory/" in lowered or "openclaw-workspace" in lowered
-                            ):
+                            if self._is_host_memory_policy_reply(role, text):
                                 continue
                             if "[Subagent Context]" in text or "You are running as a subagent" in text:
                                 session_source_type = "subagent"
@@ -651,10 +664,7 @@ class OpenClawAdapter(QuaidAdapter):
                     continue
 
                 stripped = content.strip()
-                lowered = stripped.lower()
-                if role == "assistant" and "i have remembered" in lowered and (
-                    "saved in memory/" in lowered or "openclaw-workspace" in lowered
-                ):
+                if self._is_host_memory_policy_reply(role, stripped):
                     continue
                 if "[Subagent Context]" in stripped or "You are running as a subagent" in stripped:
                     session_source_type = "subagent"
