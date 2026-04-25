@@ -5375,7 +5375,7 @@ notify_memory_extraction(
       name: "compaction-memory-extraction",
       priority: 10
     });
-    onChecked("before_reset", async (event, ctx) => {
+    const beforeResetHandler = async (event, ctx) => {
       try {
         if (isInternalSessionContext(event, ctx)) {
           return;
@@ -5497,11 +5497,16 @@ notify_memory_extraction(
           error: String(err?.message || err)
         });
       }
-    }, {
+    };
+    onChecked("before_reset", beforeResetHandler, {
       name: "reset-memory-extraction",
       priority: 10
     });
-    onChecked("session_end", async (event, ctx) => {
+    registerInternalHookChecked("before_reset", beforeResetHandler, {
+      name: "reset-memory-extraction-registerHook",
+      priority: 10
+    });
+    const sessionEndHandler = async (event, ctx) => {
       try {
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();
@@ -5561,8 +5566,13 @@ notify_memory_extraction(
           error: String(err?.message || err)
         });
       }
-    }, {
+    };
+    onChecked("session_end", sessionEndHandler, {
       name: "session-end-memory-extraction",
+      priority: 10
+    });
+    registerInternalHookChecked("session_end", sessionEndHandler, {
+      name: "session-end-memory-extraction-registerHook",
       priority: 10
     });
     registerHttpRouteChecked({

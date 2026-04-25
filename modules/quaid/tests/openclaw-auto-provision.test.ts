@@ -197,6 +197,14 @@ describe("openclaw auto-provision", () => {
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build-registerHook"
     );
     expect(beforePromptBuildRegisterHookCall).toBeTruthy();
+    const beforeResetRegisterHookCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_reset" && call?.[2]?.name === "reset-memory-extraction-registerHook"
+    );
+    expect(beforeResetRegisterHookCall).toBeTruthy();
+    const sessionEndRegisterHookCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "session_end" && call?.[2]?.name === "session-end-memory-extraction-registerHook"
+    );
+    expect(sessionEndRegisterHookCall).toBeTruthy();
 
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
     const promptResult = await beforePromptBuildHandler(

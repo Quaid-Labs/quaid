@@ -108,9 +108,11 @@ describe("adapter contract gate integration", () => {
     const onCalls = api.on.mock.calls.filter((call: any[]) => call?.[0] === "session_end");
     const hookCalls = api.registerHook.mock.calls.filter((call: any[]) => call?.[0] === "session_end");
     expect(onCalls.length + hookCalls.length).toBeGreaterThan(0);
-    const call = (hookCalls[0] || onCalls[0]) as any[];
-    expect(call[1]).toEqual(expect.any(Function));
-    expect(call[2]).toEqual(expect.objectContaining({ name: "session-end-memory-extraction" }));
+    const onCall = onCalls.find((call: any[]) => call?.[2]?.name === "session-end-memory-extraction");
+    const hookCall = hookCalls.find((call: any[]) => call?.[2]?.name === "session-end-memory-extraction-registerHook");
+    expect((onCall || hookCall)?.[1]).toEqual(expect.any(Function));
+    expect(onCall?.[2]).toEqual(expect.objectContaining({ name: "session-end-memory-extraction" }));
+    expect(hookCall?.[2]).toEqual(expect.objectContaining({ name: "session-end-memory-extraction-registerHook" }));
     warn.mockRestore();
   });
 

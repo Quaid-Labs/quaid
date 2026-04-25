@@ -6655,7 +6655,7 @@ notify_memory_extraction(
 
     // Register reset hook — compatibility fallback for older runtimes.
     // Primary reset/new boundary path is session_end below.
-    onChecked("before_reset", async (event: any, ctx: any) => {
+    const beforeResetHandler = async (event: any, ctx: any) => {
       try {
         if (isInternalSessionContext(event, ctx)) {
           return;
@@ -6795,14 +6795,19 @@ notify_memory_extraction(
           error: String((err as Error)?.message || err),
         });
       }
-    }, {
+    };
+    onChecked("before_reset", beforeResetHandler, {
       name: "reset-memory-extraction",
       priority: 10
+    });
+    registerInternalHookChecked("before_reset", beforeResetHandler, {
+      name: "reset-memory-extraction-registerHook",
+      priority: 10,
     });
 
     // Primary reset/new lifecycle capture path.
     // session_end is emitted when OpenClaw replaces/resets a session.
-    onChecked("session_end", async (event: any, ctx: any) => {
+    const sessionEndHandler = async (event: any, ctx: any) => {
       try {
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();
@@ -6862,8 +6867,13 @@ notify_memory_extraction(
           error: String((err as Error)?.message || err),
         });
       }
-    }, {
+    };
+    onChecked("session_end", sessionEndHandler, {
       name: "session-end-memory-extraction",
+      priority: 10,
+    });
+    registerInternalHookChecked("session_end", sessionEndHandler, {
+      name: "session-end-memory-extraction-registerHook",
       priority: 10,
     });
 
