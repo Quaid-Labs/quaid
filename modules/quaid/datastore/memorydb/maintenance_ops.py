@@ -126,6 +126,26 @@ def _effective_llm_timeout(requested_seconds: Optional[float], default_seconds: 
     return max(5.0, min(float(default_seconds), requested))
 
 
+def _janitor_embedding_timeout_seconds() -> float:
+    """Return the bounded per-call timeout for janitor embedding backfill."""
+    raw = str(os.environ.get("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", "") or "").strip()
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except Exception:
+            logger.warning(
+                "Invalid QUAID_JANITOR_EMBED_TIMEOUT_SECONDS=%r; using default janitor embedding timeout",
+                raw,
+            )
+    try:
+        global_timeout = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
+    except Exception:
+        global_timeout = 120.0
+    return max(5.0, min(global_timeout, 60.0))
+
+
 def _owner_display_name() -> str:
     """Get the owner's display name from config for use in prompts."""
     try:
@@ -1316,13 +1336,14 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
     found = len(rows)
     embedded = 0
     print(f"  Found {found} nodes with NULL embeddings")
+    embed_timeout_s = _janitor_embedding_timeout_seconds()
 
     for row in rows:
         node_id, name = row["id"], row["name"]
         if dry_run:
             print(f"    Would embed: {name[:50]}...")
         else:
-            emb = _get_emb(name)
+            emb = _get_emb(name, timeout_s=embed_timeout_s)
             if emb:
                 packed = _pack_emb(emb)
                 with graph._get_conn() as conn:
