@@ -290,8 +290,12 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("function _installOpenClawManagedStateGuard()");
     expect(setupText).toContain("ai.openclaw.quaid-config-guard");
     expect(setupText).toContain("managed-openclaw.json");
+    expect(setupText).toContain('spawnSync("launchctl", ["enable", serviceTarget], { stdio: "pipe" });');
+    expect(setupText).toContain('spawnSync("launchctl", ["print", serviceTarget], { stdio: "pipe" });');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);');
+    expect(setupText).toContain("_captureOpenClawManagedState(),");
+    expect(setupText).toContain("preservedOpenClawManagedState,");
     expect(setupText).toContain('Installed OpenClaw managed-state guard');
   });
 

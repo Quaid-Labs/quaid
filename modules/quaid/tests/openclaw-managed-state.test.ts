@@ -78,12 +78,14 @@ describe("OpenClaw managed state", () => {
     expect(result.changedBits).toContain("plugins.allow:matrix");
     expect(result.changedBits).toContain("plugins.entries.quaid");
     expect(result.changedBits).toContain("plugins.entries.matrix");
+    expect(result.changedBits).toContain("plugins.slots.memory");
     expect(result.changedBits).toContain("channels.matrix");
     expect(result.changedBits).toContain("agents.defaults.model.primary");
     expect(result.changedBits).toContain("agents.list.main.model.primary");
     expect(cfg.plugins.allow).toEqual(["openai", "memory-core", "quaid", "matrix"]);
     expect(cfg.plugins.entries.quaid.enabled).toBe(true);
     expect(cfg.plugins.entries.matrix.enabled).toBe(true);
+    expect(cfg.plugins.slots.memory).toBe("quaid");
     expect(cfg.channels.matrix.enabled).toBe(true);
     expect(cfg.agents.defaults.model.primary).toBe("anthropic/claude-haiku-4-5");
     expect(cfg.agents.list[0].model.primary).toBe("anthropic/claude-haiku-4-5");
@@ -101,6 +103,9 @@ describe("OpenClaw managed state", () => {
         channels: {
           matrix: { enabled: true, homeserver: "http://127.0.0.1:8008" },
         },
+        plugins: {
+          slotsMemory: "quaid",
+        },
         agents: {
           defaultPrimary: "openai-codex/gpt-5.4",
         },
@@ -113,12 +118,16 @@ describe("OpenClaw managed state", () => {
         channels: {
           matrix: { enabled: false },
         },
+        plugins: {
+          slotsMemory: "memory-core",
+        },
         agents: {},
       },
     );
 
     expect(snapshot?.entries.matrix.enabled).toBe(true);
     expect(snapshot?.channels.matrix.enabled).toBe(true);
+    expect(snapshot?.plugins.slotsMemory).toBe("quaid");
     expect(snapshot?.agents.defaultPrimary).toBe("openai-codex/gpt-5.4");
   });
 
@@ -137,6 +146,7 @@ describe("OpenClaw managed state", () => {
           quaid: { enabled: true },
           matrix: { enabled: false, disabled: true },
         },
+        slots: { memory: "quaid" },
       },
       channels: {
         matrix: { enabled: true },
@@ -148,6 +158,7 @@ describe("OpenClaw managed state", () => {
     expect(snapshot?.agents.defaultPrimary).toBe("openai-codex/gpt-5.4");
     expect(snapshot?.entries.matrix.enabled).toBe(true);
     expect(snapshot?.entries.matrix.disabled).toBeUndefined();
+    expect(snapshot?.plugins.slotsMemory).toBe("quaid");
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -180,6 +191,9 @@ describe("OpenClaw managed state", () => {
       },
       channels: {
         matrix: { enabled: true },
+      },
+      plugins: {
+        slotsMemory: "quaid",
       },
       agents: {
         defaultPrimary: "anthropic/claude-haiku-4-5",

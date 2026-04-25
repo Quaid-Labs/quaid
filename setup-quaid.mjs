@@ -2837,6 +2837,8 @@ function _installOpenClawManagedStateGuard() {
   const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", "ai.openclaw.quaid-config-guard.plist");
   const outPath = path.join(logDir, "config-guard.log");
   const errPath = path.join(logDir, "config-guard.err.log");
+  const guiTarget = `gui/${process.getuid()}`;
+  const serviceTarget = `${guiTarget}/ai.openclaw.quaid-config-guard`;
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -2880,11 +2882,12 @@ function _installOpenClawManagedStateGuard() {
     fs.writeFileSync(scriptPath, _buildOpenClawManagedStateGuardScript(), { encoding: "utf8", mode: 0o755 });
     fs.chmodSync(scriptPath, 0o755);
     if (fs.existsSync(plistPath)) {
-      spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "pipe" });
+      spawnSync("launchctl", ["bootout", guiTarget, plistPath], { stdio: "pipe" });
       spawnSync("launchctl", ["unload", plistPath], { stdio: "pipe" });
     }
     fs.writeFileSync(plistPath, plist, "utf8");
-    let load = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath], { stdio: "pipe" });
+    spawnSync("launchctl", ["enable", serviceTarget], { stdio: "pipe" });
+    let load = spawnSync("launchctl", ["bootstrap", guiTarget, plistPath], { stdio: "pipe" });
     if (load.status !== 0) {
       load = spawnSync("launchctl", ["load", plistPath], { stdio: "pipe" });
     }
@@ -2893,7 +2896,13 @@ function _installOpenClawManagedStateGuard() {
       log.warn(`failed to install OpenClaw config guard: ${detail || "unknown error"}`);
       return false;
     }
-    spawnSync("launchctl", ["kickstart", "-k", `gui/${process.getuid()}/ai.openclaw.quaid-config-guard`], { stdio: "pipe" });
+    const kick = spawnSync("launchctl", ["kickstart", "-k", serviceTarget], { stdio: "pipe" });
+    const probe = spawnSync("launchctl", ["print", serviceTarget], { stdio: "pipe" });
+    if (probe.status !== 0) {
+      const detail = String(probe.stderr || probe.stdout || kick.stderr || kick.stdout || "").trim();
+      log.warn(`OpenClaw config guard failed to register in launchctl: ${detail || "unknown error"}`);
+      return false;
+    }
     return true;
   } catch (err) {
     log.warn(`failed to install OpenClaw config guard: ${String(err?.message || err)}`);
@@ -5151,8 +5160,8 @@ except Exception as e:
     await waitForGatewayWarmup(30_000);
     await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);
     const finalManagedState = composeOpenClawManagedStateSnapshots(
-      preservedOpenClawManagedState,
       _captureOpenClawManagedState(),
+      preservedOpenClawManagedState,
       _loadPersistedOpenClawManagedState(),
     );
     if (finalManagedState && _persistOpenClawManagedState(finalManagedState)) {
