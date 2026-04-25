@@ -205,6 +205,10 @@ describe("openclaw auto-provision", () => {
       call?.[0] === "session_end" && call?.[2]?.name === "session-end-memory-extraction-registerHook"
     );
     expect(sessionEndRegisterHookCall).toBeTruthy();
+    const beforeCompactionRegisterHookCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction-registerHook"
+    );
+    expect(beforeCompactionRegisterHookCall).toBeTruthy();
 
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
     const promptResult = await beforePromptBuildHandler(

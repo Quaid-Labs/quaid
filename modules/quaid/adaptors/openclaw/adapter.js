@@ -5253,7 +5253,7 @@ notify_memory_extraction(
         console.warn(msg);
       }
     };
-    onChecked("before_compaction", async (event, ctx) => {
+    const beforeCompactionHandler = async (event, ctx) => {
       try {
         if (isInternalSessionContext(event, ctx)) {
           return;
@@ -5371,8 +5371,13 @@ notify_memory_extraction(
           error: String(err?.message || err)
         });
       }
-    }, {
+    };
+    onChecked("before_compaction", beforeCompactionHandler, {
       name: "compaction-memory-extraction",
+      priority: 10
+    });
+    registerInternalHookChecked("before_compaction", beforeCompactionHandler, {
+      name: "compaction-memory-extraction-registerHook",
       priority: 10
     });
     const beforeResetHandler = async (event, ctx) => {

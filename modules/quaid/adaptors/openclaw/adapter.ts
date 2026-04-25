@@ -6500,7 +6500,7 @@ notify_memory_extraction(
     };
     // Register compaction hook — extract memories in parallel with compaction LLM.
     // Source of truth is timeout manager's OpenClaw session reader + local cursor gate.
-    onChecked("before_compaction", async (event: any, ctx: any) => {
+    const beforeCompactionHandler = async (event: any, ctx: any) => {
       try {
         if (isInternalSessionContext(event, ctx)) {
           return;
@@ -6645,9 +6645,14 @@ notify_memory_extraction(
           error: String((err as Error)?.message || err),
         });
       }
-    }, {
+    };
+    onChecked("before_compaction", beforeCompactionHandler, {
       name: "compaction-memory-extraction",
       priority: 10
+    });
+    registerInternalHookChecked("before_compaction", beforeCompactionHandler, {
+      name: "compaction-memory-extraction-registerHook",
+      priority: 10,
     });
 
     // command:new/reset hooks are inconsistent across runtime variants.
