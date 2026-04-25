@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
 from lib.agent_notice import (
+    clear_deferred_notices_by_source,
     deliver_deferred_notices,
     drain_deferred_notices,
     format_deferred_notice_hint,
@@ -211,6 +212,26 @@ def test_drain_marks_requests_delivered(clean_adapter):
     pending = [item for item in requests if item["status"] == "pending"]
     assert len(delivered) == 1
     assert len(pending) == 1
+
+
+def test_clear_deferred_notices_by_source_prunes_provider_pending_and_delivered(clean_adapter):
+    queue_deferred_notice("provider delivered", kind="provider", priority="high", source="provider")
+    queue_deferred_notice("provider pending", kind="provider", priority="high", source="provider")
+    queue_deferred_notice("janitor pending", kind="janitor_summary", priority="low", source="janitor")
+
+    path = _notes_path(clean_adapter)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["requests"][0]["status"] = "delivered"
+    payload["requests"][0]["delivered_at"] = "2026-04-25T00:00:00Z"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    removed = clear_deferred_notices_by_source(sources={"provider"})
+
+    assert removed == 2
+    requests = _read_requests(clean_adapter)
+    assert len(requests) == 1
+    assert requests[0]["source"] == "janitor"
+    assert requests[0]["status"] == "pending"
 
 
 def test_deliver_deferred_notices_marks_only_successful_sends(clean_adapter):

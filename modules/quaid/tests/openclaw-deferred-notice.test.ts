@@ -704,7 +704,9 @@ describe("openclaw deferred notices", () => {
       "notes",
       "delayed-llm-requests.json",
     );
-    const payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    const payload = fs.existsSync(noticeFile)
+      ? JSON.parse(fs.readFileSync(noticeFile, "utf8"))
+      : { requests: [] };
     const pending = Array.isArray(payload?.requests)
       ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
       : [];
@@ -712,8 +714,7 @@ describe("openclaw deferred notices", () => {
       ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "delivered")
       : [];
     expect(pending).toHaveLength(0);
-    expect(delivered.length).toBeGreaterThan(0);
-    expect(String(delivered[0]?.message || "")).toContain("[provider]");
+    expect(delivered).toHaveLength(0);
 
     fetchMock.mockRestore();
     warn.mockRestore();
@@ -814,7 +815,9 @@ describe("openclaw deferred notices", () => {
       "notes",
       "delayed-llm-requests.json",
     );
-    const payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    const payload = fs.existsSync(noticeFile)
+      ? JSON.parse(fs.readFileSync(noticeFile, "utf8"))
+      : { requests: [] };
     const pending = Array.isArray(payload?.requests)
       ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
       : [];
@@ -822,8 +825,142 @@ describe("openclaw deferred notices", () => {
       ? payload.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "delivered")
       : [];
     expect(pending).toHaveLength(0);
-    expect(delivered.length).toBeGreaterThan(0);
-    expect(String(delivered[0]?.message || "")).toContain("[provider]");
+    expect(delivered).toHaveLength(0);
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(home);
+  });
+
+  it("clears stale provider deferred notices after config recovery", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const home = makeTempDir("quaid-oc-provider-recovery-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+    const configPath = path.join(hiddenHome, "instances", "openclaw-livetest", "config.json");
+    const noticeFile = path.join(
+      hiddenHome,
+      "instances",
+      "openclaw-livetest",
+      ".runtime",
+      "notes",
+      "delayed-llm-requests.json",
+    );
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+
+    writeJson(configPath, {
+      adapter: { type: "openclaw" },
+      systems: { memory: true, projects: false },
+      retrieval: { failHard: false, autoInject: true, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      plugins: { strict: false },
+    });
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-livetest",
+        },
+      },
+    });
+    writeJson(noticeFile, {
+      version: 1,
+      requests: [
+        {
+          id: "provider-pending",
+          dedupe_key: "provider-pending",
+          created_at: "2026-04-25T00:00:00Z",
+          source: "provider",
+          kind: "provider",
+          priority: "high",
+          status: "pending",
+          message: "[Quaid error] [provider] stale pending provider notice",
+        },
+        {
+          id: "provider-delivered",
+          dedupe_key: "provider-delivered",
+          created_at: "2026-04-25T00:01:00Z",
+          source: "provider",
+          kind: "provider",
+          priority: "high",
+          status: "delivered",
+          delivered_at: "2026-04-25T00:02:00Z",
+          message: "[Quaid error] [provider] stale delivered provider notice",
+        },
+        {
+          id: "janitor-pending",
+          dedupe_key: "janitor-pending",
+          created_at: "2026-04-25T00:03:00Z",
+          source: "janitor",
+          kind: "janitor_summary",
+          priority: "low",
+          status: "pending",
+          message: "[Quaid] janitor summary stays queued",
+        },
+      ],
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-livetest");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    await beforePromptBuildCall?.[1](
+      {
+        prependContext: "",
+        prompt: "What do you remember about my family?",
+        messages: [{ role: "user", content: "What do you remember about my family?" }],
+        sessionId: "session-provider-recovery",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-provider-recovery",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    const payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
+    expect(Array.isArray(payload?.requests)).toBe(true);
+    expect(payload.requests).toHaveLength(1);
+    expect(String(payload.requests[0]?.source || "")).toBe("janitor");
+    expect(String(payload.requests[0]?.message || "")).toContain("janitor summary");
 
     fetchMock.mockRestore();
     warn.mockRestore();

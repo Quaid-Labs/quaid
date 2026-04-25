@@ -414,6 +414,64 @@ def clear_pending_notices_by_source(*, sources: set[str] | list[str] | tuple[str
     return total_removed
 
 
+def clear_deferred_notices_by_source(
+    *,
+    sources: set[str] | list[str] | tuple[str, ...],
+    statuses: set[str] | list[str] | tuple[str, ...] = ("pending", "delivered"),
+) -> int:
+    target_sources = {
+        str(source or "").strip().lower()
+        for source in (sources or [])
+        if str(source or "").strip()
+    }
+    target_statuses = {
+        str(status or "").strip().lower()
+        for status in (statuses or [])
+        if str(status or "").strip()
+    }
+    if not target_sources:
+        return 0
+    if not target_statuses:
+        target_statuses = {"pending", "delivered"}
+
+    path = _deferred_path()
+    removed = 0
+    with _file_lock(_deferred_lock_path(path)):
+        payload = _read_json(path, {"version": 1, "requests": []})
+        requests = payload.get("requests")
+        if not isinstance(requests, list):
+            return 0
+
+        kept: list[Any] = []
+        for item in requests:
+            if not isinstance(item, dict):
+                kept.append(item)
+                continue
+            item_source = str(item.get("source") or "").strip().lower()
+            item_status = str(item.get("status") or "pending").strip().lower() or "pending"
+            if item_source in target_sources and item_status in target_statuses:
+                removed += 1
+                continue
+            kept.append(item)
+
+        if removed <= 0:
+            return 0
+
+        if kept:
+            _write_json(path, {"version": 1, "requests": _trim_deferred_notices(kept)})
+        else:
+            path.unlink(missing_ok=True)
+
+    _trace_m15(
+        "deferred_notice.clear_by_source",
+        path=str(path),
+        removed=removed,
+        sources=sorted(target_sources),
+        statuses=sorted(target_statuses),
+    )
+    return removed
+
+
 def queue_deferred_notice(
     message: str,
     *,

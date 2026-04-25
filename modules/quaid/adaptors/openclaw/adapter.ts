@@ -706,6 +706,85 @@ function drainDeferredNoticesForAgent(agentLabel: string, reason: string): numbe
   }
 }
 
+function clearDeferredNoticesForAgent(
+  agentLabel: string,
+  reason: string,
+  sources: string[] = ["provider", "llm_config"],
+): number {
+  const instanceId = getInstanceId(agentLabel);
+  const normalizedSources = Array.from(
+    new Set(
+      sources
+        .map((source) => String(source || "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+  if (normalizedSources.length === 0) {
+    return 0;
+  }
+  const script = [
+    "import json, sys",
+    `sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})`,
+    "from lib.agent_notice import clear_deferred_notices_by_source",
+    `sources = set(${JSON.stringify(normalizedSources)})`,
+    "removed = int(clear_deferred_notices_by_source(sources=sources) or 0)",
+    "print(json.dumps({'removed': removed}))",
+  ].join("\n");
+  try {
+    const result = spawnSync(PYTHON_BIN, ["-c", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: buildPythonEnv({ QUAID_INSTANCE: instanceId }) as NodeJS.ProcessEnv,
+    });
+    if (result.error || result.status !== 0) {
+      writeHookTrace("deferred_notice.clear_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || ""),
+        sources: normalizedSources,
+      });
+      return 0;
+    }
+    let payload: { removed?: number } = {};
+    try {
+      payload = JSON.parse(String(result.stdout || "{}"));
+    } catch (parseErr: unknown) {
+      writeHookTrace("deferred_notice.clear_parse_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        stdout: String(result.stdout || "").trim().slice(0, 500),
+        error: String((parseErr as Error)?.message || parseErr),
+        sources: normalizedSources,
+      });
+      return 0;
+    }
+    const removed = Math.max(0, Number(payload?.removed || 0) || 0);
+    if (removed > 0) {
+      writeHookTrace("deferred_notice.cleared", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        removed,
+        sources: normalizedSources,
+      });
+    }
+    return removed;
+  } catch (err: unknown) {
+    writeHookTrace("deferred_notice.clear_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      error: String((err as Error)?.message || err),
+      sources: normalizedSources,
+    });
+    return 0;
+  }
+}
+
 function deliverNoticeToSession(
   agentLabel: string,
   sessionKey: string,
@@ -3095,14 +3174,21 @@ async function validatePromptModelConfigIfChanged(agentLabel: string, sessionKey
   }
   if (fingerprint === promptModelConfigFingerprint) {
     if (promptModelConfigNotice) {
-      queueDeferredNoticeForAgent(agentLabel, promptModelConfigNotice, {
-        kind: "provider",
-        priority: "high",
-        source: "provider",
-        dedupeKey: `prompt-model-config:${fingerprint}`,
-      });
-      if (deliverNoticeToSession(agentLabel, sessionKey, promptModelConfigNotice, "prompt_model_config_repeat")) {
-        drainDeferredNoticesForAgent(agentLabel, "prompt_model_config_repeat");
+      const deliveredDirect = deliverNoticeToSession(
+        agentLabel,
+        sessionKey,
+        promptModelConfigNotice,
+        "prompt_model_config_repeat",
+      );
+      if (deliveredDirect) {
+        clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_repeat_clear");
+      } else {
+        queueDeferredNoticeForAgent(agentLabel, promptModelConfigNotice, {
+          kind: "provider",
+          priority: "high",
+          source: "provider",
+          dedupeKey: `prompt-model-config:${fingerprint}`,
+        });
       }
     }
     return promptModelConfigNotice;
@@ -3118,17 +3204,25 @@ async function validatePromptModelConfigIfChanged(agentLabel: string, sessionKey
       4,
       MODEL_CONFIG_VALIDATION_TIMEOUT_MS,
     );
+    clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_validated");
     writeHookTrace("hook.before_prompt_build.model_config_validated", {});
   } catch (err: unknown) {
     promptModelConfigNotice = buildProviderErrorNoticeMessage(err, "fast");
-    queueDeferredNoticeForAgent(agentLabel, promptModelConfigNotice, {
-      kind: "provider",
-      priority: "high",
-      source: "provider",
-      dedupeKey: `prompt-model-config:${fingerprint}`,
-    });
-    if (deliverNoticeToSession(agentLabel, sessionKey, promptModelConfigNotice, "prompt_model_config_error")) {
-      drainDeferredNoticesForAgent(agentLabel, "prompt_model_config_error");
+    const deliveredDirect = deliverNoticeToSession(
+      agentLabel,
+      sessionKey,
+      promptModelConfigNotice,
+      "prompt_model_config_error",
+    );
+    if (deliveredDirect) {
+      clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_error_clear");
+    } else {
+      queueDeferredNoticeForAgent(agentLabel, promptModelConfigNotice, {
+        kind: "provider",
+        priority: "high",
+        source: "provider",
+        dedupeKey: `prompt-model-config:${fingerprint}`,
+      });
     }
     writeHookTrace("hook.before_prompt_build.model_config_error", {
       error: String((err as Error)?.message || err).slice(0, 240),
