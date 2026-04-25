@@ -3692,10 +3692,7 @@ ${projectPlacementContext}` : projectPlacementContext;
 ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
         }
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
-        if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
-        if (facade.isLowQualityQuery(query)) {
-          return withDocs({ prependContext: event.prependContext });
-        }
+        const lowQualityQuery = facade.isLowQualityQuery(query);
         const autoInjectK = facade.computeDynamicK();
         const injectLimit = autoInjectK;
         const injectDomain = { all: true };
@@ -3727,9 +3724,25 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
               });
               return {
                 allMemories: [],
-                recallDiagnostics: "",
+                recallDiagnostics: null,
                 injection: null,
                 modelConfigNotice: modelConfigNotice2
+              };
+            }
+            if (!autoInjectEnabled) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "auto_inject_disabled"
+              };
+            }
+            if (lowQualityQuery) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "low_quality_query"
               };
             }
             let deadlineTimer;
@@ -3792,7 +3805,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             }
           );
         }
-        const { allMemories, recallDiagnostics, injection, modelConfigNotice } = await turnPromise;
+        const { allMemories, recallDiagnostics, injection, modelConfigNotice, skipReason } = await turnPromise;
         const preinjectSessionId = facade.extractSessionId(eventMessages, ctx);
         const preinjectSessionKey = firstNonEmptyString(
           event?.sessionKey,
@@ -3806,6 +3819,9 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
           appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${modelConfigNotice}` : modelConfigNotice;
+        }
+        if (skipReason) {
+          return withDocs({ prependContext: event.prependContext });
         }
         if (!Array.isArray(allMemories) || allMemories.length === 0) {
           writeHookTrace("hook.before_prompt_build.recall_empty", {

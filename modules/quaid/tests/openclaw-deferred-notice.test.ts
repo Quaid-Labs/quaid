@@ -849,6 +849,121 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
+  it("surfaces invalid model config on short visible user turns", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const home = makeTempDir("quaid-oc-provider-short-turn-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+    const configPath = path.join(hiddenHome, "instances", "openclaw-livetest", "config.json");
+    const noticeFile = path.join(
+      hiddenHome,
+      "instances",
+      "openclaw-livetest",
+      ".runtime",
+      "notes",
+      "delayed-llm-requests.json",
+    );
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+
+    writeJson(configPath, {
+      adapter: { type: "openclaw" },
+      systems: { memory: true, projects: false },
+      retrieval: { failHard: false, autoInject: true, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "invalid-model-short-turn",
+        fastReasoning: "invalid-model-short-turn",
+      },
+      plugins: { strict: false },
+    });
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-livetest",
+        },
+      },
+    });
+    writeJson(noticeFile, {
+      version: 1,
+      requests: [
+        {
+          id: "janitor-pending",
+          dedupe_key: "janitor-pending",
+          created_at: "2026-04-25T00:03:00Z",
+          source: "janitor",
+          kind: "janitor_summary",
+          priority: "low",
+          status: "pending",
+          message: "[Quaid] janitor summary stays queued",
+        },
+      ],
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: any, init: any) => {
+      expect(String(init?.headers?.["x-openclaw-model"] || "")).toContain("invalid-model-short-turn");
+      return {
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: { message: "model not found" } }),
+      } as any;
+    });
+
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-livetest");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const result = await beforePromptBuildCall?.[1](
+      {
+        prependContext: "",
+        prompt: "sounds good",
+        messages: [{ role: "user", content: "sounds good" }],
+        sessionId: "session-provider-short-turn",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-provider-short-turn",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    const combined = combinedSystemContext(result);
+    expect(combined).toContain("[Quaid error] [provider]");
+    expect(combined).toContain("janitor summary stays queued");
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(home);
+  });
+
   it("clears stale provider deferred notices after config recovery", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const home = makeTempDir("quaid-oc-provider-recovery-home-");

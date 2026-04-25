@@ -3372,6 +3372,7 @@ type AutoInjectTurnOutcome = {
   recallDiagnostics: Record<string, unknown> | null;
   injection: ReturnType<ReturnType<typeof createQuaidFacade>["prepareAutoInjectionContext"]>;
   modelConfigNotice?: string;
+  skipReason?: "auto_inject_disabled" | "low_quality_query";
 };
 
 // Re-entrancy guard for beforePromptBuildHandler.
@@ -4598,12 +4599,7 @@ notify_user(${JSON.stringify(message)})
         }
 
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
-        if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
-
-        // Query quality gate — skip acknowledgments and short messages
-        if (facade.isLowQualityQuery(query)) {
-          return withDocs({ prependContext: event.prependContext });
-        }
+        const lowQualityQuery = facade.isLowQualityQuery(query);
 
         // Auto-inject always bypasses the LLM router to keep latency low.
         // The router adds ~8s of LLM overhead which causes injection to arrive
@@ -4651,9 +4647,25 @@ notify_user(${JSON.stringify(message)})
               });
               return {
                 allMemories: [],
-                recallDiagnostics: "",
+                recallDiagnostics: null,
                 injection: null,
                 modelConfigNotice,
+              };
+            }
+            if (!autoInjectEnabled) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "auto_inject_disabled",
+              };
+            }
+            if (lowQualityQuery) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "low_quality_query",
               };
             }
             let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -4723,7 +4735,7 @@ notify_user(${JSON.stringify(message)})
           );
         }
 
-        const { allMemories, recallDiagnostics, injection, modelConfigNotice } = await turnPromise;
+        const { allMemories, recallDiagnostics, injection, modelConfigNotice, skipReason } = await turnPromise;
         const preinjectSessionId = facade.extractSessionId(eventMessages, ctx);
         const preinjectSessionKey = firstNonEmptyString(
           event?.sessionKey,
@@ -4737,6 +4749,9 @@ notify_user(${JSON.stringify(message)})
           appendSystemContext = appendSystemContext
             ? `${appendSystemContext}\n\n${modelConfigNotice}`
             : modelConfigNotice;
+        }
+        if (skipReason) {
+          return withDocs({ prependContext: event.prependContext });
         }
 
         if (!Array.isArray(allMemories) || allMemories.length === 0) {
