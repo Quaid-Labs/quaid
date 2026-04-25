@@ -2662,6 +2662,8 @@ const WORKSPACE = ${workspaceJson};
 const CONFIG_PATH = path.join(os.homedir(), ".openclaw", "openclaw.json");
 const SNAPSHOT_PATH = path.join(WORKSPACE, "shared", "config", "openclaw", "managed-openclaw.json");
 const STATE_PATH = path.join(WORKSPACE, "shared", "config", "openclaw", "managed-openclaw.guard-state.json");
+const GUI_TARGET = "gui/" + process.getuid();
+const GATEWAY_SERVICE = GUI_TARGET + "/ai.openclaw.gateway";
 
 function isRecord(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -2816,9 +2818,16 @@ const state = readJson(STATE_PATH) || {};
 const lastRestartMs = Number(state.lastRestartMs || 0);
 const restartCooldownMs = 15000;
 if (now - lastRestartMs >= restartCooldownMs) {
-  const restart = spawnSync("openclaw", ["gateway", "restart"], { stdio: "pipe" });
+  let restart = spawnSync("launchctl", ["kickstart", "-k", GATEWAY_SERVICE], { stdio: "pipe" });
+  let restartMethod = "launchctl";
+  if (restart.status !== 0) {
+    restart = spawnSync("openclaw", ["gateway", "restart"], { stdio: "pipe" });
+    restartMethod = "openclaw";
+  }
   state.lastRestartMs = now;
   state.lastRestartStatus = Number(restart.status || 0);
+  state.lastRestartMethod = restartMethod;
+  state.lastRestartDetail = String(restart.stderr || restart.stdout || "").trim();
   state.lastChangedBits = changedBits;
   writeJsonAtomically(STATE_PATH, state);
 } else {
@@ -5167,10 +5176,11 @@ except Exception as e:
     if (finalManagedState && _persistOpenClawManagedState(finalManagedState)) {
       log.info("Persisted OpenClaw managed state snapshot for drift recovery");
     }
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
     if (_installOpenClawManagedStateGuard()) {
       log.info("Installed OpenClaw managed-state guard");
     }
-    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-guard activation", 60_000);
     s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
 

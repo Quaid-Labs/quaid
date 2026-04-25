@@ -292,10 +292,13 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("managed-openclaw.json");
     expect(setupText).toContain('spawnSync("launchctl", ["enable", serviceTarget], { stdio: "pipe" });');
     expect(setupText).toContain('spawnSync("launchctl", ["print", serviceTarget], { stdio: "pipe" });');
+    expect(setupText).toContain('const GATEWAY_SERVICE = `${GUI_TARGET}/ai.openclaw.gateway`;');
+    expect(setupText).toContain('spawnSync("launchctl", ["kickstart", "-k", GATEWAY_SERVICE], { stdio: "pipe" });');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);');
     expect(setupText).toContain("_captureOpenClawManagedState(),");
     expect(setupText).toContain("preservedOpenClawManagedState,");
+    expect(setupText).toContain('await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-guard activation", 60_000);');
     expect(setupText).toContain('Installed OpenClaw managed-state guard');
   });
 
