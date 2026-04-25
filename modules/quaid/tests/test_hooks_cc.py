@@ -188,11 +188,16 @@ def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch
     cfg.write_text("{}", encoding="utf-8")
     reloads = []
     resets = []
+    cleared = []
 
     monkeypatch.setattr("config._config_paths", lambda: [cfg])
     monkeypatch.setattr("config.reload_config", lambda: reloads.append("reload"))
     monkeypatch.setattr("lib.embeddings.reset_embeddings_provider", lambda: resets.append("embeddings"))
     monkeypatch.setattr("lib.llm_clients.reset_model_config_cache", lambda: resets.append("llm"))
+    monkeypatch.setattr(
+        "lib.agent_notice.clear_pending_notices_by_source",
+        lambda *, sources: cleared.append(set(sources)),
+    )
     monkeypatch.setattr(hooks, "_HOOK_RUNTIME_CONFIG_SNAPSHOT", None)
 
     assert hooks._refresh_runtime_config_if_changed("test") is False
@@ -203,6 +208,7 @@ def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch
     assert hooks._refresh_runtime_config_if_changed("test") is True
     assert reloads == ["reload"]
     assert resets == ["embeddings", "llm"]
+    assert cleared == [{"provider", "llm_config", "embeddings"}]
 
 
 def test_claude_code_inject_writes_session_end_signal_for_empty_prompt_reset_metadata(

@@ -247,6 +247,12 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
 
         reload_config()
         _reset_runtime_resolution_caches()
+        try:
+            from lib.agent_notice import clear_pending_notices_by_source
+
+            clear_pending_notices_by_source(sources={"provider", "llm_config", "embeddings"})
+        except Exception:
+            pass
     except Exception as exc:
         _write_hook_trace(
             "hook.runtime_config.reload_failed",
