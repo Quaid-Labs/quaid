@@ -208,6 +208,36 @@ def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch
     assert hooks._refresh_runtime_config_if_changed("test") is True
     assert reloads == ["reload"]
     assert resets == ["embeddings", "llm"]
+    assert cleared == [
+        {"provider", "llm_config", "embeddings"},
+        {"provider", "llm_config", "embeddings"},
+    ]
+
+
+def test_refresh_runtime_config_if_changed_initializes_baseline_and_clears_stale_notices(
+    monkeypatch, tmp_path
+):
+    from core.interface import hooks
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    reloads = []
+    resets = []
+    cleared = []
+
+    monkeypatch.setattr("config._config_paths", lambda: [cfg])
+    monkeypatch.setattr("config.reload_config", lambda: reloads.append("reload"))
+    monkeypatch.setattr("lib.embeddings.reset_embeddings_provider", lambda: resets.append("embeddings"))
+    monkeypatch.setattr("lib.llm_clients.reset_model_config_cache", lambda: resets.append("llm"))
+    monkeypatch.setattr(
+        "lib.agent_notice.clear_pending_notices_by_source",
+        lambda *, sources: cleared.append(set(sources)) or 2,
+    )
+    monkeypatch.setattr(hooks, "_HOOK_RUNTIME_CONFIG_SNAPSHOT", None)
+
+    assert hooks._refresh_runtime_config_if_changed("test") is False
+    assert reloads == []
+    assert resets == []
     assert cleared == [{"provider", "llm_config", "embeddings"}]
 
 

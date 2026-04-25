@@ -239,6 +239,20 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
         return False
     if _HOOK_RUNTIME_CONFIG_SNAPSHOT is None:
         _HOOK_RUNTIME_CONFIG_SNAPSHOT = snapshot
+        try:
+            from lib.agent_notice import clear_pending_notices_by_source
+
+            cleared = clear_pending_notices_by_source(sources={"provider", "llm_config", "embeddings"})
+        except Exception:
+            cleared = 0
+        _write_hook_trace(
+            "hook.runtime_config.baseline",
+            {
+                "reason": reason,
+                "paths": [path for path, _mtime in snapshot],
+                "cleared_pending": int(cleared or 0),
+            },
+        )
         return False
     if snapshot == _HOOK_RUNTIME_CONFIG_SNAPSHOT:
         return False
