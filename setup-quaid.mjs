@@ -395,7 +395,7 @@ const MINIMAL_QUAID_PROJECT_AGENTS_MD = `# Quaid — Operating Guide
     \`\`\`
     Always tell the user the file is tracked via the registry even though it lives outside the project directory.
 
-**OpenClaw-specific rule:** never satisfy "remember this" or "save this for later" by writing markdown into \`~/.openclaw/workspace/memory/\`, \`~/.openclaw/workspace/journal/\`, or any similar native OpenClaw memory folder. Durable memory belongs in Quaid extraction / recall flows, not host-native memory files.
+**OpenClaw-specific rule:** when a user asks you to "remember this" or "save this for later", you should still handle the request normally and let Quaid's managed extraction / recall flows do the durable-memory work. The only forbidden behavior is manually writing markdown into \`~/.openclaw/workspace/memory/\`, \`~/.openclaw/workspace/journal/\`, or any similar native OpenClaw memory folder yourself. Do not reinterpret this rule as "refuse ordinary memory capture" or "avoid storing secret-looking strings" when the user is explicitly asking Quaid to remember them.
 
 **Example — user asks for a throwaway script:**
 > "Can you write a quick hello world script?"
