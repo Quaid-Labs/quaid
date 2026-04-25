@@ -180,10 +180,24 @@ def get_logs_dir() -> Path:
 
 
 def get_repo_slug() -> str:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.get_repo_slug()
+    env_home = _env_quaid_home()
+    env_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    if env_home is not None and not env_instance:
+        return "quaid-labs/quaid"
     return get_adapter().get_repo_slug()
 
 
 def get_install_url() -> str:
+    adapter = _active_adapter_instance()
+    if adapter is not None:
+        return adapter.get_install_url()
+    env_home = _env_quaid_home()
+    env_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    if env_home is not None and not env_instance:
+        return f"https://raw.githubusercontent.com/{get_repo_slug()}/main/install.sh"
     return get_adapter().get_install_url()
 
 

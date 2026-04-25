@@ -130,3 +130,16 @@ def test_runtime_context_uses_env_home_data_and_logs_without_instance(monkeypatc
         assert runtime_context.get_data_dir() == (hidden / "data").resolve()
         assert runtime_context.get_logs_dir() == (hidden / "logs").resolve()
         assert runtime_context.get_projects_dir() == (visible / "projects").resolve()
+
+
+def test_runtime_context_uses_default_repo_metadata_without_adapter(monkeypatch, tmp_path):
+    from lib import runtime_context
+
+    hidden = tmp_path / ".quaid"
+    monkeypatch.setenv("QUAID_HOME", str(hidden))
+    monkeypatch.delenv("QUAID_VISIBLE_HOME", raising=False)
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+    with patch.object(runtime_context, "get_adapter", side_effect=AssertionError("adapter should not be used")):
+        assert runtime_context.get_repo_slug() == "quaid-labs/quaid"
+        assert runtime_context.get_install_url() == "https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh"
