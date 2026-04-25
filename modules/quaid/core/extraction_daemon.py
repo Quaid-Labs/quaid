@@ -587,6 +587,9 @@ def write_signal(
             continue
         if _validate_session_id(existing.get("session_id", "")) != session_id:
             continue
+        existing_type = str(existing.get("type", "") or existing.get("signal_type", "")).strip()
+        if existing_type != signal_type:
+            continue
         existing_path = f
         existing_payload = existing if isinstance(existing, dict) else None
         break
@@ -601,13 +604,8 @@ def write_signal(
         "meta": meta or {},
     }
     if existing_path is not None and existing_payload is not None:
-        existing_type = str(existing_payload.get("type", "") or "").strip()
-        existing_priority = _SIGNAL_PRIORITY.get(existing_type, 0)
-        new_priority = _SIGNAL_PRIORITY.get(signal_type, 0)
         merged_meta = dict(existing_payload.get("meta", {}) or {})
         merged_meta.update(meta or {})
-        if existing_priority > new_priority:
-            payload["type"] = existing_type
         payload["meta"] = merged_meta
         _atomic_write(existing_path, json.dumps(payload))
         return existing_path

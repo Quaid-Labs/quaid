@@ -2119,7 +2119,7 @@ class TestSignalRoundTrip:
         assert signals[0]["transcript_path"] == "/second.jsonl"
         assert signals[0]["meta"] == {"reason": "chunk_budget", "source": "followup"}
 
-    def test_write_signal_upgrades_pending_signal_to_stronger_type(self, monkeypatch, tmp_path):
+    def test_write_signal_keeps_distinct_pending_types_for_same_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
 
@@ -2136,12 +2136,14 @@ class TestSignalRoundTrip:
             meta={"reason": "session_closed"},
         )
 
-        assert first == second
+        assert first != second
         signals = extraction_daemon.read_pending_signals()
-        assert len(signals) == 1
-        assert signals[0]["type"] == "session_end"
+        assert len(signals) == 2
+        assert [sig["type"] for sig in signals] == ["session_end", "rolling"]
         assert signals[0]["transcript_path"] == "/final.jsonl"
         assert signals[0]["meta"] == {"reason": "session_closed"}
+        assert signals[1]["transcript_path"] == "/rolling.jsonl"
+        assert signals[1]["meta"] == {"reason": "chunk_budget"}
 
     def test_session_processing_lock_is_exclusive_per_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
