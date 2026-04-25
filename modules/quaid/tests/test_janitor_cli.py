@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 
 def _fresh_import_janitor():
@@ -98,6 +100,40 @@ def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, t
     assert calls[0] == ("request", {"instance": None, "reason": "janitor-cli-apply", "requested_by": "janitor-cli"})
     assert calls[1][0] == "wait"
     assert calls[1][1]["request_id"] == "req-2"
+
+
+def test_janitor_main_all_dry_run_without_instance_uses_ambient_boot_guard(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
+
+    janitor = _fresh_import_janitor()
+    calls = []
+
+    def _fake_refresh():
+        calls.append(("refresh", os.environ.get("QUAID_SUPERVISOR_BOOT")))
+        janitor._cfg = SimpleNamespace(
+            janitor=SimpleNamespace(token_budget=0, apply_mode="auto"),
+            decay=SimpleNamespace(threshold_days=90, rate_percent=10),
+        )
+        janitor._LIFECYCLE_REGISTRY = object()
+
+    monkeypatch.setattr(janitor, "_refresh_runtime_state", _fake_refresh)
+    monkeypatch.setattr(janitor, "_logs_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(janitor, "run_task_optimized", lambda *args, **kwargs: calls.append(("run", os.environ.get("QUAID_SUPERVISOR_BOOT"))) or {
+        "success": True,
+        "applied_changes": 0,
+        "metrics": {},
+    })
+    monkeypatch.setattr(janitor, "get_token_usage", lambda: {"api_calls": 0, "input_tokens": 0, "output_tokens": 0})
+    monkeypatch.setattr(janitor, "estimate_cost", lambda: 0.0)
+
+    assert janitor.main(["--task", "all", "--dry-run"]) == 0
+    assert calls[0] == ("refresh", "1")
+    assert calls[1] == ("run", "1")
+    assert "QUAID_SUPERVISOR_BOOT" not in os.environ
 
 
 def test_janitor_main_rejects_instance_with_direct_only_flags(monkeypatch, tmp_path, capsys):

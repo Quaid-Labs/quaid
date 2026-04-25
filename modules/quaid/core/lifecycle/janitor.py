@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -1880,6 +1881,22 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     return 0 if status == "completed" else 1
 
 
+@contextlib.contextmanager
+def _ambient_boot_guard(*, enabled: bool):
+    if not enabled:
+        yield
+        return
+    original = os.environ.get("QUAID_SUPERVISOR_BOOT")
+    os.environ["QUAID_SUPERVISOR_BOOT"] = "1"
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("QUAID_SUPERVISOR_BOOT", None)
+        else:
+            os.environ["QUAID_SUPERVISOR_BOOT"] = original
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Memory Janitor (Optimized)")
     parser.add_argument("--task", choices=JANITOR_TASK_CHOICES,
@@ -1930,87 +1947,89 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[policy] {pre_apply_policy_warning}")
         return _run_supervisor_janitor_request(instance=requested_instance or None)
 
-    _refresh_runtime_state()
+    ambient_boot = pre_dry_run and not bool(str(os.environ.get("QUAID_INSTANCE", "") or "").strip())
+    with _ambient_boot_guard(enabled=ambient_boot):
+        _refresh_runtime_state()
 
-    # Resolve token budget precedence: CLI > config > environment fallback.
-    try:
-        config_token_budget = int(getattr(_cfg.janitor, "token_budget", 0) or 0)
-    except Exception as exc:
-        if is_fail_hard_enabled():
-            raise RuntimeError("Invalid janitor.token_budget config value") from exc
-        janitor_logger.warn("invalid_config_token_budget", error=str(exc))
-        config_token_budget = 0
-    try:
-        env_token_budget = int(os.environ.get("JANITOR_TOKEN_BUDGET", "0") or 0)
-    except Exception as exc:
-        if is_fail_hard_enabled():
-            raise RuntimeError("Invalid JANITOR_TOKEN_BUDGET environment value") from exc
-        janitor_logger.warn("invalid_env_token_budget", error=str(exc))
-        env_token_budget = 0
-    effective_token_budget = (
-        int(args.token_budget) if args.token_budget is not None
-        else (config_token_budget if config_token_budget > 0 else env_token_budget)
-    )
-    if effective_token_budget > 0:
-        source = "cli" if args.token_budget is not None else ("config" if config_token_budget > 0 else "env")
-        print(f"[janitor] Token budget: {effective_token_budget:,} tokens (source: {source})")
-    if int(args.stage_item_cap or 0) > 0:
-        os.environ["JANITOR_MAX_ITEMS_PER_STAGE"] = str(int(args.stage_item_cap))
-        print(f"[janitor] Stage item cap: {int(args.stage_item_cap)}")
-
-    # dry_run is derived from apply flags and janitor apply policy.
-    dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
-    if apply_policy_warning:
-        print(f"[policy] {apply_policy_warning}")
-    if requested_instance and not _can_route_supervisor_janitor(args, dry_run=dry_run):
-        print(
-            "Error: --instance requires the supervisor-owned path "
-            "(use --task all --apply without extra janitor override flags).",
-            file=sys.stderr,
+        # Resolve token budget precedence: CLI > config > environment fallback.
+        try:
+            config_token_budget = int(getattr(_cfg.janitor, "token_budget", 0) or 0)
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Invalid janitor.token_budget config value") from exc
+            janitor_logger.warn("invalid_config_token_budget", error=str(exc))
+            config_token_budget = 0
+        try:
+            env_token_budget = int(os.environ.get("JANITOR_TOKEN_BUDGET", "0") or 0)
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Invalid JANITOR_TOKEN_BUDGET environment value") from exc
+            janitor_logger.warn("invalid_env_token_budget", error=str(exc))
+            env_token_budget = 0
+        effective_token_budget = (
+            int(args.token_budget) if args.token_budget is not None
+            else (config_token_budget if config_token_budget > 0 else env_token_budget)
         )
-        return 1
-    if _can_route_supervisor_janitor(args, dry_run=dry_run):
-        return _run_supervisor_janitor_request(instance=requested_instance or None)
-    incremental = not args.full_scan
+        if effective_token_budget > 0:
+            source = "cli" if args.token_budget is not None else ("config" if config_token_budget > 0 else "env")
+            print(f"[janitor] Token budget: {effective_token_budget:,} tokens (source: {source})")
+        if int(args.stage_item_cap or 0) > 0:
+            os.environ["JANITOR_MAX_ITEMS_PER_STAGE"] = str(int(args.stage_item_cap))
+            print(f"[janitor] Stage item cap: {int(args.stage_item_cap)}")
 
-    result = run_task_optimized(args.task, dry_run=dry_run, incremental=incremental,
-                                time_budget=args.time_budget,
-                                force_distill=args.force_distill,
-                                user_approved=args.approve,
-                                token_budget=effective_token_budget,
-                                resume_checkpoint=(not args.no_resume_checkpoint))
+        # dry_run is derived from apply flags and janitor apply policy.
+        dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
+        if apply_policy_warning:
+            print(f"[policy] {apply_policy_warning}")
+        if requested_instance and not _can_route_supervisor_janitor(args, dry_run=dry_run):
+            print(
+                "Error: --instance requires the supervisor-owned path "
+                "(use --task all --apply without extra janitor override flags).",
+                file=sys.stderr,
+            )
+            return 1
+        if _can_route_supervisor_janitor(args, dry_run=dry_run):
+            return _run_supervisor_janitor_request(instance=requested_instance or None)
+        incremental = not args.full_scan
+
+        result = run_task_optimized(args.task, dry_run=dry_run, incremental=incremental,
+                                    time_budget=args.time_budget,
+                                    force_distill=args.force_distill,
+                                    user_approved=args.approve,
+                                    token_budget=effective_token_budget,
+                                    resume_checkpoint=(not args.no_resume_checkpoint))
     
-    # Write stats to file for dashboard consumption
-    stats_file = _logs_dir() / "janitor-stats.json"
-    stats_file.parent.mkdir(parents=True, exist_ok=True)
-    usage = get_token_usage()
-    stats_data = {
-        "last_run": datetime.now().isoformat(),
-        "task": args.task,
-        "dry_run": dry_run,
-        "success": result["success"],
-        "applied_changes": result["applied_changes"],
-        "metrics": result["metrics"],
-        "api_usage": {
-            "calls": usage["api_calls"],
-            "input_tokens": usage["input_tokens"],
-            "output_tokens": usage["output_tokens"],
-            "estimated_cost_usd": estimate_cost(),
+        # Write stats to file for dashboard consumption
+        stats_file = _logs_dir() / "janitor-stats.json"
+        stats_file.parent.mkdir(parents=True, exist_ok=True)
+        usage = get_token_usage()
+        stats_data = {
+            "last_run": datetime.now().isoformat(),
+            "task": args.task,
+            "dry_run": dry_run,
+            "success": result["success"],
+            "applied_changes": result["applied_changes"],
+            "metrics": result["metrics"],
+            "api_usage": {
+                "calls": usage["api_calls"],
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "estimated_cost_usd": estimate_cost(),
+            }
         }
-    }
-    _atomic_write_json(Path(stats_file), stats_data)
-    print(f"\n📊 Stats written to {stats_file}")
+        _atomic_write_json(Path(stats_file), stats_data)
+        print(f"\n📊 Stats written to {stats_file}")
     
-    # Shut down the global LLM scheduler's thread pool before exiting.
-    # Without this, non-daemon executor threads block Python from exiting cleanly.
-    try:
-        from core.llm.scheduler import reset_global_llm_scheduler
-        reset_global_llm_scheduler(wait=False)
-    except Exception:
-        pass
+        # Shut down the global LLM scheduler's thread pool before exiting.
+        # Without this, non-daemon executor threads block Python from exiting cleanly.
+        try:
+            from core.llm.scheduler import reset_global_llm_scheduler
+            reset_global_llm_scheduler(wait=False)
+        except Exception:
+            pass
 
-    # Exit with error code if janitor failed
-    return 0 if result["success"] else 1
+        # Exit with error code if janitor failed
+        return 0 if result["success"] else 1
 
 
 if __name__ == "__main__":
