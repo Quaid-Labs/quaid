@@ -1512,6 +1512,18 @@ function repairSessionCursorPathsFromQuaidEventLogs(): void {
   }
 }
 
+function isMainInteractiveSessionKey(key: string): boolean {
+  const normalized = String(key || "").trim().toLowerCase();
+  return (
+    !normalized
+    || normalized === "agent:main:main"
+    || normalized.startsWith("agent:main:tui-")
+    || normalized.startsWith("agent:main:telegram:")
+    || normalized.startsWith("agent:main:matrix:")
+    || normalized.startsWith("agent:main:webchat:")
+  );
+}
+
 function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteractiveSession | null {
   const entries = (Object.entries(data || {}) as Array<[string, any]>)
     .filter(([key, row]) => (
@@ -1539,18 +1551,18 @@ function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteract
     })
     .filter((row) => row.sessionId);
   // Sort priority:
-  // 1. TUI/telegram sessions (agent:main:tui-*, agent:main:telegram:*) outrank
+  // 1. TUI/telegram/matrix/webchat sessions outrank
   //    agent:main:main.  When a user is active in the TUI, OC may still refresh
   //    agent:main:main's updatedAt for background/relay purposes, causing it to
   //    win on timestamp alone and making the watcher track the wrong session.
-  //    EXCEPTION: if all TUI/telegram entries are stale (>5 min older than main),
+  //    EXCEPTION: if all interactive entries are stale (>5 min older than main),
   //    fall back to recency comparison — the TUI is no longer actively registered
   //    and main holds the genuine current session.
   // 2. Within the same tier, prefer newest updatedAt; break ties with transcript mtimeMs.
   const TIER_STALENESS_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
   const mainEntry = entries.find((e) => e.key === "agent:main:main");
   const isHighTierKey = (key: string): boolean =>
-    key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:");
+    isMainInteractiveSessionKey(key) && key !== "agent:main:main";
   const highTierEntries = entries.filter((e) => isHighTierKey(e.key));
   const bestHighTierUpdatedAt = highTierEntries.reduce(
     (max, e) => Math.max(max, e.updatedAt),
@@ -6024,10 +6036,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const newSessionKey = String(
         ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(newSessionId)
       ).trim().toLowerCase();
-      const isInteractiveKey = !newSessionKey
-        || newSessionKey === "agent:main:main"
-        || newSessionKey.startsWith("agent:main:tui-")
-        || newSessionKey.startsWith("agent:main:telegram:");
+      const isInteractiveKey = isMainInteractiveSessionKey(newSessionKey);
       if (!isInteractiveKey) return;
       const newAgentLabel = resolveAgentLabelFromSessionKey(newSessionKey) || "main";
 
@@ -7073,6 +7082,7 @@ export const __test = {
   looksLikeQuaidEventLogTranscript,
   preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,
+  isMainInteractiveSessionKey,
   selectNewKeyFanoutTarget,
   resolveLifecycleFlushSessionCandidate,
   NEW_KEY_FALLBACK_DELAY_MS,

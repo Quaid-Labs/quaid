@@ -1157,6 +1157,77 @@ describe("lifecycle signal detection", () => {
     expect(__test.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost")).toBe(false);
   });
 
+  it("treats matrix and webchat session keys as interactive main-lane sessions", () => {
+    expect(__test.isMainInteractiveSessionKey("agent:main:matrix:direct:@quaid-test-bot:localhost")).toBe(true);
+    expect(__test.isMainInteractiveSessionKey("agent:main:webchat:room-42")).toBe(true);
+    expect(__test.isMainInteractiveSessionKey("agent:main:main")).toBe(true);
+    expect(__test.isMainInteractiveSessionKey("agent:main:slug-generator")).toBe(false);
+    expect(__test.isMainInteractiveSessionKey("agent:worker:matrix:direct:@quaid-test-bot:localhost")).toBe(false);
+  });
+
+  it("lifecycle flush prefers matrix sessions over agent:main:main on the same lane", () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), ".tmp-oc-flush-matrix-"));
+    const openClawRoot = path.join(root, ".openclaw");
+    const sessionsDir = path.join(openClawRoot, "agents", "main", "sessions");
+    const workspace = path.join(root, "workspace");
+    const instanceRoot = path.join(workspace, "instances", "openclaw-main");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.join(instanceRoot, "data", "session-cursors"), { recursive: true });
+
+    const mainSessionId = "main-session";
+    const matrixSessionId = "matrix-session";
+    const mainFile = path.join(sessionsDir, `${mainSessionId}.jsonl`);
+    const matrixFile = path.join(sessionsDir, `${matrixSessionId}.jsonl`);
+    fs.writeFileSync(
+      mainFile,
+      `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "Quaid has 1 deferred maintenance notice waiting." }] } })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      matrixFile,
+      `${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "Baxter is the office dog." }] } })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:main": { sessionId: mainSessionId, updatedAt: 1000 },
+        "agent:main:matrix:direct:@quaid-test-bot:localhost": { sessionId: matrixSessionId, updatedAt: 2000 },
+      }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(openClawRoot, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          list: [{ id: "main", default: true, workspace }],
+          defaults: { workspace },
+        },
+      }, null, 2),
+      "utf8",
+    );
+
+    const prevOpenClawConfig = process.env.OPENCLAW_CONFIG_PATH;
+    const prevQuaidHome = process.env.QUAID_HOME;
+    const prevQuaidInstance = process.env.QUAID_INSTANCE;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(openClawRoot, "openclaw.json");
+    process.env.QUAID_HOME = workspace;
+    process.env.QUAID_INSTANCE = "openclaw-main";
+    try {
+      const selected = __test.resolveLifecycleFlushSessionCandidate("main", "hook-bootstrap-session");
+      expect(selected?.sessionId).toBe(matrixSessionId);
+      expect(selected?.key).toBe("agent:main:matrix:direct:@quaid-test-bot:localhost");
+    } finally {
+      if (prevOpenClawConfig === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+      else process.env.OPENCLAW_CONFIG_PATH = prevOpenClawConfig;
+      if (prevQuaidHome === undefined) delete process.env.QUAID_HOME;
+      else process.env.QUAID_HOME = prevQuaidHome;
+      if (prevQuaidInstance === undefined) delete process.env.QUAID_INSTANCE;
+      else process.env.QUAID_INSTANCE = prevQuaidInstance;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("exports a delayed new-key fallback window so stronger signals can win first", () => {
     expect(__test.NEW_KEY_FALLBACK_DELAY_MS).toBeGreaterThan(0);
   });

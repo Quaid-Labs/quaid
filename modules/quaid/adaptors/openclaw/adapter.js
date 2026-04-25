@@ -1152,6 +1152,10 @@ function repairSessionCursorPathsFromQuaidEventLogs() {
     console.log(`[quaid][cleanup] repaired ${repaired} cursor(s) that pointed at Quaid event logs`);
   }
 }
+function isMainInteractiveSessionKey(key) {
+  const normalized = String(key || "").trim().toLowerCase();
+  return !normalized || normalized === "agent:main:main" || normalized.startsWith("agent:main:tui-") || normalized.startsWith("agent:main:telegram:") || normalized.startsWith("agent:main:matrix:") || normalized.startsWith("agent:main:webchat:");
+}
 function pickActiveInteractiveSession(data) {
   const entries = Object.entries(data || {}).filter(([key, row]) => row && typeof row === "object" && typeof row?.sessionId === "string" && key.startsWith("agent:main:")).map(([key, row]) => {
     const sessionId = String(row?.sessionId || "").trim();
@@ -1173,7 +1177,7 @@ function pickActiveInteractiveSession(data) {
   }).filter((row) => row.sessionId);
   const TIER_STALENESS_THRESHOLD_MS = 5 * 60 * 1e3;
   const mainEntry = entries.find((e) => e.key === "agent:main:main");
-  const isHighTierKey = (key) => key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:");
+  const isHighTierKey = (key) => isMainInteractiveSessionKey(key) && key !== "agent:main:main";
   const highTierEntries = entries.filter((e) => isHighTierKey(e.key));
   const bestHighTierUpdatedAt = highTierEntries.reduce(
     (max, e) => Math.max(max, e.updatedAt),
@@ -4839,7 +4843,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const newSessionKey = String(
         ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(newSessionId)
       ).trim().toLowerCase();
-      const isInteractiveKey = !newSessionKey || newSessionKey === "agent:main:main" || newSessionKey.startsWith("agent:main:tui-") || newSessionKey.startsWith("agent:main:telegram:");
+      const isInteractiveKey = isMainInteractiveSessionKey(newSessionKey);
       if (!isInteractiveKey) return;
       const newAgentLabel = resolveAgentLabelFromSessionKey(newSessionKey) || "main";
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
@@ -5750,6 +5754,7 @@ const __test = {
   looksLikeQuaidEventLogTranscript,
   preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,
+  isMainInteractiveSessionKey,
   selectNewKeyFanoutTarget,
   resolveLifecycleFlushSessionCandidate,
   NEW_KEY_FALLBACK_DELAY_MS
