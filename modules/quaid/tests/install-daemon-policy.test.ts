@@ -331,6 +331,20 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("if (postHookReadyError) {");
     expect(setupText).toContain('await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-guard activation", 60_000);');
     expect(setupText).toContain('Installed OpenClaw managed-state guard');
+
+    const preservedCompose = setupText.indexOf("const preservedOpenClawManagedState = _isPlatform(\"openclaw\")");
+    const currentCaptureInPreserved = setupText.indexOf("_captureOpenClawManagedState(),", preservedCompose);
+    const preinstallCaptureInPreserved = setupText.indexOf("_preinstallOpenClawManagedState,", preservedCompose);
+    expect(preinstallCaptureInPreserved).toBeGreaterThan(preservedCompose);
+    expect(currentCaptureInPreserved).toBeGreaterThan(preinstallCaptureInPreserved);
+
+    const finalCompose = setupText.indexOf("const finalManagedState = composeOpenClawManagedStateSnapshots(");
+    const preservedInFinal = setupText.indexOf("preservedOpenClawManagedState,", finalCompose);
+    const persistedInFinal = setupText.indexOf("_loadPersistedOpenClawManagedState(),", finalCompose);
+    const currentCaptureInFinal = setupText.indexOf("_captureOpenClawManagedState(),", finalCompose);
+    expect(preservedInFinal).toBeGreaterThan(finalCompose);
+    expect(persistedInFinal).toBeGreaterThan(preservedInFinal);
+    expect(currentCaptureInFinal).toBeGreaterThan(persistedInFinal);
   });
 
   it("OpenClaw shared config seeds transcript mirror prefixes for lean instance layering", () => {

@@ -4889,8 +4889,8 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
   const preservedOpenClawManagedState = _isPlatform("openclaw")
     ? composeOpenClawManagedStateSnapshots(
-        _captureOpenClawManagedState(),
         _preinstallOpenClawManagedState,
+        _captureOpenClawManagedState(),
       )
     : null;
   // Installer creates only shared/runtime state. Per-instance silos are created
@@ -5174,9 +5174,9 @@ except Exception as e:
     await waitForGatewayWarmup(30_000);
     await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);
     const finalManagedState = composeOpenClawManagedStateSnapshots(
-      _captureOpenClawManagedState(),
       preservedOpenClawManagedState,
       _loadPersistedOpenClawManagedState(),
+      _captureOpenClawManagedState(),
     );
     if (finalManagedState && _persistOpenClawManagedState(finalManagedState)) {
       log.info("Persisted OpenClaw managed state snapshot for drift recovery");
