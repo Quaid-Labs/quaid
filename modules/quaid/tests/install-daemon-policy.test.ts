@@ -152,6 +152,15 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("OpenClaw gateway must be running before installing Quaid.");
     expect(setupText).toContain('bail("OpenClaw gateway must be running before installing Quaid.");');
     expect(setupText).not.toContain("OpenClaw status/probe unavailable in agent mode; continuing with install.");
+    const preflightStart = setupText.indexOf('s.message("Checking OpenClaw gateway status...");');
+    const preflightEnd = setupText.indexOf("    // --- Onboarding / agents list ---");
+    expect(preflightStart).toBeGreaterThan(-1);
+    expect(preflightEnd).toBeGreaterThan(preflightStart);
+    const preflightBlock = setupText.slice(preflightStart, preflightEnd);
+    expect(preflightBlock).toContain('const gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);');
+    expect(preflightBlock).not.toContain('["status"]');
+    expect(preflightBlock).not.toContain('["gateway", "probe"]');
+    expect(preflightBlock).not.toContain("runCliWithTimeout(bin, args, 8_000)");
   });
 
   it("OpenClaw hook symbol grep is diagnostic after the version gate", () => {
