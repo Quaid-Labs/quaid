@@ -104,6 +104,45 @@ def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, t
     assert calls[1][1]["request_id"] == "req-2"
 
 
+def test_janitor_main_all_apply_attaches_to_existing_request(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+
+    from core import project_docs
+    from core.lifecycle import janitor
+
+    active_request = {
+        "request_id": "req-active",
+        "status": "running",
+        "errors": [],
+    }
+    calls = []
+
+    monkeypatch.setattr(project_docs, "ensure_supervisor_alive", lambda: 4321)
+    monkeypatch.setattr(
+        project_docs,
+        "request_janitor_run",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("Janitor request already in progress (req-active)")),
+    )
+    monkeypatch.setattr(project_docs, "read_janitor_request", lambda: dict(active_request))
+    monkeypatch.setattr(
+        project_docs,
+        "wait_for_janitor_request",
+        lambda request_id, *, timeout_seconds: calls.append(
+            ("wait", {"request_id": request_id, "timeout_seconds": timeout_seconds})
+        )
+        or {"request_id": request_id, "status": "completed", "errors": []},
+    )
+    monkeypatch.setattr(janitor, "run_task_optimized", lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError()))
+
+    assert janitor.main(["--task", "all", "--apply"]) == 0
+    captured = capsys.readouterr()
+    assert "already in progress" in captured.out
+    assert "Attached to existing supervisor request" in captured.out
+    assert calls == [("wait", {"request_id": "req-active", "timeout_seconds": janitor._supervisor_janitor_wait_timeout_seconds()})]
+
+
 def test_janitor_main_all_dry_run_without_instance_uses_ambient_boot_guard(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

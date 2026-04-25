@@ -1888,13 +1888,30 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     from core import project_docs
 
     supervisor_pid = project_docs.ensure_supervisor_alive()
-    request = project_docs.request_janitor_run(
-        instance=instance,
-        reason="janitor-cli-apply",
-        requested_by="janitor-cli",
-    )
     scope = f"instance {instance}" if instance else "all live instances"
-    print(f"[janitor] Queued supervisor-owned janitor request for {scope}")
+    attached_to_existing = False
+    try:
+        request = project_docs.request_janitor_run(
+            instance=instance,
+            reason="janitor-cli-apply",
+            requested_by="janitor-cli",
+        )
+        print(f"[janitor] Queued supervisor-owned janitor request for {scope}")
+    except RuntimeError as exc:
+        message = str(exc or "").strip()
+        if "already in progress" not in message:
+            raise
+        request = project_docs.read_janitor_request() or {}
+        request_id = str(request.get("request_id") or "").strip()
+        status = str(request.get("status") or "").strip()
+        if not request_id or status not in {"pending", "running"}:
+            raise
+        attached_to_existing = True
+        print(
+            f"[janitor] Supervisor-owned janitor request already in progress for {scope}; "
+            f"attaching to request {request_id}"
+        )
+
     print(f"[janitor] Request ID: {request['request_id']}")
     print(f"[janitor] Supervisor PID: {supervisor_pid}")
     result = project_docs.wait_for_janitor_request(
@@ -1903,6 +1920,8 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     )
     status = str(result.get("status") or "unknown").strip() or "unknown"
     print(f"[janitor] Request status: {status}")
+    if attached_to_existing:
+        print("[janitor] Attached to existing supervisor request")
     errors = list(result.get("errors") or [])
     if errors:
         for error in errors:
