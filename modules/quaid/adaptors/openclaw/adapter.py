@@ -560,11 +560,6 @@ class OpenClawAdapter(QuaidAdapter):
         value = super().sanitize_transcript_text(text)
         if not value:
             return ""
-        lowered = value.lower()
-        if "i have remembered" in lowered and (
-            "saved in memory/" in lowered or "openclaw-workspace" in lowered
-        ):
-            return ""
         value = self._OC_INTERNAL_CONTEXT_RE.sub("", value)
         value = self._OC_UNTRUSTED_METADATA_RE.sub("", value)
         value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
@@ -622,6 +617,11 @@ class OpenClawAdapter(QuaidAdapter):
                         if payload_type in ("user_message", "agent_message"):
                             role = "user" if payload_type == "user_message" else "assistant"
                             text = str(payload.get("message", "")).strip()
+                            lowered = text.lower()
+                            if role == "assistant" and "i have remembered" in lowered and (
+                                "saved in memory/" in lowered or "openclaw-workspace" in lowered
+                            ):
+                                continue
                             if "[Subagent Context]" in text or "You are running as a subagent" in text:
                                 session_source_type = "subagent"
                                 text = re.sub(
@@ -651,6 +651,11 @@ class OpenClawAdapter(QuaidAdapter):
                     continue
 
                 stripped = content.strip()
+                lowered = stripped.lower()
+                if role == "assistant" and "i have remembered" in lowered and (
+                    "saved in memory/" in lowered or "openclaw-workspace" in lowered
+                ):
+                    continue
                 if "[Subagent Context]" in stripped or "You are running as a subagent" in stripped:
                     session_source_type = "subagent"
                     stripped = re.sub(
