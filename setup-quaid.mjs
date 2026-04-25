@@ -2401,36 +2401,6 @@ function _sanitizeOpenClawQuaidPluginEntry() {
   }
 }
 
-function _sanitizeOpenClawMemorySlot() {
-  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
-  try {
-    const raw = fs.readFileSync(cfgPath, "utf8");
-    const parsed = JSON.parse(raw);
-    const plugins = parsed?.plugins;
-    if (!plugins || typeof plugins !== "object") return false;
-    const slots = plugins.slots;
-    if (!slots || typeof slots !== "object") return false;
-    if (String(slots.memory || "").trim() !== "quaid") return false;
-
-    const installs = plugins.installs;
-    const installPath = installs?.quaid?.installPath;
-    const quaidPresent = typeof installPath === "string" && installPath.trim() && fs.existsSync(installPath);
-    if (quaidPresent) return false;
-
-    slots.memory = "memory-core";
-    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-    fs.renameSync(tmpPath, cfgPath);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {}
-  }
-}
-
 function _sanitizeOpenClawPluginInstallSources() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -2491,32 +2461,6 @@ function _ensureOpenClawPluginsAllowQuaid() {
     if (allow.length === nextAllow.length && allow.every((entry, idx) => String(entry || "").trim() === nextAllow[idx])) {
       return false;
     }
-    plugins.allow = nextAllow;
-    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-    fs.renameSync(tmpPath, cfgPath);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {}
-  }
-}
-
-function _removeOpenClawPluginsAllowQuaid() {
-  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
-  try {
-    const raw = fs.readFileSync(cfgPath, "utf8");
-    const parsed = JSON.parse(raw);
-    const plugins = parsed.plugins;
-    if (!plugins || typeof plugins !== "object") return false;
-    const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
-    const nextAllow = allow
-      .map((entry) => String(entry || "").trim())
-      .filter((entry) => entry && entry !== "quaid");
-    if (allow.length === nextAllow.length) return false;
     plugins.allow = nextAllow;
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
     fs.renameSync(tmpPath, cfgPath);

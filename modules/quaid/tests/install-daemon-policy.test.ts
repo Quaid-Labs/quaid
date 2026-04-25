@@ -243,6 +243,8 @@ describe("install daemon policy", () => {
     expect(precleanBlock).not.toContain("_sanitizeOpenClawMemorySlot();");
     expect(precleanBlock).not.toContain("_sanitizeOpenClawQuaidPluginEntry();");
     expect(precleanBlock).not.toContain("_removeOpenClawPluginsAllowQuaid();");
+    expect(setupText).not.toContain("function _sanitizeOpenClawMemorySlot()");
+    expect(setupText).not.toContain("function _removeOpenClawPluginsAllowQuaid()");
   });
 
   it("OpenClaw validation treats plugin-list visibility as diagnostic after direct registration passes", () => {
