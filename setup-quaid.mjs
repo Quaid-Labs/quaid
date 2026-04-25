@@ -39,7 +39,6 @@ import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-de
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
 import {
   captureOpenClawManagedState,
-  composeOpenClawManagedStateSnapshots,
   readOpenClawManagedStateSnapshot,
   restoreOpenClawManagedState,
   writeOpenClawManagedStateSnapshot,
@@ -336,7 +335,6 @@ if (INSTALL_ALL_PLATFORMS && (FORCED_ADAPTER_TYPE || INSTALL_ARGS.claudeCode)) {
 
 const FIXED_QUAID_HOME = path.resolve(path.join(os.homedir(), ".quaid"));
 const FIXED_VISIBLE_HOME = path.resolve(path.join(os.homedir(), "quaid"));
-let _preinstallOpenClawManagedState = null;
 
 function _normalizeInstallPath(raw) {
   const value = String(raw || "").trim();
@@ -2608,8 +2606,6 @@ const WORKSPACE = ${workspaceJson};
 const CONFIG_PATH = path.join(os.homedir(), ".openclaw", "openclaw.json");
 const SNAPSHOT_PATH = path.join(WORKSPACE, "shared", "config", "openclaw", "managed-openclaw.json");
 const STATE_PATH = path.join(WORKSPACE, "shared", "config", "openclaw", "managed-openclaw.guard-state.json");
-const GUI_TARGET = "gui/" + process.getuid();
-const GATEWAY_SERVICE = GUI_TARGET + "/ai.openclaw.gateway";
 
 function isRecord(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -2755,16 +2751,9 @@ const state = readJson(STATE_PATH) || {};
 const lastRestartMs = Number(state.lastRestartMs || 0);
 const restartCooldownMs = 15000;
 if (now - lastRestartMs >= restartCooldownMs) {
-  let restart = spawnSync("launchctl", ["kickstart", "-k", GATEWAY_SERVICE], { stdio: "pipe" });
-  let restartMethod = "launchctl";
-  if (restart.status !== 0) {
-    restart = spawnSync("openclaw", ["gateway", "restart"], { stdio: "pipe" });
-    restartMethod = "openclaw";
-  }
+  const restart = spawnSync("openclaw", ["gateway", "restart"], { stdio: "pipe" });
   state.lastRestartMs = now;
   state.lastRestartStatus = Number(restart.status || 0);
-  state.lastRestartMethod = restartMethod;
-  state.lastRestartDetail = String(restart.stderr || restart.stdout || "").trim();
   state.lastChangedBits = changedBits;
   writeJsonAtomically(STATE_PATH, state);
 } else {
@@ -3491,9 +3480,6 @@ async function step1_preflight() {
 
     // --- Onboarding / agents list ---
     const cfgCli = "openclaw";
-    if (!_preinstallOpenClawManagedState) {
-      _preinstallOpenClawManagedState = _captureOpenClawManagedState();
-    }
     s.message("Checking OpenClaw agent configuration...");
     let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
     if (!hasAgent) {
@@ -3508,13 +3494,10 @@ async function step1_preflight() {
     if (responsesEndpointChanged || agentModelChanged || runtimeEnvChanged) {
       s.message("Restarting OpenClaw gateway...");
       const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
-      if (restart.status !== 0) {
-        const detail = String(restart.stderr || restart.stdout || "").trim();
-        log.warn(`OpenClaw gateway restart during preflight exited non-zero (will verify health next): ${detail || "unknown"}`);
+      if (restart.status === 0) {
+        s.message("Waiting for gateway to come online...");
+        await waitForGatewayWarmup(30_000);
       }
-      s.message("Waiting for gateway to come online...");
-      await waitForGatewayWarmup(30_000);
-      await _reassertOpenClawPostRestartState("preflight config reconcile", _preinstallOpenClawManagedState);
     }
     _ensureOpenClawCompactionModeDefault();
     s.stop(C.green("OpenClaw") + " gateway running");
@@ -4802,12 +4785,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
-  const preservedOpenClawManagedState = _isPlatform("openclaw")
-    ? composeOpenClawManagedStateSnapshots(
-        _preinstallOpenClawManagedState,
-        _captureOpenClawManagedState(),
-      )
-    : null;
+  const preservedOpenClawManagedState = _isPlatform("openclaw") ? _captureOpenClawManagedState() : null;
   // Installer creates only shared/runtime state. Per-instance silos are created
   // on first hook use, once the adapter has the real instance ID.
   const resolvedInstanceId = String(process.env.QUAID_INSTANCE || "").trim();
@@ -4843,12 +4821,12 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     if (runtimeEnvReconciled) {
       log.info(`Reconciled OpenClaw runtime instance env to ${resolvedInstanceId}`);
       const restart = spawnSync("openclaw", ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
-      if (restart.status !== 0) {
-        const detail = String(restart.stderr || restart.stdout || "").trim();
-        log.warn(`OpenClaw gateway restart after runtime env reconcile exited non-zero (will verify health next): ${detail || "unknown"}`);
+      if (restart.status === 0) {
+        await waitForGatewayWarmup(30_000);
+        await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);
+      } else {
+        log.warn("OpenClaw gateway restart after runtime env reconcile failed.");
       }
-      await waitForGatewayWarmup(30_000);
-      await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);
     }
   }
   if (_isPlatform("claude-code")) {
@@ -5088,30 +5066,14 @@ except Exception as e:
     // config reload. Give the gateway time to settle before proceeding.
     await waitForGatewayWarmup(30_000);
     await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);
-    const finalManagedState = composeOpenClawManagedStateSnapshots(
-      preservedOpenClawManagedState,
-      _loadPersistedOpenClawManagedState(),
-      _captureOpenClawManagedState(),
-    );
+    const finalManagedState = _captureOpenClawManagedState() || preservedOpenClawManagedState || _loadPersistedOpenClawManagedState();
     if (finalManagedState && _persistOpenClawManagedState(finalManagedState)) {
       log.info("Persisted OpenClaw managed state snapshot for drift recovery");
     }
-    let postHookReadyError = null;
-    try {
-      await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
-    } catch (err) {
-      postHookReadyError = err;
-    }
-    const guardInstalled = _installOpenClawManagedStateGuard();
-    if (guardInstalled) {
+    if (_installOpenClawManagedStateGuard()) {
       log.info("Installed OpenClaw managed-state guard");
     }
-    if (postHookReadyError) {
-      throw postHookReadyError;
-    }
-    if (guardInstalled) {
-      await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-guard activation", 60_000);
-    }
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-hook sanitizer", 60_000);
     s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
 

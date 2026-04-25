@@ -201,8 +201,7 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const runtimeEnvReconciled = _ensureOpenClawRuntimeInstanceEnv(resolvedInstanceId);");
     expect(setupText).toContain("Reconciled OpenClaw runtime instance env to");
     expect(setupText).toContain('spawnSync("openclaw", ["gateway", "restart"]');
-    expect(setupText).toContain("const preservedOpenClawManagedState = _isPlatform(\"openclaw\")");
-    expect(setupText).toContain("composeOpenClawManagedStateSnapshots(");
+    expect(setupText).toContain("const preservedOpenClawManagedState = _isPlatform(\"openclaw\") ? _captureOpenClawManagedState() : null;");
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("runtime env reconcile", preservedOpenClawManagedState);');
   });
 
@@ -340,34 +339,11 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("managed-openclaw.json");
     expect(setupText).toContain('spawnSync("launchctl", ["enable", serviceTarget], { stdio: "pipe" });');
     expect(setupText).toContain('spawnSync("launchctl", ["print", serviceTarget], { stdio: "pipe" });');
-    expect(setupText).toContain('const GATEWAY_SERVICE = GUI_TARGET + "/ai.openclaw.gateway";');
-    expect(setupText).toContain('spawnSync("launchctl", ["kickstart", "-k", GATEWAY_SERVICE], { stdio: "pipe" });');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("plugin registration", preservedOpenClawManagedState);');
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawManagedState);');
-    expect(setupText).toContain("_preinstallOpenClawManagedState = _captureOpenClawManagedState();");
-    expect(setupText).toContain('await _reassertOpenClawPostRestartState("preflight config reconcile", _preinstallOpenClawManagedState);');
-    expect(setupText).toContain("composeOpenClawManagedStateSnapshots(");
-    expect(setupText).toContain("_preinstallOpenClawManagedState,");
     expect(setupText).toContain("_captureOpenClawManagedState(),");
     expect(setupText).toContain("preservedOpenClawManagedState,");
-    expect(setupText).toContain("let postHookReadyError = null;");
-    expect(setupText).toContain("if (postHookReadyError) {");
-    expect(setupText).toContain('await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "post-guard activation", 60_000);');
     expect(setupText).toContain('Installed OpenClaw managed-state guard');
-
-    const preservedCompose = setupText.indexOf("const preservedOpenClawManagedState = _isPlatform(\"openclaw\")");
-    const currentCaptureInPreserved = setupText.indexOf("_captureOpenClawManagedState(),", preservedCompose);
-    const preinstallCaptureInPreserved = setupText.indexOf("_preinstallOpenClawManagedState,", preservedCompose);
-    expect(preinstallCaptureInPreserved).toBeGreaterThan(preservedCompose);
-    expect(currentCaptureInPreserved).toBeGreaterThan(preinstallCaptureInPreserved);
-
-    const finalCompose = setupText.indexOf("const finalManagedState = composeOpenClawManagedStateSnapshots(");
-    const preservedInFinal = setupText.indexOf("preservedOpenClawManagedState,", finalCompose);
-    const persistedInFinal = setupText.indexOf("_loadPersistedOpenClawManagedState(),", finalCompose);
-    const currentCaptureInFinal = setupText.indexOf("_captureOpenClawManagedState(),", finalCompose);
-    expect(preservedInFinal).toBeGreaterThan(finalCompose);
-    expect(persistedInFinal).toBeGreaterThan(preservedInFinal);
-    expect(currentCaptureInFinal).toBeGreaterThan(persistedInFinal);
   });
 
   it("OpenClaw install acquires a host-level config lock before preflight writes", () => {
