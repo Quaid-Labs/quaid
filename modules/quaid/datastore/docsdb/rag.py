@@ -83,7 +83,7 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
     could not be determined and caller should not enforce scope filtering.
     """
     try:
-        from lib.instance import instance_id as _instance_id
+        from lib.instance import InstanceError, instance_id as _instance_id
         from lib.project_registry import list_all as _list_projects
 
         try:
@@ -103,6 +103,8 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
             if current_instance in instances:
                 linked.append(str(project_name))
         return linked, True
+    except InstanceError:
+        return [], False
     except Exception as exc:
         if is_fail_hard_enabled():
             raise RuntimeError("Failed to resolve current instance project scope for shared docs recall.") from exc

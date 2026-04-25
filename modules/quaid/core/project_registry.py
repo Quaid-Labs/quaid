@@ -487,12 +487,14 @@ def create_project(
             current_instance = str(initial_instance).strip()
         else:
             from lib.instance import instance_id as _instance_id
-            current_instance = _instance_id()
+
+            env_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+            current_instance = _instance_id() if env_instance else ""
 
         entry = {
             "canonical_path": str(canonical),
             "source_root": source_root,
-            "instances": [current_instance],
+            "instances": [current_instance] if current_instance else [],
             "created_at": datetime.now(tz=timezone.utc).isoformat(),
             "description": description,
         }

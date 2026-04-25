@@ -112,6 +112,15 @@ class TestCreateProject:
         with pytest.raises(ValueError, match="already exists"):
             create_project("my-app")
 
+    def test_allows_unscoped_create_when_instance_env_missing(self, mock_adapter, monkeypatch):
+        _, _tmp_path = mock_adapter
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+        with patch("core.project_registry._sync_docs_registry_project"):
+            entry = create_project("ambient-app", description="Ambient project")
+
+        assert entry["instances"] == []
+
     def test_with_source_root(self, mock_adapter):
         _, tmp_path = mock_adapter
         src = tmp_path / "user-code"

@@ -1267,13 +1267,52 @@ class TestDocsSearchFiltering:
 
     def test_linked_project_scope_returns_unresolved_when_instance_missing(self, tmp_path):
         from datastore.docsdb import rag as rag_module
+        from lib.instance import InstanceError
 
         with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
-             patch("lib.instance.instance_id", side_effect=RuntimeError("instance missing")):
+             patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")):
             linked, resolved = rag_module._linked_projects_for_current_instance()
 
         assert linked == []
         assert resolved is False
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_bundle_explicit_project_tolerates_missing_instance_scope(self, _sim, _unpack, _embed, tmp_path):
+        from lib.instance import InstanceError
+
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "chunk-ambient-project",
+                    "/tmp/workspace/projects/ambient-app/PROJECT.md",
+                    0,
+                    "North pier beacon protocol lives here.",
+                    "PROJECT",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")), \
+             patch.object(
+                 rag,
+                 "_get_project_paths",
+                 return_value={"home_dir": "/tmp/workspace/projects/ambient-app", "source_roots": []},
+             ), \
+             patch.object(rag, "infer_project_for_source", return_value="ambient-app"):
+            bundle = rag.search_docs_bundle("north pier beacon", limit=5, project="ambient-app")
+
+        assert len(bundle["chunks"]) == 1
+        assert bundle["chunks"][0]["project"] == "ambient-app"
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
