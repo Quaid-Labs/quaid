@@ -738,8 +738,8 @@ describe("openclaw deferred notices", () => {
     );
 
     expect(fetchMock).toHaveBeenCalled();
-    expect(String(result?.prependContext || "")).not.toContain("[Quaid error] [provider]");
-    expect(String(result?.appendSystemContext || "")).not.toContain("[Quaid error] [provider]");
+    expect(String(result?.prependContext || "")).toContain("[Quaid error] [provider]");
+    expect(String(result?.appendSystemContext || "")).toContain("[Quaid error] [provider]");
 
     const noticeFile = path.join(
       hiddenHome,
@@ -849,8 +849,8 @@ describe("openclaw deferred notices", () => {
     );
 
     expect(fetchMock).toHaveBeenCalled();
-    expect(String(result?.prependContext || "")).not.toContain("[Quaid error] [provider]");
-    expect(String(result?.appendSystemContext || "")).not.toContain("[Quaid error] [provider]");
+    expect(String(result?.prependContext || "")).toContain("[Quaid error] [provider]");
+    expect(String(result?.appendSystemContext || "")).toContain("[Quaid error] [provider]");
 
     const noticeFile = path.join(
       hiddenHome,
