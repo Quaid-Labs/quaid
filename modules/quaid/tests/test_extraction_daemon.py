@@ -1483,6 +1483,58 @@ def test_check_chunk_ready_sessions_skips_cursor_marked_internal(monkeypatch, tm
     assert captured == []
 
 
+def test_reconcile_internal_cursor_rebases_when_preserved_transcript_replaces_internal_source(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    internal_path = tmp_path / "internal-source.jsonl"
+    internal_path.write_text(
+        '{"role":"assistant","content":"[quaid][session-init] Loading project context"}\n',
+        encoding="utf-8",
+    )
+    preserved_path = tmp_path / "preserved-source.jsonl"
+    preserved_path.write_text(
+        '{"role":"user","content":"Niseko, Kinesis, and Phoebe are the real user facts in this preserved transcript."}\n',
+        encoding="utf-8",
+    )
+
+    session_id = "sess-preserved-rebase"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor(session_id, 1, str(internal_path), internal=True)
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            text = Path(path).read_text(encoding="utf-8")
+            if "Niseko" in text and "Phoebe" in text:
+                return "User: Niseko, Kinesis, and Phoebe are the real user facts in this preserved transcript."
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    try:
+        state = extraction_daemon._reconcile_internal_cursor_state(
+            session_id,
+            str(preserved_path),
+            cursor_data=extraction_daemon.read_cursor(session_id),
+        )
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor(session_id)
+    assert state == "unfrozen"
+    assert cursor["internal"] is False
+    assert cursor["line_offset"] == 0
+    assert cursor["transcript_path"] == str(preserved_path)
+
+
 def test_process_signal_skips_cursor_marked_internal_without_reparse(monkeypatch, tmp_path):
     import sys
     import types

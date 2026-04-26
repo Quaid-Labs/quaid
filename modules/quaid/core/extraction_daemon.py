@@ -2611,7 +2611,14 @@ def _reconcile_internal_cursor_state(
     except OSError:
         total_lines = 0
 
-    if cursor_internal and total_lines <= cursor_offset:
+    prior_path = _canonicalize_transcript_source_path(str(state.get("transcript_path") or ""))
+    current_path = _canonicalize_transcript_source_path(transcript_path)
+    prior_size_bytes = int(state.get("transcript_size_bytes", 0) or 0)
+    current_size_bytes = _transcript_size_bytes(transcript_path)
+    source_unchanged = bool(current_path) and current_path == prior_path
+    size_unchanged = current_size_bytes == prior_size_bytes
+
+    if cursor_internal and total_lines <= cursor_offset and source_unchanged and size_unchanged:
         return "frozen"
 
     if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
@@ -2623,9 +2630,12 @@ def _reconcile_internal_cursor_state(
         return "advanced"
 
     if cursor_internal:
+        rebased_offset = cursor_offset
+        if total_lines <= cursor_offset and (not source_unchanged or not size_unchanged):
+            rebased_offset = 0
         write_cursor(
             session_id,
-            cursor_offset,
+            rebased_offset,
             transcript_path,
             internal=False,
             source_key=cursor_key,
