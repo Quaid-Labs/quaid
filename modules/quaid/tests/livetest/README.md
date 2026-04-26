@@ -191,6 +191,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-preflight.sh` | **Run before every run.** Verifies remote ≠ local, checks SSH, warns on platform version drift without upgrading, wipes the remote, syncs the dev tree, seeds credentials, and starts platform services. Hard-aborts if the remote host matches the local machine. |
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
+| `verify-cc-session-capture.sh` | Verify the CC lane created a real Claude transcript on the remote (hooks present, project instance pinned, fresh `~/.claude/projects/.../*.jsonl`, hook trace exists) before treating M2 as a runtime extraction issue. |
 | `livetest-dashboard.sh` | Serve a local live-test dashboard at `dashboard.html`, reading `dashboard.log` (title + CSV matrix + notes). |
 | `livetest-dashboard-new-run.sh` | Create/reset `dashboard.log` from `dashboard_template.log` for a new run. |
 | `livetest-dashboard-autostart-install.sh` | Install/load a user LaunchAgent so dashboard starts automatically on login/system start (macOS). |
