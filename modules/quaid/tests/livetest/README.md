@@ -118,9 +118,9 @@ The remote host needs:
    | `remote.workspace` | Quaid workspace root on the remote. Use an absolute path, not `~` shorthand. |
    | `owner_name` | Your name — written into the Quaid identity files at install time |
    | `tester.cli` | Command used to start tester agents (default `codex --yolo`) |
-| `tester.model` | Model for tester agents (default `gpt-5.4-mini`) |
+   | `tester.model` | Model for tester agents (default `gpt-5.4-mini`) |
    | `tester.effort` | Reasoning effort for tester agents (default `medium`) |
-   | `platforms.cc.auth_token_file` | Path to a file containing your Anthropic API token (plain text, no newline). Required for the CC daemon's LLM calls. |
+   | `platforms.cc.auth_token_file` | Path to a file containing the Anthropic token Quaid should write into `~/.quaid/shared/auth/credentials.json` for CC daemon calls. |
    | `tmux.layout` | Must be `split-panes` for the canonical live-test topology |
    | `tmux.tester_side` | Must be `left` for the local tester pane |
    | `tmux.platform_side` | Must be `right` for the visible SSH-backed platform pane |
@@ -137,12 +137,18 @@ The remote host needs:
 
 ## Auth Tokens and Keys
 
-The CC platform daemon makes direct LLM calls using an Anthropic OAuth token.
-Set `platforms.cc.auth_token_file` in your config to a file containing the token
-(no newline, mode 600). The coordinator writes this to the remote after CC install.
+CC has two separate auth requirements:
 
-No other keys need to be in the config file. Platform CLIs handle their own auth
-through their normal login flows (already completed in the prerequisites step).
+1. The interactive Claude CLI itself needs a valid local `~/.claude/.credentials.json`
+   on the coordinator. Preflight copies that file to the run VM for real CC sessions.
+   If the coordinator copy is missing or expired, preflight now fails before launch.
+
+2. Quaid's CC daemon needs an Anthropic token in
+   `~/.quaid/shared/auth/credentials.json`. Set `platforms.cc.auth_token_file` in
+   your config to a file containing that token (plain text, first line used).
+
+Do not confuse those two surfaces. Refreshing the CLI login fixes `401` at CC
+session start; `platforms.cc.auth_token_file` fixes Quaid's own Anthropic calls.
 
 ---
 

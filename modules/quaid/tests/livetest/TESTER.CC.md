@@ -181,7 +181,18 @@ Verify instance root, log file, and pid file all point to `CC_INSTANCE`.
 
 ---
 
-## Auth Token
+## Auth Tokens
+
+CC needs two different auth surfaces to be healthy:
+
+1. **Claude CLI session auth** from `~/.claude/.credentials.json` on the run VM.
+   Preflight copies this from the coordinator. If it is expired, `claude` fails
+   with `401` before `SessionStart`, no transcript JSONL is created, and no hook
+   trace appears. That is a run blocker: stop and ask the coordinator to refresh
+   Claude auth + rerun preflight.
+
+2. **Quaid shared Anthropic auth** in `WORKSPACE/shared/auth/credentials.json`
+   for daemon LLM calls after hooks fire.
 
 CC requires a long-lived Anthropic credential in the shared registry at `WORKSPACE/shared/auth/credentials.json`.
 This can be an Anthropic OAuth token from `claude setup-token` or a standard Anthropic API key.
