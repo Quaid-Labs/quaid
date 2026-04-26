@@ -70,3 +70,40 @@ def test_quaid_cli_derives_openclaw_instance_from_agent_workspace(tmp_path: Path
     )
 
     assert result.stdout.strip().endswith("/instances/openclaw-m13test/config.json")
+
+
+def test_quaid_cli_ignores_stale_inherited_quaid_home_when_installed_home_exists(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    installed_home = home / ".quaid"
+    plugin_dir = installed_home / "plugins" / "quaid"
+    visible_home = home / "quaid"
+    plugin_dir.mkdir(parents=True)
+    (installed_home / "shared").mkdir(parents=True)
+
+    installed_quaid = plugin_dir / "quaid"
+    installed_quaid.write_text(quaid_bin.read_text(encoding="utf-8"), encoding="utf-8")
+    installed_quaid.chmod(0o755)
+
+    stale_home = tmp_path / "missing-user" / ".quaid"
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(stale_home),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    result = subprocess.run(
+        [str(installed_quaid), "config"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "cd:" not in result.stderr
+    assert str(installed_home / "shared" / "config" / "global" / "config.json") in result.stderr
+    assert str(visible_home) not in result.stderr

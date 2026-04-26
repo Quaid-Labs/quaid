@@ -844,6 +844,16 @@ def call_llm(system_prompt: str, user_message: str,
             f"error={last_error})"
         ) from last_error
 
+    _is_provider_config = _is_provider_config_error(last_error)
+    if _is_provider_config:
+        _notify_provider_access_error(
+            provider_name=provider_name,
+            resolved_tier=resolved_tier,
+            model=model,
+            last_error=last_error,
+            dedupe_prefix="llm-config",
+        )
+
     if is_fail_hard_enabled():
         _trace_m15(
             "llm.call.raise_failhard",
@@ -853,21 +863,13 @@ def call_llm(system_prompt: str, user_message: str,
             exc_type=type(last_error).__name__ if last_error is not None else None,
             error=str(last_error),
         )
-        if _is_provider_config_error(last_error):
-            _notify_provider_access_error(
-                provider_name=provider_name,
-                resolved_tier=resolved_tier,
-                model=model,
-                last_error=last_error,
-                dedupe_prefix="llm-config",
-            )
         err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
         raise RuntimeError(
             "LLM call failed after retries while failHard is enabled "
             f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
             f"error_type={err_type}, error={last_error})."
         ) from last_error
-    if _is_provider_config_error(last_error):
+    if _is_provider_config:
         raise RuntimeError(
             f"Quaid could not access its {resolved_tier} language model provider "
             f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"

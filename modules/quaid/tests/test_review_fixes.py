@@ -93,6 +93,40 @@ class TestProviderUnavailableError:
             extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
         assert process_calls >= 1
 
+    def test_provider_config_errors_notify_even_without_fail_hard(self, monkeypatch):
+        """Broken model config should be visible on every failed live request."""
+        from lib import llm_clients
+
+        notices = []
+
+        class FakeProvider:
+            def llm_call(self, *_args, **_kwargs):
+                raise RuntimeError("invalid-model-m6-probe model not found")
+
+        monkeypatch.setattr(llm_clients, "_load_model_config", lambda: None)
+        monkeypatch.setattr(llm_clients, "get_llm_provider", lambda model_tier=None: FakeProvider())
+        monkeypatch.setattr(llm_clients, "is_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(llm_clients, "estimate_cost", lambda: 0.0)
+        monkeypatch.setattr(llm_clients, "is_token_budget_exhausted", lambda: False)
+        monkeypatch.setattr(
+            llm_clients,
+            "_notify_provider_access_error",
+            lambda **kwargs: notices.append(kwargs),
+        )
+
+        with pytest.raises(RuntimeError, match="invalid-model-m6-probe"):
+            llm_clients.call_llm(
+                system_prompt="system",
+                user_message="user",
+                model="invalid-model-m6-probe",
+                model_tier="fast",
+                max_retries=0,
+            )
+
+        assert len(notices) == 1
+        assert notices[0]["dedupe_prefix"] == "llm-config"
+        assert notices[0]["model"] == "invalid-model-m6-probe"
+
 
 # ---------------------------------------------------------------------------
 # Deferred extraction queue (core/extraction_daemon.py)

@@ -38,6 +38,30 @@ SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 CMD="${1:-help}"
 shift 2>/dev/null || true
 
+_infer_installed_quaid_home() {
+  local root_candidate
+  root_candidate="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  if [[ -d "$root_candidate/instances" || -d "$root_candidate/shared" ]]; then
+    printf '%s\n' "$root_candidate"
+  fi
+}
+
+_visible_home_for() {
+  local hidden_home="${1:-}"
+  local hidden_base hidden_parent resolved
+  hidden_base="$(basename "$hidden_home")"
+  if [[ "$hidden_base" == .* && "$hidden_base" != "." ]]; then
+    hidden_parent="$(cd "$(dirname "$hidden_home")" 2>/dev/null && pwd || true)"
+    if [[ -z "$hidden_parent" ]]; then
+      hidden_parent="$(dirname "$hidden_home")"
+    fi
+    printf '%s/%s\n' "$hidden_parent" "${hidden_base#.}"
+    return 0
+  fi
+  resolved="$(cd "$hidden_home" 2>/dev/null && pwd || true)"
+  printf '%s\n' "${resolved:-$hidden_home}"
+}
+
 # Ensure adapter config discovery has canonical hidden + visible roots.
 if [[ -z "${QUAID_HOME:-}" && -n "${OPENCLAW_WORKSPACE:-}" ]]; then
   export QUAID_HOME="$OPENCLAW_WORKSPACE"
@@ -45,26 +69,25 @@ fi
 if [[ -z "${OPENCLAW_WORKSPACE:-}" && -n "${QUAID_HOME:-}" ]]; then
   export OPENCLAW_WORKSPACE="$QUAID_HOME"
 fi
-if [[ -z "${QUAID_VISIBLE_HOME:-}" && -n "${QUAID_HOME:-}" ]]; then
-  _qh_base="$(basename "${QUAID_HOME}")"
-  if [[ "${_qh_base}" == .* && "${_qh_base}" != "." ]]; then
-    export QUAID_VISIBLE_HOME="$(cd "$(dirname "${QUAID_HOME}")" && pwd)/${_qh_base#.}"
-  else
-    export QUAID_VISIBLE_HOME="$(cd "${QUAID_HOME}" && pwd)"
+_INSTALLED_QUAID_HOME="$(_infer_installed_quaid_home || true)"
+if [[ -n "${QUAID_HOME:-}" && ! -e "${QUAID_HOME}" && -n "$_INSTALLED_QUAID_HOME" ]]; then
+  _STALE_QUAID_HOME="$QUAID_HOME"
+  echo "[quaid][warn] Ignoring stale QUAID_HOME=${_STALE_QUAID_HOME}; using installed home ${_INSTALLED_QUAID_HOME}" >&2
+  export QUAID_HOME="$_INSTALLED_QUAID_HOME"
+  if [[ "${OPENCLAW_WORKSPACE:-}" == "$_STALE_QUAID_HOME" ]]; then
+    export OPENCLAW_WORKSPACE="$QUAID_HOME"
   fi
 fi
+if [[ -z "${QUAID_VISIBLE_HOME:-}" && -n "${QUAID_HOME:-}" ]]; then
+  export QUAID_VISIBLE_HOME="$(_visible_home_for "${QUAID_HOME}")"
+fi
 if [[ -z "${QUAID_HOME:-}" ]]; then
-  ROOT_CANDIDATE="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  ROOT_CANDIDATE="${_INSTALLED_QUAID_HOME:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
   if [[ -d "$ROOT_CANDIDATE/instances" || -d "$ROOT_CANDIDATE/shared" ]]; then
     export QUAID_HOME="$ROOT_CANDIDATE"
     export OPENCLAW_WORKSPACE="$ROOT_CANDIDATE"
     if [[ -z "${QUAID_VISIBLE_HOME:-}" ]]; then
-      _qh_base="$(basename "$ROOT_CANDIDATE")"
-      if [[ "${_qh_base}" == .* && "${_qh_base}" != "." ]]; then
-        export QUAID_VISIBLE_HOME="$(cd "$(dirname "$ROOT_CANDIDATE")" && pwd)/${_qh_base#.}"
-      else
-        export QUAID_VISIBLE_HOME="$(cd "$ROOT_CANDIDATE" && pwd)"
-      fi
+      export QUAID_VISIBLE_HOME="$(_visible_home_for "$ROOT_CANDIDATE")"
     fi
   fi
 fi
