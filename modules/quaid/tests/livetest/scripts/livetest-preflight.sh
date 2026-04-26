@@ -768,12 +768,14 @@ fi
 
 # --- Step 7b: Seed shared Quaid auth credentials for installer ---
 # M0 expects ~/.quaid/shared/auth/credentials.json to exist on the run VM.
-# Source token from platforms.cc.auth_token_file when configured; otherwise use
-# the historical local fallback.
+# Source anthropic token from platforms.cc.auth_token_file when configured;
+# otherwise use the historical local fallback. Source codex token from the VM's
+# live ~/.codex/auth.json and hydrate OC auth-profiles so the gateway can use it.
 echo ""
 echo "[7b/8] Seeding Quaid shared auth credentials on remote..."
 if [[ "$DRY_RUN" == "1" ]]; then
-    echo "  [dry-run] would read platforms.cc.auth_token_file (or fallback token path) and write $REMOTE_HOST:~/.quaid/shared/auth/credentials.json"
+    echo "  [dry-run] would read platforms.cc.auth_token_file (or fallback token path) and $REMOTE_HOST:~/.codex/auth.json"
+    echo "            then write $REMOTE_HOST:~/.quaid/shared/auth/credentials.json and seed ~/.openclaw/agents/main/agent/auth-profiles.json"
 else
     LOCAL_SHARED_TOKEN_FILE="$(read_config platforms.cc.auth_token_file)"
     LOCAL_SHARED_TOKEN_FILE="${LOCAL_SHARED_TOKEN_FILE/#\~/$HOME}"
@@ -810,23 +812,36 @@ import sys
 token_path = pathlib.Path(sys.argv[1])
 try:
     lines = token_path.read_text(encoding="utf-8").splitlines()
-    token = lines[0].strip() if lines else ""
+    anthropic_token = lines[0].strip() if lines else ""
 finally:
     try:
         token_path.unlink(missing_ok=True)
     except Exception:
         pass
-if not token:
+if not anthropic_token:
     raise SystemExit("empty token from temp file")
+
+codex_auth_path = pathlib.Path.home() / ".codex" / "auth.json"
+codex_token = ""
+if codex_auth_path.exists():
+    try:
+        codex_auth = json.loads(codex_auth_path.read_text(encoding="utf-8"))
+        codex_token = str(codex_auth.get("tokens", {}).get("access_token", "")).strip()
+    except Exception as err:
+        print(f"  WARN  failed reading {codex_auth_path}: {err}")
 
 out_path = pathlib.Path.home() / ".quaid" / "shared" / "auth" / "credentials.json"
 payload = {
     "credentials": {
         "anthropic_oauth": {
-            "token": token,
+            "token": anthropic_token,
         }
     }
 }
+if codex_token:
+    payload["credentials"]["codex_oauth"] = {
+        "token": codex_token,
+    }
 out_path.parent.mkdir(parents=True, exist_ok=True)
 tmp_path = out_path.with_name(f".{out_path.name}.{os.getpid()}.tmp")
 fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -844,6 +859,35 @@ except Exception:
     raise
 out_path.chmod(0o600)
 print(f"  wrote {out_path}")
+
+profiles_path = pathlib.Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+if codex_token:
+    profiles_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        profiles = json.loads(profiles_path.read_text(encoding="utf-8")) if profiles_path.exists() else {}
+    except Exception:
+        profiles = {}
+    profiles.setdefault("version", 1)
+    profiles.setdefault("profiles", {}).setdefault("openai-codex:default", {})["access_token"] = codex_token
+    profiles.setdefault("lastGood", {})["openai-codex"] = "openai-codex:default"
+    profiles_tmp = profiles_path.with_name(f".{profiles_path.name}.{os.getpid()}.tmp")
+    fd = os.open(str(profiles_tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(profiles, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(profiles_tmp, profiles_path)
+    except Exception:
+        try:
+            profiles_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    profiles_path.chmod(0o600)
+    print(f"  wrote {profiles_path}")
+else:
+    print(f"  WARN  {codex_auth_path} missing or unreadable — codex_oauth/auth-profiles not updated")
 PYEOF
             rm -f "$LOCAL_SHARED_TOKEN_TMP"
             LOCAL_SHARED_TOKEN_TMP=""
