@@ -267,9 +267,23 @@ def _strip_generated_user_snippet_block(content: str) -> str:
     return block_pattern.sub("\n\n", content)
 
 
+def _strip_generated_projection_for_review(filename: str, content: str) -> str:
+    """Return durable authored content for review prompts and duplicate checks.
+
+    USER.md may contain a generated mirror of USER.snippets.md so hosts that
+    still read USER.md directly can see pending snippets. That projection is a
+    queue view, not durable authored identity content; treating it as durable
+    makes janitor reviews self-discard pending snippets and then remove the
+    projection, losing the signal.
+    """
+    if filename == "USER.md":
+        return _strip_generated_user_snippet_block(content)
+    return content
+
+
 def _user_identity_has_meaningful_content(content: str) -> bool:
     """Whether USER.md contains authored content beyond the stub/projection block."""
-    stripped = _strip_generated_user_snippet_block(str(content or ""))
+    stripped = _strip_generated_projection_for_review("USER.md", str(content or ""))
     lines = []
     for raw in stripped.splitlines():
         line = raw.strip()
@@ -969,6 +983,7 @@ def build_distillation_prompt(
     project_content: str = "",
 ) -> str:
     """Build the Deep Reasoning prompt for distilling journal entries into core markdown."""
+    parent_content = _strip_generated_projection_for_review(filename, parent_content or "")
     config = _get_core_markdown_config(filename)
     purpose = config.get("purpose", "")
     max_lines = config.get("maxLines", 200)
@@ -1556,7 +1571,7 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
     file_sections = []
     single_target = next(iter(all_snippets.keys())) if len(all_snippets) == 1 else ""
     for filename, data in all_snippets.items():
-        parent_content = data["parent_content"]
+        parent_content = _strip_generated_projection_for_review(filename, data["parent_content"])
         project_content = data.get("project_content", "")
         snippets = data["snippets"]
         config = data.get("config", {})
@@ -1810,7 +1825,8 @@ def apply_decisions(
                 file_path = _resolve_writable_file_path(filename)
                 if file_path is not None and file_path.exists():
                     existing_content = file_path.read_text(encoding="utf-8")
-                    if text_to_insert.strip() and text_to_insert.strip() in existing_content:
+                    durable_existing = _strip_generated_projection_for_review(filename, existing_content)
+                    if text_to_insert.strip() and text_to_insert.strip() in durable_existing:
                         stats["discarded"] += 1
                         processed_snippets.setdefault(filename, []).append(original_text)
                         logger.info(
