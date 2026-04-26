@@ -1461,15 +1461,47 @@ class TestCodexAdapter:
             encoding="utf-8",
         )
 
-        signal = adapter.check_session_transition({"thread_id": "new-thread"})
+        with patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=False):
+            signal = adapter.check_session_transition({"thread_id": "new-thread"})
 
         assert signal is None
         assert adapter._read_last_session_id() == "new-thread"
+
+    def test_check_session_transition_raises_on_unresolved_prior_transcript_when_failhard(self, tmp_path, monkeypatch):
+        own_project = tmp_path / "cdx-livetest"
+        foreign_project = tmp_path / "cdx-m13-test"
+        own_project.mkdir()
+        foreign_project.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(own_project))
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._write_last_session_id("old-thread")
+        ended = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "14"
+            / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        )
+        ended.parent.mkdir(parents=True)
+        ended.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(foreign_project)}}) + "\n",
+            encoding="utf-8",
+        )
+
+        with patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Codex session transition detected"):
+            adapter.check_session_transition({"thread_id": "new-thread"})
 
     def test_check_session_transition_uses_cursor_for_explicit_instance_label(self, tmp_path, monkeypatch):
         project_dir = tmp_path / "cdx-m13test"
         project_dir.mkdir()
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
         monkeypatch.setenv("QUAID_INSTANCE", "codex-m13test")
         monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
         adapter = CodexAdapter()
@@ -1489,9 +1521,11 @@ class TestCodexAdapter:
             json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(project_dir)}}) + "\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(
-            "core.extraction_daemon.read_cursor",
-            lambda session_id: {"transcript_path": str(ended)} if session_id == "old-thread" else {},
+        cursor_dir = tmp_path / ".quaid" / "instances" / "codex-m13test" / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True)
+        (cursor_dir / "old-thread.json").write_text(
+            json.dumps({"session_id": "old-thread", "transcript_path": str(ended)}) + "\n",
+            encoding="utf-8",
         )
 
         assert adapter._get_session_path("old-thread", allow_unclassified=True) is None
@@ -1502,6 +1536,42 @@ class TestCodexAdapter:
         assert signal["ended_transcript_path"] == str(ended)
         assert signal["signal_type"] == "session_end"
         assert adapter._read_last_session_id() == "new-thread"
+
+    def test_check_session_transition_does_not_read_cursor_from_other_instance(self, tmp_path, monkeypatch):
+        project_dir = tmp_path / "cdx-m13test"
+        project_dir.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-m13test")
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._write_last_session_id("old-thread")
+        ended = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "14"
+            / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        )
+        ended.parent.mkdir(parents=True)
+        ended.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(project_dir)}}) + "\n",
+            encoding="utf-8",
+        )
+        foreign_cursor_dir = tmp_path / ".quaid" / "instances" / "codex-other" / "data" / "session-cursors"
+        foreign_cursor_dir.mkdir(parents=True)
+        (foreign_cursor_dir / "old-thread.json").write_text(
+            json.dumps({"session_id": "old-thread", "transcript_path": str(ended)}) + "\n",
+            encoding="utf-8",
+        )
+
+        with patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=False):
+            signal = adapter.check_session_transition({"thread_id": "new-thread"})
+
+        assert signal is None
 
     def test_parse_session_jsonl_prefers_event_messages(self, tmp_path):
         path = tmp_path / "rollout.jsonl"

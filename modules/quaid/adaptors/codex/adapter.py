@@ -481,6 +481,11 @@ class CodexAdapter(QuaidAdapter):
             or self._get_session_path_from_cursor(last_id)
         )
         if transcript_path is None:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "[fail_hard] Codex session transition detected, but the prior "
+                    f"session transcript could not be resolved: session_id={last_id}"
+                )
             return None
         return {
             "ended_session_id": last_id,
