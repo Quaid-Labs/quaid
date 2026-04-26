@@ -905,6 +905,12 @@ function buildMissingUserMessageOverride(recovered) {
     "Do not mention this recovery block unless the user explicitly asks about it."
   ].join("\n");
 }
+function shouldPersistAutoInjectionDedup(params) {
+  if (params.queuedStartupRecovery || params.missingUserRecovery) return false;
+  const source = String(params.querySource || "").trim().toLowerCase();
+  if (!source) return true;
+  return !(source === "message_received_cache_queued_startup" || source === "message_received_cache" || source === "transcript_tail" || source === "rawprompt_recovered");
+}
 function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now(), currentSessionId) {
   const rawPrompt = String(event?.prompt || "").trim();
   const eventMessages = Array.isArray(event?.messages) ? event.messages : [];
@@ -3795,6 +3801,11 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
         const autoInjectK = facade.computeDynamicK();
         const injectLimit = autoInjectK;
         const injectDomain = { all: true };
+        const persistInjectionDedup = shouldPersistAutoInjectionDedup({
+          querySource,
+          queuedStartupRecovery,
+          missingUserRecovery
+        });
         const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
         let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
         if (!turnPromise && _beforePromptBuildInFlightByTurn.size > 0) {
@@ -3886,7 +3897,8 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
               context: ctx,
               existingPrependContext: void 0,
               injectLimit,
-              maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
+              maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
+              persistDedup: persistInjectionDedup
             });
             return { allMemories: allMemories2, recallDiagnostics: recallDiagnostics2, injection: injection2, modelConfigNotice: modelConfigNotice2 || void 0 };
           })();
@@ -6095,6 +6107,7 @@ const __test = {
   buildQueuedStartupUserMessageOverride,
   selectMissingUserMessageRecoveryMessage,
   buildMissingUserMessageOverride,
+  shouldPersistAutoInjectionDedup,
   deliverDeferredNoticesViaChannel,
   extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
   extractOpenAICodexText: _extractOpenAICodexText,

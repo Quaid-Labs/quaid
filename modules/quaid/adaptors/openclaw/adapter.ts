@@ -1209,6 +1209,22 @@ function buildMissingUserMessageOverride(recovered: { text: string; ageMs: numbe
   ].join("\n");
 }
 
+function shouldPersistAutoInjectionDedup(params: {
+  querySource: string;
+  queuedStartupRecovery: { text: string; ageMs: number } | null;
+  missingUserRecovery: { text: string; ageMs: number } | null;
+}): boolean {
+  if (params.queuedStartupRecovery || params.missingUserRecovery) return false;
+  const source = String(params.querySource || "").trim().toLowerCase();
+  if (!source) return true;
+  return !(
+    source === "message_received_cache_queued_startup"
+    || source === "message_received_cache"
+    || source === "transcript_tail"
+    || source === "rawprompt_recovered"
+  );
+}
+
 function selectAutoInjectQuery(
   event: any,
   lastUserMessageQuery: LastUserMessageQuery,
@@ -4727,6 +4743,11 @@ notify_user(${JSON.stringify(message)})
         // filter excludes untagged or differently-tagged facts. Retrieve all facts
         // and let semantic similarity + reranking surface the relevant ones.
         const injectDomain: DomainFilter = { all: true };
+        const persistInjectionDedup = shouldPersistAutoInjectionDedup({
+          querySource,
+          queuedStartupRecovery,
+          missingUserRecovery,
+        });
 
         // Re-entrancy guard: if before_prompt_build fires while we are already inside
         // recallMemories for a different prompt, this is likely an OC-internal LLM call
@@ -4831,6 +4852,7 @@ notify_user(${JSON.stringify(message)})
               existingPrependContext: undefined,
               injectLimit,
               maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
+              persistDedup: persistInjectionDedup,
             });
             return { allMemories, recallDiagnostics, injection, modelConfigNotice: modelConfigNotice || undefined };
           })();
@@ -7470,6 +7492,7 @@ export const __test = {
   buildQueuedStartupUserMessageOverride,
   selectMissingUserMessageRecoveryMessage,
   buildMissingUserMessageOverride,
+  shouldPersistAutoInjectionDedup,
   deliverDeferredNoticesViaChannel,
   extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
   extractOpenAICodexText: _extractOpenAICodexText,

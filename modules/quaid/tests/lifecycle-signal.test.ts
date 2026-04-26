@@ -1096,6 +1096,26 @@ describe("lifecycle signal detection", () => {
     expect(override).toContain(latestUserMessage);
   });
 
+  it("does not persist auto-inject dedup for recovery-derived query surfaces", () => {
+    expect(__test.shouldPersistAutoInjectionDedup({
+      querySource: "event_text_scrubbed",
+      queuedStartupRecovery: null,
+      missingUserRecovery: null,
+    })).toBe(true);
+
+    expect(__test.shouldPersistAutoInjectionDedup({
+      querySource: "message_received_cache_queued_startup",
+      queuedStartupRecovery: { text: "What grinder do I use for my Flair 58 espresso setup?", ageMs: 1_000 },
+      missingUserRecovery: null,
+    })).toBe(false);
+
+    expect(__test.shouldPersistAutoInjectionDedup({
+      querySource: "message_received_cache",
+      queuedStartupRecovery: null,
+      missingUserRecovery: { text: "What grinder do I use for my Flair 58 espresso setup?", ageMs: 500 },
+    })).toBe(false);
+  });
+
   it("does not recover a cached user message when usable prompt payload already exists", () => {
     const nowMs = 460_000;
 

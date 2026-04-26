@@ -1500,6 +1500,40 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext can skip persisting dedup on recovery surfaces", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-recovery-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      { id: "m1", text: "Solomon uses a Baratza Encore for his Flair 58", category: "fact", similarity: 0.99 },
+    ];
+
+    const recoverySurface = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [],
+      context: { sessionId: "sess-auto-recovery" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+      persistDedup: false,
+    });
+    expect(recoverySurface?.toInject.map((m) => m.id)).toEqual(["m1"]);
+    expect(facade.loadInjectedMemoryKeys("sess-auto-recovery")).toEqual([]);
+
+    const realTurn = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "What grinder do I use?", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-recovery" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+    expect(realTurn?.toInject.map((m) => m.id)).toEqual(["m1"]);
+    expect(facade.loadInjectedMemoryKeys("sess-auto-recovery")).toEqual(["m1"]);
+
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("formatRecallToolResponse returns grouped text and source breakdown", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const out = facade.formatRecallToolResponse([

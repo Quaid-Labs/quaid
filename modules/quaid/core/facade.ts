@@ -171,6 +171,7 @@ type InjectionLogWriteOptions = {
   visibleTurnCount?: number;
   sessionKey?: string;
   timestamp?: string;
+  persistDedup?: boolean;
 };
 
 export type ProjectContextOptions = {
@@ -2156,11 +2157,18 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     maxEntries: number,
     options: InjectionLogWriteOptions = {},
   ): string[] {
+    const persistDedup = options.persistDedup !== false;
     const newKeys = memories.map((m) => m.id || m.text);
-    const merged = [...previousKeys, ...newKeys]
+    const normalizedPrevious = previousKeys
       .map((k) => String(k || "").trim())
       .filter(Boolean)
       .slice(-Math.max(1, Number(maxEntries) || 1));
+    const merged = persistDedup
+      ? [...normalizedPrevious, ...newKeys]
+          .map((k) => String(k || "").trim())
+          .filter(Boolean)
+          .slice(-Math.max(1, Number(maxEntries) || 1))
+      : normalizedPrevious;
     const timestamp = String(options.timestamp || new Date().toISOString());
     const injectedMemoriesDetail = buildInjectionLogMemoryDetails(memories);
     const payload: Record<string, unknown> = {
@@ -2175,6 +2183,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       totalMemoriesInSession: merged.length,
       injectedMemoriesDetail,
       newlyInjected: injectedMemoriesDetail,
+      dedupPersisted: persistDedup,
     };
     if (Number.isFinite(Number(options.visibleTurnCount)) && Number(options.visibleTurnCount) >= 0) {
       payload.visibleTurnCount = Number(options.visibleTurnCount);
@@ -3486,6 +3495,7 @@ ${lines.join("\n")}
     existingPrependContext?: string;
     injectLimit: number;
     maxInjectionIdsPerSession: number;
+    persistDedup?: boolean;
   }): AutoInjectionPreparation | null {
     const {
       allMemories,
@@ -3494,6 +3504,7 @@ ${lines.join("\n")}
       existingPrependContext,
       injectLimit,
       maxInjectionIdsPerSession,
+      persistDedup,
     } = params;
     if (!Array.isArray(allMemories) || allMemories.length === 0) return null;
     const sessionKey = extractSessionKey(eventMessages, context);
@@ -3532,6 +3543,7 @@ ${lines.join("\n")}
       toInject,
       maxInjectionIdsPerSession,
       {
+        persistDedup,
         visibleTurnCount,
         sessionKey,
       },
