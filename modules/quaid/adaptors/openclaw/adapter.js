@@ -1069,6 +1069,16 @@ function rememberSessionTranscriptPath(sessionId, filePath, source, opts) {
     });
     return false;
   }
+  const existing = String(sessionTranscriptPaths.get(sid) || "").trim();
+  if (existing && existing !== candidate && fs.existsSync(existing) && !looksLikeQuaidEventLogTranscript(existing) && !fs.existsSync(candidate)) {
+    writeHookTrace("session.transcript_path_missing_candidate_ignored", {
+      source,
+      session_id: sid,
+      existing_path: existing,
+      missing_candidate: candidate
+    });
+    return false;
+  }
   sessionTranscriptPaths.set(sid, candidate);
   return true;
 }
@@ -1988,6 +1998,22 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     console.warn(message);
     return null;
   }
+  const usePreservedFallbackIfAvailable = (reason) => {
+    const preserved = getPreservedSessionFile(sessionId);
+    if (!fs.existsSync(preserved) || looksLikeQuaidEventLogTranscript(preserved)) {
+      return false;
+    }
+    writeHookTrace("session.daemon_signal_preserved_fallback", {
+      session_id: sessionId,
+      signal_type: signalType,
+      reason,
+      missing_path: resolvedPath,
+      preserved_path: preserved
+    });
+    resolvedPath = preserved;
+    sessionTranscriptPaths.set(sessionId, preserved);
+    return true;
+  };
   if (signalType === "reset") {
     const sessionBackup = latestResetBackup(sessionId);
     if (sessionBackup) {
@@ -2006,22 +2032,26 @@ function writeDaemonSignal(sessionId, signalType, meta) {
         if (backup) {
           resolvedPath = backup;
         } else {
-          writeHookTrace("session.daemon_signal_reset_backup_missing", {
-            session_id: sessionId,
-            signal_type: signalType,
-            resolved_path: resolvedPath
-          });
+          if (!usePreservedFallbackIfAvailable("reset_missing_physical")) {
+            writeHookTrace("session.daemon_signal_reset_backup_missing", {
+              session_id: sessionId,
+              signal_type: signalType,
+              resolved_path: resolvedPath
+            });
+          }
         }
       }
     }
   }
   if ((signalType === "compaction" || signalType === "session_end") && resolvedPath && !fs.existsSync(resolvedPath)) {
-    writeHookTrace("session.daemon_signal_missing_transcript", {
-      session_id: sessionId,
-      signal_type: signalType,
-      resolved_path: resolvedPath
-    });
-    resolvedPath = "";
+    if (!usePreservedFallbackIfAvailable(`${signalType}_missing_physical`)) {
+      writeHookTrace("session.daemon_signal_missing_transcript", {
+        session_id: sessionId,
+        signal_type: signalType,
+        resolved_path: resolvedPath
+      });
+      resolvedPath = "";
+    }
   }
   if (!resolvedPath || !fs.existsSync(resolvedPath)) {
     const message = `[quaid][daemon-signal] no existing transcript path for session ${sessionId}, skipping ${signalType} signal`;

@@ -531,6 +531,52 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("keeps Matrix preserved transcript when session index reports a missing OC file", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-matrix-missing-physical-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "1b5ed807-a705-4e17-a5d5-465a259121d9";
+      const missingPhysicalPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+
+      const preserved = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Quick one to remember: my workshop safe codeword is cobalt-postage-oc.",
+        "message_received",
+      );
+      expect(preserved).toBeTruthy();
+      expect(fs.existsSync(String(preserved))).toBe(true);
+
+      expect(isolatedTest.rememberSessionTranscriptPath(sessionId, missingPhysicalPath, "session-index-entry")).toBe(false);
+      const sigPath = isolatedTest.writeDaemonSignal(sessionId, "session_end", { source: "session_end" });
+      expect(sigPath).toBeTruthy();
+      const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+      expect(payload.transcript_path).toBe(preserved);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("does not emit daemon signals that point at missing OC transcript files", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-missing-transcript-signal-"));
     const quaidHome = path.join(baseDir, ".quaid");
