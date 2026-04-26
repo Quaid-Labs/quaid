@@ -48,6 +48,30 @@ def _daemon_start_env() -> dict[str, str]:
         if not k.startswith("OPENCLAW_") and k not in _DAEMON_START_SKIP_ENV_KEYS
     }
 
+
+def _wake_daemon_after_signal() -> None:
+    """Best-effort wakeup after a signal write, without disturbing live daemons."""
+    try:
+        from core.extraction_daemon import read_pid
+
+        if read_pid() is not None:
+            return
+    except Exception:
+        pass
+
+    try:
+        _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
+        subprocess.Popen(
+            [sys.executable, str(_daemon_script), "start"],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=_daemon_start_env(),
+        )
+    except Exception:
+        pass
+
 _CODEX_TOOL_OUTPUT_KEYS = (
     "tool_output",
     "toolOutput",
@@ -855,19 +879,7 @@ def hook_inject(args):
                     "ended_session_id": ended_sid,
                     "signal_name": t_sig_path.name,
                 })
-                try:
-                    _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-                    _env = _daemon_start_env()
-                    subprocess.Popen(
-                        [sys.executable, str(_daemon_script), "start"],
-                        start_new_session=True,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=_env,
-                    )
-                except Exception:
-                    pass
+                _wake_daemon_after_signal()
 
         signal_spec = adapter.resolve_prompt_submit_signal(hook_input)
         if signal_spec:
@@ -901,19 +913,7 @@ def hook_inject(args):
                     "signal_type": signal_type,
                 })
 
-                try:
-                    _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-                    _env = _daemon_start_env()
-                    subprocess.Popen(
-                        [sys.executable, str(_daemon_script), "start"],
-                        start_new_session=True,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=_env,
-                    )
-                except Exception:
-                    pass
+                _wake_daemon_after_signal()
             else:
                 _write_hook_trace("hook.inject.signal_skipped", {
                     "query": query[:160],
@@ -1882,19 +1882,7 @@ def hook_extract(args):
         # Signal write is complete (the critical part). Now ensure the daemon
         # is alive to process it. Run in a detached subprocess so host hook
         # cancellation cannot interrupt daemon startup.
-        try:
-            _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-            _env = _daemon_start_env()
-            subprocess.Popen(
-                [sys.executable, str(_daemon_script), "start"],
-                start_new_session=True,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=_env,
-            )
-        except Exception:
-            pass  # best-effort; signal is already written
+        _wake_daemon_after_signal()
 
     except Exception as e:
         print(f"[quaid][{label}] error: {e}", file=sys.stderr)
@@ -1967,20 +1955,8 @@ def hook_codex_stop(args):
             "signal_type": signal_type,
         })
 
-        # Best-effort daemon wakeup using the same detached launcher strategy as hook_extract.
-        try:
-            _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
-            _env = _daemon_start_env()
-            subprocess.Popen(
-                [sys.executable, str(_daemon_script), "start"],
-                start_new_session=True,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=_env,
-            )
-        except Exception:
-            pass  # signal write is complete; wakeup remains best-effort
+        # Signal write is complete; wakeup remains best-effort.
+        _wake_daemon_after_signal()
 
         print("{}")
     except RuntimeError:

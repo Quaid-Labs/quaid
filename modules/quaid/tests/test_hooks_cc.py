@@ -135,6 +135,39 @@ def _run_hook_subagent_stop(hook_input: dict, *, monkeypatch):
     return captured_err.getvalue()
 
 
+def test_wake_daemon_after_signal_skips_start_when_daemon_is_live(monkeypatch):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    popen_calls = []
+
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: 12345)
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs)))
+
+    hooks._wake_daemon_after_signal()
+
+    assert popen_calls == []
+
+
+def test_wake_daemon_after_signal_starts_when_daemon_is_missing(monkeypatch):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    popen_calls = []
+
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(hooks, "_daemon_start_env", lambda: {"QUAID_HOME": "/tmp/quaid"})
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs)))
+
+    hooks._wake_daemon_after_signal()
+
+    assert len(popen_calls) == 1
+    args, kwargs = popen_calls[0]
+    assert args[0][-1] == "start"
+    assert kwargs["start_new_session"] is True
+    assert kwargs["env"] == {"QUAID_HOME": "/tmp/quaid"}
+
+
 def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
