@@ -173,6 +173,25 @@ class TestStoreValidation:
             with pytest.raises(ValueError, match="3 words"):
                 store("hello", owner_id="quaid")
 
+    def test_compact_japanese_fact_is_accepted(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store("マヤはオースティンに住んでいる", owner_id="quaid")
+            node = graph.get_node(result["id"])
+            assert node is not None
+            assert node.name == "マヤはオースティンに住んでいる"
+
+    def test_compact_cjk_fragment_still_raises(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+
+        with patch("datastore.memorydb.memory_graph.get_graph") as mock_gg:
+            mock_gg.return_value = _make_graph(tmp_path)[0]
+            with pytest.raises(ValueError, match="3 words"):
+                store("東京", owner_id="quaid")
+
     def test_missing_owner_falls_back_to_default(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         from config import get_config
@@ -3378,8 +3397,43 @@ class TestRecallTelemetry:
 
         assert queries[0] == query
         assert "Default to exactly 1 query" in captured["prompt"]
-        assert "keep generated queries in that same language/script" in captured["prompt"]
+        assert "Preserve the original user language/script in the first query" in captured["prompt"]
+        assert "cross-language or code-identifier query variant" in captured["prompt"]
         assert meta["planner_profile"] == "aggressive"
+
+    def test_plan_fanout_queries_fast_uses_llm_to_classify_non_ascii_short_exact_stores(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            captured["prompt"] = prompt
+            captured["timeout"] = kwargs.get("timeout")
+            return ('{"stores":["docs"],"project":"recipe-app","queries":["レシピアプリにはテストがありますか？"]}', {})
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={
+                "stores": ["docs"],
+                "project": "recipe-app",
+                "queries": ["レシピアプリにはテストがありますか？"],
+            },
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "レシピアプリにはテストがありますか？",
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == ["レシピアプリにはテストがありますか？"]
+        assert meta["used_llm"] is True
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "docs"]
+        assert meta["planned_project"] == "recipe-app"
+        assert "only classify stores/project" in captured["prompt"]
+        assert captured["timeout"] == 60.0
 
     def test_plan_fanout_queries_raises_without_llm_when_failhard_enabled(self):
         import datastore.memorydb.memory_graph as mg
@@ -3471,7 +3525,8 @@ class TestRecallTelemetry:
             "assistant suggestions Linda birthday dinner restaurants",
             "Linda birthday dinner restaurant recommendations",
         ]
-        assert "same language/script as the original query" in captured["prompt"]
+        assert "Preserve the original language/script in the first follow-up query" in captured["prompt"]
+        assert "cross-language or code-identifier variant" in captured["prompt"]
         assert meta["queries_count"] == len(queries)
         assert meta["done"] is False
 
@@ -4178,6 +4233,53 @@ class TestRecallFastHookInjectContract:
         assert captured["candidate_pool"] == []
         assert [row["id"] for row in rows] == ["fact-1", "alice"]
         assert meta["planned_stores"] == ["vector", "graph"]
+
+    def test_run_recall_store_plan_passes_timeout_budget_to_graph_store(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [{"id": "fact-1", "text": "Diana is Solomon's sister", "category": "fact", "similarity": 0.8}],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 10}},
+                None,
+            )
+
+        def _fake_graph(*args, **kwargs):
+            captured["timeout_ms"] = kwargs.get("timeout_ms")
+            captured["fast_mode"] = kwargs.get("fast_mode")
+            return (
+                [{"id": "alice", "text": "Diana has a daughter named Alice", "category": "fact", "similarity": 0.76}],
+                {"selected_path": "graph_aware", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "half marathon date change reason postponed rescheduled",
+                stores=["vector", "graph"],
+                limit=5,
+                owner_id="maya",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=["half marathon date change reason postponed rescheduled"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                graph_depth=2,
+                common_kwargs={"timeout_ms": 90000},
+            )
+
+        assert [row["id"] for row in rows] == ["fact-1", "alice"]
+        assert meta["planned_stores"] == ["vector", "graph"]
+        assert captured["timeout_ms"] == 90000
+        assert captured["fast_mode"] is False
 
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
@@ -6502,6 +6604,78 @@ class TestRecallLimitEdgeCases:
         assert kwargs["include_mmr"] is False
         assert kwargs["max_turns"] == 1
         assert payload["meta"]["base_recall_meta"] == {"mode": "deliberate"}
+
+    def test_graph_aware_recall_passes_explicit_timeout_to_seed_recall(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        recorded = {}
+
+        def _fake_recall(query, **kwargs):
+            recorded["query"] = query
+            recorded["kwargs"] = kwargs
+            return ([], {"mode": "deliberate"})
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "recall", side_effect=_fake_recall), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            mg.graph_aware_recall(
+                "half marathon date change reason postponed rescheduled",
+                owner_id="maya",
+                limit=20,
+                project="recipe-app",
+                timeout_ms=90000,
+                fast_mode=False,
+            )
+
+        kwargs = recorded["kwargs"]
+        assert kwargs["timeout_ms"] == 90000
+        assert kwargs["lexical_anchor_timeout_ms"] == 22500
+
+    def test_recall_explicit_timeout_scales_lexical_anchor_timeout_for_branches(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall_once(*args, **kwargs):
+            captured["lexical_anchor_timeout_ms"] = kwargs.get("lexical_anchor_timeout_ms")
+            return (
+                [],
+                {
+                    "selected_path": "vector",
+                    "counts": {
+                        "initial_candidates": 0,
+                        "post_threshold_candidates": 0,
+                        "diverse_results": 0,
+                        "final_results": 0,
+                    },
+                    "phases_ms": {"total_ms": 1},
+                },
+            )
+
+        with patch.object(mg, "_recall_once", side_effect=_fake_recall_once), \
+             patch.object(mg, "_merge_recall_batches", return_value=[]), \
+             patch.object(
+                 mg,
+                 "_evaluate_quality_gate_readiness",
+                 return_value={
+                     "ready": True,
+                     "needs_validation": False,
+                     "surface_quality": "good",
+                     "another_recall_may_help": False,
+                     "note": "",
+                 },
+             ):
+            mg.recall(
+                "half marathon date change reason postponed rescheduled",
+                limit=5,
+                use_routing=False,
+                max_turns=1,
+                timeout_ms=90000,
+                return_meta=True,
+            )
+
+        assert captured["lexical_anchor_timeout_ms"] == 22500
 
     def test_graph_aware_recall_opens_relation_expansion_for_multi_hop_depth(self):
         import datastore.memorydb.memory_graph as mg

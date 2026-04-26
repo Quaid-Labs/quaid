@@ -48,7 +48,8 @@ def store(
     """Store a new memory with automatic deduplication.
 
     Args:
-        text: The fact or memory to store. Must be at least 3 words.
+        text: The fact or memory to store. Must be sentence-like; whitespace-delimited
+            languages need at least 3 words.
         owner_id: Owner identifier (e.g. "quaid"). Required.
         category: Memory category — "fact", "preference", "decision", "entity".
         confidence: Initial confidence level, 0.0 to 1.0. Default 0.5.

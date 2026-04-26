@@ -88,6 +88,7 @@ from lib.embeddings import (
 from lib.worker_pool import run_callables
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.tokens import (
+    estimate_tokens as _lib_estimate_tokens,
     extract_key_tokens as _lib_extract_key_tokens,
     is_subset_overlap_candidate,
     texts_are_near_identical,
@@ -2790,6 +2791,10 @@ _ENTITY_PLACEHOLDER_PREFIXES = (
     "their ",
 )
 
+_COMPACT_FACT_SCRIPT_RE = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]"
+)
+
 
 def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
     """Normalize owner aliases to a concrete owner name when one is known."""
@@ -2830,6 +2835,21 @@ def _is_sentence_like_entity_name(name: str) -> bool:
         r"\b(has|have|had|is|are|was|were|named|works|work|lives|live|called|says|said|remember|remembered)\b",
         lowered,
     ))
+
+
+def _looks_like_compact_script_fact(text: str) -> bool:
+    """Accept sentence-like facts for scripts that do not rely on spaces."""
+    compact = re.sub(r"\s+", "", str(text or "").strip())
+    if not compact:
+        return False
+    if not _COMPACT_FACT_SCRIPT_RE.search(compact):
+        return False
+    script_chars = len(_COMPACT_FACT_SCRIPT_RE.findall(compact))
+    if script_chars < 4:
+        return False
+    if len(compact) < 6:
+        return False
+    return _lib_estimate_tokens(compact) >= 4
 
 
 def _get_owner_names() -> set:
@@ -3018,6 +3038,8 @@ def graph_aware_recall(
     domain: Optional[Dict[str, bool]] = None,
     domain_boost: Optional[List[str]] = None,
     project: Optional[str] = None,
+    timeout_ms: Optional[int] = None,
+    fast_mode: bool = False,
     candidate_pool: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Combined search: vector search + pronoun resolution + bidirectional graph expansion.
@@ -3109,6 +3131,8 @@ def graph_aware_recall(
             include_co_session=False,
             include_mmr=False,
             max_turns=1,
+            timeout_ms=timeout_ms,
+            lexical_anchor_timeout_ms=_resolve_lexical_anchor_timeout_ms(timeout_ms, fast_mode=fast_mode),
             return_meta=True,
         )
         results["meta"]["phases_ms"]["base_recall_ms"] = round((time.monotonic() - _base_started_at) * 1000)
@@ -4889,6 +4913,8 @@ def _graph_store_recall(
     domain_boost: Optional[Any],
     project: Optional[str],
     depth: int,
+    timeout_ms: Optional[int] = None,
+    fast_mode: bool = False,
     candidate_pool: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     payload = graph_aware_recall(
@@ -4900,6 +4926,8 @@ def _graph_store_recall(
         domain=domain,
         domain_boost=domain_boost,
         project=project,
+        timeout_ms=timeout_ms,
+        fast_mode=fast_mode,
         candidate_pool=candidate_pool,
     )
     combined = list(payload.get("direct_results", [])) + list(payload.get("graph_results", []))
@@ -5122,6 +5150,8 @@ def _run_recall_store_plan(
                     domain_boost=kwargs.get("domain_boost"),
                     project=planned_project,
                     depth=graph_depth,
+                    timeout_ms=kwargs.get("timeout_ms"),
+                    fast_mode=fast_mode,
                     candidate_pool=graph_candidate_pool,
                 ),
             ))
@@ -5507,6 +5537,7 @@ def _recall_once(
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
     lexical_anchor_planner_mode: str = "llm",
+    lexical_anchor_timeout_ms: Optional[int] = None,
     use_lightweight_config: bool = False,
     track_access: bool = True,
     low_signal_retry: bool = True,
@@ -5756,13 +5787,19 @@ def _recall_once(
     if include_lexical_anchor_shaping:
         planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
         planner_max_retries = 0
-        try:
-            planner_timeout_ms = int(
-                getattr(config_retrieval, "lexical_anchor_timeout_ms", _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS)
-                or _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
-            )
-        except Exception:
-            planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
+        if lexical_anchor_timeout_ms is not None:
+            try:
+                planner_timeout_ms = max(200, int(lexical_anchor_timeout_ms))
+            except Exception:
+                planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
+        else:
+            try:
+                planner_timeout_ms = int(
+                    getattr(config_retrieval, "lexical_anchor_timeout_ms", _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS)
+                    or _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
+                )
+            except Exception:
+                planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
         try:
             planner_max_retries = int(getattr(config_retrieval, "lexical_anchor_max_retries", 0) or 0)
         except Exception:
@@ -5861,6 +5898,7 @@ def _recall_once(
                 clean_query,
                 limit=planner_anchor_limit,
                 timeout_s=planner_timeout_s,
+                timeout_cap_s=(planner_timeout_ms / 1000.0),
                 max_retries=planner_max_retries,
             )
             allow_anchor_miss_penalty = bool(query_anchor_terms)
@@ -7794,6 +7832,7 @@ def _resolve_lexical_anchor_limit(query: str, config_retrieval: Any) -> int:
 # r1420 hit failHard on lexical-anchor planning before this bounded 8s ceiling.
 _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS = 8000
 _LEXICAL_ANCHOR_MAX_TIMEOUT_S = 8.0
+_LEXICAL_ANCHOR_EXPLICIT_TIMEOUT_CAP_MS = 30000
 _LEXICAL_ANCHOR_FAST_MAX_TIMEOUT_S = 0.75
 _LEXICAL_ANCHOR_FAST_RESERVE_MS = 250
 
@@ -7825,6 +7864,7 @@ def _plan_query_anchor_terms(
     *,
     limit: int = 4,
     timeout_s: float = _LEXICAL_ANCHOR_MAX_TIMEOUT_S,
+    timeout_cap_s: Optional[float] = None,
     max_retries: int = 0,
 ) -> Tuple[List[str], Dict[str, Any]]:
     """Plan lexical anchor terms with a tiny LLM call.
@@ -7837,7 +7877,13 @@ def _plan_query_anchor_terms(
     started = _time.monotonic()
     clean = " ".join(str(query or "").split()).strip()
     limit = max(1, min(24, int(limit or 4)))
-    timeout_s = max(0.2, min(_LEXICAL_ANCHOR_MAX_TIMEOUT_S, float(timeout_s or _LEXICAL_ANCHOR_MAX_TIMEOUT_S)))
+    effective_timeout_cap_s = _LEXICAL_ANCHOR_MAX_TIMEOUT_S
+    if timeout_cap_s is not None:
+        try:
+            effective_timeout_cap_s = max(_LEXICAL_ANCHOR_MAX_TIMEOUT_S, float(timeout_cap_s))
+        except Exception:
+            effective_timeout_cap_s = _LEXICAL_ANCHOR_MAX_TIMEOUT_S
+    timeout_s = max(0.2, min(effective_timeout_cap_s, float(timeout_s or _LEXICAL_ANCHOR_MAX_TIMEOUT_S)))
     max_retries = max(0, int(max_retries or 0))
     timeout_ms = int(round(timeout_s * 1000))
     meta: Dict[str, Any] = {
@@ -9198,7 +9244,15 @@ def _plan_fanout_queries(
             or profile["shape"] in {"narrow", "focused"}
         )
     )
-    store_plan_only = planner_profile == "full" and preserve_exact_query
+    multilingual_store_plan_only = (
+        preserve_exact_query
+        and _requires_llm_store_classification_for_exact_query(
+            clean,
+            default_stores=planned_default_stores,
+            default_project=default_project,
+        )
+    )
+    store_plan_only = (planner_profile == "full" and preserve_exact_query) or multilingual_store_plan_only
     if preserve_exact_query and not store_plan_only:
         _trace_m15(
             "planner.fanout.short_circuit",
@@ -9243,9 +9297,11 @@ def _plan_fanout_queries(
         "- First query: rephrase the core intent as a factual statement.\n"
         "- Additional queries: alternative angles, related entities, or broader context.\n"
         "- Keep all original names, dates, projects, and entities.\n"
-        "- Detect the message language and keep generated queries in that same language/script.\n"
-        "- Do not translate user content into another language unless explicitly requested.\n"
-        "- If you generate lexical alternatives, keep them in the same language/script as the user message.\n"
+        "- Preserve the original user language/script in the first query.\n"
+        "- Do not translate general personal/life queries into another language unless explicitly requested.\n"
+        "- For project/code/docs questions, if likely evidence lives in source code, filenames, package names, APIs, config keys, or project slugs in another language/script, you may add at most one cross-language or code-identifier query variant.\n"
+        "- Keep any added cross-language variant tightly scoped to those likely source artifacts; do not rewrite the whole request into broad translated paraphrases.\n"
+        "- Keep literal identifiers (project names, API names, file names, package names, code symbols) exactly as they appear when useful.\n"
         "- Preserve subject/object roles and possession exactly; never rewrite into the opposite ownership or relation direction.\n"
         "- Do not guess a relationship subtype unless the user explicitly stated it.\n"
         "- For short focused factual questions, returning only the original query is often best.\n"
@@ -9358,6 +9414,27 @@ def _recall_planner_timeout_s(
     except Exception:
         return default_cap
     return max(0.1, min(default_cap, budget_s * 0.5))
+
+
+def _resolve_lexical_anchor_timeout_ms(
+    timeout_ms: Optional[int],
+    *,
+    fast_mode: bool = False,
+) -> int:
+    """Resolve lexical-anchor planner timeout from the overall recall budget."""
+    default_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
+    if timeout_ms is None:
+        return default_ms
+    try:
+        budget_ms = max(200, int(timeout_ms))
+    except Exception:
+        return default_ms
+    if fast_mode:
+        return min(default_ms, budget_ms)
+    if budget_ms <= default_ms:
+        return budget_ms
+    scaled_ms = int(budget_ms * 0.25)
+    return max(default_ms, min(_LEXICAL_ANCHOR_EXPLICIT_TIMEOUT_CAP_MS, scaled_ms))
 
 
 _FAST_DRILL_RESERVE_MS = 250
@@ -9479,6 +9556,21 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         stores = ["vector", "graph"]
 
     return _planner_store_plan(stores), project_name
+
+
+def _requires_llm_store_classification_for_exact_query(
+    text: str,
+    *,
+    default_stores: List[str],
+    default_project: Optional[str],
+) -> bool:
+    """Use the LLM store classifier for exact queries when heuristics are weak."""
+    if default_project is not None:
+        return False
+    normalized_stores = list(_planner_store_plan(default_stores))
+    if normalized_stores != ["vector"]:
+        return False
+    return any(ord(ch) > 127 and str(ch).isalpha() for ch in str(text or ""))
 
 
 def _load_tools_md() -> Optional[str]:
@@ -10244,8 +10336,10 @@ def _drill_plan_queries(
         "- Try different angles: related entities, temporal context, broader/narrower scope.\n"
         "- Do NOT repeat queries from the 'already searched' list.\n"
         "- Keep original names, dates, and entities.\n"
-        "- Keep follow-up queries in the same language/script as the original query.\n"
-        "- Do not translate query content into another language unless explicitly requested.\n"
+        "- Preserve the original language/script in the first follow-up query.\n"
+        "- Do not translate general personal/life queries into another language unless explicitly requested.\n"
+        "- For project/code/docs follow-ups, you may add at most one cross-language or code-identifier variant when likely evidence lives in source code, filenames, package names, APIs, config keys, or project slugs in another language/script.\n"
+        "- Keep literal identifiers (project names, API names, file names, package names, code symbols) exactly as they appear when useful.\n"
         "- Prefer one precise follow-up over several vague rewrites.\n"
     )
     try:
@@ -10334,6 +10428,7 @@ def recall(
     include_mmr: bool = True,
     include_lexical_anchor_shaping: bool = True,
     lexical_anchor_planner_mode: str = "llm",
+    lexical_anchor_timeout_ms: Optional[int] = None,
     use_lightweight_config: bool = False,
     track_access: bool = True,
     return_meta: bool = False,
@@ -10506,6 +10601,8 @@ def recall(
 
     # Load config
     overall_timeout_ms = timeout_ms
+    if lexical_anchor_timeout_ms is None and overall_timeout_ms is not None:
+        lexical_anchor_timeout_ms = _resolve_lexical_anchor_timeout_ms(overall_timeout_ms, fast_mode=False)
     quality_gate = 0.70
     config_retrieval = None
     try:
@@ -10567,6 +10664,7 @@ def recall(
         timeout_ms=overall_timeout_ms,
         include_lexical_anchor_shaping=include_lexical_anchor_shaping,
         lexical_anchor_planner_mode=lexical_anchor_planner_mode,
+        lexical_anchor_timeout_ms=lexical_anchor_timeout_ms,
         use_lightweight_config=use_lightweight_config,
         track_access=track_access,
     )
@@ -11664,7 +11762,11 @@ def store(
 
     text = text.strip()
     word_count = len(text.split())
-    if word_count < 3 and category not in _LOW_INFO_ENTITY_CATEGORIES:
+    if (
+        word_count < 3
+        and category not in _LOW_INFO_ENTITY_CATEGORIES
+        and not _looks_like_compact_script_fact(text)
+    ):
         raise ValueError(f"Facts must be at least 3 words (got {word_count}: '{text}'). A fact needs a subject, verb, and object (e.g., 'X is Y').")
 
     if not owner_id:
