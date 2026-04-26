@@ -3669,6 +3669,16 @@ ${projectPlacementContext}` : projectPlacementContext;
         };
       };
       try {
+        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
+          promptAgentLabel,
+          "before_prompt_build"
+        );
+        if (deferredNoticeRelayContext) {
+          prependContextParts.push(deferredNoticeRelayContext);
+          appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
+        }
         let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
           event,
           lastUserMessageQuery,
@@ -3709,16 +3719,6 @@ ${projectPlacementContext}` : projectPlacementContext;
         }
         if (facade.isInternalMaintenancePrompt(query)) {
           return withDocs({ prependContext: event.prependContext });
-        }
-        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
-          promptAgentLabel,
-          "before_prompt_build"
-        );
-        if (deferredNoticeRelayContext) {
-          prependContextParts.push(deferredNoticeRelayContext);
-          appendSystemContext = appendSystemContext ? `${appendSystemContext}
-
-${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
         }
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
         const lowQualityQuery = facade.isLowQualityQuery(query);

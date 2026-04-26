@@ -4570,6 +4570,17 @@ notify_user(${JSON.stringify(message)})
       };
 
       try {
+        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
+          promptAgentLabel,
+          "before_prompt_build",
+        );
+        if (deferredNoticeRelayContext) {
+          prependContextParts.push(deferredNoticeRelayContext);
+          appendSystemContext = appendSystemContext
+            ? `${appendSystemContext}\n\n${deferredNoticeRelayContext}`
+            : deferredNoticeRelayContext;
+        }
+
         let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
           event,
           lastUserMessageQuery,
@@ -4622,17 +4633,6 @@ notify_user(${JSON.stringify(message)})
         // Skip janitor/reviewer internal prompts so maintenance flows never trigger auto-injection.
         if (facade.isInternalMaintenancePrompt(query)) {
           return withDocs({ prependContext: event.prependContext });
-        }
-
-        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
-          promptAgentLabel,
-          "before_prompt_build",
-        );
-        if (deferredNoticeRelayContext) {
-          prependContextParts.push(deferredNoticeRelayContext);
-          appendSystemContext = appendSystemContext
-            ? `${appendSystemContext}\n\n${deferredNoticeRelayContext}`
-            : deferredNoticeRelayContext;
         }
 
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());

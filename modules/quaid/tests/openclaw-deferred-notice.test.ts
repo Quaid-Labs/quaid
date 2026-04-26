@@ -257,6 +257,58 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("delivers deferred notices even when the first prompt payload is empty", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-empty-prompt-home-",
+      "openclaw-main",
+      "[Quaid] Empty prompt relay still needs delivery.",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const result = await beforePromptBuildCall?.[1](
+      { prompt: "", messages: [], sessionId: "session-main-empty", sessionKey: "agent:main:tui-main" },
+      { sessionId: "session-main-empty", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
+    );
+
+    const systemContext = combinedSystemContext(result);
+    expect(systemContext).toContain("Empty prompt relay still needs delivery");
+    expect(String(result?.prependContext || "")).toContain("Empty prompt relay still needs delivery");
+
+    const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    const pending = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    const delivered = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "delivered")
+      : [];
+    expect(pending).toHaveLength(0);
+    expect(delivered).toHaveLength(1);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("delivers deferred notices even when auto-inject is disabled", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
