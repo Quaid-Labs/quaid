@@ -914,6 +914,11 @@ groups_cfg[room_id] = room_entry
 room_entry["enabled"] = True
 room_entry["allow"] = True
 room_entry["requireMention"] = False
+room_tools = room_entry.get("tools")
+if not isinstance(room_tools, dict):
+    room_tools = {}
+room_entry["tools"] = room_tools
+room_tools["deny"] = _merge_allowlist(room_tools.get("deny"), "write")
 
 helper_paths = [
     home / "quaidcode" / "dev" / "modules" / "quaid" / "tests" / "livetest" / "scripts" / ".matrix-config",
