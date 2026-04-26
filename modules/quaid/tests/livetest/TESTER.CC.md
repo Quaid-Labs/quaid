@@ -69,6 +69,23 @@ hook and extraction will not fire.
 
 `claude -p` (print mode) does not trigger hooks — always use interactive mode.
 
+**MANDATORY session-capture proof before M2:** after launch and after the first
+real user message, verify that Claude actually created a live transcript file for
+this project. If this file is missing, stop immediately and report FAIL to the
+coordinator — Quaid will have nothing to extract and every downstream DB check
+will be false signal.
+
+```bash
+ssh REMOTE_HOST 'find ~/.claude/projects/-tmp-cc-livetest -maxdepth 1 -name "*.jsonl" -type f -mmin -5 | head'
+```
+
+Expected: at least one fresh `*.jsonl` path. If empty:
+- you are not in a real interactive Claude session
+- or Claude never started from `/tmp/cc-livetest`
+- or the wrong command path was used
+
+Do not continue to M2 until this is non-empty.
+
 ---
 
 ## Extraction Triggers
@@ -192,6 +209,7 @@ More than 3 concurrent hooks.py processes = hook storm. Report to coordinator im
 
 `QUAID_INSTANCE` is pinned **per project dir**, not globally. It is set in
 `/tmp/cc-livetest/.claude/settings.json`, not in `~/.claude/settings.json`.
+Claude hooks are the opposite: they live in the global `~/.claude/settings.json`.
 
 Verify:
 ```bash
@@ -199,6 +217,8 @@ ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/tmp/cc-livetest/.c
 # Expected: CC_INSTANCE
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"$HOME/.claude/settings.json\")); print(d.get(\"env\",{}).get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
 # Expected: absent
+ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"$HOME/.claude/settings.json\")); print(sorted((d.get(\"hooks\") or {}).keys()))"'
+# Expected: includes SessionStart, UserPromptSubmit, PreCompact, SessionEnd
 ```
 
 ---
