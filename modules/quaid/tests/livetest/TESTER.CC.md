@@ -76,13 +76,16 @@ coordinator — Quaid will have nothing to extract and every downstream DB check
 will be false signal.
 
 ```bash
-ssh REMOTE_HOST 'find ~/.claude/projects/-tmp-cc-livetest -maxdepth 1 -name "*.jsonl" -type f -mmin -5 | head'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && bash modules/quaid/tests/livetest/scripts/verify-cc-session-capture.sh --remote localhost --project-dir /tmp/cc-livetest --instance claude-code-private-tmp-cc-livetest --max-age-min 5'
 ```
 
-Expected: at least one fresh `*.jsonl` path. If empty:
+Expected: `PASS`, including at least one fresh `*.jsonl` path. If it fails:
 - you are not in a real interactive Claude session
 - or Claude never started from `/tmp/cc-livetest`
 - or the wrong command path was used
+- or you checked the wrong transcript directory. On macOS, `/tmp/...` resolves to
+  `/private/tmp/...`, so Claude writes under `~/.claude/projects/-private-tmp-...`
+  rather than `-tmp-...`. Use the verifier script instead of hardcoding the path.
 
 Do not continue to M2 until this is non-empty.
 

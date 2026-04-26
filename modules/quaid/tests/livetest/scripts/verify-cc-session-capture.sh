@@ -76,7 +76,6 @@ echo ""
 remote_python="$(cat <<'PY'
 import glob
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -90,9 +89,12 @@ failures = []
 home = Path.home()
 global_settings_path = home / ".claude" / "settings.json"
 project_settings_path = Path(project_dir) / ".claude" / "settings.json"
-session_dir_name = project_dir.replace("/", "-")
+resolved_project_dir = str(Path(project_dir).resolve())
+session_dir_name = resolved_project_dir.replace("/", "-")
 session_root = home / ".claude" / "projects" / session_dir_name
 hook_trace_path = home / ".quaid" / "instances" / instance_id / "logs" / "quaid-hook-trace.jsonl"
+
+print(f"resolved_project_dir={resolved_project_dir}")
 
 print(f"global_settings={global_settings_path}")
 if not global_settings_path.is_file():
