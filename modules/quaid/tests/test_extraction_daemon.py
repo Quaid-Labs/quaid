@@ -670,6 +670,91 @@ def test_process_signal_skips_foreign_adapter_transcript(monkeypatch, tmp_path):
     assert not extraction_daemon._rolling_state_path("foreign-session").exists()
 
 
+def test_process_signal_allows_current_instance_cursor_owned_transcript(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-m13test")
+    transcript_path = tmp_path / "rollout-2026-04-26T18-43-04-old-thread.jsonl"
+    transcript_path.write_text(
+        (
+            '{"type":"session_meta","payload":{"id":"old-thread","cwd":"/private/tmp/cdx-livetest"}}\n'
+            '{"role":"user","content":"The tamarind-lighthouse-3317 codeword belongs in this explicit instance."}\n'
+        ),
+        encoding="utf-8",
+    )
+    extraction_daemon.write_cursor("old-thread", 0, str(transcript_path))
+    signal_path = extraction_daemon.write_signal(
+        signal_type="session_end",
+        session_id="old-thread",
+        transcript_path=str(transcript_path),
+    )
+    signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+    signal_data["_signal_path"] = str(signal_path)
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path
+
+        def owns_session_path(self, path, session_id=""):
+            captured["owns_called"] = True
+            return False
+
+        def parse_session_jsonl(self, path):
+            captured["path"] = str(path)
+            return "User: The tamarind-lighthouse-3317 codeword belongs in this explicit instance."
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    try:
+        def _fake_extract_from_transcript(transcript, **kwargs):
+            captured["transcript"] = transcript
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [],
+                "facts": [],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", _fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda *_args, **_kwargs: {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "facts": [],
+                "snippets_updated": 0,
+                "journal_updated": 0,
+                "project_logs_updated": 0,
+                "project_logs_projects_updated": 0,
+                "project_logs_seen": 0,
+            },
+        )
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert "tamarind-lighthouse-3317" in captured.get("transcript", "")
+    assert captured.get("path")
+    assert captured.get("owns_called") is None
+
+
 def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypatch, tmp_path):
     from lib.adapter import set_adapter, reset_adapter
     from ingest import extract as extract_mod

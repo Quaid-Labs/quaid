@@ -2425,6 +2425,23 @@ def _load_runtime_adapter():
         return None
 
 
+def _cursor_records_transcript_path(session_id: str, transcript_path: str) -> bool:
+    """Return True when this instance already cursored the transcript for session."""
+    if not session_id or not transcript_path:
+        return False
+    try:
+        cursor = read_cursor(session_id)
+    except Exception:
+        return False
+    cursor_path = str((cursor or {}).get("transcript_path") or "").strip()
+    if not cursor_path:
+        return False
+    return (
+        _canonicalize_transcript_source_path(cursor_path)
+        == _canonicalize_transcript_source_path(transcript_path)
+    )
+
+
 def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str) -> bool:
     """Return whether an adapter-scoped transcript belongs to this daemon instance."""
     if adapter is None:
@@ -2436,6 +2453,8 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
         return False
     if not transcript_path:
         return False
+    if _cursor_records_transcript_path(session_id, transcript_path):
+        return True
     owns_fn = getattr(adapter, "owns_session_path", None)
     if not callable(owns_fn):
         owns_fn = getattr(adapter, "owns_transcript_path", None)
