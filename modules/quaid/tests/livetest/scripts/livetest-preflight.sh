@@ -811,6 +811,7 @@ import json
 import os
 import pathlib
 import sys
+from typing import Optional
 
 token_path = pathlib.Path(sys.argv[1])
 try:
@@ -840,7 +841,7 @@ if codex_auth_path.exists():
     except Exception as err:
         print(f"  WARN  failed reading {codex_auth_path}: {err}")
 
-def _jwt_expiry_ms(token: str) -> int | None:
+def _jwt_expiry_ms(token: str) -> Optional[int]:
     parts = token.split(".")
     if len(parts) < 2:
         return None
