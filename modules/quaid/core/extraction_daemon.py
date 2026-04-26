@@ -3201,7 +3201,15 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     if not new_lines:
         logger.info("[%s] session %s: no new content past cursor (offset=%d)", label, session_id, cursor_offset)
         pending_subagent_harvest = not rolling_mode and _session_has_harvestable_subagents(session_id, adapter=adapter)
-        if not rolling_mode and (
+        if rolling_mode and _semantic_buffer_has_content(staged_state):
+            logger.info(
+                "[%s] session %s: no raw tail past cursor but semantic rolling buffer is pending; "
+                "continuing with buffered content",
+                label,
+                session_id,
+            )
+            new_lines = []
+        elif not rolling_mode and (
             staged_state_has_payload(staged_state)
             or _semantic_buffer_has_content(staged_state)
             or pending_subagent_harvest
