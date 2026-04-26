@@ -2431,7 +2431,19 @@ def _cursor_records_transcript_path(session_id: str, transcript_path: str) -> bo
         return False
     try:
         cursor = read_cursor(session_id)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "cursor transcript ownership check failed for session %s (%s): %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+            if is_fail_hard_enabled():
+                raise
+        except ImportError:
+            pass
         return False
     cursor_path = str((cursor or {}).get("transcript_path") or "").strip()
     if not cursor_path:

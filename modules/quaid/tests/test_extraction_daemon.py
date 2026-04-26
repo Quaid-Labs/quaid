@@ -670,6 +670,43 @@ def test_process_signal_skips_foreign_adapter_transcript(monkeypatch, tmp_path):
     assert not extraction_daemon._rolling_state_path("foreign-session").exists()
 
 
+def test_cursor_records_transcript_path_is_scoped_to_current_instance(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "shared-session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"instance scoped"}\n', encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "instance-a")
+    extraction_daemon.write_cursor("shared-session", 0, str(transcript_path))
+
+    assert extraction_daemon._cursor_records_transcript_path("shared-session", str(transcript_path))
+
+    monkeypatch.setenv("QUAID_INSTANCE", "instance-b")
+    assert not extraction_daemon._cursor_records_transcript_path("shared-session", str(transcript_path))
+
+
+def test_cursor_records_transcript_path_raises_on_read_error_when_fail_hard(monkeypatch):
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_cursor",
+        lambda _session_id: (_ for _ in ()).throw(RuntimeError("cursor read failed")),
+    )
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="cursor read failed"):
+        extraction_daemon._cursor_records_transcript_path("broken-session", "/tmp/session.jsonl")
+
+
+def test_cursor_records_transcript_path_falls_back_on_read_error_when_not_fail_hard(monkeypatch):
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_cursor",
+        lambda _session_id: (_ for _ in ()).throw(RuntimeError("cursor read failed")),
+    )
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
+
+    assert not extraction_daemon._cursor_records_transcript_path("broken-session", "/tmp/session.jsonl")
+
+
 def test_process_signal_allows_current_instance_cursor_owned_transcript(monkeypatch, tmp_path):
     from lib.adapter import set_adapter, reset_adapter
     from ingest import extract as extract_mod
