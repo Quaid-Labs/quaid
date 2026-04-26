@@ -52,10 +52,12 @@ if [[ -z "$REMOTE_HOST" ]]; then
     echo "Error: config not found at '$CONFIG_PATH'" >&2
     exit 1
   fi
-  REMOTE_HOST="$(python3 - <<PY
+  REMOTE_HOST="$(python3 - "$CONFIG_PATH" <<'PY'
 import json
+import sys
 from pathlib import Path
-cfg = json.loads(Path(${CONFIG_PATH@Q}).read_text())
+
+cfg = json.loads(Path(sys.argv[1]).read_text())
 print(str(((cfg.get("remote") or {}).get("host")) or "").strip())
 PY
 )"
@@ -164,4 +166,4 @@ print("PASS")
 PY
 )"
 
-ssh "$REMOTE_HOST" "python3 - ${PROJECT_DIR@Q} ${INSTANCE_ID@Q} ${MAX_AGE_MIN@Q}" <<<"$remote_python"
+ssh "$REMOTE_HOST" python3 - "$PROJECT_DIR" "$INSTANCE_ID" "$MAX_AGE_MIN" <<<"$remote_python"
