@@ -955,6 +955,65 @@ def _read_cursor_with_source_compat(session_id: str, source_key: Optional[str]) 
     return read_cursor(session_id)
 
 
+def _cursor_shadowed_by_source_cursor(
+    *,
+    cursor_file: Path,
+    session_id: str,
+    transcript_path: str,
+    cursor_data: Dict[str, Any],
+) -> bool:
+    """Return True when a legacy/alias cursor is behind its source-key cursor."""
+    if not transcript_path:
+        return False
+    try:
+        source_key = _signal_source_cursor_key(
+            session_id,
+            transcript_path,
+            cursor_data=cursor_data,
+        )
+    except Exception:
+        return False
+    if cursor_file.stem == source_key:
+        return False
+    source_file = _cursor_dir() / f"{source_key}.json"
+    if not source_file.is_file():
+        return False
+    source_cursor = _read_cursor_file(source_file, session_id)
+    source_path = str(source_cursor.get("transcript_path") or "").strip()
+    if (
+        _canonicalize_transcript_source_path(source_path)
+        != _canonicalize_transcript_source_path(transcript_path)
+    ):
+        return False
+    source_offset = int(source_cursor.get("line_offset", 0) or 0)
+    cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
+    if source_offset < cursor_offset:
+        return False
+    logger.info(
+        "session %s cursor %s shadowed by source cursor %s at offset %d >= %d; skipping stale alias",
+        session_id,
+        cursor_file.name,
+        source_file.name,
+        source_offset,
+        cursor_offset,
+    )
+    return True
+
+
+def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
+    keys: set[str] = set()
+    for signal in signals:
+        session_id = str(signal.get("session_id") or "").strip()
+        transcript_path = str(signal.get("transcript_path") or "").strip()
+        if not session_id or not transcript_path:
+            continue
+        try:
+            keys.add(_signal_source_cursor_key(session_id, transcript_path))
+        except Exception:
+            continue
+    return keys
+
+
 def _deferred_extraction_dir() -> Path:
     d = _instance_root() / "data" / "deferred-extractions"
     d.mkdir(parents=True, exist_ok=True)
@@ -3978,6 +4037,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     # B003: Hoist pending signals read outside the loop
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
+    pending_source_keys = _pending_signal_source_keys(pending)
 
     cursor_rows: list[dict[str, Any]] = []
     for cursor_file in cursor_dir.glob("*.json"):
@@ -3989,6 +4049,13 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if _cursor_shadowed_by_source_cursor(
+            cursor_file=cursor_file,
+            session_id=str(session_id),
+            transcript_path=str(transcript_path),
+            cursor_data=data,
+        ):
             continue
         if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
             continue
@@ -4069,6 +4136,9 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 pass
 
         if cursor_at_end and has_staged_payload and session_id not in pending_session_ids:
+            source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
+            if source_key in pending_source_keys:
+                continue
             newer_session_exists = any(
                 float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
                 for other in cursor_rows
@@ -4122,6 +4192,9 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         # Check if we already have a pending signal for this session
         if session_id in pending_session_ids:
             continue
+        source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
+        if source_key in pending_source_keys:
+            continue
 
         logger.info(
             "session %s idle for %.0fs with %d unextracted lines%s, generating timeout signal",
@@ -4166,6 +4239,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     chunk_line_budget = _get_capture_chunk_max_lines()
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
+    pending_source_keys = _pending_signal_source_keys(pending)
 
     for cursor_file in cursor_dir.glob("*.json"):
         try:
@@ -4176,6 +4250,13 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if _cursor_shadowed_by_source_cursor(
+            cursor_file=cursor_file,
+            session_id=str(session_id),
+            transcript_path=str(transcript_path),
+            cursor_data=data,
+        ):
             continue
         if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
             continue
@@ -4197,6 +4278,9 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 session_id,
             )
         if session_id in pending_session_ids:
+            continue
+        source_key = _signal_source_cursor_key(str(session_id), str(transcript_path), cursor_data=data)
+        if source_key in pending_source_keys:
             continue
 
         cursor_offset = int(data.get("line_offset", 0) or 0)

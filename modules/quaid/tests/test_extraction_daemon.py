@@ -3298,6 +3298,78 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_check_chunk_ready_sessions_skips_legacy_cursor_shadowed_by_source_cursor(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "rollout-2026-04-26T21-47-37-019dcbc3-2522-7fc1-80a2-08967963dfe2.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"first long rolling note"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"second long rolling note"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        legacy_session_id = "019dcbc3-2522-7fc1-80a2-08967963dfe2"
+        rollout_session_id = "rollout-2026-04-26T21-47-37-019dcbc3-2522-7fc1-80a2-08967963dfe2"
+        extraction_daemon.write_cursor(legacy_session_id, 0, str(transcript_path))
+        source_key = extraction_daemon._signal_source_cursor_key(
+            rollout_session_id,
+            str(transcript_path),
+        )
+        extraction_daemon.write_cursor(
+            rollout_session_id,
+            2,
+            str(transcript_path),
+            source_key=source_key,
+        )
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                messages = []
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    payload = json.loads(raw)
+                    event_payload = payload.get("payload", {})
+                    message = event_payload.get("message")
+                    if message:
+                        messages.append(f"User: {message}")
+                return "\n\n".join(messages)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 5)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            assert captured == []
+            assert not extraction_daemon._rolling_state_path(legacy_session_id).exists()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_process_signal_rolling_requeues_continuation_when_transcript_tail_remains(self, monkeypatch, tmp_path):
         import sys
         import types
