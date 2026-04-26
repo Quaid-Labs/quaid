@@ -1351,4 +1351,123 @@ describe("openclaw deferred notices", () => {
     error.mockRestore();
     removeTempDir(fixture.home);
   });
+
+  it("re-arms project context injection after /new on the same matrix session key", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-new-refresh-key-home-",
+      "openclaw-main",
+      "[Quaid] /new refresh fixture",
+    );
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(identityDir, "USER.md"),
+      "# USER\nInitial OC M7 identity canary: basalt-harbor\n",
+      "utf8",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const commandNewCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "command:new" && call?.[2]?.name === "command-new-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(commandNewCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const commandNewHandler = commandNewCall?.[1];
+    const sessionKey = "agent:main:matrix:channel:!m7-room:localhost";
+
+    const first = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "first identity check",
+        messages: [{ role: "user", content: "first identity check" }],
+        sessionId: "session-m7-before-new",
+        sessionKey,
+      },
+      {
+        sessionId: "session-m7-before-new",
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+    expect(combinedSystemContext(first)).toContain("basalt-harbor");
+
+    fs.writeFileSync(
+      path.join(identityDir, "USER.md"),
+      "# USER\nThe office plant is named Bartholomew. It is a fiddle-leaf fig.\n",
+      "utf8",
+    );
+
+    const stillGated = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "second identity check",
+        messages: [{ role: "user", content: "second identity check" }],
+        sessionId: "session-m7-after-new",
+        sessionKey,
+      },
+      {
+        sessionId: "session-m7-after-new",
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+    expect(combinedSystemContext(stillGated)).not.toContain("Bartholomew");
+
+    await commandNewHandler(
+      {
+        action: "new",
+        sessionId: "session-m7-after-new",
+        sessionKey,
+      },
+      {
+        sessionId: "session-m7-after-new",
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    const refreshed = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "what is the office plant named?",
+        messages: [{ role: "user", content: "what is the office plant named?" }],
+        sessionId: "session-m7-after-new",
+        sessionKey,
+      },
+      {
+        sessionId: "session-m7-after-new",
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+    expect(combinedSystemContext(refreshed)).toContain("Bartholomew");
+    expect(combinedSystemContext(refreshed)).toContain("fiddle-leaf fig");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
 });

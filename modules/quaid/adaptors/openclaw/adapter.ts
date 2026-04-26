@@ -4511,16 +4511,46 @@ notify_user(${JSON.stringify(message)})
     //      gated by a Set. Belongs in before_agent_start when OC adds support.
     //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
-    const maybeArmCompactionContextRefresh = (refreshKey: string, source: string) => {
+    const armProjectContextRefresh = (
+      refreshKey: string,
+      source: string,
+      options: { requireCompactionStrategy?: boolean; traceName?: string } = {},
+    ): void => {
       const key = String(refreshKey || "").trim();
       if (!key) return;
-      if (getContextRefreshStrategy(getMemoryConfig()) !== "compaction") return;
+      const strategy = getContextRefreshStrategy(getMemoryConfig());
+      if (options.requireCompactionStrategy && strategy !== "compaction") return;
       const wasTracked = projectDocsInjectedSessions.delete(key);
-      writeHookTrace("hook.context_refresh.compaction_armed", {
+      writeHookTrace(options.traceName || "hook.context_refresh.armed", {
         refresh_key: key,
         source,
+        strategy,
         was_tracked: wasTracked,
       });
+    };
+    const maybeArmCompactionContextRefresh = (refreshKey: string, source: string) => {
+      armProjectContextRefresh(refreshKey, source, {
+        requireCompactionStrategy: true,
+        traceName: "hook.context_refresh.compaction_armed",
+      });
+    };
+    const armLifecycleProjectContextRefresh = (
+      event: any,
+      ctx: any,
+      fallbackSessionId: string,
+      source: string,
+    ): void => {
+      if (!isSystemEnabled("projects")) return;
+      const refreshKey = resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId);
+      armProjectContextRefresh(refreshKey, source, {
+        traceName: "hook.context_refresh.lifecycle_armed",
+      });
+      const sessionId = String(fallbackSessionId || "").trim();
+      if (sessionId && sessionId !== refreshKey) {
+        armProjectContextRefresh(sessionId, `${source}:session_id`, {
+          traceName: "hook.context_refresh.lifecycle_armed",
+        });
+      }
     };
 
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
@@ -6014,6 +6044,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           text: text.slice(0, 120),
           hook_session_id: sessionId || "",
         });
+        if (commandAction === "new" || commandAction === "reset") {
+          armLifecycleProjectContextRefresh(
+            event,
+            ctx,
+            sessionId,
+            `${sourceEvent}:command_${commandAction}`,
+          );
+        }
         if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled("memory")) {
           return;
         }
@@ -6206,6 +6244,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           preferred_transcript_path: preferredTranscriptPath,
           transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || ""),
         });
+        armLifecycleProjectContextRefresh(
+          event,
+          ctx,
+          sessionId,
+          `command:${action}`,
+        );
         if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled("memory")) {
           return;
         }
@@ -6440,6 +6484,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const newAgentLabel = resolveAgentLabelFromSessionKey(newSessionKey) || "main";
 
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
+      if (!isAlreadyTracked) {
+        armLifecycleProjectContextRefresh(
+          event,
+          ctx,
+          newSessionId,
+          "before_agent_start:new_interactive_session",
+        );
+      }
       if (!isAlreadyTracked && isSystemEnabled("memory")) {
         // Find the prior session. Strategy:
         // 1. "Just reset" detection: look for a session whose JSONL is 0 bytes AND

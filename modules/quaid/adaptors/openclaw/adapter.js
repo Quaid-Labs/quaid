@@ -3617,16 +3617,37 @@ notify_user(${JSON.stringify(message)})
       return { prependContext: event.prependContext };
     };
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
-    const maybeArmCompactionContextRefresh = (refreshKey, source) => {
+    const armProjectContextRefresh = (refreshKey, source, options = {}) => {
       const key = String(refreshKey || "").trim();
       if (!key) return;
-      if (getContextRefreshStrategy(getMemoryConfig2()) !== "compaction") return;
+      const strategy = getContextRefreshStrategy(getMemoryConfig2());
+      if (options.requireCompactionStrategy && strategy !== "compaction") return;
       const wasTracked = projectDocsInjectedSessions.delete(key);
-      writeHookTrace("hook.context_refresh.compaction_armed", {
+      writeHookTrace(options.traceName || "hook.context_refresh.armed", {
         refresh_key: key,
         source,
+        strategy,
         was_tracked: wasTracked
       });
+    };
+    const maybeArmCompactionContextRefresh = (refreshKey, source) => {
+      armProjectContextRefresh(refreshKey, source, {
+        requireCompactionStrategy: true,
+        traceName: "hook.context_refresh.compaction_armed"
+      });
+    };
+    const armLifecycleProjectContextRefresh = (event, ctx, fallbackSessionId, source) => {
+      if (!isSystemEnabled2("projects")) return;
+      const refreshKey = resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId);
+      armProjectContextRefresh(refreshKey, source, {
+        traceName: "hook.context_refresh.lifecycle_armed"
+      });
+      const sessionId = String(fallbackSessionId || "").trim();
+      if (sessionId && sessionId !== refreshKey) {
+        armProjectContextRefresh(sessionId, `${source}:session_id`, {
+          traceName: "hook.context_refresh.lifecycle_armed"
+        });
+      }
     };
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
@@ -4829,6 +4850,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           text: text.slice(0, 120),
           hook_session_id: sessionId || ""
         });
+        if (commandAction === "new" || commandAction === "reset") {
+          armLifecycleProjectContextRefresh(
+            event,
+            ctx,
+            sessionId,
+            `${sourceEvent}:command_${commandAction}`
+          );
+        }
         if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
           return;
         }
@@ -4997,6 +5026,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           preferred_transcript_path: preferredTranscriptPath,
           transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || "")
         });
+        armLifecycleProjectContextRefresh(
+          event,
+          ctx,
+          sessionId,
+          `command:${action}`
+        );
         if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
           return;
         }
@@ -5199,6 +5234,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       if (!isInteractiveKey) return;
       const newAgentLabel = resolveAgentLabelFromSessionKey(newSessionKey) || "main";
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
+      if (!isAlreadyTracked) {
+        armLifecycleProjectContextRefresh(
+          event,
+          ctx,
+          newSessionId,
+          "before_agent_start:new_interactive_session"
+        );
+      }
       if (!isAlreadyTracked && isSystemEnabled2("memory")) {
         const RECENT_RESET_WINDOW_MS = 12e4;
         const nowMs = Date.now();
