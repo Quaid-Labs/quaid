@@ -82,30 +82,35 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    if sender_user_id and bot_user_id and sender_user_id == bot_user_id:
+    if not sender_user_id or not bot_user_id:
+        print(
+            "matrix-send config missing MATRIX_SENDER_USER_ID or MATRIX_BOT_USER_ID; rerun livetest preflight to seed a safe sender config",
+            file=sys.stderr,
+        )
+        return 2
+    if sender_user_id == bot_user_id:
         print(
             f"matrix-send refuses to send as the OpenClaw bot itself ({bot_user_id}); use the external tester account token",
             file=sys.stderr,
         )
         return 3
-    if sender_user_id:
-        try:
-            token_user_id = _matrix_whoami(homeserver, token)
-        except Exception as exc:
-            print(f"matrix-send could not verify Matrix sender token: {exc}", file=sys.stderr)
-            return 4
-        if bot_user_id and token_user_id == bot_user_id:
-            print(
-                f"matrix-send refuses to send with the OpenClaw bot token ({bot_user_id}); use the external tester account token",
-                file=sys.stderr,
-            )
-            return 3
-        if token_user_id != sender_user_id:
-            print(
-                f"matrix-send token belongs to {token_user_id or '<unknown>'}, expected {sender_user_id}",
-                file=sys.stderr,
-            )
-            return 4
+    try:
+        token_user_id = _matrix_whoami(homeserver, token)
+    except Exception as exc:
+        print(f"matrix-send could not verify Matrix sender token: {exc}", file=sys.stderr)
+        return 4
+    if token_user_id == bot_user_id:
+        print(
+            f"matrix-send refuses to send with the OpenClaw bot token ({bot_user_id}); use the external tester account token",
+            file=sys.stderr,
+        )
+        return 3
+    if token_user_id != sender_user_id:
+        print(
+            f"matrix-send token belongs to {token_user_id or '<unknown>'}, expected {sender_user_id}",
+            file=sys.stderr,
+        )
+        return 4
 
     message = " ".join(sys.argv[1:]).strip()
     room_enc = urllib.parse.quote(room_id, safe="")
