@@ -733,6 +733,46 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("queues late transcript_update extraction when OC writes real content after reset signal", () => {
+    const sessionId = "b960bd81-2534-4e49-b72a-549cc7c5e26b";
+    const resetMs = Date.parse("2026-04-26T21:32:03.000Z");
+    const nowMs = resetMs + 9_000;
+    const messages = [
+      {
+        role: "user",
+        content:
+          "Conversation info (untrusted metadata):\n```json\n{\"sender_id\":\"@quaid-test-bot:localhost\"}\n```\n\nQuick one to remember: my workshop safe codeword is cobalt-postage-oc.",
+      },
+      { role: "assistant", content: "Got it - workshop safe codeword: cobalt-postage-oc." },
+    ];
+
+    const decision = __test.lateTranscriptUpdateSessionEndDecision(sessionId, messages, 7576, {
+      nowMs,
+      lastResetSignalMs: resetMs,
+      alreadySignaled: () => false,
+    });
+
+    expect(decision.shouldQueue).toBe(true);
+    expect(decision.reason).toBe("late_post_reset_content");
+  });
+
+  it("does not queue duplicate late transcript_update extraction for the same reset signal", () => {
+    const sessionId = "b960bd81-2534-4e49-b72a-549cc7c5e26b";
+    const resetMs = Date.parse("2026-04-26T21:32:03.000Z");
+    const messages = [
+      { role: "user", content: "Quick one to remember: my workshop safe codeword is cobalt-postage-oc." },
+    ];
+
+    const decision = __test.lateTranscriptUpdateSessionEndDecision(sessionId, messages, 7576, {
+      nowMs: resetMs + 10_000,
+      lastResetSignalMs: resetMs,
+      alreadySignaled: () => true,
+    });
+
+    expect(decision.shouldQueue).toBe(false);
+    expect(decision.reason).toBe("already_signaled");
+  });
+
   it("recognizes corrupted preserved transcripts overwritten by timeout events", () => {
     const baseDir = `/tmp/quaid-oc-preserved-${Date.now()}`;
     const corruptedFile = path.join(baseDir, "logs", "quaid", "sessions", "sess-1.jsonl");

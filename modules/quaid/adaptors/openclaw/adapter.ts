@@ -382,7 +382,55 @@ const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE
 // in writeDaemonSignal handles cross-process dedup after gateway restarts; this
 // Set handles same-process bursts where multiple callers race before the marker
 // is visible on disk.
-const _recentResetSignalsWritten = new Map<string, number>(); // session_id → timestamp
+const _recentResetSignalsWritten = new Map<string, number>(); // session_id -> timestamp
+const _lateTranscriptUpdateSessionEndSignalsWritten = new Set<string>();
+const LATE_TRANSCRIPT_UPDATE_SESSION_END_WINDOW_MS = 2 * 60 * 1000;
+
+function lateTranscriptUpdateSignalKey(sessionId: string, resetSignalMs: number): string {
+  return `${sessionId}:${Math.floor(resetSignalMs)}`;
+}
+
+function lateTranscriptUpdateSessionEndDecision(
+  sessionId: string,
+  conversationMessages: any[],
+  currentTranscriptSize: number,
+  opts?: {
+    nowMs?: number;
+    lastResetSignalMs?: number;
+    alreadySignaled?: (key: string) => boolean;
+  },
+): { shouldQueue: boolean; reason: string; key?: string; resetAgeMs?: number } {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return { shouldQueue: false, reason: "missing_session_id" };
+  if (!Array.isArray(conversationMessages) || conversationMessages.length === 0) {
+    return { shouldQueue: false, reason: "empty_conversation" };
+  }
+  if (!isMeaningfulUserTranscriptActivity(conversationMessages)) {
+    return { shouldQueue: false, reason: "no_meaningful_user_activity" };
+  }
+  if (Number(currentTranscriptSize) <= 0) {
+    return { shouldQueue: false, reason: "empty_transcript" };
+  }
+  const lastResetSignalMs = Number(
+    opts?.lastResetSignalMs ?? _recentResetSignalsWritten.get(sid) ?? 0,
+  );
+  if (lastResetSignalMs <= 0) {
+    return { shouldQueue: false, reason: "no_recent_reset_signal" };
+  }
+  const nowMs = Number(opts?.nowMs ?? Date.now());
+  const resetAgeMs = nowMs - lastResetSignalMs;
+  if (resetAgeMs < 0 || resetAgeMs > LATE_TRANSCRIPT_UPDATE_SESSION_END_WINDOW_MS) {
+    return { shouldQueue: false, reason: "reset_signal_too_old", resetAgeMs };
+  }
+  const key = lateTranscriptUpdateSignalKey(sid, lastResetSignalMs);
+  const alreadySignaled = opts?.alreadySignaled
+    ? opts.alreadySignaled(key)
+    : _lateTranscriptUpdateSessionEndSignalsWritten.has(key);
+  if (alreadySignaled) {
+    return { shouldQueue: false, reason: "already_signaled", key, resetAgeMs };
+  }
+  return { shouldQueue: true, reason: "late_post_reset_content", key, resetAgeMs };
+}
 
 /**
  * Read the install-time lower bound from data/installed-at.json.
@@ -5149,6 +5197,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         try {
           const sessionFile = String(update?.sessionFile || "").trim();
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
+          let transcriptUpdateSize = -1;
+          try {
+            transcriptUpdateSize = fs.statSync(sessionFile).size;
+          } catch {}
           // Track transcript path for daemon signal writing
           const trackSessionId = String(update?.sessionId || "").trim();
           if (trackSessionId) {
@@ -5292,6 +5344,44 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               role: String(m?.role || ""),
               text: String(facade.getMessageText(m) || "").slice(0, 200),
             }));
+            const lateDecision = lateTranscriptUpdateSessionEndDecision(
+              sessionId,
+              conversationMessages,
+              transcriptUpdateSize,
+            );
+            if (lateDecision.shouldQueue && lateDecision.key) {
+              preserveSessionTranscript(sessionId, sessionFile, "transcript-update-late-content");
+              const sigPath = writeDaemonSignal(sessionId, "session_end", {
+                source: "transcript_update_late_content",
+                reason: lateDecision.reason,
+                reset_age_ms: lateDecision.resetAgeMs,
+                transcript_size: transcriptUpdateSize,
+              });
+              if (sigPath) {
+                _lateTranscriptUpdateSessionEndSignalsWritten.add(lateDecision.key);
+                writeHookTrace("hook.transcript_update.late_content_signal_queued", {
+                  session_id: sessionId,
+                  session_file: sessionFile,
+                  signal: "session_end",
+                  reason: lateDecision.reason,
+                  reset_age_ms: lateDecision.resetAgeMs,
+                  transcript_size: transcriptUpdateSize,
+                  message_count: messages.length,
+                  signal_path: sigPath,
+                });
+                console.log(`[quaid][signal] daemon signal session_end session=${sessionId} source=transcript_update_late_content`);
+                return;
+              }
+            } else if (sessionId && lateDecision.reason !== "no_recent_reset_signal") {
+              writeHookTrace("hook.transcript_update.late_content_signal_skipped", {
+                session_id: sessionId,
+                session_file: sessionFile,
+                reason: lateDecision.reason,
+                reset_age_ms: lateDecision.resetAgeMs,
+                transcript_size: transcriptUpdateSize,
+                message_count: messages.length,
+              });
+            }
             writeHookTrace("hook.transcript_update.no_signal", {
               update_session_id: String(update?.sessionId || ""),
               session_file: sessionFile,
@@ -7607,6 +7697,7 @@ export const __test = {
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,
+  lateTranscriptUpdateSessionEndDecision,
   parseSessionMessagesJsonl,
   rememberSessionTranscriptPath,
   transcriptPathExplicitlyMatchesSession,

@@ -20,6 +20,8 @@ Adapter selection (get_adapter()):
 Tests use set_adapter() / reset_adapter() for isolation.
 """
 
+from __future__ import annotations
+
 import abc
 import importlib
 import json
