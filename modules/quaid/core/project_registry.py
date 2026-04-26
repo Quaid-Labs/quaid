@@ -72,8 +72,13 @@ def _sync_docs_registry_project(
     registry.save_project_definition(name, defn, link_current_instance=False)
     project_md = canonical / "PROJECT.md"
     if project_md.is_file():
+        visible_home = _visible_home_from_hidden(_resolve_quaid_home())
+        try:
+            project_md_path = str(project_md.resolve().relative_to(visible_home.resolve()))
+        except ValueError:
+            project_md_path = str(project_md)
         registry.register(
-            file_path=str(project_md),
+            file_path=project_md_path,
             project=name,
             asset_type="doc",
             title=f"Project: {label}",

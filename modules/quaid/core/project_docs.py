@@ -1735,10 +1735,16 @@ def format_status(status: Dict[str, Any]) -> str:
     state = status.get("state") or {}
     if state.get("last_completed_at"):
         lines.append(f"Last completed: {state.get('last_completed_at')}")
-    show_last_error = str(status.get("status") or "").strip().lower() != "fresh"
+    status_value = str(status.get("status") or "").strip().lower()
+    show_last_error = status_value != "fresh"
     if show_last_error and state.get("last_error"):
         lines.append(f"Last error: {state.get('last_error')}")
     tail = status.get("worker_log_tail") or []
+    if status_value == "fresh":
+        tail = [
+            line for line in tail
+            if "QUAID_INSTANCE environment variable is not set" not in str(line)
+        ]
     if tail:
         lines.append("Recent worker log:")
         for line in tail[-5:]:

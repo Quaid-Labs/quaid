@@ -171,6 +171,32 @@ def test_project_registry_sync_does_not_cross_link_ambient_instance(project_regi
     assert entry["instances"] == [creating_instance]
 
 
+def test_project_registry_sync_reuses_relative_project_md_registry_path(project_registry_env):
+    from core.docs.updater import sync_project_visible_docs
+    from core.project_registry import create_project
+    from datastore.docsdb.registry import DocsRegistry
+
+    entry = create_project("recipe-app", description="Recipe benchmark app")
+
+    sync_project_visible_docs(
+        "recipe-app",
+        entry["canonical_path"],
+        root_docs={"PROJECT.md", "TOOLS.md", "AGENTS.md"},
+        protected_names={"PROJECT.log"},
+    )
+
+    registry = DocsRegistry()
+    docs = registry.list_docs(project="recipe-app")
+    project_md_docs = [row for row in docs if str(row.get("file_path")) == "projects/recipe-app/PROJECT.md"]
+
+    assert len(project_md_docs) == 1
+    assert [
+        row
+        for row in docs
+        if str(row.get("file_path", "")).endswith("/projects/recipe-app/PROJECT.md")
+    ] == []
+
+
 def test_docs_registry_scopes_lists_and_reads_to_current_instance(project_registry_env, monkeypatch):
     from datastore.docsdb.registry import DocsRegistry
     from lib.database import get_connection
