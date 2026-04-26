@@ -5703,6 +5703,64 @@ class TestRecallFastHookInjectContract:
         assert "ceramics practice" in attached[0]["text"]
         assert attached[0]["via_relation"] == "has_fact"
 
+    def test_graph_store_prioritizes_chained_relation_path_over_noisy_owner_edges(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        solomon = mg.Node.create("Person", "Solomon Steadman")
+        yuni = mg.Node.create("Person", "Yuni")
+        kai = mg.Node.create("Person", "Kai")
+        mei = mg.Node.create("Person", "Mei")
+        ceramics = mg.Node.create(
+            "Fact",
+            "Mei is Kai's wife and runs a ceramics practice out of their garage",
+        )
+        for node in (solomon, yuni, kai, mei, ceramics):
+            graph.add_node(node, embed=False)
+        for idx in range(12):
+            noise = mg.Node.create("Organization", f"Noise Org {idx}")
+            graph.add_node(noise, embed=False)
+            graph.add_edge(mg.Edge.create(solomon.id, noise.id, "works_at"))
+        graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, yuni.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(kai.id, mei.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        candidate_pool = [
+            {
+                "id": ceramics.id,
+                "text": "Mei is Kai's wife and runs a ceramics practice out of their garage",
+                "category": "fact",
+                "similarity": 0.72,
+            },
+        ]
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "what does my partner's brother's wife do",
+                stores=["graph"],
+                limit=5,
+                owner_id="solomon-steadman",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=None,
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                graph_depth=3,
+                common_kwargs={"candidate_pool": candidate_pool},
+            )
+
+        assert bundle is None
+        assert meta["store_runs"][0]["selected_path"] == "graph_aware"
+        assert meta["counts"]["graph_discoveries"] > 0
+        assert any(row["id"] == ceramics.id for row in rows)
+        assert "ceramics practice" in rows[0]["text"]
+        assert rows[0]["via"] == "graph_attached_fact"
+        assert "Yuni --sibling_of--> Kai --spouse_of--> Mei" in rows[0]["graph_path"]
+
     def test_graph_aware_recall_does_not_relation_filter_multi_hop_depth(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

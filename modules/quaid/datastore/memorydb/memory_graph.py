@@ -2596,6 +2596,71 @@ def _has_generic_graph_signal(query: str) -> bool:
     )) or chained_relation_lookup
 
 
+_RELATION_CHAIN_GROUP_ALIASES = {
+    "spouse": {"partner", "spouse", "wife", "husband", "married", "spouse_of", "partner_of"},
+    "parent": {
+        "mother", "mom", "father", "dad", "parent", "parents", "grandmother",
+        "grandfather", "grandparent", "grandparents", "parent_of",
+    },
+    "sibling": {"sister", "brother", "sibling", "siblings", "sibling_of"},
+    "child": {"son", "daughter", "child", "children", "niece", "nephew", "parent_of"},
+    "extended_family": {"cousin", "aunt", "uncle"},
+    "work": {"manager", "boss", "supervisor", "employee", "coworker", "colleague", "teammate", "works_at"},
+}
+
+
+def _relation_chain_groups_for_query(query: str) -> List[str]:
+    groups: List[str] = []
+    for raw in re.findall(r"[a-z][a-z'-]+", str(query or "").lower()):
+        normalized = str(raw).strip().rstrip("'").rstrip("’")
+        if normalized.endswith("'s") or normalized.endswith("’s"):
+            normalized = normalized[:-2]
+        for group, aliases in _RELATION_CHAIN_GROUP_ALIASES.items():
+            if normalized in aliases:
+                groups.append(group)
+                break
+    return groups
+
+
+def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, float]:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in ("text", "graph_path", "relation", "via_relation")
+    ).lower()
+    hit_groups = 0
+    for group in set(relation_groups):
+        aliases = _RELATION_CHAIN_GROUP_ALIASES.get(group) or {group}
+        if any(alias in text for alias in aliases):
+            hit_groups += 1
+    fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" or str(row.get("category") or "").lower() == "fact" else 0
+    try:
+        depth = int(row.get("hop_depth") or row.get("depth") or 0)
+    except Exception:
+        depth = 0
+    try:
+        similarity = float(row.get("similarity") or 0.0)
+    except Exception:
+        similarity = 0.0
+    return hit_groups, fact_bonus, depth, similarity
+
+
+def _boost_relation_chain_row_scores(rows: List[Dict[str, Any]], relation_groups: List[str]) -> None:
+    for row in rows:
+        hit_groups, fact_bonus, _depth, _similarity = _rank_graph_row_for_relation_chain(
+            row,
+            relation_groups,
+        )
+        if hit_groups >= 2 or (hit_groups >= 1 and fact_bonus):
+            try:
+                current_similarity = float(row.get("similarity") or 0.0)
+            except Exception:
+                current_similarity = 0.0
+            row["similarity"] = round(max(
+                current_similarity,
+                min(0.995, 0.93 + (0.02 * hit_groups) + (0.04 * fact_bonus)),
+            ), 3)
+
+
 def store_edge_keywords(relation: str, keywords: List[str], description: str = "") -> bool:
     """Store keywords for an edge relation type.
 
@@ -3139,6 +3204,8 @@ def graph_aware_recall(
 
     expand_from: List[str] = []  # Node IDs to expand from
     seen_ids: set = set()
+    owner_anchor_id: Optional[str] = None
+    owner_anchor_name: Optional[str] = None
 
     if _has_generic_graph_signal(query):
         graph_depth = max(graph_depth, 2)
@@ -3151,12 +3218,22 @@ def graph_aware_recall(
     matched_relations = _relation_matches_for_query(query)
     expand_relations = None if graph_depth > 1 else (matched_relations or None)
     results["meta"]["relation_expansion"] = "open" if expand_relations is None else "narrowed"
+    relation_chain_groups = _relation_chain_groups_for_query(query)
+    relation_chain_query = (
+        len(relation_chain_groups) >= 2
+        and (
+            str(query or "").count("'s") + str(query or "").count("’s") >= 1
+            or bool(re.search(r"\bof\b", str(query or "").lower()))
+        )
+    )
 
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
         owner_person = resolve_owner_person(owner_id)
         if owner_person:
             expand_from.append(owner_person.id)
+            owner_anchor_id = owner_person.id
+            owner_anchor_name = owner_person.name
             results["source_breakdown"]["pronoun_resolved"] = True
             results["source_breakdown"]["owner_person"] = owner_person.name
 
@@ -3193,20 +3270,45 @@ def graph_aware_recall(
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
+    relation_chain_path_by_node: Dict[str, str] = {}
+    if relation_chain_query and owner_anchor_id and owner_anchor_name:
+        try:
+            for node, relation, direction, _depth, path in graph.get_related_bidirectional(
+                owner_anchor_id,
+                relations=None,
+                depth=graph_depth,
+            ):
+                if node.id and node.id not in relation_chain_path_by_node:
+                    relation_chain_path_by_node[node.id] = _render_bidirectional_graph_path(
+                        owner_anchor_name,
+                        node.name,
+                        relation,
+                        direction,
+                        path,
+                    )
+        except Exception:
+            relation_chain_path_by_node = {}
 
-    # 3. For each Fact, find associated Person via reverse edge traversal
-    # Only add Fact IDs to seen_ids, not Person/Entity nodes that might appear in results
+    # 3. For each Fact, find associated Person via reverse edge traversal.
+    # Do not mark the direct fact as seen here: if graph expansion later reaches
+    # the same fact, the graph-attached duplicate carries path metadata and can
+    # replace the direct row during merge.
     for fact in direct:
         fact_id = fact.get("id")
         fact_category = fact.get("category", "").lower()
         if fact_id and fact_category == "fact":
-            seen_ids.add(fact_id)
             # Check for inbound has_fact edges
             in_edges = graph.get_edges(fact_id, direction="in")
             for edge in in_edges:
                 if edge.relation == "has_fact":
                     person = graph.get_node(edge.source_id)
                     if person and person.type == "Person":
+                        chain_path = relation_chain_path_by_node.get(person.id)
+                        if chain_path:
+                            fact["via"] = "graph_attached_fact"
+                            fact["via_relation"] = "has_fact"
+                            fact["source_name"] = person.name
+                            fact["graph_path"] = f"{chain_path} --has_fact--> {fact.get('text') or fact.get('content') or fact.get('name') or ''}"
                         expand_from.append(person.id)
 
     # 4. Extract entities from query
@@ -3235,7 +3337,7 @@ def graph_aware_recall(
                 break
 
     # 5. Bidirectional graph expansion with relation filtering
-    max_graph_results = limit * 2  # Cap graph results
+    max_graph_results = max(limit * 2, 40) if relation_chain_query else limit * 2
     _graph_started_at = time.monotonic()
     for node_id in set(expand_from):
         if node_id in seen_ids:
@@ -3292,6 +3394,16 @@ def graph_aware_recall(
 
         if len(results["graph_results"]) >= max_graph_results:
             break
+
+    if relation_chain_query and results["graph_results"]:
+        _boost_relation_chain_row_scores(results["graph_results"], relation_chain_groups)
+        results["graph_results"].sort(
+            key=lambda row: (
+                float(row.get("similarity") or 0.0),
+                *_rank_graph_row_for_relation_chain(row, relation_chain_groups),
+            ),
+            reverse=True,
+        )
 
     results["source_breakdown"]["graph_count"] = len(results["graph_results"])
     results["meta"]["phases_ms"]["graph_expand_ms"] = round((time.monotonic() - _graph_started_at) * 1000)
@@ -4465,6 +4577,25 @@ def _harmonize_store_plan_meta(
             current_i = int(current) if isinstance(current, (int, float)) else 0
             if current_i < final_count:
                 counts[key] = final_count
+        graph_discoveries = sum(
+            int(run.get("graph_count") or 0)
+            for run in store_runs
+            if str(run.get("store") or "") == "graph"
+        )
+        final_graph_rows = sum(
+            1
+            for row in final_rows
+            if (
+                str(row.get("category") or "").lower() == "graph"
+                or str(row.get("via") or "").startswith("graph")
+                or bool(row.get("via_relation"))
+            )
+        )
+        graph_discoveries = max(graph_discoveries, final_graph_rows)
+        if graph_discoveries:
+            current_graph = counts.get("graph_discoveries")
+            current_graph_i = int(current_graph) if isinstance(current_graph, (int, float)) else 0
+            counts["graph_discoveries"] = max(current_graph_i, graph_discoveries)
         out["counts"] = counts
         if str(out.get("stop_reason") or "") == "no_initial_results":
             out["stop_reason"] = "store_plan_results"
@@ -4996,6 +5127,16 @@ def _graph_store_recall(
         candidate_pool=candidate_pool,
     )
     combined = list(payload.get("direct_results", [])) + list(payload.get("graph_results", []))
+    relation_chain_groups = _relation_chain_groups_for_query(query)
+    relation_chain_query = (
+        len(relation_chain_groups) >= 2
+        and (
+            str(query or "").count("'s") + str(query or "").count("’s") >= 1
+            or bool(re.search(r"\bof\b", str(query or "").lower()))
+        )
+    )
+    if relation_chain_query and combined:
+        _boost_relation_chain_row_scores(combined, relation_chain_groups)
     try:
         graph = get_graph()
         _, anchor_expansions = _expand_high_confidence_entity_anchors(
@@ -5009,6 +5150,8 @@ def _graph_store_recall(
         )
         if anchor_expansions:
             combined.extend(anchor_expansions)
+            if relation_chain_query:
+                _boost_relation_chain_row_scores(combined, relation_chain_groups)
     except Exception:
         pass
     return (
@@ -5290,12 +5433,19 @@ def _run_recall_store_plan(
             base_meta = meta
         if store == "vector":
             vector_meta = meta
-        store_runs.append({
+        store_run = {
             "store": store,
             "result_count": len(rows),
             "total_ms": int(total_ms) if isinstance(total_ms, (int, float)) else None,
             "selected_path": meta.get("selected_path"),
-        })
+        }
+        if store == "graph":
+            source_breakdown = meta.get("source_breakdown")
+            if isinstance(source_breakdown, dict):
+                graph_count = source_breakdown.get("graph_count")
+                if isinstance(graph_count, (int, float)):
+                    store_run["graph_count"] = max(0, int(graph_count))
+        store_runs.append(store_run)
 
     merged = _merge_recall_batches(merged_batches, limit=max(limit, limit * 2 if fast_mode else limit))
     if fast_mode:
@@ -7709,6 +7859,9 @@ def _print_recall_results(results: List[Dict[str, Any]]) -> None:
         owner = r.get('owner_id', '')
         source_suffix = f"|source_date:{source_date}" if source_date else ""
         print(f"[{similarity:.2f}] [{category}]{flag_str}[C:{conf:.1f}] {text} |ID:{result_id}|T:{created}{source_suffix}|P:{privacy}|O:{owner}")
+        graph_path = str(r.get("graph_path") or "").strip()
+        if graph_path:
+            print(f"  [graph_path] {graph_path}")
         if r.get('_debug'):
             d = r['_debug']
             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
