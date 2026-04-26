@@ -464,6 +464,14 @@ def _all_process_commands_with_env() -> list[tuple[int, str]]:
         return []
 
 
+def _command_has_env_value(command: str, key: str, value: str) -> bool:
+    """Return true when ps output contains an exact KEY=value env token."""
+    if not key or not value:
+        return False
+    pattern = rf"(?:^|\s){re.escape(key)}={re.escape(value)}(?:\s|$)"
+    return re.search(pattern, str(command or "")) is not None
+
+
 def _matching_daemon_pids(
     *,
     quaid_home: Path | str | None = None,
@@ -480,9 +488,9 @@ def _matching_daemon_pids(
             continue
         if "extraction_daemon.py" not in command or "_worker" not in command:
             continue
-        if f"QUAID_HOME={home}" not in command:
+        if not _command_has_env_value(command, "QUAID_HOME", home):
             continue
-        if f"QUAID_INSTANCE={instance_id}" not in command:
+        if not _command_has_env_value(command, "QUAID_INSTANCE", instance_id):
             continue
         if _pid_alive(pid):
             matches.append(pid)

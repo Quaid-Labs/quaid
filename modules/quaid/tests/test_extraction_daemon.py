@@ -328,6 +328,27 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
 
 
+def test_matching_daemon_pids_does_not_match_instance_prefix(monkeypatch):
+    home = "/Users/admin/.quaid"
+    cmd = "/opt/homebrew/bin/python3 /Users/admin/.quaid/plugins/quaid/core/extraction_daemon.py _worker"
+
+    monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_all_process_commands_with_env",
+        lambda: [
+            (101, f"{cmd} QUAID_HOME={home} QUAID_INSTANCE=claude-code-private-tmp-cc-livetest QUAID_DAEMON=1"),
+            (102, f"{cmd} QUAID_HOME={home} QUAID_INSTANCE=claude-code-private-tmp-cc-livetest-m5b QUAID_DAEMON=1"),
+            (103, f"{cmd} QUAID_HOME={home}-backup QUAID_INSTANCE=claude-code-private-tmp-cc-livetest QUAID_DAEMON=1"),
+        ],
+    )
+
+    assert extraction_daemon._matching_daemon_pids(
+        quaid_home=home,
+        instance="claude-code-private-tmp-cc-livetest",
+    ) == [101]
+
+
 def test_start_daemon_adopts_matching_live_worker_without_pidfile(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     adopted = []
