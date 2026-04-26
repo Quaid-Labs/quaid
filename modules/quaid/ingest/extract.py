@@ -51,6 +51,74 @@ logger = logging.getLogger(__name__)
 
 
 _SESSION_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
+_SUPPORT_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*")
+_SUPPORT_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "had",
+    "i",
+    "in",
+    "includes",
+    "into",
+    "is",
+    "it",
+    "its",
+    "my",
+    "of",
+    "on",
+    "or",
+    "our",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "they",
+    "this",
+    "to",
+    "use",
+    "uses",
+    "using",
+    "was",
+    "were",
+    "with",
+    "your",
+}
+_QUESTION_PREFIXES = (
+    "what ",
+    "what's ",
+    "whats ",
+    "who ",
+    "who's ",
+    "when ",
+    "where ",
+    "which ",
+    "why ",
+    "how ",
+    "do ",
+    "does ",
+    "did ",
+    "is ",
+    "are ",
+    "can ",
+    "could ",
+    "would ",
+    "will ",
+    "am ",
+    "should ",
+    "remind me ",
+    "tell me ",
+)
 
 
 def _project_log_date_for_payload(session_id: str) -> Optional[str]:
@@ -1265,6 +1333,130 @@ def _filter_chunk_facts_against_carry(
     return out, dropped
 
 
+def _transcript_role_blocks(transcript: str) -> List[Tuple[str, str]]:
+    """Return normalized transcript blocks as (role, text) tuples."""
+    blocks: List[Tuple[str, str]] = []
+    for raw_block in str(transcript or "").split("\n\n"):
+        block = raw_block.strip()
+        if not block:
+            continue
+        if block.startswith("User: "):
+            blocks.append(("user", block[6:].strip()))
+        elif block.startswith("Assistant: "):
+            blocks.append(("assistant", block[11:].strip()))
+    return blocks
+
+
+def _is_question_text(text: str) -> bool:
+    stripped = str(text or "").strip().lower()
+    if not stripped.endswith("?"):
+        return False
+    return stripped.startswith(_QUESTION_PREFIXES)
+
+
+def _is_question_only_transcript(transcript: str) -> bool:
+    """Whether the transcript is just a user question plus assistant answer(s)."""
+    blocks = _transcript_role_blocks(transcript)
+    if not blocks or len(blocks) > 6:
+        return False
+    user_blocks = [text for role, text in blocks if role == "user" and text]
+    if not user_blocks:
+        return False
+    return all(_is_question_text(text) for text in user_blocks)
+
+
+def _support_tokens(text: str) -> List[str]:
+    tokens = []
+    for raw in _SUPPORT_TOKEN_RE.findall(str(text or "").lower()):
+        if len(raw) < 3:
+            continue
+        if raw in _SUPPORT_STOPWORDS:
+            continue
+        tokens.append(raw)
+    return tokens
+
+
+def _is_exact_support_token(token: str) -> bool:
+    return any(ch.isdigit() for ch in token) or "-" in token or len(token) >= 10
+
+
+def _fact_has_short_transcript_support(fact_text: str, transcript_tokens: set[str]) -> bool:
+    fact_tokens = _support_tokens(fact_text)
+    if not fact_tokens:
+        return True
+    overlap = {token for token in fact_tokens if token in transcript_tokens}
+    if not overlap:
+        return False
+    if any(_is_exact_support_token(token) for token in overlap):
+        return True
+    unique_fact_tokens = set(fact_tokens)
+    overlap_ratio = len(overlap) / max(1, len(unique_fact_tokens))
+    return overlap_ratio >= 0.5
+
+
+def _filter_question_only_transcript_payload(
+    parsed: Dict[str, Any],
+    transcript: str,
+) -> Tuple[Dict[str, Any], bool]:
+    """Question-only recall turns should not produce new durable memory."""
+    if not _is_question_only_transcript(transcript):
+        return parsed, False
+
+    out = dict(parsed)
+    out["facts"] = []
+    out["soul_snippets"] = {}
+    out["journal_entries"] = {}
+    out["project_logs"] = {}
+    if _chunk_assessment(out) in {"", "usable"}:
+        out["chunk_assessment"] = "nothing_usable"
+    return out, True
+
+
+def _filter_short_transcript_facts_against_support(
+    parsed: Dict[str, Any],
+    transcript: str,
+) -> Tuple[Dict[str, Any], int]:
+    """Drop facts from short transcripts when the text is weakly supported."""
+    transcript_text = str(transcript or "").strip()
+    facts = parsed.get("facts", []) or []
+    if not isinstance(facts, list) or not facts:
+        return parsed, 0
+    if len(transcript_text) > 800:
+        return parsed, 0
+
+    blocks = _transcript_role_blocks(transcript_text)
+    if not blocks or len(blocks) > 6:
+        return parsed, 0
+
+    transcript_tokens = set(_support_tokens(transcript_text))
+    if not transcript_tokens:
+        return parsed, 0
+
+    filtered: List[Dict[str, Any]] = []
+    dropped = 0
+    for fact in facts:
+        if not isinstance(fact, dict):
+            filtered.append(fact)
+            continue
+        text = str(fact.get("text", "") or "").strip()
+        if not text:
+            filtered.append(fact)
+            continue
+        if _fact_has_short_transcript_support(text, transcript_tokens):
+            filtered.append(fact)
+            continue
+        dropped += 1
+
+    if not dropped:
+        return parsed, 0
+
+    out = dict(parsed)
+    out["facts"] = filtered
+    if not _payload_has_signal(out) and _chunk_assessment(out) in {"", "usable"}:
+        out["chunk_assessment"] = "nothing_usable"
+    return out, dropped
+
+
 def _carryable_facts(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract minimally valid facts for carry-forward context."""
     facts = parsed.get("facts", []) or []
@@ -1516,6 +1708,21 @@ def _extract_chunk_payloads(
                 label,
                 chunk_label,
                 dropped,
+            )
+        parsed, question_only_dropped = _filter_question_only_transcript_payload(parsed, chunk)
+        if question_only_dropped:
+            logger.info(
+                "[extract] %s chunk %s: dropped payload from question-only transcript",
+                label,
+                chunk_label,
+            )
+        parsed, unsupported_dropped = _filter_short_transcript_facts_against_support(parsed, chunk)
+        if unsupported_dropped:
+            logger.info(
+                "[extract] %s chunk %s: dropped %d weakly supported fact(s) from short transcript",
+                label,
+                chunk_label,
+                unsupported_dropped,
             )
 
     estimated_tokens = estimate_tokens(chunk)
