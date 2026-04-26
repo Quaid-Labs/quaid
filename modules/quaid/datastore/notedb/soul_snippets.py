@@ -260,6 +260,12 @@ def _strip_generated_user_snippet_block(content: str) -> str:
     """Remove the managed USER snippet projection block from visible content."""
     if not content:
         return ""
+    if _GENERATED_USER_SNIPPETS_START in content and _GENERATED_USER_SNIPPETS_END not in content:
+        message = "Malformed generated USER snippets projection: missing end marker"
+        if is_fail_hard_enabled():
+            raise RuntimeError(message)
+        logger.warning("%s; stripping from start marker to EOF", message)
+        return content.split(_GENERATED_USER_SNIPPETS_START, 1)[0].rstrip() + "\n"
     block_pattern = re.compile(
         rf"\n?{re.escape(_GENERATED_USER_SNIPPETS_START)}[\s\S]*?{re.escape(_GENERATED_USER_SNIPPETS_END)}\n?",
         re.MULTILINE,
@@ -276,9 +282,11 @@ def _strip_generated_projection_for_review(filename: str, content: str) -> str:
     makes janitor reviews self-discard pending snippets and then remove the
     projection, losing the signal.
     """
-    if filename == "USER.md":
-        return _strip_generated_user_snippet_block(content)
-    return content
+    _ = filename
+    text = str(content or "")
+    if _GENERATED_USER_SNIPPETS_START in text or _GENERATED_USER_SNIPPETS_END in text:
+        return _strip_generated_user_snippet_block(text)
+    return text
 
 
 def _user_identity_has_meaningful_content(content: str) -> bool:
