@@ -22,10 +22,13 @@ non-trivial plan.
   direction is `approved → active`: newly extracted facts land as
   `approved`, janitor promotes them to `active` after review. Check that
   the `active` count grew and the `approved` count shrank.
-- Snippets, journals, and identity files under
-  `~/quaid/instances/<INSTANCE>/` show fresh-timestamp activity within the
-  apply window. Identity file line counts may go DOWN after janitor, not
-  up — janitor consolidates and prunes duplicates, not only appends.
+- Identity files, `*.snippets.md`, and `journal/*.journal.md` artifacts under
+  `~/quaid/instances/<INSTANCE>/` show fresh-timestamp activity when the
+  apply processed matching inputs. Identity file line counts may go DOWN
+  after janitor, not up — janitor consolidates and prunes duplicates, not
+  only appends.
+- `PROJECT.log` activity is only required when the run has pending project-log
+  queue items or the milestone explicitly seeded project-log entries.
 - No duplicate or orphan snippet / journal rows; registry deletes
   propagate.
 
@@ -41,8 +44,11 @@ non-trivial plan.
      for i in ~/quaid/instances/*/; do \
        echo -n \"\$i\$f: \"; wc -l < \"\$i\$f\" 2>/dev/null || echo '(missing)'; \
      done; done"
-   ssh REMOTE_HOST "ls ~/quaid/instances/*/snippets 2>/dev/null | head -30"
-   ssh REMOTE_HOST "ls ~/quaid/instances/*/journals 2>/dev/null | head -30"
+   ssh REMOTE_HOST "find ~/quaid/instances -maxdepth 2 -name '*.snippets.md' \
+     -exec stat -f '%Sm %N' -t '%Y-%m-%dT%H:%M:%SZ' {} \\; 2>/dev/null | sort"
+   ssh REMOTE_HOST "find ~/quaid/instances -maxdepth 3 \
+     \\( -name '*.journal.md' -o -name '.distillation-state.json' \\) \
+     -exec stat -f '%Sm %N' -t '%Y-%m-%dT%H:%M:%SZ' {} \\; 2>/dev/null | sort"
    ```
 
 2. **Dry-run.** Confirm the plan before applying:
@@ -65,24 +71,37 @@ non-trivial plan.
 
 4. **Post-state verification.** Diff identity / snippet / journal files
    against the pre-state snapshot. Identity line counts may go DOWN
-   (consolidation) or UP (new facts); both are legitimate. Snippet and
-   journal dirs should have fresh activity.
+   (consolidation) or UP (new facts); both are legitimate. Snippet files
+   are flat `*.snippets.md` files in the visible instance root. Journal files
+   live under the singular `journal/` directory.
 
    ```bash
    ssh REMOTE_HOST "for f in SOUL.md USER.md ENVIRONMENT.md; do \
      for i in ~/quaid/instances/*/; do \
        echo -n \"\$i\$f: \"; wc -l < \"\$i\$f\" 2>/dev/null || echo '(missing)'; \
      done; done"
-   ssh REMOTE_HOST "tail -40 ~/quaid/instances/*/journals/SOUL.md 2>/dev/null | head -20"
-   ssh REMOTE_HOST "ls -lt ~/quaid/instances/*/snippets 2>/dev/null | head -10"
+   ssh REMOTE_HOST "find ~/quaid/instances -maxdepth 2 -name '*.snippets.md' \
+     -exec stat -f '%Sm %N' -t '%Y-%m-%dT%H:%M:%SZ' {} \\; 2>/dev/null | sort"
+   ssh REMOTE_HOST "find ~/quaid/instances -maxdepth 3 \
+     \\( -name '*.journal.md' -o -name '.distillation-state.json' \\) \
+     -exec stat -f '%Sm %N' -t '%Y-%m-%dT%H:%M:%SZ' {} \\; 2>/dev/null | sort"
+   ssh REMOTE_HOST "tail -40 ~/quaid/instances/*/journal/*.journal.md 2>/dev/null | head -40"
    ```
 
-   `PROJECT.log` entries for any linked projects should have fresh lines
-   matching the apply window. The "Solomon runs a project called Quaid"
-   passing mention from the rolling transcript should have become a line
-   under either `~/quaid/projects/misc--<instance>/PROJECT.log` or
-   `~/quaid/projects/quaid/PROJECT.log` depending on whether a Quaid
-   project was linked in the instance.
+   `PROJECT.log` entries are not an unconditional janitor side effect. Check
+   project-log freshness only when there are pending queue items or the
+   milestone explicitly seeded project-log entries:
+
+   ```bash
+   ssh REMOTE_HOST "find ~/.quaid/instances -path '*/data/project-docs/project-log-queue/*' \
+     -type f 2>/dev/null | head -30"
+   ssh REMOTE_HOST "find ~/quaid/projects -name PROJECT.log \
+     -exec stat -f '%Sm %N' -t '%Y-%m-%dT%H:%M:%SZ' {} \\; 2>/dev/null | sort"
+   ```
+
+   When a queue item or seeded project-log entry exists, the matching
+   `PROJECT.log` under `~/quaid/projects/<PROJECT>/PROJECT.log` should have
+   fresh lines matching the apply window.
 
 5. **State advancement (approved → active).** Spot-check that reviewed
    rows graduated from `approved` to `active`. Newly extracted facts
@@ -102,7 +121,10 @@ non-trivial plan.
 
 - Dry-run hangs > 60 s — FAIL (regression in checkpoint bypass).
 - Apply completes but no state advances — FAIL.
-- Snippets / journals / `PROJECT.log` entries never materialize after apply
-  — FAIL.
+- Matching `*.snippets.md` or `journal/*.journal.md` artifacts never
+  materialize after apply even though the apply processed corresponding
+  snippet or journal inputs — FAIL.
+- `PROJECT.log` entries never materialize after apply when a project-log
+  queue item or explicit seeded project-log entry existed — FAIL.
 - Apply reports a per-row LLM error on a small subset but completes
   otherwise — PWN-note with the error class.
