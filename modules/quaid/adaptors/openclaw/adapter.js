@@ -277,8 +277,12 @@ function getDaemonSignalDir(agentId = "main") {
 }
 const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
 const _recentResetSignalsWritten = /* @__PURE__ */ new Map();
+const _recentResetSignalSources = /* @__PURE__ */ new Map();
 const _lateTranscriptUpdateSessionEndSignalsWritten = /* @__PURE__ */ new Set();
 const LATE_TRANSCRIPT_UPDATE_SESSION_END_WINDOW_MS = 2 * 60 * 1e3;
+const LATE_TRANSCRIPT_UPDATE_EXCLUDED_RESET_SOURCES = /* @__PURE__ */ new Set([
+  "session_index_new_key"
+]);
 function lateTranscriptUpdateSignalKey(sessionId, resetSignalMs) {
   return `${sessionId}:${Math.floor(resetSignalMs)}`;
 }
@@ -299,6 +303,12 @@ function lateTranscriptUpdateSessionEndDecision(sessionId, conversationMessages,
   );
   if (lastResetSignalMs <= 0) {
     return { shouldQueue: false, reason: "no_recent_reset_signal" };
+  }
+  const lastResetSource = String(
+    opts?.lastResetSource ?? _recentResetSignalSources.get(sid) ?? ""
+  ).trim();
+  if (LATE_TRANSCRIPT_UPDATE_EXCLUDED_RESET_SOURCES.has(lastResetSource)) {
+    return { shouldQueue: false, reason: "reset_source_excluded" };
   }
   const nowMs = Number(opts?.nowMs ?? Date.now());
   const resetAgeMs = nowMs - lastResetSignalMs;
@@ -2131,6 +2141,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     } catch {
     }
     _recentResetSignalsWritten.set(sessionId, Date.now());
+    _recentResetSignalSources.set(sessionId, String(meta?.source || "").trim());
   }
   const payload = {
     type: signalType,

@@ -383,8 +383,12 @@ const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE
 // Set handles same-process bursts where multiple callers race before the marker
 // is visible on disk.
 const _recentResetSignalsWritten = new Map<string, number>(); // session_id -> timestamp
+const _recentResetSignalSources = new Map<string, string>();
 const _lateTranscriptUpdateSessionEndSignalsWritten = new Set<string>();
 const LATE_TRANSCRIPT_UPDATE_SESSION_END_WINDOW_MS = 2 * 60 * 1000;
+const LATE_TRANSCRIPT_UPDATE_EXCLUDED_RESET_SOURCES = new Set([
+  "session_index_new_key",
+]);
 
 function lateTranscriptUpdateSignalKey(sessionId: string, resetSignalMs: number): string {
   return `${sessionId}:${Math.floor(resetSignalMs)}`;
@@ -397,6 +401,7 @@ function lateTranscriptUpdateSessionEndDecision(
   opts?: {
     nowMs?: number;
     lastResetSignalMs?: number;
+    lastResetSource?: string;
     alreadySignaled?: (key: string) => boolean;
   },
 ): { shouldQueue: boolean; reason: string; key?: string; resetAgeMs?: number } {
@@ -416,6 +421,12 @@ function lateTranscriptUpdateSessionEndDecision(
   );
   if (lastResetSignalMs <= 0) {
     return { shouldQueue: false, reason: "no_recent_reset_signal" };
+  }
+  const lastResetSource = String(
+    opts?.lastResetSource ?? _recentResetSignalSources.get(sid) ?? "",
+  ).trim();
+  if (LATE_TRANSCRIPT_UPDATE_EXCLUDED_RESET_SOURCES.has(lastResetSource)) {
+    return { shouldQueue: false, reason: "reset_source_excluded" };
   }
   const nowMs = Number(opts?.nowMs ?? Date.now());
   const resetAgeMs = nowMs - lastResetSignalMs;
@@ -2699,6 +2710,7 @@ function writeDaemonSignal(
     }
     try { fs.writeFileSync(markerPath, sessionId, { mode: 0o600 }); } catch {}
     _recentResetSignalsWritten.set(sessionId, Date.now());
+    _recentResetSignalSources.set(sessionId, String(meta?.source || "").trim());
   }
 
   const payload = {

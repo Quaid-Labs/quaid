@@ -773,6 +773,25 @@ describe("lifecycle signal detection", () => {
     expect(decision.reason).toBe("already_signaled");
   });
 
+  it("does not queue late transcript_update extraction for session-index new-key resets", () => {
+    const sessionId = "da26473d-ca94-4880-9ad6-da01f89912cb";
+    const resetMs = Date.parse("2026-04-26T21:43:14.643Z");
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hello! What can I help with?" },
+    ];
+
+    const decision = __test.lateTranscriptUpdateSessionEndDecision(sessionId, messages, 31097, {
+      nowMs: resetMs + 150,
+      lastResetSignalMs: resetMs,
+      lastResetSource: "session_index_new_key",
+      alreadySignaled: () => false,
+    });
+
+    expect(decision.shouldQueue).toBe(false);
+    expect(decision.reason).toBe("reset_source_excluded");
+  });
+
   it("recognizes corrupted preserved transcripts overwritten by timeout events", () => {
     const baseDir = `/tmp/quaid-oc-preserved-${Date.now()}`;
     const corruptedFile = path.join(baseDir, "logs", "quaid", "sessions", "sess-1.jsonl");
