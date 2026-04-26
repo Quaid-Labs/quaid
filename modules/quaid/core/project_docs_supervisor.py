@@ -269,7 +269,7 @@ def _spawn_janitor_worker(instance: str, *, command: str) -> subprocess.Popen:
     name = validate_instance_id(instance)
     if _instance_misc_project_deleted(name):
         raise RuntimeError(f"refusing to start janitor worker for deleted misc instance {name}")
-    if project_docs.is_instance_monitor_disabled(name):
+    if command != "run-all-once" and project_docs.is_instance_monitor_disabled(name):
         raise RuntimeError(f"refusing to start janitor worker for disabled instance {name}")
     script = Path(__file__).parent / "janitor_worker.py"
     env = _instance_child_env(name)
@@ -285,19 +285,23 @@ def _spawn_janitor_worker(instance: str, *, command: str) -> subprocess.Popen:
 
 
 def _requested_janitor_instances(request: Dict[str, object]) -> tuple[list[str], list[str]]:
-    live, inactive = _live_instances_for_supervisor()
     all_instances = set(list_instances())
+    deleted = {
+        instance
+        for instance in all_instances
+        if _instance_misc_project_deleted(instance)
+    }
     scope = str(request.get("scope") or "all").strip().lower()
     if scope == "instance":
         raw = validate_instance_id(str(request.get("instance") or ""))
-        if raw in live:
+        if raw in all_instances and raw not in deleted:
             return [raw], []
-        if raw in inactive:
-            return [], [f"instance {raw} is disabled or deleted"]
+        if raw in deleted:
+            return [], [f"instance {raw} is deleted"]
         if raw in all_instances:
             return [], [f"instance {raw} is not eligible for janitor"]
         return [], [f"instance {raw} was not found"]
-    return sorted(live), []
+    return sorted(all_instances - deleted), []
 
 
 def _start_requested_janitor_run(

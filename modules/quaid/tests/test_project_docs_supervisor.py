@@ -369,6 +369,44 @@ def test_start_requested_janitor_run_starts_all_live_instances(monkeypatch, tmp_
     assert payload["started_instances"] == ["alpha", "beta"]
 
 
+def test_start_requested_janitor_run_includes_monitor_disabled_instances(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    starts = []
+
+    class _RunningProc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def poll(self):
+            return None
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: ["alpha", "beta"])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "is_instance_monitor_disabled",
+        lambda name: name == "beta",
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_spawn_janitor_worker",
+        lambda name, *, command: starts.append((name, command)) or _RunningProc(100 + len(starts)),
+    )
+
+    request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
+    active = supervisor._maintain_on_demand_janitor_request(None, {}, {})
+
+    assert active is not None
+    assert starts == [("alpha", "run-all-once"), ("beta", "run-all-once")]
+    payload = project_docs.read_janitor_request()
+    assert payload["request_id"] == request["request_id"]
+    assert payload["instances"] == ["alpha", "beta"]
+    assert payload["started_instances"] == ["alpha", "beta"]
+
+
 def test_requested_janitor_run_completes_single_instance(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
@@ -450,6 +488,26 @@ def test_start_janitor_worker_refuses_disabled_instance(monkeypatch):
 
     with pytest.raises(RuntimeError, match="disabled instance"):
         supervisor._start_janitor_worker("claude-code-paused")
+
+
+def test_on_demand_janitor_worker_allows_disabled_instance_monitor(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: True)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", _FakePopen)
+
+    supervisor._spawn_janitor_worker("claude-code-paused", command="run-all-once")
+
+    assert captured["env"]["QUAID_INSTANCE"] == "claude-code-paused"
 
 
 def test_janitor_worker_throttles_per_instance(monkeypatch):
