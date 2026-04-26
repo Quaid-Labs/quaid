@@ -3082,6 +3082,42 @@ class TestResolveAnthropicCredential:
         cred = adapter._resolve_anthropic_credential()
         assert cred == "sk-ant-oat01-from-profiles"
 
+    def test_get_api_key_anthropic_does_not_fall_through_to_codex_shared_token(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = OpenClawAdapter()
+        adapter.store_shared_auth_token("codex_oauth", "eyJ-openai-jwt")
+        fake_agent_dir = tmp_path / "fake_agent"
+        fake_agent_dir.mkdir()
+        monkeypatch.setattr(adapter, "_get_agent_config_dir", lambda: fake_agent_dir)
+        assert adapter.get_api_key("ANTHROPIC_API_KEY") is None
+
+    def test_get_api_key_anthropic_reads_gateway_last_good_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = OpenClawAdapter()
+        fake_agent_dir = tmp_path / "fake_agent"
+        fake_agent_dir.mkdir()
+        monkeypatch.setattr(adapter, "_get_agent_config_dir", lambda: fake_agent_dir)
+        (fake_agent_dir / "auth-profiles.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "profiles": {
+                        "anthropic:oauth": {
+                            "provider": "anthropic",
+                            "token": "sk-ant-oat01-gateway-token",
+                        }
+                    },
+                    "lastGood": {"anthropic": "anthropic:oauth"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert adapter.get_api_key("ANTHROPIC_API_KEY") == "sk-ant-oat01-gateway-token"
+
 
 class TestResetAdapterClearsProviders:
     """reset_adapter() should clear the embeddings provider cache."""

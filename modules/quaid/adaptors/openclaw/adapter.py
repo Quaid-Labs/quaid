@@ -497,7 +497,10 @@ class OpenClawAdapter(QuaidAdapter):
     def get_api_key(self, env_var_name: str) -> Optional[str]:
         # 1. Environment variable
         if env_var_name == "ANTHROPIC_API_KEY":
-            token = self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"]) or self.read_auth_token()
+            token = (
+                self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"])
+                or self._resolve_anthropic_credential()
+            )
             if token:
                 return token
         if env_var_name == "OPENAI_API_KEY":

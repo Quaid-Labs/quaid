@@ -3120,7 +3120,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
         int(cursor_offset or 0),
     )
-    if total_lines > buffered_line_offset:
+    staged_semantic_ready = rolling_mode and _semantic_buffer_has_content(staged_state)
+    if total_lines > buffered_line_offset and not staged_semantic_ready:
         buffer_kwargs: Dict[str, Any] = {"adapter": adapter}
         if rolling_mode:
             buffer_kwargs["max_tokens"] = chunk_budget
@@ -3138,6 +3139,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
         else:
             refreshed_semantic_buffer_for_nonrolling = True
+    elif staged_semantic_ready:
+        buffered_line_offset = int(
+            staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
+        )
     read_start_offset = cursor_offset if rolling_mode else buffered_line_offset
     pending_subagent_harvest = False
     new_lines = (
