@@ -2285,6 +2285,66 @@ function persistHookPayloadTranscript(
   }
 }
 
+function appendPreservedTranscriptMessage(
+  sessionId: string,
+  role: "user" | "assistant",
+  content: string,
+  source: string,
+): string | null {
+  const sid = String(sessionId || "").trim();
+  const text = preprocessTranscriptText(String(content || "")).trim();
+  if (!sid || !text) return null;
+  const destPath = getPreservedSessionFile(sid);
+  const row = JSON.stringify({
+    type: "message",
+    message: {
+      role,
+      content: text,
+      timestamp: new Date().toISOString(),
+    },
+  });
+  try {
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    if (fs.existsSync(destPath)) {
+      const lines = fs.readFileSync(destPath, "utf8")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const last = lines[lines.length - 1] || "";
+      if (last) {
+        try {
+          const parsed = JSON.parse(last);
+          const lastRole = String(parsed?.message?.role || parsed?.role || "").trim().toLowerCase();
+          const lastText = String(parsed?.message?.content || parsed?.content || "").trim();
+          if (lastRole === role && lastText === text) {
+            sessionTranscriptPaths.set(sid, destPath);
+            return destPath;
+          }
+        } catch {}
+      }
+    }
+    fs.appendFileSync(destPath, `${row}\n`, "utf8");
+    sessionTranscriptPaths.set(sid, destPath);
+    writeHookTrace("session_index.transcript_preserved_append", {
+      session_id: sid,
+      role,
+      source,
+      dest_path: destPath,
+      text_len: text.length,
+    });
+    return destPath;
+  } catch (err: unknown) {
+    writeHookTrace("session_index.transcript_preserve_append_error", {
+      session_id: sid,
+      role,
+      source,
+      dest_path: destPath,
+      error: String((err as Error)?.message || err),
+    });
+    return null;
+  }
+}
+
 function preserveLifecycleTranscript(
   sessionId: string,
   preferredPath: string | null | undefined,
@@ -2476,6 +2536,15 @@ function writeDaemonSignal(
       resolved_path: resolvedPath,
     });
     resolvedPath = "";
+  }
+  if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+    writeHookTrace("session.daemon_signal_no_transcript", {
+      session_id: sessionId,
+      signal_type: signalType,
+      resolved_path: resolvedPath,
+    });
+    console.warn(`[quaid][daemon-signal] no existing transcript path for session ${sessionId}, skipping ${signalType} signal`);
+    return null;
   }
 
   // Route to the agent's own Quaid silo if known, otherwise the primary instance.
@@ -6017,6 +6086,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             ...(sessionId ? { sessionId } : {}),
             ...(transientOrigin ? { originSessionId: transientOriginValue } : {}),
           };
+          if (sessionId) {
+            appendPreservedTranscriptMessage(sessionId, "user", rawText, "message_received");
+          }
           writeHookTrace("hook.message_received.user_cache", {
             session_id: sessionId || "",
             origin_session_id: transientOrigin ? transientOriginValue : "",
@@ -7404,6 +7476,7 @@ export const __test = {
   transcriptPathExplicitlyMatchesSession,
   preferredTranscriptPathForSession,
   persistHookPayloadTranscript,
+  appendPreservedTranscriptMessage,
   preserveLifecycleTranscript,
   writeDaemonSignal,
   looksLikeQuaidEventLogTranscript,

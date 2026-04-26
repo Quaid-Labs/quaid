@@ -486,6 +486,84 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("uses preserved message transcripts for Matrix sessions without OC JSONL files", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-matrix-preserve-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "0ce34f8f-112a-42d8-98b3-d42faef2923d";
+
+      const preserved = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Quick one to remember: my workshop safe codeword is cobalt-postage-oc.",
+        "message_received",
+      );
+      expect(preserved).toBeTruthy();
+      expect(fs.existsSync(String(preserved))).toBe(true);
+      expect(isolatedTest.parseSessionMessagesJsonl(String(preserved))).toMatchObject([
+        { role: "user", content: "Quick one to remember: my workshop safe codeword is cobalt-postage-oc." },
+      ]);
+
+      const sigPath = isolatedTest.writeDaemonSignal(sessionId, "reset", { source: "message:received" });
+      expect(sigPath).toBeTruthy();
+      const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+      expect(payload.transcript_path).toBe(preserved);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("does not emit daemon signals that point at missing OC transcript files", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-missing-transcript-signal-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "656bd733-6aef-4163-a4f0-569ddd0a4a60";
+      const missingPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+
+      expect(isolatedTest.rememberSessionTranscriptPath(sessionId, missingPath, "session-index-entry")).toBe(true);
+      expect(isolatedTest.writeDaemonSignal(sessionId, "session_end", { source: "session_end" })).toBe(null);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("distinguishes Quaid event logs from preserved conversation transcripts", () => {
     const eventLogFile = `/tmp/quaid-oc-event-log-${Date.now()}.jsonl`;
     const transcriptFile = `/tmp/quaid-oc-transcript-${Date.now()}.jsonl`;
