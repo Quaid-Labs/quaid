@@ -3742,6 +3742,14 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
           });
         } else {
           turnPromise = (async () => {
+            if (!autoInjectEnabled) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "auto_inject_disabled"
+              };
+            }
             const modelConfigNotice2 = await validatePromptModelConfigIfChanged(
               promptAgentLabel,
               String(event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "").trim()
@@ -3756,14 +3764,6 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
                 recallDiagnostics: null,
                 injection: null,
                 modelConfigNotice: modelConfigNotice2
-              };
-            }
-            if (!autoInjectEnabled) {
-              return {
-                allMemories: [],
-                recallDiagnostics: null,
-                injection: null,
-                skipReason: "auto_inject_disabled"
               };
             }
             if (lowQualityQuery) {

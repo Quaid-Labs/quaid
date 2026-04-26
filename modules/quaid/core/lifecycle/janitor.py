@@ -148,7 +148,10 @@ def _logs_dir() -> Path:
 _LIFECYCLE_REGISTRY = None
 
 # Thresholds - now loaded from config.json
-_cfg = None
+try:
+    _cfg = get_config()
+except Exception:
+    _cfg = None
 DUPLICATE_MIN_SIM = 0.85  # Lower bound for "might be duplicate"
 DUPLICATE_MAX_SIM = 0.94  # Upper bound (auto-reject above)
 CONTRADICTION_MIN_SIM = 0.2  # Minimum similarity for contradiction checks

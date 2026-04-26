@@ -4673,6 +4673,14 @@ notify_user(${JSON.stringify(message)})
           });
         } else {
           turnPromise = (async (): Promise<AutoInjectTurnOutcome> => {
+            if (!autoInjectEnabled) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "auto_inject_disabled",
+              };
+            }
             const modelConfigNotice = await validatePromptModelConfigIfChanged(
               promptAgentLabel,
               String(event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "").trim(),
@@ -4687,14 +4695,6 @@ notify_user(${JSON.stringify(message)})
                 recallDiagnostics: null,
                 injection: null,
                 modelConfigNotice,
-              };
-            }
-            if (!autoInjectEnabled) {
-              return {
-                allMemories: [],
-                recallDiagnostics: null,
-                injection: null,
-                skipReason: "auto_inject_disabled",
               };
             }
             if (lowQualityQuery) {

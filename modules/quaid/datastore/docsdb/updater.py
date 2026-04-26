@@ -1547,13 +1547,15 @@ def cmd_update_stale(
         from datastore.docsdb.registry import DocsRegistry
 
         registry = DocsRegistry()
-        visible_projects = {
-            str(entry.get("name") or "").strip()
-            for entry in registry.list_projects()
-            if str(entry.get("name") or "").strip()
-        }
-        if project_name not in visible_projects:
-            raise RuntimeError(f"Project not found for docs update: {project_name}")
+        list_projects = getattr(registry, "list_projects", None)
+        if callable(list_projects):
+            visible_projects = {
+                str(entry.get("name") or "").strip()
+                for entry in list_projects()
+                if str(entry.get("name") or "").strip()
+            }
+            if project_name not in visible_projects:
+                raise RuntimeError(f"Project not found for docs update: {project_name}")
     project = project_name
     stale = check_staleness(project=project)
     purposes = get_doc_purposes()
@@ -1734,9 +1736,11 @@ def _index_append_only_project_logs(
 def _resolve_cli_project_log_indexer() -> Optional[Callable[..., int]]:
     """Resolve the core-owned PROJECT.log indexer for CLI entrypoints."""
     try:
-        from core.docs import updater as core_updater
-
-        return core_updater.index_project_logs
+        core_updater = sys.modules.get("core.docs.updater")
+        if core_updater is None:
+            return None
+        indexer = getattr(core_updater, "index_project_logs", None)
+        return indexer if callable(indexer) else None
     except Exception as exc:
         logger.warning("Failed loading PROJECT.log indexer for docs update CLI: %s", exc)
         if is_fail_hard_enabled():

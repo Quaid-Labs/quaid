@@ -592,16 +592,15 @@ def get_project_entry(project: str) -> Dict[str, Any]:
 
 
 def _adapter_type_from_instance_name(instance_name: str) -> str:
-    name = str(instance_name or "").strip().lower()
-    if name.startswith("claude-code-") or name == "claude-code":
-        return "claude-code"
-    if name.startswith("codex-") or name == "codex":
-        return "codex"
-    if name.startswith("openclaw-") or name == "openclaw":
-        return "openclaw"
-    if name.startswith("standalone-") or name == "standalone":
-        return "standalone"
-    return ""
+    name = str(instance_name or "").strip()
+    if not name:
+        return ""
+    try:
+        from lib.adapter import _adapter_type_from_instance_id
+
+        return str(_adapter_type_from_instance_id(name) or "").strip().lower()
+    except Exception:
+        return ""
 
 
 def _project_runtime_hints(entry: Dict[str, Any], request: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str]]:

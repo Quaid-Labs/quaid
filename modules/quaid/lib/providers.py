@@ -1545,7 +1545,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                 default_timeout_s = 120.0
         timeout_s, deadline = _embedding_deadline(timeout_s, default_timeout_s)
         for attempt in range(retries + 1):
-            request_timeout_s = _remaining_embedding_timeout(deadline)
+            request_timeout_s = float(timeout_s) if explicit_timeout else _remaining_embedding_timeout(deadline)
             request_started = time.monotonic()
             try:
                 text_value = str(text or "")
@@ -1651,7 +1651,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
             batch_chars = sum(len(str(item or "")) for item in batch)
             batch_started = time.monotonic()
             for attempt in range(retries + 1):
-                request_timeout_s = _remaining_embedding_timeout(deadline)
+                request_timeout_s = float(timeout_s) if explicit_timeout else _remaining_embedding_timeout(deadline)
                 request_started = time.monotonic()
                 try:
                     data = json.dumps({
