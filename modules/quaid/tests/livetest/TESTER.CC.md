@@ -38,7 +38,7 @@ After M0 install, start the CC interaction pane:
 ```bash
 tmux respawn-pane -k -t livetest:CC 'zsh -il'
 tmux send-keys -t livetest:CC "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CC "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions --model claude-sonnet-4-6" Enter
+tmux send-keys -t livetest:CC "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=WORKSPACE CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions --model claude-sonnet-4-6" Enter
 ```
 
 **MANDATORY — always pass `--model claude-sonnet-4-6` as a launch flag.**
@@ -221,14 +221,17 @@ More than 3 concurrent hooks.py processes = hook storm. Report to coordinator im
 
 ## Instance Isolation
 
-`QUAID_INSTANCE` is pinned **per project dir**, not globally. It is set in
-`/tmp/cc-livetest/.claude/settings.json`, not in `~/.claude/settings.json`.
-Claude hooks are the opposite: they live in the global `~/.claude/settings.json`.
+`QUAID_INSTANCE` is **not global** for CC. Claude hooks live in the global
+`~/.claude/settings.json`, but instance identity is project-scoped: either
+explicitly pinned in `/tmp/cc-livetest/.claude/settings.json`, or derived by
+Quaid from the resolved `CLAUDE_PROJECT_DIR` path (`/tmp` resolves to
+`/private/tmp` on macOS, so this lane derives
+`claude-code-private-tmp-cc-livetest`).
 
 Verify:
 ```bash
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"/tmp/cc-livetest/.claude/settings.json\")); print(d.get(\"env\",{}).get(\"QUAID_INSTANCE\",\"MISSING\"))"'
-# Expected: CC_INSTANCE
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && bash modules/quaid/tests/livetest/scripts/verify-cc-session-capture.sh --remote localhost --project-dir /tmp/cc-livetest --instance claude-code-private-tmp-cc-livetest --max-age-min 5'
+# Expected: PASS with either explicit project_instance=CC_INSTANCE or path-derived fallback
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"$HOME/.claude/settings.json\")); print(d.get(\"env\",{}).get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
 # Expected: absent
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"$HOME/.claude/settings.json\")); print(sorted((d.get(\"hooks\") or {}).keys()))"'

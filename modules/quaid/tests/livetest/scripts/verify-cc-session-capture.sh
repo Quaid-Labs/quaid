@@ -12,7 +12,8 @@
 #
 # Checks:
 #   1. ~/.claude/settings.json contains Quaid CC hooks
-#   2. <project-dir>/.claude/settings.json contains the expected QUAID_INSTANCE
+#   2. Instance identity is either explicitly pinned in
+#      <project-dir>/.claude/settings.json or matches CC's path-derived fallback
 #   3. ~/.claude/projects/<encoded-project-dir> has a fresh *.jsonl transcript
 #   4. The instance hook trace file exists (best-effort; absence is reported)
 #
@@ -76,8 +77,8 @@ echo "  Fresh window: ${MAX_AGE_MIN}m"
 echo ""
 
 remote_python="$(cat <<'PY'
-import glob
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -92,6 +93,7 @@ home = Path.home()
 global_settings_path = home / ".claude" / "settings.json"
 project_settings_path = Path(project_dir) / ".claude" / "settings.json"
 resolved_project_dir = str(Path(project_dir).resolve())
+derived_instance = "claude-code-" + re.sub(r"[^a-z0-9]+", "-", resolved_project_dir.lower()).strip("-")
 session_dir_name = resolved_project_dir.replace("/", "-")
 session_root = home / ".claude" / "projects" / session_dir_name
 hook_trace_path = home / ".quaid" / "instances" / instance_id / "logs" / "quaid-hook-trace.jsonl"
@@ -108,15 +110,29 @@ else:
         failures.append(f"missing Claude hooks in ~/.claude/settings.json: {missing}")
 
 print(f"project_settings={project_settings_path}")
-if not project_settings_path.is_file():
-    failures.append(f"missing project settings: {project_settings_path}")
-else:
+if project_settings_path.is_file():
     data = json.loads(project_settings_path.read_text())
     actual_instance = str(((data.get("env") or {}).get("QUAID_INSTANCE")) or "").strip()
-    print(f"project_instance={actual_instance or '(missing)'}")
-    if actual_instance != instance_id:
+    if actual_instance:
+        print(f"project_instance={actual_instance}")
+    else:
+        print(f"project_instance=(missing; derived fallback {derived_instance})")
+    if actual_instance and actual_instance != instance_id:
         failures.append(
-            f"project settings QUAID_INSTANCE mismatch: expected {instance_id} got {actual_instance or '(missing)'}"
+            f"project settings QUAID_INSTANCE mismatch: expected {instance_id} got {actual_instance}"
+        )
+else:
+    print(f"project_instance=(path-derived fallback {derived_instance})")
+if derived_instance != instance_id and not project_settings_path.is_file():
+    failures.append(
+        f"missing project settings and path-derived instance mismatch: expected {instance_id} got {derived_instance}"
+    )
+elif derived_instance != instance_id and project_settings_path.is_file():
+    data = json.loads(project_settings_path.read_text())
+    actual_instance = str(((data.get("env") or {}).get("QUAID_INSTANCE")) or "").strip()
+    if not actual_instance:
+        failures.append(
+            f"project settings omit QUAID_INSTANCE and path-derived instance mismatch: expected {instance_id} got {derived_instance}"
         )
 
 print(f"session_root={session_root}")
@@ -166,4 +182,11 @@ print("PASS")
 PY
 )"
 
-ssh "$REMOTE_HOST" python3 - "$PROJECT_DIR" "$INSTANCE_ID" "$MAX_AGE_MIN" <<<"$remote_python"
+case "$REMOTE_HOST" in
+  localhost|127.0.0.1|::1)
+    python3 - "$PROJECT_DIR" "$INSTANCE_ID" "$MAX_AGE_MIN" <<<"$remote_python"
+    ;;
+  *)
+    ssh "$REMOTE_HOST" python3 - "$PROJECT_DIR" "$INSTANCE_ID" "$MAX_AGE_MIN" <<<"$remote_python"
+    ;;
+esac
