@@ -86,6 +86,11 @@ tmux send-keys -t livetest:CDX.1 "" Enter
 This must be sent by whoever is driving the pane — the tester agent (from CDX.0),
 or the coordinator directly if the tester's delivery is failing.
 
+Do not report a CDX "no reply" product failure until you have confirmed a Codex
+session JSONL was created or updated under `~/.codex/sessions`. If the pane shows
+the prompt text but no session file changed, the turn was not submitted; send the
+bare Enter above and re-check.
+
 Exit CDX with Ctrl+D or `/exit`.
 
 **Always wait for the current turn to fully finish** before sending `/new` —
