@@ -77,6 +77,16 @@ class OpenClawAdapter(QuaidAdapter):
             "won't store that" in lowered or "unless you want me to" in lowered
         ):
             return True
+        if (
+            "did not schedule a reminder" in lowered
+            and "this will not trigger automatically" in lowered
+            and (
+                "i’ll remember" in lowered
+                or "i'll remember" in lowered
+                or "i will remember" in lowered
+            )
+        ):
+            return True
         return False
 
     def _openclaw_config_path_candidates(self) -> list[Path]:

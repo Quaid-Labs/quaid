@@ -1884,6 +1884,48 @@ class TestCodexAdapter:
         assert "durable memory" not in transcript
         assert "won't store that" not in transcript
 
+    def test_parse_session_jsonl_strips_openclaw_reminder_acknowledgement(self, tmp_path):
+        path = tmp_path / "rollout-openclaw-memory-reminder-ack.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "My Friday ritual is roasting pumpkin seeds with the codeword "
+                                    "cedar-lantern-235854."
+                                ),
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "Got it. I’ll remember that your Friday ritual includes roasting "
+                                    "pumpkin seeds, and the codeword is cedar-lantern-235854.\n\n"
+                                    "Note: I did not schedule a reminder in this turn, so this will "
+                                    "not trigger automatically."
+                                ),
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "cedar-lantern-235854" in transcript
+        assert "i’ll remember" not in transcript.lower()
+        assert "i'll remember" not in transcript.lower()
+        assert "did not schedule a reminder" not in transcript.lower()
+
     def test_resolve_stop_hook_signal_returns_none_for_regular_turn(self, tmp_path):
         path = tmp_path / "rollout-regular-turn.jsonl"
         path.write_text(
