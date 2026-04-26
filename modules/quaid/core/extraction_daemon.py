@@ -4430,6 +4430,13 @@ def ensure_alive() -> int:
                     return pid
             msg = "supervisor did not start an instance monitor before timeout"
             logger.warning(msg)
+            fallback_pid = start_daemon()
+            if fallback_pid and fallback_pid > 0:
+                logger.warning(
+                    "started extraction daemon directly after supervisor handoff timeout (pid=%s)",
+                    fallback_pid,
+                )
+                return fallback_pid
             try:
                 from lib.fail_policy import is_fail_hard_enabled
             except Exception:
@@ -4438,7 +4445,7 @@ def ensure_alive() -> int:
                 fail_hard = bool(is_fail_hard_enabled())
             if fail_hard:
                 raise RuntimeError(msg)
-            return -1
+            return fallback_pid
     pid = read_pid()
     if pid is not None:
         return pid

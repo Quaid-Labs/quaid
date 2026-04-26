@@ -233,6 +233,52 @@ def _runtime_config_snapshot() -> tuple[tuple[str, int], ...]:
         return tuple()
 
 
+def _runtime_config_snapshot_state_path() -> Path | None:
+    try:
+        from lib.adapter import get_adapter
+
+        data_dir = get_adapter().data_dir()
+    except Exception:
+        return None
+    try:
+        return Path(data_dir) / "runtime-config-snapshot.json"
+    except Exception:
+        return None
+
+
+def _read_runtime_config_snapshot_state() -> tuple[tuple[str, int], ...] | None:
+    path = _runtime_config_snapshot_state_path()
+    if path is None or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw_items = payload.get("snapshot") if isinstance(payload, dict) else payload
+        items: list[tuple[str, int]] = []
+        for item in raw_items if isinstance(raw_items, list) else []:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                return None
+            items.append((str(item[0]), int(item[1])))
+        return tuple(items)
+    except Exception:
+        return None
+
+
+def _write_runtime_config_snapshot_state(snapshot: tuple[tuple[str, int], ...]) -> None:
+    path = _runtime_config_snapshot_state_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
+        tmp_path.write_text(json.dumps({"snapshot": list(snapshot)}), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink()  # type: ignore[name-defined]
+        except Exception:
+            pass
+
+
 def _reset_runtime_resolution_caches() -> None:
     try:
         from lib.embeddings import reset_embeddings_provider
@@ -262,19 +308,20 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
     if not snapshot:
         return False
     if _HOOK_RUNTIME_CONFIG_SNAPSHOT is None:
-        _HOOK_RUNTIME_CONFIG_SNAPSHOT = snapshot
-        try:
-            from lib.agent_notice import clear_pending_notices_by_source
-
-            cleared = clear_pending_notices_by_source(sources={"provider", "llm_config", "embeddings"})
-        except Exception:
-            cleared = 0
+        persisted_snapshot = _read_runtime_config_snapshot_state()
+        _HOOK_RUNTIME_CONFIG_SNAPSHOT = persisted_snapshot or snapshot
+        if persisted_snapshot is not None and persisted_snapshot != snapshot:
+            # Short-lived hook processes cannot rely on module globals to detect
+            # restored configs. Use the persisted signature to clear stale
+            # provider notices only when the config actually changed.
+            return _refresh_runtime_config_if_changed(reason)
+        _write_runtime_config_snapshot_state(snapshot)
         _write_hook_trace(
             "hook.runtime_config.baseline",
             {
                 "reason": reason,
                 "paths": [path for path, _mtime in snapshot],
-                "cleared_pending": int(cleared or 0),
+                "cleared_pending": 0,
             },
         )
         return False
@@ -302,6 +349,7 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
         )
         return False
     _HOOK_RUNTIME_CONFIG_SNAPSHOT = snapshot
+    _write_runtime_config_snapshot_state(snapshot)
     _write_hook_trace(
         "hook.runtime_config.reloaded",
         {

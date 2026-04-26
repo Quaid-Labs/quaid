@@ -184,6 +184,36 @@ def test_ensure_alive_bootstraps_explicit_instance_before_supervisor(monkeypatch
     ]
 
 
+def test_ensure_alive_falls_back_to_direct_start_when_supervisor_monitor_times_out(monkeypatch):
+    now = {"value": 100.0}
+    steps = []
+
+    def fake_sleep(seconds):
+        now["value"] += max(1.0, float(seconds))
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+    monkeypatch.setenv("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", "1")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "start_daemon", lambda: steps.append("direct") or 5555)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now["value"])
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: object())
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr("core.project_docs.ensure_supervisor_alive", lambda: steps.append("ensure") or 1111)
+    monkeypatch.setattr(
+        "core.project_docs.enable_instance_monitor",
+        lambda instance: steps.append(f"enable:{instance}"),
+    )
+
+    assert extraction_daemon.ensure_alive() == 5555
+    assert steps == [
+        "enable:codex-private-tmp-cdx-livetest",
+        "ensure",
+        "direct",
+    ]
+
+
 def test_stop_daemon_disables_supervisor_instance_monitor(monkeypatch):
     disabled = []
 
