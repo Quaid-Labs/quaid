@@ -936,6 +936,12 @@ room_cfg = _read_json(room_path)
 openclaw_cfg = _read_json(openclaw_path)
 
 homeserver = _extract_first(
+    room_cfg,
+    "homeserver",
+    "homeserverUrl",
+    "baseUrl",
+    ("matrix", "homeserver"),
+) or _extract_first(
     creds,
     "homeserver",
     "homeserverUrl",
@@ -943,7 +949,55 @@ homeserver = _extract_first(
     ("matrix", "homeserver"),
     ("server", "url"),
 ) or "http://127.0.0.1:8008"
-access_token = _extract_first(
+openclaw_user_id = _extract_first(
+    room_cfg,
+    "openclaw_user_id",
+    "openclawUserId",
+    "bot_user_id",
+    "botUserId",
+) or "@openclaw-bot:localhost"
+sender_user_id = _extract_first(
+    room_cfg,
+    "sender_user_id",
+    "senderUserId",
+    "test_user_id",
+    "testUserId",
+) or "@quaid-test-bot:localhost"
+room_id = _extract_first(
+    room_cfg,
+    "room_id",
+    "roomId",
+    "id",
+    ("room", "room_id"),
+    ("room", "roomId"),
+)
+
+if not room_id:
+    raise SystemExit(f"could not extract Matrix room id from {room_path}")
+if sender_user_id == openclaw_user_id:
+    raise SystemExit(
+        f"Matrix sender user must differ from OpenClaw bot user: {sender_user_id}"
+    )
+
+
+def _matrix_localpart(user_id: str) -> str:
+    head = str(user_id or "").split(":", 1)[0].strip()
+    return head[1:] if head.startswith("@") else head
+
+
+def _account_token(data: dict, account: str) -> str:
+    row = data.get(account)
+    if isinstance(row, dict):
+        for key in ("access_token", "accessToken", "token"):
+            value = str(row.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+openclaw_account = _matrix_localpart(openclaw_user_id) or "openclaw-bot"
+sender_account = _matrix_localpart(sender_user_id) or "quaid-test-bot"
+access_token = _account_token(creds, openclaw_account) or _extract_first(
     creds,
     ("openclaw-bot", "access_token"),
     ("openclaw-bot", "accessToken"),
@@ -956,26 +1010,30 @@ access_token = _extract_first(
     ("auth", "access_token"),
     ("auth", "accessToken"),
 )
-user_id = _extract_first(
+sender_access_token = _account_token(creds, sender_account) or _extract_first(
     creds,
-    "user_id",
-    "userId",
-    ("user", "id"),
-    ("account", "user_id"),
+    ("quaid-test-bot", "access_token"),
+    ("quaid-test-bot", "accessToken"),
+    ("quaid-test-bot", "token"),
+    ("sender", "access_token"),
+    ("sender", "accessToken"),
+    ("sender", "token"),
+    ("test-bot", "access_token"),
+    ("test-bot", "accessToken"),
+    ("test-bot", "token"),
 )
-room_id = _extract_first(
-    room_cfg,
-    "room_id",
-    "roomId",
-    "id",
-    ("room", "room_id"),
-    ("room", "roomId"),
-)
-
 if not access_token:
-    raise SystemExit(f"could not extract Matrix access token from {creds_path}")
-if not room_id:
-    raise SystemExit(f"could not extract Matrix room id from {room_path}")
+    raise SystemExit(
+        f"could not extract OpenClaw bot Matrix access token for {openclaw_user_id} from {creds_path}"
+    )
+if not sender_access_token:
+    raise SystemExit(
+        f"could not extract Matrix sender access token for {sender_user_id} from {creds_path}"
+    )
+if sender_access_token == access_token:
+    raise SystemExit(
+        "Matrix sender token resolves to the OpenClaw bot token; tests must send as the external tester account"
+    )
 
 plugins = openclaw_cfg.setdefault("plugins", {})
 allow = plugins.setdefault("allow", [])
@@ -1007,8 +1065,7 @@ if not isinstance(matrix_cfg, dict):
 matrix_cfg["enabled"] = True
 matrix_cfg["homeserver"] = homeserver.rstrip("/")
 matrix_cfg["accessToken"] = access_token
-if user_id:
-    matrix_cfg["userId"] = user_id
+matrix_cfg["userId"] = openclaw_user_id
 if _is_private_homeserver(homeserver):
     network_cfg = matrix_cfg.get("network")
     if not isinstance(network_cfg, dict):
@@ -1021,7 +1078,7 @@ matrix_cfg["autoJoinAllowlist"] = _merge_allowlist(matrix_cfg.get("autoJoinAllow
 matrix_cfg["groupPolicy"] = "allowlist"
 matrix_cfg["groupAllowFrom"] = _merge_allowlist(
     matrix_cfg.get("groupAllowFrom"),
-    "@quaid-test-bot:localhost",
+    sender_user_id,
 )
 dm_cfg = matrix_cfg.get("dm")
 if not isinstance(dm_cfg, dict):
@@ -1030,7 +1087,7 @@ matrix_cfg["dm"] = dm_cfg
 dm_cfg["policy"] = "allowlist"
 dm_cfg["allowFrom"] = _merge_allowlist(
     dm_cfg.get("allowFrom"),
-    "@quaid-test-bot:localhost",
+    sender_user_id,
 )
 groups_cfg = matrix_cfg.get("groups")
 if not isinstance(groups_cfg, dict):
@@ -1086,8 +1143,10 @@ openclaw_changed = _write_text_atomic(openclaw_path, openclaw_json)
 
 helper_payload = (
     f"MATRIX_HOMESERVER={homeserver.rstrip('/')}\n"
-    f"MATRIX_ACCESS_TOKEN={access_token}\n"
+    f"MATRIX_ACCESS_TOKEN={sender_access_token}\n"
     f"MATRIX_ROOM_ID={room_id}\n"
+    f"MATRIX_SENDER_USER_ID={sender_user_id}\n"
+    f"MATRIX_BOT_USER_ID={openclaw_user_id}\n"
 )
 helper_changed = False
 for helper_path in helper_paths:
@@ -1098,6 +1157,8 @@ print(json.dumps({
     "helper_changed": helper_changed,
     "homeserver": homeserver.rstrip("/"),
     "room_id": room_id,
+    "sender_user_id": sender_user_id,
+    "openclaw_user_id": openclaw_user_id,
 }))
 PYEOF
 )"
@@ -1105,10 +1166,11 @@ PYEOF
     MATRIX_HELPER_CHANGED="$(python3 -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("helper_changed") else "0")' "$MATRIX_SEED_OUTPUT")"
     MATRIX_ROOM_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("room_id",""))' "$MATRIX_SEED_OUTPUT")"
     MATRIX_HOMESERVER="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("homeserver",""))' "$MATRIX_SEED_OUTPUT")"
+    MATRIX_SENDER_USER_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("sender_user_id",""))' "$MATRIX_SEED_OUTPUT")"
     if [[ "$MATRIX_OPENCLAW_CHANGED" == "1" || "$MATRIX_HELPER_CHANGED" == "1" ]]; then
-        echo "  $PASS  OC Matrix config seeded (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID)"
+        echo "  $PASS  OC Matrix config seeded (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID sender=$MATRIX_SENDER_USER_ID)"
     else
-        echo "  $PASS  OC Matrix config already present (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID)"
+        echo "  $PASS  OC Matrix config already present (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID sender=$MATRIX_SENDER_USER_ID)"
     fi
     if [[ "$MATRIX_OPENCLAW_CHANGED" == "1" ]]; then
         ssh "$REMOTE_HOST" 'launchctl kickstart -k "gui/$(id -u)/ai.openclaw.gateway" >/dev/null 2>&1 || openclaw gateway restart >/dev/null 2>&1 || true'

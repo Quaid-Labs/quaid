@@ -68,7 +68,12 @@ Config is read from env or `.matrix-config` next to the helper. For VM compatibi
 the helper also falls back to `~/quaidcode/util/scripts/.matrix-config` if present:
 - Homeserver: `http://127.0.0.1:8008`
 - Room: `!fDTDMrzcdmaVKRnhxu:localhost`
+- Sender: `@quaid-test-bot:localhost`
 - OC bot: `@openclaw-bot:localhost`
+
+The send helper must use the sender account token, not the OC bot token. If Matrix
+traffic is authored by `@openclaw-bot:localhost`, OpenClaw sees its own echo and no
+Quaid hooks or extraction signals are expected.
 
 ---
 

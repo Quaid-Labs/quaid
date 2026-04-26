@@ -37,11 +37,26 @@ def _cfg() -> dict[str, str]:
     cfg = {}
     cfg.update(_load_env_file(Path.home() / "quaidcode" / "util" / "scripts" / ".matrix-config"))
     cfg.update(_load_env_file(script_dir / ".matrix-config"))
-    for key in ("MATRIX_HOMESERVER", "MATRIX_TOKEN", "MATRIX_ACCESS_TOKEN", "MATRIX_ROOM_ID"):
+    for key in (
+        "MATRIX_HOMESERVER",
+        "MATRIX_TOKEN",
+        "MATRIX_ACCESS_TOKEN",
+        "MATRIX_ROOM_ID",
+        "MATRIX_SENDER_USER_ID",
+        "MATRIX_BOT_USER_ID",
+    ):
         value = os.environ.get(key, "").strip()
         if value:
             cfg[key] = value
     return cfg
+
+
+def _matrix_whoami(homeserver: str, token: str) -> str:
+    url = f"{homeserver}/_matrix/client/v3/account/whoami"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.load(resp)
+    return str(data.get("user_id") or "").strip()
 
 
 def main() -> int:
@@ -58,6 +73,8 @@ def main() -> int:
         or ""
     ).strip()
     room_id = str(cfg.get("MATRIX_ROOM_ID") or cfg.get("ROOM") or "").strip()
+    sender_user_id = str(cfg.get("MATRIX_SENDER_USER_ID") or "").strip()
+    bot_user_id = str(cfg.get("MATRIX_BOT_USER_ID") or "").strip()
     if not homeserver or not token or not room_id:
         print(
             "matrix-send config missing. Set MATRIX_HOMESERVER, MATRIX_TOKEN(or MATRIX_ACCESS_TOKEN), MATRIX_ROOM_ID "
@@ -65,6 +82,30 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if sender_user_id and bot_user_id and sender_user_id == bot_user_id:
+        print(
+            f"matrix-send refuses to send as the OpenClaw bot itself ({bot_user_id}); use the external tester account token",
+            file=sys.stderr,
+        )
+        return 3
+    if sender_user_id:
+        try:
+            token_user_id = _matrix_whoami(homeserver, token)
+        except Exception as exc:
+            print(f"matrix-send could not verify Matrix sender token: {exc}", file=sys.stderr)
+            return 4
+        if bot_user_id and token_user_id == bot_user_id:
+            print(
+                f"matrix-send refuses to send with the OpenClaw bot token ({bot_user_id}); use the external tester account token",
+                file=sys.stderr,
+            )
+            return 3
+        if token_user_id != sender_user_id:
+            print(
+                f"matrix-send token belongs to {token_user_id or '<unknown>'}, expected {sender_user_id}",
+                file=sys.stderr,
+            )
+            return 4
 
     message = " ".join(sys.argv[1:]).strip()
     room_enc = urllib.parse.quote(room_id, safe="")
