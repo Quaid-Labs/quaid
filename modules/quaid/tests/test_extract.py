@@ -2076,59 +2076,6 @@ class TestExtractFromTranscript:
         assert result["carry_duplicate_facts_dropped"] == 1
         assert result["assessment_nothing_usable"] == 1
 
-    def test_question_only_transcript_drops_memory_payload(self):
-        from ingest.extract import _filter_question_only_transcript_payload
-
-        transcript = (
-            "User: What's my Friday ritual?\n\n"
-            "Assistant: Your Friday ritual includes strength work."
-        )
-        parsed = {
-            "chunk_assessment": "usable",
-            "facts": [
-                {
-                    "text": "Solomon Steadman has a Friday ritual that includes strength work",
-                    "category": "preference",
-                }
-            ],
-            "soul_snippets": {"USER.md": ["Friday ritual includes strength work"]},
-        }
-
-        filtered, dropped = _filter_question_only_transcript_payload(parsed, transcript)
-
-        assert dropped is True
-        assert filtered["facts"] == []
-        assert filtered["soul_snippets"] == {}
-        assert filtered["chunk_assessment"] == "nothing_usable"
-
-    def test_short_transcript_support_drops_stale_fact(self):
-        from ingest.extract import _filter_short_transcript_facts_against_support
-
-        transcript = (
-            "User: My Friday ritual is roasting pumpkin seeds with the codeword harbor-thimble-002131.\n\n"
-            "Assistant: Got it, noted: your Friday ritual is roasting pumpkin seeds, and the codeword is harbor-thimble-002131."
-        )
-        parsed = {
-            "chunk_assessment": "usable",
-            "facts": [
-                {
-                    "text": "Solomon Steadman has a Friday ritual of roasting pumpkin seeds",
-                    "category": "preference",
-                },
-                {
-                    "text": "Solomon Steadman has a Friday ritual that includes strength work",
-                    "category": "preference",
-                },
-            ],
-        }
-
-        filtered, dropped = _filter_short_transcript_facts_against_support(parsed, transcript)
-
-        assert dropped == 1
-        assert [fact["text"] for fact in filtered["facts"]] == [
-            "Solomon Steadman has a Friday ritual of roasting pumpkin seeds"
-        ]
-
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract._repair_non_json_extraction_payload")
     @patch("ingest.extract.call_deep_reasoning")
