@@ -1680,6 +1680,82 @@ def _adapter_type_from_instance_id(instance_id: str) -> str:
     return matches[0][1]
 
 
+def _project_instance_binding_path(home: str | Path, adapter_type: str, project_dir: str) -> Optional[Path]:
+    """Return the binding path for a project-dir -> explicit instance mapping."""
+    adapter_id = _normalize_adapter_id(adapter_type)
+    if not adapter_id or not str(project_dir or "").strip():
+        return None
+    try:
+        from lib.instance import instance_slug_from_project_dir
+
+        slug = instance_slug_from_project_dir(project_dir)
+    except Exception:
+        return None
+    if not slug:
+        return None
+    return Path(home) / "shared" / "instance-bindings" / adapter_id / f"{slug}.json"
+
+
+def _read_project_instance_binding(home: str | Path, adapter_type: str, project_dir: str) -> str:
+    """Read a project binding if it still points at an initialized instance."""
+    path = _project_instance_binding_path(home, adapter_type, project_dir)
+    if path is None or not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    instance = str(data.get("instance") or "").strip()
+    if not instance:
+        return ""
+    try:
+        stored_project = str(data.get("project_dir") or "").strip()
+        if stored_project and Path(stored_project).resolve() != Path(project_dir).resolve():
+            return ""
+    except Exception:
+        return ""
+    if (Path(home) / "instances" / instance / "config.json").is_file():
+        return instance
+    return ""
+
+
+def _write_project_instance_binding(
+    home: str | Path,
+    adapter_type: str,
+    project_dir: str,
+    instance: str,
+) -> None:
+    """Persist an explicit instance binding for later unscoped hook/helper calls."""
+    adapter_id = _normalize_adapter_id(adapter_type)
+    instance_id = str(instance or "").strip()
+    if not adapter_id or not instance_id or not str(project_dir or "").strip():
+        return
+    try:
+        from lib.instance import validate_instance_id
+
+        validate_instance_id(instance_id)
+        resolved_project = str(Path(project_dir).resolve())
+        path = _project_instance_binding_path(home, adapter_id, resolved_project)
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "adapter": adapter_id,
+            "instance": instance_id,
+            "project_dir": resolved_project,
+        }
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).debug(
+            "failed writing %s project instance binding for %s",
+            adapter_id,
+            instance_id,
+            exc_info=True,
+        )
+
+
 def _auto_provision_from_env_if_needed() -> None:
     """Scaffold a default silo when QUAID_INSTANCE is set but has no config yet.
 
@@ -1718,10 +1794,24 @@ def _auto_provision_from_env_if_needed() -> None:
             except Exception:
                 return
 
+        if codex_project_dir:
+            bound = _read_project_instance_binding(home, "codex", codex_project_dir)
+            if bound:
+                instance = bound
+                os.environ["QUAID_INSTANCE"] = instance
+
+        if not instance and explicit_adapter_type == "codex":
+            bound = _read_project_instance_binding(home, "codex", os.getcwd())
+            if bound:
+                instance = bound
+                os.environ["QUAID_INSTANCE"] = instance
+
         for env_name, prefix in (
             ("CLAUDE_PROJECT_DIR", "claude-code"),
             ("CODEX_PROJECT_DIR", "codex"),
         ):
+            if instance:
+                break
             project_dir = os.environ.get(env_name, "").strip()
             if not project_dir:
                 continue
@@ -1739,6 +1829,9 @@ def _auto_provision_from_env_if_needed() -> None:
 
     if not home or not instance:
         return
+    adapter_type_hint = _normalize_adapter_id(explicit_adapter_type) or _adapter_type_from_instance_id(instance)
+    if adapter_type_hint == "codex" and codex_project_dir:
+        _write_project_instance_binding(home, "codex", codex_project_dir, instance)
     silo_root = Path(home) / "instances" / instance
     config_path = silo_root / "config.json"
     db_path = silo_root / "data" / "memory.db"

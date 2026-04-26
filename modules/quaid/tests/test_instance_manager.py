@@ -651,6 +651,42 @@ def test_auto_provision_derives_claude_code_instance_from_cwd_when_adapter_type_
     assert (tmp_path / "instances" / expected / "config.json").is_file()
 
 
+def test_auto_provision_binds_explicit_codex_instance_to_project_dir(tmp_path, monkeypatch):
+    from lib import adapter as adapter_mod
+    from lib.instance import instance_slug_from_project_dir
+
+    project_dir = tmp_path / "cdx-project"
+    project_dir.mkdir()
+    explicit_instance = "codex-m13test"
+    slug = instance_slug_from_project_dir(str(project_dir))
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", explicit_instance)
+    monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+    monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    assert (tmp_path / "instances" / explicit_instance / "config.json").is_file()
+    binding_path = tmp_path / "shared" / "instance-bindings" / "codex" / f"{slug}.json"
+    assert binding_path.is_file()
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    assert binding["instance"] == explicit_instance
+    assert binding["project_dir"] == str(project_dir.resolve())
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    assert os.environ.get("QUAID_INSTANCE") == explicit_instance
+    assert not (tmp_path / "instances" / f"codex-{slug}" / "config.json").exists()
+
+
 def test_auto_provision_infers_adapter_from_manifest_prefix_for_existing_instance_env(tmp_path, monkeypatch):
     from lib import adapter as adapter_mod
 
