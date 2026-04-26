@@ -769,13 +769,15 @@ fi
 # --- Step 7b: Seed shared Quaid auth credentials for installer ---
 # M0 expects ~/.quaid/shared/auth/credentials.json to exist on the run VM.
 # Source anthropic token from platforms.cc.auth_token_file when configured;
-# otherwise use the historical local fallback. Source codex token from the VM's
-# live ~/.codex/auth.json and hydrate OC auth-profiles so the gateway can use it.
+# otherwise use the historical local fallback. Source codex auth from the VM's
+# live ~/.codex/auth.json, hydrate OC auth-profiles with the schema OpenClaw
+# expects, and pin the livetest OC agent to the matching openai-codex provider.
 echo ""
 echo "[7b/8] Seeding Quaid shared auth credentials on remote..."
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would read platforms.cc.auth_token_file (or fallback token path) and $REMOTE_HOST:~/.codex/auth.json"
-    echo "            then write $REMOTE_HOST:~/.quaid/shared/auth/credentials.json and seed ~/.openclaw/agents/main/agent/auth-profiles.json"
+    echo "            then write $REMOTE_HOST:~/.quaid/shared/auth/credentials.json, seed ~/.openclaw/agents/main/agent/auth-profiles.json,"
+    echo "            and pin ~/.openclaw/openclaw.json agents.defaults.model.primary to openai-codex/gpt-5.4"
 else
     LOCAL_SHARED_TOKEN_FILE="$(read_config platforms.cc.auth_token_file)"
     LOCAL_SHARED_TOKEN_FILE="${LOCAL_SHARED_TOKEN_FILE/#\~/$HOME}"
@@ -804,6 +806,7 @@ else
             REMOTE_SHARED_TOKEN_TMP="$(ssh "$REMOTE_HOST" 'mkdir -p ~/.quaid/shared/auth && umask 077 && token_file="$(mktemp ~/.quaid/shared/auth/.shared-token.XXXXXX)" && chmod 600 "$token_file" && printf "%s\n" "$token_file"')"
             scp "$LOCAL_SHARED_TOKEN_TMP" "$REMOTE_HOST:$REMOTE_SHARED_TOKEN_TMP"
             ssh "$REMOTE_HOST" python3 - "$REMOTE_SHARED_TOKEN_TMP" <<'PYEOF'
+import base64
 import json
 import os
 import pathlib
@@ -823,12 +826,34 @@ if not anthropic_token:
 
 codex_auth_path = pathlib.Path.home() / ".codex" / "auth.json"
 codex_token = ""
+codex_refresh = ""
+codex_account_id = ""
 if codex_auth_path.exists():
     try:
         codex_auth = json.loads(codex_auth_path.read_text(encoding="utf-8"))
-        codex_token = str(codex_auth.get("tokens", {}).get("access_token", "")).strip()
+        codex_tokens = codex_auth.get("tokens", {})
+        if not isinstance(codex_tokens, dict):
+            codex_tokens = {}
+        codex_token = str(codex_tokens.get("access_token", "")).strip()
+        codex_refresh = str(codex_tokens.get("refresh_token", "")).strip()
+        codex_account_id = str(codex_tokens.get("account_id", "")).strip()
     except Exception as err:
         print(f"  WARN  failed reading {codex_auth_path}: {err}")
+
+def _jwt_expiry_ms(token: str) -> int | None:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload.encode("ascii"))
+        exp = json.loads(decoded.decode("utf-8")).get("exp")
+        if isinstance(exp, (int, float)) and exp > 0:
+            return int(exp * 1000)
+    except Exception:
+        return None
+    return None
 
 out_path = pathlib.Path.home() / ".quaid" / "shared" / "auth" / "credentials.json"
 payload = {
@@ -867,9 +892,26 @@ if codex_token:
         profiles = json.loads(profiles_path.read_text(encoding="utf-8")) if profiles_path.exists() else {}
     except Exception:
         profiles = {}
+    expires = _jwt_expiry_ms(codex_token)
+    credential = {
+        "type": "oauth" if codex_refresh else "token",
+        "provider": "openai-codex",
+    }
+    if codex_refresh:
+        credential["access"] = codex_token
+        credential["refresh"] = codex_refresh
+        credential["managedBy"] = "codex-cli"
+    else:
+        credential["token"] = codex_token
+    if expires:
+        credential["expires"] = expires
+    if codex_account_id:
+        credential["accountId"] = codex_account_id
+
     profiles.setdefault("version", 1)
-    profiles.setdefault("profiles", {}).setdefault("openai-codex:default", {})["access_token"] = codex_token
+    profiles.setdefault("profiles", {})["openai-codex:default"] = credential
     profiles.setdefault("lastGood", {})["openai-codex"] = "openai-codex:default"
+    profiles.setdefault("order", {})["openai-codex"] = ["openai-codex:default"]
     profiles_tmp = profiles_path.with_name(f".{profiles_path.name}.{os.getpid()}.tmp")
     fd = os.open(str(profiles_tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -886,6 +928,40 @@ if codex_token:
         raise
     profiles_path.chmod(0o600)
     print(f"  wrote {profiles_path}")
+
+    openclaw_path = pathlib.Path.home() / ".openclaw" / "openclaw.json"
+    if openclaw_path.exists():
+        cfg = json.loads(openclaw_path.read_text(encoding="utf-8"))
+        agents = cfg.setdefault("agents", {})
+        if not isinstance(agents, dict):
+            agents = {}
+            cfg["agents"] = agents
+        defaults = agents.setdefault("defaults", {})
+        if not isinstance(defaults, dict):
+            defaults = {}
+            agents["defaults"] = defaults
+        model_cfg = defaults.setdefault("model", {})
+        if not isinstance(model_cfg, dict):
+            model_cfg = {}
+            defaults["model"] = model_cfg
+        model_cfg["primary"] = "openai-codex/gpt-5.4"
+        model_cfg["fallbacks"] = ["openai-codex/gpt-5.4-mini"]
+        allowed_models = defaults.setdefault("models", {})
+        if not isinstance(allowed_models, dict):
+            allowed_models = {}
+            defaults["models"] = allowed_models
+        allowed_models.setdefault("openai-codex/gpt-5.4", {})
+        allowed_models.setdefault("openai-codex/gpt-5.4-mini", {})
+        openclaw_tmp = openclaw_path.with_name(f".{openclaw_path.name}.{os.getpid()}.tmp")
+        with open(openclaw_tmp, "w", encoding="utf-8") as handle:
+            json.dump(cfg, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(openclaw_tmp, openclaw_path)
+        print(f"  wrote {openclaw_path} agent model openai-codex/gpt-5.4")
+    else:
+        print(f"  WARN  {openclaw_path} missing — OC agent model default not updated")
 else:
     print(f"  WARN  {codex_auth_path} missing or unreadable — codex_oauth/auth-profiles not updated")
 PYEOF
