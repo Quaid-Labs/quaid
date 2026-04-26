@@ -1466,6 +1466,43 @@ class TestCodexAdapter:
         assert signal is None
         assert adapter._read_last_session_id() == "new-thread"
 
+    def test_check_session_transition_uses_cursor_for_explicit_instance_label(self, tmp_path, monkeypatch):
+        project_dir = tmp_path / "cdx-m13test"
+        project_dir.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-m13test")
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._write_last_session_id("old-thread")
+        ended = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "14"
+            / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        )
+        ended.parent.mkdir(parents=True)
+        ended.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(project_dir)}}) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "core.extraction_daemon.read_cursor",
+            lambda session_id: {"transcript_path": str(ended)} if session_id == "old-thread" else {},
+        )
+
+        assert adapter._get_session_path("old-thread", allow_unclassified=True) is None
+        signal = adapter.check_session_transition({"thread_id": "new-thread"})
+
+        assert signal is not None
+        assert signal["ended_session_id"] == "old-thread"
+        assert signal["ended_transcript_path"] == str(ended)
+        assert signal["signal_type"] == "session_end"
+        assert adapter._read_last_session_id() == "new-thread"
+
     def test_parse_session_jsonl_prefers_event_messages(self, tmp_path):
         path = tmp_path / "rollout.jsonl"
         path.write_text(

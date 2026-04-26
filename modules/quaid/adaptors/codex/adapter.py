@@ -470,7 +470,16 @@ class CodexAdapter(QuaidAdapter):
         # Session changed — the old session ended via /new or /clear.  The
         # prior session id comes from this instance's own state file, so allow
         # a just-rotated Codex rollout whose session_meta.cwd has not landed yet.
-        transcript_path = self._get_session_path(last_id, allow_unclassified=True)
+        #
+        # Some live-test/production flows intentionally name a CDX instance
+        # explicitly instead of using the cwd-derived slug. In that case the
+        # rollout session_meta.cwd looks "foreign" to the ownership filter, but
+        # this instance's cursor still records the exact transcript it touched on
+        # the prior turn. Trust that instance-local cursor as the fallback source.
+        transcript_path = (
+            self._get_session_path(last_id, allow_unclassified=True)
+            or self._get_session_path_from_cursor(last_id)
+        )
         if transcript_path is None:
             return None
         return {
@@ -507,6 +516,30 @@ class CodexAdapter(QuaidAdapter):
         matches = owned_matches or unclassified_matches
         matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return matches[0] if matches else None
+
+    def _get_session_path_from_cursor(self, session_id: str) -> Optional[Path]:
+        """Return the transcript path this instance already recorded for a session."""
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return None
+        if not os.environ.get("QUAID_INSTANCE", "").strip():
+            return None
+        try:
+            from core.extraction_daemon import read_cursor
+
+            cursor = read_cursor(session_id)
+        except Exception:
+            if is_fail_hard_enabled():
+                raise
+            return None
+        raw_path = str((cursor or {}).get("transcript_path") or "").strip()
+        if not raw_path:
+            return None
+        path = Path(raw_path).expanduser()
+        try:
+            return path if path.is_file() else None
+        except OSError:
+            return None
 
     def get_session_path(self, session_id: str) -> Optional[Path]:
         return self._get_session_path(session_id, allow_unclassified=False)
