@@ -1431,7 +1431,7 @@ describe("openclaw deferred notices", () => {
         trigger: "user",
       },
     );
-    expect(combinedSystemContext(stillGated)).not.toContain("Bartholomew");
+    expect(combinedSystemContext(stillGated)).toContain("Bartholomew");
 
     await commandNewHandler(
       {
@@ -1464,6 +1464,103 @@ describe("openclaw deferred notices", () => {
     );
     expect(combinedSystemContext(refreshed)).toContain("Bartholomew");
     expect(combinedSystemContext(refreshed)).toContain("fiddle-leaf fig");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
+  it("keeps identity context available after startup turns consume /new project docs", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-new-identity-every-turn-home-",
+      "openclaw-main",
+      "[Quaid] /new identity fixture",
+    );
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(identityDir, "USER.md"),
+      "# USER\nThe office plant is named Bartholomew. It is a fiddle-leaf fig.\n",
+      "utf8",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const commandNewCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "command:new" && call?.[2]?.name === "command-new-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(commandNewCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const commandNewHandler = commandNewCall?.[1];
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const sessionId = "session-m7-startup-consumes-docs";
+
+    await commandNewHandler(
+      {
+        action: "new",
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    const startup = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "Hello",
+        messages: [{ role: "user", content: "Hello" }],
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+    expect(combinedSystemContext(startup)).toContain("Bartholomew");
+
+    const graded = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "What's the office plant named?",
+        messages: [{ role: "user", content: "What's the office plant named?" }],
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+    expect(combinedSystemContext(graded)).toContain("Bartholomew");
+    expect(combinedSystemContext(graded)).toContain("fiddle-leaf fig");
 
     warn.mockRestore();
     log.mockRestore();

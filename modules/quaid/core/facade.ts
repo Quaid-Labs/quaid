@@ -176,6 +176,7 @@ type InjectionLogWriteOptions = {
 
 export type ProjectContextOptions = {
   cwd?: string;
+  identityOnly?: boolean;
 };
 
 export type RecallDiagnostics = {
@@ -3773,38 +3774,41 @@ ${lines.join("\n")}
         }
       }
 
-      // Project docs: TOOLS.md + AGENTS.md for every project in projects/.
-      const projectsDir = path.join(resolveVisibleHome(), "projects");
-      let subdirs: string[] = [];
-      try {
-        subdirs = fs.readdirSync(projectsDir)
-          .filter((name: string) => {
-            try { return fs.statSync(path.join(projectsDir, name)).isDirectory() && !name.startsWith("."); }
-            catch { return false; }
-          })
-          .sort((a: string, b: string) => a === "quaid" ? -1 : b === "quaid" ? 1 : a.localeCompare(b));
-      } catch { /* no projects dir yet */ }
+      if (!options.identityOnly) {
+        // Project docs: TOOLS.md + AGENTS.md for every project in projects/.
+        const projectsDir = path.join(resolveVisibleHome(), "projects");
+        let subdirs: string[] = [];
+        try {
+          subdirs = fs.readdirSync(projectsDir)
+            .filter((name: string) => {
+              try { return fs.statSync(path.join(projectsDir, name)).isDirectory() && !name.startsWith("."); }
+              catch { return false; }
+            })
+            .sort((a: string, b: string) => a === "quaid" ? -1 : b === "quaid" ? 1 : a.localeCompare(b));
+        } catch { /* no projects dir yet */ }
 
-      for (const projectName of subdirs) {
-        const projectDir = path.join(projectsDir, projectName);
-        const existingDocs = ["TOOLS.md", "AGENTS.md"].filter((docFile) => fs.existsSync(path.join(projectDir, docFile)));
-        if (existingDocs.length === 0) continue;
-        if (_shouldInjectFullProjectContext(projectName)) {
-          for (const docFile of existingDocs) {
-            const filePath = path.join(projectDir, docFile);
-            try {
-              const content = _stripInjectedToolsDomainBlock(docFile, fs.readFileSync(filePath, "utf8").trim());
-              if (content) sections.push(`--- ${projectName}/${docFile} ---\n${content}`);
-            } catch { /* skip unreadable */ }
+        for (const projectName of subdirs) {
+          const projectDir = path.join(projectsDir, projectName);
+          const existingDocs = ["TOOLS.md", "AGENTS.md"].filter((docFile) => fs.existsSync(path.join(projectDir, docFile)));
+          if (existingDocs.length === 0) continue;
+          if (_shouldInjectFullProjectContext(projectName)) {
+            for (const docFile of existingDocs) {
+              const filePath = path.join(projectDir, docFile);
+              try {
+                const content = _stripInjectedToolsDomainBlock(docFile, fs.readFileSync(filePath, "utf8").trim());
+                if (content) sections.push(`--- ${projectName}/${docFile} ---\n${content}`);
+              } catch { /* skip unreadable */ }
+            }
+          } else {
+            sections.push(_projectCatalogSection(projectName, projectDir, existingDocs, options.cwd));
           }
-        } else {
-          sections.push(_projectCatalogSection(projectName, projectDir, existingDocs, options.cwd));
         }
       }
 
       if (sections.length === 0) return prepend;
-      const runtimeMeta = await _buildRuntimeContextBlock();
-      const combined = "# Quaid Context\n\n" + runtimeMeta + "\n" + sections.join("\n\n") + "\n";
+      const runtimeMeta = options.identityOnly ? "" : await _buildRuntimeContextBlock();
+      const header = options.identityOnly ? "# Quaid Identity Context\n\n" : "# Quaid Context\n\n";
+      const combined = header + (runtimeMeta ? `${runtimeMeta}\n` : "") + sections.join("\n\n") + "\n";
       prepend = prepend ? `${prepend}\n\n${combined}` : combined;
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;

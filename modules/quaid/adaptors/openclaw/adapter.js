@@ -3692,6 +3692,22 @@ ${missingUserOverride}` : missingUserOverride;
         });
       }
       if (isSystemEnabled2("projects")) {
+        try {
+          const identityContext = await facade.injectProjectContext(void 0, {
+            identityOnly: true
+          });
+          if (identityContext) {
+            appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${identityContext}` : identityContext;
+            writeHookTrace("hook.identity_context_injected", {
+              session_id: promptSessionId,
+              len: identityContext.length
+            });
+          }
+        } catch (err) {
+          console.warn(`[quaid] Identity context injection failed: ${err?.message || String(err)}`);
+        }
         const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
         writeHookTrace("hook.docs_gate_check", {
           session_id: sessionKeyDocs,

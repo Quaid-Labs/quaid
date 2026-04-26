@@ -4607,6 +4607,22 @@ notify_user(${JSON.stringify(message)})
         });
       }
       if (isSystemEnabled("projects")) {
+        try {
+          const identityContext = await facade.injectProjectContext(undefined, {
+            identityOnly: true,
+          });
+          if (identityContext) {
+            appendSystemContext = appendSystemContext
+              ? `${appendSystemContext}\n\n${identityContext}`
+              : identityContext;
+            writeHookTrace("hook.identity_context_injected", {
+              session_id: promptSessionId,
+              len: identityContext.length,
+            });
+          }
+        } catch (err: unknown) {
+          console.warn(`[quaid] Identity context injection failed: ${(err as Error)?.message || String(err)}`);
+        }
         const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
         writeHookTrace("hook.docs_gate_check", {
           session_id: sessionKeyDocs,

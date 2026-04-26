@@ -191,6 +191,37 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("injectProjectContext identityOnly reads identity files without project docs or runtime metadata", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-identity-context-"));
+    const projectDir = path.join(workspace, "projects", "quaid");
+    const identityDir = path.join(workspace, "instances", "instance-a");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(identityDir, { recursive: true });
+    await writeFile(path.join(identityDir, "USER.md"), "The office plant is named Bartholomew", "utf8");
+    await writeFile(path.join(identityDir, "SOUL.md"), "Soul baseline", "utf8");
+    await writeFile(path.join(projectDir, "TOOLS.md"), "# Tools\nDo not include me", "utf8");
+    const execPython = vi.fn(async () => "[Quaid runtime]\ninstance: instance-a");
+
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      instanceRoot: path.join(workspace, "instances", "instance-a"),
+      execPython,
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    }));
+
+    const out = await facade.injectProjectContext(undefined, { identityOnly: true });
+    expect(out).toContain("# Quaid Identity Context");
+    expect(out).toContain("--- USER.md ---");
+    expect(out).toContain("Bartholomew");
+    expect(out).toContain("--- SOUL.md ---");
+    expect(out).not.toContain("[Quaid runtime]");
+    expect(out).not.toContain("--- quaid/TOOLS.md ---");
+    expect(out).not.toContain("Do not include me");
+    expect(execPython).not.toHaveBeenCalledWith("system-context-metadata", []);
+
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("injectProjectContext warns and skips visible-home root files when instance is unknown", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-context-no-instance-"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
