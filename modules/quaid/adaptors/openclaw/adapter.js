@@ -1975,7 +1975,11 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     }
   }
   if (!resolvedPath) {
-    console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
+    const message = `[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping ${signalType} signal`;
+    if (isFailHardEnabled()) {
+      throw new Error(message);
+    }
+    console.warn(message);
     return null;
   }
   if (signalType === "reset") {
@@ -2014,12 +2018,16 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     resolvedPath = "";
   }
   if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+    const message = `[quaid][daemon-signal] no existing transcript path for session ${sessionId}, skipping ${signalType} signal`;
     writeHookTrace("session.daemon_signal_no_transcript", {
       session_id: sessionId,
       signal_type: signalType,
       resolved_path: resolvedPath
     });
-    console.warn(`[quaid][daemon-signal] no existing transcript path for session ${sessionId}, skipping ${signalType} signal`);
+    if (isFailHardEnabled()) {
+      throw new Error(message);
+    }
+    console.warn(message);
     return null;
   }
   const agentLabel = sessionIdToAgentId.get(sessionId);

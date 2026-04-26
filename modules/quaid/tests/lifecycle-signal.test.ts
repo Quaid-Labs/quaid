@@ -538,6 +538,12 @@ describe("lifecycle signal detection", () => {
     const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
     const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.join(quaidHome, "instances", "openclaw-main"), { recursive: true });
+    fs.writeFileSync(
+      path.join(quaidHome, "instances", "openclaw-main", "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: false } }),
+      "utf8",
+    );
     fs.writeFileSync(
       openClawConfigPath,
       JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
@@ -558,6 +564,46 @@ describe("lifecycle signal detection", () => {
 
       expect(isolatedTest.rememberSessionTranscriptPath(sessionId, missingPath, "session-index-entry")).toBe(true);
       expect(isolatedTest.writeDaemonSignal(sessionId, "session_end", { source: "session_end" })).toBe(null);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("raises missing transcript daemon signals when failHard is enabled", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-missing-transcript-failhard-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.join(quaidHome, "instances", "openclaw-main"), { recursive: true });
+    fs.writeFileSync(
+      path.join(quaidHome, "instances", "openclaw-main", "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: true } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "656bd733-6aef-4163-a4f0-569ddd0a4a60";
+      const missingPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+
+      expect(isolatedTest.rememberSessionTranscriptPath(sessionId, missingPath, "session-index-entry")).toBe(true);
+      expect(() => isolatedTest.writeDaemonSignal(sessionId, "session_end", { source: "session_end" }))
+        .toThrow(/no existing transcript path/);
     } finally {
       vi.unstubAllEnvs();
       try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
