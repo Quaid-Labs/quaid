@@ -20,13 +20,23 @@ non-trivial plan.
 - `--apply` completes (first run can take 15–30 min because the janitor LLM
   reviews accumulated memories across all instances). The graduation
   direction is `approved → active`: newly extracted facts land as
-  `approved`, janitor promotes them to `active` after review. Check that
-  the `active` count grew and the `approved` count shrank.
-- Identity files, `*.snippets.md`, and `journal/*.journal.md` artifacts under
-  `~/quaid/instances/<INSTANCE>/` show fresh-timestamp activity when the
-  apply processed matching inputs. Identity file line counts may go DOWN
-  after janitor, not up — janitor consolidates and prunes duplicates, not
-  only appends.
+  `approved`, janitor promotes them to `active` after review. When duplicate
+  merge or delete work also runs, row counts may shrink; use the worker log
+  and janitor stats to verify actual maintenance effects.
+- Identity files and janitor telemetry show fresh activity when the apply
+  processed matching inputs. Identity file line counts may go DOWN after
+  janitor, not up — janitor consolidates and prunes duplicates, not only
+  appends.
+- `*.snippets.md` files are pending queues. After snippet review succeeds,
+  they are normally reduced or deleted. Do not require post-apply snippet
+  files to remain. Treat a consumed snippet queue as PASS when the matching
+  instance telemetry or worker log reports successful snippet review
+  decisions (`snippets_folded`, `snippets_rewritten`, `snippets_discarded`,
+  or `preserved_pending`) with zero snippet errors.
+- `journal/*.journal.md` and `.distillation-state.json` timestamps are only
+  required to move when the apply had source journal entries to distill.
+  A second GLOBAL run with no new journal entries may legitimately report
+  `journal_entries_distilled=0` and leave journal files unchanged.
 - `PROJECT.log` activity is only required when this GLOBAL run explicitly
   includes a project-docs worker drain or the milestone seeded project-log
   entries. Pending project-log queue items by themselves are a separate
@@ -108,27 +118,38 @@ non-trivial plan.
    no project-docs drain was part of the GLOBAL run, route that as a
    project-docs follow-up instead of grading the janitor apply as failed.
 
-5. **State advancement (approved → active).** Spot-check that reviewed
-   rows graduated from `approved` to `active`. Newly extracted facts
-   start as `approved`; the janitor promotes them to `active`:
+5. **State advancement / maintenance effects.** Spot-check reviewed row
+   movement. Newly extracted facts start as `approved`; the janitor promotes
+   them to `active` after review. Active counts can also go DOWN when the
+   same apply legitimately merges duplicates or deletes reviewed rows, so do
+   not require active to increase on every run. Require the run to show at
+   least one expected maintenance effect when the dry-run found work:
+   `graduated_to_active`, `duplicates_merged`, `memories_deleted`,
+   `memories_fixed`, snippet review decisions, journal distillation, or
+   project-docs requests.
 
    ```bash
    ssh REMOTE_HOST "sqlite3 ~/.quaid/instances/\$INSTANCE/data/memory.db \
      \"SELECT status, COUNT(*) FROM nodes GROUP BY status;\""
    ```
 
-   Expect: `active` count grew compared to pre-apply; `approved` count
-   shrank. Raw counts vary by how much got extracted during M2. Apply
-   output should also print a `Graduated N memories from approved to
-   active` line.
+   Expect: if approved rows were present and selected for review, `approved`
+   shrinks and `active` usually grows. If duplicate merge or delete work ran,
+   total/active row counts may shrink instead. Raw counts vary by how much
+   got extracted during the milestones. Use the worker log / janitor stats to
+   distinguish real no-op from valid maintenance.
 
 ### PWN vs FAIL
 
 - Dry-run hangs > 60 s — FAIL (regression in checkpoint bypass).
-- Apply completes but no state advances — FAIL.
-- Matching `*.snippets.md` or `journal/*.journal.md` artifacts never
-  materialize after apply even though the apply processed corresponding
-  snippet or journal inputs — FAIL.
+- Apply completes but no maintenance effect occurs despite dry-run reporting
+  actionable work — FAIL.
+- Matching snippet inputs are present before apply, but the instance worker
+  log/telemetry shows no snippet-review decision and no preserved-pending
+  reason — FAIL.
+- Matching journal inputs are present before apply, but the instance worker
+  log/telemetry shows no journal distillation result and no explicit
+  "no entries" / "not due" reason — FAIL.
 - `PROJECT.log` entries never materialize after apply when this GLOBAL run
   explicitly included project-log worker drain verification or seeded
   project-log entries — FAIL.
