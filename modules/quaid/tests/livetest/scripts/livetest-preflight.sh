@@ -691,36 +691,59 @@ else
             ssh "$REMOTE_HOST" 'mkdir -p ~/.claude'
             scp "$LOCAL_CREDS" "$REMOTE_HOST:~/.claude/.credentials.json"
             echo "  $PASS  CC OAuth credentials copied to remote ~/.claude/.credentials.json"
-            REMOTE_CC_AUTH_STATUS="$(ssh "$REMOTE_HOST" 'python3 - <<'"'"'\"'"'"'\"'"'"'PYEOF'"'"'\"'"'"'\"'"'"'
+            if ! REMOTE_CC_AUTH_STATUS="$(ssh "$REMOTE_HOST" python3 - '~/.claude/.credentials.json' <<'PYEOF' 2>&1
 import datetime
 import json
 import pathlib
+import sys
 
-path = pathlib.Path.home() / ".claude" / ".credentials.json"
+path = pathlib.Path(sys.argv[1]).expanduser()
+label = "remote CC OAuth"
 if not path.exists():
-    raise SystemExit(f"remote CC OAuth: missing {path}")
-payload = json.loads(path.read_text(encoding="utf-8"))
+    raise SystemExit(f"{label}: missing {path}")
+
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    raise SystemExit(f"{label}: invalid JSON in {path}: {exc}") from exc
+
 oauth = payload.get("claudeAiOauth")
 if not isinstance(oauth, dict):
-    raise SystemExit(f"remote CC OAuth: claudeAiOauth block missing in {path}")
+    raise SystemExit(f"{label}: claudeAiOauth block missing in {path}")
+
+access_token = str(oauth.get("accessToken") or "").strip()
+refresh_token = str(oauth.get("refreshToken") or "").strip()
 raw_expires = oauth.get("expiresAt")
+if not access_token:
+    raise SystemExit(f"{label}: accessToken missing in {path}")
+if not refresh_token:
+    raise SystemExit(f"{label}: refreshToken missing in {path}")
 if raw_expires in (None, ""):
-    raise SystemExit(f"remote CC OAuth: expiresAt missing in {path}")
-if isinstance(raw_expires, (int, float)):
-    expires_at = datetime.datetime.fromtimestamp(float(raw_expires) / 1000.0, tz=datetime.timezone.utc)
-else:
-    raw_text = str(raw_expires).strip()
-    if raw_text.isdigit():
-        expires_at = datetime.datetime.fromtimestamp(int(raw_text) / 1000.0, tz=datetime.timezone.utc)
+    raise SystemExit(f"{label}: expiresAt missing in {path}")
+
+try:
+    if isinstance(raw_expires, (int, float)):
+        expires_at = datetime.datetime.fromtimestamp(float(raw_expires) / 1000.0, tz=datetime.timezone.utc)
     else:
-        expires_at = datetime.datetime.fromisoformat(raw_text.replace("Z", "+00:00"))
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+        raw_text = str(raw_expires).strip()
+        if raw_text.isdigit():
+            expires_at = datetime.datetime.fromtimestamp(int(raw_text) / 1000.0, tz=datetime.timezone.utc)
+        else:
+            expires_at = datetime.datetime.fromisoformat(raw_text.replace("Z", "+00:00"))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+except Exception as exc:
+    raise SystemExit(f"{label}: cannot parse expiresAt={raw_expires!r} in {path}: {exc}") from exc
+
 if expires_at <= datetime.datetime.now(datetime.timezone.utc):
-    raise SystemExit(f"remote CC OAuth: expired at {expires_at.isoformat()} ({path})")
-print(f"remote CC OAuth: valid until {expires_at.isoformat()}")
-PYEOF' 2>&1 || true)"
-            if [[ "$REMOTE_CC_AUTH_STATUS" != remote\ CC\ OAuth:\ valid\ until* ]]; then
+    raise SystemExit(f"{label}: expired at {expires_at.isoformat()} ({path})")
+
+print(f"{label}: valid until {expires_at.isoformat()}")
+PYEOF
+)"; then
+                echo "  $FAIL  $REMOTE_CC_AUTH_STATUS"
+                ERRORS=$((ERRORS + 1))
+            elif [[ "$REMOTE_CC_AUTH_STATUS" != remote\ CC\ OAuth:\ valid\ until* ]]; then
                 echo "  $FAIL  $REMOTE_CC_AUTH_STATUS"
                 ERRORS=$((ERRORS + 1))
             else

@@ -152,7 +152,9 @@ start_nudge() {
     safe_target="$(printf '%s' "$target" | tr -c 'A-Za-z0-9_.-' '_')"
     log_file="/tmp/livetest_session_init_${safe_target}.log"
     "$SCRIPT_DIR/livetest-nudge.sh" -w "$target" -r "$RUN_LABEL" >>"$log_file" 2>&1 &
-    echo "  nudge $target pid=$! log=$log_file"
+    local nudge_pid="$!"
+    disown "$nudge_pid" 2>/dev/null || true
+    echo "  nudge $target pid=$nudge_pid log=$log_file"
 }
 
 echo "livetest-session-init.sh"

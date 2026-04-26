@@ -94,8 +94,6 @@ session_dir_name = resolved_project_dir.replace("/", "-")
 session_root = home / ".claude" / "projects" / session_dir_name
 hook_trace_path = home / ".quaid" / "instances" / instance_id / "logs" / "quaid-hook-trace.jsonl"
 
-print(f"resolved_project_dir={resolved_project_dir}")
-
 print(f"global_settings={global_settings_path}")
 if not global_settings_path.is_file():
     failures.append(f"missing global Claude settings: {global_settings_path}")
