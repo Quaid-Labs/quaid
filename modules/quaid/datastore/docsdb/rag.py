@@ -37,6 +37,22 @@ def _workspace() -> Path:
     return get_workspace_dir()
 
 
+def _resolved_workspace() -> Path:
+    """Best-effort workspace root for docs recall path matching.
+
+    Explicit project docs recall should still work even when there is no active
+    ambient instance context. In that case, fall back to the visible Quaid home
+    before giving up.
+    """
+    try:
+        return _workspace().resolve()
+    except Exception:
+        try:
+            return get_visible_quaid_home().resolve()
+        except Exception:
+            return Path.cwd().resolve()
+
+
 def _resolve_project_root(raw: str) -> Path:
     p = Path(str(raw or "").strip())
     if p.is_absolute():
@@ -1122,7 +1138,7 @@ class DocsRAG:
                 registry = DocsRegistry(self.db_path)
             except TypeError:
                 registry = DocsRegistry()
-            workspace = _workspace().resolve()
+            workspace = _resolved_workspace()
             for doc in registry.list_docs():
                 raw_path = str(doc.get("file_path") or "").strip()
                 if not raw_path:
@@ -1220,7 +1236,7 @@ class DocsRAG:
 
         project_paths = None
         registry_paths: List[str] = []
-        workspace = _workspace().resolve()
+        workspace = _resolved_workspace()
         project_scope_token: Optional[str] = None
 
         def _add_scope_paths_for_project(
@@ -1440,6 +1456,7 @@ class DocsRAG:
                         rank_similarity,
                     )
                     if is_dated_project_log:
+                        source_date = _project_log_latest_line_date(content)
                         rank_score += _project_log_asof_rank_delta(content, date_to)
                         rank_score += _project_log_query_line_rank_delta(
                             content,
@@ -1455,6 +1472,7 @@ class DocsRAG:
                         "_rank_score": rank_score,
                         "chunk_index": row[2],  # chunk_index
                         "project": inferred_project,
+                        "source_date": source_date if is_dated_project_log else None,
                     })
 
         # Sort by similarity and limit

@@ -1316,6 +1316,65 @@ class TestDocsSearchFiltering:
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.20)
+    def test_search_docs_bundle_explicit_project_date_query_falls_back_when_workspace_resolution_needs_instance(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        from lib.instance import InstanceError
+
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "chunk-plog-2023",
+                    "/tmp/workspace/projects/livetest-agentmsg-cc/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2023-02-14T10:00:00] plog-amber-valentine-2023",
+                            "- [2024-01-18T08:00:00] plog-jasper-retreat-2024",
+                        ]
+                    ),
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")), \
+             patch("datastore.docsdb.rag._workspace", side_effect=RuntimeError("workspace unavailable without instance")), \
+             patch("datastore.docsdb.rag.get_visible_quaid_home", return_value=Path("/tmp/workspace")), \
+             patch.object(
+                 rag,
+                 "_get_project_paths",
+                 return_value={"home_dir": "projects/livetest-agentmsg-cc", "source_roots": []},
+             ), \
+             patch.object(rag, "infer_project_for_source", return_value="livetest-agentmsg-cc"):
+            bundle = rag.search_docs_bundle(
+                "plog",
+                limit=5,
+                project="livetest-agentmsg-cc",
+                date_from="2023-01-01",
+                date_to="2023-12-31",
+            )
+
+        assert len(bundle["chunks"]) == 1
+        assert bundle["chunks"][0]["project"] == "livetest-agentmsg-cc"
+        assert bundle["chunks"][0]["source_date"] == "2023-02-14"
+        assert "2024-01-18" not in bundle["chunks"][0]["content"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_bundle_blocks_explicit_unlinked_project_and_returns_scope_hint(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)

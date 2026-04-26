@@ -2538,10 +2538,62 @@ def _relation_matches_for_query(query: str) -> List[str]:
 
 def _has_generic_graph_signal(query: str) -> bool:
     lowered = str(query or "").lower()
+    relation_chain_terms = []
+    for raw in re.findall(r"[a-z][a-z'-]+", lowered):
+        normalized = str(raw).strip().rstrip("'").rstrip("’")
+        if normalized.endswith("'s") or normalized.endswith("’s"):
+            normalized = normalized[:-2]
+        relation_chain_terms.append(normalized)
+    chain_relation_hits = {
+        term
+        for term in relation_chain_terms
+        if term in {
+            "partner",
+            "spouse",
+            "wife",
+            "husband",
+            "mother",
+            "mom",
+            "father",
+            "dad",
+            "parent",
+            "parents",
+            "sister",
+            "brother",
+            "sibling",
+            "son",
+            "daughter",
+            "child",
+            "children",
+            "niece",
+            "nephew",
+            "cousin",
+            "aunt",
+            "uncle",
+            "grandmother",
+            "grandfather",
+            "grandparent",
+            "grandparents",
+            "manager",
+            "boss",
+            "supervisor",
+            "employee",
+            "coworker",
+            "colleague",
+            "teammate",
+        }
+    }
+    chained_relation_lookup = (
+        len(chain_relation_hits) >= 2
+        and (
+            lowered.count("'s") + lowered.count("’s") >= 1
+            or bool(re.search(r"\bof\b", lowered))
+        )
+    )
     return bool(re.search(
         r"\b(relation|relationship|related|connected|connection|hierarchy|depends?|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|family|relative|kin|kinship|reports?\s+to)\b",
         lowered,
-    ))
+    )) or chained_relation_lookup
 
 
 def store_edge_keywords(relation: str, keywords: List[str], description: str = "") -> bool:
@@ -4237,6 +4289,11 @@ def _normalize_doc_chunk_contract(chunk: Any, index: int = 0) -> Dict[str, Any]:
     project = chunk.get("project")
     if project is not None and not isinstance(project, str):
         raise _contract_error(f"docs.chunks[{index}].project must be a string or null")
+    source_date = chunk.get("source_date")
+    if source_date is not None:
+        source_date = _date_part(source_date)
+        if not source_date:
+            raise _contract_error(f"docs.chunks[{index}].source_date must be an ISO date or null")
 
     return {
         "content": content,
@@ -4245,6 +4302,7 @@ def _normalize_doc_chunk_contract(chunk: Any, index: int = 0) -> Dict[str, Any]:
         "similarity": round(similarity_value, 3),
         "chunk_index": chunk_index,
         "project": project or None,
+        "source_date": source_date or None,
     }
 
 
@@ -4447,6 +4505,8 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
             text = text[: remaining - 1].rstrip() + "…"
         source = str(chunk.get("source") or "").strip()
         section = str(chunk.get("section_header") or "").strip()
+        project = str(chunk.get("project") or "").strip() or None
+        source_date = _date_part(chunk.get("source_date"))
         prefix = f"[docs] {source}"
         if section:
             prefix += f" > {section}"
@@ -4455,6 +4515,10 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
             "similarity": float(chunk.get("similarity") or 0.0),
             "category": "docs",
             "source_type": "docs",
+            "project": project,
+            "source": source or None,
+            "section_header": section or None,
+            "source_date": source_date or None,
         })
         consumed_chars += len(text)
         if consumed_chars >= total_char_budget:
@@ -4742,6 +4806,7 @@ def _legacy_search_dated_project_logs(
             "_rank_score": score,
             "chunk_index": row["chunk_index"],
             "project": project or _docs_infer_project_for_source(rag, source_file),
+            "source_date": latest_date,
         })
     chunks.sort(
         key=lambda item: float(item.get("_rank_score") or item.get("similarity") or 0.0),
@@ -9481,9 +9546,25 @@ def _sanitize_planned_project(value: Any) -> Optional[str]:
 
 def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
     """Return a mentioned project name without triggering docs reconciliation."""
+    import re as _re
+
     text = str(lowered_query or "").strip().lower()
     if not text:
         return None
+
+    def _mentions_project(clean: str) -> bool:
+        # Registered project names are often short fixtures (for example
+        # "other"). Treat them as slugs/tokens, not arbitrary substrings, so
+        # "brother" does not route a kinship query to docs through "other".
+        pattern = rf"(?<![a-z0-9._-]){_re.escape(clean)}(?![a-z0-9._-])"
+        if _re.search(pattern, text):
+            return True
+        spaced = clean.replace("-", " ")
+        if spaced != clean:
+            spaced_pattern = rf"(?<![a-z0-9._-]){_re.escape(spaced)}(?![a-z0-9._-])"
+            return bool(_re.search(spaced_pattern, text))
+        return False
+
     try:
         import json as _json
         from lib.instance import shared_registry_path
@@ -9498,7 +9579,7 @@ def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
             return None
         for name in sorted(projects.keys(), key=lambda item: len(str(item or "")), reverse=True):
             clean = str(name or "").strip().lower()
-            if clean and name not in deleted and clean in text:
+            if clean and name not in deleted and _mentions_project(clean):
                 return str(name)
     except Exception:
         return None

@@ -2501,6 +2501,20 @@ class TestRecallTelemetry:
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector", "graph"]
 
+    def test_plan_fanout_queries_fast_profiles_preserve_kinship_chain_as_graph_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                "what does my partner's brother's wife do",
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == ["what does my partner's brother's wife do"]
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "graph"]
+
     def test_plan_fanout_queries_full_uses_llm_to_classify_short_exact_stores(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -4115,6 +4129,33 @@ class TestRecallFastHookInjectContract:
         assert bundle["telemetry"]["date_to"] == "2023-12-31"
         assert meta["counts"]["final_results"] == 1
 
+    def test_docs_bundle_to_rows_preserves_project_and_source_date_for_dated_project_logs(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._docs_bundle_to_rows(
+            {
+                "chunks": [
+                    {
+                        "content": "- [2023-02-14T10:00:00] plog-amber-valentine-2023",
+                        "source": "/tmp/workspace/projects/livetest-agentmsg-cc/PROJECT.log",
+                        "section_header": None,
+                        "similarity": 0.91,
+                        "project": "livetest-agentmsg-cc",
+                        "source_date": "2023-02-14",
+                    }
+                ],
+                "project": "livetest-agentmsg-cc",
+                "project_md": None,
+            },
+            limit=5,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["project"] == "livetest-agentmsg-cc"
+        assert rows[0]["source"].endswith("PROJECT.log")
+        assert rows[0]["source_date"] == "2023-02-14"
+        assert mg._recall_row_temporal_date(rows[0]) == "2023-02-14"
+
     def test_store_registry_requires_recall_fast_contract(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -5384,6 +5425,28 @@ class TestRecallFastHookInjectContract:
 
         assert stores == ["vector", "docs"]
         assert project == "cross-live-test"
+
+    def test_infer_recall_store_defaults_does_not_match_project_name_inside_relation_word(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        registry = tmp_path / "project-registry.json"
+        registry.write_text(
+            '{"projects":{"other":{"description":"fixture"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, project = mg._infer_recall_store_defaults(
+                "what does my partner's brother's wife do",
+            )
+
+        assert stores == ["vector", "graph"]
+        assert project is None
 
     def test_infer_recall_store_defaults_routes_docs_for_project_asof_exact_values(self):
         import datastore.memorydb.memory_graph as mg
