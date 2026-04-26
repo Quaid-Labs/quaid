@@ -981,6 +981,136 @@ def test_process_signal_uses_adapter_resolved_transcript_when_signal_path_missin
     assert "cobalt-postage-oc" in captured.get("transcript", "")
 
 
+def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "sess-stage-reset"
+    transcript_path = tmp_path / f"{session_id}.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"user","content":"My Lisbon notebook codeword is tangerine-emilia."}\n'
+            '{"role":"assistant","content":"Understood."}\n'
+        ),
+        encoding="utf-8",
+    )
+    signal_path = tmp_path / "reset-signal.json"
+    signal_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda: 10)
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda: 100)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+    })
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_collapse_staged_semantic_duplicates",
+        lambda existing, incoming: (
+            list(existing or []) + list(incoming or []),
+            extraction_daemon._semantic_stage_metrics_defaults(),
+        ),
+    )
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_buffer_transcript_tail(_path, _from_line, state, **_kwargs):
+        staged = dict(state or {})
+        staged.update({
+            "session_id": session_id,
+            "semantic_buffer": "User: My Lisbon notebook codeword is tangerine-emilia.",
+            "semantic_buffer_tokens": 12,
+            "buffered_line_offset": 2,
+            "processed_line_offset": 0,
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "transcript_path": str(transcript_path),
+        })
+        return staged, {
+            "raw_lines_added": 2,
+            "semantic_chars_added": len(staged["semantic_buffer"]),
+            "semantic_tokens_added": 12,
+            "buffered_line_offset": 2,
+        }
+
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path
+
+        def parse_session_jsonl(self, path):
+            return "User: My Lisbon notebook codeword is tangerine-emilia.\nAssistant: Understood."
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    extract_calls = []
+    published_payloads = []
+
+    def fake_extract_from_transcript(transcript, **_kwargs):
+        extract_calls.append(transcript)
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{
+                "text": "Solomon Steadman's Lisbon notebook codeword is tangerine-emilia",
+                "speaker": "user",
+                "privacy": "shared",
+                "category": "fact",
+                "keywords": "lisbon notebook codeword",
+            }],
+            "facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    def fake_apply_extracted_payloads(payload, **_kwargs):
+        published_payloads.append(payload)
+        return {
+            "facts_stored": len(payload.get("raw_facts", [])),
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"status": "stored"} for _ in payload.get("raw_facts", [])],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        }
+
+    set_adapter(_Adapter())
+    try:
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(extract_mod, "apply_extracted_payloads", fake_apply_extracted_payloads)
+
+        extraction_daemon.process_signal({
+            "session_id": session_id,
+            "type": "reset",
+            "transcript_path": str(transcript_path),
+            "_signal_path": str(signal_path),
+        })
+    finally:
+        reset_adapter()
+
+    assert extract_calls == ["User: My Lisbon notebook codeword is tangerine-emilia."]
+    assert len(published_payloads) == 1
+    assert len(published_payloads[0]["raw_facts"]) == 1
+
+
 def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():
     summary = extraction_daemon._summarize_fact_result_buckets([
         {"status": "duplicate", "reason": "Already stored"},
@@ -4744,7 +4874,7 @@ class TestRollingExtraction:
 
             assert seen_transcripts[0].startswith("User: My sister is Diana")
             assert "Assistant: Her daughter Alice just opened" in seen_transcripts[0]
-            assert seen_transcripts[1].startswith("Assistant: Her daughter Alice just opened")
+            assert len(seen_transcripts) == 1
             assert [metric["event"] for metric in rolling_metrics[-2:]] == ["rolling_stage", "rolling_flush"]
             assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
             assert not extraction_daemon._rolling_state_path("sess-roll").exists()

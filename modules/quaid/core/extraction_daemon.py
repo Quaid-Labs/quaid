@@ -3327,6 +3327,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     extract_started_at: Optional[float] = None
     publish_started_at: Optional[float] = None
     flush_payload: Dict[str, Any] = {}
+    staged_semantic_buffer_for_nonrolling = False
+    staged_fresh_semantic_buffer_for_nonrolling = False
     try:
         from ingest.extract import extract_from_transcript, apply_extracted_payloads
 
@@ -3349,6 +3351,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if not rolling_mode and _semantic_buffer_has_content(staged_state):
             if int(staged_state.get("semantic_buffer_tokens", 0) or 0) >= chunk_budget:
                 operation_phase = "rolling_stage_extract"
+                staged_semantic_buffer_for_nonrolling = True
+                staged_fresh_semantic_buffer_for_nonrolling = bool(refreshed_semantic_buffer_for_nonrolling)
                 staged_state = _stage_semantic_buffer_payload(
                     session_id=session_id,
                     signal_type=signal_type,
@@ -3365,7 +3369,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 refreshed_semantic_buffer_for_nonrolling = False
             buffered_text = str(staged_state.get("semantic_buffer", "") or "").strip()
             tail_text = str(transcript_text or "").strip()
-            if refreshed_semantic_buffer_for_nonrolling:
+            if staged_semantic_buffer_for_nonrolling and staged_fresh_semantic_buffer_for_nonrolling:
+                # The fresh tail was appended into semantic_buffer and staged above.
+                # Tail extraction would process the same transcript twice before
+                # publishing the staged payload.
+                transcript_text = ""
+            elif refreshed_semantic_buffer_for_nonrolling:
                 # The non-rolling pre-buffer step already appended the new tail
                 # into semantic_buffer. Re-appending tail_text here would
                 # duplicate the fresh session content on under-budget flushes.
