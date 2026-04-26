@@ -761,6 +761,7 @@ describe("openclaw deferred notices", () => {
 
     expect(fetchMock).toHaveBeenCalled();
     expect(String(result?.prependContext || "")).toContain("[Quaid error] [provider]");
+    expect(String(result?.prependContext || "")).toContain("Start your next response by relaying this exact Quaid error");
     expect(String(result?.appendSystemContext || "")).toContain("[Quaid error] [provider]");
 
     const noticeFile = path.join(

@@ -2682,8 +2682,10 @@ const AUTO_INJECT_RECALL_TIMEOUT_MS = Math.max(
   )
 );
 const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8e3);
+const IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS = 500;
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
+const immediateProviderNoticeDispatchByAgent = /* @__PURE__ */ new Map();
 function currentPromptModelConfigFingerprint() {
   try {
     const models = getMemoryConfig()?.models || {};
@@ -2701,15 +2703,94 @@ function currentPromptModelConfigFingerprint() {
 function resetPromptModelConfigTracking() {
   promptModelConfigFingerprint = "";
   promptModelConfigNotice = "";
+  immediateProviderNoticeDispatchByAgent.clear();
+}
+function providerNoticeAgentKey(agentLabel) {
+  return String(agentLabel || "main").trim().toLowerCase() || "main";
+}
+function clearImmediateProviderNoticeDispatch(agentLabel, reason) {
+  const key = providerNoticeAgentKey(agentLabel);
+  if (!immediateProviderNoticeDispatchByAgent.delete(key)) {
+    return;
+  }
+  writeHookTrace("hook.before_prompt_build.provider_notice_dispatch_cleared", {
+    agent_label: key,
+    reason
+  });
+}
+function formatImmediateProviderNoticeContext(message) {
+  const notice = String(message || "").trim();
+  if (!notice) {
+    return "";
+  }
+  return `MANDATORY: Quaid has an active provider/configuration error for the human user. Start your next response by relaying this exact Quaid error before any other answer.
+
+<quaid_system_message>
+\u2022 ${notice}
+</quaid_system_message>`;
+}
+function dispatchImmediateProviderNotice(agentLabel, message, reason) {
+  const notice = String(message || "").trim();
+  if (!notice) {
+    return false;
+  }
+  const key = providerNoticeAgentKey(agentLabel);
+  const nowMs = Date.now();
+  const prior = immediateProviderNoticeDispatchByAgent.get(key);
+  if (prior && prior.message === notice && nowMs - prior.dispatchedAtMs < IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS) {
+    writeHookTrace("hook.before_prompt_build.provider_notice_dispatch_suppressed", {
+      agent_label: key,
+      reason,
+      age_ms: nowMs - prior.dispatchedAtMs
+    });
+    return false;
+  }
+  immediateProviderNoticeDispatchByAgent.set(key, { message: notice, dispatchedAtMs: nowMs });
+  if (String(process.env.QUAID_DISABLE_NOTIFICATIONS || "").trim() === "1") {
+    writeHookTrace("hook.before_prompt_build.provider_notice_dispatch_disabled", {
+      agent_label: key,
+      reason
+    });
+    return false;
+  }
+  const instanceId = getInstanceId(key);
+  const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
+  const preamble = `import sys, os
+sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})
+`;
+  const launched = spawnDetachedScript({
+    scriptDir: QUAID_NOTIFY_DIR,
+    logFile: notifyLogFile,
+    scriptPrefix: preamble,
+    scriptBody: `
+from core.runtime.notify import notify_user
+notify_user(${JSON.stringify(notice)})
+`,
+    env: buildPythonEnv({ QUAID_INSTANCE: instanceId }),
+    interpreter: PYTHON_BIN,
+    filePrefix: "provider-notice",
+    fileExtension: ".py"
+  });
+  writeHookTrace("hook.before_prompt_build.provider_notice_dispatched", {
+    agent_label: key,
+    instance_id: instanceId,
+    reason,
+    launched
+  });
+  return launched;
 }
 async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
   const fingerprint = currentPromptModelConfigFingerprint();
   if (!fingerprint) {
+    clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_no_fingerprint");
     return "";
   }
   if (fingerprint === promptModelConfigFingerprint) {
     if (promptModelConfigNotice) {
       clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_repeat_inline_clear");
+      dispatchImmediateProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_repeat");
+    } else {
+      clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_repeat_valid");
     }
     return promptModelConfigNotice;
   }
@@ -2724,10 +2805,12 @@ async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
       MODEL_CONFIG_VALIDATION_TIMEOUT_MS
     );
     clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_validated");
+    clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_validated");
     writeHookTrace("hook.before_prompt_build.model_config_validated", {});
   } catch (err) {
     promptModelConfigNotice = buildProviderErrorNoticeMessage(err, "fast");
     clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_error_inline_clear");
+    dispatchImmediateProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_error");
     writeHookTrace("hook.before_prompt_build.model_config_error", {
       error: String(err?.message || err).slice(0, 240)
     });
@@ -3080,10 +3163,7 @@ function buildProviderErrorNoticeMessage(err, tier = "fast") {
 }
 function buildImmediateProviderNotice(err, tier = "fast") {
   const message = buildProviderErrorNoticeMessage(err, tier);
-  return `<quaid_system_message>
-NOTICE: Include the following Quaid error in your response verbatim.
-\u2022 ${message}
-</quaid_system_message>`;
+  return formatImmediateProviderNoticeContext(message);
 }
 async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 6e5) {
   const resolved = facade.resolveTierModel(modelTier);
@@ -4039,10 +4119,13 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
           resolveSessionKeyForSessionId(preinjectSessionId)
         );
         if (modelConfigNotice) {
-          prependContextParts.push(modelConfigNotice);
-          appendSystemContext = appendSystemContext ? `${appendSystemContext}
+          const providerNoticeContext = formatImmediateProviderNoticeContext(modelConfigNotice);
+          if (providerNoticeContext) {
+            prependContextParts.unshift(providerNoticeContext);
+          }
+          appendSystemContext = appendSystemContext ? `${providerNoticeContext || modelConfigNotice}
 
-${modelConfigNotice}` : modelConfigNotice;
+${appendSystemContext}` : providerNoticeContext || modelConfigNotice;
         }
         if (skipReason) {
           return withDocs({ prependContext: event.prependContext });
