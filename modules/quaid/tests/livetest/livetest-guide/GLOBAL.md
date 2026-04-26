@@ -27,8 +27,10 @@ non-trivial plan.
   apply processed matching inputs. Identity file line counts may go DOWN
   after janitor, not up — janitor consolidates and prunes duplicates, not
   only appends.
-- `PROJECT.log` activity is only required when the run has pending project-log
-  queue items or the milestone explicitly seeded project-log entries.
+- `PROJECT.log` activity is only required when this GLOBAL run explicitly
+  includes a project-docs worker drain or the milestone seeded project-log
+  entries. Pending project-log queue items by themselves are a separate
+  project-docs signal, not a janitor artifact failure.
 - No duplicate or orphan snippet / journal rows; registry deletes
   propagate.
 
@@ -88,20 +90,23 @@ non-trivial plan.
    ssh REMOTE_HOST "tail -40 ~/quaid/instances/*/journal/*.journal.md 2>/dev/null | head -40"
    ```
 
-   `PROJECT.log` entries are not an unconditional janitor side effect. Check
-   project-log freshness only when there are pending queue items or the
-   milestone explicitly seeded project-log entries:
+   `PROJECT.log` entries are not an unconditional janitor side effect. Inspect
+   the hidden project-log queue under `QUAID_HOME`, but only require
+   project-log freshness when this GLOBAL run is explicitly testing a
+   project-docs worker drain or the milestone seeded project-log entries:
 
    ```bash
-   ssh REMOTE_HOST "find ~/.quaid/instances -path '*/data/project-docs/project-log-queue/*' \
-     -type f 2>/dev/null | head -30"
+   ssh REMOTE_HOST "QHOME=\"\${QUAID_HOME:-\$HOME/.quaid}\"; \
+     find \"\$QHOME/data/project-docs/project-log-queue\" -type f 2>/dev/null | head -30"
    ssh REMOTE_HOST "find ~/quaid/projects -name PROJECT.log \
      -exec stat -f '%Sm %N' -t '%Y-%m-%dT%H:%M:%SZ' {} \\; 2>/dev/null | sort"
    ```
 
-   When a queue item or seeded project-log entry exists, the matching
+   When project-log draining is part of the GLOBAL verification, the matching
    `PROJECT.log` under `~/quaid/projects/<PROJECT>/PROJECT.log` should have
-   fresh lines matching the apply window.
+   fresh lines matching the worker drain window. If queue items are present but
+   no project-docs drain was part of the GLOBAL run, route that as a
+   project-docs follow-up instead of grading the janitor apply as failed.
 
 5. **State advancement (approved → active).** Spot-check that reviewed
    rows graduated from `approved` to `active`. Newly extracted facts
@@ -124,7 +129,8 @@ non-trivial plan.
 - Matching `*.snippets.md` or `journal/*.journal.md` artifacts never
   materialize after apply even though the apply processed corresponding
   snippet or journal inputs — FAIL.
-- `PROJECT.log` entries never materialize after apply when a project-log
-  queue item or explicit seeded project-log entry existed — FAIL.
+- `PROJECT.log` entries never materialize after apply when this GLOBAL run
+  explicitly included project-log worker drain verification or seeded
+  project-log entries — FAIL.
 - Apply reports a per-row LLM error on a small subset but completes
   otherwise — PWN-note with the error class.
