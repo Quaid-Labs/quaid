@@ -3362,6 +3362,35 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 session_id,
             )
             new_lines = []
+        elif rolling_mode and staged_state_has_payload(staged_state):
+            logger.info(
+                "[%s] session %s: no raw tail past cursor but staged rolling payload is pending; "
+                "queueing staged payload flush",
+                label,
+                session_id,
+            )
+            write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=transcript_path,
+                meta={
+                    "reason": "rolling_stage_flush",
+                    "source_signal": "rolling",
+                    "staged_payload_sweep": True,
+                    "buffered_line_offset": int(
+                        staged_state.get("buffered_line_offset", cursor_offset) or cursor_offset
+                    ),
+                },
+            )
+            _finalize_no_payload_signal(
+                session_id=session_id,
+                transcript_path=transcript_path,
+                signal_data=signal_data,
+                lock_owner_key=lock_owner_key,
+                lock_fd=lock_fd,
+                cursor_key=lock_owner_key,
+            )
+            return
         elif not rolling_mode and (
             staged_state_has_payload(staged_state)
             or _semantic_buffer_has_content(staged_state)
