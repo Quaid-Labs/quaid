@@ -105,6 +105,7 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('--all-platforms cannot be combined with --adapter or --claude-code.');
     expect(setupText).toContain('if (INSTALL_ALL_PLATFORMS && !_platformOverride && _chainedPlatformQueue.length === 0) {');
     expect(setupText).toContain('const [firstAdapter, ...queuedAdapters] = installableAdapterOptions.map((opt) => opt.value);');
+    expect(setupText).toContain('if (instanceId.startsWith("openclaw-")) return "openclaw";');
     expect(setupText).toContain('if (INSTALL_ALL_PLATFORMS) {');
     expect(setupText).toContain('platform = resolvedInstallerPlatform() ? "" : "__install_all__";');
     expect(setupText).toContain('_beginChainedPlatformInstall(firstAdapter, queuedAdapters);');
@@ -114,6 +115,16 @@ describe("install daemon policy", () => {
     expect(queueIdx).toBeGreaterThanOrEqual(0);
     expect(gateIdx).toBeGreaterThanOrEqual(0);
     expect(queueIdx).toBeLessThan(gateIdx);
+  });
+
+  it("generates installer python env dynamically for chained platform installs", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function pythonInstallerEnvSetup(adapterType = \"\")");
+    expect(setupText).toContain("os.environ['QUAID_ADAPTER_TYPE']");
+    expect(setupText).toContain("os.environ.pop('QUAID_INSTANCE', None)");
+    expect(setupText).not.toContain("const PY_ENV_SETUP =");
   });
 
 

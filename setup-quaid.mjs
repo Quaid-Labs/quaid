@@ -1160,8 +1160,8 @@ let _platformOverride = FORCED_ADAPTER_TYPE;
 // Takes precedence over the adapter-derived default.
 let _instanceIdOverride = "";
 // In agent mode, seed the override immediately from QUAID_INSTANCE env so that
-// early module-level calls to syncInstallerInstanceEnv() (e.g. PY_ENV_SETUP)
-// use the operator-specified instance rather than the platform default.
+// early module-level calls to syncInstallerInstanceEnv() use the
+// operator-specified instance rather than the platform default.
 if (AGENT_MODE) {
   const _envInstance = String(process.env.QUAID_INSTANCE || "").trim();
   if (_envInstance) _instanceIdOverride = _envInstance;
@@ -1176,6 +1176,7 @@ function resolvedInstallerPlatform() {
   const instanceId = (process.env.QUAID_INSTANCE || "").trim();
   if (instanceId.startsWith("codex-")) return "codex";
   if (instanceId.startsWith("claude-code-")) return "claude-code";
+  if (instanceId.startsWith("openclaw-")) return "openclaw";
   if (IS_CLAUDE_CODE) return "claude-code";
   if (IS_OPENCLAW) return "openclaw";
   return "";
@@ -1189,10 +1190,30 @@ function resolvedInstallerInstanceId(adapterType = "") {
 }
 
 function syncInstallerInstanceEnv(adapterType = "") {
+  const platform = String(adapterType || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  if (platform) process.env.QUAID_ADAPTER_TYPE = platform;
+  else delete process.env.QUAID_ADAPTER_TYPE;
   const instance = resolvedInstallerInstanceId(adapterType);
   if (instance) process.env.QUAID_INSTANCE = instance;
   else delete process.env.QUAID_INSTANCE;
   return instance;
+}
+
+function pythonInstallerEnvSetup(adapterType = "") {
+  const instance = syncInstallerInstanceEnv(adapterType);
+  const platform = String(adapterType || resolvedInstallerPlatform() || "").trim().toLowerCase();
+  return [
+    `os.environ['QUAID_HOME'] = ${JSON.stringify(WORKSPACE)}`,
+    `os.environ['QUAID_VISIBLE_HOME'] = ${JSON.stringify(VISIBLE_HOME)}`,
+    `os.environ['QUAID_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}`,
+    `os.environ['OPENCLAW_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}`,
+    platform
+      ? `os.environ['QUAID_ADAPTER_TYPE'] = ${JSON.stringify(platform)}`
+      : "os.environ.pop('QUAID_ADAPTER_TYPE', None)",
+    instance
+      ? `os.environ['QUAID_INSTANCE'] = ${JSON.stringify(instance)}`
+      : "os.environ.pop('QUAID_INSTANCE', None)",
+  ].join("\n");
 }
 
 /**
@@ -1419,11 +1440,8 @@ function _installerPlatformLabel() {
   return "Standalone mode";
 }
 
-// Python env setup — always set canonical Quaid root, plus workspace hint.
-const PY_ENV_SETUP =
-  `os.environ['QUAID_HOME'] = ${JSON.stringify(WORKSPACE)}\n` +
-  `os.environ['OPENCLAW_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}\n` +
-  `os.environ['QUAID_INSTANCE'] = ${JSON.stringify(syncInstallerInstanceEnv())}`;
+// Python env setup must be generated per step because chained all-platform
+// installs mutate the active platform/instance inside one Node process.
 
 // Step-specific quotes — each tied to the step's theme
 const STEP_QUOTES = {
@@ -4641,7 +4659,7 @@ print(int(row[0] if row else 0))
     s.start("Bootstrapping datastores...");
     const domainInitScript = `
 import os, sys
-${PY_ENV_SETUP}
+${pythonInstallerEnvSetup()}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from config import get_config
@@ -4754,7 +4772,7 @@ print('[+] Datastore init hooks complete')
     s.start("Creating owner node...");
     const storeScript = `
 import os, sys
-${PY_ENV_SETUP}
+${pythonInstallerEnvSetup()}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store
@@ -4834,7 +4852,7 @@ except Exception as e:
       const projNames = JSON.stringify(existingDirs);
       const registerScript = `
 import os, sys
-${PY_ENV_SETUP}
+${pythonInstallerEnvSetup()}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
@@ -4894,7 +4912,7 @@ print(total_docs)
       s.start("Registering bundled project docs...");
       const regQuaidScript = `
 import os, sys
-${PY_ENV_SETUP}
+${pythonInstallerEnvSetup()}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
@@ -4949,7 +4967,7 @@ print(len(found))
       for (const bucket of sharedBuckets) {
         const regScript = `
 import os, sys
-${PY_ENV_SETUP}
+${pythonInstallerEnvSetup()}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
@@ -5134,7 +5152,7 @@ c.close()
   s.start("Smoke test (store + recall)...");
   const smokeScript = `
 import os, sys
-${PY_ENV_SETUP}
+${pythonInstallerEnvSetup()}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store, recall
@@ -5176,7 +5194,7 @@ except Exception as e:
     s.start("Starting extraction daemon...");
     const daemonScript = `
 import os, sys
-${PY_ENV_SETUP}
+${pythonInstallerEnvSetup()}
 sys.path.insert(0, '.')
 try:
     from core.extraction_daemon import ensure_alive

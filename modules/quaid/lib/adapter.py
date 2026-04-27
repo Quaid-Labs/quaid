@@ -1469,12 +1469,16 @@ def _adapter_config_paths() -> List[Path]:
 
     home = os.environ.get("QUAID_HOME", "").strip()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
+    instance_config_exists = False
 
     # Primary: instance-specific config
     if home and instance:
-        paths.append(Path(home) / "instances" / instance / "config.json")
+        instance_config_path = Path(home) / "instances" / instance / "config.json"
+        instance_config_exists = instance_config_path.is_file()
+        paths.append(instance_config_path)
 
     explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
+    derived_adapter_type = _adapter_type_from_instance_id(instance) if instance else ""
 
     # Secondary: path-derived instance path when QUAID_INSTANCE is not yet set.
     # This covers normal hook execution (host exports project env) and fresh
@@ -1535,6 +1539,8 @@ def _adapter_config_paths() -> List[Path]:
                 ]
             except Exception:
                 platform_cfgs = []
+            if derived_adapter_type and not instance_config_exists:
+                paths.append(Path(home) / "shared" / "config" / derived_adapter_type / "config.json")
             if len(platform_cfgs) == 1 and platform_cfgs[0].parent.name in ("claude-code", "codex"):
                 from lib.instance import instance_slug_from_project_dir
                 _slug = instance_slug_from_project_dir(os.getcwd())
@@ -1841,6 +1847,8 @@ def _auto_provision_from_env_if_needed() -> None:
         return  # Already initialised — nothing to do
 
     adapter_type = _normalize_adapter_id(explicit_adapter_type)
+    if not adapter_type and not config_path.exists():
+        adapter_type = _adapter_type_from_instance_id(instance)
     if not adapter_type:
         if claude_project_dir and not codex_project_dir:
             adapter_type = "claude-code"

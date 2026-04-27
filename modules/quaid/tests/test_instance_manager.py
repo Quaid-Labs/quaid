@@ -708,3 +708,26 @@ def test_auto_provision_infers_adapter_from_manifest_prefix_for_existing_instanc
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert cfg.get("adapter", {}).get("type") == "openclaw"
     assert (cfg_path.parent / "data" / "memory.db").is_file()
+
+
+def test_auto_provision_prefers_explicit_instance_prefix_over_inherited_host_env(tmp_path, monkeypatch):
+    from lib import adapter as adapter_mod
+
+    host_project = tmp_path / "cc-host-project"
+    host_project.mkdir()
+    instance_id = "openclaw-main"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(host_project))
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+    monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    cfg_path = tmp_path / "instances" / instance_id / "config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg.get("adapter", {}).get("type") == "openclaw"
