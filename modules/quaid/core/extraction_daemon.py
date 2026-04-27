@@ -2642,10 +2642,20 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
                 existing_path
                 and _is_discovery_artifact_transcript(Path(existing_path))
             )
-            if existing_path and os.path.isfile(existing_path) and not existing_is_artifact:
+            existing_is_stale_relocation = _discovered_transcript_supersedes_cursor(
+                existing_path,
+                str(transcript_path),
+            )
+            if (
+                existing_path
+                and os.path.isfile(existing_path)
+                and not existing_is_artifact
+                and not existing_is_stale_relocation
+            ):
                 continue
-            line_offset = 0 if existing_is_artifact else int(cursor_data.get("line_offset", 0) or 0)
-            internal = False if existing_is_artifact else bool(cursor_data.get("internal", False))
+            reset_cursor = existing_is_artifact or existing_is_stale_relocation
+            line_offset = 0 if reset_cursor else int(cursor_data.get("line_offset", 0) or 0)
+            internal = False if reset_cursor else bool(cursor_data.get("internal", False))
             write_cursor(
                 session_id,
                 line_offset,
@@ -2658,6 +2668,32 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
         write_cursor(session_id, 0, str(transcript_path), source_key=source_cursor_key)
         discovered += 1
     return discovered
+
+
+def _discovered_transcript_supersedes_cursor(existing_path: str, transcript_path: str) -> bool:
+    """Return True when an active adapter transcript should replace a relocated cursor."""
+    if not existing_path or not transcript_path:
+        return False
+    try:
+        existing = Path(existing_path).expanduser()
+        current = Path(transcript_path).expanduser()
+        if not existing.is_file() or not current.is_file():
+            return False
+        if existing.resolve() == current.resolve():
+            return False
+        if existing.name != current.name:
+            return False
+        if _is_discovery_artifact_transcript(current):
+            return False
+        if _is_discovery_artifact_transcript(existing):
+            return True
+        existing_size = _transcript_size_bytes(str(existing))
+        current_size = _transcript_size_bytes(str(current))
+        if current_size != existing_size:
+            return True
+        return current.stat().st_mtime > existing.stat().st_mtime
+    except OSError:
+        return False
 
 
 def _is_internal_transcript_session(
