@@ -4870,6 +4870,14 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
     return out
 
 
+def _build_docs_only_recall_json_payload(doc_results: Dict[str, Any], *, limit: int) -> Dict[str, Any]:
+    """Build JSON for docs-only recall with docs hits visible as top-level rows."""
+    return _build_recall_json_payload(
+        _docs_bundle_to_rows(doc_results, limit=limit),
+        docs=doc_results,
+    )
+
+
 def _merge_docs_bundles(existing: Optional[Dict[str, Any]], incoming: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not incoming:
         return existing
@@ -14646,10 +14654,13 @@ if __name__ == "__main__":
                             docs=doc_filters,
                             date_from=date_from,
                             date_to=date_to,
-                        )
+                    )
                     if use_json:
                         if json_payload is None:
-                            json_payload = _build_recall_json_payload([], docs=doc_results)
+                            json_payload = _build_docs_only_recall_json_payload(
+                                doc_results,
+                                limit=max(1, min(doc_limit, docs_fanout_max)),
+                            )
                         else:
                             json_payload["docs"] = _validate_docs_bundle(doc_results)
                         if _recall_telemetry_enabled():

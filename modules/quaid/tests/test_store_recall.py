@@ -6733,6 +6733,35 @@ class TestRecallLimitEdgeCases:
         assert payload["docs"]["chunks"][0]["content"].startswith("The backend uses Express")
         assert payload["docs"]["telemetry"]["resolved_project"] == "recipe-app"
 
+    def test_build_docs_only_recall_json_payload_exposes_docs_as_results(self):
+        from datastore.memorydb.memory_graph import _build_docs_only_recall_json_payload
+
+        payload = _build_docs_only_recall_json_payload(
+            {
+                "chunks": [
+                    {
+                        "content": "- [2023-02-14T10:00:00] plog-amber-valentine-2023",
+                        "source": "/tmp/workspace/projects/livetest-agentmsg-cdx/PROJECT.log",
+                        "section_header": None,
+                        "similarity": 1.0,
+                        "chunk_index": 0,
+                        "project": "livetest-agentmsg-cdx",
+                        "source_date": "2023-02-14",
+                    }
+                ],
+                "project": "livetest-agentmsg-cdx",
+                "project_md": None,
+            },
+            limit=5,
+        )
+
+        assert payload["contract"] == "quaid.recall.v1"
+        assert payload["results"][0]["category"] == "docs"
+        assert payload["results"][0]["source"].endswith("PROJECT.log")
+        assert payload["results"][0]["source_date"] == "2023-02-14"
+        assert "plog-amber-valentine-2023" in payload["results"][0]["text"]
+        assert payload["docs"]["chunks"][0]["source"].endswith("PROJECT.log")
+
     def test_build_recall_json_payload_raises_on_invalid_result_shape(self):
         from datastore.memorydb.memory_graph import _build_recall_json_payload
 
