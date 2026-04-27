@@ -16,7 +16,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Dict
+from typing import Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -151,7 +151,7 @@ def _live_instances_for_supervisor() -> tuple[set[str], set[str]]:
 
 def _wait_for_instance_pid(
     instance: str,
-    expected_pid: int,
+    expected_pid: Optional[int],
     timeout_seconds: float | None = None,
     proc: subprocess.Popen | None = None,
 ) -> int:
@@ -162,7 +162,9 @@ def _wait_for_instance_pid(
         pid = _read_instance_daemon_pid(instance)
         if pid is not None:
             last_seen_pid = pid
-        if pid == int(expected_pid):
+        if expected_pid is None and pid is not None:
+            return pid
+        if expected_pid is not None and pid == int(expected_pid):
             return pid
         if pid is not None:
             if proc is not None and proc.poll() is None:
@@ -172,7 +174,22 @@ def _wait_for_instance_pid(
             raise RuntimeError(f"instance monitor {instance} exited before writing pid file rc={proc.returncode}")
         time.sleep(0.1)
     detail = f"last_seen_pid={last_seen_pid}" if last_seen_pid is not None else "no live pid observed"
-    raise TimeoutError(f"instance monitor {instance} did not write pid file for pid {expected_pid} ({detail})")
+    expected = f"pid {expected_pid}" if expected_pid is not None else "a live daemon pid"
+    raise TimeoutError(f"instance monitor {instance} did not write pid file for {expected} ({detail})")
+
+
+def _daemon_pid_has_supervisor_token(pid: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["ps", "eww", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return False
+    command = result.stdout or ""
+    return " QUAID_SUPERVISOR_PID=" in f" {command}"
 
 
 def _start_instance_monitor(instance: str) -> int:
@@ -192,9 +209,10 @@ def _start_instance_monitor(instance: str) -> int:
         instance=name,
         include_foreground=True,
     )
-    if len(matching_workers) == 1 and matching_all == matching_workers:
-        _extraction_daemon.write_pid(matching_workers[0])
-        return matching_workers[0]
+    detached_workers = [pid for pid in matching_workers if not _daemon_pid_has_supervisor_token(pid)]
+    if len(detached_workers) == 1 and matching_all == detached_workers:
+        _extraction_daemon.write_pid(detached_workers[0])
+        return detached_workers[0]
     if matching_all:
         logging.getLogger(__name__).warning(
             "reaping %d matching extraction daemon(s) before supervisor spawn for %s: %s",
@@ -210,17 +228,21 @@ def _start_instance_monitor(instance: str) -> int:
             pass
     script = Path(__file__).parent / "extraction_daemon.py"
     env = _instance_child_env(name, daemon=True)
+    for key in list(env):
+        if key.startswith("QUAID_SUPERVISOR_"):
+            env.pop(key, None)
+    env["QUAID_SUPERVISOR_DISABLE"] = "1"
     with _instance_daemon_log_path(name).open("ab") as log_fh:
         proc = subprocess.Popen(
-            [sys.executable, str(script), "_worker"],
+            [sys.executable, str(script), "start"],
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
-            start_new_session=False,
+            start_new_session=True,
             env=env,
         )
     try:
-        return _wait_for_instance_pid(name, int(proc.pid), proc=proc)
+        return _wait_for_instance_pid(name, None, proc=proc)
     except Exception:
         project_docs._terminate_process(proc)
         raise

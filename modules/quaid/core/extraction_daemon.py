@@ -4832,6 +4832,9 @@ def start_daemon() -> int:
         env = project_docs.scrub_background_process_env(env)
         env["QUAID_HOME"] = str(_quaid_home())
         env["QUAID_DAEMON"] = "1"
+        for key in list(env):
+            if key.startswith("QUAID_SUPERVISOR_"):
+                env.pop(key, None)
 
         with open(log_file, "a") as _lf:
             subprocess.Popen(

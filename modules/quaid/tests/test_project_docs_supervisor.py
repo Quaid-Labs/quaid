@@ -184,7 +184,8 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
     class _FakePopen:
         pid = 12345
 
-        def __init__(self, *_args, **kwargs):
+        def __init__(self, args, **kwargs):
+            captured["args"] = list(args)
             captured["env"] = dict(kwargs.get("env") or {})
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -193,6 +194,8 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
     monkeypatch.setenv("LANE", "cc")
     monkeypatch.setenv("QUAID_ADAPTER_TYPE", "claude-code")
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp/cc-livetest")
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "11111")
+    monkeypatch.setenv("QUAID_SUPERVISOR_TOKEN", "inherited-token")
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
@@ -200,17 +203,21 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
     )
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
     monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
-    monkeypatch.setattr(supervisor, "_wait_for_instance_pid", lambda _name, pid, **_kwargs: pid)
+    monkeypatch.setattr(supervisor, "_wait_for_instance_pid", lambda _name, _pid, **_kwargs: 12345)
     monkeypatch.setattr(supervisor.subprocess, "Popen", _FakePopen)
 
     assert supervisor._start_instance_monitor("codex-private-tmp-cdx-livetest") == 12345
 
+    assert captured["args"][-1] == "start"
     env = captured["env"]
     assert "MEMORY_DB_PATH" not in env
     assert "MEMORY_ARCHIVE_DB_PATH" not in env
     assert env["QUAID_HOME"] == str(tmp_path)
     assert env["QUAID_INSTANCE"] == "codex-private-tmp-cdx-livetest"
     assert env["QUAID_DAEMON"] == "1"
+    assert env["QUAID_SUPERVISOR_DISABLE"] == "1"
+    assert "QUAID_SUPERVISOR_PID" not in env
+    assert "QUAID_SUPERVISOR_TOKEN" not in env
     assert "INSTANCE" not in env
     assert "SILO" not in env
     assert "LANE" not in env
@@ -229,6 +236,7 @@ def test_start_instance_monitor_adopts_matching_live_daemon_without_pidfile(monk
     monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
     monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
     monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [8424])
+    monkeypatch.setattr(supervisor, "_daemon_pid_has_supervisor_token", lambda _pid: False)
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda pid: adopted.append(pid))
     monkeypatch.setattr(
         supervisor.subprocess,
@@ -238,6 +246,37 @@ def test_start_instance_monitor_adopts_matching_live_daemon_without_pidfile(monk
 
     assert supervisor._start_instance_monitor("codex-private-tmp-cdx-livetest") == 8424
     assert adopted == [8424]
+
+
+def test_start_instance_monitor_reaps_supervisor_attached_daemon(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from core import extraction_daemon
+
+    terminated = []
+    captured = {}
+
+    class _FakePopen:
+        pid = 31337
+
+        def __init__(self, args, **kwargs):
+            captured["args"] = list(args)
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [8424])
+    monkeypatch.setattr(supervisor, "_daemon_pid_has_supervisor_token", lambda _pid: True)
+    monkeypatch.setattr(extraction_daemon, "_terminate_daemon_pid", lambda pid: terminated.append(pid) or True)
+    monkeypatch.setattr(supervisor, "_wait_for_instance_pid", lambda _name, _pid, **_kwargs: 9001)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", _FakePopen)
+
+    assert supervisor._start_instance_monitor("codex-private-tmp-cdx-livetest") == 9001
+    assert terminated == [8424]
+    assert captured["args"][-1] == "start"
+    assert captured["env"]["QUAID_SUPERVISOR_DISABLE"] == "1"
+    assert "QUAID_SUPERVISOR_PID" not in captured["env"]
 
 
 def test_stop_instance_monitor_kills_pidfile_target_and_matching_orphans(monkeypatch, tmp_path):
