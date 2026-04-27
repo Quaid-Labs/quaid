@@ -253,6 +253,26 @@ class TestStandaloneAdapter:
         assert "User: Normal user message" in transcript
         assert "Assistant: Normal assistant reply" in transcript
 
+    def test_build_transcript_strips_quaid_system_notice_leadin(self, standalone):
+        transcript = standalone.build_transcript([
+            {
+                "role": "user",
+                "content": (
+                    "MANDATORY: Quaid has active notices for the human user. "
+                    "Begin your next response by relaying each notice below.\n\n"
+                    "<quaid_system_message>\n"
+                    "• [Quaid — Janitor] Edges created: 3\n"
+                    "</quaid_system_message>\n\n"
+                    "My Friday ritual uses marker marigold-anvil-5816."
+                ),
+            },
+        ])
+
+        assert "MANDATORY: Quaid" not in transcript
+        assert "quaid_system_message" not in transcript
+        assert "Edges created" not in transcript
+        assert transcript == "User: My Friday ritual uses marker marigold-anvil-5816."
+
     def test_parse_session_jsonl_uses_adapter_transcript_rules(self, standalone, tmp_path):
         import json
         jsonl_file = tmp_path / "session.jsonl"
@@ -718,6 +738,31 @@ class TestOpenClawAdapter:
         assert "A new session was started via /new or /reset" not in sanitized
         assert "\n\n\n" not in sanitized
         assert sanitized == "My neighbour won a regional chili cook-off last weekend."
+
+    def test_sanitize_transcript_text_strips_untrusted_daily_memory_blocks(self):
+        adapter = OpenClawAdapter()
+        text = (
+            "[Startup context loaded by runtime]\n"
+            "[Untrusted daily memory: memory/2026-04-27-friday-ritual.md]\n"
+            "BEGIN_QUOTED_NOTES\n"
+            "```text\n"
+            "# Session: 2026-04-27 19:23:01 UTC\n"
+            "- **Session Key**: agent:main:matrix:direct:@quaid-test-bot:localhost\n"
+            "user: <injected_memories>\n"
+            "- fact | stale recalled memory\n"
+            "</injected_memories>\n"
+            "```\n"
+            "END_QUOTED_NOTES\n\n"
+            "My Friday ritual uses marker marigold-anvil-5816.\n"
+        )
+
+        sanitized = adapter.sanitize_transcript_text(text)
+
+        assert "BEGIN_QUOTED_NOTES" not in sanitized
+        assert "Bootstrap files like" not in sanitized
+        assert "<injected_memories>" not in sanitized
+        assert "stale recalled memory" not in sanitized
+        assert sanitized.endswith("My Friday ritual uses marker marigold-anvil-5816.")
 
     def test_get_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-key")

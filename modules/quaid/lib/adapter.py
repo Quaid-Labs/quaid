@@ -63,6 +63,10 @@ class QuaidAdapter(abc.ABC):
         r"<quaid_system_message>.*?</quaid_system_message>",
         flags=re.DOTALL,
     )
+    _QUAID_SYSTEM_LEAD_IN_RE = re.compile(
+        r"^\s*MANDATORY:\s+Quaid\b.*?(?=\n\n|\Z)",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     _OFFLINE_EXTRACTION_PROMPT_RE = re.compile(
         r"You are performing offline memory extraction on a transcript archive\.\s*"
         r"Do NOT continue the conversation, answer questions, write code, or act as the assistant in the transcript\.\s*"
@@ -423,7 +427,9 @@ class QuaidAdapter(abc.ABC):
         value = str(text or "").strip()
         if not value:
             return ""
-        return cls._QUAID_SYSTEM_MESSAGE_RE.sub("", value).strip()
+        value = cls._QUAID_SYSTEM_MESSAGE_RE.sub("", value)
+        value = cls._QUAID_SYSTEM_LEAD_IN_RE.sub("", value)
+        return value.strip()
 
     def sanitize_transcript_text(self, text: str) -> str:
         value = self.strip_quaid_system_messages(text)

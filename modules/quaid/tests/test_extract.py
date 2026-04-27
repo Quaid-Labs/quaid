@@ -687,6 +687,58 @@ class TestExtractFromTranscript:
         assert result["explicit_structural_anchor_facts"] == 0
         assert result["raw_facts"] == []
 
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_drops_injected_memory_and_session_artifact_facts(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": (
+                        "BEGIN_QUOTED_NOTES ```text # Session: 2026-04-27 19:32:05 UTC "
+                        "- **Session Key**: agent:main:matrix"
+                    ),
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+                {
+                    "text": (
+                        "<injected_memories> - fact | Solomon does strength work Friday "
+                        "</injected_memories>"
+                    ),
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+                {
+                    "text": "Solomon Steadman uses marker marigold-anvil-5816 for pumpkin seeds",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript="User: My Friday ritual uses marker marigold-anvil-5816.\n\nAssistant: noted",
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert result["artifact_facts_dropped"] == 2
+        assert result["facts_skipped"] == 2
+        assert texts == ["Solomon Steadman uses marker marigold-anvil-5816 for pumpkin seeds"]
+
     def test_carry_selection_is_bounded_and_persistable(self):
         from ingest.extract import _select_carry_facts, _persistable_carry_facts
 

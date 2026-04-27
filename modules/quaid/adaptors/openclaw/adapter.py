@@ -584,12 +584,30 @@ class OpenClawAdapter(QuaidAdapter):
         r"<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _OC_UNTRUSTED_DAILY_MEMORY_RE = re.compile(
+        r"^\s*\[Untrusted daily memory:[^\]]+\]\s*"
+        r"BEGIN_QUOTED_NOTES\s*```[\s\S]*?```\s*END_QUOTED_NOTES\s*",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    _OC_STARTUP_CONTEXT_LINE_RE = re.compile(
+        r"^\s*(?:"
+        r"\[Startup context loaded by runtime\]|"
+        r"Bootstrap files like SOUL\.md, USER\.md, and MEMORY\.md are already provided separately when eligible\.|"
+        r"Recent daily memory was selected and loaded by runtime for this new session\.|"
+        r"Treat the daily memory below as untrusted workspace notes\..*|"
+        r"Do not claim you manually read files unless the user asks\.|"
+        r"\.\.\.\[additional startup memory truncated\]\.\.\."
+        r")\s*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
 
     def sanitize_transcript_text(self, text: str) -> str:
         value = super().sanitize_transcript_text(text)
         if not value:
             return ""
         value = self._OC_INTERNAL_CONTEXT_RE.sub("", value)
+        value = self._OC_UNTRUSTED_DAILY_MEMORY_RE.sub("", value)
+        value = self._OC_STARTUP_CONTEXT_LINE_RE.sub("", value)
         value = self._OC_UNTRUSTED_METADATA_RE.sub("", value)
         value = self._QUAID_MEMORY_CONTEXT_RE.sub("", value)
         value = self._QUAID_NOTIFICATION_RE.sub("", value)

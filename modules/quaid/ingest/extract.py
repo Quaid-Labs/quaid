@@ -984,6 +984,17 @@ _SPEAKER_PREFIX_RE = re.compile(
 )
 _INJECTED_MEMORIES_RE = re.compile(r"<injected_memories\b[^>]*>.*?</injected_memories>", re.IGNORECASE | re.DOTALL)
 _FENCED_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+_EXTRACTION_ARTIFACT_FACT_RE = re.compile(
+    r"</?injected_memories\b|"
+    r"</?quaid_system_message\b|"
+    r"^\s*MANDATORY:\s+Quaid\b|"
+    r"^\s*Bootstrap files like SOUL\.md, USER\.md, and MEMORY\.md\b|"
+    r"^\s*Recent daily memory was selected and loaded by runtime\b|"
+    r"\bBEGIN_QUOTED_NOTES\b|\bEND_QUOTED_NOTES\b|"
+    r"#\s*Session:\s*\d{4}-\d{2}-\d{2}|"
+    r"-\s*\*\*(?:Session Key|Session ID|Source)\*\*:",
+    re.IGNORECASE | re.DOTALL,
+)
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
 )
@@ -1126,6 +1137,37 @@ def _explicit_structural_anchor_facts(
                 seen_markers.add(marker.lower())
 
     return additions
+
+
+def _is_extraction_artifact_fact_text(text: str) -> bool:
+    return bool(_EXTRACTION_ARTIFACT_FACT_RE.search(str(text or "")))
+
+
+def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
+    facts = parsed.get("facts", []) or []
+    if not isinstance(facts, list) or not facts:
+        return parsed, 0
+
+    filtered: List[Any] = []
+    dropped = 0
+    for fact in facts:
+        if not isinstance(fact, dict):
+            filtered.append(fact)
+            continue
+        text = fact.get("text", "")
+        if isinstance(text, str) and _is_extraction_artifact_fact_text(text):
+            dropped += 1
+            continue
+        filtered.append(fact)
+
+    if not dropped:
+        return parsed, 0
+
+    out = dict(parsed)
+    out["facts"] = filtered
+    if not _payload_has_signal(out) and _chunk_assessment(out) in {"", "usable"}:
+        out["chunk_assessment"] = "nothing_usable"
+    return out, dropped
 
 
 def collapse_duplicate_payload_facts(facts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
@@ -1450,6 +1492,7 @@ def _merge_extract_telemetry(target: Dict[str, Any], source: Dict[str, Any]) -> 
         "assessment_needs_smaller_chunk",
         "unclassified_empty_payloads",
         "carry_duplicate_facts_dropped",
+        "artifact_facts_dropped",
     ):
         target[key] = int(target.get(key, 0) or 0) + int(source.get(key, 0) or 0)
     target["max_split_depth"] = max(
@@ -1666,6 +1709,18 @@ def _extract_chunk_payloads(
                 label,
                 chunk_label,
                 dropped,
+            )
+        parsed, artifact_dropped = _filter_extraction_artifact_facts(parsed)
+        if artifact_dropped:
+            if isinstance(telemetry, dict):
+                telemetry["artifact_facts_dropped"] = int(
+                    telemetry.get("artifact_facts_dropped", 0) or 0
+                ) + artifact_dropped
+            logger.warning(
+                "[extract] %s chunk %s: dropped %d extraction artifact fact(s)",
+                label,
+                chunk_label,
+                artifact_dropped,
             )
 
     estimated_tokens = estimate_tokens(chunk)
@@ -2551,6 +2606,7 @@ def extract_from_transcript(
                 "assessment_needs_smaller_chunk": 0,
                 "unclassified_empty_payloads": 0,
                 "carry_duplicate_facts_dropped": 0,
+                "artifact_facts_dropped": 0,
                 "circuit_breaker": breaker.status,
             }
     except Exception:
@@ -2591,6 +2647,7 @@ def extract_from_transcript(
         "assessment_needs_smaller_chunk": 0,
         "unclassified_empty_payloads": 0,
         "carry_duplicate_facts_dropped": 0,
+        "artifact_facts_dropped": 0,
     }
 
     if not transcript or not transcript.strip():
@@ -2730,6 +2787,7 @@ def extract_from_transcript(
                     "assessment_needs_smaller_chunk": 0,
                     "unclassified_empty_payloads": 0,
                     "carry_duplicate_facts_dropped": 0,
+                    "artifact_facts_dropped": 0,
                 }
                 future = executor.submit(_process_root_chunk, ci, chunk, [], local_telemetry)
                 future_map[future] = (ci, local_telemetry)
@@ -2800,6 +2858,7 @@ def extract_from_transcript(
         all_facts = explicit_anchor_facts + all_facts
     else:
         result["explicit_structural_anchor_facts"] = 0
+    result["facts_skipped"] += int(result.get("artifact_facts_dropped", 0) or 0)
 
     result["raw_facts"] = list(all_facts)
     result["raw_snippets"] = dict(all_snippets)
