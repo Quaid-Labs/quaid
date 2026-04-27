@@ -901,6 +901,7 @@ describe("lifecycle signal detection", () => {
       "What do you know about my dog Baxter?",
       5,
       { all: true },
+      false,
     );
     expect(direct.datastores).toEqual(["vector_basic", "graph"]);
     expect(direct.expandGraph).toBe(true);
@@ -911,6 +912,7 @@ describe("lifecycle signal detection", () => {
       "Who is my niece?",
       5,
       { all: true },
+      false,
     );
     expect(relational.datastores).toEqual(["vector_basic", "graph"]);
     expect(relational.expandGraph).toBe(true);
@@ -1219,6 +1221,48 @@ describe("lifecycle signal detection", () => {
       queuedStartupRecovery: null,
       missingUserRecovery: { text: "What grinder do I use for my Flair 58 espresso setup?", ageMs: 500 },
     })).toBe(false);
+  });
+
+  it("uses routed stores for generic auto-inject when pre-injection pass is enabled", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "What grinder do I use for my Flair 58 espresso setup?",
+      6,
+      { all: true },
+      true,
+    );
+
+    expect(opts.routeStores).toBe(true);
+    expect(opts.datastores).toBeUndefined();
+    expect(opts.sourceTag).toBe("auto_inject");
+  });
+
+  it("forces project store for explicit known-project detail queries during auto-inject", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "As of 2026-03-15, what projects were on Maya's portfolio site?",
+      6,
+      { all: true },
+      true,
+      ["portfolio-site", "recipe-app"],
+    );
+
+    expect(opts.routeStores).toBe(false);
+    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
+    expect(opts.project).toBe("portfolio-site");
+    expect(opts.dateTo).toBe("2026-03-15");
+    expect(opts.sourceTag).toBe("auto_inject");
+  });
+
+  it("keeps bounded memory-only auto-inject stores when pre-injection pass is disabled", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "What grinder do I use for my Flair 58 espresso setup?",
+      6,
+      { all: true },
+      false,
+    );
+
+    expect(opts.routeStores).toBe(false);
+    expect(opts.datastores).toEqual(["vector_basic", "graph"]);
+    expect(opts.sourceTag).toBe("auto_inject");
   });
 
   it("does not recover a cached user message when usable prompt payload already exists", () => {

@@ -767,6 +767,35 @@ describe("QuaidFacade", () => {
     ]);
   });
 
+  it("project recall preserves PROJECT.log content in parsed results", async () => {
+    const execDocsRag = vi.fn(async () => [
+      "Found 1 results for 'portfolio projects':",
+      "",
+      "1. ~/projects/portfolio-site/PROJECT.log > 2026-03-15 (similarity: 0.95)",
+      "   - [2026-03-15T09:00:00] Projects on the site: Recipe App; TechFlow Platform Redesign",
+      "",
+    ].join("\n"));
+    const facade = createQuaidFacade(makeMockDeps({
+      execDocsRag,
+      isSystemEnabled: vi.fn((system: string) => system === "projects"),
+    }));
+
+    const results = await facade.recall({
+      query: "As of 2026-03-15, what projects were on the portfolio site?",
+      limit: 5,
+      routeStores: false,
+      datastores: ["project"],
+      expandGraph: false,
+      project: "portfolio-site",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].via).toBe("project");
+    expect(results[0].sourceType).toBe("docs");
+    expect(results[0].text).toContain("Projects on the site: Recipe App; TechFlow Platform Redesign");
+    expect(results[0].createdAt).toBe("2026-03-15");
+  });
+
   it("recallWithDiagnostics forwards timeout budget in JSON config", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {

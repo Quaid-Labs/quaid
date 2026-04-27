@@ -4401,6 +4401,88 @@ const facade = createQuaidFacade({
 
 const getProjectNames = () => facade.getProjectNames();
 
+function _normalizeProjectRecallHint(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function _inferAutoInjectProject(query: string, projectNames: string[] = getProjectNames()): string | undefined {
+  const normalizedQuery = _normalizeProjectRecallHint(query);
+  if (!normalizedQuery) return undefined;
+  let bestMatch: { name: string; score: number } | null = null;
+  for (const rawName of projectNames) {
+    const name = String(rawName || "").trim();
+    if (!name) continue;
+    const normalizedName = _normalizeProjectRecallHint(name);
+    if (!normalizedName) continue;
+    if (!normalizedQuery.includes(normalizedName)) continue;
+    const score = normalizedName.length;
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { name, score };
+    }
+  }
+  return bestMatch?.name;
+}
+
+function _looksLikeExplicitProjectDetailQuery(query: string): boolean {
+  const normalized = _normalizeProjectRecallHint(query);
+  if (!normalized) return false;
+  const detailCues = [
+    "version",
+    "versions",
+    "architecture",
+    "api",
+    "schema",
+    "deploy",
+    "deployment",
+    "feature",
+    "features",
+    "bug",
+    "bugs",
+    "test",
+    "tests",
+    "docs",
+    "documentation",
+    "project log",
+    "project logs",
+    "file",
+    "files",
+    "ui",
+    "frontend",
+    "backend",
+    "graphql",
+    "rest",
+    "database",
+    "migration",
+    "component",
+    "implementation",
+    "implemented",
+    "portfolio",
+    "site",
+    "projects",
+  ];
+  const temporalCues = ["as of", "latest", "current", "after", "before", "since", "until"];
+  return detailCues.some((cue) => normalized.includes(cue)) || temporalCues.some((cue) => normalized.includes(cue));
+}
+
+function _extractAutoInjectTemporalBounds(query: string): Pick<RecallOptions, "dateFrom" | "dateTo"> {
+  const raw = String(query || "").trim();
+  if (!raw) return {};
+  const beforeLike = raw.match(/\b(?:as of|before|until)\s+(\d{4}-\d{2}-\d{2})\b/i);
+  if (beforeLike?.[1]) {
+    return { dateTo: beforeLike[1] };
+  }
+  const afterLike = raw.match(/\b(?:after|since)\s+(\d{4}-\d{2}-\d{2})\b/i);
+  if (afterLike?.[1]) {
+    return { dateFrom: afterLike[1] };
+  }
+  return {};
+}
+
 // Shared recall abstraction — used by both memory_recall tool and auto-inject
 type RecallOptions = FacadeRecallOptions & {
   waitForExtraction?: boolean;  // wait on facade extraction queue (tool=yes, inject=no)
@@ -4411,19 +4493,46 @@ function _buildAutoInjectRecallOptions(
   query: string,
   limit: number,
   domain: DomainFilter,
+  usePreInjectionPass: boolean = facade.isPreInjectionPassEnabled(),
+  projectNames: string[] = getProjectNames(),
 ): RecallOptions {
+  const inferredProject = usePreInjectionPass ? _inferAutoInjectProject(query, projectNames) : undefined;
+  if (usePreInjectionPass && inferredProject && _looksLikeExplicitProjectDetailQuery(query)) {
+    return {
+      query,
+      limit,
+      expandGraph: true,
+      graphDepth: 2,
+      datastores: ["project", "vector_basic", "graph"],
+      routeStores: false,
+      project: inferredProject,
+      ..._extractAutoInjectTemporalBounds(query),
+      intent: "general",
+      domain,
+      failOpen: true,
+      waitForExtraction: false,
+      timeoutMs: AUTO_INJECT_RECALL_TIMEOUT_MS,
+      sourceTag: "auto_inject",
+    };
+  }
   return {
     query,
     limit,
     expandGraph: true,
     graphDepth: 2,
-    // OC already injects project docs separately in before_prompt_build.
-    // Keep auto-inject memory recall focused on memory stores so a slow
-    // project search cannot consume the hook budget. Graph recall stays
-    // bounded by the same subprocess timeout and keeps linked memories
-    // reachable without language-specific routing heuristics.
-    datastores: ["vector_basic", "graph"],
-    routeStores: false,
+    // When pre-injection pass is enabled, honor the routed fast planner so
+    // project/docs questions can surface project-log evidence during normal
+    // turns. If that feature is disabled, keep the older bounded memory-only
+    // path for minimal hook overhead.
+    ...(usePreInjectionPass
+      ? {
+          datastores: undefined,
+          routeStores: true,
+        }
+      : {
+          datastores: ["vector_basic", "graph"],
+          routeStores: false,
+        }),
     intent: "general",
     domain,
     failOpen: true,

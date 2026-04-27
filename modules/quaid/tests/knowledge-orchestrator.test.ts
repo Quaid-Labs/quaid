@@ -277,6 +277,47 @@ describe("knowledge orchestrator", () => {
     expect(results[0].category).toBe("project");
   });
 
+  it("preserves explicit project rows in mixed-store recall", async () => {
+    const recallProjectStore = vi.fn(async () => [
+      {
+        text: "~/projects/portfolio-site/PROJECT.log: Projects on the site: Recipe App; TechFlow Platform Redesign",
+        category: "project",
+        similarity: 0.52,
+        via: "project",
+        sourceType: "docs",
+      },
+    ]);
+    const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
+      if (opts.stores?.includes("vector_basic")) {
+        return [
+          { text: "Maya asked about what projects were on the portfolio site as of 2026-03-15", category: "fact", similarity: 0.99, via: "vector" },
+          { text: "The assistant did not have specific project names for the portfolio site's Projects section as of 2026-03-15", category: "fact", similarity: 0.98, via: "vector" },
+        ];
+      }
+      return [];
+    });
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: (name) => name === "projects",
+      recallProjectStore,
+      callFastRouter: vi.fn(async () => '{"datastores":["project","vector_basic"]}'),
+      recallMemory,
+    });
+
+    const results = await engine.recall("As of 2026-03-15, what projects were on the portfolio site?", 2, {
+      datastores: ["project", "vector_basic"],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+      project: "portfolio-site",
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results.some((item) => item.via === "project")).toBe(true);
+    expect(results.some((item) => item.text.includes("Projects on the site: Recipe App"))).toBe(true);
+  });
+
   it("applies datastoreOptions override for project store scope", async () => {
     const recallProjectStore = vi.fn(async () => [
       { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
@@ -432,6 +473,30 @@ describe("knowledge orchestrator", () => {
     const plan = await engine.routeRecallPlan("x", false, "fast");
     expect(plan.project).toBeUndefined();
     expect(plan.datastores).toEqual(["project"]);
+  });
+
+  it("augments routed plans with project store for explicit known project detail queries", async () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => JSON.stringify({
+        query: "As of 2026-03-15, what projects were on Maya's portfolio site?",
+        datastores: ["vector_basic"],
+        project: null,
+      })),
+      getProjectCatalog: () => [{ name: "portfolio-site", description: "Maya portfolio site" }],
+      recallMemory: vi.fn(async () => []),
+    });
+
+    const plan = await engine.routeRecallPlan(
+      "As of 2026-03-15, what projects were on Maya's portfolio site?",
+      false,
+      "fast",
+    );
+
+    expect(plan.project).toBe("portfolio-site");
+    expect(plan.datastores).toEqual(["project", "vector_basic"]);
   });
 
   it("applies source-type boosts for agent_actions intent", async () => {

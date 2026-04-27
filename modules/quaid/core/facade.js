@@ -1926,23 +1926,55 @@ Consider running: docs staleness updater (update-stale --apply)`;
     scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
     return scored.slice(0, limit);
   }
-  function parseProjectStoreResults(out, _query, _limit, _project) {
+  function parseProjectStoreResults(out, _query, _limit, project) {
     if (!out || !out.trim()) return [];
     const results = [];
     const lines = out.split("\n");
-    for (const line of lines) {
-      const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
-      if (!m) continue;
-      const sourcePath = m[1];
-      const section = m[2].trim();
-      const sim = Number.parseFloat(m[3]) || 0.6;
+    let current = null;
+    const flushCurrent = () => {
+      if (!current) return;
+      const sourceBits = [current.sourcePath, current.section].filter(Boolean).join(" > ");
+      const body = current.content.map((line) => line.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      const text = body ? `${sourceBits}: ${body}` : sourceBits;
+      const createdAtMatch = body.match(/\[(20\d{2}-\d{2}-\d{2})(?:T[^\]]*)?\]/);
       results.push({
-        text: `${sourcePath} > ${section}`,
+        text,
         category: "project",
-        similarity: sim,
-        via: "project"
+        similarity: current.similarity || 0.6,
+        via: "project",
+        sourceType: "docs",
+        sourceName: current.sourcePath,
+        createdAt: createdAtMatch?.[1],
+        ...project ? { project } : {}
       });
+      current = null;
+    };
+    for (const line of lines) {
+      const headerMatch = line.match(/^\d+\.\s+(.+?)\s+\(similarity:\s+([\d.]+)\)\s*$/);
+      if (headerMatch) {
+        flushCurrent();
+        const sourceLabel = String(headerMatch[1] || "").trim();
+        const headerParts = sourceLabel.split(/\s+>\s+/);
+        const sourcePath = String(headerParts.shift() || "").trim();
+        const section = headerParts.join(" > ").trim() || void 0;
+        current = {
+          sourcePath,
+          section,
+          similarity: Number.parseFloat(headerMatch[2]) || 0.6,
+          content: []
+        };
+        continue;
+      }
+      if (!current) continue;
+      if (!line.trim()) {
+        flushCurrent();
+        continue;
+      }
+      if (/^\s{2,}\S/.test(line)) {
+        current.content.push(line.trim());
+      }
     }
+    flushCurrent();
     return results;
   }
   const _memoryNotes = /* @__PURE__ */ new Map();

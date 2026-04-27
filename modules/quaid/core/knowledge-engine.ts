@@ -272,6 +272,77 @@ Return JSON only: {"datastores":["vector_basic","graph"]}`;
     );
   }
 
+  function normalizeProjectHintText(value: string): string {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[-_]+/g, " ")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function inferProjectFromQuery(
+    query: string,
+    projectCatalog: Array<{ name: string; description: string }>,
+  ): string | undefined {
+    const normalizedQuery = normalizeProjectHintText(query);
+    if (!normalizedQuery) return undefined;
+
+    let bestMatch: { name: string; score: number } | null = null;
+    for (const entry of projectCatalog) {
+      const normalizedName = normalizeProjectHintText(entry.name);
+      if (!normalizedName) continue;
+      if (!normalizedQuery.includes(normalizedName)) continue;
+      const score = normalizedName.length;
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { name: entry.name, score };
+      }
+    }
+    return bestMatch?.name;
+  }
+
+  function shouldAugmentProjectStore(query: string): boolean {
+    const normalized = normalizeProjectHintText(query);
+    if (!normalized) return false;
+    const detailCues = [
+      "version",
+      "architecture",
+      "api",
+      "schema",
+      "deploy",
+      "deployment",
+      "feature",
+      "features",
+      "bug",
+      "bugs",
+      "test",
+      "tests",
+      "readme",
+      "docs",
+      "documentation",
+      "project log",
+      "project logs",
+      "portfolio",
+      "site",
+      "projects",
+      "file",
+      "files",
+      "ui",
+      "frontend",
+      "backend",
+      "graphql",
+      "rest",
+      "database",
+      "model",
+      "migration",
+      "component",
+      "implementation",
+      "implemented",
+    ];
+    const temporalCues = ["as of", "latest", "current", "after", "before", "since", "until"];
+    return detailCues.some((cue) => normalized.includes(cue)) || temporalCues.some((cue) => normalized.includes(cue));
+  }
+
   async function routeRecallPlan(
     query: string,
     expandGraph: boolean,
@@ -359,6 +430,7 @@ ${projectHints}
         const routedProject = routedProjectRaw && allowedProjectNames.has(routedProjectRaw)
           ? routedProjectRaw
           : undefined;
+        const inferredProject = inferProjectFromQuery(original, projectCatalog);
         const routedDomainBoostRaw = payload?.domainBoost;
         const routedDomainBoost: Record<string, number> = {};
         if (routedDomainBoostRaw && typeof routedDomainBoostRaw === "object" && !Array.isArray(routedDomainBoostRaw)) {
@@ -372,8 +444,14 @@ ${projectHints}
         const plan: RoutedRecallPlan = {
           query: cleaned,
           datastores,
-          project: routedProject,
+          project: routedProject || inferredProject,
         };
+        if (
+          inferredProject
+          && shouldAugmentProjectStore(original)
+        ) {
+          plan.datastores = ["project", ...plan.datastores.filter((store) => store !== "project")];
+        }
         if (Object.keys(routedDomainBoost).length) {
           plan.domainBoost = routedDomainBoost;
         }
@@ -420,6 +498,61 @@ ${projectHints}
     });
   }
 
+  function recallItemIdentity(item: TMemoryResult): string {
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    if (id) return `id:${id}`;
+    return `${String(item.via || "vector").toLowerCase()}::${String(item.text || "").trim().toLowerCase()}`;
+  }
+
+  function isProjectRecallItem(item: TMemoryResult): boolean {
+    const via = String((item as any)?.via || "").trim().toLowerCase();
+    const category = String((item as any)?.category || "").trim().toLowerCase();
+    const sourceType = String((item as any)?.sourceType || (item as any)?.source_type || "").trim().toLowerCase();
+    return via === "project" || category === "project" || sourceType === "docs";
+  }
+
+  function preserveRequestedProjectRows(
+    rows: TMemoryResult[],
+    projectRows: TMemoryResult[],
+    limit: number,
+  ): TMemoryResult[] {
+    if (!Array.isArray(rows) || limit <= 0 || !Array.isArray(projectRows) || projectRows.length === 0) {
+      return rows.slice(0, Math.max(1, limit));
+    }
+    const targetProjectRows = Math.min(projectRows.length, Math.max(1, Math.min(2, limit)));
+    const out = rows.slice(0, Math.max(1, limit));
+    let present = out.filter(isProjectRecallItem).length;
+    if (present >= targetProjectRows) return out;
+
+    const seen = new Set(out.map((item) => recallItemIdentity(item)));
+    const candidates = [...projectRows]
+      .filter((item) => !seen.has(recallItemIdentity(item)))
+      .sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+
+    for (const candidate of candidates) {
+      if (present >= targetProjectRows) break;
+      const dropIndex = out.length >= limit
+        ? (() => {
+            for (let i = out.length - 1; i >= 0; i -= 1) {
+              if (!isProjectRecallItem(out[i])) return i;
+            }
+            return -1;
+          })()
+        : -1;
+      if (out.length >= limit && dropIndex < 0) break;
+      if (dropIndex >= 0) out.splice(dropIndex, 1);
+      out.push(candidate);
+      present += 1;
+    }
+
+    out.sort((a, b) => {
+      const simDelta = Number(b.similarity || 0) - Number(a.similarity || 0);
+      if (Math.abs(simDelta) > 1e-9) return simDelta;
+      return Number(isProjectRecallItem(b)) - Number(isProjectRecallItem(a));
+    });
+    return out.slice(0, Math.max(1, limit));
+  }
+
   async function recallFromJournalStore(query: string, limit: number): Promise<TMemoryResult[]> {
     if (!deps.isSystemEnabled("journal")) return [];
     if (!deps.recallJournalStore) return [];
@@ -442,6 +575,7 @@ ${projectHints}
   async function _executeStores(query: string, limit: number, opts: TotalRecallOptions): Promise<TMemoryResult[]> {
     const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);
     const all: TMemoryResult[] = [];
+    const projectRows: TMemoryResult[] = [];
     const descriptors: Record<KnowledgeDatastore, StoreDescriptor> = {
       vector: {
         key: "vector",
@@ -511,6 +645,9 @@ ${projectHints}
         const storeResults = await descriptor.recall({ query, limit, opts, candidatePool });
         all.push(...storeResults);
         if (_vectorStores.has(store)) vectorAccumulated.push(...storeResults);
+        if (store === "project" && Array.isArray(storeResults) && storeResults.length > 0) {
+          projectRows.push(...storeResults);
+        }
       } catch (err: unknown) {
         const msg = String((err as Error)?.message || err);
         console.warn(`[memory][recall] datastore=${store} failed: ${msg}`);
@@ -532,7 +669,11 @@ ${projectHints}
     }
     const merged = applySourceTypeBoosts(Array.from(dedup.values()), opts);
     merged.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
-    return merged.slice(0, limit);
+    const sliced = merged.slice(0, limit);
+    if (datastores.includes("project") && projectRows.length > 0) {
+      return preserveRequestedProjectRows(sliced, projectRows, limit);
+    }
+    return sliced;
   }
 
   async function recall(query: string, limit: number, opts: TotalRecallOptions): Promise<TMemoryResult[]> {

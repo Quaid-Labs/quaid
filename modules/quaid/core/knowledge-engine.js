@@ -165,6 +165,65 @@ expandGraphAllowed: ${expandGraph ? "true" : "false"}`;
       "routeKnowledgeDatastores"
     );
   }
+  function normalizeProjectHintText(value) {
+    return String(value || "").toLowerCase().replace(/[-_]+/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function inferProjectFromQuery(query, projectCatalog) {
+    const normalizedQuery = normalizeProjectHintText(query);
+    if (!normalizedQuery) return void 0;
+    let bestMatch = null;
+    for (const entry of projectCatalog) {
+      const normalizedName = normalizeProjectHintText(entry.name);
+      if (!normalizedName) continue;
+      if (!normalizedQuery.includes(normalizedName)) continue;
+      const score = normalizedName.length;
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { name: entry.name, score };
+      }
+    }
+    return bestMatch?.name;
+  }
+  function shouldAugmentProjectStore(query) {
+    const normalized = normalizeProjectHintText(query);
+    if (!normalized) return false;
+    const detailCues = [
+      "version",
+      "architecture",
+      "api",
+      "schema",
+      "deploy",
+      "deployment",
+      "feature",
+      "features",
+      "bug",
+      "bugs",
+      "test",
+      "tests",
+      "readme",
+      "docs",
+      "documentation",
+      "project log",
+      "project logs",
+      "portfolio",
+      "site",
+      "projects",
+      "file",
+      "files",
+      "ui",
+      "frontend",
+      "backend",
+      "graphql",
+      "rest",
+      "database",
+      "model",
+      "migration",
+      "component",
+      "implementation",
+      "implemented"
+    ];
+    const temporalCues = ["as of", "latest", "current", "after", "before", "since", "until"];
+    return detailCues.some((cue) => normalized.includes(cue)) || temporalCues.some((cue) => normalized.includes(cue));
+  }
   async function routeRecallPlan(query, expandGraph, reasoning = "fast", intent = "general") {
     const allowed = getRoutableDatastoreKeys();
     const original = String(query || "").trim();
@@ -240,6 +299,7 @@ intent: ${intent}`;
         const datastores = parseRoutedDatastores(payload?.datastores, allowed);
         const routedProjectRaw = String(payload?.project || "").trim();
         const routedProject = routedProjectRaw && allowedProjectNames.has(routedProjectRaw) ? routedProjectRaw : void 0;
+        const inferredProject = inferProjectFromQuery(original, projectCatalog);
         const routedDomainBoostRaw = payload?.domainBoost;
         const routedDomainBoost = {};
         if (routedDomainBoostRaw && typeof routedDomainBoostRaw === "object" && !Array.isArray(routedDomainBoostRaw)) {
@@ -253,8 +313,11 @@ intent: ${intent}`;
         const plan = {
           query: cleaned,
           datastores,
-          project: routedProject
+          project: routedProject || inferredProject
         };
+        if (inferredProject && shouldAugmentProjectStore(original)) {
+          plan.datastores = ["project", ...plan.datastores.filter((store) => store !== "project")];
+        }
         if (Object.keys(routedDomainBoost).length) {
           plan.domainBoost = routedDomainBoost;
         }
@@ -296,6 +359,47 @@ intent: ${intent}`;
       return { ...item, similarity: nextSimilarity };
     });
   }
+  function recallItemIdentity(item) {
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    if (id) return `id:${id}`;
+    return `${String(item.via || "vector").toLowerCase()}::${String(item.text || "").trim().toLowerCase()}`;
+  }
+  function isProjectRecallItem(item) {
+    const via = String(item?.via || "").trim().toLowerCase();
+    const category = String(item?.category || "").trim().toLowerCase();
+    const sourceType = String(item?.sourceType || item?.source_type || "").trim().toLowerCase();
+    return via === "project" || category === "project" || sourceType === "docs";
+  }
+  function preserveRequestedProjectRows(rows, projectRows, limit) {
+    if (!Array.isArray(rows) || limit <= 0 || !Array.isArray(projectRows) || projectRows.length === 0) {
+      return rows.slice(0, Math.max(1, limit));
+    }
+    const targetProjectRows = Math.min(projectRows.length, Math.max(1, Math.min(2, limit)));
+    const out = rows.slice(0, Math.max(1, limit));
+    let present = out.filter(isProjectRecallItem).length;
+    if (present >= targetProjectRows) return out;
+    const seen = new Set(out.map((item) => recallItemIdentity(item)));
+    const candidates = [...projectRows].filter((item) => !seen.has(recallItemIdentity(item))).sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+    for (const candidate of candidates) {
+      if (present >= targetProjectRows) break;
+      const dropIndex = out.length >= limit ? (() => {
+        for (let i = out.length - 1; i >= 0; i -= 1) {
+          if (!isProjectRecallItem(out[i])) return i;
+        }
+        return -1;
+      })() : -1;
+      if (out.length >= limit && dropIndex < 0) break;
+      if (dropIndex >= 0) out.splice(dropIndex, 1);
+      out.push(candidate);
+      present += 1;
+    }
+    out.sort((a, b) => {
+      const simDelta = Number(b.similarity || 0) - Number(a.similarity || 0);
+      if (Math.abs(simDelta) > 1e-9) return simDelta;
+      return Number(isProjectRecallItem(b)) - Number(isProjectRecallItem(a));
+    });
+    return out.slice(0, Math.max(1, limit));
+  }
   async function recallFromJournalStore(query, limit) {
     if (!deps.isSystemEnabled("journal")) return [];
     if (!deps.recallJournalStore) return [];
@@ -309,6 +413,7 @@ intent: ${intent}`;
   async function _executeStores(query, limit, opts) {
     const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);
     const all = [];
+    const projectRows = [];
     const descriptors = {
       vector: {
         key: "vector",
@@ -364,6 +469,9 @@ intent: ${intent}`;
         const storeResults = await descriptor.recall({ query, limit, opts, candidatePool });
         all.push(...storeResults);
         if (_vectorStores.has(store)) vectorAccumulated.push(...storeResults);
+        if (store === "project" && Array.isArray(storeResults) && storeResults.length > 0) {
+          projectRows.push(...storeResults);
+        }
       } catch (err) {
         const msg = String(err?.message || err);
         console.warn(`[memory][recall] datastore=${store} failed: ${msg}`);
@@ -382,7 +490,11 @@ intent: ${intent}`;
     }
     const merged = applySourceTypeBoosts(Array.from(dedup.values()), opts);
     merged.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
-    return merged.slice(0, limit);
+    const sliced = merged.slice(0, limit);
+    if (datastores.includes("project") && projectRows.length > 0) {
+      return preserveRequestedProjectRows(sliced, projectRows, limit);
+    }
+    return sliced;
   }
   async function recall(query, limit, opts) {
     const hasExplicitStores = Array.isArray(opts.datastores) && opts.datastores.length > 0;
