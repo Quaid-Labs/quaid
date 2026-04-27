@@ -2786,6 +2786,33 @@ class TestSignalRoundTrip:
         assert signals[0]["type"] == "reset"
         assert signals[0]["session_id"] == "reset-session"
 
+    def test_read_pending_signals_prioritizes_timeout_before_rolling_backlog(self, monkeypatch, tmp_path):
+        """Fresh idle captures must not wait behind expensive rolling backlog."""
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        sig_dir = extraction_daemon._signal_dir()
+        (sig_dir / "1000_rolling.json").write_text(
+            json.dumps({
+                "type": "rolling",
+                "session_id": "old-rolling",
+                "transcript_path": "/tmp/old-rolling.jsonl",
+            }),
+            encoding="utf-8",
+        )
+        (sig_dir / "2000_timeout.json").write_text(
+            json.dumps({
+                "type": "timeout",
+                "session_id": "fresh-timeout",
+                "transcript_path": "/tmp/fresh-timeout.jsonl",
+            }),
+            encoding="utf-8",
+        )
+
+        signals = extraction_daemon.read_pending_signals()
+
+        assert [signal["type"] for signal in signals[:2]] == ["timeout", "rolling"]
+
     def test_read_pending_signals_normalizes_signal_type_field(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

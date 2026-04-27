@@ -62,9 +62,9 @@ _SIGNAL_PRIORITY = {
 _SIGNAL_POLL_PRIORITY = {
     "reset": 0,
     "session_end": 1,
-    "rolling": 2,
-    "compaction": 3,
-    "timeout": 4,
+    "timeout": 2,
+    "rolling": 3,
+    "compaction": 4,
 }
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
 
@@ -4734,11 +4734,6 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                     # Preserve the signal for a future retry. Outer-loop exceptions
                     # mean we do not know whether processing was durable.
 
-            try:
-                check_chunk_ready_sessions()
-            except Exception as e:
-                logger.error("rolling chunk readiness check failed: %s", e)
-
             # Periodic idle session check. Use a timeout-aware cadence so
             # shorter configured inactivity windows do not wait on a fixed
             # five-minute sweep interval before becoming eligible.
@@ -4757,6 +4752,11 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
+
+            try:
+                check_chunk_ready_sessions()
+            except Exception as e:
+                logger.error("rolling chunk readiness check failed: %s", e)
 
             # Periodic embedding retry — backfill facts stored without embeddings
             if now - last_embed_retry_check > _EMBED_RETRY_INTERVAL:
