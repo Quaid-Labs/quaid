@@ -3000,12 +3000,13 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
   };
 }
 
-function getDatastoreStatsSync(): Record<string, any> | null {
+function getDatastoreStatsSync(instanceId: string = _QUAID_INSTANCE): Record<string, any> | null {
+  const normalizedInstance = String(instanceId || "").trim();
   try {
     const output = execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
       timeout: DATASTORE_STATS_TIMEOUT_MS,
-      env: buildPythonEnv(),
+      env: buildPythonEnv({ QUAID_INSTANCE: normalizedInstance || undefined }),
     });
     const parsed = JSON.parse(output || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -3013,7 +3014,8 @@ function getDatastoreStatsSync(): Record<string, any> | null {
     }
     return parsed as Record<string, any>;
   } catch (err: unknown) {
-    const msg = `[quaid] datastore stats read failed: ${String((err as Error)?.message || err)}`;
+    const suffix = normalizedInstance ? ` for instance ${normalizedInstance}` : "";
+    const msg = `[quaid] datastore stats read failed${suffix}: ${String((err as Error)?.message || err)}`;
     const retrieval = memoryConfigResolver.getMemoryConfig().retrieval || {};
     const failHard = typeof retrieval.fail_hard === "boolean"
       ? retrieval.fail_hard
@@ -4319,85 +4321,116 @@ function isMeaningfulUserTranscriptActivity(messages: any[]): boolean {
 // Single entry point for all core operations. Tool handlers should route
 // through the facade instead of reaching directly into bridges/scripts.
 
-const facade = createQuaidFacade({
-  workspace: WORKSPACE,
-  instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : undefined,
-  delayedRequestsPath: _QUAID_INSTANCE
-    ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE, ".runtime", "notes", "delayed-llm-requests.json")
-    : path.join(WORKSPACE, ".runtime", "notes", "delayed-llm-requests.json"),
-  pluginRoot: PYTHON_PLUGIN_ROOT,
-  dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
-  eventSource: "openclaw_adapter",
-  execPython: createPythonBridgeExecutor({
-    scriptPath: PYTHON_SCRIPT,
-    dbPath: resolveAdapterMemoryDbPath(WORKSPACE, _QUAID_INSTANCE, DB_PATH),
+type AdapterFacade = ReturnType<typeof createQuaidFacade>;
+const adapterFacadeByInstance = new Map<string, AdapterFacade>();
+
+function resolveAdapterFacadeRuntimePaths(instanceId: string = _QUAID_INSTANCE): {
+  dbPath: string;
+  delayedRequestsPath: string;
+  instanceRoot?: string;
+} {
+  const normalizedInstance = String(instanceId || "").trim();
+  return {
+    dbPath: resolveAdapterMemoryDbPath(WORKSPACE, normalizedInstance, DB_PATH),
+    delayedRequestsPath: normalizedInstance
+      ? path.join(WORKSPACE, "instances", normalizedInstance, ".runtime", "notes", "delayed-llm-requests.json")
+      : path.join(WORKSPACE, ".runtime", "notes", "delayed-llm-requests.json"),
+    ...(normalizedInstance
+      ? { instanceRoot: path.join(WORKSPACE, "instances", normalizedInstance) }
+      : {}),
+  };
+}
+
+function createAdapterFacade(instanceId: string = _QUAID_INSTANCE): AdapterFacade {
+  const normalizedInstance = String(instanceId || "").trim();
+  const paths = resolveAdapterFacadeRuntimePaths(normalizedInstance);
+  const instanceEnv = normalizedInstance ? { QUAID_INSTANCE: normalizedInstance } : {};
+  return createQuaidFacade({
     workspace: WORKSPACE,
+    instanceRoot: paths.instanceRoot,
+    delayedRequestsPath: paths.delayedRequestsPath,
     pluginRoot: PYTHON_PLUGIN_ROOT,
-    instanceId: _QUAID_INSTANCE,
-  }),
-  execExtractPipeline: (tmpPath, args) =>
-    _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", {}, EXTRACT_PIPELINE_TIMEOUT_MS),
-  execDocsRag: (cmd, args) =>
-    _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", {
-      QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
+    dbPath: paths.dbPath,
+    eventSource: "openclaw_adapter",
+    execPython: createPythonBridgeExecutor({
+      scriptPath: PYTHON_SCRIPT,
+      dbPath: paths.dbPath,
+      workspace: WORKSPACE,
+      pluginRoot: PYTHON_PLUGIN_ROOT,
+      instanceId: normalizedInstance,
     }),
-  execDocsRegistry: (cmd, args) =>
-    _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", {
-      QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
-    }),
-  execDocsUpdater: (cmd, args) => {
-    const apiKey = _getAnthropicCredential();
-    return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {
-      QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
-      ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
-    });
-  },
-  execEvents: (cmd, args) =>
-    _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", {
-      QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE, OPENCLAW_WORKSPACE: WORKSPACE,
-    }, EVENTS_EMIT_TIMEOUT_MS),
-  // emitProjectEventBackground removed — project events now emitted from Python extraction.
-  callLLM: callConfiguredLLM,
-  getDefaultLLMProvider: getGatewayDefaultProvider,
-  adapterName: "openclaw_adapter",
-  defaultOwner: "quaid",
-  isSystemSession: (sid: string) =>
-    sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm"),
-  runtimeDir: QUAID_RUNTIME_DIR,
-  providerAliases: {
-    "openai-codex": "openai",
-    "anthropic-claude-code": "anthropic",
-  },
-  resolveSessionIdFromSessionKey,
-  resolveDefaultSessionId: () => resolveSessionIdFromSessionKey("agent:main:main"),
-  resolveMostRecentSessionId,
-  timeoutSessionStorePath: () => path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json"),
-  timeoutSessionTranscriptDirs: () => [
-    path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
-    path.join(os.homedir(), ".openclaw", "sessions"),
-    // Keep runtime log transcripts as a last-resort fallback only.
-    QUAID_SESSION_PRESERVE_DIR,
-  ],
-  readSessionMessagesFile: (sessionFile: string) => parseSessionMessagesJsonl(sessionFile),
-  listCompactionSessions,
-  requestSessionCompaction,
-  initDatastore: () => {
-    execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "init"], {
-      timeout: 20_000,
-      env: buildPythonEnv(),
-    });
-  },
-  getDatastoreStatsSync,
-  getMemoryConfig,
-  isSystemEnabled,
-  isFailHardEnabled,
-  trace: process.env.QUAID_TOOL_HINT_TRACE === "1" ? writeHookTrace : undefined,
-  transcriptFormat: {
-    preprocessText: preprocessTranscriptText,
-    shouldSkipText: shouldSkipTranscriptText,
-    speakerLabel: (role: "user" | "assistant") => role === "user" ? "User" : "Alfie",
-  },
-});
+    execExtractPipeline: (tmpPath, args) =>
+      _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", instanceEnv, EXTRACT_PIPELINE_TIMEOUT_MS),
+    execDocsRag: (cmd, args) =>
+      _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", instanceEnv),
+    execDocsRegistry: (cmd, args) =>
+      _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", instanceEnv),
+    execDocsUpdater: (cmd, args) => {
+      const apiKey = _getAnthropicCredential();
+      return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {
+        ...instanceEnv,
+        ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
+      });
+    },
+    execEvents: (cmd, args) =>
+      _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", instanceEnv, EVENTS_EMIT_TIMEOUT_MS),
+    // emitProjectEventBackground removed — project events now emitted from Python extraction.
+    callLLM: callConfiguredLLM,
+    getDefaultLLMProvider: getGatewayDefaultProvider,
+    adapterName: "openclaw_adapter",
+    defaultOwner: "quaid",
+    isSystemSession: (sid: string) =>
+      sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm"),
+    runtimeDir: QUAID_RUNTIME_DIR,
+    providerAliases: {
+      "openai-codex": "openai",
+      "anthropic-claude-code": "anthropic",
+    },
+    resolveSessionIdFromSessionKey,
+    resolveDefaultSessionId: () => resolveSessionIdFromSessionKey("agent:main:main"),
+    resolveMostRecentSessionId,
+    timeoutSessionStorePath: () => path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json"),
+    timeoutSessionTranscriptDirs: () => [
+      path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
+      path.join(os.homedir(), ".openclaw", "sessions"),
+      // Keep runtime log transcripts as a last-resort fallback only.
+      QUAID_SESSION_PRESERVE_DIR,
+    ],
+    readSessionMessagesFile: (sessionFile: string) => parseSessionMessagesJsonl(sessionFile),
+    listCompactionSessions,
+    requestSessionCompaction,
+    initDatastore: () => {
+      execFileSync(PYTHON_BIN, [PYTHON_SCRIPT, "init"], {
+        timeout: 20_000,
+        env: buildPythonEnv({ QUAID_INSTANCE: normalizedInstance || undefined }),
+      });
+    },
+    getDatastoreStatsSync: () => getDatastoreStatsSync(normalizedInstance),
+    getMemoryConfig,
+    isSystemEnabled,
+    isFailHardEnabled,
+    trace: process.env.QUAID_TOOL_HINT_TRACE === "1" ? writeHookTrace : undefined,
+    transcriptFormat: {
+      preprocessText: preprocessTranscriptText,
+      shouldSkipText: shouldSkipTranscriptText,
+      speakerLabel: (role: "user" | "assistant") => role === "user" ? "User" : "Alfie",
+    },
+  });
+}
+
+function getAdapterFacadeForInstance(instanceId: string = _QUAID_INSTANCE): AdapterFacade {
+  const normalizedInstance = String(instanceId || "").trim();
+  const key = normalizedInstance || "__legacy__";
+  const existing = adapterFacadeByInstance.get(key);
+  if (existing) {
+    return existing;
+  }
+  const created = createAdapterFacade(normalizedInstance);
+  adapterFacadeByInstance.set(key, created);
+  return created;
+}
+
+const facade = getAdapterFacadeForInstance(_QUAID_INSTANCE);
 
 const getProjectNames = () => facade.getProjectNames();
 
@@ -4851,6 +4884,7 @@ notify_user(${JSON.stringify(message)})
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
       const promptInstanceId = getInstanceId(promptAgentLabel);
+      const promptFacade = getAdapterFacadeForInstance(promptInstanceId);
       const promptSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
       ensureAgentInstanceProvisioned(promptAgentLabel, "before_prompt_build");
 
@@ -4902,7 +4936,7 @@ notify_user(${JSON.stringify(message)})
       }
       if (isSystemEnabled("projects")) {
         try {
-          const identityContext = await facade.injectProjectContext(undefined, {
+          const identityContext = await promptFacade.injectProjectContext(undefined, {
             identityOnly: true,
           });
           if (identityContext) {
@@ -4930,7 +4964,7 @@ notify_user(${JSON.stringify(message)})
           projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
             const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
-            const projectDocs = await facade.injectProjectContext(undefined, { cwd: hookCwd });
+            const projectDocs = await promptFacade.injectProjectContext(undefined, { cwd: hookCwd });
             if (projectDocs) {
               appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
@@ -5051,7 +5085,7 @@ notify_user(${JSON.stringify(message)})
           const recoveredSource = "rawPrompt_recovered";
           if (rawRecovered.length >= 3 && !PROMPT_RELAY_SKIP_RE.test(rawRecovered) &&
               !rawRecovered.startsWith("Extract memorable facts") &&
-              !facade.isInternalMaintenancePrompt(rawRecovered)) {
+              !promptFacade.isInternalMaintenancePrompt(rawRecovered)) {
             query = rawRecovered;
             querySource = recoveredSource;
             writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80), source: recoveredSource });
@@ -5064,19 +5098,19 @@ notify_user(${JSON.stringify(message)})
           return withDocs({ prependContext: event.prependContext });
         }
         // Skip janitor/reviewer internal prompts so maintenance flows never trigger auto-injection.
-        if (facade.isInternalMaintenancePrompt(query)) {
+        if (promptFacade.isInternalMaintenancePrompt(query)) {
           return withDocs({ prependContext: event.prependContext });
         }
 
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
-        const lowQualityQuery = facade.isLowQualityQuery(query);
+        const lowQualityQuery = promptFacade.isLowQualityQuery(query);
 
         // Auto-inject always bypasses the LLM router to keep latency low.
         // The router adds ~8s of LLM overhead which causes injection to arrive
         // after the agent has already responded. Direct vector+graph lookup is
         // sufficient for contextual injection.
         // Dynamic K: 2 * log2(nodeCount) — scales with graph size
-        const autoInjectK = facade.computeDynamicK();
+        const autoInjectK = promptFacade.computeDynamicK();
         const injectLimit = autoInjectK;
         // Use all-domain search for auto-inject: domain tagging may be incomplete
         // on fresh installs or for newly extracted facts. A strict { personal: true }
@@ -5160,7 +5194,16 @@ notify_user(${JSON.stringify(message)})
             try {
               [allMemories] = await Promise.race([
                 Promise.all([
-                  recallMemories(_buildAutoInjectRecallOptions(query, injectLimit, injectDomain)),
+                  recallMemories(
+                    _buildAutoInjectRecallOptions(
+                      query,
+                      injectLimit,
+                      injectDomain,
+                      promptFacade.isPreInjectionPassEnabled(),
+                      promptFacade.getProjectNames(),
+                    ),
+                    promptFacade,
+                  ),
                 ]),
                 deadline,
               ]);
@@ -5185,7 +5228,7 @@ notify_user(${JSON.stringify(message)})
               diagnostics: recallDiagnostics,
               top_results: summarizeRecallResults(allMemories),
             });
-            const injection = facade.prepareAutoInjectionContext({
+            const injection = promptFacade.prepareAutoInjectionContext({
               allMemories,
               eventMessages: event.messages || [],
               context: ctx,
@@ -5212,7 +5255,7 @@ notify_user(${JSON.stringify(message)})
         }
 
         const { allMemories, recallDiagnostics, injection, modelConfigNotice, skipReason } = await turnPromise;
-        const preinjectSessionId = facade.extractSessionId(eventMessages, ctx);
+        const preinjectSessionId = promptFacade.extractSessionId(eventMessages, ctx);
         const preinjectSessionKey = firstNonEmptyString(
           event?.sessionKey,
           ctx?.sessionKey,
@@ -5300,8 +5343,8 @@ notify_user(${JSON.stringify(message)})
 
         // Best-effort user notification for auto-injected recalls.
         try {
-          if (facade.shouldNotifyFeature("retrieval", "summary")) {
-            const payload = facade.buildRecallNotificationPayload(toInject, query, "auto_inject");
+          if (promptFacade.shouldNotifyFeature("retrieval", "summary")) {
+            const payload = promptFacade.buildRecallNotificationPayload(toInject, query, "auto_inject");
             const dataFile = path.join(QUAID_TMP_DIR, `auto-inject-recall-${Date.now()}.json`);
             fs.writeFileSync(dataFile, JSON.stringify(payload), { mode: 0o600 });
             const launchedNotify = spawnNotifyScript(`
@@ -7014,7 +7057,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     });
 
     // Shared recall abstraction — used by both memory_recall tool and auto-inject
-    async function recallMemories(opts: RecallOptions): Promise<MemoryResult[]> {
+    async function recallMemories(opts: RecallOptions, activeFacade: AdapterFacade = facade): Promise<MemoryResult[]> {
       const {
         query, limit = 10, expandGraph = false,
         graphDepth = 1, datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, domain = { all: true }, domainBoost, project, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown"
@@ -7024,7 +7067,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       );
 
       // Wait for in-flight extraction if requested
-      const queuedExtraction = facade.getQueuedExtractionPromise();
+      const queuedExtraction = activeFacade.getQueuedExtractionPromise();
       if (waitForExtraction && queuedExtraction) {
         const waitStartedAt = Date.now();
         writeHookTrace("recall.wait_for_extraction.start", {
@@ -7060,11 +7103,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
       const recallOpts = _buildFacadeRecallOptions(opts);
       const recallResponse = (sourceTag !== "tool" && !(routeStores ?? false))
-        ? await facade.recallWithDiagnostics(recallOpts)
+        ? await activeFacade.recallWithDiagnostics(recallOpts)
         : {
             results: await (sourceTag === "tool"
-              ? facade.recallWithToolRetry(recallOpts)
-              : facade.recall(recallOpts)),
+              ? activeFacade.recallWithToolRetry(recallOpts)
+              : activeFacade.recall(recallOpts)),
             diagnostics: null,
           };
       const results = Array.isArray(recallResponse.results) ? recallResponse.results : [];
@@ -7879,6 +7922,7 @@ export const __test = {
   extractLifecycleSlashAction,
   getContextRefreshStrategy,
   resolveAdapterMemoryDbPath,
+  resolveAdapterFacadeRuntimePaths,
   scrubAutoInjectQuery,
   autoInjectTurnKey: _autoInjectTurnKey,
   buildAutoInjectRecallOptions: _buildAutoInjectRecallOptions,

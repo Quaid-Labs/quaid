@@ -1293,6 +1293,13 @@ describe("lifecycle signal detection", () => {
     )).toBe("/tmp/quaid-home/instances/openclaw-livetest/data/memory.db");
   });
 
+  it("uses the target instance silo paths for adapter facades", () => {
+    const paths = __test.resolveAdapterFacadeRuntimePaths("openclaw-m5test");
+    expect(paths.dbPath).toContain("/instances/openclaw-m5test/data/memory.db");
+    expect(paths.instanceRoot).toContain("/instances/openclaw-m5test");
+    expect(paths.delayedRequestsPath).toContain("/instances/openclaw-m5test/.runtime/notes/delayed-llm-requests.json");
+  });
+
   it("detects same-session transcript rollover when rows shrink in place", () => {
     expect(__test.isSameSessionTranscriptRollover(12, 1, 4096, 128)).toBe(true);
   });
