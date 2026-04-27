@@ -4383,6 +4383,15 @@ def _effective_idle_timeout_minutes(
     return min(raw, int(max_timeout_minutes))
 
 
+def _rolling_ready_threshold(chunk_budget: int) -> int:
+    """Return the semantic-token threshold at which a rolling buffer is ready."""
+    budget = max(1, int(chunk_budget or 1))
+    # Token estimation is deliberately approximate. Do not let a full semantic
+    # buffer miss rolling extraction just because it lands a few estimated tokens
+    # under the configured chunk budget.
+    return max(1, min(budget, max(int(budget * 0.95), budget - 64)))
+
+
 def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     """Queue rolling extraction for sessions whose unprocessed tail crossed chunk budget."""
     _reload_config_if_changed("rolling chunk check")
@@ -4493,8 +4502,11 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             buffered_line_offset = int(state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset)
 
         semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
+        near_budget_threshold = _rolling_ready_threshold(chunk_budget)
         should_signal = semantic_tokens >= chunk_budget or (
             semantic_tokens > 0 and buffered_line_offset < total_lines
+        ) or (
+            semantic_tokens >= near_budget_threshold
         )
         if not should_signal:
             continue
@@ -4506,23 +4518,38 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 semantic_tokens,
                 chunk_budget,
             )
+            reason = "semantic_chunk_budget"
         else:
-            logger.info(
-                "session %s has staged semantic buffer below budget (%d < %d) with unread transcript tail, generating rolling signal",
-                session_id,
-                semantic_tokens,
-                chunk_budget,
-            )
+            if buffered_line_offset < total_lines:
+                logger.info(
+                    "session %s has staged semantic buffer below budget (%d < %d) with unread transcript tail, generating rolling signal",
+                    session_id,
+                    semantic_tokens,
+                    chunk_budget,
+                )
+                reason = "semantic_chunk_budget"
+            else:
+                logger.info(
+                    "session %s is near rolling extract budget (%d >= %d semantic tokens, budget=%d), generating rolling signal",
+                    session_id,
+                    semantic_tokens,
+                    near_budget_threshold,
+                    chunk_budget,
+                )
+                reason = "semantic_chunk_budget_near"
+        signal_meta = {
+            "reason": reason,
+            "chunk_tokens": chunk_budget,
+            "semantic_buffer_tokens": semantic_tokens,
+            "buffered_line_offset": buffered_line_offset,
+        }
+        if reason == "semantic_chunk_budget_near":
+            signal_meta["near_budget_threshold"] = near_budget_threshold
         write_signal(
             signal_type="rolling",
             session_id=session_id,
             transcript_path=transcript_path,
-            meta={
-                "reason": "semantic_chunk_budget",
-                "chunk_tokens": chunk_budget,
-                "semantic_buffer_tokens": semantic_tokens,
-                "buffered_line_offset": buffered_line_offset,
-            },
+            meta=signal_meta,
         )
 
 

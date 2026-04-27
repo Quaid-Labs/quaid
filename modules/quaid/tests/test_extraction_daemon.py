@@ -3896,6 +3896,62 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_check_chunk_ready_sessions_rolls_near_semantic_budget(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"near budget rolling note"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-roll-near", 0, str(transcript_path))
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        near_budget_text = "User: " + ("a" * 378)
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                return near_budget_text
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 100)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            state = extraction_daemon.read_rolling_state("sess-roll-near")
+            assert len(captured) == 1
+            assert captured[0]["signal_type"] == "rolling"
+            assert captured[0]["meta"]["reason"] == "semantic_chunk_budget_near"
+            assert captured[0]["meta"]["semantic_buffer_tokens"] == 96
+            assert captured[0]["meta"]["near_budget_threshold"] == 95
+            assert state["buffered_line_offset"] == 1
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_check_chunk_ready_sessions_accumulates_semantic_buffer_across_checks(self, monkeypatch, tmp_path):
         import sys
         import types
