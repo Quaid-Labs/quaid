@@ -591,7 +591,7 @@ class TestExtractFromTranscript:
         assert result["raw_snippets"]["SOUL.md"] == ["Noticed the user values brevity"]
 
     @patch("ingest.extract.call_deep_reasoning")
-    def test_explicit_codeword_anchor_is_preserved_when_llm_omits_marker(self, mock_llm):
+    def test_explicit_structural_anchor_is_preserved_when_llm_omits_marker(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -625,15 +625,49 @@ class TestExtractFromTranscript:
         )
 
         texts = [fact["text"] for fact in result["raw_facts"]]
-        assert result["explicit_codeword_anchor_facts"] == 1
+        assert result["explicit_structural_anchor_facts"] == 1
         assert texts[0] == (
-            "Solomon Steadman's Friday ritual is roasting pumpkin seeds with the codeword "
+            "My Friday ritual is roasting pumpkin seeds with the codeword "
             "walnut-umbrella-7142"
         )
         assert any("walnut-umbrella-7142" in text for text in texts)
 
     @patch("ingest.extract.call_deep_reasoning")
-    def test_explicit_codeword_anchor_does_not_store_user_questions(self, mock_llm):
+    def test_explicit_structural_anchor_preserves_non_english_statement(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "El ritual de los viernes de Solomon es tostar semillas de calabaza",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "User: Mi ritual de viernes es tostar semillas de calabaza con la clave "
+                "cedro-plantilla-4821.\n\nAssistant: Entendido."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert result["explicit_structural_anchor_facts"] == 1
+        assert texts[0] == "Mi ritual de viernes es tostar semillas de calabaza con la clave cedro-plantilla-4821"
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_explicit_structural_anchor_does_not_store_user_questions(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -650,7 +684,7 @@ class TestExtractFromTranscript:
             dry_run=True,
         )
 
-        assert result["explicit_codeword_anchor_facts"] == 0
+        assert result["explicit_structural_anchor_facts"] == 0
         assert result["raw_facts"] == []
 
     def test_carry_selection_is_bounded_and_persistable(self):

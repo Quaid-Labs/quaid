@@ -983,20 +983,15 @@ _SPEAKER_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _INJECTED_MEMORIES_RE = re.compile(r"<injected_memories\b[^>]*>.*?</injected_memories>", re.IGNORECASE | re.DOTALL)
-_CONVERSATION_INFO_RE = re.compile(
-    r"Conversation info\s*\([^)]*\):\s*```(?:json)?\s*.*?```",
-    re.IGNORECASE | re.DOTALL,
+_FENCED_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+_STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
 )
-_CODEWORD_LABEL_RE = re.compile(r"\bcode[-\s]?word\b", re.IGNORECASE)
-_STRUCTURAL_CODEWORD_TOKEN_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
+_UUID_ANCHOR_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
 )
-
-
-def _owner_possessive(owner_id: str) -> str:
-    owner = str(owner_id or "").strip() or "User"
-    suffix = "'" if owner.endswith("s") else "'s"
-    return f"{owner}{suffix}"
+_DATE_ANCHOR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[-_]\d{2})?$")
 
 
 def _iter_user_turn_texts(transcript: str) -> List[str]:
@@ -1022,20 +1017,20 @@ def _iter_user_turn_texts(transcript: str) -> List[str]:
     if current_role == "user" and current_parts:
         turns.append("\n".join(current_parts).strip())
 
-    if not saw_prefixed_turn and _CODEWORD_LABEL_RE.search(str(transcript or "")):
+    if not saw_prefixed_turn and _STRUCTURAL_ANCHOR_TOKEN_RE.search(str(transcript or "")):
         turns.append(str(transcript or "").strip())
     return [turn for turn in turns if turn]
 
 
-def _clean_codeword_turn_text(text: str) -> str:
+def _clean_structural_anchor_turn_text(text: str) -> str:
     cleaned = _INJECTED_MEMORIES_RE.sub(" ", str(text or ""))
-    cleaned = _CONVERSATION_INFO_RE.sub(" ", cleaned)
+    cleaned = _FENCED_BLOCK_RE.sub(" ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned.strip()
 
 
 def _split_fact_sentences(text: str) -> List[str]:
-    normalized = _clean_codeword_turn_text(text)
+    normalized = _clean_structural_anchor_turn_text(text)
     if not normalized:
         return []
     return [
@@ -1045,27 +1040,34 @@ def _split_fact_sentences(text: str) -> List[str]:
     ]
 
 
-def _normalize_codeword_sentence(sentence: str, owner_id: str) -> str:
+def _normalize_structural_anchor_sentence(sentence: str) -> str:
     text = str(sentence or "").strip(" \t\r\n\"'`")
-    text = re.sub(
-        r"(?i)^\s*(quick one to remember|please remember|remember this|remember)\s*[:,-]?\s*",
-        "",
-        text,
-    ).strip()
-    possessive = _owner_possessive(owner_id)
-    text = re.sub(r"(?i)^my\s+", f"{possessive} ", text, count=1)
-    text = re.sub(r"(?i)(:\s*)my\s+", rf"\1{possessive} ", text, count=1)
-    text = re.sub(r"(?i)^i\s+use\s+", f"{owner_id} uses ", text, count=1)
+    text = re.sub(r"^\s*[-*•]+\s*", "", text)
     return text.rstrip(" .")
 
 
-def _explicit_codeword_anchor_facts(
+def _is_persistable_structural_anchor(token: str) -> bool:
+    value = str(token or "").strip()
+    if not value:
+        return False
+    if _UUID_ANCHOR_RE.fullmatch(value) or _DATE_ANCHOR_RE.fullmatch(value):
+        return False
+    letters = sum(1 for char in value if char.isalpha())
+    digits = sum(1 for char in value if char.isdigit())
+    if letters == 0:
+        return False
+    if digits and digits >= max(letters * 3, 9):
+        return False
+    return True
+
+
+def _explicit_structural_anchor_facts(
     transcript: str,
     facts: List[Dict[str, Any]],
     *,
     owner_id: str,
 ) -> List[Dict[str, Any]]:
-    """Preserve exact user-stated codeword anchors when LLM extraction omits them."""
+    """Preserve exact user-stated structural anchors when LLM extraction omits them."""
     existing_text = "\n".join(
         str(fact.get("text", "") or "")
         for fact in facts or []
@@ -1079,9 +1081,13 @@ def _explicit_codeword_anchor_facts(
         for sentence in _split_fact_sentences(turn):
             if sentence.rstrip().endswith("?"):
                 continue
-            if not _CODEWORD_LABEL_RE.search(sentence):
+            if len(sentence) > 240:
                 continue
-            markers = [m.group(0) for m in _STRUCTURAL_CODEWORD_TOKEN_RE.finditer(sentence)]
+            markers = [
+                m.group(0)
+                for m in _STRUCTURAL_ANCHOR_TOKEN_RE.finditer(sentence)
+                if _is_persistable_structural_anchor(m.group(0))
+            ]
             if not markers:
                 continue
             missing_markers = [
@@ -1091,7 +1097,7 @@ def _explicit_codeword_anchor_facts(
             ]
             if not missing_markers:
                 continue
-            fact_text = _normalize_codeword_sentence(sentence, owner_id)
+            fact_text = _normalize_structural_anchor_sentence(sentence)
             if len(fact_text.split()) < 3:
                 continue
             fact_key = _fact_text_key(fact_text)
@@ -1112,7 +1118,7 @@ def _explicit_codeword_anchor_facts(
                 "extraction_confidence": "high",
                 "keywords": " ".join(dict.fromkeys(keyword_tokens)),
                 "privacy": "private",
-                "confidence_reason": "Explicit user-authored codeword statement in transcript",
+                "confidence_reason": "Explicit user-authored structural anchor statement in transcript",
                 "edges": [],
             })
             seen_fact_texts.add(fact_key)
@@ -2779,21 +2785,21 @@ def extract_from_transcript(
                 session_date_hint=session_date_hint,
             )
 
-    explicit_codeword_facts = _explicit_codeword_anchor_facts(
+    explicit_anchor_facts = _explicit_structural_anchor_facts(
         transcript,
         all_facts,
         owner_id=owner_id,
     )
-    if explicit_codeword_facts:
+    if explicit_anchor_facts:
         logger.info(
-            "[extract] %s: preserved %d explicit codeword anchor fact(s)",
+            "[extract] %s: preserved %d explicit structural anchor fact(s)",
             label,
-            len(explicit_codeword_facts),
+            len(explicit_anchor_facts),
         )
-        result["explicit_codeword_anchor_facts"] = len(explicit_codeword_facts)
-        all_facts = explicit_codeword_facts + all_facts
+        result["explicit_structural_anchor_facts"] = len(explicit_anchor_facts)
+        all_facts = explicit_anchor_facts + all_facts
     else:
-        result["explicit_codeword_anchor_facts"] = 0
+        result["explicit_structural_anchor_facts"] = 0
 
     result["raw_facts"] = list(all_facts)
     result["raw_snippets"] = dict(all_snippets)
