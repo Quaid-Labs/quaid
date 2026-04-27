@@ -3528,20 +3528,42 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             cursor_offset = 0
         elif _is_cursor_on_backup_to_plain and cursor_offset > 0:
             # Cursor was written against a .reset.* backup; new signal points to
-            # the plain preserved copy of the same session content. Content up to
-            # cursor_offset is already extracted.
-            # Skip extraction entirely and leave the cursor on the backup path.
-            # If we let extraction run (even with "no new content"), write_cursor
-            # would update cursor_transcript to the plain path, which then triggers
-            # _is_reset_rename on any late .reset.* signal and re-extracts from 0.
-            logger.info(
-                "[%s] session %s: cursor on reset backup, new signal is preserved copy "
-                "(%s -> %s), content already extracted at offset %d, skipping",
-                label, session_id, cursor_transcript, transcript_path, cursor_offset,
-            )
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            return
+            # the plain session path. OpenClaw can reuse the same session id after
+            # /new and then append the real queued user turn to the plain file
+            # after the reset backup was extracted. Only skip when the plain file
+            # is still at the extracted backup offset; otherwise keep processing
+            # the preserved copy so post-reset user content is not lost.
+            plain_total_lines = count_transcript_lines(transcript_path)
+            cursor_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
+            plain_size_bytes = _transcript_size_bytes(transcript_path)
+            if plain_total_lines < cursor_offset or (
+                plain_total_lines == cursor_offset
+                and cursor_size_bytes
+                and plain_size_bytes
+                and plain_size_bytes != cursor_size_bytes
+            ):
+                logger.info(
+                    "[%s] session %s: cursor on reset backup but preserved copy appears rebased "
+                    "(%s -> %s, backup_offset=%d, plain_lines=%d); resetting cursor for full extraction",
+                    label, session_id, cursor_transcript, transcript_path, cursor_offset, plain_total_lines,
+                )
+                cursor_offset = 0
+            elif plain_total_lines > cursor_offset:
+                logger.info(
+                    "[%s] session %s: cursor on reset backup, preserved copy has %d new line(s) "
+                    "past offset %d (%s -> %s); continuing from cursor",
+                    label, session_id, plain_total_lines - cursor_offset, cursor_offset,
+                    cursor_transcript, transcript_path,
+                )
+            else:
+                logger.info(
+                    "[%s] session %s: cursor on reset backup, new signal is preserved copy "
+                    "(%s -> %s), content already extracted at offset %d, skipping",
+                    label, session_id, cursor_transcript, transcript_path, cursor_offset,
+                )
+                mark_signal_processed(signal_data)
+                _release_session_processing_lock(lock_owner_key, lock_fd)
+                return
         elif _is_cursor_on_backup_to_plain:
             # cursor_offset == 0: no prior extraction — proceed normally.
             logger.info(

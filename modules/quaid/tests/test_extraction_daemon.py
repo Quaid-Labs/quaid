@@ -1351,6 +1351,116 @@ def test_process_signal_clamps_same_path_cursor_when_oc_transcript_shrinks_in_pl
     assert captured.get("processed") is True
 
 
+def test_process_signal_extracts_plain_session_rebased_after_reset_backup(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+
+    session_id = "0726256d-2d2f-406e-b81f-4a44e70d93b7"
+    sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    plain_path = sessions_dir / f"{session_id}.jsonl"
+    backup_path = sessions_dir / f"{session_id}.jsonl.reset.2026-04-27T19-23-01.326Z"
+    backup_path.write_text(
+        "\n".join(
+            f'{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"old line {idx}"}}]}}}}'
+            for idx in range(7)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    plain_path.write_text(
+        (
+            '{"type":"message","message":{"role":"user","content":[{"type":"text",'
+            '"text":"My Friday ritual is roasting pumpkin seeds with the codeword cedar-stencil-4821."}]}}\n'
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text",'
+            '"text":"Got it — your Friday ritual is roasting pumpkin seeds."}]}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(plain_path))
+    extraction_daemon.write_cursor(session_id, 7, str(backup_path), source_key=source_key)
+    signal_path = extraction_daemon.write_signal(
+        signal_type="session_end",
+        session_id=session_id,
+        transcript_path=str(plain_path),
+    )
+    signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+    signal_data["_signal_path"] = str(signal_path)
+
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Solomon Steadman")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    captured = {"transcripts": []}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            raw = Path(path).read_text(encoding="utf-8")
+            if "cedar-stencil-4821" in raw:
+                return (
+                    "User: My Friday ritual is roasting pumpkin seeds with the codeword cedar-stencil-4821.\n"
+                    "Assistant: Got it — your Friday ritual is roasting pumpkin seeds."
+                )
+            return "User: old line"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    try:
+        def _fake_extract_from_transcript(transcript, **_kwargs):
+            captured["transcripts"].append(transcript)
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [
+                    {
+                        "text": "Solomon Steadman's Friday ritual is roasting pumpkin seeds with the codeword cedar-stencil-4821",
+                        "speaker": "user",
+                        "privacy": "private",
+                        "category": "fact",
+                        "domains": ["personal"],
+                    }
+                ],
+                "facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "carry_facts": [],
+            }
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", _fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **_kwargs: {
+                "facts_stored": len(payload.get("raw_facts", [])),
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [{"status": "stored"} for _ in payload.get("raw_facts", [])],
+                "snippets": {},
+                "journal": {},
+                "project_log_metrics": {},
+            },
+        )
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert len(captured["transcripts"]) == 1
+    assert "cedar-stencil-4821" in captured["transcripts"][0]
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["transcript_path"] == str(plain_path)
+    assert cursor["line_offset"] == 2
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
