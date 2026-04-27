@@ -4916,6 +4916,8 @@ class TestRollingExtraction:
 
             assert seen_transcripts == ["User: My sister is Diana\n\nAssistant: Her daughter is Alice"]
             assert [metric["event"] for metric in rolling_metrics[-2:]] == ["rolling_stage", "rolling_flush"]
+            assert rolling_metrics[-1]["signal_type"] == "session_end"
+            assert rolling_metrics[-1]["processing_signal_type"] == "session_end"
             assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
             assert not extraction_daemon._rolling_state_path("sess-roll").exists()
             buffer_log = (instance_root / "logs" / "daemon" / "extraction-buffer.log").read_text(

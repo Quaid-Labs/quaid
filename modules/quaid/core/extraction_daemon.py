@@ -2786,6 +2786,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
         str(signal_meta.get("reason") or "") == "rolling_stage_flush"
     )
+    # Staged rolling sweeps are processed by a synthetic session_end signal, but
+    # telemetry consumers need the originating signal type to identify the flush.
     flush_metric_signal_type = (
         str(signal_meta.get("source_signal") or signal_type)
         if staged_payload_sweep_signal
