@@ -4945,6 +4945,10 @@ def _vector_store_recall(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     vector_kwargs = dict(common_kwargs or {})
     vector_kwargs.pop("candidate_pool", None)
+    vector_kwargs["relative_temporal_freshness"] = bool(
+        vector_kwargs.get("relative_temporal_freshness")
+        or (isinstance(planner_meta, dict) and planner_meta.get("freshness_preferred") is True)
+    )
     results, meta = recall(
         query=query,
         limit=limit,
@@ -5994,6 +5998,7 @@ def _recall_once(
     lexical_anchor_timeout_ms: Optional[int] = None,
     use_lightweight_config: bool = False,
     track_access: bool = True,
+    relative_temporal_freshness: bool = False,
     low_signal_retry: bool = True,
     timeout_ms: Optional[int] = None,
     return_meta: bool = False,
@@ -6144,14 +6149,8 @@ def _recall_once(
         intent = "GENERAL"
         type_boosts = {}
     _phase_ms["intent_classification_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-    _temporal_fresh_cues = (
-        r"\b(latest|currently|current|now|today|most recent|recently|as of)\b"
-    )
     target_date = _query_target_date(clean_query)
-    # "as of 2026-03-15" is a historical-state query over the final DB, not a
-    # current/latest query. Do not let the generic "as of" wording activate
-    # freshness ranking when an explicit date anchor is present.
-    prefer_fresh = bool(re.search(_temporal_fresh_cues, clean_query, re.IGNORECASE)) and not target_date
+    prefer_fresh = bool(relative_temporal_freshness) and not target_date
 
     # Fast Ollama health check — skip semantic search entirely if Ollama is down
     # Saves ~30s of embedding timeout waits when Ollama is unreachable
@@ -6925,9 +6924,8 @@ def _recall_once(
         ]
 
     scored_results = _apply_relative_temporal_freshness_rerank(
-        clean_query,
         scored_results,
-        intent=intent,
+        freshness_preferred=prefer_fresh,
         target_date=target_date,
     )
 
@@ -9048,26 +9046,10 @@ def _asof_temporal_score_delta(node: Node, target_date: str) -> float:
     return -min(0.18, 0.06 + days_future * 0.004)
 
 
-def _should_apply_relative_temporal_freshness(query: str, *, intent: str, target_date: str) -> bool:
-    """Whether peer-relative temporal freshness should rerank open-ended results."""
-    if target_date:
-        return False
-    lower = str(query or "").lower()
-    if re.search(r"\b(current|currently|latest|now|today|most recent|still|yet)\b", lower):
-        return True
-    # Open-ended schedule/state questions should usually prefer the latest
-    # corrected fact in the final memory graph, unless the user supplied an
-    # explicit historical cutoff.
-    if intent == "WHEN" and re.search(r"\bwhen\s+(?:is|are|was)\b", lower):
-        return True
-    return False
-
-
 def _apply_relative_temporal_freshness_rerank(
-    query: str,
     scored_results: List[Tuple["Node", float]],
     *,
-    intent: str,
+    freshness_preferred: bool,
     target_date: str,
 ) -> List[Tuple["Node", float]]:
     """Prefer newer temporal candidates for current/open-ended schedule queries.
@@ -9076,7 +9058,7 @@ def _apply_relative_temporal_freshness_rerank(
     benchmark and prod replay paths stable even when transcript dates run ahead of
     the executing machine's current date.
     """
-    if not _should_apply_relative_temporal_freshness(query, intent=intent, target_date=target_date):
+    if target_date or not freshness_preferred:
         return scored_results
     if len(scored_results) < 2:
         return scored_results
@@ -9102,13 +9084,7 @@ def _apply_relative_temporal_freshness_rerank(
     if span_days < 14:
         return scored_results
 
-    current_like = bool(
-        re.search(
-            r"\b(current|currently|latest|now|today|most recent|still|yet)\b",
-            str(query or "").lower(),
-        )
-    )
-    max_boost = 0.12 if current_like else 0.08
+    max_boost = 0.12
     reranked: List[Tuple[Node, float]] = []
     for node, score in scored_results:
         date_part = _node_temporal_date(node)
@@ -9707,6 +9683,7 @@ def _plan_fanout_queries(
         "planner_profile": planner_profile,
         "planned_stores": ["vector"],
         "planned_project": None,
+        "freshness_preferred": False,
     }
 
     def _finish(out: List[str], bailout_reason: Optional[str] = None):
@@ -9914,9 +9891,10 @@ def _plan_fanout_queries(
     prompt = (
         f"Generate 1 to {max_queries} search queries to find relevant stored knowledge for this message.\n"
         "Rules:\n"
-        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs"], "project": "recipe-app"}\n'
+        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs"], "project": "recipe-app", "freshness_preferred": false}\n'
         '- "stores" is optional, but when present it must be an array containing any of: "vector", "graph", "docs".\n'
         '- "project" is optional and should be set only when the message clearly names a project.\n'
+        '- "freshness_preferred" is optional. Set it true only when the user asks for current/latest/current-state information or an open-ended schedule date, and not for explicit historical/as-of date lookups.\n'
         "- If the message is just a greeting, acknowledgement, filler, or otherwise has no meaningful information need, return an empty list.\n"
         "- Each query must be a short declarative statement (HyDE style), NOT a question.\n"
         "- First query: rephrase the core intent as a factual statement.\n"
@@ -9977,6 +9955,8 @@ def _plan_fanout_queries(
         if isinstance(parsed, dict):
             planned_stores = _planner_store_plan(parsed.get("stores")) or planned_default_stores
             planned_project = _sanitize_planned_project(parsed.get("project")) or default_project
+            if isinstance(parsed.get("freshness_preferred"), bool):
+                meta["freshness_preferred"] = bool(parsed.get("freshness_preferred"))
             if "docs" in planned_default_stores and "docs" not in planned_stores:
                 planned_stores = _planner_store_plan([*planned_stores, "docs"])
         else:
@@ -11088,6 +11068,7 @@ def recall(
     return_meta: bool = False,
     planned_queries: Optional[List[str]] = None,
     planner_meta: Optional[Dict[str, Any]] = None,
+    relative_temporal_freshness: bool = False,
 ) -> Any:
     """Orchestrated recall with iterative drilling.
 
@@ -11209,6 +11190,7 @@ def recall(
             "planner_profile": "fast",
             "planned_stores": ["vector"],
             "planned_project": project,
+            "freshness_preferred": False,
         }
         return recall(
             query=query,
@@ -11251,6 +11233,7 @@ def recall(
             return_meta=return_meta,
             planned_queries=[query],
             planner_meta=exact_planner_meta,
+            relative_temporal_freshness=False,
         )
 
     # Load config
@@ -11321,6 +11304,7 @@ def recall(
         lexical_anchor_timeout_ms=lexical_anchor_timeout_ms,
         use_lightweight_config=use_lightweight_config,
         track_access=track_access,
+        relative_temporal_freshness=bool(relative_temporal_freshness),
     )
     gate_intent = "GENERAL"
     if use_intent:
@@ -11342,6 +11326,7 @@ def recall(
         fanout_meta.setdefault("planner_profile", planner_profile)
         fanout_meta.setdefault("planned_stores", ["vector"])
         fanout_meta.setdefault("planned_project", None)
+        fanout_meta.setdefault("freshness_preferred", False)
     elif use_routing:
         planner_timeout_s = _recall_planner_timeout_s(overall_timeout_ms, fast_mode=False)
         if deadline is not None:
@@ -11366,6 +11351,7 @@ def recall(
                 "queries_count": len(fanout_queries),
                 "elapsed_ms": 0,
                 "planner_profile": planner_profile,
+                "freshness_preferred": False,
             }
     else:
         fanout_queries = [query]
@@ -11379,10 +11365,16 @@ def recall(
             "planner_profile": planner_profile,
             "planned_stores": ["vector"],
             "planned_project": None,
+            "freshness_preferred": False,
         }
     if fanout_meta.get("bailout_reason") in bailout_counts:
         bailout_counts[fanout_meta["bailout_reason"]] += 1
     all_searched.extend(fanout_queries)
+    branch_common_kwargs = dict(common_kwargs)
+    branch_common_kwargs["relative_temporal_freshness"] = bool(
+        relative_temporal_freshness
+        or (isinstance(fanout_meta, dict) and fanout_meta.get("freshness_preferred") is True)
+    )
 
     remaining = None if deadline is None else (deadline - _time.monotonic())
     if remaining is not None and remaining <= 0.5:
@@ -11405,7 +11397,7 @@ def recall(
             include_mmr=False if turn1_post_merge_refine else include_mmr,
             low_signal_retry=low_signal_retry,
             return_meta=True,
-            **common_kwargs,
+            **branch_common_kwargs,
         ))
 
     t1_batches, search_wall_ms = _run_recall_branch_callables(
@@ -11670,7 +11662,7 @@ def recall(
                 include_mmr=False if drill_post_merge_refine else include_mmr,
                 low_signal_retry=False,
                 return_meta=True,
-                **common_kwargs,
+                **branch_common_kwargs,
             ))
             for q in new_queries
         ]

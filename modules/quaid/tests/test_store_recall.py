@@ -2487,6 +2487,25 @@ class TestRecallTelemetry:
         assert fast_meta["fanout_budget"] == 5
         assert aggressive_meta["fanout_budget"] == 5
 
+    def test_plan_fanout_queries_carries_multilingual_freshness_flag(self):
+        from datastore.memorydb.memory_graph import _plan_fanout_queries
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            return_value=(
+                '{"queries":["Maya trabaja actualmente"],"freshness_preferred":true}',
+                {},
+            ),
+        ):
+            queries, meta = _plan_fanout_queries(
+                "¿Dónde trabaja Maya ahora?",
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries
+        assert meta["freshness_preferred"] is True
+
     def test_plan_fanout_queries_fast_profiles_preserve_short_exact_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -5377,9 +5396,8 @@ class TestRecallFastHookInjectContract:
         )
 
         reranked = mg._apply_relative_temporal_freshness_rerank(
-            "Where does Maya work right now?",
             [(older, 0.91), (newer, 0.89)],
-            intent="WHERE",
+            freshness_preferred=True,
             target_date="",
         )
 
@@ -5405,9 +5423,8 @@ class TestRecallFastHookInjectContract:
         )
 
         reranked = mg._apply_relative_temporal_freshness_rerank(
-            "When is the Austin Half marathon?",
             [(older, 0.93), (newer, 0.89)],
-            intent="WHEN",
+            freshness_preferred=True,
             target_date="",
         )
 
@@ -5432,10 +5449,35 @@ class TestRecallFastHookInjectContract:
         )
 
         reranked = mg._apply_relative_temporal_freshness_rerank(
-            "As of 2026-03-01, where does Maya work?",
             [(older, 0.91), (newer, 0.89)],
-            intent="WHERE",
+            freshness_preferred=True,
             target_date="2026-03-01",
+        )
+
+        assert [node.id for node, _score in reranked] == ["old", "new"]
+
+    def test_relative_temporal_freshness_rerank_requires_structured_planner_flag(self):
+        import datastore.memorydb.memory_graph as mg
+
+        older = mg.Node(
+            id="old",
+            type="Fact",
+            name="Maya worked at TechFlow as a PM.",
+            attributes={},
+            created_at="2026-01-10T00:00:00Z",
+        )
+        newer = mg.Node(
+            id="new",
+            type="Fact",
+            name="Maya joined Stripe as a senior PM.",
+            attributes={},
+            created_at="2026-03-22T00:00:00Z",
+        )
+
+        reranked = mg._apply_relative_temporal_freshness_rerank(
+            [(older, 0.91), (newer, 0.89)],
+            freshness_preferred=False,
+            target_date="",
         )
 
         assert [node.id for node, _score in reranked] == ["old", "new"]
