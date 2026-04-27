@@ -5497,6 +5497,8 @@ class TestRollingExtraction:
                 return tail if "Baxter" in raw else prior
 
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
         sys.modules["lib.adapter"] = fake_adapter_mod
         fake_notify = types.ModuleType("core.runtime.notify")
         fake_notify.notify_memory_extraction = lambda **kwargs: None
@@ -5578,6 +5580,17 @@ class TestRollingExtraction:
             assert [item["type"] for item in pending] == ["session_end", "rolling"]
             assert pending[0]["meta"]["reason"] == "rolling_stage_flush"
             assert pending[0]["meta"]["flush_staged_payload_only"] is True
+            assert pending[1]["meta"]["reason"] == "continued_chunk_budget"
+            assert pending[1]["meta"]["source_cursor_key"]
+            continued_path = Path(pending[1]["transcript_path"])
+            assert continued_path.is_file()
+            assert continued_path.name == transcript_path.name
+            assert continued_path != transcript_path
+
+            transcript_path.write_text(
+                '{"role":"user","content":"Hello after /new"}\n',
+                encoding="utf-8",
+            )
 
             extraction_daemon.process_signal(pending[0])
             assert seen_transcripts == [prior]

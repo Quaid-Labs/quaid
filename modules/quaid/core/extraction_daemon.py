@@ -246,6 +246,12 @@ def _tmp_dir() -> Path:
     return d
 
 
+def _rolling_transcript_snapshot_dir() -> Path:
+    d = _instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _pid_path() -> Path:
     return _instance_root() / "data" / "extraction-daemon.pid"
 
@@ -920,6 +926,67 @@ def _should_raise_transcript_stat_error(transcript_path: str, exc: OSError) -> b
         return False
 
 
+def _is_daemon_owned_transcript_snapshot_path(transcript_path: str) -> bool:
+    raw = str(transcript_path or "").strip()
+    if not raw:
+        return False
+    try:
+        path = Path(raw).expanduser().resolve()
+        root = (_instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots").resolve()
+        return path.is_file() and path.is_relative_to(root)
+    except OSError as exc:
+        if _should_raise_transcript_stat_error(raw, exc):
+            raise
+        return False
+
+
+def _stable_transcript_snapshot_for_continued_rolling(
+    session_id: str,
+    transcript_path: str,
+) -> str:
+    """Copy a rolling transcript before queuing a later tail signal.
+
+    Some hosts reuse the active transcript path immediately after reset/new-session
+    transitions. A continued rolling signal must read the tail from the file as it
+    existed when the rolling stage split it, not whatever the host writes later at
+    the same path.
+    """
+    raw = str(transcript_path or "").strip()
+    if not raw or not os.path.isfile(raw):
+        return raw
+    try:
+        source = Path(raw).expanduser().resolve()
+        source_stat = source.stat()
+        source_digest = hashlib.blake2b(
+            f"{source}:{source_stat.st_mtime_ns}:{source_stat.st_size}".encode(
+                "utf-8",
+                "replace",
+            ),
+            digest_size=8,
+        ).hexdigest()
+        safe_session = re.sub(r"[^A-Za-z0-9_.-]", "_", _validate_session_id(session_id))
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        # Keep the original basename so cursor path-change handling treats this
+        # as a same-source relocation instead of a fresh transcript.
+        dest_dir = _rolling_transcript_snapshot_dir() / safe_session / f"{stamp}-{source_digest}"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / source.name
+        tmp = dest.with_name(f".{dest.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        tmp.write_bytes(source.read_bytes())
+        os.replace(tmp, dest)
+        return str(dest)
+    except OSError as exc:
+        if _should_raise_transcript_stat_error(raw, exc):
+            raise
+        logger.warning(
+            "failed to snapshot rolling transcript for session %s (%s): %s",
+            session_id,
+            raw,
+            exc,
+        )
+        return raw
+
+
 def write_cursor(
     session_id: str,
     line_offset: int,
@@ -1017,6 +1084,15 @@ def _signal_source_cursor_key(
     return f"source-{digest}"
 
 
+def _signal_meta_cursor_key(session_id: str, meta: Any) -> str:
+    if not isinstance(meta, dict):
+        return ""
+    raw = str(meta.get("source_cursor_key") or "").strip()
+    if not raw:
+        return ""
+    return _cursor_storage_key(session_id, raw)
+
+
 def _read_cursor_with_source_compat(session_id: str, source_key: Optional[str]) -> Dict[str, Any]:
     """Read a source-aware cursor while tolerating patched one-arg test doubles."""
     if source_key:
@@ -1077,10 +1153,17 @@ def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
     for signal in signals:
         session_id = str(signal.get("session_id") or "").strip()
         transcript_path = str(signal.get("transcript_path") or "").strip()
-        if not session_id or not transcript_path:
+        if not session_id:
             continue
         try:
-            keys.add(_signal_source_cursor_key(session_id, transcript_path))
+            meta_key = _signal_meta_cursor_key(
+                session_id,
+                signal.get("meta") if isinstance(signal.get("meta"), dict) else {},
+            )
+            if meta_key:
+                keys.add(meta_key)
+            elif transcript_path:
+                keys.add(_signal_source_cursor_key(session_id, transcript_path))
         except Exception:
             continue
     return keys
@@ -2709,14 +2792,16 @@ def _cursor_records_transcript_path(session_id: str, transcript_path: str) -> bo
 
 def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str) -> bool:
     """Return whether an adapter-scoped transcript belongs to this daemon instance."""
+    if not transcript_path:
+        return False
+    if _is_daemon_owned_transcript_snapshot_path(transcript_path):
+        return True
     if adapter is None:
         logger.warning(
             "adapter unavailable during transcript ownership check for session %s (%s)",
             session_id,
             transcript_path,
         )
-        return False
-    if not transcript_path:
         return False
     if _cursor_records_transcript_path(session_id, transcript_path):
         return True
@@ -3052,7 +3137,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         mark_signal_processed(signal_data)
         return
 
-    lock_owner_key = _signal_source_cursor_key(
+    lock_owner_key = _signal_meta_cursor_key(session_id, signal_meta) or _signal_source_cursor_key(
         session_id,
         transcript_path,
         staged_state=staged_state,
@@ -3867,15 +3952,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             has_remaining_tail = buffered_line_offset > cursor_offset and total_lines > buffered_line_offset
             if has_remaining_tail:
-                remaining_tokens = estimate_unextracted_tokens(
+                continued_transcript_path = _stable_transcript_snapshot_for_continued_rolling(
+                    session_id,
                     transcript_path,
+                )
+                remaining_tokens = estimate_unextracted_tokens(
+                    continued_transcript_path,
                     buffered_line_offset,
                     chunk_budget,
                 )
                 write_signal(
                     signal_type="rolling",
                     session_id=session_id,
-                    transcript_path=transcript_path,
+                    transcript_path=continued_transcript_path,
                     meta={
                         "reason": "continued_chunk_budget",
                         "chunk_tokens": chunk_budget,
@@ -3883,6 +3972,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "buffered_line_offset": buffered_line_offset,
                         "remaining_tokens_estimate": remaining_tokens,
                         "remaining_lines": max(0, int(total_lines) - int(buffered_line_offset)),
+                        "source_cursor_key": lock_owner_key,
+                        "source_transcript_path": transcript_path,
+                        "source_transcript_size_bytes": _transcript_size_bytes(transcript_path),
                     },
                 )
             if staged_state_has_payload(staged_state):
