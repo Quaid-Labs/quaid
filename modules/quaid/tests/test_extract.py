@@ -2397,6 +2397,134 @@ class TestExtractFromTranscript:
         assert all("EARLIER CHUNK CONTEXT" not in prompt for prompt in prompts)
 
 
+class TestUnsupportedSpecificityFilters:
+    def test_drops_invented_date_anchor_not_in_chunk_or_session_hint(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya started her first day at Stripe on January 16, 2024",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "high",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text="today: first day at stripe. my brain is mush.",
+            session_date_hint="2026-05-19",
+            result=result,
+            label="unit",
+            chunk_label="1",
+        )
+
+        assert filtered == []
+        assert result["facts_skipped"] == 1
+        assert result["unsupported_specificity_facts_dropped"] == 1
+
+    def test_keeps_date_anchor_when_it_matches_session_hint(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya's Stripe start date is May 19th",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "high",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text="today: first day at stripe. my brain is mush.",
+            session_date_hint="2026-05-19",
+            result=result,
+            label="unit",
+            chunk_label="1",
+        )
+
+        assert filtered == facts
+        assert result["facts_skipped"] == 0
+        assert result["unsupported_specificity_facts_dropped"] == 0
+
+    def test_drops_pet_species_upgrade_when_chunk_never_states_species(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya has a cat named Biscuit",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "medium",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text="ok i'm going to go watch something stupid on netflix and pet biscuit.",
+            session_date_hint="2026-03-17",
+            result=result,
+            label="unit",
+            chunk_label="2",
+        )
+
+        assert filtered == []
+        assert result["facts_skipped"] == 1
+
+    def test_keeps_pet_species_when_chunk_explicitly_states_it(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya has a dog named Biscuit",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "high",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text="my partner David and our golden retriever Biscuit came to the race.",
+            session_date_hint="2026-05-19",
+            result=result,
+            label="unit",
+            chunk_label="3",
+        )
+
+        assert filtered == facts
+
+    def test_pet_species_support_does_not_match_embedded_substrings(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya has a dog named Biscuit",
+                "category": "fact",
+                "speaker": "user",
+                "extraction_confidence": "medium",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text="Maya collaborated with Biscuit on a zine.",
+            session_date_hint="2026-05-19",
+            result=result,
+            label="unit",
+            chunk_label="4",
+        )
+
+        assert filtered == []
+        assert result["unsupported_specificity_facts_dropped"] == 1
+
+
 # ---------------------------------------------------------------------------
 # _format_human_summary tests
 # ---------------------------------------------------------------------------
@@ -2474,6 +2602,13 @@ class TestLoadPrompt:
         prompt = _load_extraction_prompt()
         assert "complete, self-contained statement of at least 3 words" in prompt
         assert "Never emit a bare name, lone codeword, or noun fragment as a fact" in prompt
+
+    def test_prompt_forbids_invented_specific_anchors(self):
+        from ingest.extract import _load_extraction_prompt
+
+        prompt = _load_extraction_prompt()
+        assert "Do not invent a more specific anchor than the transcript actually provides." in prompt
+        assert "Never manufacture an exact calendar date" in prompt
 
     def test_truncated_array_scanner_stops_on_mid_string_truncation(self):
         from ingest.extract import _complete_json_objects_from_array

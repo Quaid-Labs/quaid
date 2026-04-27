@@ -62,6 +62,9 @@ QUALITY RULES:
 - Be specific: "User likes spicy Thai food" > "User likes food"
 - Favor specific facts over generalities.
 - Preserve concrete anchors from the transcript whenever available: names, organizations, places, dates, times, numbers, and version identifiers.
+- Do not invent a more specific anchor than the transcript actually provides.
+  - If the transcript says "today", "this week", "maybe late April", "I think", or similar uncertain/relative wording, keep that uncertainty unless an exact anchor is explicitly stated in the transcript or provided by message metadata.
+  - Never manufacture an exact calendar date, year, time, number, employer, species, breed, or title that does not appear in the transcript.
 - Do NOT abstract a concrete statement into a generic umbrella fact.
   Example: prefer "User switched to gpt-5.4-mini on April 12" over "User changed models".
 - If a concrete anchored version exists, do not emit a competing generic paraphrase for the same claim.
