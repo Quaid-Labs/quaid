@@ -2088,7 +2088,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       }
     }
   }
-  if ((signalType === "compaction" || signalType === "session_end") && resolvedPath && !fs.existsSync(resolvedPath)) {
+  if ((signalType === "compaction" || signalType === "session_end" || signalType === "timeout") && resolvedPath && !fs.existsSync(resolvedPath)) {
     if (!usePreservedFallbackIfAvailable(`${signalType}_missing_physical`)) {
       writeHookTrace("session.daemon_signal_missing_transcript", {
         session_id: sessionId,
@@ -5549,9 +5549,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       },
       extract: async (_msgs, sid, label) => {
         if (sid) {
-          writeDaemonSignal(sid, "compaction", {
+          writeDaemonSignal(sid, "timeout", {
             source: "timeout_extract",
-            label: label || "Timeout"
+            label: label || "Timeout",
+            compact_on_timeout: true
           });
           console.log(`[quaid][timeout] daemon signal for idle session=${sid} label=${label || "Timeout"}`);
         }

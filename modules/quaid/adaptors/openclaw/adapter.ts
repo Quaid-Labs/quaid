@@ -2534,9 +2534,11 @@ function buildExecCompletedHeartbeatVisibleReply(event: any): string | undefined
   return undefined;
 }
 
+type DaemonSignalType = "compaction" | "reset" | "session_end" | "timeout";
+
 function writeDaemonSignal(
   sessionId: string,
-  signalType: "compaction" | "reset" | "session_end",
+  signalType: DaemonSignalType,
   meta?: Record<string, any>,
 ): string | null {
   if (!sessionId) return null;
@@ -2642,7 +2644,7 @@ function writeDaemonSignal(
       }
     }
   }
-  if ((signalType === "compaction" || signalType === "session_end") &&
+  if ((signalType === "compaction" || signalType === "session_end" || signalType === "timeout") &&
       resolvedPath && !fs.existsSync(resolvedPath)) {
     if (!usePreservedFallbackIfAvailable(`${signalType}_missing_physical`)) {
       writeHookTrace("session.daemon_signal_missing_transcript", {
@@ -6832,9 +6834,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         // The timeout manager calls this on idle-session timeout;
         // write a daemon signal so the daemon handles it.
         if (sid) {
-          writeDaemonSignal(sid, "compaction", {
+          writeDaemonSignal(sid, "timeout", {
             source: "timeout_extract",
             label: label || "Timeout",
+            compact_on_timeout: true,
           });
           console.log(`[quaid][timeout] daemon signal for idle session=${sid} label=${label || "Timeout"}`);
         }

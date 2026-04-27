@@ -475,11 +475,19 @@ describe("lifecycle signal detection", () => {
       );
 
       expect(remembered).toBe(true);
-      const sigPath = isolatedTest.writeDaemonSignal(sid, "compaction", { source: "timeout_extract" });
+      const sigPath = isolatedTest.writeDaemonSignal(sid, "timeout", {
+        source: "timeout_extract",
+        compact_on_timeout: true,
+      });
       expect(sigPath).toBeTruthy();
       expect(String(sigPath)).toContain(`${path.sep}.quaid${path.sep}instances${path.sep}openclaw-livetest${path.sep}`);
       const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+      expect(payload.type).toBe("timeout");
       expect(payload.transcript_path).toBe(sessionFile);
+      expect(payload.meta).toMatchObject({
+        source: "timeout_extract",
+        compact_on_timeout: true,
+      });
     } finally {
       vi.unstubAllEnvs();
       try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
