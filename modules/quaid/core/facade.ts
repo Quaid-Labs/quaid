@@ -174,6 +174,59 @@ type InjectionLogWriteOptions = {
   persistDedup?: boolean;
 };
 
+function recallItemIdentity(item: MemoryResult): string {
+  const id = typeof item?.id === "string" ? item.id.trim() : "";
+  if (id) return `id:${id}`;
+  return `${String(item?.via || "vector").toLowerCase()}::${String(item?.text || "").trim().toLowerCase()}`;
+}
+
+function isDocsProjectRecallItem(item: MemoryResult): boolean {
+  const via = String(item?.via || "").trim().toLowerCase();
+  const category = String(item?.category || "").trim().toLowerCase();
+  const sourceType = String(item?.sourceType || "").trim().toLowerCase();
+  return via === "project" || category === "project" || sourceType === "docs";
+}
+
+function selectAutoInjectionMemories(rows: MemoryResult[], limit: number): MemoryResult[] {
+  const boundedLimit = Math.max(1, Number(limit) || 1);
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const projectRows = rows.filter(isDocsProjectRecallItem);
+  if (projectRows.length === 0) return rows.slice(0, boundedLimit);
+
+  const targetProjectRows = Math.min(projectRows.length, Math.max(1, Math.min(2, boundedLimit)));
+  const out = rows.slice(0, boundedLimit);
+  let present = out.filter(isDocsProjectRecallItem).length;
+  if (present >= targetProjectRows) return out;
+
+  const seen = new Set(out.map((item) => recallItemIdentity(item)));
+  const candidates = [...projectRows]
+    .filter((item) => !seen.has(recallItemIdentity(item)))
+    .sort((a, b) => Number(b?.similarity || 0) - Number(a?.similarity || 0));
+
+  for (const candidate of candidates) {
+    if (present >= targetProjectRows) break;
+    const dropIndex = out.length >= boundedLimit
+      ? (() => {
+          for (let i = out.length - 1; i >= 0; i -= 1) {
+            if (!isDocsProjectRecallItem(out[i])) return i;
+          }
+          return -1;
+        })()
+      : -1;
+    if (out.length >= boundedLimit && dropIndex < 0) break;
+    if (dropIndex >= 0) out.splice(dropIndex, 1);
+    out.push(candidate);
+    present += 1;
+  }
+
+  out.sort((a, b) => {
+    const simDelta = Number(b?.similarity || 0) - Number(a?.similarity || 0);
+    if (Math.abs(simDelta) > 1e-9) return simDelta;
+    return Number(isDocsProjectRecallItem(b)) - Number(isDocsProjectRecallItem(a));
+  });
+  return out.slice(0, boundedLimit);
+}
+
 export type ProjectContextOptions = {
   cwd?: string;
   identityOnly?: boolean;
@@ -3574,7 +3627,7 @@ ${lines.join("\n")}
       previouslyInjected = [];
       newMemories = filtered;
     }
-    const toInject = newMemories.slice(0, injectLimit);
+    const toInject = selectAutoInjectionMemories(newMemories, injectLimit);
     if (!toInject.length) return null;
 
     const formatted = formatMemoriesForInjection(toInject);

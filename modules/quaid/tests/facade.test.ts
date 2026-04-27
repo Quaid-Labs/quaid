@@ -1594,6 +1594,38 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext preserves project docs rows within the inject limit", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-project-docs-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      { id: "m1", text: "Maya is building a portfolio site", category: "fact", similarity: 0.99, via: "vector" },
+      { id: "m2", text: "Maya prefers static HTML", category: "fact", similarity: 0.98, via: "vector" },
+      { id: "m3", text: "Maya dislikes flashy design", category: "fact", similarity: 0.97, via: "vector" },
+      {
+        id: "p1",
+        text: "Two project cards completed: Recipe App and TechFlow Platform Redesign",
+        category: "fact",
+        similarity: 0.91,
+        via: "project",
+        sourceType: "docs",
+      },
+    ];
+
+    const result = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "What projects were on my portfolio site?", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-project-docs" },
+      existingPrependContext: "",
+      injectLimit: 3,
+      maxInjectionIdsPerSession: 100,
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.toInject.map((m) => m.id)).toEqual(["m1", "m2", "p1"]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("formatRecallToolResponse returns grouped text and source breakdown", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const out = facade.formatRecallToolResponse([
