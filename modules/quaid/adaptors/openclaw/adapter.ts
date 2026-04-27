@@ -4508,16 +4508,21 @@ function _buildAutoInjectRecallOptions(
   projectNames: string[] = getProjectNames(),
 ): RecallOptions {
   const inferredProject = usePreInjectionPass ? _inferAutoInjectProject(query, projectNames) : undefined;
+  const temporalBounds = _extractAutoInjectTemporalBounds(query);
   if (usePreInjectionPass && inferredProject && _looksLikeExplicitProjectDetailQuery(query)) {
+    const useProjectOnly = Boolean(temporalBounds.dateFrom || temporalBounds.dateTo);
     return {
       query,
       limit,
       expandGraph: true,
       graphDepth: 2,
-      datastores: ["project", "vector_basic", "graph"],
+      // For explicit dated project-state questions, PROJECT.log/PROJECT.md are the
+      // source of truth. Mixing in later vector facts leaks future state into an
+      // otherwise well-bounded "as of" question, so keep those turns project-only.
+      datastores: useProjectOnly ? ["project"] : ["project", "vector_basic", "graph"],
       routeStores: false,
       project: inferredProject,
-      ..._extractAutoInjectTemporalBounds(query),
+      ...temporalBounds,
       intent: "general",
       domain,
       failOpen: true,

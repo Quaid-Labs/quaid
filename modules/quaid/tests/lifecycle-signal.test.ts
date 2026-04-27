@@ -1244,7 +1244,7 @@ describe("lifecycle signal detection", () => {
     expect(opts.sourceTag).toBe("auto_inject");
   });
 
-  it("forces project store for explicit known-project detail queries during auto-inject", () => {
+  it("forces project-only recall for dated explicit known-project detail queries during auto-inject", () => {
     const opts = __test.buildAutoInjectRecallOptions(
       "As of 2026-03-15, what projects were on Maya's portfolio site?",
       6,
@@ -1254,9 +1254,25 @@ describe("lifecycle signal detection", () => {
     );
 
     expect(opts.routeStores).toBe(false);
-    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
+    expect(opts.datastores).toEqual(["project"]);
     expect(opts.project).toBe("portfolio-site");
     expect(opts.dateTo).toBe("2026-03-15");
+    expect(opts.sourceTag).toBe("auto_inject");
+  });
+
+  it("keeps mixed project and memory stores for undated explicit known-project detail queries during auto-inject", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "What projects are on Maya's portfolio site?",
+      6,
+      { all: true },
+      true,
+      ["portfolio-site", "recipe-app"],
+    );
+
+    expect(opts.routeStores).toBe(false);
+    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
+    expect(opts.project).toBe("portfolio-site");
+    expect(opts.dateTo).toBeUndefined();
     expect(opts.sourceTag).toBe("auto_inject");
   });
 
