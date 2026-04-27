@@ -967,6 +967,30 @@ class TestCmdUpdateStaleNeverIndexed:
             assert captured["project"] == "quaid"
             assert captured["project_log_indexer"] is sentinel_indexer
 
+    def test_cli_project_log_indexer_imports_core_updater_when_absent(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            sentinel_calls = []
+
+            def sentinel_indexer(project=None):
+                sentinel_calls.append(project)
+                return 1
+
+            core_module = SimpleNamespace(index_project_logs=sentinel_indexer)
+            monkeypatch.delitem(sys.modules, "core.docs.updater", raising=False)
+            monkeypatch.setattr(
+                updater.importlib,
+                "import_module",
+                lambda name: core_module if name == "core.docs.updater" else None,
+            )
+
+            resolved = updater._resolve_cli_project_log_indexer()
+
+            assert resolved is sentinel_indexer
+            assert resolved(project="quaid") == 1
+            assert sentinel_calls == ["quaid"]
+
     def test_update_stale_raises_for_missing_explicit_project(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             from datastore.docsdb import updater

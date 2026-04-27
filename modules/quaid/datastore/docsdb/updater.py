@@ -29,6 +29,7 @@ Usage:
 import argparse
 import contextlib
 import difflib
+import importlib
 import json
 import logging
 import os
@@ -1738,7 +1739,7 @@ def _resolve_cli_project_log_indexer() -> Optional[Callable[..., int]]:
     try:
         core_updater = sys.modules.get("core.docs.updater")
         if core_updater is None:
-            return None
+            core_updater = importlib.import_module("core.docs.updater")
         indexer = getattr(core_updater, "index_project_logs", None)
         return indexer if callable(indexer) else None
     except Exception as exc:
