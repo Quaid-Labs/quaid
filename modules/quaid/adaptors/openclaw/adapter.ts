@@ -2983,9 +2983,8 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
     requestedInstance,
     path.join(WORKSPACE, "data", "memory.db"),
   );
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
-    MEMORY_DB_PATH: memoryDbPath,
     MEMORY_RUNTIME_DIR: QUAID_RUNTIME_DIR,
     QUAID_HOME: WORKSPACE,
     QUAID_VISIBLE_HOME: VISIBLE_WORKSPACE,
@@ -2998,6 +2997,9 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
     PYTHONPATH: pyPath,
     ...extra,
   };
+  if (requestedInstance) delete env.MEMORY_DB_PATH;
+  else env.MEMORY_DB_PATH = memoryDbPath;
+  return env;
 }
 
 function getDatastoreStatsSync(instanceId: string = _QUAID_INSTANCE): Record<string, any> | null {
@@ -7927,6 +7929,7 @@ export const __test = {
   autoInjectTurnKey: _autoInjectTurnKey,
   buildAutoInjectRecallOptions: _buildAutoInjectRecallOptions,
   buildFacadeRecallOptions: _buildFacadeRecallOptions,
+  buildPythonEnv,
   summarizeRecallDiagnostics,
   summarizeRecallResults,
   selectAutoInjectQuery,

@@ -77,8 +77,26 @@ describe("python-bridge visible home resolution", () => {
     await execPython("stats", []);
 
     const env = spawnMock.mock.calls[0]?.[2]?.env;
-    expect(env?.MEMORY_DB_PATH).toBe("/tmp/.quaid/instances/openclaw-main/data/memory.db");
     expect(env?.QUAID_INSTANCE).toBe("openclaw-main");
+    expect(env?.MEMORY_DB_PATH).toBeUndefined();
+  });
+
+  it("keeps MEMORY_DB_PATH only for legacy flat-layout bridge subprocesses", async () => {
+    spawnMock.mockImplementation(() => makeProc());
+
+    const { createPythonBridgeExecutor } = await import("../adaptors/openclaw/python-bridge.js");
+    const execPython = createPythonBridgeExecutor({
+      scriptPath: "/tmp/test-script.py",
+      dbPath: "/tmp/.quaid/data/memory.db",
+      workspace: "/tmp/.quaid",
+      pluginRoot: "/tmp/plugin-root",
+    });
+
+    await execPython("stats", []);
+
+    const env = spawnMock.mock.calls[0]?.[2]?.env;
+    expect(env?.QUAID_INSTANCE).toBeUndefined();
+    expect(env?.MEMORY_DB_PATH).toBe("/tmp/.quaid/data/memory.db");
   });
 
   it("escalates timed-out recall subprocesses if SIGTERM does not exit", async () => {

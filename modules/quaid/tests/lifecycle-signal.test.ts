@@ -1932,4 +1932,18 @@ describe("lifecycle signal detection", () => {
     expect(__test.looksLikeQuaidRuntimeRoot(moduleRoot)).toBe(true);
     expect(__test.resolvePythonPluginRoot(workspace, moduleRoot)).toBe(path.resolve(moduleRoot));
   });
+
+  it("does not force MEMORY_DB_PATH for instance-scoped python bridge env", () => {
+    const prevInstance = process.env.QUAID_INSTANCE;
+    try {
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      const env = __test.buildPythonEnv({ QUAID_INSTANCE: "openclaw-main" }) as Record<string, string | undefined>;
+      expect(env.QUAID_INSTANCE).toBe("openclaw-main");
+      expect(env.MEMORY_DB_PATH).toBeUndefined();
+    } finally {
+      if (prevInstance === undefined) delete process.env.QUAID_INSTANCE;
+      else process.env.QUAID_INSTANCE = prevInstance;
+      vi.unstubAllEnvs();
+    }
+  });
 });

@@ -157,22 +157,28 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existingPyPath = String(process.env.PYTHONPATH || "").trim();
   const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;
+  const requestedInstance = String(config.instanceId || process.env.QUAID_INSTANCE || "").trim() || undefined;
 
   return async function execPython(command: string, args: string[] = []): Promise<string> {
     return new Promise((resolve, reject) => {
       const commandTimeoutMs = resolvePythonBridgeCommandTimeoutMs(command, args);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        QUAID_INSTANCE: requestedInstance,
+        QUAID_HOME: config.workspace,
+        QUAID_VISIBLE_HOME: _resolveVisibleHome(config.workspace),
+        QUAID_WORKSPACE: config.workspace,
+        OPENCLAW_WORKSPACE: config.workspace,
+        PYTHONPATH: pythonPath,
+      };
+      if (requestedInstance) {
+        delete env.MEMORY_DB_PATH;
+      } else {
+        env.MEMORY_DB_PATH = config.dbPath;
+      }
       const proc = spawn(PYTHON_BIN, [config.scriptPath, command, ...args], {
         cwd: config.workspace,
-        env: {
-          ...process.env,
-          MEMORY_DB_PATH: config.dbPath,
-          QUAID_INSTANCE: String(config.instanceId || process.env.QUAID_INSTANCE || "").trim() || undefined,
-          QUAID_HOME: config.workspace,
-          QUAID_VISIBLE_HOME: _resolveVisibleHome(config.workspace),
-          QUAID_WORKSPACE: config.workspace,
-          OPENCLAW_WORKSPACE: config.workspace,
-          PYTHONPATH: pythonPath,
-        },
+        env,
       });
 
       let stdout = "";
