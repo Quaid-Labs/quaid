@@ -2834,8 +2834,6 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
             transcript_path,
         )
         return False
-    if _cursor_records_transcript_path(session_id, transcript_path):
-        return True
     owns_fn = getattr(adapter, "owns_session_path", None)
     if not callable(owns_fn):
         owns_fn = getattr(adapter, "owns_transcript_path", None)
@@ -2848,10 +2846,10 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
         )
         return False
     try:
-        return bool(owns_fn(Path(transcript_path), session_id=session_id))
+        owns = bool(owns_fn(Path(transcript_path), session_id=session_id))
     except TypeError:
         try:
-            return bool(owns_fn(Path(transcript_path)))
+            owns = bool(owns_fn(Path(transcript_path)))
         except Exception as exc:
             logger.warning(
                 "adapter transcript ownership check failed for session %s (%s): %s",
@@ -2880,6 +2878,11 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
         except ImportError:
             pass
         return False
+    if not owns:
+        return False
+    if _cursor_records_transcript_path(session_id, transcript_path):
+        return True
+    return True
 
 
 def _ensure_discovered_session_cursors(adapter=None) -> int:

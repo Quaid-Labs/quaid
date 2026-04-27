@@ -842,8 +842,62 @@ class TestOpenClawAdapter:
         sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
         sessions_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
         adapter = OpenClawAdapter()
         assert adapter.get_sessions_dir() == sessions_dir
+
+    def test_get_sessions_dir_non_main_without_matching_session_key_is_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / "sessions.json").write_text(json.dumps({
+            "agent:main:matrix:channel:!room": {
+                "sessionId": "main-session",
+                "sessionFile": str(sessions_dir / "main-session.jsonl"),
+            }
+        }), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-m5test")
+
+        adapter = OpenClawAdapter()
+
+        assert adapter.get_sessions_dir() is None
+
+    def test_owns_session_path_rejects_main_session_for_non_main_instance(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        main_transcript = sessions_dir / "main-session.jsonl"
+        main_transcript.write_text('{"role":"user","content":"tamarind-lighthouse-3317"}\n', encoding="utf-8")
+        (sessions_dir / "sessions.json").write_text(json.dumps({
+            "agent:main:matrix:channel:!room": {
+                "sessionId": "main-session",
+                "sessionFile": str(main_transcript),
+            }
+        }), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-m5test")
+
+        adapter = OpenClawAdapter()
+
+        assert adapter.owns_session_path(main_transcript, session_id="main-session") is False
+
+    def test_owns_session_path_accepts_matching_non_main_session_key(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        worker_transcript = sessions_dir / "worker-session.jsonl"
+        worker_transcript.write_text('{"role":"user","content":"tamarind-lighthouse-3317"}\n', encoding="utf-8")
+        (sessions_dir / "sessions.json").write_text(json.dumps({
+            "agent:m5test:matrix:channel:!room": {
+                "sessionId": "worker-session",
+                "sessionFile": str(worker_transcript),
+            }
+        }), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-m5test")
+
+        adapter = OpenClawAdapter()
+
+        assert adapter.get_sessions_dir() == sessions_dir
+        assert adapter.owns_session_path(worker_transcript, session_id="worker-session") is True
 
     def test_get_bootstrap_markdown_globs(self, tmp_path, monkeypatch):
         import json

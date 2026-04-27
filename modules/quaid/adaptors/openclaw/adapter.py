@@ -540,8 +540,58 @@ class OpenClawAdapter(QuaidAdapter):
         return None
 
     def get_sessions_dir(self) -> Optional[Path]:
-        d = self._openclaw_root_dir() / "agents" / "main" / "sessions"
-        return d if d.is_dir() else None
+        label = self.get_instance_name()
+        own_dir = self._agent_sessions_dir(label)
+        if own_dir.is_dir():
+            return own_dir
+        main_dir = self._agent_sessions_dir("main")
+        if label != "main":
+            sessions_json = main_dir / "sessions.json"
+            if main_dir.is_dir() and self._sessions_json_has_agent_label(sessions_json, label):
+                return main_dir
+            return None
+        return main_dir if main_dir.is_dir() else None
+
+    def owns_session_path(self, path: Path, session_id: str = "") -> bool:
+        """Return True only for transcripts belonging to this OC agent label.
+
+        OpenClaw may keep multiple agent sessions under the shared
+        ``agents/main/sessions`` directory. Quaid silos must still be separated
+        by the logical OC agent label from sessions.json, otherwise a newly
+        auto-provisioned instance can discover and ingest the main agent's
+        transcript.
+        """
+        sid = str(session_id or "").strip() or self._session_id_from_path(path)
+        if not sid:
+            return False
+        try:
+            transcript_path = Path(path).expanduser().resolve()
+        except (OSError, RuntimeError):
+            transcript_path = Path(path).expanduser()
+
+        label = self.get_instance_name()
+        own_dir = self._agent_sessions_dir(label)
+        if self._path_is_under(transcript_path, own_dir) and self._path_matches_session_id(transcript_path, sid):
+            return True
+
+        main_sessions_json = self._agent_sessions_dir("main") / "sessions.json"
+        saw_session = False
+        for session_key, row in self._iter_sessions_index(main_sessions_json):
+            row_sid = str(row.get("sessionId") or "").strip()
+            if row_sid != sid:
+                continue
+            saw_session = True
+            row_label = self.extract_agent_label_from_session_key(session_key) or "main"
+            if row_label != label:
+                continue
+            row_path = self._session_path_from_index_row(main_sessions_json.parent, row, sid)
+            if row_path is not None and self._same_path(row_path, transcript_path):
+                return True
+
+        if label == "main" and not saw_session:
+            main_dir = self._agent_sessions_dir("main")
+            return self._path_is_under(transcript_path, main_dir) and self._path_matches_session_id(transcript_path, sid)
+        return False
 
     def auth_token_path(self) -> Optional[Path]:
         return self.quaid_home() / "adaptors" / "openclaw" / ".auth-token"
@@ -1187,3 +1237,72 @@ class OpenClawAdapter(QuaidAdapter):
         if fallback.exists():
             return fallback
         return None
+
+    def _agent_sessions_dir(self, label: str) -> Path:
+        clean = str(label or "main").strip().lower() or "main"
+        return self._openclaw_root_dir() / "agents" / clean / "sessions"
+
+    def _sessions_json_has_agent_label(self, sessions_json: Path, label: str) -> bool:
+        wanted = str(label or "main").strip().lower() or "main"
+        return any(
+            (self.extract_agent_label_from_session_key(session_key) or "main") == wanted
+            for session_key, _row in self._iter_sessions_index(sessions_json)
+        )
+
+    def _iter_sessions_index(self, sessions_json: Path):
+        try:
+            data = json.loads(sessions_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return []
+        if not isinstance(data, dict):
+            return []
+        rows = []
+        for session_key, row in data.items():
+            if isinstance(row, dict):
+                rows.append((str(session_key or ""), row))
+        return rows
+
+    def _session_path_from_index_row(self, sessions_dir: Path, row: dict, session_id: str) -> Optional[Path]:
+        candidates = [
+            row.get("sessionFile"),
+            row.get("file"),
+            row.get("path"),
+            sessions_dir / f"{session_id}.jsonl",
+        ]
+        for candidate in candidates:
+            text = str(candidate or "").strip()
+            if not text:
+                continue
+            try:
+                return Path(text).expanduser().resolve()
+            except (OSError, RuntimeError):
+                return Path(text).expanduser()
+        return None
+
+    @staticmethod
+    def _session_id_from_path(path: Path) -> str:
+        name = Path(path).name
+        marker = ".jsonl.reset."
+        if marker in name:
+            return name.split(marker, 1)[0]
+        if name.endswith(".jsonl"):
+            return name[: -len(".jsonl")]
+        return ""
+
+    def _path_matches_session_id(self, path: Path, session_id: str) -> bool:
+        return self._session_id_from_path(path) == str(session_id or "").strip()
+
+    @staticmethod
+    def _same_path(left: Path, right: Path) -> bool:
+        try:
+            return left.expanduser().resolve() == right.expanduser().resolve()
+        except (OSError, RuntimeError):
+            return left.expanduser() == right.expanduser()
+
+    @staticmethod
+    def _path_is_under(path: Path, parent: Path) -> bool:
+        try:
+            path.expanduser().resolve().relative_to(parent.expanduser().resolve())
+            return True
+        except (OSError, RuntimeError, ValueError):
+            return False
