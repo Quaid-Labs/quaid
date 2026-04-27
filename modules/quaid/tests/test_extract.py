@@ -2192,6 +2192,16 @@ class TestExtractFromTranscript:
         assert "BEGIN TRANSCRIPT CHUNK" in second_prompt
         assert "Maya changed jobs from TechFlow to Stripe" in second_prompt
 
+    def test_extraction_prompt_preserves_exact_lists_routines_and_callback_anchors(self):
+        from ingest.extract import _load_extraction_prompt
+
+        prompt = _load_extraction_prompt({}, owner_id="maya")
+
+        assert "short exact list of named options or steps" in prompt
+        assert "minimum viable stretching routine" in prompt
+        assert "dog tried to eat a pinecone" in prompt
+        assert "GraphQL alongside REST" in prompt
+
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
     def test_carry_repeat_facts_are_dropped_before_recarry(self, mock_llm, mock_chunk):

@@ -29,6 +29,10 @@ WHAT TO EXTRACT:
 - Personal decisions with reasoning ("User decided to use X because Y" — the decision is about the person)
 - Personal preferences expressed ("Always do X", "Never Y", "I prefer Z format")
 - Significant events or milestones ("Deployed X", "Bought Y", "Flying to Z next week")
+- Concrete assistant-provided recommendations when they contain named options, exact steps, or an adopted plan
+- Short exact routines/checklists/protocols when the transcript gives the cadence and named steps
+- Memorable concrete anecdotes or callback anchors involving the user, family, pets, or project work, even when they seem small
+- Architecture or product decisions together with the explicit compatibility constraint that shaped the decision
 - Technical/project-state facts that are explicitly stated and likely to matter later (security fixes, architecture changes, tests added, deployment choices, version changes)
 - Important relationships (family, staff, contacts, business partners)
 - Emotional reactions or sentiments about specific things
@@ -40,6 +44,10 @@ EXAMPLES OF GOOD EXTRACTIONS:
 - "User's birthday is March 15"
 - "The assistant suggested a layered birthday surprise plan and the user adopted it"
 - "The agent identified a SQL injection issue and recommended parameterized queries"
+- "The assistant suggested Restaurant A, Restaurant B, and Restaurant C for the birthday dinner"
+- "The assistant recommended a minimum viable stretching routine: quad, hamstring, calf after runs; foam roller and hip flexor twice weekly"
+- "The user's dog tried to eat a pinecone and someone had to take it away"
+- "The agent implemented GraphQL alongside REST so older clients could keep using browser share links"
 
 WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
 - System architecture descriptions ("The memory system uses SQLite with WAL mode")
@@ -68,6 +76,10 @@ QUALITY RULES:
 - Do NOT abstract a concrete statement into a generic umbrella fact.
   Example: prefer "User switched to gpt-5.4-mini on April 12" over "User changed models".
 - If a concrete anchored version exists, do not emit a competing generic paraphrase for the same claim.
+- If the transcript gives a short exact list of named options or steps (roughly 20 items or fewer), preserve the list itself in at least one searchable fact instead of collapsing it to a generic category.
+  Examples:
+  - prefer "The assistant suggested Restaurant A, Restaurant B, and Restaurant C" over "The assistant suggested restaurants"
+  - prefer "The routine is quad stretch, hamstring stretch, calf stretch, foam roller, hip flexor" over "The assistant suggested stretching"
 - This applies to ALL fact categories (relationships, preferences, events, technical/project changes), not just relationship facts.
 - Do NOT degrade named/anchored facts into generic paraphrases.
   Examples:
