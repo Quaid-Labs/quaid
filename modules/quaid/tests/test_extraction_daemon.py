@@ -1888,6 +1888,63 @@ def test_check_chunk_ready_sessions_bounds_parse_empty_deferral_after_stable_siz
     assert captured == []
 
 
+def test_transcript_size_bytes_raises_stat_failure_under_failhard(monkeypatch):
+    fake_fail_policy = types.ModuleType("lib.fail_policy")
+    fake_fail_policy.is_fail_hard_enabled = lambda: True
+    monkeypatch.setitem(sys.modules, "lib.fail_policy", fake_fail_policy)
+
+    def _raise_getsize(_path):
+        raise OSError("stat failed")
+
+    monkeypatch.setattr(extraction_daemon.os.path, "getsize", _raise_getsize)
+
+    with pytest.raises(OSError, match="stat failed"):
+        extraction_daemon._transcript_size_bytes("/missing/transcript.jsonl")
+
+
+def test_check_chunk_ready_sessions_raises_mtime_failure_under_failhard(monkeypatch, tmp_path):
+    import types
+
+    transcript_path = tmp_path / "parse-empty-stat-fail.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"The live rolling tail cannot be statted."}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-parse-empty-stat-fail", 0, str(transcript_path))
+
+    fake_fail_policy = types.ModuleType("lib.fail_policy")
+    fake_fail_policy.is_fail_hard_enabled = lambda: True
+    monkeypatch.setitem(sys.modules, "lib.fail_policy", fake_fail_policy)
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _ParseEmptyAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _ParseEmptyAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+
+    def _raise_getmtime(_path):
+        raise PermissionError("mtime failed")
+
+    monkeypatch.setattr(extraction_daemon.os.path, "getmtime", _raise_getmtime)
+
+    try:
+        with pytest.raises(OSError, match="mtime failed"):
+            extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+
 def test_check_chunk_ready_sessions_advances_old_parse_empty_internal_transcript(monkeypatch, tmp_path):
     import sys
     import types

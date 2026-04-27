@@ -856,8 +856,23 @@ def read_cursor(session_id: str, *, source_key: Optional[str] = None) -> Dict[st
 def _transcript_size_bytes(transcript_path: str) -> int:
     try:
         return int(os.path.getsize(transcript_path))
-    except OSError:
+    except OSError as exc:
+        if _should_raise_transcript_stat_error(transcript_path, exc):
+            raise
         return 0
+
+
+def _should_raise_transcript_stat_error(transcript_path: str, exc: OSError) -> bool:
+    if not str(transcript_path or "").strip():
+        return False
+    if isinstance(exc, FileNotFoundError):
+        return False
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return False
 
 
 def write_cursor(
@@ -4312,7 +4327,9 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             recently_modified = (
                 time.time() - os.path.getmtime(str(transcript_path))
             ) < _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS
-        except OSError:
+        except OSError as exc:
+            if _should_raise_transcript_stat_error(str(transcript_path), exc):
+                raise
             recently_modified = False
         defer_internal_advance = transcript_grew_since_cursor or recently_modified
         internal_state = _reconcile_internal_cursor_state(
