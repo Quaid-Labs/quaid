@@ -3237,6 +3237,47 @@ class TestCheckIdleSessions:
 
         assert captured == []
 
+    def test_recent_idle_sessions_timeout_before_stale_backlog(self, monkeypatch, tmp_path):
+        """A fresh idle session must not wait behind old stale timeout work."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        stale_transcript = tmp_path / "stale.jsonl"
+        fresh_transcript = tmp_path / "fresh.jsonl"
+        stale_transcript.write_text(
+            '{"role":"user","content":"old stale duplicate fact"}\n',
+            encoding="utf-8",
+        )
+        fresh_transcript.write_text(
+            '{"role":"user","content":"my garden shed combination is indigo-lantern-7742"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, "a-stale-sess", 0, stale_transcript)
+        self._setup_cursor(tmp_path, instance_id, "z-fresh-sess", 0, fresh_transcript)
+
+        now = 1_700_000_000.0
+        os.utime(stale_transcript, (now - 3600, now - 3600))
+        os.utime(fresh_transcript, (now - 120, now - 120))
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=1)
+
+        assert [item["session_id"] for item in captured] == ["z-fresh-sess", "a-stale-sess"]
+
     def test_discovers_uncursored_session_files_before_timeout_scan(self, monkeypatch, tmp_path):
         """Idle scan must seed cursors for uncursored session transcripts before timing them out."""
         instance_id = "openclaw-livetest"

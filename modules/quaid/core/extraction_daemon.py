@@ -4253,6 +4253,14 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "mtime": mtime,
         })
 
+    # Process recently-active sessions first. Old stale cursors can be expensive
+    # to re-extract and should not starve the session that just crossed its idle
+    # timeout in front of the user.
+    cursor_rows.sort(
+        key=lambda row: (float(row.get("mtime", 0.0) or 0.0), str(row.get("session_id") or "")),
+        reverse=True,
+    )
+
     for row in cursor_rows:
         session_id = str(row["session_id"])
         transcript_path = str(row["transcript_path"])
