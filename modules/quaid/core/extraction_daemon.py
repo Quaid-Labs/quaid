@@ -66,6 +66,7 @@ _SIGNAL_POLL_PRIORITY = {
     "compaction": 3,
     "timeout": 4,
 }
+_ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -4295,22 +4296,35 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             continue
         if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
             continue
+        defer_internal_advance = False
+        try:
+            defer_internal_advance = (
+                time.time() - os.path.getmtime(str(transcript_path))
+            ) < _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS
+        except OSError:
+            defer_internal_advance = False
         internal_state = _reconcile_internal_cursor_state(
             session_id,
             transcript_path,
             cursor_data=data,
             cursor_key=str(data.get("cursor_key") or "").strip() or None,
             adapter=adapter,
-            advance_internal=False,
+            advance_internal=not defer_internal_advance,
         )
         if internal_state == "frozen":
             continue
         if internal_state == "advanced":
-            logger.info(
-                "session %s appears internal maintenance-only during rolling scan; "
-                "leaving cursor unchanged for a later signal",
-                session_id,
-            )
+            if defer_internal_advance:
+                logger.info(
+                    "session %s appears internal maintenance-only during rolling scan; "
+                    "leaving recent cursor unchanged for a later signal",
+                    session_id,
+                )
+            else:
+                logger.info(
+                    "session %s is internal maintenance-only during rolling scan, advancing cursor to EOF",
+                    session_id,
+                )
             continue
         if internal_state == "unfrozen":
             logger.info(

@@ -1832,6 +1832,55 @@ def test_check_chunk_ready_sessions_does_not_consume_parse_empty_transient(monke
     assert captured == []
 
 
+def test_check_chunk_ready_sessions_advances_old_parse_empty_internal_transcript(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "parse-empty-old.jsonl"
+    transcript_path.write_text(
+        '{"role":"assistant","content":"internal maintenance only"}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-parse-empty-old", 0, str(transcript_path))
+    now = 1_700_000_000.0
+    os.utime(transcript_path, (now - 120, now - 120))
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _ParseEmptyAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _ParseEmptyAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    try:
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor("sess-parse-empty-old")
+    assert cursor["line_offset"] == 1
+    assert cursor["internal"] is True
+    assert captured == []
+
+
 def test_reconcile_internal_cursor_rebases_when_preserved_transcript_replaces_internal_source(monkeypatch, tmp_path):
     import sys
     import types
