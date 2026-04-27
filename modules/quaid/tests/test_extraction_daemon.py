@@ -2857,6 +2857,38 @@ class TestSignalRoundTrip:
         assert signals[0]["transcript_path"] == "/second.jsonl"
         assert signals[0]["meta"] == {"reason": "chunk_budget", "source": "followup"}
 
+    def test_write_signal_keeps_staged_flush_separate_from_real_lifecycle(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        real = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-roll-lifecycle",
+            transcript_path="/real-lifecycle.jsonl",
+            meta={"reason": "session_closed"},
+        )
+        synthetic = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-roll-lifecycle",
+            transcript_path="/staged-flush.jsonl",
+            meta={
+                "reason": "rolling_stage_flush",
+                "source_signal": "rolling",
+                "staged_payload_sweep": True,
+                "flush_staged_payload_only": True,
+            },
+        )
+
+        assert real != synthetic
+        signals = extraction_daemon.read_pending_signals()
+        assert len(signals) == 2
+        assert [signal["meta"]["reason"] for signal in signals] == [
+            "rolling_stage_flush",
+            "session_closed",
+        ]
+        assert signals[0]["transcript_path"] == "/staged-flush.jsonl"
+        assert signals[1]["transcript_path"] == "/real-lifecycle.jsonl"
+
     def test_write_signal_keeps_distinct_pending_types_for_same_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

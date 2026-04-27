@@ -593,6 +593,7 @@ def write_signal(
 
     # B008: Validate session_id
     session_id = _validate_session_id(session_id)
+    incoming_meta = meta or {}
 
     sig_dir = _signal_dir()
     existing_path = None
@@ -609,6 +610,14 @@ def write_signal(
         existing_type = str(existing.get("type", "") or existing.get("signal_type", "")).strip()
         if existing_type != signal_type:
             continue
+        existing_meta = existing.get("meta", {}) if isinstance(existing.get("meta", {}), dict) else {}
+        if not _signal_dedupe_compatible(
+            existing_type=existing_type,
+            existing_meta=existing_meta,
+            new_type=signal_type,
+            new_meta=incoming_meta,
+        ):
+            continue
         existing_path = f
         existing_payload = existing if isinstance(existing, dict) else None
         break
@@ -620,7 +629,7 @@ def write_signal(
         "adapter": adapter,
         "supports_compaction_control": supports_compaction_control,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "meta": meta or {},
+        "meta": incoming_meta,
     }
     if existing_path is not None and existing_payload is not None:
         merged_meta = dict(existing_payload.get("meta", {}) or {})
@@ -634,6 +643,32 @@ def write_signal(
     sig_path = sig_dir / fname
     _atomic_write(sig_path, json.dumps(payload))
     return sig_path
+
+
+def _is_staged_payload_flush_signal_meta(meta: Dict[str, Any]) -> bool:
+    """Return true for synthetic signals that only publish staged rolling payload."""
+    if not isinstance(meta, dict):
+        return False
+    return bool(
+        str(meta.get("reason") or "") == "rolling_stage_flush"
+        or meta.get("staged_payload_sweep")
+        or meta.get("flush_staged_payload_only")
+    )
+
+
+def _signal_dedupe_compatible(
+    *,
+    existing_type: str,
+    existing_meta: Dict[str, Any],
+    new_type: str,
+    new_meta: Dict[str, Any],
+) -> bool:
+    if existing_type != new_type:
+        return False
+    # A synthetic rolling-stage flush is not equivalent to a real lifecycle
+    # signal. Merging them rewrites the real lifecycle into "flush staged
+    # payload only" and strands the residual transcript tail until a later scan.
+    return _is_staged_payload_flush_signal_meta(existing_meta) == _is_staged_payload_flush_signal_meta(new_meta)
 
 
 def _pending_signal_sort_key(signal_data: Dict[str, Any]) -> Tuple[int, str]:
