@@ -2018,6 +2018,47 @@ def test_transcript_size_bytes_raises_stat_failure_under_failhard(monkeypatch):
         extraction_daemon._transcript_size_bytes("/missing/transcript.jsonl")
 
 
+def test_stable_transcript_snapshot_raises_creation_failure_under_failhard(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"Baxter tail"}\n', encoding="utf-8")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "snapshot-inst")
+    fake_fail_policy = types.ModuleType("lib.fail_policy")
+    fake_fail_policy.is_fail_hard_enabled = lambda: True
+    monkeypatch.setitem(sys.modules, "lib.fail_policy", fake_fail_policy)
+
+    def _raise_replace(_src, _dst):
+        raise OSError("snapshot replace failed")
+
+    monkeypatch.setattr(extraction_daemon.os, "replace", _raise_replace)
+    with pytest.raises(OSError, match="snapshot replace failed"):
+        extraction_daemon._stable_transcript_snapshot_for_continued_rolling(
+            "sess-snapshot-fail",
+            str(transcript_path),
+        )
+    assert not list(extraction_daemon._rolling_transcript_snapshot_dir().rglob("*.tmp"))
+
+
+def test_stable_transcript_snapshot_falls_back_when_not_failhard(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"Baxter tail"}\n', encoding="utf-8")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "snapshot-inst")
+    fake_fail_policy = types.ModuleType("lib.fail_policy")
+    fake_fail_policy.is_fail_hard_enabled = lambda: False
+    monkeypatch.setitem(sys.modules, "lib.fail_policy", fake_fail_policy)
+
+    def _raise_replace(_src, _dst):
+        raise OSError("snapshot replace failed")
+
+    monkeypatch.setattr(extraction_daemon.os, "replace", _raise_replace)
+    assert extraction_daemon._stable_transcript_snapshot_for_continued_rolling(
+        "sess-snapshot-fail",
+        str(transcript_path),
+    ) == str(transcript_path)
+    assert not list(extraction_daemon._rolling_transcript_snapshot_dir().rglob("*.tmp"))
+
+
 def test_check_chunk_ready_sessions_raises_mtime_failure_under_failhard(monkeypatch, tmp_path):
     import types
 
@@ -5603,6 +5644,10 @@ class TestRollingExtraction:
 
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
             assert seen_transcripts == [prior, tail]
+            assert not continued_path.exists()
+            pending_after_tail = extraction_daemon.read_pending_signals()
+            assert [item["type"] for item in pending_after_tail] == ["session_end"]
+            assert pending_after_tail[0]["transcript_path"] == str(transcript_path)
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry

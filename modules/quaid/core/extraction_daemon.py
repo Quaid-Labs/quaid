@@ -918,6 +918,10 @@ def _should_raise_transcript_stat_error(transcript_path: str, exc: OSError) -> b
         return False
     if isinstance(exc, FileNotFoundError):
         return False
+    return _fail_hard_enabled()
+
+
+def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
 
@@ -954,6 +958,7 @@ def _stable_transcript_snapshot_for_continued_rolling(
     raw = str(transcript_path or "").strip()
     if not raw or not os.path.isfile(raw):
         return raw
+    tmp: Optional[Path] = None
     try:
         source = Path(raw).expanduser().resolve()
         source_stat = source.stat()
@@ -976,7 +981,12 @@ def _stable_transcript_snapshot_for_continued_rolling(
         os.replace(tmp, dest)
         return str(dest)
     except OSError as exc:
-        if _should_raise_transcript_stat_error(raw, exc):
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        if _fail_hard_enabled():
             raise
         logger.warning(
             "failed to snapshot rolling transcript for session %s (%s): %s",
@@ -985,6 +995,25 @@ def _stable_transcript_snapshot_for_continued_rolling(
             exc,
         )
         return raw
+
+
+def _cleanup_daemon_transcript_snapshot_path(transcript_path: str) -> None:
+    raw = str(transcript_path or "").strip()
+    if not raw or not _is_daemon_owned_transcript_snapshot_path(raw):
+        return
+    try:
+        path = Path(raw).expanduser().resolve()
+        root = (_instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots").resolve()
+        path.unlink()
+        parent = path.parent
+        while parent != root and parent.is_relative_to(root):
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+    except OSError as exc:
+        logger.debug("failed to clean rolling transcript snapshot %s: %s", raw, exc)
 
 
 def write_cursor(
@@ -3929,6 +3958,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     source_key=lock_owner_key,
                 )
                 mark_signal_processed(signal_data)
+                _cleanup_daemon_transcript_snapshot_path(transcript_path)
                 return
             staged_state = _stage_semantic_buffer_payload(
                 session_id=session_id,
@@ -3978,18 +4008,25 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     },
                 )
             if staged_state_has_payload(staged_state):
+                flush_transcript_path = (
+                    str(signal_meta.get("source_transcript_path") or "").strip()
+                    if _is_daemon_owned_transcript_snapshot_path(transcript_path)
+                    else ""
+                ) or transcript_path
                 write_signal(
                     signal_type="session_end",
                     session_id=session_id,
-                    transcript_path=transcript_path,
+                    transcript_path=flush_transcript_path,
                     meta={
                         "reason": "rolling_stage_flush",
                         "source_signal": "rolling",
                         "staged_payload_sweep": True,
                         "buffered_line_offset": buffered_line_offset,
                         "flush_staged_payload_only": bool(has_remaining_tail),
+                        "source_cursor_key": lock_owner_key,
                     },
                 )
+            _cleanup_daemon_transcript_snapshot_path(transcript_path)
             return
 
         tail_result = None
