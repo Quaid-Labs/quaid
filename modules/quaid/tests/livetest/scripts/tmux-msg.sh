@@ -168,7 +168,7 @@ _candidate_is_placeholder() {
 }
 
 _pane_has_draft() {
-    local cursor_y pane_height raw_block candidate composer_top scan_lines
+    local cursor_y pane_height raw_block candidate composer_top scan_lines current_line current_candidate
     cursor_y="$(tmux display-message -p -t "$PANE" '#{cursor_y}' 2>/dev/null || echo "")"
     pane_height="$(tmux display-message -p -t "$PANE" '#{pane_height}' 2>/dev/null || echo "")"
     [[ "$cursor_y" =~ ^[0-9]+$ ]] || return 1
@@ -184,6 +184,20 @@ _pane_has_draft() {
         composer_top=0
     fi
     [[ "$cursor_y" -ge "$composer_top" ]] || return 1
+
+    current_line="$(tmux capture-pane -p -t "$PANE" -S "$cursor_y" -E "$cursor_y" 2>/dev/null || true)"
+    current_candidate="$current_line"
+    local mark
+    for mark in "❯ " "› " "> " "$ " "% "; do
+        if [[ "$current_candidate" == "$mark"* ]]; then
+            current_candidate="${current_candidate#"$mark"}"
+            break
+        fi
+    done
+    current_candidate="${current_candidate#"${current_candidate%%[![:space:]]*}"}"
+    current_candidate="${current_candidate%"${current_candidate##*[![:space:]]}"}"
+    _candidate_is_placeholder "$current_candidate" && return 1
+    [[ -n "$current_candidate" ]] || return 1
 
     raw_block="$(tmux capture-pane -p -t "$PANE" -S 0 -E "$cursor_y" 2>/dev/null || true)"
 
