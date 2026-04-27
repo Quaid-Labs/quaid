@@ -453,6 +453,14 @@ def project_exists_raw(name: str) -> bool:
         return key in data.get("projects", {})
 
 
+def project_deleted_raw(name: str) -> bool:
+    """Return whether a project is tombstoned in the global registry."""
+    key = str(name or "").strip()
+    with _registry_lock():
+        data = _load_registry()
+        return key in (data.get("deleted_projects") or {})
+
+
 def create_project(
     name: str,
     description: str = "",

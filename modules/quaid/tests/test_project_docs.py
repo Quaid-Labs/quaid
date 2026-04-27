@@ -374,6 +374,71 @@ def test_execute_update_once_preserves_structured_project_log_entry_dates(projec
     assert "- [2026-03-05T23:59:59] Added error banner" in project_log_text
 
 
+def test_auto_register_project_docs_materializes_queued_transcript_projects(tmp_path, monkeypatch):
+    from core import project_docs
+    from core.project_registry import project_exists_raw
+    from datastore.docsdb import project_log_queue
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    try:
+        project_log_queue.enqueue_project_logs(
+            {"recipe-app": ["Added image_url field to recipe cards"]},
+            trigger="Compaction",
+        )
+        synced: list[str] = []
+        monkeypatch.setattr("core.project_registry._sync_docs_registry_project", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            project_docs,
+            "sync_project_docs_registry",
+            lambda name, entry=None: synced.append(name) or {"registered": 1},
+        )
+
+        assert project_docs.auto_register_project_docs() == 1
+        assert project_exists_raw("recipe-app") is True
+        assert synced == ["recipe-app"]
+        assert (tmp_path / "projects" / "recipe-app" / "PROJECT.md").is_file()
+    finally:
+        reset_adapter()
+
+
+def test_auto_register_project_docs_skips_deleted_queued_projects(tmp_path, monkeypatch):
+    from core import project_docs
+    from core.project_registry import create_project, delete_project, project_exists_raw
+    from datastore.docsdb import project_log_queue
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    try:
+        monkeypatch.setattr("core.project_registry._sync_docs_registry_project", lambda *args, **kwargs: None)
+        create_project("recipe-app", description="Recipe app")
+        delete_project("recipe-app")
+        project_log_queue.enqueue_project_logs(
+            {"recipe-app": ["Queued transcript note after delete"]},
+            trigger="Compaction",
+        )
+        synced: list[str] = []
+        monkeypatch.setattr(
+            project_docs,
+            "sync_project_docs_registry",
+            lambda name, entry=None: synced.append(name) or {"registered": 1},
+        )
+
+        assert project_docs.auto_register_project_docs() == 0
+        assert project_exists_raw("recipe-app") is False
+        assert synced == []
+    finally:
+        reset_adapter()
+
+
 def test_cleanup_project_state_removes_project_log_queue(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

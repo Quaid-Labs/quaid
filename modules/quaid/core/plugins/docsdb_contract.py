@@ -67,6 +67,7 @@ def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> D
     from core import project_docs
     from core.project_registry import list_projects
 
+    project_docs.materialize_queued_projects()
     projects = list_projects()
     names = sorted(str(name) for name in projects.keys() if str(name or "").strip())
     supervisor_parent = _supervisor_parent_pid()

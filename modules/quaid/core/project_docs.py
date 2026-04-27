@@ -910,6 +910,68 @@ def _empty_project_log_queue_metrics() -> Dict[str, int]:
     }
 
 
+def _queued_project_log_projects(project: Optional[str] = None) -> List[str]:
+    from datastore.docsdb import project_log_queue
+
+    if project:
+        candidates = [validate_project_name(project)]
+    else:
+        root = project_log_queue.queue_root()
+        try:
+            candidates = sorted(path.name for path in root.iterdir() if path.is_dir())
+        except FileNotFoundError:
+            return []
+    names: List[str] = []
+    seen: set[str] = set()
+    for raw_name in candidates:
+        try:
+            name = validate_project_name(raw_name)
+        except ValueError:
+            continue
+        if name in seen:
+            continue
+        try:
+            if project_log_queue.pending_project_log_count(name) <= 0:
+                continue
+        except Exception as exc:
+            logger.warning("Failed checking queued project-log count for %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise
+            continue
+        names.append(name)
+        seen.add(name)
+    return names
+
+
+def materialize_queued_projects(project: Optional[str] = None) -> int:
+    """Create durable projects for valid transcript-driven PROJECT.log queues."""
+    from core.project_registry import create_project, project_deleted_raw, project_exists_raw
+
+    created = 0
+    for name in _queued_project_log_projects(project):
+        if name == "quaid" or name.startswith("misc--"):
+            logger.info("Skipping queued PROJECT.log auto-create for reserved project %s", name)
+            continue
+        if project_exists_raw(name):
+            continue
+        if project_deleted_raw(name):
+            logger.info("Skipping queued PROJECT.log auto-create for deleted project %s", name)
+            continue
+        try:
+            create_project(
+                name,
+                description="Project inferred from conversation continuity.",
+            )
+            created += 1
+        except ValueError as exc:
+            logger.info("Skipping queued PROJECT.log auto-create for %s: %s", name, exc)
+        except Exception as exc:
+            logger.warning("Failed auto-creating queued PROJECT.log project %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise
+    return created
+
+
 def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[str, int]:
     """Commit queued project-log entries under the project-docs worker lock."""
     name = validate_project_name(project)
@@ -1178,6 +1240,8 @@ def auto_register_project_docs(project: Optional[str] = None) -> int:
     """Register visible project docs from the supervisor-owned docs daemon path."""
     from core.project_registry import get_project as get_project_entry
     from core.project_registry import list_projects
+
+    materialize_queued_projects(project)
 
     if project:
         name = validate_project_name(project)

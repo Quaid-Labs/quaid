@@ -1,5 +1,7 @@
 import os
 
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
 from core.plugins.docsdb_contract import DocsDbPluginContract
 from core.runtime.plugins import PluginHookContext, PluginManifest
 from datastore.docsdb.system_context import build_system_context_metadata
@@ -78,6 +80,40 @@ def test_project_docs_monitor_uses_supervisor_parent_without_reensure(monkeypatc
     assert result["requested"] == 1
     assert result["supervisor_pid"] == os.getpid()
     assert result["errors"] == []
+
+
+def test_project_docs_monitor_materializes_queued_projects(tmp_path, monkeypatch):
+    from core.plugins import docsdb_contract
+    from core.project_registry import project_exists_raw
+    from datastore.docsdb import project_log_queue
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", str(os.getpid()))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    try:
+        project_log_queue.enqueue_project_logs(
+            {"recipe-app": ["Queued project docs entry from transcript"]},
+            trigger="Compaction",
+        )
+        monkeypatch.setattr("core.project_registry._sync_docs_registry_project", lambda *args, **kwargs: None)
+        requests: list[str] = []
+        monkeypatch.setattr(
+            "core.project_docs.request_update",
+            lambda name, *, reason, requested_by: requests.append(name) or {"project": name, "request_id": "req-1"},
+        )
+
+        result = docsdb_contract._queue_project_docs_monitor_requests(reason="janitor", requested_by="pytest")
+
+        assert result["requested"] == 1
+        assert requests == ["recipe-app"]
+        assert project_exists_raw("recipe-app") is True
+    finally:
+        reset_adapter()
 
 
 def test_build_docsdb_system_context_metadata(monkeypatch, tmp_path):
