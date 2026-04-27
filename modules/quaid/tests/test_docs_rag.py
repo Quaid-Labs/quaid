@@ -190,6 +190,80 @@ class TestIndexDocument:
             (str(test_file), 1, "## Notes\nChunk B", "## Notes"),
         ]
 
+    def test_index_document_chunks_project_log_into_focused_day_slices(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        project_dir = tmp_path / "projects" / "recipe-app"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        test_file = project_dir / "PROJECT.log"
+        test_file.write_text(
+            "\n".join(
+                [
+                    "# Project Log",
+                    "- [2026-03-22T23:59:59] Authorization gaps documented in updateRecipe and deleteRecipe mutations",
+                    "- [2026-03-22T23:59:59] Implemented resolvers.js with queries and mutations",
+                    "- [2026-03-22T23:59:59] Known N+1 bug in Recipe.ingredientList field resolver",
+                    "- [2026-03-22T23:59:59] Added recipe_shares table with unique code constraint",
+                    "- [2026-03-22T23:59:59] Added owner_id column to recipes table",
+                    "- [2026-03-22T23:59:59] Implemented share endpoints for public recipe links",
+                    "- [2026-03-22T23:59:59] Added /health endpoint for Docker healthcheck",
+                    "- [2026-03-22T23:59:59] Added Dockerfile with Node 18 Alpine, production deps only",
+                    "- [2026-03-22T23:59:59] Added docker-compose.yml with SQLite volume mount and healthcheck",
+                    "- [2026-03-22T23:59:59] Added Makefile with docker-up and docker-down targets",
+                    "- [2026-03-22T23:59:59] Created docs/api.md with deployment and API docs",
+                    "- [2026-03-23T23:59:59] Added follow-up release checklist",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        def _embed_many(chunks, **_kwargs):
+            out = []
+            for chunk in chunks:
+                if "Dockerfile" in chunk or "docker-compose.yml" in chunk or "docker-up" in chunk:
+                    out.append([0.95])
+                else:
+                    out.append([0.35])
+            return out
+
+        def _pack_embedding(embedding):
+            return str(float(embedding[0])).encode("ascii")
+
+        def _unpack_embedding(blob):
+            return [float(bytes(blob).decode("ascii"))]
+
+        def _similarity(_query_embedding, chunk_embedding):
+            return float(chunk_embedding[0])
+
+        with (
+            patch.object(rag, "chunk_markdown", side_effect=AssertionError("PROJECT.log should use specialized chunking")),
+            patch("datastore.docsdb.rag._lib_get_embeddings", side_effect=_embed_many),
+            patch("datastore.docsdb.rag._lib_pack_embedding", side_effect=_pack_embedding),
+            patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0]),
+            patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack_embedding),
+            patch("datastore.docsdb.rag._lib_cosine_similarity", side_effect=_similarity),
+            patch.object(
+                rag,
+                "_get_project_paths",
+                return_value={
+                    "home_dir": str(project_dir),
+                    "source_roots": [],
+                },
+            ),
+        ):
+            chunk_count = rag.index_document(str(test_file))
+            results = rag.search_docs(
+                "As of 2026-03-22, how did the recipe app handle deployment?",
+                limit=2,
+                project="recipe-app",
+                date_to="2026-03-22",
+            )
+
+        assert chunk_count >= 3
+        assert len(results) == 2
+        assert "Dockerfile" in results[0]["content"]
+        assert "docker-compose.yml" in results[0]["content"]
+        assert "2026-03-23" not in results[0]["content"]
+
     def test_preserves_existing_chunks_when_any_embedding_fails(self, tmp_path):
         rag = _make_rag(tmp_path)
         test_file = tmp_path / "guide.md"
@@ -719,8 +793,95 @@ class TestDocsSearchFiltering:
             )
 
         assert len(since_results) == 2
-        assert "grocery list endpoint" in since_results[0]["content"]
-        assert "tests/dietary.test.js" in since_results[1]["content"]
+        assert "tests/dietary.test.js" in since_results[0]["content"]
+        assert "grocery list endpoint" in since_results[1]["content"]
+
+    def test_search_docs_date_filtered_project_log_diversifies_test_suite_inventory(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            rows = [
+                (
+                    "suite:sharing",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    0,
+                    "- [2026-05-08T23:59:59] Created sharing.test.js with 14 tests covering share code generation and idempotency",
+                    None,
+                    b"0.96",
+                ),
+                (
+                    "suite:mealplan:1",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    1,
+                    "- [2026-04-12T23:59:59] Completed tests/mealplan.test.js with 368 lines covering meal plan CRUD and grocery list aggregation",
+                    None,
+                    b"0.95",
+                ),
+                (
+                    "suite:mealplan:2",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    2,
+                    "- [2026-03-18T23:59:59] tests/mealplan.test.js includes five describe blocks for meal plan creation and validation",
+                    None,
+                    b"0.94",
+                ),
+                (
+                    "suite:recipe",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    3,
+                    "- [2026-03-11T23:59:59] Added Jest test framework with tests/setup.js, tests/helpers.js, and tests/recipe.test.js for CRUD and SQL injection regression",
+                    None,
+                    b"0.60",
+                ),
+                (
+                    "suite:graphql",
+                    "/tmp/workspace/projects/recipe-app/PROJECT.log",
+                    4,
+                    "- [2026-03-22T23:59:59] Created tests/graphql.test.js covering queries, mutations, and field resolvers",
+                    None,
+                    b"0.61",
+                ),
+            ]
+            db.executemany(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        def _unpack(blob):
+            return [float(bytes(blob).decode("ascii"))]
+
+        def _sim(_query_embedding, chunk_embedding):
+            return float(chunk_embedding[0])
+
+        with (
+            patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0]),
+            patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack),
+            patch("datastore.docsdb.rag._lib_cosine_similarity", side_effect=_sim),
+            patch.object(
+                rag,
+                "_get_project_paths",
+                return_value={
+                    "home_dir": "/tmp/workspace/projects/recipe-app",
+                    "source_roots": [],
+                },
+            ),
+        ):
+            results = rag.search_docs(
+                "As of 2026-05-08, what test suites existed for the recipe app?",
+                limit=4,
+                project="recipe-app",
+                date_to="2026-05-08",
+            )
+
+        assert len(results) == 4
+        top_lines = [result["content"].splitlines()[0] for result in results]
+        assert any("sharing.test.js" in line for line in top_lines)
+        assert any("mealplan.test.js" in line for line in top_lines)
+        assert any("recipe.test.js" in line for line in top_lines)
+        assert any("graphql.test.js" in line for line in top_lines)
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])

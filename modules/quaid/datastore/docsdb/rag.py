@@ -491,6 +491,97 @@ def _project_log_query_terms(query: str) -> List[str]:
     return out
 
 
+_TEST_QUERY_TERMS = frozenset({"test", "tests", "testing"})
+_SUITE_FILE_RE = re.compile(
+    r"\b(?:[\w.-]+/)*([\w.-]+\.(?:test|spec)\.[A-Za-z0-9]+)\b",
+    re.IGNORECASE,
+)
+_CODE_ARTIFACT_RE = re.compile(
+    r"\b(?:[\w.-]+/)*[\w.-]+\.(?:[cm]?[jt]sx?|mjs|cjs|json|md|sql|ya?ml)\b",
+    re.IGNORECASE,
+)
+_TEST_PATH_RE = re.compile(
+    r"\btests?/[\w./-]+\.[A-Za-z0-9]+\b",
+    re.IGNORECASE,
+)
+
+
+def _project_log_code_artifact_rank_delta(content: str, query_terms: List[str]) -> float:
+    """Prefer explicit suite-file inventory rows for test-oriented queries.
+
+    Dated PROJECT.log recall often needs to answer inventory-style questions
+    such as which test suites existed. Generic "tests" language can otherwise
+    outrank rows that name the actual suite files. Keep this structural:
+    reward chunks that contain explicit suite filenames and surrounding code
+    artifact paths, rather than relying on English cue phrases.
+    """
+    term_set = {str(term or "").lower() for term in (query_terms or []) if str(term or "").strip()}
+    if not (term_set & _TEST_QUERY_TERMS):
+        return 0.0
+
+    content_text = str(content or "")
+    suite_files = {match.group(1).lower() for match in _SUITE_FILE_RE.finditer(content_text)}
+    if not suite_files:
+        return 0.0
+
+    artifact_paths = {match.group(0).lower() for match in _CODE_ARTIFACT_RE.finditer(content_text)}
+    test_paths = {match.group(0).lower() for match in _TEST_PATH_RE.finditer(content_text)}
+    bonus = 0.18
+    bonus += min(0.18, max(0, len(artifact_paths) - 1) * 0.09)
+    bonus += min(0.12, max(0, len(suite_files) - 1) * 0.12)
+    bonus += min(0.09, max(0, len(test_paths) - 1) * 0.03)
+    return min(0.42, bonus)
+
+
+def _extract_suite_filenames(text: str) -> List[str]:
+    seen: List[str] = []
+    for match in _SUITE_FILE_RE.finditer(str(text or "")):
+        name = str(match.group(1) or "").lower()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _should_diversify_suite_results(query: str, query_terms: List[str]) -> bool:
+    term_set = {str(term or "").lower() for term in (query_terms or []) if str(term or "").strip()}
+    if not (term_set & _TEST_QUERY_TERMS):
+        return False
+    # If the user names a specific suite file, preserve normal ranking rather
+    # than forcing inventory-style diversity.
+    return not _extract_suite_filenames(query)
+
+
+def _diversify_suite_results(results: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    selected: List[Dict[str, Any]] = []
+    selected_ids: set[tuple[Any, Any]] = set()
+    seen_suites: set[str] = set()
+
+    for row in results:
+        suites = _extract_suite_filenames(row.get("content", ""))
+        if not suites:
+            continue
+        if set(suites).issubset(seen_suites):
+            continue
+        selected.append(row)
+        selected_ids.add((row.get("source"), row.get("chunk_index")))
+        seen_suites.update(suites)
+        if len(selected) >= limit:
+            return selected
+
+    for row in results:
+        row_id = (row.get("source"), row.get("chunk_index"))
+        if row_id in selected_ids:
+            continue
+        selected.append(row)
+        if len(selected) >= limit:
+            return selected
+
+    return selected
+
+
 def _project_log_query_line_rank_delta(
     content: str,
     query_terms: List[str],
@@ -789,6 +880,71 @@ class DocsRAG:
         # Convert to DocumentChunk objects (will be populated with source info later)
         return [chunk for chunk in chunks if chunk.strip()]
 
+    def chunk_project_log(self, content: str, max_tokens: int = None) -> List[str]:
+        """Chunk append-only PROJECT.log content into focused day-scoped slices.
+
+        PROJECT.log recall works best when chunks preserve chronology but avoid
+        mixing an entire day's worth of unrelated changes into a single blob.
+        Keep dated lines grouped by day, then subdivide large days into bounded
+        slices so later dated recall can surface answer-bearing lines cleanly.
+        """
+        if max_tokens is None:
+            max_tokens = _chunk_max_tokens()
+
+        chunks: List[str] = []
+        preamble: List[str] = []
+        current_date: Optional[str] = None
+        current_lines: List[str] = []
+        max_lines_per_chunk = 4
+
+        def _flush_bucket(lines: List[str]) -> None:
+            if not lines:
+                return
+            bucket_lines: List[str] = []
+            bucket_tokens = 0
+            for raw_line in lines:
+                for line in self._split_oversized_line(raw_line, max_tokens):
+                    line_tokens = self.estimate_tokens(line)
+                    if bucket_lines and (
+                        len(bucket_lines) >= max_lines_per_chunk
+                        or bucket_tokens + line_tokens > max_tokens
+                    ):
+                        chunks.append("\n".join(bucket_lines))
+                        bucket_lines = []
+                        bucket_tokens = 0
+                    bucket_lines.append(line)
+                    bucket_tokens += line_tokens
+            if bucket_lines:
+                chunks.append("\n".join(bucket_lines))
+
+        for raw_line in str(content or "").splitlines():
+            line = raw_line.rstrip()
+            line_date = _project_log_line_date(line)
+            if line_date:
+                if current_date is None:
+                    current_date = line_date
+                    if preamble:
+                        current_lines.extend(preamble)
+                        preamble = []
+                elif line_date != current_date:
+                    _flush_bucket(current_lines)
+                    current_lines = []
+                    current_date = line_date
+                current_lines.append(line)
+                continue
+
+            if current_lines:
+                current_lines.append(line)
+            else:
+                preamble.append(line)
+
+        if current_lines:
+            _flush_bucket(current_lines)
+        elif preamble:
+            _flush_bucket(preamble)
+
+        return [chunk for chunk in chunks if chunk.strip()]
+
     def _find_paragraph_break(self, lines: List[str]) -> int:
         """Find the best place to split at a paragraph break."""
         # Look for empty lines working backwards
@@ -926,7 +1082,10 @@ class DocsRAG:
             content = self._archive_temporal_header(canonical_file_path) + content
 
         # Chunk the content
-        chunk_texts = self.chunk_markdown(content)
+        if Path(canonical_file_path).name == "PROJECT.log":
+            chunk_texts = self.chunk_project_log(content)
+        else:
+            chunk_texts = self.chunk_markdown(content)
         if not chunk_texts:
             logger.info("No chunks generated for %s", file_path)
             return 0
@@ -1559,6 +1718,10 @@ class DocsRAG:
                             project_log_query_terms,
                             date_to,
                         )
+                        rank_score += _project_log_code_artifact_rank_delta(
+                            content,
+                            project_log_query_terms,
+                        )
                     if is_dated_project_log:
                         source_date = _project_log_latest_line_date(content)
                         rank_score += _project_log_asof_rank_delta(content, date_to)
@@ -1576,7 +1739,10 @@ class DocsRAG:
 
         # Sort by similarity and limit
         results.sort(key=lambda x: float(x.get("_rank_score", x["similarity"])), reverse=True)
-        limited_results = results[:limit]
+        if _should_diversify_suite_results(query, project_log_query_terms):
+            limited_results = _diversify_suite_results(results, limit)
+        else:
+            limited_results = results[:limit]
         for result in limited_results:
             result.pop("_rank_score", None)
         if not limited_results and project_scope_token == "__instance_linked_scope__":
