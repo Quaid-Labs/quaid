@@ -2646,7 +2646,9 @@ def count_transcript_lines(transcript_path: str) -> int:
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
             return sum(1 for _ in f)
-    except OSError:
+    except OSError as exc:
+        if _should_raise_transcript_stat_error(transcript_path, exc):
+            raise
         return 0
 
 

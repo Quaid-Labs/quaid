@@ -1461,6 +1461,17 @@ def test_process_signal_extracts_plain_session_rebased_after_reset_backup(monkey
     assert cursor["line_offset"] == 2
 
 
+def test_count_transcript_lines_raises_on_stat_error_when_fail_hard(monkeypatch):
+    def _raise_permission_error(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("builtins.open", _raise_permission_error)
+    monkeypatch.setattr(extraction_daemon, "_should_raise_transcript_stat_error", lambda _path, _exc: True)
+
+    with pytest.raises(PermissionError, match="denied"):
+        extraction_daemon.count_transcript_lines("/tmp/unreadable-session.jsonl")
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
