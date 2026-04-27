@@ -2505,9 +2505,211 @@ def _relation_tokens_for_runtime() -> Dict[str, set[str]]:
                 tokens.add(token[:-3] + "y")
             elif token.endswith("s") and len(token) > 4:
                 tokens.add(token[:-1])
+        canonical_group = _canonical_relation_group_for_relation(str(relation or ""))
+        for token in _SCHEMA_RELATION_GROUP_TOKENS.get(canonical_group, set()):
+            clean = str(token or "").strip().lower()
+            if clean:
+                tokens.add(clean)
         if tokens:
             out[relation] = tokens
     return out
+
+
+def _normalize_relation_query_tokens(text: str) -> List[str]:
+    tokens: List[str] = []
+    for raw in re.findall(r"[^\W_][\w'\-’]*", str(text or "").lower(), flags=re.UNICODE):
+        normalized = str(raw).strip().rstrip("'").rstrip("’")
+        if normalized.endswith("'s") or normalized.endswith("’s"):
+            normalized = normalized[:-2]
+        normalized = normalized.replace("’", "'")
+        normalized = normalized.replace("-", " ").replace("_", " ")
+        for token in normalized.split():
+            token = token.strip()
+            if token:
+                tokens.append(token)
+    return tokens
+
+
+def _ordered_relation_matches_for_query(query: str) -> List[str]:
+    lowered = str(query or "").lower()
+    tokens = _normalize_relation_query_tokens(query)
+    if not lowered.strip():
+        return []
+
+    raw_matches: List[Tuple[int, int, str]] = []
+    keyword_map = get_edge_keywords()
+    for relation, keywords in keyword_map.items():
+        clean_relation = str(relation or "").strip()
+        if not clean_relation:
+            continue
+        for keyword in keywords or []:
+            normalized_keyword = str(keyword or "").strip().lower()
+            if not normalized_keyword or normalized_keyword.isascii():
+                continue
+            start = 0
+            while True:
+                index = lowered.find(normalized_keyword, start)
+                if index < 0:
+                    break
+                raw_matches.append((index, index + len(normalized_keyword), clean_relation))
+                start = index + max(1, len(normalized_keyword))
+
+    candidates: List[Tuple[List[str], str]] = []
+    seen_candidates: set[Tuple[Tuple[str, ...], str]] = set()
+    for relation, keywords in keyword_map.items():
+        clean_relation = str(relation or "").strip()
+        if not clean_relation:
+            continue
+        for keyword in keywords or []:
+            normalized_tokens = _normalize_relation_query_tokens(keyword)
+            if not normalized_tokens:
+                continue
+            key = (tuple(normalized_tokens), clean_relation)
+            if key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            candidates.append((normalized_tokens, clean_relation))
+    for relation, relation_tokens in _relation_tokens_for_runtime().items():
+        clean_relation = str(relation or "").strip()
+        if not clean_relation:
+            continue
+        for token in sorted(relation_tokens, key=len, reverse=True):
+            key = ((token,), clean_relation)
+            if key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            candidates.append(([token], clean_relation))
+    for group, aliases in _SCHEMA_RELATION_GROUP_TOKENS.items():
+        for alias in sorted(set(aliases) | {group}, key=lambda item: (-len(str(item).split()), -len(str(item)), str(item))):
+            normalized_tokens = _normalize_relation_query_tokens(alias)
+            if not normalized_tokens:
+                continue
+            key = (tuple(normalized_tokens), group)
+            if key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            candidates.append((normalized_tokens, group))
+
+    candidates.sort(key=lambda item: (-len(item[0]), -sum(len(token) for token in item[0]), item[1]))
+    matches: List[str] = []
+    if raw_matches:
+        occupied: List[Tuple[int, int]] = []
+        for start, end, relation in sorted(raw_matches, key=lambda item: (item[0], -(item[1] - item[0]), item[2])):
+            if any(not (end <= taken_start or start >= taken_end) for taken_start, taken_end in occupied):
+                continue
+            occupied.append((start, end))
+            matches.append(relation)
+    if not tokens:
+        return matches
+    index = 0
+    while index < len(tokens):
+        matched: Optional[Tuple[List[str], str]] = None
+        for relation_tokens, relation in candidates:
+            width = len(relation_tokens)
+            if tokens[index:index + width] == relation_tokens:
+                matched = (relation_tokens, relation)
+                break
+        if matched is None:
+            index += 1
+            continue
+        matches.append(matched[1])
+        index += len(matched[0])
+    return matches
+
+
+_SCHEMA_RELATION_GROUP_TOKENS: Dict[str, set[str]] = {
+    "spouse": {"spouse", "partner", "wife", "husband", "married", "spouse_of", "partner_of"},
+    "parent": {
+        "parent", "parents", "mother", "mom", "father", "dad", "grandparent",
+        "grandparents", "grandmother", "grandfather", "parent_of",
+    },
+    "sibling": {"sibling", "siblings", "brother", "sister", "sibling_of"},
+    "child": {"child", "children", "son", "daughter", "niece", "nephew", "parent_of"},
+    "extended_family": {"cousin", "aunt", "uncle"},
+    "work": {
+        "manager", "boss", "supervisor", "employee", "coworker", "colleague",
+        "teammate", "work", "works_at", "reports to",
+    },
+}
+
+
+def _canonical_relation_group_for_relation(relation: str) -> str:
+    clean = str(relation or "").strip().lower().replace("-", "_")
+    if not clean:
+        return ""
+    tokens = {token for token in clean.split("_") if token and token not in _RELATION_TOKEN_STOPWORDS}
+    for group, schema_tokens in _SCHEMA_RELATION_GROUP_TOKENS.items():
+        if tokens & schema_tokens:
+            return group
+    return clean
+
+
+def _relation_intent_sequence_for_query(query: str) -> List[str]:
+    sequence: List[str] = []
+    for relation in _ordered_relation_matches_for_query(query):
+        group = _canonical_relation_group_for_relation(relation)
+        if group:
+            sequence.append(group)
+    return sequence
+
+
+def _relation_chain_groups_for_query(query: str) -> List[str]:
+    return _relation_intent_sequence_for_query(query)
+
+
+def _has_relation_chain_structure(query: str) -> bool:
+    lowered = str(query or "").lower()
+    return (
+        lowered.count("'s") + lowered.count("’s") >= 1
+        or bool(re.search(r"\bof\b", lowered))
+        or (
+            any(ord(ch) > 127 for ch in lowered)
+            and len(_normalize_relation_query_tokens(query)) <= 1
+        )
+    )
+
+
+def _relation_groups_for_sequence(sequence: List[str]) -> List[str]:
+    groups: List[str] = []
+    for relation in sequence or []:
+        group = _canonical_relation_group_for_relation(relation)
+        if group:
+            groups.append(group)
+    return groups
+
+
+def _relation_sequence_from_path(path: Optional[List[tuple]], *, terminal_relation: Optional[str] = None) -> List[str]:
+    sequence: List[str] = []
+    for hop in list(path or []):
+        if len(hop) < 2:
+            continue
+        relation = str(hop[1] or "").strip()
+        if relation:
+            sequence.append(relation)
+    clean_terminal = str(terminal_relation or "").strip()
+    if clean_terminal and (not sequence or sequence[-1] != clean_terminal):
+        sequence.append(clean_terminal)
+    return sequence
+
+
+def _annotate_graph_traversal_fields(row: Dict[str, Any], relation_sequence: List[str], *, discovery_kind: str) -> None:
+    clean_sequence = [str(rel or "").strip() for rel in relation_sequence if str(rel or "").strip()]
+    if clean_sequence:
+        row["graph_relation_sequence"] = clean_sequence
+        row["graph_relation_groups"] = _relation_groups_for_sequence(clean_sequence)
+    row["graph_discovery_kind"] = discovery_kind
+
+
+def _has_structured_graph_discovery(row: Dict[str, Any]) -> bool:
+    return bool(
+        row.get("graph_discovery_kind")
+        or row.get("graph_relation_sequence")
+        or row.get("graph_relation_groups")
+    )
+
+
+def _count_graph_discovery_rows(rows: List[Dict[str, Any]]) -> int:
+    return sum(1 for row in rows if isinstance(row, dict) and _has_structured_graph_discovery(row))
 
 
 def _relation_matches_for_query(query: str) -> List[str]:
@@ -2538,100 +2740,62 @@ def _relation_matches_for_query(query: str) -> List[str]:
 
 def _has_generic_graph_signal(query: str) -> bool:
     lowered = str(query or "").lower()
-    relation_chain_terms = []
-    for raw in re.findall(r"[a-z][a-z'-]+", lowered):
-        normalized = str(raw).strip().rstrip("'").rstrip("’")
-        if normalized.endswith("'s") or normalized.endswith("’s"):
-            normalized = normalized[:-2]
-        relation_chain_terms.append(normalized)
-    chain_relation_hits = {
-        term
-        for term in relation_chain_terms
-        if term in {
-            "partner",
-            "spouse",
-            "wife",
-            "husband",
-            "mother",
-            "mom",
-            "father",
-            "dad",
-            "parent",
-            "parents",
-            "sister",
-            "brother",
-            "sibling",
-            "son",
-            "daughter",
-            "child",
-            "children",
-            "niece",
-            "nephew",
-            "cousin",
-            "aunt",
-            "uncle",
-            "grandmother",
-            "grandfather",
-            "grandparent",
-            "grandparents",
-            "manager",
-            "boss",
-            "supervisor",
-            "employee",
-            "coworker",
-            "colleague",
-            "teammate",
-        }
-    }
-    chained_relation_lookup = (
-        len(chain_relation_hits) >= 2
-        and (
-            lowered.count("'s") + lowered.count("’s") >= 1
-            or bool(re.search(r"\bof\b", lowered))
-        )
-    )
+    relation_intent_sequence = _relation_intent_sequence_for_query(query)
+    chained_relation_lookup = len(relation_intent_sequence) >= 2 and _has_relation_chain_structure(query)
     return bool(re.search(
         r"\b(relation|relationship|related|connected|connection|hierarchy|depends?|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|family|relative|kin|kinship|reports?\s+to)\b",
         lowered,
     )) or chained_relation_lookup
 
 
-_RELATION_CHAIN_GROUP_ALIASES = {
-    "spouse": {"partner", "spouse", "wife", "husband", "married", "spouse_of", "partner_of"},
-    "parent": {
-        "mother", "mom", "father", "dad", "parent", "parents", "grandmother",
-        "grandfather", "grandparent", "grandparents", "parent_of",
-    },
-    "sibling": {"sister", "brother", "sibling", "siblings", "sibling_of"},
-    "child": {"son", "daughter", "child", "children", "niece", "nephew", "parent_of"},
-    "extended_family": {"cousin", "aunt", "uncle"},
-    "work": {"manager", "boss", "supervisor", "employee", "coworker", "colleague", "teammate", "works_at"},
-}
+def _graph_row_relation_groups(row: Dict[str, Any]) -> List[str]:
+    raw_groups = row.get("graph_relation_groups")
+    if isinstance(raw_groups, list):
+        groups = [str(item or "").strip() for item in raw_groups if str(item or "").strip()]
+        if groups:
+            return groups
+    raw_sequence = row.get("graph_relation_sequence")
+    if isinstance(raw_sequence, list):
+        return _relation_groups_for_sequence([
+            str(item or "").strip()
+            for item in raw_sequence
+            if str(item or "").strip()
+        ])
+    relation = str(row.get("via_relation") or row.get("relation") or "").strip()
+    if not relation:
+        return []
+    group = _canonical_relation_group_for_relation(relation)
+    return [group] if group else []
 
 
-def _relation_chain_groups_for_query(query: str) -> List[str]:
-    groups: List[str] = []
-    for raw in re.findall(r"[a-z][a-z'-]+", str(query or "").lower()):
-        normalized = str(raw).strip().rstrip("'").rstrip("’")
-        if normalized.endswith("'s") or normalized.endswith("’s"):
-            normalized = normalized[:-2]
-        for group, aliases in _RELATION_CHAIN_GROUP_ALIASES.items():
-            if normalized in aliases:
-                groups.append(group)
-                break
-    return groups
+def _ordered_relation_group_match_length(row_groups: List[str], intent_groups: List[str]) -> int:
+    if not row_groups or not intent_groups:
+        return 0
+    matched = 0
+    row_index = 0
+    for group in intent_groups:
+        while row_index < len(row_groups) and row_groups[row_index] != group:
+            row_index += 1
+        if row_index >= len(row_groups):
+            break
+        matched += 1
+        row_index += 1
+    return matched
 
 
-def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, float]:
-    text = " ".join(
-        str(row.get(key) or "")
-        for key in ("text", "graph_path", "relation", "via_relation")
-    ).lower()
-    hit_groups = 0
-    for group in set(relation_groups):
-        aliases = _RELATION_CHAIN_GROUP_ALIASES.get(group) or {group}
-        if any(alias in text for alias in aliases):
-            hit_groups += 1
+def _prefix_relation_group_match_length(row_groups: List[str], intent_groups: List[str]) -> int:
+    matched = 0
+    for row_group, intent_group in zip(row_groups, intent_groups):
+        if row_group != intent_group:
+            break
+        matched += 1
+    return matched
+
+
+def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, float]:
+    row_groups = _graph_row_relation_groups(row)
+    ordered_hits = _ordered_relation_group_match_length(row_groups, relation_groups)
+    prefix_hits = _prefix_relation_group_match_length(row_groups, relation_groups)
     fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" or str(row.get("category") or "").lower() == "fact" else 0
     try:
         depth = int(row.get("hop_depth") or row.get("depth") or 0)
@@ -2641,24 +2805,33 @@ def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: Lis
         similarity = float(row.get("similarity") or 0.0)
     except Exception:
         similarity = 0.0
-    return hit_groups, fact_bonus, depth, similarity
+    return ordered_hits, prefix_hits, fact_bonus, depth, similarity
+
+
+def _relation_chain_sort_key(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, float]:
+    ordered_hits, prefix_hits, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
+        row,
+        relation_groups,
+    )
+    return ordered_hits, prefix_hits, fact_bonus, -depth, similarity
 
 
 def _boost_relation_chain_row_scores(rows: List[Dict[str, Any]], relation_groups: List[str]) -> None:
     for row in rows:
-        hit_groups, fact_bonus, _depth, _similarity = _rank_graph_row_for_relation_chain(
+        ordered_hits, prefix_hits, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
             row,
             relation_groups,
         )
-        if hit_groups >= 2 or (hit_groups >= 1 and fact_bonus):
-            try:
-                current_similarity = float(row.get("similarity") or 0.0)
-            except Exception:
-                current_similarity = 0.0
+        graph_like = str(row.get("via") or "").startswith("graph") or str(row.get("category") or "").lower() == "graph"
+        if ordered_hits >= 2 or (ordered_hits >= 1 and fact_bonus):
+            cap = 0.996 if fact_bonus else 0.994
+            target = 0.86 + (0.03 * ordered_hits) + (0.02 * prefix_hits) + (0.02 * fact_bonus) - (0.01 * max(depth - 1, 0))
             row["similarity"] = round(max(
                 current_similarity,
-                min(0.995, 0.93 + (0.02 * hit_groups) + (0.04 * fact_bonus)),
+                min(cap, target),
             ), 3)
+        elif graph_like and ordered_hits <= 0:
+            row["similarity"] = round(min(current_similarity, max(0.34, 0.58 - (0.03 * max(depth - 1, 0)))), 3)
 
 
 def store_edge_keywords(relation: str, keywords: List[str], description: str = "") -> bool:
@@ -3095,6 +3268,7 @@ def _graph_attached_fact_rows(
     anchor_text: str,
     anchor_score: float,
     graph_path: str,
+    relation_sequence: Optional[List[str]] = None,
     hop_depth: int,
     seen_ids: set,
     per_anchor_limit: int = 2,
@@ -3121,7 +3295,7 @@ def _graph_attached_fact_rows(
         seen_ids.add(fact.id)
         fact_attrs = fact.attributes if isinstance(fact.attributes, dict) else {}
         fact_score = max(0.60, min(0.91, float(anchor_score or 0.0) * 0.98))
-        rows.append({
+        row = {
             "id": fact.id,
             "text": _sanitize_for_context(fact.name),
             "category": "fact",
@@ -3140,7 +3314,13 @@ def _graph_attached_fact_rows(
             "extraction_confidence": getattr(fact, "extraction_confidence", None),
             "privacy": getattr(fact, "privacy", None),
             "owner_id": getattr(fact, "owner_id", None),
-        })
+        }
+        _annotate_graph_traversal_fields(
+            row,
+            list(relation_sequence or []) + ["has_fact"],
+            discovery_kind="graph_attached_fact",
+        )
+        rows.append(row)
         if len(rows) >= max(1, int(per_anchor_limit or 1)):
             break
     return rows
@@ -3271,6 +3451,7 @@ def graph_aware_recall(
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
     relation_chain_path_by_node: Dict[str, str] = {}
+    relation_chain_sequence_by_node: Dict[str, List[str]] = {}
     if relation_chain_query and owner_anchor_id and owner_anchor_name:
         try:
             for node, relation, direction, _depth, path in graph.get_related_bidirectional(
@@ -3279,6 +3460,7 @@ def graph_aware_recall(
                 depth=graph_depth,
             ):
                 if node.id and node.id not in relation_chain_path_by_node:
+                    relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
                     relation_chain_path_by_node[node.id] = _render_bidirectional_graph_path(
                         owner_anchor_name,
                         node.name,
@@ -3286,8 +3468,10 @@ def graph_aware_recall(
                         direction,
                         path,
                     )
+                    relation_chain_sequence_by_node[node.id] = relation_sequence
         except Exception:
             relation_chain_path_by_node = {}
+            relation_chain_sequence_by_node = {}
 
     # 3. For each Fact, find associated Person via reverse edge traversal.
     # Do not mark the direct fact as seen here: if graph expansion later reaches
@@ -3309,6 +3493,11 @@ def graph_aware_recall(
                             fact["via_relation"] = "has_fact"
                             fact["source_name"] = person.name
                             fact["graph_path"] = f"{chain_path} --has_fact--> {fact.get('text') or fact.get('content') or fact.get('name') or ''}"
+                            _annotate_graph_traversal_fields(
+                                fact,
+                                relation_chain_sequence_by_node.get(person.id, []) + ["has_fact"],
+                                discovery_kind="graph_attached_fact",
+                            )
                         expand_from.append(person.id)
 
     # 4. Extract entities from query
@@ -3361,9 +3550,10 @@ def graph_aware_recall(
                     direction,
                     path,
                 )
+                relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
 
                 graph_score = round(max(0.55, 0.92 - (0.08 * max(depth - 1, 0))), 3)
-                results["graph_results"].append({
+                row = {
                     "id": node.id,
                     "text": graph_path,
                     "category": "graph",
@@ -3377,13 +3567,16 @@ def graph_aware_recall(
                     "source_name": source_name,
                     "via": "graph",
                     "graph_path": graph_path,
-                })
+                }
+                _annotate_graph_traversal_fields(row, relation_sequence, discovery_kind="graph_path")
+                results["graph_results"].append(row)
                 results["graph_results"].extend(_graph_attached_fact_rows(
                     graph,
                     anchor_node=node,
                     anchor_text=node.name,
                     anchor_score=graph_score,
                     graph_path=graph_path,
+                    relation_sequence=relation_sequence,
                     hop_depth=depth,
                     seen_ids=seen_ids,
                 ))
@@ -3398,14 +3591,14 @@ def graph_aware_recall(
     if relation_chain_query and results["graph_results"]:
         _boost_relation_chain_row_scores(results["graph_results"], relation_chain_groups)
         results["graph_results"].sort(
-            key=lambda row: (
-                float(row.get("similarity") or 0.0),
-                *_rank_graph_row_for_relation_chain(row, relation_chain_groups),
-            ),
+            key=lambda row: _relation_chain_sort_key(row, relation_chain_groups),
             reverse=True,
         )
 
     results["source_breakdown"]["graph_count"] = len(results["graph_results"])
+    results["meta"]["counts"] = {
+        "graph_discoveries": _count_graph_discovery_rows(results["direct_results"]) + _count_graph_discovery_rows(results["graph_results"]),
+    }
     results["meta"]["phases_ms"]["graph_expand_ms"] = round((time.monotonic() - _graph_started_at) * 1000)
     results["meta"]["phases_ms"]["total_ms"] = round((time.monotonic() - _started_at) * 1000)
 
@@ -4578,19 +4771,11 @@ def _harmonize_store_plan_meta(
             if current_i < final_count:
                 counts[key] = final_count
         graph_discoveries = sum(
-            int(run.get("graph_count") or 0)
+            int(run.get("graph_discovery_count") or 0)
             for run in store_runs
             if str(run.get("store") or "") == "graph"
         )
-        final_graph_rows = sum(
-            1
-            for row in final_rows
-            if (
-                str(row.get("category") or "").lower() == "graph"
-                or str(row.get("via") or "").startswith("graph")
-                or bool(row.get("via_relation"))
-            )
-        )
+        final_graph_rows = _count_graph_discovery_rows(final_rows)
         graph_discoveries = max(graph_discoveries, final_graph_rows)
         if graph_discoveries:
             current_graph = counts.get("graph_discoveries")
@@ -5154,9 +5339,16 @@ def _graph_store_recall(
                 _boost_relation_chain_row_scores(combined, relation_chain_groups)
     except Exception:
         pass
+    meta = dict(payload.get("meta") or {})
+    counts = dict(meta.get("counts") or {})
+    counts["graph_discoveries"] = max(
+        int(counts.get("graph_discoveries") or 0),
+        _count_graph_discovery_rows(combined),
+    )
+    meta["counts"] = counts
     return (
         _validate_recall_result_rows(combined),
-        dict(payload.get("meta") or {}),
+        meta,
         None,
     )
 
@@ -5445,6 +5637,11 @@ def _run_recall_store_plan(
                 graph_count = source_breakdown.get("graph_count")
                 if isinstance(graph_count, (int, float)):
                     store_run["graph_count"] = max(0, int(graph_count))
+            counts = meta.get("counts")
+            if isinstance(counts, dict):
+                graph_discovery_count = counts.get("graph_discoveries")
+                if isinstance(graph_discovery_count, (int, float)):
+                    store_run["graph_discovery_count"] = max(0, int(graph_discovery_count))
         store_runs.append(store_run)
 
     merged = _merge_recall_batches(merged_batches, limit=max(limit, limit * 2 if fast_mode else limit))
@@ -7476,6 +7673,37 @@ def _is_low_information_message(query: str) -> bool:
 
 def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> List[Dict[str, Any]]:
     """Merge recall batches by memory id, keeping highest similarity variant."""
+    graph_meta_keys = (
+        "via",
+        "via_relation",
+        "graph_path",
+        "graph_relation_sequence",
+        "graph_relation_groups",
+        "graph_discovery_kind",
+        "source_name",
+        "hop_depth",
+        "depth",
+        "direction",
+        "relation",
+        "_graph_anchor_expansion",
+        "anchor_id",
+        "anchor_text",
+        "anchor_similarity",
+        "anchor_category",
+    )
+
+    def _merge_row_variants(preferred: Dict[str, Any], alternate: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(preferred)
+        if not _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
+            for key in graph_meta_keys:
+                if alternate.get(key) is not None:
+                    merged[key] = alternate.get(key)
+        else:
+            for key in graph_meta_keys:
+                if merged.get(key) is None and alternate.get(key) is not None:
+                    merged[key] = alternate.get(key)
+        return merged
+
     by_id: Dict[str, Dict[str, Any]] = {}
     fallback_rows: List[Dict[str, Any]] = []
     for batch in batches:
@@ -7487,8 +7715,13 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
                 fallback_rows.append(row)
                 continue
             prev = by_id.get(rid)
-            if prev is None or float(row.get("similarity", 0.0)) > float(prev.get("similarity", 0.0)):
+            if prev is None:
                 by_id[rid] = row
+                continue
+            if float(row.get("similarity", 0.0)) > float(prev.get("similarity", 0.0)):
+                by_id[rid] = _merge_row_variants(row, prev)
+            else:
+                by_id[rid] = _merge_row_variants(prev, row)
 
     merged = list(by_id.values()) + fallback_rows
     merged.sort(key=lambda x: float(x.get("similarity", 0.0)), reverse=True)
@@ -9108,12 +9341,25 @@ def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str 
     tokens = [tok for tok in clean.split() if tok]
     lower = clean.lower()
     named_tokens = [tok for tok in tokens if tok[:1].isupper() and len(tok) > 2]
+    try:
+        estimated_tokens = max(len(tokens), int(_lib_estimate_tokens(clean or "")))
+    except Exception:
+        estimated_tokens = max(1, len(tokens))
+    alpha_chars = sum(1 for ch in clean if str(ch).isalpha())
+    low_space_query = (
+        bool(clean)
+        and len(tokens) <= 2
+        and alpha_chars >= 6
+        and estimated_tokens >= max(4, len(tokens) * 2)
+    )
 
     signals: List[str] = []
     if len(tokens) >= 8:
         signals.append("long_query")
     if len(named_tokens) >= 2:
         signals.append("multi_entity")
+    if low_space_query:
+        signals.append("low_space_query")
     if any(phrase in lower for phrase in [
         "over time", "what changed", "changed about", "trace ", "timeline",
         "career arc", "relationship", "week of", "what's new", "whats new",
@@ -9137,7 +9383,10 @@ def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str 
         "shape": shape,
         "fanout_budget": max(1, budget),
         "token_count": len(tokens),
+        "estimated_token_count": estimated_tokens,
         "named_entity_tokens": len(named_tokens),
+        "segmentation_confidence": "low" if low_space_query else "high",
+        "low_space_query": low_space_query,
         "signals": signals,
         "planner_profile": planner_profile,
     }
@@ -9395,7 +9644,10 @@ def _plan_fanout_queries(
     meta["query_shape"] = str(profile["shape"])
     meta["fanout_budget"] = int(profile["fanout_budget"])
     meta["token_count"] = int(profile["token_count"])
+    meta["estimated_token_count"] = int(profile.get("estimated_token_count") or profile["token_count"])
     meta["named_entity_tokens"] = int(profile["named_entity_tokens"])
+    meta["segmentation_confidence"] = str(profile.get("segmentation_confidence") or "high")
+    meta["low_space_query"] = bool(profile.get("low_space_query"))
     meta["shape_signals"] = list(profile["signals"])
     meta["planner_profile"] = str(profile.get("planner_profile") or planner_profile)
     meta["planned_stores"] = list(_planner_store_plan(default_stores))
@@ -9468,6 +9720,7 @@ def _plan_fanout_queries(
             clean,
             default_stores=planned_default_stores,
             default_project=default_project,
+            profile=profile,
         )
     )
     store_plan_only = (planner_profile == "full" and preserve_exact_query) or multilingual_store_plan_only
@@ -9797,6 +10050,7 @@ def _requires_llm_store_classification_for_exact_query(
     *,
     default_stores: List[str],
     default_project: Optional[str],
+    profile: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Use the LLM store classifier for exact queries when heuristics are weak."""
     if default_project is not None:
@@ -9804,7 +10058,19 @@ def _requires_llm_store_classification_for_exact_query(
     normalized_stores = list(_planner_store_plan(default_stores))
     if normalized_stores != ["vector"]:
         return False
-    return any(ord(ch) > 127 and str(ch).isalpha() for ch in str(text or ""))
+    profile_dict = dict(profile or {})
+    segmentation_confidence = str(profile_dict.get("segmentation_confidence") or "high").lower()
+    low_space_query = bool(profile_dict.get("low_space_query"))
+    signals = {str(sig) for sig in profile_dict.get("signals") or []}
+    shape = str(profile_dict.get("shape") or "")
+    named_entity_tokens = int(profile_dict.get("named_entity_tokens") or 0)
+    store_classification_uncertain = (
+        shape in {"narrow", "focused"}
+        and named_entity_tokens <= 1
+        and "broad_intent" not in signals
+        and "multi_clause" not in signals
+    )
+    return (segmentation_confidence == "low" or low_space_query) and store_classification_uncertain
 
 
 def _load_tools_md() -> Optional[str]:
@@ -11605,6 +11871,7 @@ def _expand_high_confidence_entity_anchors(
                 direction,
                 path,
             )
+            relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
             if relation == "has_fact" and str(rel_node.type or "").strip().lower() == "fact":
                 text = rel_node.name
             else:
@@ -11614,7 +11881,7 @@ def _expand_high_confidence_entity_anchors(
                     relation,
                     direction,
                 )
-            expanded.append({
+            row = {
                 "text": _sanitize_for_context(text),
                 "category": rel_node.type.lower(),
                 "similarity": round(rel_score, 3),
@@ -11637,7 +11904,9 @@ def _expand_high_confidence_entity_anchors(
                 "extraction_confidence": getattr(rel_node, "extraction_confidence", None),
                 "privacy": getattr(rel_node, "privacy", None),
                 "owner_id": getattr(rel_node, "owner_id", None),
-            })
+            }
+            _annotate_graph_traversal_fields(row, relation_sequence, discovery_kind="graph_anchor_expansion")
+            expanded.append(row)
             added_for_anchor += 1
             if added_for_anchor >= max(1, int(expansion_limit_per_anchor or 1)):
                 break

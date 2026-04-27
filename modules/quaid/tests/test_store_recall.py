@@ -3449,6 +3449,38 @@ class TestRecallTelemetry:
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 60.0
 
+    def test_exact_query_store_classification_uses_segmentation_uncertainty_not_script_gate(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_lib_estimate_tokens", return_value=6):
+            profile = mg._estimate_fanout_profile(
+                "opaqueblobidentifierquestion",
+                max_queries=5,
+                planner_profile="fast",
+            )
+
+        assert profile["low_space_query"] is True
+        assert profile["segmentation_confidence"] == "low"
+        assert mg._requires_llm_store_classification_for_exact_query(
+            "opaqueblobidentifierquestion",
+            default_stores=["vector"],
+            default_project=None,
+            profile=profile,
+        ) is True
+
+        normal_profile = mg._estimate_fanout_profile(
+            "normal spaced question",
+            max_queries=5,
+            planner_profile="fast",
+        )
+        assert normal_profile["segmentation_confidence"] == "high"
+        assert mg._requires_llm_store_classification_for_exact_query(
+            "normal spaced question",
+            default_stores=["vector"],
+            default_project=None,
+            profile=normal_profile,
+        ) is False
+
     def test_plan_fanout_queries_raises_without_llm_when_failhard_enabled(self):
         import datastore.memorydb.memory_graph as mg
         query = "Walk me through how Maya's career changed from TechFlow to Stripe over time"
@@ -5580,10 +5612,11 @@ class TestRecallFastHookInjectContract:
                 domain_boost=None,
                 project=None,
                 depth=2,
-            )
+        )
 
         assert [row["id"] for row in rows] == ["fact-1", "alice"]
-        assert meta == {"source": "test"}
+        assert meta["source"] == "test"
+        assert meta["counts"]["graph_discoveries"] == 0
         assert bundle is None
 
     def test_graph_store_recall_expands_terminal_graph_entity_to_attached_fact(self, tmp_path):
@@ -5631,7 +5664,8 @@ class TestRecallFastHookInjectContract:
         assert by_id[ceramics.id]["text"] == "Mei runs a ceramics practice out of Kai and Mei's garage"
         assert by_id[ceramics.id]["via_relation"] == "has_fact"
         assert by_id[ceramics.id]["via"] == "graph_anchor_expansion"
-        assert meta == {"source": "test"}
+        assert meta["source"] == "test"
+        assert meta["counts"]["graph_discoveries"] == 1
         assert bundle is None
 
     def test_graph_aware_recall_renders_inbound_edge_direction(self, tmp_path):
@@ -5760,6 +5794,56 @@ class TestRecallFastHookInjectContract:
         assert "ceramics practice" in rows[0]["text"]
         assert rows[0]["via"] == "graph_attached_fact"
         assert "Yuni --sibling_of--> Kai --spouse_of--> Mei" in rows[0]["graph_path"]
+        assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "spouse_of", "has_fact"]
+        assert meta["counts"]["graph_discoveries"] > 0
+
+    def test_graph_store_recovers_non_english_relation_chain_keywords(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "get_edge_keywords",
+            return_value={
+                "sibling_of": ["兄", "姉"],
+                "spouse_of": ["妻", "夫"],
+            },
+        ):
+            assert mg._ordered_relation_matches_for_query("兄の妻は何をしていますか") == ["sibling_of", "spouse_of"]
+            assert mg._relation_chain_groups_for_query("兄の妻は何をしていますか") == ["sibling", "spouse"]
+            assert mg._has_generic_graph_signal("兄の妻は何をしていますか") is True
+
+    def test_merge_recall_batches_preserves_graph_metadata_from_lower_similarity_variant(self):
+        import datastore.memorydb.memory_graph as mg
+
+        merged = mg._merge_recall_batches(
+            [[
+                {
+                    "id": "fact-1",
+                    "text": "Mei runs a ceramics practice out of Kai and Mei's garage",
+                    "category": "fact",
+                    "similarity": 0.91,
+                },
+                {
+                    "id": "fact-1",
+                    "text": "Mei runs a ceramics practice out of Kai and Mei's garage",
+                    "category": "fact",
+                    "similarity": 0.74,
+                    "via": "graph_attached_fact",
+                    "via_relation": "has_fact",
+                    "graph_path": "Solomon --spouse_of--> Yuni --sibling_of--> Kai --spouse_of--> Mei --has_fact--> Mei runs a ceramics practice out of Kai and Mei's garage",
+                    "graph_relation_sequence": ["spouse_of", "sibling_of", "spouse_of", "has_fact"],
+                    "graph_relation_groups": ["spouse", "sibling", "spouse", "has_fact"],
+                    "graph_discovery_kind": "graph_attached_fact",
+                }
+            ]],
+            limit=5,
+        )
+
+        assert len(merged) == 1
+        assert merged[0]["similarity"] == 0.91
+        assert merged[0]["graph_discovery_kind"] == "graph_attached_fact"
+        assert merged[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "spouse_of", "has_fact"]
+        assert merged[0]["graph_path"].startswith("Solomon --spouse_of--> Yuni")
 
     def test_graph_aware_recall_does_not_relation_filter_multi_hop_depth(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
