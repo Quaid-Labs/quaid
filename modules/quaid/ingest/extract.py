@@ -978,6 +978,150 @@ def _collapse_duplicate_payload_facts(facts: List[Dict[str, Any]]) -> Tuple[List
     return collapsed, dropped
 
 
+_SPEAKER_PREFIX_RE = re.compile(
+    r"^\s*(User|Assistant|Agent|System|Tool|Developer):\s*(.*)$",
+    re.IGNORECASE,
+)
+_INJECTED_MEMORIES_RE = re.compile(r"<injected_memories\b[^>]*>.*?</injected_memories>", re.IGNORECASE | re.DOTALL)
+_CONVERSATION_INFO_RE = re.compile(
+    r"Conversation info\s*\([^)]*\):\s*```(?:json)?\s*.*?```",
+    re.IGNORECASE | re.DOTALL,
+)
+_CODEWORD_LABEL_RE = re.compile(r"\bcode[-\s]?word\b", re.IGNORECASE)
+_STRUCTURAL_CODEWORD_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
+)
+
+
+def _owner_possessive(owner_id: str) -> str:
+    owner = str(owner_id or "").strip() or "User"
+    suffix = "'" if owner.endswith("s") else "'s"
+    return f"{owner}{suffix}"
+
+
+def _iter_user_turn_texts(transcript: str) -> List[str]:
+    """Return user-authored turn text from a rendered transcript."""
+    turns: List[str] = []
+    current_role: Optional[str] = None
+    current_parts: List[str] = []
+    saw_prefixed_turn = False
+
+    for raw_line in str(transcript or "").splitlines():
+        match = _SPEAKER_PREFIX_RE.match(raw_line)
+        if match:
+            saw_prefixed_turn = True
+            if current_role == "user" and current_parts:
+                turns.append("\n".join(current_parts).strip())
+            role = match.group(1).strip().lower().replace("_", " ").replace("-", " ")
+            current_role = "user" if role == "user" else "other"
+            current_parts = [match.group(2)] if current_role == "user" else []
+            continue
+        if current_role == "user":
+            current_parts.append(raw_line)
+
+    if current_role == "user" and current_parts:
+        turns.append("\n".join(current_parts).strip())
+
+    if not saw_prefixed_turn and _CODEWORD_LABEL_RE.search(str(transcript or "")):
+        turns.append(str(transcript or "").strip())
+    return [turn for turn in turns if turn]
+
+
+def _clean_codeword_turn_text(text: str) -> str:
+    cleaned = _INJECTED_MEMORIES_RE.sub(" ", str(text or ""))
+    cleaned = _CONVERSATION_INFO_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _split_fact_sentences(text: str) -> List[str]:
+    normalized = _clean_codeword_turn_text(text)
+    if not normalized:
+        return []
+    return [
+        part.strip(" \t\r\n\"'`")
+        for part in re.split(r"(?<=[.!?])\s+", normalized)
+        if part.strip(" \t\r\n\"'`")
+    ]
+
+
+def _normalize_codeword_sentence(sentence: str, owner_id: str) -> str:
+    text = str(sentence or "").strip(" \t\r\n\"'`")
+    text = re.sub(
+        r"(?i)^\s*(quick one to remember|please remember|remember this|remember)\s*[:,-]?\s*",
+        "",
+        text,
+    ).strip()
+    possessive = _owner_possessive(owner_id)
+    text = re.sub(r"(?i)^my\s+", f"{possessive} ", text, count=1)
+    text = re.sub(r"(?i)(:\s*)my\s+", rf"\1{possessive} ", text, count=1)
+    text = re.sub(r"(?i)^i\s+use\s+", f"{owner_id} uses ", text, count=1)
+    return text.rstrip(" .")
+
+
+def _explicit_codeword_anchor_facts(
+    transcript: str,
+    facts: List[Dict[str, Any]],
+    *,
+    owner_id: str,
+) -> List[Dict[str, Any]]:
+    """Preserve exact user-stated codeword anchors when LLM extraction omits them."""
+    existing_text = "\n".join(
+        str(fact.get("text", "") or "")
+        for fact in facts or []
+        if isinstance(fact, dict)
+    ).lower()
+    seen_markers: set[str] = set()
+    seen_fact_texts: set[str] = set()
+    additions: List[Dict[str, Any]] = []
+
+    for turn in _iter_user_turn_texts(transcript):
+        for sentence in _split_fact_sentences(turn):
+            if sentence.rstrip().endswith("?"):
+                continue
+            if not _CODEWORD_LABEL_RE.search(sentence):
+                continue
+            markers = [m.group(0) for m in _STRUCTURAL_CODEWORD_TOKEN_RE.finditer(sentence)]
+            if not markers:
+                continue
+            missing_markers = [
+                marker
+                for marker in markers
+                if marker.lower() not in existing_text and marker.lower() not in seen_markers
+            ]
+            if not missing_markers:
+                continue
+            fact_text = _normalize_codeword_sentence(sentence, owner_id)
+            if len(fact_text.split()) < 3:
+                continue
+            fact_key = _fact_text_key(fact_text)
+            if not fact_key or fact_key in seen_fact_texts:
+                for marker in missing_markers:
+                    seen_markers.add(marker.lower())
+                continue
+            keyword_tokens = [
+                token.strip(".,;:!?()[]{}\"'`").lower()
+                for token in re.split(r"\s+", fact_text)
+                if token.strip(".,;:!?()[]{}\"'`")
+            ]
+            additions.append({
+                "text": fact_text,
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "high",
+                "keywords": " ".join(dict.fromkeys(keyword_tokens)),
+                "privacy": "private",
+                "confidence_reason": "Explicit user-authored codeword statement in transcript",
+                "edges": [],
+            })
+            seen_fact_texts.add(fact_key)
+            for marker in missing_markers:
+                seen_markers.add(marker.lower())
+
+    return additions
+
+
 def collapse_duplicate_payload_facts(facts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
     """Public wrapper for exact duplicate collapse used by rolling staging."""
     return _collapse_duplicate_payload_facts(facts)
@@ -2634,6 +2778,22 @@ def extract_from_transcript(
                 label=label,
                 session_date_hint=session_date_hint,
             )
+
+    explicit_codeword_facts = _explicit_codeword_anchor_facts(
+        transcript,
+        all_facts,
+        owner_id=owner_id,
+    )
+    if explicit_codeword_facts:
+        logger.info(
+            "[extract] %s: preserved %d explicit codeword anchor fact(s)",
+            label,
+            len(explicit_codeword_facts),
+        )
+        result["explicit_codeword_anchor_facts"] = len(explicit_codeword_facts)
+        all_facts = explicit_codeword_facts + all_facts
+    else:
+        result["explicit_codeword_anchor_facts"] = 0
 
     result["raw_facts"] = list(all_facts)
     result["raw_snippets"] = dict(all_snippets)
