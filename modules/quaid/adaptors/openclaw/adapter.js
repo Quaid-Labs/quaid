@@ -2689,7 +2689,7 @@ const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VAL
 const IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS = 500;
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
-const immediateProviderNoticeDispatchByAgent = /* @__PURE__ */ new Map();
+const promptScopedProviderNoticeByAgent = /* @__PURE__ */ new Map();
 function currentPromptModelConfigFingerprint() {
   try {
     const models = getMemoryConfig()?.models || {};
@@ -2707,14 +2707,14 @@ function currentPromptModelConfigFingerprint() {
 function resetPromptModelConfigTracking() {
   promptModelConfigFingerprint = "";
   promptModelConfigNotice = "";
-  immediateProviderNoticeDispatchByAgent.clear();
+  promptScopedProviderNoticeByAgent.clear();
 }
 function providerNoticeAgentKey(agentLabel) {
   return String(agentLabel || "main").trim().toLowerCase() || "main";
 }
 function clearImmediateProviderNoticeDispatch(agentLabel, reason) {
   const key = providerNoticeAgentKey(agentLabel);
-  if (!immediateProviderNoticeDispatchByAgent.delete(key)) {
+  if (!promptScopedProviderNoticeByAgent.delete(key)) {
     return;
   }
   writeHookTrace("hook.before_prompt_build.provider_notice_dispatch_cleared", {
@@ -2733,55 +2733,28 @@ function formatImmediateProviderNoticeContext(message) {
 \u2022 ${notice}
 </quaid_system_message>`;
 }
-function dispatchImmediateProviderNotice(agentLabel, message, reason) {
+function recordPromptScopedProviderNotice(agentLabel, message, reason) {
   const notice = String(message || "").trim();
   if (!notice) {
     return false;
   }
   const key = providerNoticeAgentKey(agentLabel);
   const nowMs = Date.now();
-  const prior = immediateProviderNoticeDispatchByAgent.get(key);
-  if (prior && prior.message === notice && nowMs - prior.dispatchedAtMs < IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS) {
+  const prior = promptScopedProviderNoticeByAgent.get(key);
+  if (prior && prior.message === notice && nowMs - prior.recordedAtMs < IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS) {
     writeHookTrace("hook.before_prompt_build.provider_notice_dispatch_suppressed", {
       agent_label: key,
       reason,
-      age_ms: nowMs - prior.dispatchedAtMs
+      age_ms: nowMs - prior.recordedAtMs
     });
     return false;
   }
-  immediateProviderNoticeDispatchByAgent.set(key, { message: notice, dispatchedAtMs: nowMs });
-  if (String(process.env.QUAID_DISABLE_NOTIFICATIONS || "").trim() === "1") {
-    writeHookTrace("hook.before_prompt_build.provider_notice_dispatch_disabled", {
-      agent_label: key,
-      reason
-    });
-    return false;
-  }
-  const instanceId = getInstanceId(key);
-  const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
-  const preamble = `import sys, os
-sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})
-`;
-  const launched = spawnDetachedScript({
-    scriptDir: QUAID_NOTIFY_DIR,
-    logFile: notifyLogFile,
-    scriptPrefix: preamble,
-    scriptBody: `
-from core.runtime.notify import notify_user
-notify_user(${JSON.stringify(notice)})
-`,
-    env: buildPythonEnv({ QUAID_INSTANCE: instanceId }),
-    interpreter: PYTHON_BIN,
-    filePrefix: "provider-notice",
-    fileExtension: ".py"
-  });
-  writeHookTrace("hook.before_prompt_build.provider_notice_dispatched", {
+  promptScopedProviderNoticeByAgent.set(key, { message: notice, recordedAtMs: nowMs });
+  writeHookTrace("hook.before_prompt_build.provider_notice_inline_scoped", {
     agent_label: key,
-    instance_id: instanceId,
-    reason,
-    launched
+    reason
   });
-  return launched;
+  return true;
 }
 async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
   const fingerprint = currentPromptModelConfigFingerprint();
@@ -2792,7 +2765,7 @@ async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
   if (fingerprint === promptModelConfigFingerprint) {
     if (promptModelConfigNotice) {
       clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_repeat_inline_clear");
-      dispatchImmediateProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_repeat");
+      recordPromptScopedProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_repeat");
     } else {
       clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_repeat_valid");
     }
@@ -2814,7 +2787,7 @@ async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
   } catch (err) {
     promptModelConfigNotice = buildProviderErrorNoticeMessage(err, "fast");
     clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_error_inline_clear");
-    dispatchImmediateProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_error");
+    recordPromptScopedProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_error");
     writeHookTrace("hook.before_prompt_build.model_config_error", {
       error: String(err?.message || err).slice(0, 240)
     });

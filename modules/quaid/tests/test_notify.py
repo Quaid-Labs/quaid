@@ -486,6 +486,33 @@ class TestNotifyAgent:
         assert requests[0]["priority"] == "high"
         assert "[Quaid error] [provider] provider down" in requests[0]["message"]
 
+    def test_openclaw_provider_error_uses_deferred_not_direct_notification(self, tmp_path):
+        adapter = MagicMock()
+        adapter.adapter_id.return_value = "openclaw"
+        adapter.data_dir.return_value = tmp_path / "data"
+        adapter.instance_root.return_value = tmp_path
+        adapter.notify.return_value = True
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            ok = notify_agent(
+                "configured model invalid-model-m6-probe does not exist",
+                severity="error",
+                source="provider",
+                dedupe_key="m6-provider-404",
+                ttl_seconds=900,
+            )
+
+        assert ok is True
+        adapter.notify.assert_not_called()
+        delayed = tmp_path / ".runtime" / "notes" / "delayed-llm-requests.json"
+        payload = json.loads(delayed.read_text(encoding="utf-8"))
+        requests = payload.get("requests", [])
+        assert len(requests) == 1
+        assert requests[0]["source"] == "provider"
+        assert requests[0]["priority"] == "high"
+        assert "[Quaid error] [provider]" in requests[0]["message"]
+        assert "invalid-model-m6-probe" in requests[0]["message"]
+
     def test_falls_back_to_deferred_when_notify_raises(self, tmp_path):
         adapter = MagicMock()
         adapter.data_dir.return_value = tmp_path

@@ -94,6 +94,19 @@ def _bypass_active_error_dedupe(*, severity: str, source: str) -> bool:
     )
 
 
+def _uses_turn_scoped_provider_notices(adapter: Any, *, severity: str, source: str) -> bool:
+    """Avoid out-of-band provider messages on adapters that inject them per turn."""
+    if _normalize_severity(severity) != "error":
+        return False
+    if str(source or "").strip().lower() not in {"provider", "llm_config"}:
+        return False
+    try:
+        adapter_id = str(adapter.adapter_id() or "").strip().lower()
+    except Exception:
+        adapter_id = ""
+    return adapter_id == "openclaw"
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -298,6 +311,16 @@ def notify_agent(
             logger.warning("Failed queueing deferred fallback for agent notice: %s", deferred_exc)
             _trace_m15("agent_notice.notify.deferred_fallback_error", error=str(deferred_exc))
             return False
+
+    if _uses_turn_scoped_provider_notices(adapter, severity=severity, source=source):
+        _trace_m15(
+            "agent_notice.notify.deferred_turn_scoped_provider",
+            adapter=str(adapter.adapter_id() if hasattr(adapter, "adapter_id") else ""),
+            source=source,
+            severity=severity,
+            dedupe_key=dedupe_token,
+        )
+        return _fallback_to_deferred()
 
     try:
         ok = bool(
