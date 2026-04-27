@@ -79,13 +79,23 @@ QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon start 2
 sleep 10
 QUAID_HOME=/Users/admin/.quaid QUAID_INSTANCE="$INSTANCE" "$QCLI" daemon status --json > "$ART/status-after-start.json" 2>&1
 ps auxww | grep -E 'extraction_daemon.py|project_docs_supervisor|project_docs_worker|janitor' | grep -v grep > "$ART/ps-after-start.txt" || true
+for f in /Users/admin/.quaid/instances/*/data/extraction-daemon.pid; do
+    inst="${f%/data/extraction-daemon.pid}"
+    inst="${inst##*/}"
+    pid="$(cat "$f" 2>/dev/null || true)"
+    printf '%s pid=%s ' "$inst" "$pid"
+    [ -n "$pid" ] && ps -p "$pid" -o pid=,ppid=,etime=,command= 2>/dev/null || true
+    printf '\n'
+done > "$ART/daemon-pid-map-after-start.txt" || true
 ```
 
 Pass:
 - `daemon status --json` reports `running=true`.
 - The pid file under `$SILO/data/` points to a live process.
 - The supervisor or monitor process is present when expected for that lane.
-- There is no duplicate respawn loop for the same instance after 30 seconds.
+- There is no duplicate respawn loop for the same instance after 30 seconds. Do
+  not count workers whose pid matches another instance's pid file in
+  `daemon-pid-map-after-start.txt`.
 
 Fail:
 - `running=false` after start.
