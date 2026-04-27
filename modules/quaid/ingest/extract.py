@@ -51,37 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 _SESSION_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
-_MONTH_DAY_ANCHOR_RE = re.compile(
-    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
-    r"dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b",
-    re.IGNORECASE,
-)
 _ISO_DATE_ANCHOR_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-_DOG_SUPPORT_TERMS = (
-    "dog",
-    "puppy",
-    "golden retriever",
-    "retriever",
-    "labrador",
-    "lab",
-    "beagle",
-    "poodle",
-    "corgi",
-    "husky",
-    "terrier",
-    "shepherd",
-)
-_CAT_SUPPORT_TERMS = (
-    "cat",
-    "kitten",
-    "feline",
-    "tabby",
-    "siamese",
-    "persian",
-    "maine coon",
-    "ragdoll",
-)
 
 
 def _project_log_date_for_payload(session_id: str) -> Optional[str]:
@@ -152,13 +122,12 @@ def _normalize_fact_temporal_hint(
 def _normalize_anchor_search_text(value: str) -> str:
     """Normalize anchor text for loose transcript containment checks."""
     text = str(value or "").lower().replace(",", " ")
-    text = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
 def _parse_supported_date_anchor(value: str) -> Optional[Tuple[Optional[int], int, int]]:
-    """Parse ISO or month-day(-year) anchors into comparable tuples."""
+    """Parse structural ISO date anchors into comparable tuples."""
     raw = str(value or "").strip()
     if not raw:
         return None
@@ -169,18 +138,6 @@ def _parse_supported_date_anchor(value: str) -> Optional[Tuple[Optional[int], in
             return (parsed.year, parsed.month, parsed.day)
         except ValueError:
             return None
-    for fmt in ("%B %d %Y", "%b %d %Y"):
-        try:
-            parsed = datetime.strptime(normalized, fmt)
-            return (parsed.year, parsed.month, parsed.day)
-        except ValueError:
-            continue
-    for fmt in ("%B %d %Y", "%b %d %Y"):
-        try:
-            parsed = datetime.strptime(f"{normalized} 2000", fmt)
-            return (None, parsed.month, parsed.day)
-        except ValueError:
-            continue
     return None
 
 
@@ -213,9 +170,7 @@ def _unsupported_date_anchor_reason(
         return None
     transcript_norm = _normalize_anchor_search_text(transcript_text)
     seen: set[str] = set()
-    date_matches = list(_MONTH_DAY_ANCHOR_RE.finditer(fact_raw))
-    date_matches.extend(_ISO_DATE_ANCHOR_RE.finditer(fact_raw))
-    for match in date_matches:
+    for match in _ISO_DATE_ANCHOR_RE.finditer(fact_raw):
         anchor = str(match.group(0) or "").strip()
         anchor_norm = _normalize_anchor_search_text(anchor)
         if not anchor_norm or anchor_norm in seen:
@@ -226,42 +181,6 @@ def _unsupported_date_anchor_reason(
         if _date_anchor_matches_session_hint(anchor, session_date_hint):
             continue
         return f"unsupported date anchor '{anchor}'"
-    return None
-
-
-def _transcript_has_support_term(transcript_norm: str, term: str) -> bool:
-    """Match support terms as standalone words/phrases, not substrings."""
-    term_norm = re.escape(str(term or "").lower().strip())
-    if not term_norm:
-        return False
-    return re.search(rf"(?<!\w){term_norm}(?!\w)", transcript_norm) is not None
-
-
-def _unsupported_pet_species_reason(fact_text: str, transcript_text: str) -> Optional[str]:
-    """Return a reason when a fact upgrades a pet to a species absent from the chunk."""
-    fact_norm = str(fact_text or "").lower()
-    transcript_norm = str(transcript_text or "").lower()
-    if not fact_norm or not transcript_norm:
-        return None
-
-    species_rules = (
-        (
-            re.compile(r"\b(?:has a|owns a|their)\s+cat\b|\bcat named\b|\bis a cat\b", re.IGNORECASE),
-            "cat",
-            _CAT_SUPPORT_TERMS,
-        ),
-        (
-            re.compile(r"\b(?:has a|owns a|their)\s+dog\b|\bdog named\b|\bis a dog\b", re.IGNORECASE),
-            "dog",
-            _DOG_SUPPORT_TERMS,
-        ),
-    )
-    for pattern, label, support_terms in species_rules:
-        if not pattern.search(fact_norm):
-            continue
-        if any(_transcript_has_support_term(transcript_norm, term) for term in support_terms):
-            continue
-        return f"unsupported pet species '{label}'"
     return None
 
 
@@ -283,8 +202,6 @@ def _filter_unsupported_specificity_facts(
             filtered.append(fact)
             continue
         reason = _unsupported_date_anchor_reason(text, transcript_text, session_date_hint)
-        if not reason:
-            reason = _unsupported_pet_species_reason(text, transcript_text)
         if reason:
             dropped += 1
             logger.warning(
