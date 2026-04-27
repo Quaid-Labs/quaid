@@ -196,6 +196,175 @@ if [[ -n "${QUAID_HOME:-}" || -n "${OPENCLAW_WORKSPACE:-}" ]]; then
   fi
 fi
 
+_derive_project_instance_from_context() {
+  [[ -n "${QUAID_HOME:-}" ]] || return 0
+  "$PYTHON_BIN" - "$PWD" "${QUAID_HOME:-}" "${QUAID_ADAPTER_TYPE:-}" "${CLAUDE_PROJECT_DIR:-}" "${CODEX_PROJECT_DIR:-}" <<'PYEOF'
+import json
+import pathlib
+import sys
+
+from lib.instance import instance_slug_from_project_dir
+
+cwd = pathlib.Path(sys.argv[1]).resolve()
+home = pathlib.Path(sys.argv[2]).expanduser().resolve()
+explicit = str(sys.argv[3] or "").strip().lower()
+claude_project_dir = str(sys.argv[4] or "").strip()
+codex_project_dir = str(sys.argv[5] or "").strip()
+
+
+def _normalize_adapter(raw: str) -> str:
+    value = str(raw or "").strip().lower().replace("_", "-")
+    if value in {"claude-code", "claudecode"}:
+        return "claude-code"
+    if value in {"codex", "openai-codex"}:
+        return "codex"
+    return value
+
+
+def _safe_project_dir(raw: str) -> pathlib.Path | None:
+    if not str(raw or "").strip():
+        return None
+    try:
+        path = pathlib.Path(raw).expanduser().resolve()
+    except Exception:
+        return None
+    blocked = [
+        home,
+        home / "plugins",
+        home / "extensions",
+        home / "adaptors",
+        home / "shared",
+        home / "instances",
+        home / "runtime",
+        home / ".runtime",
+    ]
+    for root in blocked:
+        try:
+            if path == root or path.is_relative_to(root):
+                return None
+        except AttributeError:
+            try:
+                path.relative_to(root)
+                return None
+            except ValueError:
+                pass
+        except Exception:
+            pass
+    return path
+
+
+def _instance_config_exists(instance: str) -> bool:
+    return bool(instance) and (home / "instances" / instance / "config.json").is_file()
+
+
+def _bound_instance(adapter: str, project_dir: pathlib.Path) -> str:
+    try:
+        slug = instance_slug_from_project_dir(str(project_dir))
+    except Exception:
+        return ""
+    if not slug:
+        return ""
+    path = home / "shared" / "instance-bindings" / adapter / f"{slug}.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    instance = str(data.get("instance") or "").strip()
+    stored_project = str(data.get("project_dir") or "").strip()
+    if not instance:
+        return ""
+    try:
+        if stored_project and pathlib.Path(stored_project).expanduser().resolve() != project_dir:
+            return ""
+    except Exception:
+        return ""
+    return instance if _instance_config_exists(instance) else ""
+
+
+def _settings_instance(project_dir: pathlib.Path) -> str:
+    settings = project_dir / ".claude" / "settings.json"
+    if not settings.is_file():
+        return ""
+    try:
+        data = json.loads(settings.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    instance = str((data.get("env") or {}).get("QUAID_INSTANCE") or "").strip()
+    return instance if _instance_config_exists(instance) else ""
+
+
+def _derived_instance(adapter: str, project_dir: pathlib.Path) -> str:
+    try:
+        slug = instance_slug_from_project_dir(str(project_dir))
+    except Exception:
+        return ""
+    if not slug:
+        return ""
+    instance = f"{adapter}-{slug}"
+    return instance if _instance_config_exists(instance) else ""
+
+
+contexts: list[tuple[str, pathlib.Path]] = []
+if claude_project_dir:
+    path = _safe_project_dir(claude_project_dir)
+    if path is not None:
+        contexts.append(("claude-code", path))
+if codex_project_dir:
+    path = _safe_project_dir(codex_project_dir)
+    if path is not None:
+        contexts.append(("codex", path))
+
+for adapter, project_dir in contexts:
+    if adapter == "claude-code":
+        instance = _settings_instance(project_dir)
+        if instance:
+            print(instance)
+            raise SystemExit(0)
+    instance = _bound_instance(adapter, project_dir) or _derived_instance(adapter, project_dir)
+    if instance:
+        print(instance)
+        raise SystemExit(0)
+
+cwd_project = _safe_project_dir(str(cwd))
+explicit = _normalize_adapter(explicit)
+if cwd_project is not None:
+    if explicit in {"claude-code", "codex"}:
+        if explicit == "claude-code":
+            instance = _settings_instance(cwd_project)
+            if instance:
+                print(instance)
+                raise SystemExit(0)
+        instance = _bound_instance(explicit, cwd_project) or _derived_instance(explicit, cwd_project)
+        if instance:
+            print(instance)
+            raise SystemExit(0)
+    elif not contexts:
+        candidates: list[str] = []
+        for adapter in ("claude-code", "codex"):
+            if adapter == "claude-code":
+                instance = _settings_instance(cwd_project)
+                if instance:
+                    candidates.append(instance)
+                    continue
+            instance = _bound_instance(adapter, cwd_project) or _derived_instance(adapter, cwd_project)
+            if instance:
+                candidates.append(instance)
+        unique = sorted(set(candidates))
+        if len(unique) == 1:
+            print(unique[0])
+            raise SystemExit(0)
+PYEOF
+}
+
+if [[ -z "${QUAID_INSTANCE:-}" && -n "${QUAID_HOME:-}" ]]; then
+  _project_instance="$(_derive_project_instance_from_context || true)"
+  if [[ -n "$_project_instance" ]]; then
+    export QUAID_INSTANCE="$_project_instance"
+  fi
+fi
+
 case "$CMD" in
   # Lifecycle hooks (adapter-agnostic)
   hook-inject)

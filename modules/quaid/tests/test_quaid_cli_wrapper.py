@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+
+
+def _instance_slug(project_dir: Path) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
 
 
 def test_quaid_cli_derives_openclaw_instance_from_agent_workspace(tmp_path: Path) -> None:
@@ -70,6 +77,105 @@ def test_quaid_cli_derives_openclaw_instance_from_agent_workspace(tmp_path: Path
     )
 
     assert result.stdout.strip().endswith("/instances/openclaw-m13test/config.json")
+
+
+def test_quaid_project_create_links_claude_code_instance_from_safe_cwd(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    visible_home = home / "quaid"
+    short_root = Path(tempfile.mkdtemp(prefix="qcli-", dir="/tmp"))
+    project_dir = short_root / "cc-livetest"
+    project_dir.mkdir(parents=True)
+
+    instance = f"claude-code-{_instance_slug(project_dir)}"
+    instance_dir = quaid_home / "instances" / instance
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_text(
+        json.dumps({"adapter": {"type": "claude-code"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "QUAID_VISIBLE_HOME": str(visible_home),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    env.pop("QUAID_INSTANCE", None)
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    env.pop("CODEX_PROJECT_DIR", None)
+    env.pop("QUAID_ADAPTER_TYPE", None)
+
+    try:
+        subprocess.run(
+            [str(quaid_bin), "project", "create", "livetest-agentmsg-xp"],
+            cwd=project_dir,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        shutil.rmtree(short_root, ignore_errors=True)
+
+    registry = json.loads((quaid_home / "project-registry.json").read_text(encoding="utf-8"))
+    assert registry["projects"]["livetest-agentmsg-xp"]["instances"] == [instance]
+
+
+def test_quaid_cli_does_not_guess_ambiguous_project_cwd(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    visible_home = home / "quaid"
+    short_root = Path(tempfile.mkdtemp(prefix="qcli-", dir="/tmp"))
+    project_dir = short_root / "shared-project"
+    project_dir.mkdir(parents=True)
+
+    slug = _instance_slug(project_dir)
+    for instance, adapter in (
+        (f"claude-code-{slug}", "claude-code"),
+        (f"codex-{slug}", "codex"),
+    ):
+        instance_dir = quaid_home / "instances" / instance
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "config.json").write_text(
+            json.dumps({"adapter": {"type": adapter}}) + "\n",
+            encoding="utf-8",
+        )
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "QUAID_VISIBLE_HOME": str(visible_home),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    env.pop("QUAID_INSTANCE", None)
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    env.pop("CODEX_PROJECT_DIR", None)
+    env.pop("QUAID_ADAPTER_TYPE", None)
+
+    try:
+        result = subprocess.run(
+            [str(quaid_bin), "project", "create", "ambiguous-project"],
+            cwd=project_dir,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        shutil.rmtree(short_root, ignore_errors=True)
+
+    assert "Created project: ambiguous-project" in result.stdout
+    registry = json.loads((quaid_home / "project-registry.json").read_text(encoding="utf-8"))
+    assert registry["projects"]["ambiguous-project"]["instances"] == []
 
 
 def test_quaid_cli_ignores_stale_inherited_quaid_home_when_installed_home_exists(tmp_path: Path) -> None:
