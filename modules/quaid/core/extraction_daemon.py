@@ -2767,6 +2767,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     label = f"daemon-{signal_type}"
     rolling_mode = signal_type == "rolling"
     staged_state = read_rolling_state(session_id)
+    signal_meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
+    staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
+        str(signal_meta.get("reason") or "") == "rolling_stage_flush"
+    )
 
     def _emit_noop_flush_metric(reason: str) -> None:
         if signal_type not in ("compaction", "timeout"):
@@ -2881,13 +2885,16 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         return
 
     cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
-    internal_state = _reconcile_internal_cursor_state(
-        session_id,
-        transcript_path,
-        cursor_data=cursor_data,
-        cursor_key=lock_owner_key,
-        adapter=adapter,
-    )
+    if staged_payload_sweep_signal and staged_state_has_payload(staged_state):
+        internal_state = "not_internal"
+    else:
+        internal_state = _reconcile_internal_cursor_state(
+            session_id,
+            transcript_path,
+            cursor_data=cursor_data,
+            cursor_key=lock_owner_key,
+            adapter=adapter,
+        )
     if internal_state == "frozen":
         logger.info("[%s] session %s: cursor marked internal with no new content, skipping signal", label, session_id)
         mark_signal_processed(signal_data)

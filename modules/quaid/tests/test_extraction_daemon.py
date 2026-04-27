@@ -4267,6 +4267,8 @@ class TestRollingExtraction:
                 "quaid_tracking_dir",
                 lambda: tmp_path / "tracking",
             )
+        parse_empty = {"value": False}
+
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
                 return tmp_path
@@ -4278,6 +4280,8 @@ class TestRollingExtraction:
                 return instance_root / "data"
 
             def parse_session_jsonl(self, path):
+                if parse_empty["value"]:
+                    return ""
                 return 'User: My sister is Diana\n\nAssistant: Noted'
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
         sys.modules["lib.adapter"] = fake_adapter_mod
@@ -4443,6 +4447,7 @@ class TestRollingExtraction:
             flush_signal = pending[0]
             assert flush_signal["type"] == "session_end"
             assert flush_signal["meta"]["reason"] == "rolling_stage_flush"
+            parse_empty["value"] = True
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 
             assert extraction_daemon.read_rolling_state("sess-roll")["rolling_batches"] == 0
