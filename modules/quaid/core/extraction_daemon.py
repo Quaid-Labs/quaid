@@ -1252,6 +1252,10 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
     data.setdefault("buffered_line_offset", int(data.get("processed_line_offset", 0) or 0))
     data.setdefault("semantic_buffer", "")
     data.setdefault("semantic_buffer_tokens", 0)
+    data.setdefault("semantic_buffer_prior", "")
+    data.setdefault("semantic_buffer_tail", "")
+    data.setdefault("semantic_buffer_prior_tokens", 0)
+    data.setdefault("semantic_buffer_tail_tokens", 0)
     data.setdefault("facts_skipped", 0)
     data.setdefault("payload_duplicate_facts_collapsed", 0)
     data.setdefault("carry_duplicate_facts_dropped", 0)
@@ -1744,6 +1748,39 @@ def staged_state_has_payload(state: Dict[str, Any]) -> bool:
     )
 
 
+def clear_staged_payload_from_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop published rolling payload while keeping any deferred semantic tail."""
+    cleaned = dict(state or {})
+    cleaned["raw_facts"] = []
+    cleaned["raw_snippets"] = {}
+    cleaned["raw_journal"] = {}
+    cleaned["raw_project_logs"] = {}
+    cleaned["rolling_batches"] = 0
+    cleaned["facts_skipped"] = 0
+    cleaned["payload_duplicate_facts_collapsed"] = 0
+    cleaned["carry_duplicate_facts_dropped"] = 0
+    for key in (
+        "root_chunks",
+        "split_events",
+        "split_child_chunks",
+        "leaf_chunks",
+        "chunk_calls",
+        "deep_calls",
+        "repair_calls",
+        "chunks_processed",
+        "chunks_total",
+        "assessment_usable",
+        "assessment_nothing_usable",
+        "assessment_needs_smaller_chunk",
+        "unclassified_empty_payloads",
+    ):
+        cleaned[key] = 0
+    cleaned["max_split_depth"] = 0
+    for key in _semantic_stage_metrics_defaults().keys():
+        cleaned[key] = 0
+    return cleaned
+
+
 def _session_has_harvestable_subagents(session_id: str, adapter=None) -> bool:
     """Return True when a parent has completed child transcripts waiting."""
     try:
@@ -2165,12 +2202,18 @@ def _append_semantic_buffer(state: Dict[str, Any], parsed_text: str, line_offset
     merged = dict(state or {})
     existing = str(merged.get("semantic_buffer", "") or "").strip()
     incoming = str(parsed_text or "").strip()
+    before_tokens = int(merged.get("semantic_buffer_tokens", 0) or 0)
     if existing and incoming:
         combined = f"{existing}\n\n{incoming}"
     else:
         combined = existing or incoming
     merged["semantic_buffer"] = combined
     merged["semantic_buffer_tokens"] = estimate_tokens(combined) if combined else 0
+    if incoming:
+        merged["semantic_buffer_prior"] = existing
+        merged["semantic_buffer_tail"] = incoming
+        merged["semantic_buffer_prior_tokens"] = before_tokens
+        merged["semantic_buffer_tail_tokens"] = estimate_tokens(incoming)
     merged["buffered_line_offset"] = max(
         int(merged.get("buffered_line_offset", 0) or 0),
         int(line_offset or 0),
@@ -2253,6 +2296,22 @@ def _stage_semantic_buffer_payload(
         return staged_state
 
     from ingest.extract import extract_from_transcript
+    from lib.tokens import estimate_tokens
+
+    stage_text = transcript_text
+    residual_text = ""
+    prior_text = str(staged_state.get("semantic_buffer_prior", "") or "").strip()
+    tail_text = str(staged_state.get("semantic_buffer_tail", "") or "").strip()
+    prior_tokens = int(staged_state.get("semantic_buffer_prior_tokens", 0) or 0)
+    if (
+        signal_type == "rolling"
+        and prior_text
+        and tail_text
+        and prior_tokens >= _rolling_prior_buffer_threshold(chunk_budget)
+        and int(staged_state.get("semantic_buffer_tokens", 0) or 0) >= _rolling_ready_threshold(chunk_budget)
+    ):
+        stage_text = prior_text
+        residual_text = tail_text
 
     stage_started_at = time.time()
     line_chars = int(semantic_buffer_metrics.get("semantic_chars_added", 0) or len(transcript_text))
@@ -2265,7 +2324,7 @@ def _stage_semantic_buffer_payload(
     max_line_estimated_tokens = max((max(1, len(line) // 4) for line in new_lines), default=0)
     carry_facts_in = len(staged_state.get("carry_facts", []) or [])
     stage_result = extract_from_transcript(
-        transcript=transcript_text,
+        transcript=stage_text,
         owner_id=owner,
         label=label,
         session_id=session_id,
@@ -2304,10 +2363,14 @@ def _stage_semantic_buffer_payload(
         session_id,
         phase="rolling_stage",
         signal_type=signal_type,
-        transcript_text=transcript_text,
+        transcript_text=stage_text,
     )
-    staged_state["semantic_buffer"] = ""
-    staged_state["semantic_buffer_tokens"] = 0
+    staged_state["semantic_buffer"] = residual_text
+    staged_state["semantic_buffer_tokens"] = estimate_tokens(residual_text) if residual_text else 0
+    staged_state["semantic_buffer_prior"] = ""
+    staged_state["semantic_buffer_tail"] = ""
+    staged_state["semantic_buffer_prior_tokens"] = 0
+    staged_state["semantic_buffer_tail_tokens"] = 0
     staged_state["transcript_path"] = transcript_path
     write_rolling_state(session_id, staged_state)
     write_rolling_metric(
@@ -2957,7 +3020,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         return
 
     cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
-    if staged_payload_sweep_signal and staged_state_has_payload(staged_state):
+    if (staged_payload_sweep_signal and staged_state_has_payload(staged_state)) or _semantic_buffer_has_content(staged_state):
         internal_state = "not_internal"
     else:
         internal_state = _reconcile_internal_cursor_state(
@@ -3471,7 +3534,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             transcript_text = adapter.parse_session_jsonl(Path(tmp_path))
         if rolling_mode:
             transcript_text = str(staged_state.get("semantic_buffer", "") or "").strip()
-        if not rolling_mode and _semantic_buffer_has_content(staged_state):
+        if not rolling_mode and not staged_payload_sweep_signal and _semantic_buffer_has_content(staged_state):
             if int(staged_state.get("semantic_buffer_tokens", 0) or 0) >= chunk_budget:
                 operation_phase = "rolling_stage_extract"
                 staged_semantic_buffer_for_nonrolling = True
@@ -3890,7 +3953,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             transcript_path,
             source_key=lock_owner_key,
         )
-        clear_rolling_state(session_id)
+        if staged_payload_sweep_signal and _semantic_buffer_has_content(staged_state):
+            write_rolling_state(session_id, clear_staged_payload_from_state(staged_state))
+        else:
+            clear_rolling_state(session_id)
         if mark_harvested_fn is not None:
             try:
                 for child in harvestable:
@@ -4390,6 +4456,12 @@ def _rolling_ready_threshold(chunk_budget: int) -> int:
     # buffer miss rolling extraction just because it lands a few estimated tokens
     # under the configured chunk budget.
     return max(1, min(budget, max(int(budget * 0.95), budget - 64)))
+
+
+def _rolling_prior_buffer_threshold(chunk_budget: int) -> int:
+    """Return the minimum prior-buffer size worth staging without the crossing tail."""
+    budget = max(1, int(chunk_budget or 1))
+    return max(1, int(budget * 0.70))
 
 
 def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:

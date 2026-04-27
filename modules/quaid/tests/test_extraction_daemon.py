@@ -5002,6 +5002,202 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("core.runtime.notify", None)
 
+    def test_rolling_flush_preserves_threshold_crossing_tail_for_lifecycle(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"chunk one stable memory"}\n'
+            '{"role":"user","content":"chunk two Baxter residual"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        extraction_daemon.write_cursor("sess-roll-residual", 0, str(transcript_path))
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 100)
+
+        prior = "User: " + " ".join(["stable"] * 48)
+        tail = "User: Baxter residual context is durable and should wait for lifecycle extraction"
+        extraction_daemon.write_rolling_state(
+            "sess-roll-residual",
+            {
+                "session_id": "sess-roll-residual",
+                "transcript_path": str(transcript_path),
+                "semantic_buffer": f"{prior}\n\n{tail}",
+                "semantic_buffer_tokens": 110,
+                "semantic_buffer_prior": prior,
+                "semantic_buffer_tail": tail,
+                "semantic_buffer_prior_tokens": 80,
+                "semantic_buffer_tail_tokens": 5,
+                "buffered_line_offset": 2,
+                "processed_line_offset": 2,
+            },
+        )
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        if real_adapter is not None:
+            fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
+            fake_adapter_mod.quaid_projects_dir = getattr(
+                real_adapter,
+                "quaid_projects_dir",
+                lambda: tmp_path / "projects",
+            )
+            fake_adapter_mod.quaid_tracking_dir = getattr(
+                real_adapter,
+                "quaid_tracking_dir",
+                lambda: tmp_path / "tracking",
+            )
+        parse_empty = {"value": False}
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                if parse_empty["value"]:
+                    return ""
+                return f"{prior}\n\n{tail}"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        import ingest.extract as extract_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import core.docs_updater_hook as docs_updater_mod
+
+        seen_transcripts = []
+        applied_payloads = []
+
+        def fake_extract_from_transcript(**kwargs):
+            transcript = kwargs["transcript"]
+            seen_transcripts.append(transcript)
+            if "Baxter" in transcript:
+                raw_facts = [{"text": "Owner discussed Baxter", "status": "new"}]
+                carry = [{"text": "Owner discussed Baxter"}]
+            else:
+                raw_facts = [{"text": "Owner has stable prior memories", "status": "new"}]
+                carry = [{"text": "Owner has stable prior memories"}]
+            return {
+                "carry_facts": carry,
+                "raw_facts": raw_facts,
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "facts_skipped": 0,
+                "payload_duplicate_facts_collapsed": 0,
+                "carry_duplicate_facts_dropped": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            }
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: applied_payloads.append(payload) or {
+                **payload,
+                "facts_stored": len(payload.get("raw_facts", []) or []),
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [
+                    {"text": fact.get("text", ""), "status": "stored", "edges": []}
+                    for fact in (payload.get("raw_facts", []) or [])
+                ],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(ingest_runtime_mod, "run_session_logs_ingest", lambda **kwargs: {"status": "indexed"})
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id="sess-roll-residual",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+            state_after_stage = extraction_daemon.read_rolling_state("sess-roll-residual")
+            assert seen_transcripts == [prior]
+            assert state_after_stage["semantic_buffer"] == tail
+            assert state_after_stage["raw_facts"] == [{"text": "Owner has stable prior memories", "status": "new"}]
+
+            parse_empty["value"] = True
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+            state_after_synthetic_flush = extraction_daemon.read_rolling_state("sess-roll-residual")
+            assert len(applied_payloads) == 1
+            assert [fact["text"] for fact in applied_payloads[0]["raw_facts"]] == [
+                "Owner has stable prior memories"
+            ]
+            assert state_after_synthetic_flush["semantic_buffer"] == tail
+            assert state_after_synthetic_flush["raw_facts"] == []
+            assert extraction_daemon.read_pending_signals() == []
+
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id="sess-roll-residual",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+            assert seen_transcripts == [prior, tail]
+            assert len(applied_payloads) == 2
+            assert [fact["text"] for fact in applied_payloads[1]["raw_facts"]] == [
+                "Owner discussed Baxter"
+            ]
+            assert not extraction_daemon._rolling_state_path("sess-roll-residual").exists()
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_process_signal_session_end_flushes_buffered_semantic_tail_without_new_raw_lines(self, monkeypatch, tmp_path):
         import sys
         import types
