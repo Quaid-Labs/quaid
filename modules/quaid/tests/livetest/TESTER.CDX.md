@@ -54,12 +54,30 @@ sequence. If you re-use a pre-install Codex session for M1 seeding,
 `hook-inject` will not fire, the seed will not produce a session transition
 signal, and extraction will silently skip the turn.
 
-**MANDATORY — verify model before any test messages:**
-CDX should use installer defaults: fast=`gpt-5.4-mini`, deep=`gpt-5.4`. Do not
-patch tiers mid-run. Verify from config before sending any milestone prompts:
+**MANDATORY — verify effective models before any test messages:**
+CDX may define models in the instance, platform, or global config layer. Do not
+patch tiers mid-run. Verify the effective layered values are sane before sending
+any milestone prompts:
 ```bash
-ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"WORKSPACE/instances/CDX_INSTANCE/config.json\")); \
-  print(\"fast:\", d[\"models\"][\"fastReasoning\"]); print(\"deep:\", d[\"models\"][\"deepReasoning\"])"'
+ssh REMOTE_HOST 'python3 -c "import json, pathlib
+home = pathlib.Path(\"WORKSPACE\")
+paths = [
+  home / \"shared/config/global/config.json\",
+  home / \"shared/config/codex/config.json\",
+  home / \"instances/CDX_INSTANCE/config.json\",
+]
+models = {}
+for p in paths:
+    if p.exists():
+        d = json.loads(p.read_text())
+        if isinstance(d.get(\"models\"), dict):
+            models.update(d[\"models\"])
+print(\"provider:\", models.get(\"llmProvider\"))
+print(\"fast:\", models.get(\"fastReasoning\"))
+print(\"deep:\", models.get(\"deepReasoning\"))
+assert \"invalid-model\" not in json.dumps(models), models
+assert models.get(\"fastReasoning\") in (\"gpt-5.4-mini\", \"claude-haiku-4-5\"), models
+assert models.get(\"deepReasoning\") in (\"gpt-5.4\", \"claude-sonnet-4-5\"), models"'
 ```
 
 ---
