@@ -5133,6 +5133,27 @@ except Exception as e:
   // session/lifecycle processing so the first real session is ready immediately.
   const validationAdapterType = models?.adapterType || resolvedInstallerPlatform();
   if (_validationInstanceId && shouldStartExtractionDaemonAfterInstall(validationAdapterType)) {
+    s.start("Stopping stale Quaid supervisor...");
+    const supervisorStopScript = `
+import os, sys
+${pythonInstallerEnvSetup()}
+sys.path.insert(0, '.')
+try:
+    from core import project_docs
+    project_docs.stop_supervisor()
+    print('OK')
+except Exception as e:
+    print(f'error: {e}', file=sys.stderr)
+    raise
+`;
+    const supervisorStop = python3Spawn(["-c", supervisorStopScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    if (supervisorStop.status !== 0 || (supervisorStop.stdout || "").trim() !== "OK") {
+      s.stop(C.red("Quaid supervisor stop failed"));
+      const detail = (supervisorStop.stderr || supervisorStop.stdout || "").trim();
+      throw new Error(`failed to stop stale Quaid supervisor before daemon restart${detail ? `: ${detail}` : ""}`);
+    }
+    s.stop(C.green("Stale Quaid supervisor cleared"));
+
     s.start("Starting extraction daemon...");
     const daemonScript = `
 import os, sys

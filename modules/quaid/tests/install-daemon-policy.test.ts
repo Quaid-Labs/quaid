@@ -26,6 +26,19 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("shouldStartExtractionDaemonAfterInstall(validationAdapterType)");
   });
 
+  it("installer clears stale supervisors before starting hook-driven daemons", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    const stopIdx = setupText.indexOf('s.start("Stopping stale Quaid supervisor...")');
+    const startIdx = setupText.indexOf('s.start("Starting extraction daemon...")');
+    expect(stopIdx).toBeGreaterThan(-1);
+    expect(startIdx).toBeGreaterThan(stopIdx);
+    expect(setupText).toContain("from core import project_docs");
+    expect(setupText).toContain("project_docs.stop_supervisor()");
+    expect(setupText).toContain("failed to stop stale Quaid supervisor before daemon restart");
+  });
+
   it("installer writes shared platform config without inventing a default instance silo", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
