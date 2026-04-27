@@ -188,6 +188,11 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
             captured["env"] = dict(kwargs.get("env") or {})
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setenv("SILO", str(tmp_path / "instances" / "claude-code-private-tmp-cc-livetest"))
+    monkeypatch.setenv("LANE", "cc")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "claude-code")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp/cc-livetest")
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
@@ -206,6 +211,11 @@ def test_start_instance_monitor_strips_inherited_memory_db_overrides(monkeypatch
     assert env["QUAID_HOME"] == str(tmp_path)
     assert env["QUAID_INSTANCE"] == "codex-private-tmp-cdx-livetest"
     assert env["QUAID_DAEMON"] == "1"
+    assert "INSTANCE" not in env
+    assert "SILO" not in env
+    assert "LANE" not in env
+    assert "QUAID_ADAPTER_TYPE" not in env
+    assert "CLAUDE_PROJECT_DIR" not in env
 
 
 def test_start_instance_monitor_adopts_matching_live_daemon_without_pidfile(monkeypatch, tmp_path):
@@ -318,6 +328,10 @@ def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, 
             captured["env"] = dict(kwargs.get("env") or {})
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("INSTANCE", "openclaw-main")
+    monkeypatch.setenv("SILO", str(tmp_path / "instances" / "openclaw-main"))
+    monkeypatch.setenv("LANE_UPPER", "OC")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
@@ -333,6 +347,10 @@ def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, 
     assert "MEMORY_ARCHIVE_DB_PATH" not in env
     assert env["QUAID_HOME"] == str(tmp_path)
     assert env["QUAID_INSTANCE"] == "claude-code-private-tmp-cc-livetest"
+    assert "INSTANCE" not in env
+    assert "SILO" not in env
+    assert "LANE_UPPER" not in env
+    assert "QUAID_ADAPTER_TYPE" not in env
 
 
 def test_start_requested_janitor_run_starts_all_live_instances(monkeypatch, tmp_path):

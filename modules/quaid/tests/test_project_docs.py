@@ -927,6 +927,11 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
             return None
 
     monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setenv("INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setenv("SILO", str(_tmp_path / "instances" / "claude-code-private-tmp-cc-livetest"))
+    monkeypatch.setenv("LANE", "cc")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "claude-code")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp/cc-livetest")
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
@@ -942,6 +947,11 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     assert terminated == [11111, 22222]
     assert captured["env"]["QUAID_HOME"] == str(project_docs.get_quaid_home())
     assert "QUAID_INSTANCE" not in captured["env"]
+    assert "INSTANCE" not in captured["env"]
+    assert "SILO" not in captured["env"]
+    assert "LANE" not in captured["env"]
+    assert "QUAID_ADAPTER_TYPE" not in captured["env"]
+    assert "CLAUDE_PROJECT_DIR" not in captured["env"]
     assert "MEMORY_DB_PATH" not in captured["env"]
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
     assert captured["env"]["QUAID_SUPERVISOR_BOOT"] == "1"
@@ -963,6 +973,10 @@ def test_start_worker_strips_inherited_memory_db_overrides(project_env, monkeypa
             return None
 
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
+    monkeypatch.setenv("INSTANCE", "openclaw-main")
+    monkeypatch.setenv("SILO", str(_tmp_path / "instances" / "openclaw-main"))
+    monkeypatch.setenv("LANE_UPPER", "OC")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
         str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory_archive.db"),
@@ -976,6 +990,10 @@ def test_start_worker_strips_inherited_memory_db_overrides(project_env, monkeypa
     assert project_docs.start_worker("demo") == 44444
     assert "MEMORY_DB_PATH" not in captured["env"]
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
+    assert "INSTANCE" not in captured["env"]
+    assert "SILO" not in captured["env"]
+    assert "LANE_UPPER" not in captured["env"]
+    assert "QUAID_ADAPTER_TYPE" not in captured["env"]
     assert captured["env"]["QUAID_SUPERVISOR_PID"] == "12345"
     assert captured["env"]["QUAID_PROJECT_DOCS_WORKER_TOKEN"]
 

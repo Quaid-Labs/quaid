@@ -307,6 +307,11 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setenv("INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setenv("SILO", str(tmp_path / "instances" / "claude-code-private-tmp-cc-livetest"))
+    monkeypatch.setenv("LANE", "cc")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "claude-code")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp/cc-livetest")
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
@@ -324,6 +329,11 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     assert captured["env"]["QUAID_HOME"] == str(tmp_path / "home")
     assert captured["env"]["QUAID_INSTANCE"] == "codex-livetest"
     assert captured["env"]["QUAID_DAEMON"] == "1"
+    assert "INSTANCE" not in captured["env"]
+    assert "SILO" not in captured["env"]
+    assert "LANE" not in captured["env"]
+    assert "QUAID_ADAPTER_TYPE" not in captured["env"]
+    assert "CLAUDE_PROJECT_DIR" not in captured["env"]
     assert "MEMORY_DB_PATH" not in captured["env"]
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
 
@@ -347,6 +357,32 @@ def test_matching_daemon_pids_does_not_match_instance_prefix(monkeypatch):
         quaid_home=home,
         instance="claude-code-private-tmp-cc-livetest",
     ) == [101]
+
+
+def test_matching_daemon_pids_can_include_foreground_run(monkeypatch):
+    home = "/Users/admin/.quaid"
+    worker = "/opt/homebrew/bin/python3 /Users/admin/.quaid/plugins/quaid/core/extraction_daemon.py _worker"
+    foreground = "/opt/homebrew/bin/python3 /Users/admin/.quaid/plugins/quaid/core/extraction_daemon.py run"
+
+    monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_all_process_commands_with_env",
+        lambda: [
+            (101, f"{worker} QUAID_HOME={home} QUAID_INSTANCE=codex-private-tmp-cdx-livetest QUAID_DAEMON=1"),
+            (102, f"{foreground} QUAID_HOME={home} QUAID_INSTANCE=codex-private-tmp-cdx-livetest"),
+        ],
+    )
+
+    assert extraction_daemon._matching_daemon_pids(
+        quaid_home=home,
+        instance="codex-private-tmp-cdx-livetest",
+    ) == [101]
+    assert extraction_daemon._matching_daemon_pids(
+        quaid_home=home,
+        instance="codex-private-tmp-cdx-livetest",
+        include_foreground=True,
+    ) == [101, 102]
 
 
 def test_start_daemon_adopts_matching_live_worker_without_pidfile(monkeypatch, tmp_path):

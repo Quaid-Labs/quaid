@@ -29,6 +29,21 @@ UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
 SUPERVISOR_ROLE = "project-docs-supervisor"
 WORKER_ROLE = "project-docs-worker"
 _DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
+_BACKGROUND_PROCESS_SCRUB_ENV_KEYS = (
+    "ART",
+    "CLAUDE_PROJECT_DIR",
+    "CODEX_PROJECT_DIR",
+    "INSTANCE",
+    "INSTANCE_X",
+    "INSTANCE_Y",
+    "LANE",
+    "LANE_UPPER",
+    "PROBE_ID",
+    "QUAID_ADAPTER_TYPE",
+    "SILO",
+    "SILO_X",
+    "SILO_Y",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +63,14 @@ def get_quaid_home() -> Path:
     """Return QUAID_HOME without adapter bootstrap side effects."""
     raw = os.environ.get("QUAID_HOME", "").strip()
     return Path(raw).expanduser().resolve() if raw else Path.home() / ".quaid"
+
+
+def scrub_background_process_env(env: Dict[str, str]) -> Dict[str, str]:
+    """Remove caller-local lane/test variables from long-lived Quaid processes."""
+    cleaned = dict(env)
+    for key in _BACKGROUND_PROCESS_SCRUB_ENV_KEYS:
+        cleaned.pop(key, None)
+    return cleaned
 
 
 def quaid_tracking_dir(quaid_home: Path) -> Path:
@@ -1639,7 +1662,7 @@ def start_supervisor() -> int:
         supervisor_dir().mkdir(parents=True, exist_ok=True)
         log_path = supervisor_log_path()
         script = Path(__file__).parent / "project_docs_supervisor.py"
-        env = dict(os.environ)
+        env = scrub_background_process_env(dict(os.environ))
         for key in _DB_OVERRIDE_ENV_KEYS:
             env.pop(key, None)
         env["QUAID_HOME"] = str(get_quaid_home())
@@ -1721,7 +1744,7 @@ def start_worker(project: str) -> int:
         _worker_dir().mkdir(parents=True, exist_ok=True)
         log_path = worker_log_path(name)
         script = Path(__file__).parent / "project_docs_worker.py"
-        env = dict(os.environ)
+        env = scrub_background_process_env(dict(os.environ))
         for key in _DB_OVERRIDE_ENV_KEYS:
             env.pop(key, None)
         env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")

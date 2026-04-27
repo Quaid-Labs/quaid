@@ -473,12 +473,22 @@ def _command_has_env_value(command: str, key: str, value: str) -> bool:
     return re.search(pattern, str(command or "")) is not None
 
 
+def _command_is_daemon_process(command: str, *, include_foreground: bool = False) -> bool:
+    text = f" {str(command or '').strip()} "
+    if "extraction_daemon.py" not in text:
+        return False
+    if " _worker " in text:
+        return True
+    return bool(include_foreground and " run " in text)
+
+
 def _matching_daemon_pids(
     *,
     quaid_home: Path | str | None = None,
     instance: str | None = None,
+    include_foreground: bool = False,
 ) -> list[int]:
-    """Return live extraction-daemon worker PIDs for this home+instance."""
+    """Return live extraction-daemon PIDs for this home+instance."""
     home = str(quaid_home or _quaid_home()).strip()
     instance_id = str(instance or _instance_id()).strip()
     if not home or not instance_id:
@@ -487,7 +497,7 @@ def _matching_daemon_pids(
     for pid, command in _all_process_commands_with_env():
         if pid <= 0 or pid == os.getpid():
             continue
-        if "extraction_daemon.py" not in command or "_worker" not in command:
+        if not _command_is_daemon_process(command, include_foreground=include_foreground):
             continue
         if not _command_has_env_value(command, "QUAID_HOME", home):
             continue
@@ -4771,7 +4781,7 @@ def start_daemon() -> int:
         # Re-check PID under lock
         existing = read_pid()
         if existing is not None:
-            matching = _matching_daemon_pids()
+            matching = _matching_daemon_pids(include_foreground=True)
             extras = [pid for pid in matching if pid != existing]
             if extras:
                 logger.warning(
@@ -4785,19 +4795,20 @@ def start_daemon() -> int:
                 for pid in extras:
                     _terminate_daemon_pid(pid)
             return existing
-        matching = _matching_daemon_pids()
-        if len(matching) == 1:
-            write_pid(matching[0])
-            return matching[0]
-        if matching:
+        matching_workers = _matching_daemon_pids()
+        matching_all = _matching_daemon_pids(include_foreground=True)
+        if len(matching_workers) == 1 and matching_all == matching_workers:
+            write_pid(matching_workers[0])
+            return matching_workers[0]
+        if matching_all:
             logger.warning(
                 "reaping %d matching extraction daemon(s) before spawn for home=%s instance=%s: %s",
-                len(matching),
+                len(matching_all),
                 _quaid_home(),
                 _instance_id(),
-                ",".join(str(pid) for pid in matching),
+                ",".join(str(pid) for pid in matching_all),
             )
-            for pid in matching:
+            for pid in matching_all:
                 _terminate_daemon_pid(pid)
             remove_pid()
 
@@ -4817,6 +4828,8 @@ def start_daemon() -> int:
             if not any(k.startswith(p) for p in _skip_prefixes)
             and k not in _skip_keys
         }
+        from core import project_docs
+        env = project_docs.scrub_background_process_env(env)
         env["QUAID_HOME"] = str(_quaid_home())
         env["QUAID_DAEMON"] = "1"
 
@@ -4871,7 +4884,7 @@ def stop_daemon() -> bool:
     pid = read_pid()
     if pid is not None:
         targets.append(pid)
-    for match_pid in _matching_daemon_pids():
+    for match_pid in _matching_daemon_pids(include_foreground=True):
         if match_pid not in targets:
             targets.append(match_pid)
     if not targets:

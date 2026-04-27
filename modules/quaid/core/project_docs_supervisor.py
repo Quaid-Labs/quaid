@@ -69,7 +69,7 @@ def _instance_root(instance: str) -> Path:
 def _instance_child_env(instance: str, *, daemon: bool = False) -> dict[str, str]:
     """Build an env for a supervisor-owned per-instance child process."""
     name = validate_instance_id(instance)
-    env = dict(os.environ)
+    env = project_docs.scrub_background_process_env(dict(os.environ))
     for key in _INSTANCE_DB_OVERRIDE_ENV_KEYS:
         env.pop(key, None)
     env["QUAID_HOME"] = str(quaid_home())
@@ -186,18 +186,23 @@ def _start_instance_monitor(instance: str) -> int:
         return existing
     from core import extraction_daemon as _extraction_daemon
 
-    matching = _extraction_daemon._matching_daemon_pids(quaid_home=quaid_home(), instance=name)
-    if len(matching) == 1:
-        _extraction_daemon.write_pid(matching[0])
-        return matching[0]
-    if matching:
+    matching_workers = _extraction_daemon._matching_daemon_pids(quaid_home=quaid_home(), instance=name)
+    matching_all = _extraction_daemon._matching_daemon_pids(
+        quaid_home=quaid_home(),
+        instance=name,
+        include_foreground=True,
+    )
+    if len(matching_workers) == 1 and matching_all == matching_workers:
+        _extraction_daemon.write_pid(matching_workers[0])
+        return matching_workers[0]
+    if matching_all:
         logging.getLogger(__name__).warning(
             "reaping %d matching extraction daemon(s) before supervisor spawn for %s: %s",
-            len(matching),
+            len(matching_all),
             name,
-            ",".join(str(pid) for pid in matching),
+            ",".join(str(pid) for pid in matching_all),
         )
-        for pid in matching:
+        for pid in matching_all:
             _extraction_daemon._terminate_daemon_pid(pid)
         try:
             _instance_daemon_pid_path(name).unlink(missing_ok=True)
@@ -229,7 +234,11 @@ def _stop_instance_monitor(instance: str) -> bool:
     pid = _read_instance_daemon_pid(name)
     if pid is not None:
         targets.append(pid)
-    for match_pid in _extraction_daemon._matching_daemon_pids(quaid_home=quaid_home(), instance=name):
+    for match_pid in _extraction_daemon._matching_daemon_pids(
+        quaid_home=quaid_home(),
+        instance=name,
+        include_foreground=True,
+    ):
         if match_pid not in targets:
             targets.append(match_pid)
     if not targets:
@@ -427,7 +436,11 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
         known_instances.pop(instance, None)
     for instance in sorted(live):
         pid = _read_instance_daemon_pid(instance)
-        matching = _extraction_daemon._matching_daemon_pids(quaid_home=quaid_home(), instance=instance)
+        matching = _extraction_daemon._matching_daemon_pids(
+            quaid_home=quaid_home(),
+            instance=instance,
+            include_foreground=True,
+        )
         if pid is not None and len(matching) > 1:
             logging.getLogger(__name__).warning(
                 "reconciling duplicate extraction daemons for %s: pidfile=%s matches=%s",
