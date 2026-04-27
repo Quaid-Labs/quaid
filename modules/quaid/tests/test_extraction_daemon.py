@@ -3012,6 +3012,54 @@ class TestSignalRoundTrip:
 
         assert kept is False
 
+    def test_process_signal_preserves_missing_timeout_signal_for_retry(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        missing_path = tmp_path / "missing-timeout.jsonl"
+        calls = []
+        marked = []
+        released = []
+
+        monkeypatch.setattr(extraction_daemon, "_read_rolling_state_for_signal", lambda sid, _path: ({}, sid))
+        monkeypatch.setattr(extraction_daemon, "_acquire_session_processing_lock", lambda _key: object())
+        monkeypatch.setattr(extraction_daemon, "_release_session_processing_lock", lambda key, _fd: released.append(key))
+        monkeypatch.setattr(extraction_daemon, "_read_cursor_with_source_compat", lambda *_args, **_kwargs: {
+            "line_offset": 0,
+            "transcript_path": "",
+        })
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *_args, **_kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
+
+        def _preserve(signal_data, *, session_id, signal_type, transcript_path, label, **_kwargs):
+            calls.append({
+                "signal": signal_data,
+                "session_id": session_id,
+                "signal_type": signal_type,
+                "transcript_path": transcript_path,
+                "label": label,
+            })
+            return True
+
+        monkeypatch.setattr(extraction_daemon, "_preserve_missing_transcript_signal_for_retry", _preserve)
+
+        signal = {
+            "type": "timeout",
+            "session_id": "sess-timeout-missing",
+            "transcript_path": str(missing_path),
+            "_signal_path": str(tmp_path / "sig.json"),
+            "timestamp": "2026-04-27T17:00:00Z",
+        }
+        extraction_daemon.process_signal(signal)
+
+        assert marked == []
+        assert released
+        assert len(calls) == 1
+        assert calls[0]["session_id"] == "sess-timeout-missing"
+        assert calls[0]["signal_type"] == "timeout"
+        assert calls[0]["transcript_path"] == str(missing_path)
+        assert calls[0]["label"] == "daemon-timeout"
+
     def test_session_processing_lock_is_exclusive_per_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

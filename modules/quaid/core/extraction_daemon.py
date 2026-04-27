@@ -3375,7 +3375,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 _reset_found = True
                 logger.info("[%s] transcript renamed to reset backup, using: %s", label, transcript_path)
         if not _reset_found:
-            if signal_type in ("reset", "session_end", "compaction") and _preserve_missing_transcript_signal_for_retry(
+            if signal_type in ("reset", "session_end", "compaction", "timeout") and _preserve_missing_transcript_signal_for_retry(
                 signal_data,
                 session_id=session_id,
                 signal_type=signal_type,
