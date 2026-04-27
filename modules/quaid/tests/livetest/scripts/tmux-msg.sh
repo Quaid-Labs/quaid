@@ -139,6 +139,34 @@ _user_viewing() {
     [[ "$a" == "1" ]]
 }
 
+_candidate_is_placeholder() {
+    local candidate="$1"
+    # Codex renders rotating suggestion ghost text in the composer while idle.
+    # Treat known suggestions as placeholders so nudges are not skipped as drafts.
+    case "$candidate" in
+        ""|\
+        "Press up to edit queued messages"*|\
+        "Type a message"*|\
+        "Enter a message"*|\
+        "Ask anything"*|\
+        "Ask a question"*|\
+        "Explain this codebase"*|\
+        "Summarize this codebase"*|\
+        "Describe this codebase"*|\
+        "Find and fix a bug"*|\
+        "Fix a bug"*|\
+        "Write tests"*|\
+        "Write tests for @filename"*|\
+        "Add a feature"*|\
+        "Improve this code"*|\
+        "Review this code"*|\
+        "Explain this file"*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
 _pane_has_draft() {
     local cursor_y pane_height raw_block candidate composer_top scan_lines
     cursor_y="$(tmux display-message -p -t "$PANE" '#{cursor_y}' 2>/dev/null || echo "")"
@@ -191,11 +219,7 @@ _pane_has_draft() {
     # Trim whitespace
     candidate="${candidate#"${candidate%%[![:space:]]*}"}"
     candidate="${candidate%"${candidate##*[![:space:]]}"}"
-    case "$candidate" in
-        ""|"Press up to edit queued messages"*|"Type a message"*|"Enter a message"*|"Write tests for @filename"*)
-            return 1
-            ;;
-    esac
+    _candidate_is_placeholder "$candidate" && return 1
     [[ -n "$candidate" ]]
 }
 
