@@ -437,6 +437,19 @@ def get_project(name: str) -> Optional[Dict[str, Any]]:
         return data.get("projects", {}).get(key)
 
 
+def get_project_raw(name: str) -> Optional[Dict[str, Any]]:
+    """Return a project entry without docs-registry reconciliation."""
+    key = str(name or "").strip()
+    with _registry_lock():
+        data = _load_registry()
+        if key in (data.get("deleted_projects") or {}):
+            if key in data.get("projects", {}):
+                del data["projects"][key]
+                _save_registry(data)
+            return None
+        return data.get("projects", {}).get(key)
+
+
 def project_exists_raw(name: str) -> bool:
     """Return whether a project is present in the global registry without reconciliation.
 

@@ -582,10 +582,12 @@ def clear_worker_pid_for_current_process(project: str) -> None:
 
 
 def get_project_entry(project: str) -> Dict[str, Any]:
-    from core.project_registry import get_project
+    from core.project_registry import get_project, get_project_raw
 
     name = validate_project_name(project)
-    entry = get_project(name)
+    entry = get_project_raw(name)
+    if not entry:
+        entry = get_project(name)
     if not entry:
         raise KeyError(f"Project not found: {name}")
     return dict(entry)

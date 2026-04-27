@@ -60,6 +60,18 @@ def test_request_update_records_runtime_context(project_env, monkeypatch):
     assert request["requested_adapter_type"] == "codex"
 
 
+def test_get_project_entry_uses_raw_registry_without_instance_env(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+    with patch("core.project_registry.get_project", side_effect=AssertionError("reconciled get_project should not be used")):
+        entry = project_docs.get_project_entry("demo")
+
+    assert entry["canonical_path"].endswith("/projects/demo")
+
+
 def test_project_runtime_context_uses_request_instance(monkeypatch):
     from core import project_docs
 
@@ -729,7 +741,7 @@ def test_project_status_counts_project_log_without_canonical_path(project_env, m
     managed_log.write_text("- [2026-04-20T00:00:00] Managed milestone\n", encoding="utf-8")
 
     monkeypatch.setattr(
-        "core.project_registry.get_project",
+        "core.project_registry.get_project_raw",
         lambda name: {"source_root": None, "description": "Demo"},
     )
 
@@ -811,7 +823,7 @@ def test_project_status_no_source_root_is_fresh_when_managed_log_cursor_current(
     log_size = managed_log.stat().st_size
 
     monkeypatch.setattr(
-        "core.project_registry.get_project",
+        "core.project_registry.get_project_raw",
         lambda name: {"source_root": None, "description": "Demo"},
     )
     project_docs.merge_state("demo", {"project_log_offset": log_size})
