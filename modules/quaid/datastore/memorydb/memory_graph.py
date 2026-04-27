@@ -6924,6 +6924,13 @@ def _recall_once(
             if _node_in_date_range(node)
         ]
 
+    scored_results = _apply_relative_temporal_freshness_rerank(
+        clean_query,
+        scored_results,
+        intent=intent,
+        target_date=target_date,
+    )
+
     # Apply MMR diversity (select diverse top-N from candidates)
     _mmr_lambda = 0.7
     _mmr_candidate_cap = max(limit * 4, 12)
@@ -9039,6 +9046,85 @@ def _asof_temporal_score_delta(node: Node, target_date: str) -> float:
         return 0.02
     days_future = max(1, (event_date - target).days)
     return -min(0.18, 0.06 + days_future * 0.004)
+
+
+def _should_apply_relative_temporal_freshness(query: str, *, intent: str, target_date: str) -> bool:
+    """Whether peer-relative temporal freshness should rerank open-ended results."""
+    if target_date:
+        return False
+    lower = str(query or "").lower()
+    if re.search(r"\b(current|currently|latest|now|today|most recent|still|yet)\b", lower):
+        return True
+    # Open-ended schedule/state questions should usually prefer the latest
+    # corrected fact in the final memory graph, unless the user supplied an
+    # explicit historical cutoff.
+    if intent == "WHEN" and re.search(r"\bwhen\s+(?:is|are|was)\b", lower):
+        return True
+    return False
+
+
+def _apply_relative_temporal_freshness_rerank(
+    query: str,
+    scored_results: List[Tuple["Node", float]],
+    *,
+    intent: str,
+    target_date: str,
+) -> List[Tuple["Node", float]]:
+    """Prefer newer temporal candidates for current/open-ended schedule queries.
+
+    This compares candidate rows to each other, not to wall-clock time. That keeps
+    benchmark and prod replay paths stable even when transcript dates run ahead of
+    the executing machine's current date.
+    """
+    if not _should_apply_relative_temporal_freshness(query, intent=intent, target_date=target_date):
+        return scored_results
+    if len(scored_results) < 2:
+        return scored_results
+
+    dated: List[Tuple[Node, float, datetime]] = []
+    for node, score in scored_results:
+        date_part = _node_temporal_date(node)
+        if not date_part:
+            continue
+        try:
+            parsed = datetime.fromisoformat(date_part)
+        except Exception:
+            continue
+        dated.append((node, score, parsed))
+    if len(dated) < 2:
+        return scored_results
+
+    latest = max(parsed for _, _, parsed in dated)
+    earliest = min(parsed for _, _, parsed in dated)
+    span_days = max(1, abs((latest - earliest).days))
+    # Only intervene when the candidate set really spans time; otherwise the
+    # rerank just adds noise to essentially equivalent facts.
+    if span_days < 14:
+        return scored_results
+
+    current_like = bool(
+        re.search(
+            r"\b(current|currently|latest|now|today|most recent|still|yet)\b",
+            str(query or "").lower(),
+        )
+    )
+    max_boost = 0.12 if current_like else 0.08
+    reranked: List[Tuple[Node, float]] = []
+    for node, score in scored_results:
+        date_part = _node_temporal_date(node)
+        if not date_part:
+            reranked.append((node, score))
+            continue
+        try:
+            parsed = datetime.fromisoformat(date_part)
+        except Exception:
+            reranked.append((node, score))
+            continue
+        age_days = max(0, (latest - parsed).days)
+        freshness = max(0.0, 1.0 - (age_days / span_days))
+        reranked.append((node, min(1.0, float(score) + max_boost * freshness)))
+    reranked.sort(key=lambda item: item[1], reverse=True)
+    return reranked
 
 
 def _collect_recall_temporal_markers(row: Dict[str, Any]) -> List[datetime]:

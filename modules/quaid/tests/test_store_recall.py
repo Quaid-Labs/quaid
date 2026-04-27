@@ -5358,6 +5358,88 @@ class TestRecallFastHookInjectContract:
 
         assert mult >= 1.05
 
+    def test_relative_temporal_freshness_rerank_prefers_newer_current_state_fact(self):
+        import datastore.memorydb.memory_graph as mg
+
+        older = mg.Node(
+            id="old",
+            type="Fact",
+            name="Maya worked at TechFlow as a PM.",
+            attributes={},
+            created_at="2026-01-10T00:00:00Z",
+        )
+        newer = mg.Node(
+            id="new",
+            type="Fact",
+            name="Maya joined Stripe as a senior PM.",
+            attributes={},
+            created_at="2026-03-22T00:00:00Z",
+        )
+
+        reranked = mg._apply_relative_temporal_freshness_rerank(
+            "Where does Maya work right now?",
+            [(older, 0.91), (newer, 0.89)],
+            intent="WHERE",
+            target_date="",
+        )
+
+        assert reranked[0][0].id == "new"
+        assert reranked[0][1] > reranked[1][1]
+
+    def test_relative_temporal_freshness_rerank_prefers_latest_schedule_fact_for_open_ended_when(self):
+        import datastore.memorydb.memory_graph as mg
+
+        older = mg.Node(
+            id="old",
+            type="Fact",
+            name="Maya is training for a half marathon in Austin scheduled for late April",
+            attributes={},
+            created_at="2026-03-03T00:00:00Z",
+        )
+        newer = mg.Node(
+            id="new",
+            type="Fact",
+            name="Maya's half marathon race is scheduled for May 18th",
+            attributes={},
+            created_at="2026-04-21T00:00:00Z",
+        )
+
+        reranked = mg._apply_relative_temporal_freshness_rerank(
+            "When is the Austin Half marathon?",
+            [(older, 0.93), (newer, 0.89)],
+            intent="WHEN",
+            target_date="",
+        )
+
+        assert reranked[0][0].id == "new"
+
+    def test_relative_temporal_freshness_rerank_skips_explicit_historical_cutoff(self):
+        import datastore.memorydb.memory_graph as mg
+
+        older = mg.Node(
+            id="old",
+            type="Fact",
+            name="Maya worked at TechFlow as a PM.",
+            attributes={},
+            created_at="2026-01-10T00:00:00Z",
+        )
+        newer = mg.Node(
+            id="new",
+            type="Fact",
+            name="Maya joined Stripe as a senior PM.",
+            attributes={},
+            created_at="2026-03-22T00:00:00Z",
+        )
+
+        reranked = mg._apply_relative_temporal_freshness_rerank(
+            "As of 2026-03-01, where does Maya work?",
+            [(older, 0.91), (newer, 0.89)],
+            intent="WHERE",
+            target_date="2026-03-01",
+        )
+
+        assert [node.id for node, _score in reranked] == ["old", "new"]
+
     def test_query_fit_multiplier_boosts_technical_rows_for_project_queries(self):
         import datastore.memorydb.memory_graph as mg
 
