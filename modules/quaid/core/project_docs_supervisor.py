@@ -351,18 +351,24 @@ def _requested_janitor_instances(request: Dict[str, object]) -> tuple[list[str],
 def _janitor_checkpoint_status(instance: str) -> tuple[str, Optional[str]]:
     name = validate_instance_id(instance)
     checkpoint_path = quaid_home() / "instances" / name / "logs" / "janitor" / "checkpoint-all.json"
+
+    def _checkpoint_error(message: str, exc: Exception | None = None) -> tuple[str, str]:
+        if _fail_hard_enabled():
+            raise RuntimeError(message) from exc
+        return "", message
+
     try:
         raw = checkpoint_path.read_text(encoding="utf-8")
         payload = json.loads(raw)
-    except FileNotFoundError:
-        return "", f"instance {name} janitor checkpoint missing"
+    except FileNotFoundError as exc:
+        return _checkpoint_error(f"instance {name} janitor checkpoint missing", exc)
     except Exception as exc:
-        return "", f"instance {name} janitor checkpoint unreadable: {exc}"
+        return _checkpoint_error(f"instance {name} janitor checkpoint unreadable: {exc}", exc)
     if not isinstance(payload, dict):
-        return "", f"instance {name} janitor checkpoint invalid"
+        return _checkpoint_error(f"instance {name} janitor checkpoint invalid")
     status = str(payload.get("status") or "").strip().lower()
     if not status:
-        return "", f"instance {name} janitor checkpoint missing status"
+        return _checkpoint_error(f"instance {name} janitor checkpoint missing status")
     return status, None
 
 

@@ -590,6 +590,7 @@ def test_requested_janitor_run_fails_when_child_checkpoint_failed(monkeypatch, t
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
 
     request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
@@ -605,6 +606,35 @@ def test_requested_janitor_run_fails_when_child_checkpoint_failed(monkeypatch, t
     assert payload["errors"] == ["instance alpha janitor checkpoint status=failed"]
 
 
+def test_requested_janitor_run_fails_when_child_checkpoint_still_running(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    class _DoneProc:
+        pid = 101
+
+        def poll(self):
+            return 0
+
+    _write_janitor_checkpoint(tmp_path, "alpha", "running")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+
+    request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
+    workers: dict[str, subprocess.Popen] = {"alpha": _DoneProc()}
+    active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
+
+    active = supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+
+    assert active is None
+    payload = project_docs.read_janitor_request()
+    assert payload["status"] == "failed"
+    assert payload["exit_codes"] == {"alpha": 0}
+    assert payload["errors"] == ["instance alpha janitor checkpoint status=running"]
+
+
 def test_requested_janitor_run_fails_when_child_checkpoint_missing(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
@@ -616,6 +646,7 @@ def test_requested_janitor_run_fails_when_child_checkpoint_missing(monkeypatch, 
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
 
     request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
@@ -629,6 +660,16 @@ def test_requested_janitor_run_fails_when_child_checkpoint_missing(monkeypatch, 
     assert payload["status"] == "failed"
     assert payload["exit_codes"] == {"alpha": 0}
     assert payload["errors"] == ["instance alpha janitor checkpoint missing"]
+
+
+def test_janitor_checkpoint_status_raises_missing_checkpoint_when_failhard(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="instance alpha janitor checkpoint missing"):
+        supervisor._janitor_checkpoint_status("alpha")
 
 
 def test_start_janitor_worker_refuses_disabled_instance(monkeypatch):
