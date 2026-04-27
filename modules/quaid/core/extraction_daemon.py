@@ -2786,6 +2786,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
         str(signal_meta.get("reason") or "") == "rolling_stage_flush"
     )
+    flush_metric_signal_type = (
+        str(signal_meta.get("source_signal") or signal_type)
+        if staged_payload_sweep_signal
+        else signal_type
+    )
 
     def _emit_noop_flush_metric(reason: str) -> None:
         if signal_type not in ("compaction", "timeout"):
@@ -3825,7 +3830,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         write_rolling_metric(
             "rolling_flush",
             session_id,
-            signal_type=signal_type,
+            signal_type=flush_metric_signal_type,
+            processing_signal_type=signal_type,
             signal_timestamp=signal_data.get("timestamp"),
             staged_batches=int(staged_state.get("rolling_batches", 0) or 0),
             staged_facts=len(staged_state.get("raw_facts", []) or []),
@@ -3937,7 +3943,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             write_rolling_metric(
                 "rolling_flush_error",
                 session_id,
-                signal_type=signal_type,
+                signal_type=flush_metric_signal_type,
+                processing_signal_type=signal_type,
                 signal_timestamp=signal_data.get("timestamp"),
                 phase=operation_phase,
                 error_type=type(e).__name__,
