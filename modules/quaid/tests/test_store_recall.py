@@ -4322,6 +4322,8 @@ class TestRecallFastHookInjectContract:
         def _fake_graph(*args, **kwargs):
             captured["timeout_ms"] = kwargs.get("timeout_ms")
             captured["fast_mode"] = kwargs.get("fast_mode")
+            captured["date_from"] = kwargs.get("date_from")
+            captured["date_to"] = kwargs.get("date_to")
             return (
                 [{"id": "alice", "text": "Diana has a daughter named Alice", "category": "fact", "similarity": 0.76}],
                 {"selected_path": "graph_aware", "phases_ms": {"total_ms": 5}},
@@ -4346,13 +4348,19 @@ class TestRecallFastHookInjectContract:
                 planner_meta={"planned_stores": ["vector", "graph"]},
                 fast_mode=False,
                 graph_depth=2,
-                common_kwargs={"timeout_ms": 90000},
+                common_kwargs={
+                    "timeout_ms": 90000,
+                    "date_from": "2023-01-01",
+                    "date_to": "2023-12-31",
+                },
             )
 
         assert [row["id"] for row in rows] == ["fact-1", "alice"]
         assert meta["planned_stores"] == ["vector", "graph"]
         assert captured["timeout_ms"] == 90000
         assert captured["fast_mode"] is False
+        assert captured["date_from"] == "2023-01-01"
+        assert captured["date_to"] == "2023-12-31"
 
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
@@ -5611,12 +5619,80 @@ class TestRecallFastHookInjectContract:
                 domain=None,
                 domain_boost=None,
                 project=None,
+                date_from=None,
+                date_to=None,
                 depth=2,
-        )
+            )
 
         assert [row["id"] for row in rows] == ["fact-1", "alice"]
         assert meta["source"] == "test"
         assert meta["counts"]["graph_discoveries"] == 0
+        assert bundle is None
+
+    def test_graph_store_recall_filters_out_of_window_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        payload = {
+            "direct_results": [
+                {
+                    "id": "fact-2023",
+                    "text": "Maya and David got married in 2023",
+                    "category": "fact",
+                    "similarity": 0.84,
+                    "source_date": "2023-05-10",
+                },
+                {
+                    "id": "fact-2024",
+                    "text": "Maya listened to Phoebe Bridgers in 2024",
+                    "category": "fact",
+                    "similarity": 0.83,
+                    "source_date": "2024-08-01",
+                },
+            ],
+            "graph_results": [
+                {
+                    "id": "graph-2022",
+                    "text": "Solomon --spouse_of--> Yuni",
+                    "category": "graph",
+                    "similarity": 0.76,
+                    "via_relation": "spouse_of",
+                    "graph_path": "Solomon --spouse_of--> Yuni",
+                    "graph_discovery_kind": "graph_path",
+                    "source_date": "2022-11-01",
+                },
+                {
+                    "id": "graph-2023",
+                    "text": "Solomon --visits--> Niseko",
+                    "category": "graph",
+                    "similarity": 0.75,
+                    "via_relation": "visits",
+                    "graph_path": "Solomon --visits--> Niseko",
+                    "graph_discovery_kind": "graph_path",
+                    "source_date": "2023-02-14",
+                },
+            ],
+            "meta": {"source": "test", "counts": {"graph_discoveries": 2}},
+        }
+
+        with patch.object(mg, "graph_aware_recall", return_value=payload), \
+             patch.object(mg, "get_graph", return_value=MagicMock()), \
+             patch.object(mg, "_expand_high_confidence_entity_anchors", return_value=([], [])):
+            rows, meta, bundle = mg._graph_store_recall(
+                "what happened in 2023",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.6,
+                domain=None,
+                domain_boost=None,
+                project=None,
+                date_from="2023-01-01",
+                date_to="2023-12-31",
+                depth=2,
+            )
+
+        assert [row["id"] for row in rows] == ["fact-2023", "graph-2023"]
+        assert meta["source"] == "test"
+        assert meta["counts"]["graph_discoveries"] == 1
         assert bundle is None
 
     def test_graph_store_recall_expands_terminal_graph_entity_to_attached_fact(self, tmp_path):
@@ -5655,6 +5731,8 @@ class TestRecallFastHookInjectContract:
                 domain=None,
                 domain_boost=None,
                 project=None,
+                date_from=None,
+                date_to=None,
                 depth=3,
             )
 

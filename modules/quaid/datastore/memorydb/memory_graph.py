@@ -3335,6 +3335,8 @@ def graph_aware_recall(
     domain: Optional[Dict[str, bool]] = None,
     domain_boost: Optional[List[str]] = None,
     project: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     timeout_ms: Optional[int] = None,
     fast_mode: bool = False,
     candidate_pool: Optional[List[Dict[str, Any]]] = None,
@@ -3357,6 +3359,8 @@ def graph_aware_recall(
         graph_depth = max(1, int(graph_depth or 1))
     except Exception:
         graph_depth = 1
+    date_from = _normalize_recall_date_bound(date_from)
+    date_to = _normalize_recall_date_bound(date_to)
     graph = get_graph()
 
     results = {
@@ -3434,6 +3438,8 @@ def graph_aware_recall(
             domain=domain,
             domain_boost=domain_boost,
             project=project,
+            date_from=date_from,
+            date_to=date_to,
             use_multi_pass=False,
             use_reranker=False,
             include_graph_traversal=False,
@@ -3447,6 +3453,12 @@ def graph_aware_recall(
         results["meta"]["phases_ms"]["base_recall_ms"] = round((time.monotonic() - _base_started_at) * 1000)
         if isinstance(base_meta, dict):
             results["meta"]["base_recall_meta"] = base_meta
+    if candidate_pool is not None and (date_from or date_to):
+        direct_all = _filter_recall_rows_by_date_bounds(
+            direct_all,
+            date_from=date_from,
+            date_to=date_to,
+        )
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
@@ -3595,7 +3607,20 @@ def graph_aware_recall(
             reverse=True,
         )
 
+    if date_from or date_to:
+        results["direct_results"] = _filter_recall_rows_by_date_bounds(
+            results["direct_results"],
+            date_from=date_from,
+            date_to=date_to,
+        )
+        results["graph_results"] = _filter_recall_rows_by_date_bounds(
+            results["graph_results"],
+            date_from=date_from,
+            date_to=date_to,
+        )
+
     results["source_breakdown"]["graph_count"] = len(results["graph_results"])
+    results["source_breakdown"]["vector_count"] = len(results["direct_results"])
     results["meta"]["counts"] = {
         "graph_discoveries": _count_graph_discovery_rows(results["direct_results"]) + _count_graph_discovery_rows(results["graph_results"]),
     }
@@ -5301,6 +5326,8 @@ def _graph_store_recall(
     domain: Optional[Dict[str, bool]],
     domain_boost: Optional[Any],
     project: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
     depth: int,
     timeout_ms: Optional[int] = None,
     fast_mode: bool = False,
@@ -5315,6 +5342,8 @@ def _graph_store_recall(
         domain=domain,
         domain_boost=domain_boost,
         project=project,
+        date_from=date_from,
+        date_to=date_to,
         timeout_ms=timeout_ms,
         fast_mode=fast_mode,
         candidate_pool=candidate_pool,
@@ -5347,12 +5376,15 @@ def _graph_store_recall(
                 _boost_relation_chain_row_scores(combined, relation_chain_groups)
     except Exception:
         pass
+    if date_from or date_to:
+        combined = _filter_recall_rows_by_date_bounds(
+            combined,
+            date_from=date_from,
+            date_to=date_to,
+        )
     meta = dict(payload.get("meta") or {})
     counts = dict(meta.get("counts") or {})
-    counts["graph_discoveries"] = max(
-        int(counts.get("graph_discoveries") or 0),
-        _count_graph_discovery_rows(combined),
-    )
+    counts["graph_discoveries"] = _count_graph_discovery_rows(combined)
     meta["counts"] = counts
     return (
         _validate_recall_result_rows(combined),
@@ -5557,6 +5589,8 @@ def _run_recall_store_plan(
                     domain=kwargs.get("domain"),
                     domain_boost=kwargs.get("domain_boost"),
                     project=planned_project,
+                    date_from=kwargs.get("date_from"),
+                    date_to=kwargs.get("date_to"),
                     depth=graph_depth,
                     timeout_ms=kwargs.get("timeout_ms"),
                     fast_mode=fast_mode,
@@ -8890,6 +8924,32 @@ def _recall_row_temporal_date(row: Dict[str, Any]) -> str:
         if date_part:
             return date_part
     return ""
+
+
+def _filter_recall_rows_by_date_bounds(
+    rows: List[Dict[str, Any]],
+    *,
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Return only recall rows whose best temporal date falls within bounds."""
+    normalized_from = _normalize_recall_date_bound(date_from)
+    normalized_to = _normalize_recall_date_bound(date_to)
+    if not normalized_from and not normalized_to:
+        return list(rows or [])
+    filtered: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        date_part = _recall_row_temporal_date(row)
+        if not date_part:
+            continue
+        if normalized_from and date_part < normalized_from:
+            continue
+        if normalized_to and date_part > normalized_to:
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def _source_date_from_session_id(session_id: Any) -> str:
