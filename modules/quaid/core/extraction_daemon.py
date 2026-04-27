@@ -2226,6 +2226,65 @@ def _semantic_buffer_has_content(state: Dict[str, Any]) -> bool:
     return bool(str((state or {}).get("semantic_buffer", "") or "").strip())
 
 
+def _rolling_state_has_pending_content(state: Dict[str, Any]) -> bool:
+    return bool(staged_state_has_payload(state or {}) or _semantic_buffer_has_content(state or {}))
+
+
+def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tuple[Dict[str, Any], str]:
+    """Read rolling state, tolerating host session-id aliases for one transcript source.
+
+    Codex can report lifecycle signals with the bare UUID while rolling scans use the
+    full rollout-* session id. Cursors already key by transcript source; staged rolling
+    state needs the same source compatibility so lifecycle signals can drain residual
+    semantic buffers left by rolling-stage flushes.
+    """
+    normalized_session_id = _validate_session_id(session_id)
+    direct_state = read_rolling_state(normalized_session_id)
+    if _rolling_state_has_pending_content(direct_state):
+        return direct_state, normalized_session_id
+
+    raw_transcript_path = str(transcript_path or "").strip()
+    if not raw_transcript_path:
+        return direct_state, normalized_session_id
+
+    wanted_canonical_path = _canonicalize_transcript_source_path(raw_transcript_path)
+    try:
+        wanted_identity = _signal_source_identity(normalized_session_id, raw_transcript_path)
+    except Exception:
+        wanted_identity = ""
+
+    try:
+        state_files = list(_rolling_state_dir().glob("*.json"))
+    except OSError:
+        return direct_state, normalized_session_id
+
+    for state_file in state_files:
+        state_key = _validate_session_id(state_file.stem)
+        if state_key == normalized_session_id:
+            continue
+        state = read_rolling_state(state_key)
+        if not _rolling_state_has_pending_content(state):
+            continue
+        state_transcript_path = str(state.get("transcript_path") or "").strip()
+        if not state_transcript_path:
+            continue
+        state_canonical_path = _canonicalize_transcript_source_path(state_transcript_path)
+        if wanted_canonical_path and state_canonical_path == wanted_canonical_path:
+            return state, _validate_session_id(str(state.get("session_id") or state_key))
+        try:
+            state_identity = _signal_source_identity(
+                str(state.get("session_id") or state_key),
+                state_transcript_path,
+                staged_state=state,
+            )
+        except Exception:
+            state_identity = ""
+        if wanted_identity and state_identity == wanted_identity:
+            return state, _validate_session_id(str(state.get("session_id") or state_key))
+
+    return direct_state, normalized_session_id
+
+
 def _buffer_transcript_tail(
     transcript_path: str,
     start_line: int,
@@ -2894,7 +2953,16 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     transcript_path = signal_data.get("transcript_path", "")
     label = f"daemon-{signal_type}"
     rolling_mode = signal_type == "rolling"
-    staged_state = read_rolling_state(session_id)
+    original_session_id = session_id
+    staged_state, rolling_state_session_id = _read_rolling_state_for_signal(session_id, transcript_path)
+    if rolling_state_session_id != session_id:
+        session_id = rolling_state_session_id
+        logger.info(
+            "[%s] session %s: adopting rolling state for aliased session %s",
+            label,
+            original_session_id,
+            session_id,
+        )
     signal_meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
     staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
         str(signal_meta.get("reason") or "") == "rolling_stage_flush"
