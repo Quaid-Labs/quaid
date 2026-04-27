@@ -1786,6 +1786,52 @@ def test_check_chunk_ready_sessions_skips_cursor_marked_internal(monkeypatch, tm
     assert captured == []
 
 
+def test_check_chunk_ready_sessions_does_not_consume_parse_empty_transient(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "parse-empty-growing.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"The live rolling tail is present but not parseable yet."}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-parse-empty", 0, str(transcript_path))
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _ParseEmptyAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _ParseEmptyAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    try:
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor("sess-parse-empty")
+    assert cursor["line_offset"] == 0
+    assert not cursor.get("internal")
+    assert captured == []
+
+
 def test_reconcile_internal_cursor_rebases_when_preserved_transcript_replaces_internal_source(monkeypatch, tmp_path):
     import sys
     import types
@@ -3631,9 +3677,10 @@ class TestRollingExtraction:
             assert cursor["line_offset"] == 1
 
             pending = extraction_daemon.read_pending_signals()
-            assert len(pending) == 1
-            assert pending[0]["type"] == "rolling"
+            assert [signal["type"] for signal in pending] == ["rolling", "session_end"]
             assert pending[0]["meta"]["reason"] == "continued_chunk_budget"
+            assert pending[1]["meta"]["reason"] == "rolling_stage_flush"
+            assert pending[1]["meta"]["staged_payload_sweep"] is True
         finally:
             if real_extract is not None:
                 sys.modules["ingest.extract"] = real_extract
@@ -3781,10 +3828,11 @@ class TestRollingExtraction:
             assert cursor["line_offset"] == 1
 
             pending = extraction_daemon.read_pending_signals()
-            assert len(pending) == 1
-            assert pending[0]["type"] == "rolling"
+            assert [signal["type"] for signal in pending] == ["rolling", "session_end"]
             assert pending[0]["meta"]["reason"] == "continued_chunk_budget"
             assert pending[0]["meta"]["buffered_line_offset"] == 1
+            assert pending[1]["meta"]["reason"] == "rolling_stage_flush"
+            assert pending[1]["meta"]["staged_payload_sweep"] is True
         finally:
             if real_extract is not None:
                 sys.modules["ingest.extract"] = real_extract
@@ -3921,7 +3969,11 @@ class TestRollingExtraction:
             state = extraction_daemon.read_rolling_state(session_id)
             assert state["rolling_batches"] == 1
             assert state["raw_facts"] == [{"text": "rolling fact", "status": "new"}]
-            assert not extraction_daemon.read_pending_signals()
+            pending = extraction_daemon.read_pending_signals()
+            assert len(pending) == 1
+            assert pending[0]["type"] == "session_end"
+            assert pending[0]["meta"]["reason"] == "rolling_stage_flush"
+            assert pending[0]["meta"]["staged_payload_sweep"] is True
         finally:
             if real_extract is not None:
                 sys.modules["ingest.extract"] = real_extract
@@ -4042,12 +4094,15 @@ class TestRollingExtraction:
             assert cursor["line_offset"] == 1
 
             pending = extraction_daemon.read_pending_signals()
-            assert len(pending) == 1
-            assert pending[0]["type"] == "rolling"
-            assert pending[0]["meta"]["reason"] == "continued_chunk_budget"
-            assert pending[0]["meta"]["chunk_lines"] == 0
-            assert pending[0]["meta"]["remaining_lines"] == 1
-            assert pending[0]["meta"]["remaining_tokens_estimate"] < 120
+            assert [signal["type"] for signal in pending] == ["rolling", "session_end"]
+            rolling_signal = pending[0]
+            flush_signal = pending[1]
+            assert rolling_signal["meta"]["reason"] == "continued_chunk_budget"
+            assert rolling_signal["meta"]["chunk_lines"] == 0
+            assert rolling_signal["meta"]["remaining_lines"] == 1
+            assert rolling_signal["meta"]["remaining_tokens_estimate"] < 120
+            assert flush_signal["meta"]["reason"] == "rolling_stage_flush"
+            assert flush_signal["meta"]["staged_payload_sweep"] is True
         finally:
             if real_extract is not None:
                 sys.modules["ingest.extract"] = real_extract
@@ -4278,11 +4333,11 @@ class TestRollingExtraction:
             assert "signal=rolling" in buffer_log
             assert "User: My sister is Diana" in buffer_log
 
-            flush_signal = extraction_daemon.write_signal(
-                signal_type="session_end",
-                session_id="sess-roll",
-                transcript_path=str(transcript_path),
-            )
+            pending = extraction_daemon.read_pending_signals()
+            assert len(pending) == 1
+            flush_signal = pending[0]
+            assert flush_signal["type"] == "session_end"
+            assert flush_signal["meta"]["reason"] == "rolling_stage_flush"
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 
             assert extraction_daemon.read_rolling_state("sess-roll")["rolling_batches"] == 0

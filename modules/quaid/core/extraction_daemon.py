@@ -628,6 +628,9 @@ def write_signal(
 def _pending_signal_sort_key(signal_data: Dict[str, Any]) -> Tuple[int, str]:
     signal_type = str(signal_data.get("type") or signal_data.get("signal_type") or "")
     signal_path = str(signal_data.get("_signal_path") or "")
+    meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
+    if signal_type == "session_end" and meta.get("reason") == "rolling_stage_flush":
+        return (_SIGNAL_POLL_PRIORITY.get("rolling", 2) + 1, signal_path)
     return (_SIGNAL_POLL_PRIORITY.get(signal_type, 99), signal_path)
 
 
@@ -2689,12 +2692,13 @@ def _reconcile_internal_cursor_state(
     cursor_data: Optional[Dict[str, Any]] = None,
     cursor_key: Optional[str] = None,
     adapter=None,
+    advance_internal: bool = True,
 ) -> str:
     """Return internal-session handling state for the current transcript.
 
     States:
     - "frozen": cursor is marked internal and no new transcript lines arrived.
-    - "advanced": transcript is still internal-only; cursor was advanced to EOF.
+    - "advanced": transcript is still internal-only; cursor advanced unless advance_internal=False.
     - "unfrozen": transcript gained non-internal content past a frozen cursor.
     - "not_internal": transcript is not internal and cursor was not frozen.
     """
@@ -2720,6 +2724,8 @@ def _reconcile_internal_cursor_state(
         return "frozen"
 
     if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+        if not advance_internal:
+            return "advanced"
         _advance_internal_session_cursor_to_end(
             session_id,
             transcript_path,
@@ -3598,6 +3604,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "remaining_lines": max(0, int(total_lines) - int(buffered_line_offset)),
                     },
                 )
+            if staged_state_has_payload(staged_state):
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    meta={
+                        "reason": "rolling_stage_flush",
+                        "source_signal": "rolling",
+                        "staged_payload_sweep": True,
+                        "buffered_line_offset": buffered_line_offset,
+                    },
+                )
             return
 
         tail_result = None
@@ -4283,11 +4301,16 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             cursor_data=data,
             cursor_key=str(data.get("cursor_key") or "").strip() or None,
             adapter=adapter,
+            advance_internal=False,
         )
         if internal_state == "frozen":
             continue
         if internal_state == "advanced":
-            logger.info("session %s is internal maintenance-only during rolling scan, advancing cursor to EOF", session_id)
+            logger.info(
+                "session %s appears internal maintenance-only during rolling scan; "
+                "leaving cursor unchanged for a later signal",
+                session_id,
+            )
             continue
         if internal_state == "unfrozen":
             logger.info(
