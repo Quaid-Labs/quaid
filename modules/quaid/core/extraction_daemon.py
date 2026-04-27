@@ -4296,13 +4296,17 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             continue
         if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
             continue
-        defer_internal_advance = False
+        current_size_bytes = _transcript_size_bytes(str(transcript_path))
+        cursor_size_bytes = int(data.get("transcript_size_bytes", 0) or 0)
+        transcript_grew_since_cursor = current_size_bytes > cursor_size_bytes
+        recently_modified = False
         try:
-            defer_internal_advance = (
+            recently_modified = (
                 time.time() - os.path.getmtime(str(transcript_path))
             ) < _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS
         except OSError:
-            defer_internal_advance = False
+            recently_modified = False
+        defer_internal_advance = transcript_grew_since_cursor or recently_modified
         internal_state = _reconcile_internal_cursor_state(
             session_id,
             transcript_path,
@@ -4315,9 +4319,16 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             continue
         if internal_state == "advanced":
             if defer_internal_advance:
+                write_cursor(
+                    session_id,
+                    int(data.get("line_offset", 0) or 0),
+                    str(transcript_path),
+                    internal=False,
+                    source_key=str(data.get("cursor_key") or "").strip() or None,
+                )
                 logger.info(
                     "session %s appears internal maintenance-only during rolling scan; "
-                    "leaving recent cursor unchanged for a later signal",
+                    "leaving cursor offset unchanged for a later signal",
                     session_id,
                 )
             else:
