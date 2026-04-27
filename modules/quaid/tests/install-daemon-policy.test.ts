@@ -448,18 +448,18 @@ describe("install daemon policy", () => {
     expect(postinstallText).toContain('"trusted"');
   });
 
-  it("Codex install only registers a persistent launchd daemon agent for explicit instance installs", () => {
+  it("Codex install removes legacy launchd daemon agents for explicit instance installs", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
 
-    expect(setupText).toContain("function installCodexDaemonLaunchAgent(instanceId)");
+    expect(setupText).toContain("function removeCodexDaemonLaunchAgent(instanceId)");
     expect(setupText).toContain('const label = `com.quaid.daemon.${normalizedInstance}`;');
-    expect(setupText).toContain('<string>daemon</string>');
-    expect(setupText).toContain('<string>run</string>');
+    expect(setupText).toContain('spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath]');
+    expect(setupText).toContain('spawnSync("launchctl", ["remove", label]');
     expect(setupText).toContain('if (resolvedInstanceId) {');
-    expect(setupText).toContain('s.start("Installing Codex daemon launch agent...")');
-    expect(setupText).toContain("installCodexDaemonLaunchAgent(resolvedInstanceId)");
-    expect(setupText).toContain("Skipping Codex daemon launch agent install until the first real instance is created by hook use.");
+    expect(setupText).toContain('s.start("Removing legacy Codex daemon launch agent...")');
+    expect(setupText).toContain("removeCodexDaemonLaunchAgent(resolvedInstanceId)");
+    expect(setupText).toContain("Skipping legacy Codex daemon launch agent cleanup until a real instance ID is known.");
   });
 
   it("install ensures all visible identity stubs exist for the resolved instance", () => {
