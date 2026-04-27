@@ -283,7 +283,82 @@ def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
     return penalty
 
 
-def _docs_rank_score(query_terms: List[str], source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
+def _docs_normalized_lexical_text(value: str) -> str:
+    return " ".join(re.findall(r"[a-zA-Z0-9_./-]+", str(value or "").lower()))
+
+
+def _docs_exact_anchor_boost(
+    query_terms: List[str],
+    query: str,
+    source_file: str,
+    section_header: Optional[str],
+    content: str,
+) -> float:
+    """Strongly prefer chunks that explicitly contain the requested anchor.
+
+    Embeddings can over-rank generic project/status boilerplate for short
+    codewords. If a scoped docs row contains all concrete query terms, and
+    especially the exact normalized phrase, it should not be crowded out by
+    semantically-near overview chunks.
+    """
+    if len(query_terms) < 2:
+        return 0.0
+
+    haystack = _docs_normalized_lexical_text(f"{source_file}\n{section_header or ''}\n{content}")
+    if not haystack:
+        return 0.0
+    hits = sum(1 for term in query_terms if term in haystack)
+    if hits < len(query_terms):
+        return 0.0
+
+    boost = 0.28
+    query_phrase = _docs_normalized_lexical_text(query)
+    if query_phrase and query_phrase in haystack:
+        boost += 0.18
+    return boost
+
+
+def _docs_scaffold_penalty(
+    query_terms: List[str],
+    source_file: str,
+    section_header: Optional[str],
+    content_hits: int,
+) -> float:
+    """Penalty for generic scaffold sections beating real content docs."""
+    file_name = Path(source_file or "").name.lower()
+    header_lower = str(section_header or "").strip().lower()
+    query_specific = len(query_terms) >= 2
+
+    if not query_specific:
+        return 0.0
+
+    scaffold_headers = {
+        "### project home",
+        "### source roots",
+        "### in this project directory",
+        "### registered docs",
+        "### external files",
+    }
+    generic_project_headers = {
+        "## what this is",
+        "## current state",
+        "## start here",
+        "## primary artifacts",
+        "## recent major changes",
+    }
+
+    penalty = 0.0
+    if file_name == "project.md":
+        if header_lower in scaffold_headers:
+            penalty += 0.28
+        elif header_lower in generic_project_headers and content_hits < 2:
+            penalty += 0.12
+    if file_name == "status.md" and content_hits < 2:
+        penalty += 0.10
+    return penalty
+
+
+def _docs_rank_score(query_terms: List[str], query: str, source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
     """Blend semantic similarity with lightweight lexical/path features.
 
     This keeps semantic search as the base signal, but prefers implementation
@@ -310,6 +385,18 @@ def _docs_rank_score(query_terms: List[str], source_file: str, section_header: O
     score += min(header_hits, 3) * 0.06
     score += min(content_hits, 4) * 0.025
 
+    informative_terms = [term for term in query_terms if len(term) >= 4]
+    if informative_terms:
+        matched_terms = sum(
+            1 for term in informative_terms if term in content_lower or term in header_lower or term in path_lower
+        )
+        score += min(matched_terms, 4) * 0.035
+        if matched_terms >= min(2, len(informative_terms)):
+            score += 0.10
+        if all(term in content_lower for term in informative_terms[: min(4, len(informative_terms))]):
+            score += 0.18
+    score += _docs_exact_anchor_boost(query_terms, query, source_file, section_header, content)
+
     implementation_terms = {
         "test", "tests", "testing", "auth", "error", "errors", "validation",
         "middleware", "schema", "graphql", "resolver", "resolvers", "deploy",
@@ -324,6 +411,7 @@ def _docs_rank_score(query_terms: List[str], source_file: str, section_header: O
         score -= 0.06
     if wants_impl:
         score -= _docs_source_penalty(query_terms, source_file)
+    score -= _docs_scaffold_penalty(query_terms, source_file, section_header, content_hits)
 
     return max(0.0, round(score, 4))
 
@@ -406,14 +494,15 @@ def _project_log_query_terms(query: str) -> List[str]:
 def _project_log_query_line_rank_delta(
     content: str,
     query_terms: List[str],
-    date_to: Optional[str],
+    date_to: Optional[str] = None,
 ) -> float:
-    """Prefer project-log chunks whose latest lines directly match the query."""
-    latest = _project_log_latest_line_date(content)
-    if not latest:
-        return 0.0
-    if not date_to or latest != date_to:
-        return 0.0
+    """Prefer project-log chunks whose lines directly match the query.
+
+    For dated "as of" recall, strongly prefer same-day lines that match the
+    query terms. For normal natural-language recall, still give answer-bearing
+    project-log lines a bounded boost so they can outrank generic PROJECT.md
+    scaffolding inside the same linked project.
+    """
     terms = [
         str(term or "").lower()
         for term in query_terms
@@ -421,12 +510,20 @@ def _project_log_query_line_rank_delta(
     ]
     if not terms:
         return 0.0
-    best = 0
+
+    latest = _project_log_latest_line_date(content)
+    if date_to and latest == date_to:
+        best_same_day = 0
+        for line in str(content or "").splitlines():
+            if _project_log_line_date(line) != latest:
+                continue
+            best_same_day = max(best_same_day, _project_log_line_query_score(line, terms))
+        return min(0.72, best_same_day * 0.18)
+
+    best_any = 0
     for line in str(content or "").splitlines():
-        if _project_log_line_date(line) != latest:
-            continue
-        best = max(best, _project_log_line_query_score(line, terms))
-    return min(0.72, best * 0.18)
+        best_any = max(best_any, _project_log_line_query_score(line, terms))
+    return min(0.48, best_any * 0.12)
 
 
 def _is_project_log_source(source_file: str) -> bool:
@@ -1450,19 +1547,21 @@ class DocsRAG:
                     section_header = row[4]
                     rank_score = _docs_rank_score(
                         query_terms,
+                        query,
                         source_file,
                         section_header,
                         content,
                         rank_similarity,
                     )
-                    if is_dated_project_log:
-                        source_date = _project_log_latest_line_date(content)
-                        rank_score += _project_log_asof_rank_delta(content, date_to)
+                    if _is_project_log_source(source_file) and (date_to or not (date_from or date_to)):
                         rank_score += _project_log_query_line_rank_delta(
                             content,
                             project_log_query_terms,
                             date_to,
                         )
+                    if is_dated_project_log:
+                        source_date = _project_log_latest_line_date(content)
+                        rank_score += _project_log_asof_rank_delta(content, date_to)
                     inferred_project = project or self.infer_project_for_source(row[1])
                     results.append({
                         "content": content,

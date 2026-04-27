@@ -1029,6 +1029,116 @@ class TestDocsSearchFiltering:
         assert results[0]["source"].endswith("tests/graphql.test.js")
         assert results[0]["similarity"] > results[1]["similarity"]
 
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=lambda blob: [0.95] if blob == b"generic" else [0.55])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", side_effect=lambda _query, chunk: chunk[0])
+    def test_search_docs_exact_multiterm_anchor_beats_generic_project_boilerplate(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "status:0",
+                    "/tmp/workspace/projects/livetest-agentmsg-xp/docs/status.md",
+                    0,
+                    "The project is operational and ready for coordination.",
+                    "# Operational Status",
+                    b"generic",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "pager:0",
+                    "/tmp/workspace/projects/livetest-agentmsg-xp/docs/pager-escalation.md",
+                    0,
+                    "The codeword `Ember Glass` means pager escalation level 2.",
+                    "# Pager Escalation",
+                    b"ember",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/livetest-agentmsg-xp",
+                "source_roots": ["/tmp/workspace/projects/livetest-agentmsg-xp"],
+            },
+        ):
+            results = rag.search_docs("Ember Glass", limit=2, project="livetest-agentmsg-xp")
+
+        assert len(results) == 2
+        assert results[0]["source"].endswith("pager-escalation.md")
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_prefers_project_log_answer_line_over_project_scaffold(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "project-home:0",
+                    "/tmp/workspace/projects/portfolio-site/PROJECT.md",
+                    0,
+                    "### Project Home\n- `/tmp/workspace/projects/portfolio-site`",
+                    "### Project Home",
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "recent:0",
+                    "/tmp/workspace/projects/portfolio-site/PROJECT.md",
+                    1,
+                    "## Recent Major Changes\n- [2026-03-15] Initial portfolio site created with about, projects, and contact sections",
+                    "## Recent Major Changes",
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "log:0",
+                    "/tmp/workspace/projects/portfolio-site/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2026-03-15T23:59:59] Created initial portfolio site with three sections: about, projects, contact",
+                            "- [2026-03-15T23:59:59] Projects section includes: recipe app and TechFlow platform redesign",
+                        ]
+                    ),
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={"home_dir": "/tmp/workspace/projects/portfolio-site", "source_roots": []},
+        ):
+            results = rag.search_docs(
+                "As of 2026-03-15, what projects were on Maya's portfolio site?",
+                limit=5,
+                project="portfolio-site",
+            )
+
+        assert len(results) >= 1
+        assert results[0]["source"].endswith("PROJECT.log")
+        assert "Projects section includes:" in results[0]["content"]
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.80)
