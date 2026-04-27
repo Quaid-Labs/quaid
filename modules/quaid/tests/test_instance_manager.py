@@ -651,6 +651,32 @@ def test_auto_provision_derives_claude_code_instance_from_cwd_when_adapter_type_
     assert (tmp_path / "instances" / expected / "config.json").is_file()
 
 
+@pytest.mark.parametrize("adapter_type", ["claude-code", "codex"])
+def test_auto_provision_does_not_derive_instance_from_quaid_plugin_cwd(tmp_path, monkeypatch, adapter_type):
+    from lib import adapter as adapter_mod
+    from lib.instance import instance_slug_from_project_dir
+
+    home = tmp_path / ".quaid"
+    plugin_dir = home / "plugins" / "quaid"
+    plugin_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("QUAID_HOME", str(home))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "quaid"))
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", adapter_type)
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(plugin_dir)
+
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    blocked = f"{adapter_type}-{instance_slug_from_project_dir(str(plugin_dir))}"
+    assert "QUAID_INSTANCE" not in os.environ
+    assert not (home / "instances" / blocked / "config.json").exists()
+    assert all(blocked not in str(path) for path in adapter_mod._adapter_config_paths())
+
+
 def test_auto_provision_binds_explicit_codex_instance_to_project_dir(tmp_path, monkeypatch):
     from lib import adapter as adapter_mod
     from lib.instance import instance_slug_from_project_dir

@@ -1499,7 +1499,7 @@ def _adapter_config_paths() -> List[Path]:
             paths.append(
                 Path(home) / "instances" / f"codex-{_slug}" / "config.json"
             )
-        if explicit_adapter_type in ("claude-code", "codex"):
+        if explicit_adapter_type in ("claude-code", "codex") and _should_derive_instance_from_cwd(home):
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(os.getcwd())
             paths.append(
@@ -1541,7 +1541,11 @@ def _adapter_config_paths() -> List[Path]:
                 platform_cfgs = []
             if derived_adapter_type and not instance_config_exists:
                 paths.append(Path(home) / "shared" / "config" / derived_adapter_type / "config.json")
-            if len(platform_cfgs) == 1 and platform_cfgs[0].parent.name in ("claude-code", "codex"):
+            if (
+                len(platform_cfgs) == 1
+                and platform_cfgs[0].parent.name in ("claude-code", "codex")
+                and _should_derive_instance_from_cwd(home)
+            ):
                 from lib.instance import instance_slug_from_project_dir
                 _slug = instance_slug_from_project_dir(os.getcwd())
                 paths.append(
@@ -1688,6 +1692,47 @@ def _adapter_type_from_instance_id(instance_id: str) -> str:
     return matches[0][1]
 
 
+def _should_derive_instance_from_cwd(home: str | Path) -> bool:
+    """Return whether cwd is safe to treat as a host project root.
+
+    CC/CDX helper commands may legitimately rely on cwd-based auto-provisioning
+    inside a real project directory. Installer/runtime helpers run from Quaid's
+    own hidden plugin tree; deriving an instance from that cwd creates bogus
+    platform instances like ``claude-code-users-admin-quaid-plugins-quaid``.
+    """
+    try:
+        cwd = Path.cwd().resolve()
+        quaid_home = Path(home).expanduser().resolve()
+    except Exception:
+        return True
+
+    if cwd == quaid_home:
+        return False
+
+    blocked_roots = [
+        quaid_home / "plugins",
+        quaid_home / "extensions",
+        quaid_home / "adaptors",
+        quaid_home / "shared",
+        quaid_home / "instances",
+        quaid_home / "runtime",
+        quaid_home / ".runtime",
+    ]
+    for root in blocked_roots:
+        try:
+            if cwd == root or cwd.is_relative_to(root):
+                return False
+        except AttributeError:
+            try:
+                cwd.relative_to(root)
+                return False
+            except ValueError:
+                pass
+        except Exception:
+            pass
+    return True
+
+
 def _project_instance_binding_path(home: str | Path, adapter_type: str, project_dir: str) -> Optional[Path]:
     """Return the binding path for a project-dir -> explicit instance mapping."""
     adapter_id = _normalize_adapter_id(adapter_type)
@@ -1808,7 +1853,7 @@ def _auto_provision_from_env_if_needed() -> None:
                 instance = bound
                 os.environ["QUAID_INSTANCE"] = instance
 
-        if not instance and explicit_adapter_type == "codex":
+        if not instance and explicit_adapter_type == "codex" and _should_derive_instance_from_cwd(home):
             bound = _read_project_instance_binding(home, "codex", os.getcwd())
             if bound:
                 instance = bound
@@ -1829,7 +1874,11 @@ def _auto_provision_from_env_if_needed() -> None:
                 os.environ["QUAID_INSTANCE"] = instance
                 break
 
-        if not instance and explicit_adapter_type in ("claude-code", "codex"):
+        if (
+            not instance
+            and explicit_adapter_type in ("claude-code", "codex")
+            and _should_derive_instance_from_cwd(home)
+        ):
             _slug = instance_slug_from_project_dir(os.getcwd())
             if _slug:
                 instance = f"{explicit_adapter_type}-{_slug}"

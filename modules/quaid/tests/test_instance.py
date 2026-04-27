@@ -1,12 +1,15 @@
 """Tests for lib/instance.py — instance resolution and validation."""
 
 import os
+import shutil
 import pytest
 from pathlib import Path
 
 from lib.instance import (
     InstanceError,
     RESERVED_INSTANCE_NAMES,
+    internal_path_derived_instance_ids,
+    is_internal_path_derived_instance_id,
     validate_instance_id,
     quaid_home,
     visible_home,
@@ -159,6 +162,24 @@ class TestInstanceExists:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         assert instance_exists("shared") is False
 
+    def test_internal_path_derived_instance_does_not_exist(self, monkeypatch, tmp_path):
+        home = Path("/private/tmp") / f"qit{os.getpid()}a"
+        shutil.rmtree(home, ignore_errors=True)
+        try:
+            monkeypatch.setenv("QUAID_HOME", str(home))
+            internal_instance = next(
+                name
+                for name in internal_path_derived_instance_ids(home)
+                if name.startswith("claude-code-") and name.endswith("-plugins-quaid")
+            )
+            (home / "instances" / internal_instance).mkdir(parents=True)
+            (home / "instances" / internal_instance / "config.json").write_text("{}")
+
+            assert is_internal_path_derived_instance_id(internal_instance, home) is True
+            assert instance_exists(internal_instance) is False
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
 
 class TestListInstances:
     def test_lists_instances(self, monkeypatch, tmp_path):
@@ -173,6 +194,25 @@ class TestListInstances:
 
         result = list_instances()
         assert result == ["claude-code", "openclaw"]
+
+    def test_ignores_internal_path_derived_instances(self, monkeypatch, tmp_path):
+        home = Path("/private/tmp") / f"qit{os.getpid()}b"
+        shutil.rmtree(home, ignore_errors=True)
+        try:
+            monkeypatch.setenv("QUAID_HOME", str(home))
+            (home / "instances" / "openclaw-main").mkdir(parents=True)
+            (home / "instances" / "openclaw-main" / "config.json").write_text("{}")
+            internal_instance = next(
+                name
+                for name in internal_path_derived_instance_ids(home)
+                if name.startswith("codex-") and name.endswith("-plugins-quaid")
+            )
+            (home / "instances" / internal_instance).mkdir(parents=True)
+            (home / "instances" / internal_instance / "config.json").write_text("{}")
+
+            assert list_instances() == ["openclaw-main"]
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
 
     def test_empty(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

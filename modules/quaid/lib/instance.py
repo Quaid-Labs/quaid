@@ -172,7 +172,41 @@ def instance_exists(name: str) -> bool:
         validated = validate_instance_id(name)
     except InstanceError:
         return False
+    if is_internal_path_derived_instance_id(validated):
+        return False
     return (quaid_home() / "instances" / validated / "config.json").is_file()
+
+
+def internal_path_derived_instance_ids(home: Optional[Path] = None) -> set[str]:
+    """Instance ids accidentally derived from Quaid's own hidden runtime paths."""
+    root = Path(home).resolve() if home is not None else quaid_home().resolve()
+    internal_paths = [
+        root,
+        root / "plugins",
+        root / "plugins" / "quaid",
+        root / "extensions",
+        root / "adaptors",
+        root / "shared",
+        root / "instances",
+        root / "runtime",
+        root / ".runtime",
+    ]
+    out: set[str] = set()
+    for candidate in internal_paths:
+        slug = instance_slug_from_project_dir(str(candidate))
+        if not slug:
+            continue
+        out.add(f"claude-code-{slug}")
+        out.add(f"codex-{slug}")
+    return out
+
+
+def is_internal_path_derived_instance_id(name: str, home: Optional[Path] = None) -> bool:
+    try:
+        validated = validate_instance_id(name)
+    except InstanceError:
+        return False
+    return validated in internal_path_derived_instance_ids(home)
 
 
 def list_instances() -> List[str]:
@@ -189,6 +223,12 @@ def list_instances() -> List[str]:
             continue
         name = entry.name
         if name.startswith("."):
+            continue
+        try:
+            validate_instance_id(name)
+        except InstanceError:
+            continue
+        if is_internal_path_derived_instance_id(name):
             continue
         if (entry / "config.json").is_file():
             instances.append(name)

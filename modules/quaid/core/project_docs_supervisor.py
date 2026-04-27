@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import project_docs
 from core.project_registry import is_misc_project_deleted, list_projects, list_projects_raw
-from lib.instance import list_instances, quaid_home, validate_instance_id
+from lib.instance import internal_path_derived_instance_ids, list_instances, quaid_home, validate_instance_id
 
 _STOP = False
 _INSTANCE_DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
@@ -146,7 +146,19 @@ def _live_instances_for_supervisor() -> tuple[set[str], set[str]]:
         for instance in all_instances
         if _instance_misc_project_deleted(instance) or project_docs.is_instance_monitor_disabled(instance)
     }
+    inactive.update(_internal_path_derived_instances_on_disk())
     return all_instances - inactive, inactive
+
+
+def _internal_path_derived_instances_on_disk() -> set[str]:
+    root = quaid_home() / "instances"
+    if not root.is_dir():
+        return set()
+    return {
+        instance
+        for instance in internal_path_derived_instance_ids(quaid_home())
+        if (root / instance / "config.json").is_file()
+    }
 
 
 def _wait_for_instance_pid(
@@ -528,7 +540,7 @@ def _maintain_janitor_workers(
 
 
 def stop_all_instance_monitors() -> None:
-    for instance in list_instances():
+    for instance in sorted(set(list_instances()) | _internal_path_derived_instances_on_disk()):
         try:
             _stop_instance_monitor(instance)
         except Exception:
