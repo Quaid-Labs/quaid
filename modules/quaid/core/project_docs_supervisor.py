@@ -9,6 +9,7 @@ workers apply docs updates, and janitor workers run bounded maintenance ticks.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
@@ -347,6 +348,24 @@ def _requested_janitor_instances(request: Dict[str, object]) -> tuple[list[str],
     return sorted(all_instances - deleted), []
 
 
+def _janitor_checkpoint_status(instance: str) -> tuple[str, Optional[str]]:
+    name = validate_instance_id(instance)
+    checkpoint_path = quaid_home() / "instances" / name / "logs" / "janitor" / "checkpoint-all.json"
+    try:
+        raw = checkpoint_path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except FileNotFoundError:
+        return "", f"instance {name} janitor checkpoint missing"
+    except Exception as exc:
+        return "", f"instance {name} janitor checkpoint unreadable: {exc}"
+    if not isinstance(payload, dict):
+        return "", f"instance {name} janitor checkpoint invalid"
+    status = str(payload.get("status") or "").strip().lower()
+    if not status:
+        return "", f"instance {name} janitor checkpoint missing status"
+    return status, None
+
+
 def _start_requested_janitor_run(
     request: Dict[str, object],
     scheduled_workers: Dict[str, subprocess.Popen],
@@ -450,6 +469,12 @@ def _maintain_on_demand_janitor_request(
     for instance, code in accumulated_exit_codes.items():
         if code != 0:
             errors.append(f"instance {instance} janitor exited rc={code}")
+            continue
+        checkpoint_status, checkpoint_error = _janitor_checkpoint_status(instance)
+        if checkpoint_error:
+            errors.append(checkpoint_error)
+        elif checkpoint_status != "completed":
+            errors.append(f"instance {instance} janitor checkpoint status={checkpoint_status}")
     payload["status"] = "failed" if errors else "completed"
     payload["completed_at"] = project_docs.utc_now()
     payload["errors"] = errors
