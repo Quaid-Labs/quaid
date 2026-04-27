@@ -73,7 +73,7 @@ _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 _SESSION_ID_UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
-_DISCOVERY_ARTIFACT_MARKERS = (".checkpoint.", ".reset.")
+_DISCOVERY_ARTIFACT_MARKERS = (".checkpoint.", ".reset.", ".trajectory.")
 
 # Tracks sessions that have already had a cursor-at-end timeout signal fired.
 # Prevents repeated signals for sessions where rolling extracted all content
@@ -2638,10 +2638,14 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
         if cursor_file.exists() or legacy_cursor_file.exists():
             cursor_data = read_cursor(session_id, source_key=source_cursor_key)
             existing_path = str(cursor_data.get("transcript_path") or "").strip()
-            if existing_path and os.path.isfile(existing_path):
+            existing_is_artifact = bool(
+                existing_path
+                and _is_discovery_artifact_transcript(Path(existing_path))
+            )
+            if existing_path and os.path.isfile(existing_path) and not existing_is_artifact:
                 continue
-            line_offset = int(cursor_data.get("line_offset", 0) or 0)
-            internal = bool(cursor_data.get("internal", False))
+            line_offset = 0 if existing_is_artifact else int(cursor_data.get("line_offset", 0) or 0)
+            internal = False if existing_is_artifact else bool(cursor_data.get("internal", False))
             write_cursor(
                 session_id,
                 line_offset,
@@ -4118,6 +4122,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
+        if _is_discovery_artifact_transcript(Path(str(transcript_path))):
+            continue
         if _cursor_shadowed_by_source_cursor(
             cursor_file=cursor_file,
             session_id=str(session_id),
@@ -4318,6 +4324,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
         if _cursor_shadowed_by_source_cursor(
             cursor_file=cursor_file,

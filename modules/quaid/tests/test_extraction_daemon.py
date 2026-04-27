@@ -540,6 +540,40 @@ def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch
     assert list(cursor_dir.glob("unknown-*.json")) == []
 
 
+def test_ensure_discovered_session_cursors_replaces_trajectory_sidecar_cursor(monkeypatch, tmp_path):
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    session_id = "f324c131-6414-4629-8ee6-7653995ac2fb"
+    canonical = sessions_dir / f"{session_id}.jsonl"
+    trajectory = sessions_dir / f"{session_id}.trajectory.jsonl"
+    canonical.write_text('{"role":"user","content":"fresh fact"}\n', encoding="utf-8")
+    trajectory.write_text('{"type":"trace.metadata","data":{"prompt":"sidecar only"}}\n', encoding="utf-8")
+
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(canonical))
+    extraction_daemon.write_cursor(
+        session_id,
+        14,
+        str(trajectory),
+        internal=True,
+        source_key=source_key,
+    )
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def get_sessions_dir(self):
+            return sessions_dir
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+    assert discovered == 1
+
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 0
+    assert cursor["transcript_path"] == str(canonical)
+    assert cursor["internal"] is False
+
+
 def test_ensure_discovered_session_cursors_skips_foreign_adapter_transcripts(monkeypatch, tmp_path):
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -3170,6 +3204,85 @@ class TestCheckIdleSessions:
         cursor = extraction_daemon.read_cursor(session_id)
         assert cursor["line_offset"] == 0
         assert cursor["transcript_path"] == str(transcript_path)
+        assert captured == [
+            {
+                "signal_type": "timeout",
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "meta": {"compact_on_timeout": True},
+            }
+        ]
+
+    def test_repairs_trajectory_cursor_before_timeout_scan(self, monkeypatch, tmp_path):
+        """OC trajectory sidecars must not consume the cursor for real session JSONL."""
+        instance_id = "openclaw-livetest"
+        sessions_dir = tmp_path / "openclaw-sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        session_id = "f324c131-6414-4629-8ee6-7653995ac2fb"
+        transcript_path = sessions_dir / f"{session_id}.jsonl"
+        trajectory_path = sessions_dir / f"{session_id}.trajectory.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"my garden shed combination is indigo-lantern-7742"}\n',
+            encoding="utf-8",
+        )
+        trajectory_path.write_text(
+            '{"type":"trace.metadata","data":{"prompt":"large OC trajectory sidecar"}}\n',
+            encoding="utf-8",
+        )
+
+        now = 1_700_000_000.0
+        mtime = now - (60 * 60)
+        os.utime(transcript_path, (mtime, mtime))
+        os.utime(trajectory_path, (mtime, mtime))
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            14,
+            str(trajectory_path),
+            internal=True,
+            source_key=source_key,
+        )
+
+        captured = []
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def get_sessions_dir(self):
+                return sessions_dir
+
+            def parse_session_jsonl(self, path):
+                if Path(path).name.endswith(".trajectory.jsonl"):
+                    return ""
+                return Path(path).read_text(encoding="utf-8")
+
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta"),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_idle_sessions(timeout_minutes=30)
+        finally:
+            extraction_daemon._cursor_end_timeout_fired.discard(session_id)
+
+        cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+        assert cursor["line_offset"] == 0
+        assert cursor["transcript_path"] == str(transcript_path)
+        assert cursor["internal"] is False
         assert captured == [
             {
                 "signal_type": "timeout",
