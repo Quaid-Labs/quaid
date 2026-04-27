@@ -4429,19 +4429,27 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if not cursor_at_end:
             _cursor_end_timeout_fired.discard(session_id)
 
-        # Even when all transcript content has been extracted (cursor at end),
-        # staged rolling state from prior rolling_stage cycles still needs to be
-        # flushed.  Check for a pending rolling payload so we can generate a
-        # flush signal even when there are no new lines to extract.
+        # Even when all transcript content has been extracted or buffered to EOF,
+        # staged rolling state still needs to be flushed. Short OC queued turns can
+        # sit below the rolling threshold as semantic_buffer after /new rollover.
+        # Flush those only when newer session activity proves the old turn closed.
+        rolling: Dict[str, Any] = {}
         has_staged_payload = False
-        if cursor_at_end:
-            try:
-                rolling = read_rolling_state(session_id)
-                has_staged_payload = staged_state_has_payload(rolling)
-            except Exception:
-                pass
+        has_semantic_buffer = False
+        semantic_buffer_at_end = False
+        try:
+            rolling = read_rolling_state(session_id)
+            has_staged_payload = staged_state_has_payload(rolling)
+            has_semantic_buffer = _semantic_buffer_has_content(rolling)
+            buffered_line_offset = int(rolling.get("buffered_line_offset", cursor_offset) or 0)
+            semantic_buffer_at_end = bool(has_semantic_buffer and total_lines <= max(buffered_line_offset, cursor_offset))
+        except Exception:
+            pass
+        has_flushable_rolling_content = bool(
+            has_staged_payload or (has_semantic_buffer and (cursor_at_end or semantic_buffer_at_end))
+        )
 
-        if cursor_at_end and has_staged_payload and session_id not in pending_session_ids:
+        if has_flushable_rolling_content and session_id not in pending_session_ids:
             source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
             if source_key in pending_source_keys:
                 continue
@@ -4451,7 +4459,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             )
             if newer_session_exists:
                 logger.info(
-                    "session %s cursor at end with staged payload and newer session activity detected, generating session_end flush",
+                    "session %s has pending rolling content and newer session activity detected, generating session_end flush",
                     session_id,
                 )
                 write_signal(
@@ -4461,7 +4469,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 )
                 continue
 
-        if cursor_at_end and not has_staged_payload:
+        if cursor_at_end and not has_flushable_rolling_content:
             # All content already extracted via rolling, but session may be idle without /exit.
             # Fire timeout signal for genuinely idle sessions.
             # Only fires once per session — _cursor_end_timeout_fired prevents repeated signals

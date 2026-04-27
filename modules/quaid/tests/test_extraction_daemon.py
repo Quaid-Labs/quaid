@@ -6853,6 +6853,70 @@ class TestRollingExtraction:
             }
         ]
 
+    def test_flushes_buffered_semantic_tail_when_newer_session_exists(self, monkeypatch, tmp_path):
+        """A completed short semantic buffer should flush once a newer session proves rollover."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        old_transcript = tmp_path / "old-short.jsonl"
+        old_transcript.write_text(
+            '{"role":"user","content":"walnut ritual"}\n{"role":"assistant","content":"ack"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, "old-short-sess", 0, old_transcript)
+        rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        (rolling_dir / "old-short-sess.json").write_text(
+            json.dumps({
+                "session_id": "old-short-sess",
+                "transcript_path": str(old_transcript),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: My Friday ritual uses walnut-umbrella-7142.",
+                "semantic_buffer_tokens": 12,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }),
+            encoding="utf-8",
+        )
+
+        new_transcript = tmp_path / "new-short.jsonl"
+        new_transcript.write_text('{"role":"user","content":"new"}\n', encoding="utf-8")
+        self._setup_cursor(tmp_path, instance_id, "new-short-sess", 0, new_transcript)
+
+        now = 1_700_000_000.0
+        old_mtime = now - 30
+        new_mtime = now - 5
+        os.utime(old_transcript, (old_mtime, old_mtime))
+        os.utime(new_transcript, (new_mtime, new_mtime))
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": "old-short-sess",
+                "transcript_path": str(old_transcript),
+            }
+        ]
+
     def test_does_not_flush_cursor_end_staged_payload_without_newer_session(self, monkeypatch, tmp_path):
         """A cursor-end staged payload alone must not flush without explicit rollover evidence."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
