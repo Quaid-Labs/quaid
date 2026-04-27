@@ -3063,7 +3063,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     # session_end so rolling can stage its facts first.  Without this, a
     # session_end picked up before the rolling job runs would find empty
     # rolling_state and lose staged carry_facts.
-    if signal_type == "session_end":
+    if signal_type == "session_end" and not staged_payload_sweep_signal:
         try:
             _ses_sig_path = signal_data.get("_signal_path", "")
             for _rf in list(_signal_dir().iterdir()):
@@ -3378,7 +3378,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         int(cursor_offset or 0),
     )
     staged_semantic_ready = rolling_mode and _semantic_buffer_has_content(staged_state)
-    if total_lines > buffered_line_offset and not staged_semantic_ready:
+    flush_staged_payload_only = bool(
+        staged_payload_sweep_signal
+        and signal_meta.get("flush_staged_payload_only")
+        and staged_state_has_payload(staged_state)
+    )
+    if total_lines > buffered_line_offset and not staged_semantic_ready and not flush_staged_payload_only:
         buffer_kwargs: Dict[str, Any] = {"adapter": adapter}
         if rolling_mode:
             buffer_kwargs["max_tokens"] = chunk_budget
@@ -3402,7 +3407,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         )
     read_start_offset = cursor_offset if rolling_mode else buffered_line_offset
     pending_subagent_harvest = False
-    new_lines = (
+    new_lines = [] if flush_staged_payload_only else (
         read_transcript_token_window(
             transcript_path,
             cursor_offset,
@@ -3777,7 +3782,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "remaining_lines": max(0, int(total_lines) - int(buffered_line_offset)),
                     },
                 )
-            if staged_state_has_payload(staged_state) and not has_remaining_tail:
+            if staged_state_has_payload(staged_state):
                 write_signal(
                     signal_type="session_end",
                     session_id=session_id,
@@ -3787,6 +3792,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "source_signal": "rolling",
                         "staged_payload_sweep": True,
                         "buffered_line_offset": buffered_line_offset,
+                        "flush_staged_payload_only": bool(has_remaining_tail),
                     },
                 )
             return
@@ -3947,9 +3953,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         )
         if signal_type == "timeout":
             write_context_refresh_timeout_marker(session_id)
+        final_cursor_offset = total_lines
+        if flush_staged_payload_only:
+            try:
+                final_cursor_offset = max(
+                    int(cursor_offset or 0),
+                    int(signal_meta.get("buffered_line_offset") or buffered_line_offset or 0),
+                )
+            except Exception:
+                final_cursor_offset = int(buffered_line_offset or cursor_offset or 0)
         write_cursor(
             session_id,
-            total_lines,
+            final_cursor_offset,
             transcript_path,
             source_key=lock_owner_key,
         )
