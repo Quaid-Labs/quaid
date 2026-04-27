@@ -3782,10 +3782,8 @@ class TestRollingExtraction:
             assert cursor["line_offset"] == 1
 
             pending = extraction_daemon.read_pending_signals()
-            assert [signal["type"] for signal in pending] == ["rolling", "session_end"]
+            assert [signal["type"] for signal in pending] == ["rolling"]
             assert pending[0]["meta"]["reason"] == "continued_chunk_budget"
-            assert pending[1]["meta"]["reason"] == "rolling_stage_flush"
-            assert pending[1]["meta"]["staged_payload_sweep"] is True
         finally:
             if real_extract is not None:
                 sys.modules["ingest.extract"] = real_extract
@@ -3933,11 +3931,9 @@ class TestRollingExtraction:
             assert cursor["line_offset"] == 1
 
             pending = extraction_daemon.read_pending_signals()
-            assert [signal["type"] for signal in pending] == ["rolling", "session_end"]
+            assert [signal["type"] for signal in pending] == ["rolling"]
             assert pending[0]["meta"]["reason"] == "continued_chunk_budget"
             assert pending[0]["meta"]["buffered_line_offset"] == 1
-            assert pending[1]["meta"]["reason"] == "rolling_stage_flush"
-            assert pending[1]["meta"]["staged_payload_sweep"] is True
         finally:
             if real_extract is not None:
                 sys.modules["ingest.extract"] = real_extract
@@ -4199,15 +4195,12 @@ class TestRollingExtraction:
             assert cursor["line_offset"] == 1
 
             pending = extraction_daemon.read_pending_signals()
-            assert [signal["type"] for signal in pending] == ["rolling", "session_end"]
+            assert [signal["type"] for signal in pending] == ["rolling"]
             rolling_signal = pending[0]
-            flush_signal = pending[1]
             assert rolling_signal["meta"]["reason"] == "continued_chunk_budget"
             assert rolling_signal["meta"]["chunk_lines"] == 0
             assert rolling_signal["meta"]["remaining_lines"] == 1
             assert rolling_signal["meta"]["remaining_tokens_estimate"] < 120
-            assert flush_signal["meta"]["reason"] == "rolling_stage_flush"
-            assert flush_signal["meta"]["staged_payload_sweep"] is True
         finally:
             if real_extract is not None:
                 sys.modules["ingest.extract"] = real_extract

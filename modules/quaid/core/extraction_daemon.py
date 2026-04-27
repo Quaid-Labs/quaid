@@ -631,7 +631,7 @@ def _pending_signal_sort_key(signal_data: Dict[str, Any]) -> Tuple[int, str]:
     signal_path = str(signal_data.get("_signal_path") or "")
     meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
     if signal_type == "session_end" and meta.get("reason") == "rolling_stage_flush":
-        return (_SIGNAL_POLL_PRIORITY.get("rolling", 2) + 1, signal_path)
+        return (-1, signal_path)
     return (_SIGNAL_POLL_PRIORITY.get(signal_type, 99), signal_path)
 
 
@@ -3593,7 +3593,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 source_key=lock_owner_key,
             )
             mark_signal_processed(signal_data)
-            if buffered_line_offset > cursor_offset and total_lines > buffered_line_offset:
+            has_remaining_tail = buffered_line_offset > cursor_offset and total_lines > buffered_line_offset
+            if has_remaining_tail:
                 remaining_tokens = estimate_unextracted_tokens(
                     transcript_path,
                     buffered_line_offset,
@@ -3612,7 +3613,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "remaining_lines": max(0, int(total_lines) - int(buffered_line_offset)),
                     },
                 )
-            if staged_state_has_payload(staged_state):
+            if staged_state_has_payload(staged_state) and not has_remaining_tail:
                 write_signal(
                     signal_type="session_end",
                     session_id=session_id,
