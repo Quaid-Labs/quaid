@@ -4388,6 +4388,94 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_check_chunk_ready_sessions_does_not_roll_small_residual_tail_after_flush(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        lines = [
+            json.dumps(
+                {"type": "event_msg", "payload": {"type": "user_message", "message": "chunk two lead"}}
+            ) + "\n",
+            json.dumps(
+                {"type": "event_msg", "payload": {"type": "user_message", "message": "chunk two followup"}}
+            ) + "\n",
+            json.dumps(
+                {"type": "event_msg", "payload": {"type": "user_message", "message": "chunk two tail"}}
+            ) + "\n",
+        ]
+        transcript_path.write_text("".join(lines), encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "sess-roll-residual"
+        extraction_daemon.write_cursor(session_id, 1, str(transcript_path))
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "processed_line_offset": 1,
+                "buffered_line_offset": 1,
+                "semantic_buffer": "User: carryover from prior rolling flush",
+                "semantic_buffer_tokens": 7,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            },
+        )
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                messages = []
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    payload = json.loads(raw)
+                    event_payload = payload.get("payload", {})
+                    message = event_payload.get("message")
+                    if message:
+                        messages.append(f"User: {message}")
+                return "\n\n".join(messages)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 20)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 1)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            state = extraction_daemon.read_rolling_state(session_id)
+            assert captured == []
+            assert state["buffered_line_offset"] == 2
+            assert state["semantic_buffer_tokens"] < 19
+            assert "carryover from prior rolling flush" in state["semantic_buffer"]
+            assert "chunk two followup" in state["semantic_buffer"]
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_check_chunk_ready_sessions_skips_legacy_cursor_shadowed_by_source_cursor(
         self, monkeypatch, tmp_path
     ):
