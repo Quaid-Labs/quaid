@@ -2787,6 +2787,7 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 
 function _readOpenClawPluginState(options = {}) {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const installsPath = path.join(os.homedir(), ".openclaw", "plugins", "installs.json");
   const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
   const cli = canRun("openclaw") ? "openclaw" : "";
   const skipPluginList = !!options.skipPluginList;
@@ -2808,6 +2809,14 @@ function _readOpenClawPluginState(options = {}) {
       ).trim();
     }
   } catch {}
+  if (!installPath) {
+    try {
+      if (fs.existsSync(installsPath)) {
+        const parsed = JSON.parse(fs.readFileSync(installsPath, "utf8"));
+        installPath = String(parsed?.installRecords?.quaid?.installPath || "").trim();
+      }
+    } catch {}
+  }
   if (cli && !skipPluginList) {
     const listAttempts = 3;
     const listTimeoutMs = 60_000;
