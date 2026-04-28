@@ -193,7 +193,10 @@ function selectAutoInjectionMemories(rows: MemoryResult[], limit: number): Memor
   const projectRows = rows.filter(isDocsProjectRecallItem);
   if (projectRows.length === 0) return rows.slice(0, boundedLimit);
 
-  const targetProjectRows = Math.min(projectRows.length, Math.max(1, Math.min(2, boundedLimit)));
+  const targetProjectRows = Math.min(
+    projectRows.length,
+    Math.max(1, Math.min(Math.ceil(boundedLimit / 2), boundedLimit)),
+  );
   const out = rows.slice(0, boundedLimit);
   let present = out.filter(isDocsProjectRecallItem).length;
   if (present >= targetProjectRows) return out;

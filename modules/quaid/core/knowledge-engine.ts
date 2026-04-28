@@ -519,7 +519,10 @@ ${projectHints}
     if (!Array.isArray(rows) || limit <= 0 || !Array.isArray(projectRows) || projectRows.length === 0) {
       return rows.slice(0, Math.max(1, limit));
     }
-    const targetProjectRows = Math.min(projectRows.length, Math.max(1, Math.min(2, limit)));
+    const targetProjectRows = Math.min(
+      projectRows.length,
+      Math.max(1, Math.min(Math.ceil(limit / 2), limit)),
+    );
     const out = rows.slice(0, Math.max(1, limit));
     let present = out.filter(isProjectRecallItem).length;
     if (present >= targetProjectRows) return out;

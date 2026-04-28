@@ -4488,6 +4488,15 @@ function _looksLikeExplicitProjectDetailQuery(query: string): boolean {
   return detailCues.some((cue) => normalized.includes(cue)) || temporalCues.some((cue) => normalized.includes(cue));
 }
 
+function _inferAutoInjectIntent(query: string): "general" | "agent_actions" {
+  const normalized = _normalizeProjectRecallHint(query);
+  if (!normalized) return "general";
+  const agentCue = /\b(?:agent|assistant|ai|alfie|quaid)\b/.test(normalized);
+  if (!agentCue) return "general";
+  const actionCue = /\b(?:find|found|suggest|suggested|recommend|recommended|build|built|implement|implemented|recall|recalled|leave|left|decide|decided|create|created|write|wrote|explain|explained|api|alternative|restaurant|podcast|bug|architecture|decision)\b/.test(normalized);
+  return actionCue ? "agent_actions" : "general";
+}
+
 function _extractAutoInjectTemporalBounds(query: string): Pick<RecallOptions, "dateFrom" | "dateTo"> {
   const raw = String(query || "").trim();
   if (!raw) return {};
@@ -4517,6 +4526,7 @@ function _buildAutoInjectRecallOptions(
 ): RecallOptions {
   const inferredProject = usePreInjectionPass ? _inferAutoInjectProject(query, projectNames) : undefined;
   const temporalBounds = _extractAutoInjectTemporalBounds(query);
+  const intent = _inferAutoInjectIntent(query);
   if (usePreInjectionPass && inferredProject && _looksLikeExplicitProjectDetailQuery(query)) {
     const useProjectOnly = Boolean(temporalBounds.dateFrom || temporalBounds.dateTo);
     return {
@@ -4531,7 +4541,7 @@ function _buildAutoInjectRecallOptions(
       routeStores: false,
       project: inferredProject,
       ...temporalBounds,
-      intent: "general",
+      intent,
       domain,
       failOpen: true,
       waitForExtraction: false,
@@ -4557,7 +4567,7 @@ function _buildAutoInjectRecallOptions(
           datastores: ["vector_basic", "graph"],
           routeStores: false,
         }),
-    intent: "general",
+    intent,
     domain,
     failOpen: true,
     waitForExtraction: false,

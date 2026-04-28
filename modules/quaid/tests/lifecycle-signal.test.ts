@@ -1276,6 +1276,20 @@ describe("lifecycle signal detection", () => {
     expect(opts.sourceTag).toBe("auto_inject");
   });
 
+  it("marks agent-action auto-inject queries with assistant-source intent", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "What API did the AI agent find for the recipe app, and what alternative was suggested?",
+      6,
+      { all: true },
+      true,
+      ["recipe-app"],
+    );
+
+    expect(opts.intent).toBe("agent_actions");
+    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
+    expect(opts.project).toBe("recipe-app");
+  });
+
   it("keeps bounded memory-only auto-inject stores when pre-injection pass is disabled", () => {
     const opts = __test.buildAutoInjectRecallOptions(
       "What grinder do I use for my Flair 58 espresso setup?",

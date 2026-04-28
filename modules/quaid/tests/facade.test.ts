@@ -1669,6 +1669,35 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext reserves a bounded half-budget for project docs rows", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-project-docs-half-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      { id: "m1", text: "High-scoring vector one", category: "fact", similarity: 0.99, via: "vector" },
+      { id: "m2", text: "High-scoring vector two", category: "fact", similarity: 0.98, via: "vector" },
+      { id: "m3", text: "High-scoring vector three", category: "fact", similarity: 0.97, via: "vector" },
+      { id: "m4", text: "High-scoring vector four", category: "fact", similarity: 0.96, via: "vector" },
+      { id: "p1", text: "PROJECT.log row one", category: "project", similarity: 0.71, via: "project", sourceType: "docs" },
+      { id: "p2", text: "PROJECT.log row two", category: "project", similarity: 0.70, via: "project", sourceType: "docs" },
+      { id: "p3", text: "PROJECT.log row three", category: "project", similarity: 0.69, via: "project", sourceType: "docs" },
+    ];
+
+    const result = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "What changed in the recipe app?", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-project-docs-half" },
+      existingPrependContext: "",
+      injectLimit: 6,
+      maxInjectionIdsPerSession: 100,
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.toInject.filter((m) => m.via === "project").map((m) => m.id)).toEqual(["p1", "p2", "p3"]);
+    expect(result?.toInject).toHaveLength(6);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("formatRecallToolResponse returns grouped text and source breakdown", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const out = facade.formatRecallToolResponse([

@@ -3588,6 +3588,14 @@ function _looksLikeExplicitProjectDetailQuery(query) {
   const temporalCues = ["as of", "latest", "current", "after", "before", "since", "until"];
   return detailCues.some((cue) => normalized.includes(cue)) || temporalCues.some((cue) => normalized.includes(cue));
 }
+function _inferAutoInjectIntent(query) {
+  const normalized = _normalizeProjectRecallHint(query);
+  if (!normalized) return "general";
+  const agentCue = /\b(?:agent|assistant|ai|alfie|quaid)\b/.test(normalized);
+  if (!agentCue) return "general";
+  const actionCue = /\b(?:find|found|suggest|suggested|recommend|recommended|build|built|implement|implemented|recall|recalled|leave|left|decide|decided|create|created|write|wrote|explain|explained|api|alternative|restaurant|podcast|bug|architecture|decision)\b/.test(normalized);
+  return actionCue ? "agent_actions" : "general";
+}
 function _extractAutoInjectTemporalBounds(query) {
   const raw = String(query || "").trim();
   if (!raw) return {};
@@ -3604,6 +3612,7 @@ function _extractAutoInjectTemporalBounds(query) {
 function _buildAutoInjectRecallOptions(query, limit, domain, usePreInjectionPass = facade.isPreInjectionPassEnabled(), projectNames = getProjectNames()) {
   const inferredProject = usePreInjectionPass ? _inferAutoInjectProject(query, projectNames) : void 0;
   const temporalBounds = _extractAutoInjectTemporalBounds(query);
+  const intent = _inferAutoInjectIntent(query);
   if (usePreInjectionPass && inferredProject && _looksLikeExplicitProjectDetailQuery(query)) {
     const useProjectOnly = Boolean(temporalBounds.dateFrom || temporalBounds.dateTo);
     return {
@@ -3618,7 +3627,7 @@ function _buildAutoInjectRecallOptions(query, limit, domain, usePreInjectionPass
       routeStores: false,
       project: inferredProject,
       ...temporalBounds,
-      intent: "general",
+      intent,
       domain,
       failOpen: true,
       waitForExtraction: false,
@@ -3642,7 +3651,7 @@ function _buildAutoInjectRecallOptions(query, limit, domain, usePreInjectionPass
       datastores: ["vector_basic", "graph"],
       routeStores: false
     },
-    intent: "general",
+    intent,
     domain,
     failOpen: true,
     waitForExtraction: false,
