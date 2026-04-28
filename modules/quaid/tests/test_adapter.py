@@ -1044,6 +1044,40 @@ class TestClaudeCodeAdapter:
         assert state["status"] == "cannot_install"
         assert "requires claude" in state["reason"]
 
+    def test_get_discovery_sessions_dir_scopes_path_derived_instance_to_own_project(self, tmp_path, monkeypatch):
+        sessions_root = tmp_path / ".claude" / "projects"
+        original_dir = sessions_root / "-private-tmp-cc-livetest"
+        sibling_dir = sessions_root / "-private-tmp-cc-livetest-m5b"
+        original_dir.mkdir(parents=True)
+        sibling_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest-m5b")
+
+        adapter = ClaudeCodeAdapter()
+
+        assert adapter.get_sessions_dir() == sessions_root
+        assert adapter.get_discovery_sessions_dir() == sibling_dir
+
+    def test_owns_session_path_rejects_sibling_claude_project_transcript(self, tmp_path, monkeypatch):
+        sessions_root = tmp_path / ".claude" / "projects"
+        original_dir = sessions_root / "-private-tmp-cc-livetest"
+        sibling_dir = sessions_root / "-private-tmp-cc-livetest-m5b"
+        original_dir.mkdir(parents=True)
+        sibling_dir.mkdir(parents=True)
+        original = original_dir / "658dbac3-e928-4f57-9125-f29aa4aca21c.jsonl"
+        sibling = sibling_dir / "fb4dedd5-7fc8-4afb-9e05-397871c9674d.jsonl"
+        original.write_text('{"type":"user","message":{"role":"user","content":"foreign"}}\n', encoding="utf-8")
+        sibling.write_text('{"type":"user","message":{"role":"user","content":"owned"}}\n', encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest-m5b")
+
+        adapter = ClaudeCodeAdapter()
+
+        assert adapter.owns_session_path(original, session_id=original.stem) is False
+        assert adapter.owns_session_path(sibling, session_id=sibling.stem) is True
+        assert adapter.get_session_path(sibling.stem) == sibling
+        assert adapter.get_session_path(original.stem) is None
+
     def test_pending_context_default_ttl_drops_stale_entries(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-ttl")
         adapter = ClaudeCodeAdapter(home=tmp_path)

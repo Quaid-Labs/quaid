@@ -448,9 +448,76 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 break  # Only the first match
         return files
 
+    @staticmethod
+    def _normalize_claude_project_dir_name(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+
+    def _current_project_session_slug(self) -> str:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+        if project_dir:
+            return instance_slug_from_project_dir(project_dir)
+        instance_id = ""
+        try:
+            instance_id = str(self.instance_id() or "").strip()
+        except Exception:
+            instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
+        prefix = f"{self.agent_id_prefix()}-"
+        if instance_id.startswith(prefix):
+            return instance_id[len(prefix):].strip()
+        return ""
+
+    def _project_sessions_root(self) -> Path:
+        return Path.home() / ".claude" / "projects"
+
+    def _session_project_slug_from_path(self, path: Path) -> str:
+        try:
+            root = self._project_sessions_root().expanduser().resolve()
+            candidate = Path(path).expanduser().resolve()
+            rel = candidate.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            return ""
+        parts = rel.parts
+        if len(parts) < 2:
+            return ""
+        return self._normalize_claude_project_dir_name(parts[0])
+
     def get_sessions_dir(self) -> Optional[Path]:
-        d = Path.home() / ".claude" / "projects"
-        return d if d.is_dir() else None
+        root = self._project_sessions_root()
+        if not root.is_dir():
+            return None
+        return root
+
+    def get_discovery_sessions_dir(self) -> Optional[Path]:
+        """Directory the daemon may scan for this instance's CC transcripts."""
+        root = self.get_sessions_dir()
+        if root is None:
+            return None
+        expected_slug = self._current_project_session_slug()
+        if not expected_slug:
+            return root
+        matches = [
+            candidate
+            for candidate in root.iterdir()
+            if candidate.is_dir()
+            and self._normalize_claude_project_dir_name(candidate.name) == expected_slug
+        ]
+        if matches:
+            matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+            return matches[0]
+        return root / f"-{expected_slug}"
+
+    def owns_session_path(self, path: Path, session_id: str = "") -> bool:
+        """Return True only for transcripts under this CC project's session dir."""
+        transcript_path = Path(path)
+        if not transcript_path.name.endswith(".jsonl"):
+            return False
+        sid = str(session_id or "").strip()
+        if sid and transcript_path.stem != sid and sid not in transcript_path.stem:
+            return False
+        expected_slug = self._current_project_session_slug()
+        if not expected_slug:
+            return True
+        return self._session_project_slug_from_path(transcript_path) == expected_slug
 
     def get_session_path(self, session_id: str) -> Optional[Path]:
         session_id = str(session_id or "").strip()
@@ -460,13 +527,14 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if sessions_dir is None:
             return None
         direct = sessions_dir / f"{session_id}.jsonl"
-        if direct.is_file():
+        if direct.is_file() and self.owns_session_path(direct, session_id=session_id):
             return direct
-        matches = sorted(
-            sessions_dir.rglob(f"*{session_id}*.jsonl"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
+        matches = [
+            path
+            for path in sessions_dir.rglob(f"*{session_id}*.jsonl")
+            if self.owns_session_path(path, session_id=session_id)
+        ]
+        matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return matches[0] if matches else None
 
     def _session_transition_state_path(self) -> Path:

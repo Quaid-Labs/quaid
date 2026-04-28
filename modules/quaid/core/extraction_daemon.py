@@ -2899,7 +2899,12 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
     if active_adapter is None or not hasattr(active_adapter, "get_sessions_dir"):
         return 0
     try:
-        sessions_dir = active_adapter.get_sessions_dir()
+        discovery_dir_fn = getattr(active_adapter, "get_discovery_sessions_dir", None)
+        sessions_dir = (
+            discovery_dir_fn()
+            if callable(discovery_dir_fn)
+            else active_adapter.get_sessions_dir()
+        )
     except Exception:
         return 0
     if not sessions_dir:

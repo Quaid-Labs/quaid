@@ -684,6 +684,34 @@ def test_ensure_discovered_session_cursors_skips_foreign_adapter_transcripts(mon
     assert cursor["transcript_path"] == str(owned)
 
 
+def test_ensure_discovered_session_cursors_scopes_claude_code_to_current_project(monkeypatch, tmp_path):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    instance_id = "claude-code-private-tmp-cc-livetest-m5b"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    sessions_root = tmp_path / ".claude" / "projects"
+    original_dir = sessions_root / "-private-tmp-cc-livetest"
+    sibling_dir = sessions_root / "-private-tmp-cc-livetest-m5b"
+    original_dir.mkdir(parents=True)
+    sibling_dir.mkdir(parents=True)
+    original = original_dir / "658dbac3-e928-4f57-9125-f29aa4aca21c.jsonl"
+    sibling = sibling_dir / "fb4dedd5-7fc8-4afb-9e05-397871c9674d.jsonl"
+    original.write_text('{"type":"user","message":{"role":"user","content":"foreign"}}\n', encoding="utf-8")
+    sibling.write_text('{"type":"user","message":{"role":"user","content":"owned"}}\n', encoding="utf-8")
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(ClaudeCodeAdapter())
+
+    assert discovered == 1
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+    cursor_paths = sorted(cursor_dir.glob("*.json"))
+    assert len(cursor_paths) == 1
+    cursor = json.loads(cursor_paths[0].read_text(encoding="utf-8"))
+    assert cursor["session_id"] == sibling.stem
+    assert cursor["transcript_path"] == str(sibling)
+
+
 def test_adapter_ownership_rejects_foreign_transcript_even_when_cursor_matches(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "foreign-owner")
