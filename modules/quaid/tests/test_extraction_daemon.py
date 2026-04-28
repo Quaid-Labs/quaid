@@ -4460,6 +4460,42 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_zero_offset_source_cursor_does_not_shadow_unprocessed_alias(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "rollout-2026-04-28T13-43-15-019dd454-6ab7-70a2-af6c-5b64f0cef501.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"Tamarind-lighthouse-3317 is the codeword"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "019dd454-6ab7-70a2-af6c-5b64f0cef501"
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+
+        legacy_file = extraction_daemon._cursor_dir() / f"{session_id}.json"
+        cursor_data = json.loads(legacy_file.read_text(encoding="utf-8"))
+
+        assert extraction_daemon._cursor_shadowed_by_source_cursor(
+            cursor_file=legacy_file,
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+            cursor_data=cursor_data,
+        ) is False
+
+        extraction_daemon.write_cursor(session_id, 1, str(transcript_path), source_key=source_key)
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+        cursor_data = json.loads(legacy_file.read_text(encoding="utf-8"))
+        assert extraction_daemon._cursor_shadowed_by_source_cursor(
+            cursor_file=legacy_file,
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+            cursor_data=cursor_data,
+        ) is True
+
     def test_process_signal_rolling_requeues_continuation_when_transcript_tail_remains(self, monkeypatch, tmp_path):
         import sys
         import types

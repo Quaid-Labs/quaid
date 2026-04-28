@@ -1170,7 +1170,7 @@ def _cursor_shadowed_by_source_cursor(
         return False
     source_offset = int(source_cursor.get("line_offset", 0) or 0)
     cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
-    if source_offset < cursor_offset:
+    if source_offset < cursor_offset or (source_offset == cursor_offset == 0):
         return False
     logger.info(
         "session %s cursor %s shadowed by source cursor %s at offset %d >= %d; skipping stale alias",
