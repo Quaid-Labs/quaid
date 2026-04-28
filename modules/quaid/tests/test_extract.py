@@ -6,7 +6,7 @@ import json
 import os
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -1833,24 +1833,28 @@ class TestExtractFromTranscript:
                 "text": "User likes oolong tea",
                 "category": "fact",
                 "speaker": "user",
+                "subject_entity_name": "Maya",
                 "domains": ["personal"],
             }]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
 
-        extract_from_transcript(
-            transcript="User: test\n\nAssistant: ok",
-            owner_id="test",
-            actor_id="user:owner",
-            subject_entity_id="user:owner",
-            source_channel="telegram",
-            source_conversation_id="chat-1",
-            source_author_id="operator-alias",
-        )
+        with patch("ingest.extract._memory.warm_embeddings", return_value={"requested": 1, "warmed": 1}), \
+             patch("ingest.extract._memory.batch_write", return_value=nullcontext(None)):
+            extract_from_transcript(
+                transcript="User: test\n\nAssistant: ok",
+                owner_id="test",
+                actor_id="user:owner",
+                subject_entity_id="user:owner",
+                source_channel="telegram",
+                source_conversation_id="chat-1",
+                source_author_id="operator-alias",
+            )
 
         kwargs = mock_store.call_args.kwargs
         assert kwargs["actor_id"] == "user:owner"
         assert kwargs["subject_entity_id"] == "user:owner"
+        assert kwargs["subject_entity_name"] == "Maya"
         assert kwargs["source_channel"] == "telegram"
         assert kwargs["source_conversation_id"] == "chat-1"
         assert kwargs["source_author_id"] == "operator-alias"
@@ -2201,6 +2205,7 @@ class TestExtractFromTranscript:
         assert "minimum viable stretching routine" in prompt
         assert "dog tried to eat a pinecone" in prompt
         assert "GraphQL alongside REST" in prompt
+        assert "subject_entity_name" in prompt
 
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")

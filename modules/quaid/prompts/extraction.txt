@@ -182,6 +182,7 @@ Respond with JSON only:
       "source": "user|agent|subagent|both|tool",
       "created_at": "optional ISO timestamp or YYYY-MM-DD from the transcript message that introduced the fact",
       "category": "fact|preference|decision|relationship",
+      "subject_entity_name": "optional exact named entity this fact is directly about",
       "extraction_confidence": "high|medium|low",
       "domains": ["personal", "technical"],
       "project": "optional-project-or-domain-label",
@@ -216,6 +217,11 @@ Notes on edges:
 - Only include edges array when the fact describes a relationship between named entities
 - A fact can have zero, one, or multiple edges
 - Most non-relationship facts will have no edges (omit the edges field or use empty array)
+
+Notes on subject_entity_name:
+- Include subject_entity_name only when the fact is directly about one clearly named entity stated in the transcript.
+- Copy the entity name exactly as written in the transcript.
+- Omit it when the fact is generic, comparative, or does not have a single explicit named subject.
 
 === SOUL SNIPPETS ===
 

@@ -840,6 +840,7 @@ def _repair_non_json_extraction_payload(
         '      "text": string,\n'
         '      "created_at": optional string,\n'
         '      "category": string,\n'
+        '      "subject_entity_name": optional string,\n'
         '      "domains": [string],\n'
         '      "extraction_confidence": "high"|"medium"|"low",\n'
         '      "keywords": string,\n'
@@ -2292,6 +2293,7 @@ def apply_extracted_payloads(
             return False
 
         project = fact.get("project")
+        subject_entity_name = " ".join(str(fact.get("subject_entity_name", "") or "").split()).strip() or None
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = str(fact.get("_source_label") or f"{label}-extraction")
         source_id_value = str(fact.get("_source_id") or session_id or "")
@@ -2335,6 +2337,7 @@ def apply_extracted_payloads(
                 actor_id=actor_id,
                 speaker_entity_id=speaker_entity_id,
                 subject_entity_id=subject_entity_id,
+                subject_entity_name=subject_entity_name,
                 source_channel=source_channel,
                 target_datastore=target_datastore,
                 source_conversation_id=source_conversation_id,
@@ -2453,6 +2456,7 @@ def apply_extracted_payloads(
                         domains = [normalize_domain_id(d) for d in domains if str(d).strip()]
                         domains = [d for d in domains if d]
                         project = fact.get("project")
+                        subject_entity_name = " ".join(str(fact.get("subject_entity_name", "") or "").split()).strip() or None
                         knowledge_type = "preference" if category == "preference" else "fact"
                         source_label = str(fact.get("_source_label") or f"{label}-extraction")
                         source_id_value = str(fact.get("_source_id") or session_id or "")
@@ -2484,6 +2488,7 @@ def apply_extracted_payloads(
                             actor_id=actor_id,
                             speaker_entity_id=speaker_entity_id,
                             subject_entity_id=subject_entity_id,
+                            subject_entity_name=subject_entity_name,
                             source_channel=source_channel,
                             target_datastore=target_datastore,
                             source_conversation_id=source_conversation_id,

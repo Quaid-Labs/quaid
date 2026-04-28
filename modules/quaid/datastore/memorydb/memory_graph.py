@@ -12328,19 +12328,14 @@ def _load_dedup_candidates_fts(
             ).fetchall()
         telemetry["fallback_candidates_returned"] += len(rows)
         return [(row, None) for row in rows], telemetry
-_FACT_SUBJECT_STOPWORDS = {
-    "a", "an", "and", "at", "for", "from", "in", "on", "or", "the", "this", "that",
-    "these", "those", "travel", "travel-wise", "work", "work-wise",
-}
-
-
 def _resolve_fact_subject_anchor(
     graph: "MemoryGraph",
     text: str,
     *,
     subject_entity_id: Optional[str] = None,
+    subject_entity_name: Optional[str] = None,
 ) -> Optional["Node"]:
-    """Resolve a best-effort primary entity anchor for a fact row."""
+    """Resolve a subject anchor for a fact row from structured metadata only."""
     if subject_entity_id:
         try:
             node = graph.get_node(str(subject_entity_id).strip())
@@ -12351,18 +12346,8 @@ def _resolve_fact_subject_anchor(
         }:
             return node
 
-    fact_text = str(text or "").strip()
-    if not fact_text:
-        return None
-    match = re.match(
-        r"^([A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})(?:['’]s)?\b",
-        fact_text,
-    )
-    if not match:
-        return None
-
-    candidate = " ".join(match.group(1).split()).strip()
-    if not candidate or candidate.lower() in _FACT_SUBJECT_STOPWORDS:
+    candidate = " ".join(str(subject_entity_name or "").split()).strip()
+    if not candidate:
         return None
 
     for node_type in ("Person", "Place", "Pet", "Organization", "Concept"):
@@ -12381,6 +12366,7 @@ def _ensure_fact_subject_edge(
     fact_node: "Node",
     conn: sqlite3.Connection,
     subject_entity_id: Optional[str] = None,
+    subject_entity_name: Optional[str] = None,
 ) -> Optional[str]:
     """Persist the generic subject -> fact link when the subject is resolvable."""
     if not fact_node or not getattr(fact_node, "id", None):
@@ -12392,6 +12378,7 @@ def _ensure_fact_subject_edge(
         graph,
         str(getattr(fact_node, "name", "") or ""),
         subject_entity_id=subject_entity_id,
+        subject_entity_name=subject_entity_name,
     )
     if not subject_node or not getattr(subject_node, "id", None):
         return None
@@ -12472,6 +12459,7 @@ def store(
     provenance_confidence: Optional[float] = None,  # attribution confidence
     actor_id: Optional[str] = None,  # canonical actor entity id
     subject_entity_id: Optional[str] = None,  # canonical subject entity id
+    subject_entity_name: Optional[str] = None,  # exact named entity this fact is about
     created_at: Optional[str] = None,  # Override created_at timestamp (ISO format)
     accessed_at: Optional[str] = None,  # Override accessed_at timestamp (ISO format)
     _conn: Optional[sqlite3.Connection] = None,
@@ -12562,6 +12550,8 @@ def store(
         actor_id = speaker_entity_id
     if conversation_id and not source_conversation_id:
         source_conversation_id = conversation_id
+    if subject_entity_name is not None:
+        subject_entity_name = " ".join(str(subject_entity_name).split()).strip() or None
     
     # Map category to type
     type_map = {
@@ -12637,6 +12627,7 @@ def store(
             or provenance_confidence is not None
             or actor_id
             or subject_entity_id
+            or subject_entity_name
         ):
             return
         attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
@@ -12693,8 +12684,19 @@ def store(
             attrs["provenance_confidence"] = float(provenance_confidence)
         if actor_id and not attrs.get("actor_id"):
             attrs["actor_id"] = actor_id
-        if subject_entity_id and not attrs.get("subject_entity_id"):
-            attrs["subject_entity_id"] = subject_entity_id
+        resolved_subject_id = str(attrs.get("subject_entity_id") or "").strip() or subject_entity_id
+        if not resolved_subject_id and subject_entity_name:
+            subject_anchor = _resolve_fact_subject_anchor(
+                graph,
+                existing.name,
+                subject_entity_name=subject_entity_name,
+            )
+            if subject_anchor and getattr(subject_anchor, "id", None):
+                resolved_subject_id = str(subject_anchor.id)
+        if resolved_subject_id and not attrs.get("subject_entity_id"):
+            attrs["subject_entity_id"] = resolved_subject_id
+        if subject_entity_name and not attrs.get("subject_entity_name"):
+            attrs["subject_entity_name"] = subject_entity_name
         if speaker_entity_id and not existing.speaker_entity_id:
             existing.speaker_entity_id = speaker_entity_id
         if conversation_id and not existing.conversation_id:
@@ -12706,6 +12708,16 @@ def store(
         if provenance_confidence is not None and existing.provenance_confidence is None:
             existing.provenance_confidence = float(provenance_confidence)
         existing.attributes = attrs
+        if str(getattr(existing, "type", "") or "").strip().lower() == "fact":
+            conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
+            with conn_cm as conn:
+                _ensure_fact_subject_edge(
+                    graph,
+                    fact_node=existing,
+                    conn=conn,
+                    subject_entity_id=resolved_subject_id,
+                    subject_entity_name=subject_entity_name,
+                )
 
     rowid_filter_parts: List[str] = []
     rowid_filter_params: List[Any] = []
@@ -13075,8 +13087,12 @@ def store(
     node.provenance_confidence = float(
         provenance_confidence if provenance_confidence is not None else extraction_confidence
     )
-    if not subject_entity_id:
-        subject_anchor = _resolve_fact_subject_anchor(graph, text)
+    if not subject_entity_id and subject_entity_name:
+        subject_anchor = _resolve_fact_subject_anchor(
+            graph,
+            text,
+            subject_entity_name=subject_entity_name,
+        )
         if subject_anchor and getattr(subject_anchor, "id", None):
             subject_entity_id = str(subject_anchor.id)
 
@@ -13097,6 +13113,7 @@ def store(
         or provenance_confidence is not None
         or actor_id
         or subject_entity_id
+        or subject_entity_name
     ):
         attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
         if source_type:
@@ -13129,6 +13146,8 @@ def store(
             attrs["actor_id"] = actor_id
         if subject_entity_id:
             attrs["subject_entity_id"] = subject_entity_id
+        if subject_entity_name:
+            attrs["subject_entity_name"] = subject_entity_name
         node.attributes = attrs
 
     injection_match = None
@@ -13156,6 +13175,7 @@ def store(
             fact_node=node,
             conn=conn,
             subject_entity_id=subject_entity_id,
+            subject_entity_name=subject_entity_name,
         )
 
     result = {"id": node_id, "status": "created"}
