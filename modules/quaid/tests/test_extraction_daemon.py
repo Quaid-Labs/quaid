@@ -3638,6 +3638,58 @@ class TestCheckIdleSessions:
 
         assert [item["session_id"] for item in captured] == ["z-fresh-sess", "a-stale-sess"]
 
+    def test_idle_scan_trusts_instance_cursor_when_adapter_ownership_rejects(
+        self, monkeypatch, tmp_path
+    ):
+        """Explicit instances may own a CDX transcript through their cursor, not cwd slug."""
+        instance_id = "codex-private-tmp-cdx-livetest"
+        session_id = "019dd519-9d12-71c0-bd3b-fc058b323c33"
+        transcript_path = tmp_path / "rollout-2026-04-28T17-18-38-019dd519-9d12-71c0-bd3b-fc058b323c33.jsonl"
+        transcript_path.write_text(
+            '{"type":"session_meta","payload":{"cwd":"/Users/admin/quaidcode/dev"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"My desk lamp has a brass shade."}}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, session_id, 0, transcript_path)
+
+        now = 1_700_000_000.0
+        os.utime(transcript_path, (now - 120, now - 120))
+
+        class _RejectingAdapter:
+            def owns_session_path(self, path, session_id=""):
+                return False
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _RejectingAdapter())
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta"),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=1)
+
+        assert captured == [
+            {
+                "signal_type": "timeout",
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "meta": {"compact_on_timeout": True},
+            }
+        ]
+
     def test_discovers_uncursored_session_files_before_timeout_scan(self, monkeypatch, tmp_path):
         """Idle scan must seed cursors for uncursored session transcripts before timing them out."""
         instance_id = "openclaw-livetest"
@@ -3918,6 +3970,55 @@ class TestRollingExtraction:
             {
                 "signal_type": "rolling",
                 "session_id": "sess-roll",
+                "transcript_path": str(transcript_path),
+            }
+        ]
+
+    def test_chunk_scan_trusts_instance_cursor_when_adapter_ownership_rejects(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "rollout-2026-04-28T17-18-38-019dd519-9d12-71c0-bd3b-fc058b323c33.jsonl"
+        transcript_path.write_text(
+            '{"type":"session_meta","payload":{"cwd":"/Users/admin/quaidcode/dev"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"hello there this is a longer message"}}\n'
+            '{"type":"event_msg","payload":{"type":"assistant_message","message":"reply with some extra words"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        session_id = "019dd519-9d12-71c0-bd3b-fc058b323c33"
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+
+        class _RejectingAdapter:
+            def owns_session_path(self, path, session_id=""):
+                return False
+
+            def parse_session_jsonl(self, path):
+                return "User: hello there this is a longer message\n\nAssistant: reply with some extra words"
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _RejectingAdapter())
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 2)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions()
+
+        assert captured == [
+            {
+                "signal_type": "rolling",
+                "session_id": session_id,
                 "transcript_path": str(transcript_path),
             }
         ]

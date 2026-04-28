@@ -2827,6 +2827,32 @@ def _cursor_records_transcript_path(session_id: str, transcript_path: str) -> bo
     )
 
 
+def _cursor_data_records_transcript_path(cursor_data: Dict[str, Any], transcript_path: str) -> bool:
+    """Return True when an already-loaded instance cursor points at this transcript."""
+    cursor_path = str((cursor_data or {}).get("transcript_path") or "").strip()
+    if not cursor_path or not transcript_path:
+        return False
+    return (
+        _canonicalize_transcript_source_path(cursor_path)
+        == _canonicalize_transcript_source_path(transcript_path)
+    )
+
+
+def _cursor_or_adapter_owns_transcript_path(
+    adapter,
+    session_id: str,
+    transcript_path: str,
+    *,
+    cursor_data: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Return True when this instance has already cursored or owns a transcript."""
+    if cursor_data is not None and _cursor_data_records_transcript_path(cursor_data, transcript_path):
+        return True
+    if _cursor_records_transcript_path(session_id, transcript_path):
+        return True
+    return _adapter_owns_transcript_path(adapter, session_id, transcript_path)
+
+
 def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str) -> bool:
     """Return whether an adapter-scoped transcript belongs to this daemon instance."""
     if not transcript_path:
@@ -4558,7 +4584,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             cursor_data=data,
         ):
             continue
-        if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
+        if not _cursor_or_adapter_owns_transcript_path(
+            adapter,
+            str(session_id),
+            str(transcript_path),
+            cursor_data=data,
+        ):
             continue
         internal_state = _reconcile_internal_cursor_state(
             session_id,
@@ -4792,7 +4823,12 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             cursor_data=data,
         ):
             continue
-        if not _adapter_owns_transcript_path(adapter, str(session_id), str(transcript_path)):
+        if not _cursor_or_adapter_owns_transcript_path(
+            adapter,
+            str(session_id),
+            str(transcript_path),
+            cursor_data=data,
+        ):
             continue
         current_size_bytes = _transcript_size_bytes(str(transcript_path))
         cursor_size_bytes = int(data.get("transcript_size_bytes", 0) or 0)
