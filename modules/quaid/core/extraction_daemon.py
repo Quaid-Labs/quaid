@@ -936,8 +936,14 @@ def _is_daemon_owned_transcript_snapshot_path(transcript_path: str) -> bool:
         return False
     try:
         path = Path(raw).expanduser().resolve()
-        root = (_instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots").resolve()
-        return path.is_file() and path.is_relative_to(root)
+        roots = (
+            (_instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots").resolve(),
+            # OpenClaw mirrors authoritative transcript copies here before reset /
+            # compaction lifecycle signals. These files are instance-local daemon
+            # inputs, not host-owned foreign transcripts.
+            (_instance_root() / "logs" / "quaid" / "sessions").resolve(),
+        )
+        return path.is_file() and any(path.is_relative_to(root) for root in roots)
     except OSError as exc:
         if _should_raise_transcript_stat_error(raw, exc):
             raise

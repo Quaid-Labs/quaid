@@ -702,6 +702,51 @@ def test_adapter_ownership_rejects_foreign_transcript_even_when_cursor_matches(m
     ) is False
 
 
+def test_daemon_owned_preserved_session_transcript_bypasses_adapter_ownership(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    preserved = (
+        tmp_path
+        / "instances"
+        / "openclaw-main"
+        / "logs"
+        / "quaid"
+        / "sessions"
+        / "120d788e-94ca-4df1-9b07-6e6d922dbcc6.jsonl"
+    )
+    preserved.parent.mkdir(parents=True, exist_ok=True)
+    preserved.write_text('{"role":"user","content":"cobalt-postage-oc"}\n', encoding="utf-8")
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def owns_session_path(self, path, session_id=""):
+            return False
+
+    assert extraction_daemon._is_daemon_owned_transcript_snapshot_path(str(preserved)) is True
+    assert extraction_daemon._adapter_owns_transcript_path(
+        _Adapter(),
+        "120d788e-94ca-4df1-9b07-6e6d922dbcc6",
+        str(preserved),
+    ) is True
+
+
+def test_daemon_owned_preserved_session_transcript_rejects_foreign_instance(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    foreign = (
+        tmp_path
+        / "instances"
+        / "other-instance"
+        / "logs"
+        / "quaid"
+        / "sessions"
+        / "120d788e-94ca-4df1-9b07-6e6d922dbcc6.jsonl"
+    )
+    foreign.parent.mkdir(parents=True, exist_ok=True)
+    foreign.write_text('{"role":"user","content":"foreign"}\n', encoding="utf-8")
+
+    assert extraction_daemon._is_daemon_owned_transcript_snapshot_path(str(foreign)) is False
+
+
 def test_codex_discovery_skips_rollouts_from_other_instances(monkeypatch, tmp_path):
     from adaptors.codex.adapter import CodexAdapter
 
