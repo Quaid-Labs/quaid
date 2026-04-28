@@ -3468,6 +3468,35 @@ class TestRecallTelemetry:
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 60.0
 
+    def test_plan_fanout_queries_fast_ignores_llm_project_for_structural_exact_codeword(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            return ('{"stores":["docs"],"project":"tamarind-lighthouse-3317","queries":["tamarind-lighthouse-3317"]}', {})
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={
+                "stores": ["docs"],
+                "project": "tamarind-lighthouse-3317",
+                "queries": ["tamarind-lighthouse-3317"],
+            },
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False):
+            queries, meta = mg._plan_fanout_queries(
+                "tamarind-lighthouse-3317",
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == ["tamarind-lighthouse-3317"]
+        assert meta["used_llm"] is True
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector"]
+        assert meta["planned_project"] is None
+
     def test_exact_query_store_classification_uses_segmentation_uncertainty_not_script_gate(self):
         import datastore.memorydb.memory_graph as mg
 

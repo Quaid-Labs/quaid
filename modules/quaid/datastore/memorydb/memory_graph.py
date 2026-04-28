@@ -9849,6 +9849,7 @@ def _plan_fanout_queries(
         )
     )
     store_plan_only = (planner_profile == "full" and preserve_exact_query) or multilingual_store_plan_only
+    structural_exact_store_plan_only = store_plan_only and _is_single_structural_exact_query(clean)
     if preserve_exact_query and not store_plan_only:
         _trace_m15(
             "planner.fanout.short_circuit",
@@ -9947,8 +9948,14 @@ def _plan_fanout_queries(
         )
         queries = parsed.get("queries") if isinstance(parsed, dict) else None
         if isinstance(parsed, dict):
-            planned_stores = _planner_store_plan(parsed.get("stores")) or planned_default_stores
-            planned_project = _sanitize_planned_project(parsed.get("project")) or default_project
+            parsed_stores = _planner_store_plan(parsed.get("stores")) or planned_default_stores
+            parsed_project = _sanitize_planned_project(parsed.get("project"))
+            if structural_exact_store_plan_only and default_project is None:
+                planned_stores = planned_default_stores
+                planned_project = None
+            else:
+                planned_stores = parsed_stores
+                planned_project = parsed_project or default_project
             if isinstance(parsed.get("freshness_preferred"), bool):
                 meta["freshness_preferred"] = bool(parsed.get("freshness_preferred"))
             if "docs" in planned_default_stores and "docs" not in planned_stores:
