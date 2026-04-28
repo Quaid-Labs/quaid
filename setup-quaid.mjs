@@ -2801,7 +2801,11 @@ function _readOpenClawPluginState(options = {}) {
       const plugins = parsed?.plugins;
       pluginEnabled = !!plugins?.entries?.quaid?.enabled;
       memorySlotBound = String(plugins?.slots?.memory || "").trim() === "quaid";
-      installPath = String(plugins?.installs?.quaid?.installPath || "").trim();
+      installPath = String(
+        plugins?.installRecords?.quaid?.installPath
+        || plugins?.installs?.quaid?.installPath
+        || ""
+      ).trim();
     }
   } catch {}
   if (cli && !skipPluginList) {

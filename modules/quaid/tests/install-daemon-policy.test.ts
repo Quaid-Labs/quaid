@@ -244,6 +244,8 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("const listAttempts = 3;");
     expect(setupText).toContain("const listTimeoutMs = 60_000;");
     expect(setupText).toContain("if (listRes.status === 0 || discovered)");
+    expect(setupText).toContain("plugins?.installRecords?.quaid?.installPath");
+    expect(setupText).toContain("plugins?.installs?.quaid?.installPath");
     expect(setupText).toContain("Avoid OpenClaw plugin");
     expect(setupText).not.toContain("const preUninstallList = pluginListHasQuaid();");
     expect(setupText).not.toContain('runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000)');
