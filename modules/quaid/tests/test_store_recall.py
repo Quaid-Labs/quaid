@@ -5899,6 +5899,28 @@ class TestRecallFastHookInjectContract:
         assert meta["counts"]["graph_discoveries"] == 1
         assert bundle is None
 
+    def test_store_auto_links_fact_subject_entity_with_has_fact_edge(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        mei = mg.Node.create("Person", "Mei")
+        graph.add_node(mei, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_lib_get_embedding", side_effect=_fake_get_embedding):
+            result = mg.store(
+                "Mei runs a ceramics practice out of their garage in Osaka",
+                owner_id="solomon-steadman",
+                skip_dedup=True,
+            )
+
+        fact_node = graph.get_node(result["id"])
+        assert fact_node is not None
+        fact_attrs = fact_node.attributes if isinstance(fact_node.attributes, dict) else {}
+        assert fact_attrs.get("subject_entity_id") == mei.id
+        incoming = graph.get_edges(fact_node.id, direction="in")
+        assert any(edge.source_id == mei.id and edge.relation == "has_fact" for edge in incoming)
+
     def test_graph_aware_recall_renders_inbound_edge_direction(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

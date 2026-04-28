@@ -12328,6 +12328,113 @@ def _load_dedup_candidates_fts(
             ).fetchall()
         telemetry["fallback_candidates_returned"] += len(rows)
         return [(row, None) for row in rows], telemetry
+_FACT_SUBJECT_STOPWORDS = {
+    "a", "an", "and", "at", "for", "from", "in", "on", "or", "the", "this", "that",
+    "these", "those", "travel", "travel-wise", "work", "work-wise",
+}
+
+
+def _resolve_fact_subject_anchor(
+    graph: "MemoryGraph",
+    text: str,
+    *,
+    subject_entity_id: Optional[str] = None,
+) -> Optional["Node"]:
+    """Resolve a best-effort primary entity anchor for a fact row."""
+    if subject_entity_id:
+        try:
+            node = graph.get_node(str(subject_entity_id).strip())
+        except Exception:
+            node = None
+        if node and str(getattr(node, "type", "") or "").strip() in {
+            "Person", "Place", "Pet", "Organization", "Concept"
+        }:
+            return node
+
+    fact_text = str(text or "").strip()
+    if not fact_text:
+        return None
+    match = re.match(
+        r"^([A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})(?:['’]s)?\b",
+        fact_text,
+    )
+    if not match:
+        return None
+
+    candidate = " ".join(match.group(1).split()).strip()
+    if not candidate or candidate.lower() in _FACT_SUBJECT_STOPWORDS:
+        return None
+
+    for node_type in ("Person", "Place", "Pet", "Organization", "Concept"):
+        try:
+            node = graph.find_node_by_name(candidate, type=node_type)
+        except Exception:
+            node = None
+        if node:
+            return node
+    return None
+
+
+def _ensure_fact_subject_edge(
+    graph: "MemoryGraph",
+    *,
+    fact_node: "Node",
+    conn: sqlite3.Connection,
+    subject_entity_id: Optional[str] = None,
+) -> Optional[str]:
+    """Persist the generic subject -> fact link when the subject is resolvable."""
+    if not fact_node or not getattr(fact_node, "id", None):
+        return None
+    if str(getattr(fact_node, "type", "") or "").strip().lower() != "fact":
+        return None
+
+    subject_node = _resolve_fact_subject_anchor(
+        graph,
+        str(getattr(fact_node, "name", "") or ""),
+        subject_entity_id=subject_entity_id,
+    )
+    if not subject_node or not getattr(subject_node, "id", None):
+        return None
+    if str(subject_node.id) == str(fact_node.id):
+        return None
+
+    existing = conn.execute(
+        "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation = 'has_fact' LIMIT 1",
+        (subject_node.id, fact_node.id),
+    ).fetchone()
+    if existing:
+        return str(existing[0] or "")
+
+    edge = Edge.create(
+        source_id=subject_node.id,
+        target_id=fact_node.id,
+        relation="has_fact",
+        source_fact_id=fact_node.id,
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO edges
+        (id, source_id, target_id, relation, attributes, weight,
+         valid_from, valid_until, created_at, source_fact_id,
+         origin_package_id, origin_version_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            edge.id,
+            edge.source_id,
+            edge.target_id,
+            edge.relation,
+            json.dumps(edge.attributes),
+            edge.weight,
+            edge.valid_from,
+            edge.valid_until,
+            edge.created_at or _now_iso(),
+            edge.source_fact_id,
+            edge.origin_package_id,
+            edge.origin_version_id,
+        ),
+    )
+    return edge.id
 
 
 def store(
@@ -12968,6 +13075,10 @@ def store(
     node.provenance_confidence = float(
         provenance_confidence if provenance_confidence is not None else extraction_confidence
     )
+    if not subject_entity_id:
+        subject_anchor = _resolve_fact_subject_anchor(graph, text)
+        if subject_anchor and getattr(subject_anchor, "id", None):
+            subject_entity_id = str(subject_anchor.id)
 
     # Store metadata flags in attributes blob
     if (
@@ -13038,6 +13149,14 @@ def store(
         node_id = graph.add_node(node, embed=False, conn=_conn)  # Don't re-embed
     except (ValueError, RuntimeError) as exc:
         raise ValueError(f"Failed to store memory due to domain validation: {exc}") from exc
+    conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
+    with conn_cm as conn:
+        _ensure_fact_subject_edge(
+            graph,
+            fact_node=node,
+            conn=conn,
+            subject_entity_id=subject_entity_id,
+        )
 
     result = {"id": node_id, "status": "created"}
     if node.status == "flagged":
