@@ -630,16 +630,10 @@ class MemoryGraph:
                     table_exists = False
 
             if not table_exists:
-                # Defer table creation until at least one embedding is available.
-                has_any = False
-                try:
-                    has_any = bool(conn.execute(
-                        "SELECT 1 FROM nodes WHERE embedding IS NOT NULL LIMIT 1"
-                    ).fetchone())
-                except sqlite3.OperationalError:
-                    return  # Schema not initialized yet — defer vec setup
-                if not has_any:
-                    return  # No embeddings yet — defer table creation
+                # A fresh install with zero memories is valid, and hook recall
+                # may run before the first extraction stores an embedding.
+                # Create the empty vector table up front so fail-hard retrieval
+                # does not treat that normal state as vec/index corruption.
                 conn.execute(
                     f"CREATE VIRTUAL TABLE vec_nodes USING vec0("
                     f"node_id TEXT PRIMARY KEY, "

@@ -47,6 +47,25 @@ def test_memory_graph_initializes_multi_user_foundation_schema(tmp_path):
         assert "handle" in alias_cols
 
 
+def test_memory_graph_initializes_empty_vec_index_when_sqlite_vec_available(tmp_path):
+    from datastore.memorydb.memory_graph import _lib_has_vec
+
+    if not _lib_has_vec():
+        return
+
+    db_path = Path(tmp_path) / "memory.db"
+    graph = MemoryGraph(db_path=db_path)
+    with graph._get_conn() as conn:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'vec_nodes'"
+        ).fetchone()
+        count = conn.execute("SELECT COUNT(*) FROM vec_nodes").fetchone()[0]
+
+    assert row is not None
+    assert "vec0" in str(row[0])
+    assert count == 0
+
+
 def test_memory_graph_migrates_origin_columns_on_existing_db(tmp_path):
     db_path = Path(tmp_path) / "legacy-memory.db"
     schema_path = (

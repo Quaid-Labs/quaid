@@ -243,6 +243,19 @@ class TestSearchSemantic:
             results = graph.search_semantic("anything")
             assert results == []
 
+    def test_empty_fresh_vec_index_returns_no_results_in_fail_hard(self, tmp_path):
+        from datastore.memorydb.memory_graph import MemoryGraph, _lib_has_vec
+
+        if not _lib_has_vec():
+            pytest.skip("sqlite-vec not available in this environment")
+
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            graph = MemoryGraph(db_path=tmp_path / "fresh-empty.db")
+            results = graph.search_semantic("Hello. Reply with ACK only.")
+
+        assert results == []
+
     def test_returns_results_sorted_by_similarity(self, tmp_path):
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
