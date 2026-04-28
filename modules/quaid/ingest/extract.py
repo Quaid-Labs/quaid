@@ -1102,6 +1102,9 @@ _EXTRACTION_ARTIFACT_FACT_RE = re.compile(
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
 )
+_TITLEISH_SPAN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z][A-Za-z0-9']*(?:\s+(?:[+&]\s+)?[A-Z][A-Za-z0-9']*){0,4})(?![A-Za-z0-9])"
+)
 _UUID_ANCHOR_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -1109,8 +1112,8 @@ _UUID_ANCHOR_RE = re.compile(
 _DATE_ANCHOR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[-_]\d{2})?$")
 
 
-def _iter_user_turn_texts(transcript: str) -> List[str]:
-    """Return user-authored turn text from a rendered transcript."""
+def _iter_role_turn_texts(transcript: str, *, role_name: str) -> List[str]:
+    """Return authored turn text for one rendered transcript role."""
     turns: List[str] = []
     current_role: Optional[str] = None
     current_parts: List[str] = []
@@ -1120,21 +1123,31 @@ def _iter_user_turn_texts(transcript: str) -> List[str]:
         match = _SPEAKER_PREFIX_RE.match(raw_line)
         if match:
             saw_prefixed_turn = True
-            if current_role == "user" and current_parts:
+            if current_role == role_name and current_parts:
                 turns.append("\n".join(current_parts).strip())
             role = match.group(1).strip().lower().replace("_", " ").replace("-", " ")
-            current_role = "user" if role == "user" else "other"
-            current_parts = [match.group(2)] if current_role == "user" else []
+            current_role = role_name if role == role_name else "other"
+            current_parts = [match.group(2)] if current_role == role_name else []
             continue
-        if current_role == "user":
+        if current_role == role_name:
             current_parts.append(raw_line)
 
-    if current_role == "user" and current_parts:
+    if current_role == role_name and current_parts:
         turns.append("\n".join(current_parts).strip())
 
-    if not saw_prefixed_turn and _STRUCTURAL_ANCHOR_TOKEN_RE.search(str(transcript or "")):
+    if not saw_prefixed_turn and role_name == "user" and _STRUCTURAL_ANCHOR_TOKEN_RE.search(str(transcript or "")):
         turns.append(str(transcript or "").strip())
     return [turn for turn in turns if turn]
+
+
+def _iter_user_turn_texts(transcript: str) -> List[str]:
+    """Return user-authored turn text from a rendered transcript."""
+    return _iter_role_turn_texts(transcript, role_name="user")
+
+
+def _iter_agent_turn_texts(transcript: str) -> List[str]:
+    """Return assistant-authored turn text from a rendered transcript."""
+    return _iter_role_turn_texts(transcript, role_name="assistant")
 
 
 def _clean_structural_anchor_turn_text(text: str) -> str:
@@ -1239,6 +1252,105 @@ def _explicit_structural_anchor_facts(
             seen_fact_texts.add(fact_key)
             for marker in missing_markers:
                 seen_markers.add(marker.lower())
+
+    return additions
+
+
+def _extract_titleish_spans(text: str) -> List[str]:
+    spans: List[str] = []
+    for match in _TITLEISH_SPAN_RE.finditer(str(text or "")):
+        span = match.group(0).strip(" \t\r\n\"'`()[]{}.,;:!?")
+        if span:
+            spans.append(span)
+    return spans
+
+
+def _assistant_anchor_keywords(text: str) -> str:
+    tokens = [
+        token.strip(".,;:!?()[]{}\"'`").lower()
+        for token in re.split(r"\s+", str(text or ""))
+        if token.strip(".,;:!?()[]{}\"'`")
+    ]
+    return " ".join(dict.fromkeys(tokens[:12]))
+
+
+def _strip_trailing_question_lines(text: str) -> str:
+    lines = [line.rstrip() for line in str(text or "").splitlines()]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    while lines:
+        raw_candidate = lines[-1].strip()
+        if re.match(r"^[-*•]+\s+", raw_candidate):
+            break
+        candidate = re.sub(r"^\s*[-*•]+\s*", "", raw_candidate)
+        if not candidate.endswith("?"):
+            break
+        lines.pop()
+        while lines and not lines[-1].strip():
+            lines.pop()
+    return "\n".join(lines).strip()
+
+
+def _explicit_assistant_anchor_facts(
+    transcript: str,
+    facts: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Preserve exact assistant-authored option/plan anchors when LLM extraction omits them."""
+    existing_text = "\n".join(
+        str(fact.get("text", "") or "")
+        for fact in facts or []
+        if isinstance(fact, dict)
+    ).lower()
+    seen_fact_texts: set[str] = set()
+    seen_spans: set[str] = set()
+    additions: List[Dict[str, Any]] = []
+
+    for turn in _iter_agent_turn_texts(transcript):
+        for raw_paragraph in re.split(r"\n\s*\n", str(turn or "")):
+            if "<" in raw_paragraph or "```" in raw_paragraph:
+                continue
+            candidate = _strip_trailing_question_lines(raw_paragraph)
+            if not candidate:
+                continue
+            candidate = re.sub(r"\*\*([^*]+)\*\*", r"\1", candidate)
+            candidate = re.sub(r"\n\s*[-*•]+\s*", " ", candidate)
+            candidate = re.sub(r"\s*\n\s*", " ", candidate)
+            candidate = _normalize_structural_anchor_sentence(candidate)
+            if len(candidate.split()) < 6 or len(candidate) > 360:
+                continue
+            spans = _extract_titleish_spans(candidate)
+            unique_spans: List[str] = []
+            for span in spans:
+                key = span.lower()
+                if key in {s.lower() for s in unique_spans}:
+                    continue
+                unique_spans.append(span)
+            missing_spans = [
+                span
+                for span in unique_spans
+                if span.lower() not in existing_text and span.lower() not in seen_spans
+            ]
+            if len(unique_spans) < 2 or len(missing_spans) < 2:
+                continue
+            fact_key = _fact_text_key(candidate)
+            if not fact_key or fact_key in seen_fact_texts:
+                for span in missing_spans:
+                    seen_spans.add(span.lower())
+                continue
+            additions.append({
+                "text": candidate,
+                "category": "fact",
+                "speaker": "agent",
+                "domains": ["personal"],
+                "extraction_confidence": "medium",
+                "keywords": _assistant_anchor_keywords(candidate),
+                "privacy": "shared",
+                "confidence_reason": "Exact assistant-authored named-option or plan anchor omitted by model extraction",
+                "edges": [],
+            })
+            seen_fact_texts.add(fact_key)
+            for span in missing_spans:
+                seen_spans.add(span.lower())
 
     return additions
 
@@ -2969,6 +3081,7 @@ def extract_from_transcript(
         all_facts,
         owner_id=owner_id,
     )
+    explicit_anchor_facts.extend(_explicit_assistant_anchor_facts(transcript, all_facts))
     if explicit_anchor_facts:
         logger.info(
             "[extract] %s: preserved %d explicit structural anchor fact(s)",

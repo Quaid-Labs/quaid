@@ -667,6 +667,98 @@ class TestExtractFromTranscript:
         assert texts[0] == "Mi ritual de viernes es tostar semillas de calabaza con la clave cedro-plantilla-4821"
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_named_option_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "David planned a surprise birthday dinner for Linda",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: D wants to do a surprise birthday dinner for my mom in Houston.\n\n"
+            "Assistant: Montrose is actually perfect for this — it's one of the best food neighborhoods in Houston.\n"
+            "  - **Underbelly** successor restaurants (Chris Shepherd's places)\n"
+            "  - **Local Foods** — more casual but great for dietary flexibility\n"
+            "  - **Uchi Houston** — Japanese, maybe too fancy?\n"
+            "  Want me to look into any of those?\n\n"
+            "User: the local foods direction sounds right.\n\n"
+            "Assistant: I'd look at places like Weights + Measures, or Feges BBQ for something more casual.\n"
+            "  Do you want me to look up specific menus?\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert any("Local Foods" in text and "Uchi Houston" in text for text in agent_texts)
+        assert any("Weights + Measures" in text and "Feges BBQ" in text for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_plan_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Rachel FaceTimed into Linda's birthday dinner with Ethan and Lily",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: maybe we do a FaceTime thing for Rachel during dinner.\n\n"
+            "Assistant: The FaceTime call during dinner is actually a great idea — it makes the surprise even bigger.\n"
+            "  Your mom thinks it's just her and David, then you show up, then Rachel's on the phone.\n"
+            "  Layer the surprises. It'll be a great moment.\n"
+            "  Want Rachel to have a specific time to call?\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert any(
+            "FaceTime call during dinner" in text and "David" in text and "Rachel" in text
+            for text in agent_texts
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_explicit_structural_anchor_does_not_store_user_questions(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
