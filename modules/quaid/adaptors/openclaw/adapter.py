@@ -1197,6 +1197,12 @@ class OpenClawAdapter(QuaidAdapter):
                     for a in agents_list
                     if isinstance(a, dict) and a.get("id")
                 ]
+                agents = cfg.get("agents", {})
+                if isinstance(agents, dict):
+                    for key in agents.keys():
+                        label = str(key or "").strip().lower()
+                        if label and label not in {"defaults", "list"} and label not in labels:
+                            labels.append(label)
             except (json.JSONDecodeError, IOError, KeyError):
                 pass
 
@@ -1207,7 +1213,7 @@ class OpenClawAdapter(QuaidAdapter):
             for entry in home.iterdir():
                 if entry.is_dir() and entry.name.startswith(silo_prefix):
                     label = entry.name[len(silo_prefix):]
-                    if label and label not in labels:
+                    if label and label not in labels and self._agent_label_has_platform_state(label):
                         labels.append(label)
         except (OSError, RuntimeError):
             pass
@@ -1222,6 +1228,27 @@ class OpenClawAdapter(QuaidAdapter):
             labels = ["main"] + labels
 
         return [f"{prefix}-{label}" for label in labels]
+
+    def _agent_label_has_platform_state(self, label: str) -> bool:
+        clean = str(label or "").strip().lower()
+        if not clean:
+            return False
+        if clean == "main":
+            return True
+        cfg_path = self.get_gateway_config_path()
+        if cfg_path:
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                agents = cfg.get("agents", {})
+                if isinstance(agents, dict):
+                    for row in agents.get("list", []) or []:
+                        if isinstance(row, dict) and str(row.get("id") or "").strip().lower() == clean:
+                            return True
+                    if clean in {str(key or "").strip().lower() for key in agents.keys()}:
+                        return True
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                pass
+        return (self._openclaw_root_dir() / "agents" / clean).exists()
 
     def get_instance_manager(self):
         return None

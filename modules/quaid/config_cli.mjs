@@ -50,6 +50,10 @@ const C = {
   bold: (s) => `\x1b[1m${s}\x1b[0m`,
 };
 
+const CONFIG_SET_DEPRECATED_MESSAGE =
+  "Error: 'quaid config set' is deprecated for now. " +
+  "Edit the target config JSON file directly, or use 'quaid config path' to locate it first.";
+
 function clearScreen() {
   if (process.stdout.isTTY) process.stdout.write("\x1B[2J\x1B[H");
 }
@@ -205,18 +209,6 @@ function setPath(obj, dotted, value) {
     cur = cur[seg];
   }
   cur[parts.at(-1)] = value;
-}
-
-function parseValue(raw) {
-  const v = String(raw).trim();
-  if (v === "true") return true;
-  if (v === "false") return false;
-  if (/^-?\d+$/.test(v)) return parseInt(v, 10);
-  if (/^-?\d+\.\d+$/.test(v)) return parseFloat(v);
-  if ((v.startsWith("[") && v.endsWith("]")) || (v.startsWith("{") && v.endsWith("}"))) {
-    try { return JSON.parse(v); } catch {}
-  }
-  return v;
 }
 
 function normalizeProvider(provider) {
@@ -933,16 +925,8 @@ function showConfig() {
   }
 }
 
-function setConfig(dotted, raw) {
-  const { path: cfgPath, data: cfg } = loadConfig();
-  setPath(cfg, dotted, parseValue(raw));
-  saveConfig(cfgPath, cfg);
-  runConfigCallbacksAfterSave();
-  console.log(`Set ${dotted} in ${cfgPath}`);
-}
-
 function usage() {
-  console.log("Usage: quaid config [show|edit|path|set <dotted.key> <value>] [--shared | --platform-shared [platform] | --instance <id>]");
+  console.log("Usage: quaid config [show|edit|path] [--shared | --platform-shared [platform] | --instance <id>]");
   console.log("");
   console.log("Target flags (pick one):");
   console.log("  --shared              Edit the global shared fallback config");
@@ -952,6 +936,8 @@ function usage() {
   console.log("");
   console.log("Global shared config is a fallback; platform shared config overrides it.");
   console.log("Instance configs inherit shared values and can override individual keys.");
+  console.log("");
+  console.log("'quaid config set' is deprecated for now; edit the JSON file directly.");
 }
 
 async function main() {
@@ -969,14 +955,8 @@ async function main() {
     return;
   }
   if (cmd === "set") {
-    const key = process.argv[3];
-    const value = process.argv.slice(4).join(" ");
-    if (!key || !value) {
-      usage();
-      process.exit(1);
-    }
-    setConfig(key, value);
-    return;
+    console.error(CONFIG_SET_DEPRECATED_MESSAGE);
+    process.exit(1);
   }
 
   usage();

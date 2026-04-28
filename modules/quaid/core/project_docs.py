@@ -1277,27 +1277,36 @@ def refresh_docs_rag_once(project: Optional[str] = None) -> Dict[str, Any]:
     return {"registered": registered, "indexed_one": bool(indexed)}
 
 
-def _notify_project_docs_update(project: str, result: Dict[str, Any]) -> None:
+def _notify_project_docs_update(
+    project: str,
+    result: Dict[str, Any],
+    *,
+    entry: Optional[Dict[str, Any]] = None,
+    request: Optional[Dict[str, Any]] = None,
+) -> None:
     try:
-        from lib.runtime_context import queue_deferred_notice
+        with _project_runtime_context(entry or get_project_entry(project), request=request):
+            from lib.runtime_context import queue_deferred_notice
 
-        metrics = result.get("metrics") or {}
-        registry_sync = result.get("registry_sync") or {}
-        message = (
-            f"Project docs update completed for {project}: "
-            f"docs_updated={int(metrics.get('docs_updated') or 0)}, "
-            f"docs_registered={int(registry_sync.get('registered') or 0)}, "
-            f"docs_unregistered={int(registry_sync.get('unregistered') or 0)}, "
-            f"indexed_docs={int(result.get('indexed_docs') or 0)}"
-        )
-        queue_deferred_notice(
-            message,
-            kind="project_doc_update",
-            priority="info",
-            source="project-docs-worker",
-        )
-    except Exception:
-        logger.warning("Failed to queue project docs update notice for %s", project)
+            metrics = result.get("metrics") or {}
+            registry_sync = result.get("registry_sync") or {}
+            message = (
+                f"Project docs update completed for {project}: "
+                f"docs_updated={int(metrics.get('docs_updated') or 0)}, "
+                f"docs_registered={int(registry_sync.get('registered') or 0)}, "
+                f"docs_unregistered={int(registry_sync.get('unregistered') or 0)}, "
+                f"indexed_docs={int(result.get('indexed_docs') or 0)}"
+            )
+            queue_deferred_notice(
+                message,
+                kind="project_doc_update",
+                priority="info",
+                source="project-docs-worker",
+            )
+    except Exception as exc:
+        logger.warning("Failed to queue project docs update notice for %s: %s", project, exc)
+        if _fail_hard_enabled():
+            raise
 
 
 def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = None, dry_run: bool = False) -> Dict[str, Any]:
@@ -1433,7 +1442,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 "indexed_project_logs": project_log_index_count,
             }
             if not dry_run and next_state["status"] == "fresh":
-                _notify_project_docs_update(name, result)
+                _notify_project_docs_update(name, result, entry=entry, request=request)
             return result
         except Exception as exc:
             merge_state(

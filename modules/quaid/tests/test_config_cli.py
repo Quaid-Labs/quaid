@@ -167,16 +167,24 @@ def test_plugin_schema_edit_enforces_enum_values(monkeypatch, tmp_path):
     assert staged["plugins"]["config"]["memorydb.core"]["mode"] == "safe"
 
 
-def test_main_set_returns_nonzero_when_callback_reload_fails(monkeypatch, tmp_path):
+def test_main_set_is_deprecated_before_loading_or_writing(monkeypatch, tmp_path, capsys):
     path = tmp_path / "config" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({}), encoding="utf-8")
 
     monkeypatch.setattr(config_cli, "_config_path", lambda: path)
-    monkeypatch.setattr(config_cli, "_run_config_callbacks_after_save", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        config_cli,
+        "_run_config_callbacks_after_save",
+        lambda: (_ for _ in ()).throw(AssertionError("callback should not run")),
+    )
     monkeypatch.setattr("sys.argv", ["config_cli.py", "set", "models.llm_provider", "anthropic"])
 
     assert config_cli.main() == 1
+    captured = capsys.readouterr()
+    assert "quaid config set" in captured.err
+    assert "deprecated" in captured.err
+    assert json.loads(path.read_text()) == {}
 
 
 def test_discover_plugin_manifests_suppresses_errors_in_non_strict_mode(monkeypatch, tmp_path):

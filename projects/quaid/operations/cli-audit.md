@@ -29,7 +29,8 @@ Purpose: evaluate current `quaid` CLI commands for practical runtime value in al
 1. Interactive config UX:
 - Added `quaid config edit` menu-driven editor.
 - Added `quaid config path`.
-- Added `quaid config set <dotted.key> <value>`.
+- Deprecated `quaid config set <dotted.key> <value>` during prerelease; direct
+  JSON edits are preferred until the command can be kept in parity.
 - Added shared helper `modules/quaid/config_cli.py`.
 
 2. CLI consistency:

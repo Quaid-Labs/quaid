@@ -137,6 +137,44 @@ def test_project_runtime_context_clears_cross_instance_db_overrides(monkeypatch,
     assert os.environ.get("MEMORY_ARCHIVE_DB_PATH") == str(foreign_archive)
 
 
+def test_project_docs_update_notice_uses_request_runtime_context(monkeypatch):
+    from core import project_docs
+
+    reset_adapter()
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    captured = {}
+
+    def fake_queue(message, **kwargs):
+        captured["message"] = message
+        captured["kwargs"] = kwargs
+        captured["instance"] = os.environ.get("QUAID_INSTANCE")
+        captured["adapter"] = os.environ.get("QUAID_ADAPTER_TYPE")
+        return True
+
+    with patch("lib.runtime_context.queue_deferred_notice", fake_queue):
+        project_docs._notify_project_docs_update(
+            "demo",
+            {
+                "metrics": {"docs_updated": 1},
+                "registry_sync": {"registered": 2, "unregistered": 0},
+                "indexed_docs": 3,
+            },
+            entry={"instances": ["claude-code-private-tmp-cc-livetest"]},
+            request={
+                "requested_instance": "codex-private-tmp-cdx-livetest",
+                "requested_adapter_type": "codex",
+            },
+        )
+
+    assert captured["instance"] == "codex-private-tmp-cdx-livetest"
+    assert captured["adapter"] == "codex"
+    assert captured["kwargs"]["kind"] == "project_doc_update"
+    assert "docs_updated=1" in captured["message"]
+    assert "QUAID_INSTANCE" not in os.environ
+    assert "QUAID_ADAPTER_TYPE" not in os.environ
+
+
 def test_request_janitor_run_writes_hidden_state_and_blocks_parallel_requests(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     from core import project_docs

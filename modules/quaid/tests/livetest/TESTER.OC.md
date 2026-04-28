@@ -210,7 +210,15 @@ OC is the only platform with both. Procedure:
 
 1. Set timeout to 1 minute through Quaid config, then restart the OC gateway service:
    ```bash
-   ssh REMOTE_HOST '$QCLI config set capture.inactivityTimeoutMinutes 1'
+   ssh REMOTE_HOST 'QUAID_INSTANCE=OC_INSTANCE python3 - <<PY
+import json
+import os
+from pathlib import Path
+p = Path.home() / ".quaid" / "instances" / os.environ["QUAID_INSTANCE"] / "config.json"
+data = json.loads(p.read_text())
+data.setdefault("capture", {})["inactivity_timeout_minutes"] = 1
+p.write_text(json.dumps(data, indent=2) + "\n")
+PY'
    ssh REMOTE_HOST 'openclaw gateway restart || true'
    ssh REMOTE_HOST 'for i in $(seq 1 30); do \
      curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break \
@@ -227,7 +235,15 @@ OC is the only platform with both. Procedure:
 
 4. Restore and restart:
    ```bash
-   ssh REMOTE_HOST '$QCLI config set capture.inactivityTimeoutMinutes 60'
+   ssh REMOTE_HOST 'QUAID_INSTANCE=OC_INSTANCE python3 - <<PY
+import json
+import os
+from pathlib import Path
+p = Path.home() / ".quaid" / "instances" / os.environ["QUAID_INSTANCE"] / "config.json"
+data = json.loads(p.read_text())
+data.setdefault("capture", {})["inactivity_timeout_minutes"] = 60
+p.write_text(json.dumps(data, indent=2) + "\n")
+PY'
    ssh REMOTE_HOST 'openclaw gateway restart || true'
    ssh REMOTE_HOST 'for i in $(seq 1 30); do \
      curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break \

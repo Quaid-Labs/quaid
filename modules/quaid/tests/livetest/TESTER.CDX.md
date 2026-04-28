@@ -114,6 +114,20 @@ Exit CDX with Ctrl+D or `/exit`.
 **Always wait for the current turn to fully finish** before sending `/new` —
 CDX disables `/new` while a task is still running.
 
+**`/new` rollout verification sequence:** `/new` may display a welcome screen
+and resume hint. That is normal and is not evidence of a wedge. The extraction
+handoff is only testable after the first real prompt in the new session:
+
+1. Send `/new`.
+2. Send the first real prompt for the new session (for neutral transition
+   checks, use `Hello`).
+3. If the prompt text is staged but not submitted, send the documented bare
+   Enter above.
+4. Then verify a new rollout file exists under `~/.codex/sessions` and the
+   Quaid rolling state/logs advanced.
+5. If no new rollout file exists after the follow-up prompt was submitted,
+   treat it as a real CDX pane wedge and restart Codex in the pane.
+
 ---
 
 ## Extraction Model: Signal-Only Hook + Daemon
@@ -150,8 +164,8 @@ restarting the process. `SessionStart` does not fire. Instead, `hook-inject`
 When the session_id changes (i.e., the first message arrives in the new thread),
 the adapter writes a `session_end` signal for the session that just ended.
 
-**Consequence for M1/M3:** after sending `/new`, you must send one follow-up
-message in the new session (e.g. `Hello`) to trigger `hook-inject` and fire
+**Consequence for lifecycle tests:** after sending `/new`, you must send one
+follow-up message in the new session (e.g. `Hello`) to trigger `hook-inject` and fire
 `check_session_transition`. Do not just wait — no message means no hook fires
 and extraction never starts.
 
@@ -286,14 +300,30 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE \
 
 ### M2 — Extraction via `/new`
 Use `/new` (CDX has no `/clear`). Wait for the memorable turn to fully finish,
-then send `/new`; `/new` is the extraction trigger for this milestone. Verify the
-fact is stored after the session boundary. Do not gate on snippet or journal
-output — that is discretionary and covered in M11.
+then send `/new`, then send the first real prompt for the new session. If the
+prompt stages without submitting, send the documented bare Enter. Only after that
+follow-up prompt has submitted should you verify the rollout file and memory
+state. Do not gate on snippet or journal output — that is discretionary and
+covered in M11.
 
 ### M3 — Rolling Extraction
 CDX does not have `/compact` or `/clear`. After seeding and building context, use `/new`
 as the extraction trigger. Verify `rolling-extraction.jsonl` has `rolling_stage`
 and `rolling_flush` events the same as OC/CC.
+
+### M5 — Silo Isolation Across Sessions/Instances
+When M5 asks CDX to end Session X with `LIFECYCLE`, send `/new`, then send the
+first real Session Y recall prompt. If the recall prompt is staged but not
+submitted, send the documented bare Enter. Verify rollout creation after the
+recall prompt has submitted, not from the `/new` welcome screen alone. If the
+submitted follow-up prompt still does not create a new rollout file, restart the
+Codex pane before retrying that part.
+
+### M7 — System Context Refresh
+CDX uses `/new` as the M7 refresh trigger. Send `/new`, then send the canary
+question (`What's the office plant named?`) as the first real prompt in the new
+session. Apply the same bare-Enter and rollout-file checks above before grading
+the answer. A welcome screen or resume hint immediately after `/new` is normal.
 
 ### M4 — Timeout Extraction
 See dedicated section above. CDX gets timeout extraction but no timeout compaction.

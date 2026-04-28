@@ -644,6 +644,11 @@ PYEOF
         shift 2>/dev/null || true
         exec "$PYTHON_BIN" "$SCRIPT_DIR/config_cli.py" set-auth "$@"
         ;;
+      set)
+        echo "error: 'quaid config set' is deprecated for now." >&2
+        echo "Edit the target config JSON file directly, or use 'quaid config path' to locate it first." >&2
+        exit 2
+        ;;
     esac
 
     CONFIG_HOME_HINT="${QUAID_HOME:-$HOME/.quaid}"

@@ -245,6 +245,22 @@ class TestListAgentInstanceIds:
 
         assert ids[0] == "openclaw-main"
 
+    def test_oc_list_ids_skips_deleted_agent_silo_without_platform_state(self, tmp_path):
+        adapter = _make_oc_adapter(tmp_path)
+        fake_cfg = tmp_path / "openclaw.json"
+        fake_cfg.write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}, {"id": "live"}]}}),
+            encoding="utf-8",
+        )
+        for name in ("openclaw-main", "openclaw-live", "openclaw-deleted", "openclaw-dironly"):
+            (tmp_path / "instances" / name).mkdir(parents=True)
+        (tmp_path / "agents" / "dironly").mkdir(parents=True)
+
+        with patch.object(adapter, "get_gateway_config_path", return_value=fake_cfg):
+            ids = adapter.list_agent_instance_ids()
+
+        assert ids == ["openclaw-main", "openclaw-live", "openclaw-dironly"]
+
 
 # ---------------------------------------------------------------------------
 # 4. agent_instance_root

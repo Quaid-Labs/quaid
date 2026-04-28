@@ -7,8 +7,15 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+CONFIG_SET_DEPRECATED_MESSAGE = (
+    "Error: 'quaid config set' is deprecated for now. "
+    "Edit the target config JSON file directly, or use 'quaid config path' "
+    "to locate it first."
+)
 
 
 def _workspace_root() -> Path:
@@ -472,7 +479,7 @@ def main() -> int:
     edit_p = sub.add_parser("edit", help="Interactive config editor")
     _add_target_args(edit_p)
 
-    set_p = sub.add_parser("set", help="Set a dotted key path")
+    set_p = sub.add_parser("set", help="Deprecated: edit the config JSON file directly")
     set_p.add_argument("key", help="Dotted path (e.g. models.fastReasoning)")
     set_p.add_argument("value", help="Value (string/number/true/false/json)")
     _add_target_args(set_p)
@@ -482,6 +489,10 @@ def main() -> int:
 
     args = parser.parse_args()
     cmd = args.cmd or "show"
+
+    if cmd == "set":
+        print(CONFIG_SET_DEPRECATED_MESSAGE, file=sys.stderr)
+        return 1
 
     cfg_path, cfg_label = _resolve_config_target(args)
 
@@ -504,17 +515,6 @@ def main() -> int:
 
     if cmd == "edit":
         interactive_edit(cfg_path, data)
-        return 0
-
-    if cmd == "set":
-        try:
-            _set(data, args.key, parse_literal(args.value))
-            _save_config(cfg_path, data)
-            _run_config_callbacks_after_save()
-        except Exception as err:
-            print(f"Failed to set {args.key}: {err}")
-            return 1
-        print(f"Set {args.key} in {cfg_path}")
         return 0
 
     if cmd == "set-auth":

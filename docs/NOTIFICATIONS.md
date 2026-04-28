@@ -52,16 +52,19 @@ Pending maintenance approval requests use immediate adapter notifications (coold
 
 ## Configuration
 
-Use either:
-
-- `quaid config edit` (interactive)
-- `quaid config set notifications.<feature>.verbosity <off|summary|full>`
+Use `quaid config edit` for interactive changes, or edit the target JSON config
+file directly. `quaid config path` prints the file Quaid will read for the
+current scope.
 
 Example:
 
-```bash
-quaid config set notifications.janitor.verbosity full
-quaid config set notifications.retrieval.verbosity off
+```json
+{
+  "notifications": {
+    "janitor": {"verbosity": "full"},
+    "retrieval": {"verbosity": "off"}
+  }
+}
 ```
 
 Additional notification flags:

@@ -14,6 +14,7 @@ Environment:
 """
 
 import os
+import json
 import re
 from pathlib import Path
 from typing import List, Optional
@@ -209,6 +210,83 @@ def is_internal_path_derived_instance_id(name: str, home: Optional[Path] = None)
     return validated in internal_path_derived_instance_ids(home)
 
 
+def _read_json_object(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _raw_adapter_type(instance_dir: Path) -> str:
+    config = _read_json_object(instance_dir / "config.json")
+    adapter = config.get("adapter")
+    if isinstance(adapter, dict):
+        return str(adapter.get("type") or "").strip().lower()
+    return ""
+
+
+def _openclaw_config_candidates() -> List[Path]:
+    out: List[Path] = []
+    raw = str(os.environ.get("OPENCLAW_CONFIG_PATH", "") or "").strip()
+    if raw:
+        out.append(Path(raw).expanduser())
+    out.append(Path.home() / ".openclaw" / "openclaw.json")
+    deduped: List[Path] = []
+    seen: set[str] = set()
+    for path in out:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _active_openclaw_agent_labels() -> tuple[set[str], list[Path]]:
+    labels = {"main"}
+    roots: list[Path] = []
+    for cfg_path in _openclaw_config_candidates():
+        if not cfg_path.exists():
+            continue
+        roots.append(cfg_path.parent)
+        cfg = _read_json_object(cfg_path)
+        agents = cfg.get("agents")
+        if not isinstance(agents, dict):
+            continue
+        for row in agents.get("list") or []:
+            if isinstance(row, dict):
+                label = str(row.get("id") or "").strip().lower()
+                if label:
+                    labels.add(label)
+        for key in agents.keys():
+            label = str(key or "").strip().lower()
+            if label and label not in {"defaults", "list"}:
+                labels.add(label)
+    fallback_root = Path.home() / ".openclaw"
+    if fallback_root.exists() and all(str(root) != str(fallback_root) for root in roots):
+        roots.append(fallback_root)
+    return labels, roots
+
+
+def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
+    prefix = "openclaw-"
+    if not name.startswith(prefix) or name == f"{prefix}main":
+        return False
+    if _raw_adapter_type(instance_dir) != "openclaw":
+        return False
+    labels, roots = _active_openclaw_agent_labels()
+    if not roots:
+        return False
+    label = name[len(prefix):].strip().lower()
+    if not label or label in labels:
+        return False
+    for root in roots:
+        if (root / "agents" / label).exists():
+            return False
+    return True
+
+
 def list_instances() -> List[str]:
     """List all registered instance names under QUAID_HOME/instances/.
 
@@ -229,6 +307,8 @@ def list_instances() -> List[str]:
         except InstanceError:
             continue
         if is_internal_path_derived_instance_id(name):
+            continue
+        if _is_stale_openclaw_agent_instance(name, entry):
             continue
         if (entry / "config.json").is_file():
             instances.append(name)

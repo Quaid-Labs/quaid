@@ -1,6 +1,7 @@
 """Tests for lib/instance.py — instance resolution and validation."""
 
 import os
+import json
 import shutil
 import pytest
 from pathlib import Path
@@ -213,6 +214,39 @@ class TestListInstances:
             assert list_instances() == ["openclaw-main"]
         finally:
             shutil.rmtree(home, ignore_errors=True)
+
+    def test_ignores_deleted_openclaw_agent_silos_when_platform_state_is_gone(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}, {"id": "live"}]}}),
+            encoding="utf-8",
+        )
+        (oc_root / "agents" / "dironly").mkdir(parents=True)
+
+        for name in [
+            "openclaw-main",
+            "openclaw-live",
+            "openclaw-dironly",
+            "openclaw-deleted",
+            "claude-code-main",
+        ]:
+            root = tmp_path / "instances" / name
+            root.mkdir(parents=True)
+            adapter_type = "openclaw" if name.startswith("openclaw-") else "claude-code"
+            root.joinpath("config.json").write_text(
+                json.dumps({"adapter": {"type": adapter_type}}),
+                encoding="utf-8",
+            )
+
+        assert list_instances() == [
+            "claude-code-main",
+            "openclaw-dironly",
+            "openclaw-live",
+            "openclaw-main",
+        ]
 
     def test_empty(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
