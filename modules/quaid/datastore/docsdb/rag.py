@@ -2013,7 +2013,8 @@ class DocsRAG:
             "message": (
                 "No docs matched inside currently linked projects. "
                 "Likely unlinked project candidates were found. "
-                "Ask the user whether to link one before falling back to filesystem grep."
+                "If the user asks to use, search, link, or work with one of these projects, "
+                "run `quaid project link <name>` before falling back to filesystem grep."
             ),
             "requested_project": str(requested_project or "").strip() or None,
             "linked_projects": sorted(

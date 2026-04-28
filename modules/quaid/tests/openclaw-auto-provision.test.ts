@@ -290,6 +290,12 @@ describe("openclaw auto-provision", () => {
     expect(String(promptResult?.prependSystemContext || "")).toContain(
       "quaid registry register <absolute-file-path> --project misc--openclaw-m13test",
     );
+    expect(String(promptResult?.prependSystemContext || "")).toContain(
+      "Run quaid project link <project-name>",
+    );
+    expect(String(promptResult?.prependSystemContext || "")).toContain(
+      "Do NOT satisfy that request by reading project files directly first.",
+    );
     expect(String(promptResult?.prependSystemContext || "")).not.toContain("openclaw-main");
     expect(testApi.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost")).toBe(true);
 

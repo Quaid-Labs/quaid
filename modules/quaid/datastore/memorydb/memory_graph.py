@@ -4878,8 +4878,9 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
                         {
                             "text": (
                                 "[docs] scoped miss: likely matches may exist in unlinked project(s): "
-                                f"{', '.join(names)}. Ask the user whether to link one "
-                                "(quaid project link <name>) before filesystem grep/cat."
+                                f"{', '.join(names)}. If the user asks to use, search, link, "
+                                "or work with one of these projects, run `quaid project link <name>` "
+                                "before filesystem grep/cat. Do not read project files directly first."
                             ),
                             "similarity": 0.0,
                             "category": "docs_scope_hint",
@@ -5809,7 +5810,10 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
             print("\n=== Documentation Scope Hint ===")
             print("No docs hits were found inside linked projects.")
             print(f"Likely unlinked project candidates: {', '.join(names)}")
-            print("Ask the user whether Quaid should link one, then retry docs recall.")
+            print(
+                "If the user asks to use/search/link one, run `quaid project link <name>` "
+                "before filesystem grep/cat, then retry docs recall."
+            )
 
 
 def _normalize_domain_tag(value: Optional[str]) -> Optional[str]:

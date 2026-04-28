@@ -4012,6 +4012,13 @@ ${identityContext}` : identityContext;
             `For durable new work: run Step 1 above to create a named project first.`,
             `For work that belongs to an existing project: write there directly.`,
             ``,
+            `[EXISTING SHARED PROJECTS \u2014 LINK BEFORE DIRECT FILE READS]`,
+            `If Quaid docs recall or a Documentation Scope Hint names an unlinked project candidate, and the user asks you to use, search, link, or work with that project:`,
+            `  STEP 1: Run quaid project link <project-name>`,
+            `  STEP 2: Retry Quaid docs recall for the user's question.`,
+            `Do NOT satisfy that request by reading project files directly first.`,
+            `Direct grep/cat is only a fallback after the project is linked and docs recall still has no relevant hit.`,
+            ``,
             `Always tell the user which project received the file.`
           ].join("\n");
           prependSystemContext = prependSystemContext ? `${prependSystemContext}
