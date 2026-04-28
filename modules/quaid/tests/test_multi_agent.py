@@ -245,21 +245,28 @@ class TestListAgentInstanceIds:
 
         assert ids[0] == "openclaw-main"
 
-    def test_oc_list_ids_skips_deleted_agent_silo_without_platform_state(self, tmp_path):
+    def test_oc_list_ids_skips_deleted_agent_silo_without_platform_state(self, monkeypatch, tmp_path):
         adapter = _make_oc_adapter(tmp_path)
         fake_cfg = tmp_path / "openclaw.json"
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(fake_cfg))
         fake_cfg.write_text(
             json.dumps({"agents": {"list": [{"id": "main"}, {"id": "live"}]}}),
             encoding="utf-8",
         )
         for name in ("openclaw-main", "openclaw-live", "openclaw-deleted", "openclaw-dironly"):
-            (tmp_path / "instances" / name).mkdir(parents=True)
+            instance_root = tmp_path / "instances" / name
+            instance_root.mkdir(parents=True)
+            instance_root.joinpath("config.json").write_text(
+                json.dumps({"adapter": {"type": "openclaw"}}),
+                encoding="utf-8",
+            )
         (tmp_path / "agents" / "dironly").mkdir(parents=True)
 
         with patch.object(adapter, "get_gateway_config_path", return_value=fake_cfg):
             ids = adapter.list_agent_instance_ids()
 
         assert ids == ["openclaw-main", "openclaw-live", "openclaw-dironly"]
+        assert not (tmp_path / "instances" / "openclaw-deleted").exists()
 
 
 # ---------------------------------------------------------------------------

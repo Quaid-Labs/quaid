@@ -16,6 +16,7 @@ Environment:
 import os
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -287,6 +288,48 @@ def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
     return True
 
 
+def _prune_stale_openclaw_agent_instance(
+    name: str,
+    instance_dir: Path,
+    *,
+    home: Optional[Path] = None,
+) -> bool:
+    """Remove a stale OpenClaw agent silo after the native agent is gone."""
+    if not _is_stale_openclaw_agent_instance(name, instance_dir):
+        return False
+    try:
+        root = (
+            (Path(home).resolve() if home is not None else quaid_home())
+            / "instances"
+        ).resolve()
+        target = instance_dir.resolve()
+        if instance_dir.is_symlink() or target.parent != root or target.name != name:
+            return False
+        shutil.rmtree(target)
+        return True
+    except OSError:
+        return False
+
+
+def prune_stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[str]:
+    """Delete stale OpenClaw agent silos whose native agent state is gone."""
+    instances_dir = (Path(home).resolve() if home is not None else quaid_home()) / "instances"
+    if not instances_dir.is_dir():
+        return []
+    pruned: List[str] = []
+    for entry in sorted(instances_dir.iterdir()):
+        if not entry.is_dir() or entry.is_symlink():
+            continue
+        name = entry.name
+        try:
+            validate_instance_id(name)
+        except InstanceError:
+            continue
+        if _prune_stale_openclaw_agent_instance(name, entry, home=instances_dir.parent):
+            pruned.append(name)
+    return pruned
+
+
 def list_instances() -> List[str]:
     """List all registered instance names under QUAID_HOME/instances/.
 
@@ -309,6 +352,7 @@ def list_instances() -> List[str]:
         if is_internal_path_derived_instance_id(name):
             continue
         if _is_stale_openclaw_agent_instance(name, entry):
+            _prune_stale_openclaw_agent_instance(name, entry)
             continue
         if (entry / "config.json").is_file():
             instances.append(name)

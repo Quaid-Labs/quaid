@@ -247,6 +247,7 @@ class TestListInstances:
             "openclaw-live",
             "openclaw-main",
         ]
+        assert not (tmp_path / "instances" / "openclaw-deleted").exists()
 
     def test_empty(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
