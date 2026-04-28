@@ -945,7 +945,7 @@ class TestCmdUpdateStaleNeverIndexed:
             assert count == 1
             assert indexed_projects == ["quaid"]
 
-    def test_update_stale_cli_main_wires_project_log_indexer(self, tmp_path, monkeypatch):
+    def test_update_stale_cli_main_accepts_project_log_indexer(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             from datastore.docsdb import updater
 
@@ -957,9 +957,11 @@ class TestCmdUpdateStaleNeverIndexed:
 
             sentinel_indexer = object()
             monkeypatch.setattr(updater, "cmd_update_stale", fake_cmd_update_stale)
-            monkeypatch.setattr(updater, "_resolve_cli_project_log_indexer", lambda: sentinel_indexer)
 
-            rc = updater.main(["update-stale", "--apply", "--project", "quaid"])
+            rc = updater.main(
+                ["update-stale", "--apply", "--project", "quaid"],
+                project_log_indexer=sentinel_indexer,
+            )
 
             assert rc == 0
             assert captured["dry_run"] is False
@@ -967,29 +969,24 @@ class TestCmdUpdateStaleNeverIndexed:
             assert captured["project"] == "quaid"
             assert captured["project_log_indexer"] is sentinel_indexer
 
-    def test_cli_project_log_indexer_imports_core_updater_when_absent(self, tmp_path, monkeypatch):
+    def test_core_docs_updater_cli_wires_project_log_indexer(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
-            from datastore.docsdb import updater
+            from core.docs import updater as core_updater
 
-            sentinel_calls = []
+            captured = {}
 
-            def sentinel_indexer(project=None):
-                sentinel_calls.append(project)
-                return 1
+            def fake_main(argv=None, *, project_log_indexer=None):
+                captured["argv"] = argv
+                captured["project_log_indexer"] = project_log_indexer
+                return 0
 
-            core_module = SimpleNamespace(index_project_logs=sentinel_indexer)
-            monkeypatch.delitem(sys.modules, "core.docs.updater", raising=False)
-            monkeypatch.setattr(
-                updater.importlib,
-                "import_module",
-                lambda name: core_module if name == "core.docs.updater" else None,
-            )
+            monkeypatch.setattr(core_updater._updater, "main", fake_main)
 
-            resolved = updater._resolve_cli_project_log_indexer()
+            rc = core_updater.main(["update-stale", "--apply", "--project", "quaid"])
 
-            assert resolved is sentinel_indexer
-            assert resolved(project="quaid") == 1
-            assert sentinel_calls == ["quaid"]
+            assert rc == 0
+            assert captured["argv"] == ["update-stale", "--apply", "--project", "quaid"]
+            assert captured["project_log_indexer"] is core_updater.index_project_logs
 
     def test_update_stale_raises_for_missing_explicit_project(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):

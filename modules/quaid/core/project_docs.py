@@ -936,36 +936,11 @@ def _empty_project_log_queue_metrics() -> Dict[str, int]:
 
 
 def _queued_project_log_projects(project: Optional[str] = None) -> List[str]:
-    from datastore.docsdb import project_log_queue
+    from core.docs import updater as docs_updater
 
     if project:
-        candidates = [validate_project_name(project)]
-    else:
-        root = project_log_queue.queue_root()
-        try:
-            candidates = sorted(path.name for path in root.iterdir() if path.is_dir())
-        except FileNotFoundError:
-            return []
-    names: List[str] = []
-    seen: set[str] = set()
-    for raw_name in candidates:
-        try:
-            name = validate_project_name(raw_name)
-        except ValueError:
-            continue
-        if name in seen:
-            continue
-        try:
-            if project_log_queue.pending_project_log_count(name) <= 0:
-                continue
-        except Exception as exc:
-            logger.warning("Failed checking queued project-log count for %s: %s", name, exc)
-            if _fail_hard_enabled():
-                raise
-            continue
-        names.append(name)
-        seen.add(name)
-    return names
+        return docs_updater.queued_project_log_projects(validate_project_name(project))
+    return docs_updater.queued_project_log_projects()
 
 
 def materialize_queued_projects(project: Optional[str] = None) -> int:

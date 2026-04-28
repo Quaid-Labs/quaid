@@ -29,7 +29,6 @@ Usage:
 import argparse
 import contextlib
 import difflib
-import importlib
 import json
 import logging
 import os
@@ -1734,21 +1733,6 @@ def _index_append_only_project_logs(
     return count
 
 
-def _resolve_cli_project_log_indexer() -> Optional[Callable[..., int]]:
-    """Resolve the core-owned PROJECT.log indexer for CLI entrypoints."""
-    try:
-        core_updater = sys.modules.get("core.docs.updater")
-        if core_updater is None:
-            core_updater = importlib.import_module("core.docs.updater")
-        indexer = getattr(core_updater, "index_project_logs", None)
-        return indexer if callable(indexer) else None
-    except Exception as exc:
-        logger.warning("Failed loading PROJECT.log indexer for docs update CLI: %s", exc)
-        if is_fail_hard_enabled():
-            raise
-        return None
-
-
 def cmd_update_from_transcript(transcript_path: str, dry_run: bool = True, max_docs: int = 3) -> int:
     """CLI: update docs from a conversation transcript. Returns count updated."""
     transcript_file = Path(transcript_path)
@@ -2189,7 +2173,11 @@ def register_lifecycle_routines(registry, result_factory) -> None:
     registry.register("docs_cleanup", _run_docs_cleanup)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(
+    argv: Optional[List[str]] = None,
+    *,
+    project_log_indexer: Optional[Callable[..., int]] = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Documentation Auto-Updater")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -2254,7 +2242,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             dry_run=dry_run,
             trivial_only=args.trivial_only,
             project=getattr(args, "project", None),
-            project_log_indexer=_resolve_cli_project_log_indexer(),
+            project_log_indexer=project_log_indexer,
         )
         return 0
     elif args.command == "update-from-transcript":

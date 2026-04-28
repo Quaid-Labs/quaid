@@ -438,7 +438,7 @@ print(json.dumps(register_domain(name, desc), indent=2))
       check)   exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
       update)
         if [[ "${1:-}" == --* || -z "${1:-}" ]]; then
-          exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@"
+          exec "$PYTHON_BIN" "$SCRIPT_DIR/core/docs/updater.py" update-stale "$@"
         fi
         exec "$PYTHON_BIN" "$SCRIPT_DIR/core/project_docs_cli.py" update "$@"
         ;;

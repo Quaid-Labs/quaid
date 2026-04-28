@@ -88,6 +88,39 @@ def cleanup_project_log_queue(project: str) -> dict[str, int]:
     return _project_log_queue.cleanup_project_log_queue(project)
 
 
+def queued_project_log_projects(project: str | None = None) -> list[str]:
+    """Return projects with pending append-only PROJECT.log queue entries."""
+    if project:
+        candidates = [str(project)]
+    else:
+        root = _project_log_queue.queue_root()
+        try:
+            candidates = sorted(path.name for path in root.iterdir() if path.is_dir())
+        except FileNotFoundError:
+            return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw_name in candidates:
+        try:
+            name = _project_log_queue._validate_project(str(raw_name or ""))  # datastore-owned queue validation
+        except ValueError:
+            continue
+        if name in seen:
+            continue
+        try:
+            if _project_log_queue.pending_project_log_count(name) <= 0:
+                continue
+        except Exception as exc:
+            logger.warning("Failed checking queued PROJECT.log count for %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise
+            continue
+        names.append(name)
+        seen.add(name)
+    return names
+
+
 def update_registered_docs(
     project: str | None = None,
     dry_run: bool = False,
@@ -351,6 +384,11 @@ def sync_project_visible_docs(project: str, canonical_path: str, *, root_docs: s
     return {"registered": registered, "unregistered": unregistered, "project_md_refreshed": refreshed}
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Core-owned docs updater CLI wrapper for composition-only callbacks."""
+    return _updater.main(argv, project_log_indexer=index_project_logs)
+
+
 __all__ = [
     "check_staleness",
     "cmd_update_from_transcript",
@@ -360,8 +398,14 @@ __all__ = [
     "drain_project_log_queue",
     "mark_project_log_queue_committed",
     "cleanup_project_log_queue",
+    "queued_project_log_projects",
     "update_registered_docs",
     "index_project_logs",
     "index_one_stale_registered_doc",
     "sync_project_visible_docs",
+    "main",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
