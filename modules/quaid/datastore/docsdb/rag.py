@@ -1454,6 +1454,114 @@ class DocsRAG:
             pass
         return None
 
+    def _project_source_fallback_chunks(
+        self,
+        *,
+        query: str,
+        limit: int,
+        project: Optional[str],
+        docs: Optional[List[str]],
+        date_from: Optional[str],
+        date_to: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """Read explicit project source files when the docs index is stale or empty.
+
+        Project-scoped recall is asking for the project source of truth. If the
+        async docs index has not caught up, PROJECT.log/PROJECT.md should still
+        be available to the hook path instead of returning an empty bundle.
+        """
+        project_name = str(project or "").strip()
+        if not project_name or limit <= 0:
+            return []
+
+        try:
+            paths = self._get_project_paths(project_name)
+            raw_home_dir = str(paths.get("home_dir") or "").strip()
+            if not raw_home_dir:
+                return []
+            home_dir = Path(raw_home_dir)
+        except Exception:
+            return []
+        if not home_dir.is_dir():
+            return []
+
+        doc_filters = self._normalize_docs_filter(docs)
+        query_terms = _docs_query_terms(query)
+        project_log_terms = _project_log_query_terms(query)
+        candidates: List[Dict[str, Any]] = []
+
+        def _doc_allowed(source_path: Path) -> bool:
+            if not doc_filters:
+                return True
+            source_text = str(source_path)
+            source_name = source_path.name
+            return any(df == source_name or df in source_text for df in doc_filters)
+
+        def _append_chunk(source_path: Path, content: str, section: Optional[str], chunk_index: int) -> None:
+            cleaned = str(content or "").strip()
+            if not cleaned:
+                return
+            source = str(source_path)
+            rank = _docs_rank_score(query_terms, query, source, section, cleaned, 0.52)
+            if source_path.name == "PROJECT.log":
+                rank += _project_log_query_line_rank_delta(cleaned, project_log_terms, date_to)
+                rank += _project_log_code_artifact_rank_delta(cleaned, project_log_terms)
+                if date_to:
+                    rank += _project_log_asof_rank_delta(cleaned, date_to)
+            candidates.append({
+                "content": cleaned,
+                "source": source,
+                "section_header": section,
+                "similarity": min(1.0, max(0.50, rank)),
+                "_rank_score": rank,
+                "chunk_index": chunk_index,
+                "project": project_name,
+                "source_date": _project_log_latest_line_date(cleaned) if source_path.name == "PROJECT.log" else None,
+            })
+
+        log_path = home_dir / "PROJECT.log"
+        if log_path.exists() and log_path.is_file() and _doc_allowed(log_path):
+            try:
+                content = log_path.read_text(encoding="utf-8")
+                filtered = _filter_project_log_content_by_date(
+                    content,
+                    date_from=date_from,
+                    date_to=date_to,
+                    query_terms=project_log_terms,
+                )
+                if filtered:
+                    scored_lines: List[tuple[float, int, str]] = []
+                    for index, line in enumerate(str(filtered or "").splitlines()):
+                        if not line.strip():
+                            continue
+                        rank = _docs_rank_score(query_terms, query, str(log_path), None, line, 0.52)
+                        rank += _project_log_query_line_rank_delta(line, project_log_terms, date_to)
+                        rank += _project_log_code_artifact_rank_delta(line, project_log_terms)
+                        if date_to:
+                            rank += _project_log_asof_rank_delta(line, date_to)
+                        scored_lines.append((rank, index, line))
+                    if scored_lines:
+                        selected = sorted(scored_lines, key=lambda item: item[0], reverse=True)[: max(1, min(8, limit * 2))]
+                        selected.sort(key=lambda item: item[1])
+                        _append_chunk(log_path, "\n".join(line for _, _, line in selected), "PROJECT.log", 0)
+            except Exception:
+                pass
+
+        md_path = home_dir / "PROJECT.md"
+        if not (date_from or date_to) and md_path.exists() and md_path.is_file() and _doc_allowed(md_path):
+            try:
+                content = md_path.read_text(encoding="utf-8")
+                for index, chunk in enumerate(self.chunk_markdown(content, max_tokens=_chunk_max_tokens())):
+                    _append_chunk(md_path, chunk, None, index)
+            except Exception:
+                pass
+
+        candidates.sort(key=lambda row: float(row.get("_rank_score", row.get("similarity", 0.0))), reverse=True)
+        out = candidates[:limit]
+        for row in out:
+            row.pop("_rank_score", None)
+        return out
+
     def search_docs(
         self,
         query: str,
@@ -1778,6 +1886,29 @@ class DocsRAG:
             date_from=date_from,
             date_to=date_to,
         )
+        fallback_chunks = self._project_source_fallback_chunks(
+            query=query,
+            limit=limit,
+            project=project,
+            docs=docs,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if fallback_chunks:
+            seen = {
+                (str(chunk.get("source") or ""), str(chunk.get("content") or "").strip())
+                for chunk in chunks
+                if isinstance(chunk, dict)
+            }
+            merged = list(chunks)
+            for chunk in fallback_chunks:
+                key = (str(chunk.get("source") or ""), str(chunk.get("content") or "").strip())
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(chunk)
+            merged.sort(key=lambda row: float(row.get("similarity", 0.0)), reverse=True)
+            chunks = merged[:limit]
         inferred_project = project or self.infer_project_from_chunks(chunks)
         attach_current_project_md = not (date_from or date_to)
         bundle = {
@@ -1827,6 +1958,16 @@ class DocsRAG:
             if canonical_path:
                 return {
                     "home_dir": canonical_path,
+                    "source_roots": [],
+                }
+        except Exception:
+            pass
+
+        try:
+            visible_project_dir = get_visible_quaid_home() / "projects" / str(project or "").strip()
+            if visible_project_dir.is_dir():
+                return {
+                    "home_dir": str(visible_project_dir),
                     "source_roots": [],
                 }
         except Exception:

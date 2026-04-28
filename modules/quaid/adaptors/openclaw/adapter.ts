@@ -4473,6 +4473,8 @@ function _looksLikeExplicitProjectDetailQuery(query: string): boolean {
     "ui",
     "frontend",
     "backend",
+    "build",
+    "built",
     "graphql",
     "rest",
     "database",
@@ -4486,6 +4488,15 @@ function _looksLikeExplicitProjectDetailQuery(query: string): boolean {
   ];
   const temporalCues = ["as of", "latest", "current", "after", "before", "since", "until"];
   return detailCues.some((cue) => normalized.includes(cue)) || temporalCues.some((cue) => normalized.includes(cue));
+}
+
+function _looksLikeProjectDocsSourceOfTruthQuery(query: string): boolean {
+  const normalized = _normalizeProjectRecallHint(query);
+  if (!normalized) return false;
+  if (/\b(?:find|found|suggest|suggested|recommend|recommended)\b/.test(normalized)) {
+    return false;
+  }
+  return /\b(?:build|built|projects?|features?|portfolio|site)\b/.test(normalized);
 }
 
 function _inferAutoInjectIntent(query: string): "general" | "agent_actions" {
@@ -4511,6 +4522,52 @@ function _extractAutoInjectTemporalBounds(query: string): Pick<RecallOptions, "d
   return {};
 }
 
+function _rewriteAgentRecallAutoInjectQuery(query: string): string | undefined {
+  const raw = String(query || "").trim();
+  const normalized = _normalizeProjectRecallHint(raw);
+  if (!normalized) return undefined;
+  if (!/\b(?:agent|assistant|ai|alfie|quaid)\b/.test(normalized)) return undefined;
+
+  if (/\b(?:recall|recalled|remember|remembered)\b/.test(normalized)) {
+    const aboutMatch = raw.match(/\babout\s+([A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})\b/);
+    const entity = String(aboutMatch?.[1] || "").trim();
+    if (entity) {
+      const suffix = /\b(?:surprise|surprised|surprising)\b/.test(normalized)
+        ? "surprising anecdote funny moment"
+        : "";
+      return `${entity} recalled remembered ${suffix}`.trim();
+    }
+  }
+
+  if (/\b(?:architecture|architectural|decision)\b/.test(normalized) && /\bapi\b/.test(normalized)) {
+    return `${raw} GraphQL REST compatibility migration Apollo`;
+  }
+  return undefined;
+}
+
+function _autoInjectRankingOptions(query: string, intent: "general" | "agent_actions"): RecallOptions["ranking"] | undefined {
+  if (intent !== "agent_actions") return undefined;
+  const normalized = _normalizeProjectRecallHint(query);
+  if (/\b(?:find|found|suggest|suggested|recommend|recommended)\b/.test(normalized)) {
+    return {
+      sourceTypeBoosts: {
+        assistant: 1.45,
+        both: 1.2,
+        tool: 1.1,
+        user: 0.92,
+      },
+    };
+  }
+  return {
+    sourceTypeBoosts: {
+      assistant: 1,
+      both: 1,
+      tool: 1,
+      user: 1,
+    },
+  };
+}
+
 // Shared recall abstraction — used by both memory_recall tool and auto-inject
 type RecallOptions = FacadeRecallOptions & {
   waitForExtraction?: boolean;  // wait on facade extraction queue (tool=yes, inject=no)
@@ -4527,21 +4584,25 @@ function _buildAutoInjectRecallOptions(
   const inferredProject = usePreInjectionPass ? _inferAutoInjectProject(query, projectNames) : undefined;
   const temporalBounds = _extractAutoInjectTemporalBounds(query);
   const intent = _inferAutoInjectIntent(query);
+  const recallQuery = _rewriteAgentRecallAutoInjectQuery(query) || query;
+  const ranking = _autoInjectRankingOptions(query, intent);
   if (usePreInjectionPass && inferredProject && _looksLikeExplicitProjectDetailQuery(query)) {
-    const useProjectOnly = Boolean(temporalBounds.dateFrom || temporalBounds.dateTo);
+    const useProjectOnly = Boolean(temporalBounds.dateFrom || temporalBounds.dateTo)
+      || _looksLikeProjectDocsSourceOfTruthQuery(query);
     return {
-      query,
+      query: recallQuery,
       limit,
       expandGraph: true,
       graphDepth: 2,
-      // For explicit dated project-state questions, PROJECT.log/PROJECT.md are the
-      // source of truth. Mixing in later vector facts leaks future state into an
-      // otherwise well-bounded "as of" question, so keep those turns project-only.
+      // For explicit project-state questions, PROJECT.log/PROJECT.md are the
+      // source of truth. Mixing in vector facts can let older implementation
+      // memories dominate the current file-backed project state.
       datastores: useProjectOnly ? ["project"] : ["project", "vector_basic", "graph"],
       routeStores: false,
       project: inferredProject,
       ...temporalBounds,
       intent,
+      ranking,
       domain,
       failOpen: true,
       waitForExtraction: false,
@@ -4550,7 +4611,7 @@ function _buildAutoInjectRecallOptions(
     };
   }
   return {
-    query,
+    query: recallQuery,
     limit,
     expandGraph: true,
     graphDepth: 2,
@@ -4568,6 +4629,7 @@ function _buildAutoInjectRecallOptions(
           routeStores: false,
         }),
     intent,
+    ranking,
     domain,
     failOpen: true,
     waitForExtraction: false,

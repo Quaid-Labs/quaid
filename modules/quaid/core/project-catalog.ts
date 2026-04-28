@@ -81,8 +81,32 @@ export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
   function getProjectDefinitions(): Record<string, any> {
     const config = deps.getMemoryConfig();
     const defs = config?.projects?.definitions;
-    if (!defs || typeof defs !== "object") return {};
-    return defs as Record<string, any>;
+    const out: Record<string, any> = defs && typeof defs === "object" && !Array.isArray(defs)
+      ? { ...(defs as Record<string, any>) }
+      : {};
+    const projectsDir = deps.path.join(resolveVisibleHome(deps), "projects");
+    try {
+      if (deps.fs.existsSync(projectsDir)) {
+        for (const name of deps.fs.readdirSync(projectsDir)) {
+          const projectName = String(name || "").trim();
+          if (!projectName || projectName.startsWith(".")) continue;
+          if (out[projectName]) continue;
+          const projectDir = deps.path.join(projectsDir, projectName);
+          try {
+            if (!deps.fs.statSync(projectDir).isDirectory()) continue;
+            const hasProjectDoc = deps.fs.existsSync(deps.path.join(projectDir, "PROJECT.md"));
+            const hasProjectLog = deps.fs.existsSync(deps.path.join(projectDir, "PROJECT.log"));
+            if (!hasProjectDoc && !hasProjectLog) continue;
+            out[projectName] = { homeDir: deps.path.join("projects", projectName) };
+          } catch (err: unknown) {
+            handleCatalogError(`failed to inspect visible project ${projectName}`, err);
+          }
+        }
+      }
+    } catch (err: unknown) {
+      handleCatalogError("failed to scan visible project directory", err);
+    }
+    return out;
   }
 
   function shouldFailHard(): boolean {

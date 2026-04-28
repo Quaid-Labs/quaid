@@ -1224,6 +1224,33 @@ describe("QuaidFacade", () => {
     expect(Array.isArray(facade.getProjectNames())).toBe(true);
   });
 
+  it("discovers visible project directories when config definitions are sparse", async () => {
+    const visibleHome = await mkdtemp(path.join(tmpdir(), "quaid-visible-projects-"));
+    const projectDir = path.join(visibleHome, "projects", "portfolio-site");
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      path.join(projectDir, "PROJECT.md"),
+      "# Portfolio Site\nDescription: Maya portfolio build notes\n",
+      "utf8",
+    );
+    const previousVisibleHome = process.env.QUAID_VISIBLE_HOME;
+    process.env.QUAID_VISIBLE_HOME = visibleHome;
+    try {
+      const facade = createQuaidFacade(makeMockDeps({
+        workspace: path.join(visibleHome, ".quaid"),
+        getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false }, projects: { definitions: {} } })),
+      }));
+
+      expect(facade.getProjectNames()).toContain("portfolio-site");
+      const catalogRow = facade.getProjectCatalog().find((row) => row.name === "portfolio-site");
+      expect(catalogRow?.description).toContain("Maya portfolio build notes");
+    } finally {
+      if (previousVisibleHome === undefined) delete process.env.QUAID_VISIBLE_HOME;
+      else process.env.QUAID_VISIBLE_HOME = previousVisibleHome;
+      await rm(visibleHome, { recursive: true, force: true });
+    }
+  });
+
   // -----------------------------------------------------------------------
   // Guidance
   // -----------------------------------------------------------------------

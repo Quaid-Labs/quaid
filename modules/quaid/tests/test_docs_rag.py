@@ -1785,6 +1785,50 @@ class TestDocsSearchFiltering:
         assert bundle["telemetry"]["chunk_count"] == 1
         assert bundle["telemetry"]["requested_docs"] == ["api.md"]
 
+    def test_get_project_paths_falls_back_to_visible_project_dir(self, tmp_path, monkeypatch):
+        rag = _make_rag(tmp_path)
+        visible_home = tmp_path / "visible"
+        project_dir = visible_home / "projects" / "portfolio-site"
+        project_dir.mkdir(parents=True)
+        (project_dir / "PROJECT.log").write_text("- [2026-03-15T10:00:00] Built About and Projects sections\n")
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(visible_home))
+
+        paths = rag._get_project_paths("portfolio-site")
+
+        assert paths["home_dir"] == str(project_dir)
+        assert paths["source_roots"] == []
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    def test_search_docs_bundle_reads_project_sources_when_index_empty(self, _embed, tmp_path, monkeypatch):
+        rag = _make_rag(tmp_path)
+        visible_home = tmp_path / "visible"
+        project_dir = visible_home / "projects" / "portfolio-site"
+        project_dir.mkdir(parents=True)
+        (project_dir / "PROJECT.log").write_text(
+            "\n".join(
+                [
+                    "- [2026-03-12T10:00:00] Unrelated recipe-app backend cleanup",
+                    "- [2026-03-15T11:00:00] Built portfolio site About, Projects, and Contact sections",
+                    "- [2026-03-16T12:00:00] Added Stripe Payments Platform project card",
+                ]
+            )
+        )
+        (project_dir / "PROJECT.md").write_text(
+            "# Portfolio Site\nCurrent state: About, Projects, Contact, and Stripe Payments Platform card\n"
+        )
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(visible_home))
+
+        bundle = rag.search_docs_bundle(
+            "What did the agent build for Maya's portfolio site?",
+            limit=3,
+            project="portfolio-site",
+        )
+
+        assert bundle["project"] == "portfolio-site"
+        contents = "\n".join(chunk["content"] for chunk in bundle["chunks"])
+        assert "About, Projects, and Contact" in contents
+        assert "Stripe Payments Platform" in contents
+
     def test_search_docs_uses_vec_doc_chunks_when_available(self, tmp_path):
         from lib.database import get_connection, has_vec
         from lib.embeddings import pack_embedding

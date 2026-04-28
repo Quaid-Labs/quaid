@@ -58,8 +58,30 @@ function createProjectCatalogReader(deps) {
   function getProjectDefinitions() {
     const config = deps.getMemoryConfig();
     const defs = config?.projects?.definitions;
-    if (!defs || typeof defs !== "object") return {};
-    return defs;
+    const out = defs && typeof defs === "object" && !Array.isArray(defs) ? { ...defs } : {};
+    const projectsDir = deps.path.join(resolveVisibleHome(deps), "projects");
+    try {
+      if (deps.fs.existsSync(projectsDir)) {
+        for (const name of deps.fs.readdirSync(projectsDir)) {
+          const projectName = String(name || "").trim();
+          if (!projectName || projectName.startsWith(".")) continue;
+          if (out[projectName]) continue;
+          const projectDir = deps.path.join(projectsDir, projectName);
+          try {
+            if (!deps.fs.statSync(projectDir).isDirectory()) continue;
+            const hasProjectDoc = deps.fs.existsSync(deps.path.join(projectDir, "PROJECT.md"));
+            const hasProjectLog = deps.fs.existsSync(deps.path.join(projectDir, "PROJECT.log"));
+            if (!hasProjectDoc && !hasProjectLog) continue;
+            out[projectName] = { homeDir: deps.path.join("projects", projectName) };
+          } catch (err) {
+            handleCatalogError(`failed to inspect visible project ${projectName}`, err);
+          }
+        }
+      }
+    } catch (err) {
+      handleCatalogError("failed to scan visible project directory", err);
+    }
+    return out;
   }
   function shouldFailHard() {
     try {

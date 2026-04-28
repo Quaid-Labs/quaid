@@ -1260,7 +1260,7 @@ describe("lifecycle signal detection", () => {
     expect(opts.sourceTag).toBe("auto_inject");
   });
 
-  it("keeps mixed project and memory stores for undated explicit known-project detail queries during auto-inject", () => {
+  it("uses project docs as source of truth for undated project-state auto-inject queries", () => {
     const opts = __test.buildAutoInjectRecallOptions(
       "What projects are on Maya's portfolio site?",
       6,
@@ -1270,10 +1270,40 @@ describe("lifecycle signal detection", () => {
     );
 
     expect(opts.routeStores).toBe(false);
-    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
+    expect(opts.datastores).toEqual(["project"]);
     expect(opts.project).toBe("portfolio-site");
     expect(opts.dateTo).toBeUndefined();
     expect(opts.sourceTag).toBe("auto_inject");
+  });
+
+  it("keeps mixed stores for explicit project agent suggestions", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "What API did the AI agent find for the recipe app, and what alternative was suggested?",
+      6,
+      { all: true },
+      true,
+      ["recipe-app"],
+    );
+
+    expect(opts.intent).toBe("agent_actions");
+    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
+    expect(opts.project).toBe("recipe-app");
+  });
+
+  it("keeps mixed stores for explicit project implementation decisions", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "What architectural decision did the agent implement for the recipe app API?",
+      6,
+      { all: true },
+      true,
+      ["recipe-app"],
+    );
+
+    expect(opts.intent).toBe("agent_actions");
+    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
+    expect(opts.project).toBe("recipe-app");
+    expect(opts.query).toContain("GraphQL REST compatibility");
+    expect(opts.ranking?.sourceTypeBoosts?.assistant).toBe(1);
   });
 
   it("marks agent-action auto-inject queries with assistant-source intent", () => {
@@ -1288,6 +1318,21 @@ describe("lifecycle signal detection", () => {
     expect(opts.intent).toBe("agent_actions");
     expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
     expect(opts.project).toBe("recipe-app");
+    expect(opts.ranking?.sourceTypeBoosts?.assistant).toBeGreaterThan(1);
+  });
+
+  it("focuses agent recall callback queries on the recalled subject", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "What did the agent recall about Biscuit that surprised Maya?",
+      6,
+      { all: true },
+      true,
+      ["recipe-app"],
+    );
+
+    expect(opts.intent).toBe("agent_actions");
+    expect(opts.query).toBe("Biscuit recalled remembered surprising anecdote funny moment");
+    expect(opts.ranking?.sourceTypeBoosts?.assistant).toBe(1);
   });
 
   it("keeps bounded memory-only auto-inject stores when pre-injection pass is disabled", () => {
