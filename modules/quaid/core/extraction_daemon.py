@@ -2827,6 +2827,8 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
         return False
     if _is_daemon_owned_transcript_snapshot_path(transcript_path):
         return True
+    if _cursor_records_transcript_path(session_id, transcript_path):
+        return True
     if adapter is None:
         logger.warning(
             "adapter unavailable during transcript ownership check for session %s (%s)",
@@ -2878,11 +2880,7 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
         except ImportError:
             pass
         return False
-    if not owns:
-        return False
-    if _cursor_records_transcript_path(session_id, transcript_path):
-        return True
-    return True
+    return bool(owns)
 
 
 def _ensure_discovered_session_cursors(adapter=None) -> int:

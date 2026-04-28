@@ -496,6 +496,9 @@ class OpenClawAdapter(QuaidAdapter):
 
     def get_api_key(self, env_var_name: str) -> Optional[str]:
         # 1. Environment variable
+        key = os.environ.get(env_var_name, "").strip()
+        if key:
+            return key
         if env_var_name == "ANTHROPIC_API_KEY":
             token = (
                 self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"])
@@ -510,9 +513,6 @@ class OpenClawAdapter(QuaidAdapter):
             oauth = os.environ.get("OPENAI_OAUTH_TOKEN", "").strip()
             if oauth:
                 return oauth
-        key = os.environ.get(env_var_name, "").strip()
-        if key:
-            return key
         if env_var_name != "ANTHROPIC_API_KEY":
             token = self.read_auth_token()
             if token:

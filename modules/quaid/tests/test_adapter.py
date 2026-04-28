@@ -2772,6 +2772,8 @@ class TestAdapterSelectionEdgeCases:
 class TestKeychainFallback:
     def test_no_keychain_fallback(self, tmp_path, monkeypatch):
         """Keychain lookup was removed — env+file miss returns None."""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = OpenClawAdapter()
@@ -2780,6 +2782,8 @@ class TestKeychainFallback:
 
     def test_env_file_miss_returns_none(self, tmp_path, monkeypatch):
         """Missing env var + no .env file returns None."""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         adapter = OpenClawAdapter()
