@@ -2827,8 +2827,6 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
         return False
     if _is_daemon_owned_transcript_snapshot_path(transcript_path):
         return True
-    if _cursor_records_transcript_path(session_id, transcript_path):
-        return True
     if adapter is None:
         logger.warning(
             "adapter unavailable during transcript ownership check for session %s (%s)",
@@ -3227,7 +3225,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         adapter = None
 
-    if transcript_path and os.path.isfile(transcript_path) and not _adapter_owns_transcript_path(adapter, session_id, transcript_path):
+    if (
+        transcript_path
+        and os.path.isfile(transcript_path)
+        and not _cursor_records_transcript_path(session_id, transcript_path)
+        and not _adapter_owns_transcript_path(adapter, session_id, transcript_path)
+    ):
         logger.warning(
             "[%s] session %s: transcript does not belong to active instance, skipping: %s",
             label,
@@ -3392,7 +3395,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
 
-    if not _adapter_owns_transcript_path(adapter, session_id, transcript_path):
+    if not _cursor_records_transcript_path(session_id, transcript_path) and not _adapter_owns_transcript_path(adapter, session_id, transcript_path):
         logger.warning(
             "[%s] session %s: resolved transcript does not belong to active instance, skipping: %s",
             label,
