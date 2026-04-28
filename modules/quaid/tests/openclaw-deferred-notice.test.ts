@@ -1017,6 +1017,124 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
+  it("revalidates cached provider notices instead of replaying stale recovery state", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const home = makeTempDir("quaid-oc-provider-stale-cache-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+    const configPath = path.join(hiddenHome, "instances", "openclaw-livetest", "config.json");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-livetest", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+
+    writeJson(configPath, {
+      adapter: { type: "openclaw" },
+      systems: { memory: true, projects: false },
+      retrieval: { failHard: false, autoInject: true, maxLimit: 20 },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "invalid-model-stale-cache",
+        fastReasoning: "invalid-model-stale-cache",
+      },
+      plugins: { strict: false },
+    });
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-livetest",
+        },
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let fetchCalls = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: any, init: any) => {
+      fetchCalls += 1;
+      expect(String(init?.headers?.["x-openclaw-model"] || "")).toContain("invalid-model-stale-cache");
+      if (fetchCalls === 1) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () => JSON.stringify({ error: { message: "model not found" } }),
+        } as any;
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => JSON.stringify({ output_text: "OK" }),
+      } as any;
+    });
+
+    const plugin = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath, "openclaw-livetest");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+
+    const first = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "sounds good",
+        messages: [{ role: "user", content: "sounds good" }],
+        sessionId: "session-provider-stale-cache-1",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-provider-stale-cache-1",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+    const firstCombined = `${String(first?.prependContext || "")}\n${combinedSystemContext(first)}`;
+    expect(firstCombined).toContain("[Quaid error] [provider]");
+
+    const second = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "sounds good",
+        messages: [{ role: "user", content: "sounds good" }],
+        sessionId: "session-provider-stale-cache-2",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-provider-stale-cache-2",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+    const secondCombined = `${String(second?.prependContext || "")}\n${combinedSystemContext(second)}`;
+    expect(fetchCalls).toBeGreaterThanOrEqual(2);
+    expect(secondCombined).not.toContain("[Quaid error] [provider]");
+    expect(secondCombined).not.toContain("active provider/configuration error");
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(home);
+  });
+
   it("clears stale provider deferred notices after config recovery", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const home = makeTempDir("quaid-oc-provider-recovery-home-");

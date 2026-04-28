@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import {
@@ -2484,7 +2485,8 @@ function createAdapterMemoryConfigResolver() {
     for (const configPath of paths) {
       try {
         const stats = fs.statSync(configPath);
-        parts.push(`${configPath}:${stats.mtimeMs}:${stats.size}`);
+        const digest = createHash("sha256").update(fs.readFileSync(configPath)).digest("hex");
+        parts.push(`${configPath}:${stats.mtimeMs}:${stats.size}:${digest}`);
       } catch {
         parts.push(`${configPath}:missing`);
       }
@@ -2762,17 +2764,15 @@ async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
     clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_no_fingerprint");
     return "";
   }
-  if (fingerprint === promptModelConfigFingerprint) {
-    if (promptModelConfigNotice) {
-      clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_repeat_inline_clear");
-      recordPromptScopedProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_repeat");
-    } else {
-      clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_repeat_valid");
-    }
-    return promptModelConfigNotice;
+  if (fingerprint === promptModelConfigFingerprint && !promptModelConfigNotice) {
+    clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_repeat_valid");
+    return "";
   }
-  promptModelConfigFingerprint = fingerprint;
-  promptModelConfigNotice = "";
+  const fingerprintChanged = fingerprint !== promptModelConfigFingerprint;
+  if (fingerprintChanged) {
+    promptModelConfigFingerprint = fingerprint;
+    promptModelConfigNotice = "";
+  }
   try {
     await callConfiguredLLM(
       "You are a Quaid model configuration health check. Reply with OK only.",
@@ -2781,15 +2781,23 @@ async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
       4,
       MODEL_CONFIG_VALIDATION_TIMEOUT_MS
     );
+    promptModelConfigNotice = "";
+    promptModelConfigFingerprint = fingerprint;
     clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_validated");
     clearImmediateProviderNoticeDispatch(agentLabel, "prompt_model_config_validated");
     writeHookTrace("hook.before_prompt_build.model_config_validated", {});
   } catch (err) {
     promptModelConfigNotice = buildProviderErrorNoticeMessage(err, "fast");
+    promptModelConfigFingerprint = fingerprint;
     clearDeferredNoticesForAgent(agentLabel, "prompt_model_config_error_inline_clear");
-    recordPromptScopedProviderNotice(agentLabel, promptModelConfigNotice, "prompt_model_config_error");
+    recordPromptScopedProviderNotice(
+      agentLabel,
+      promptModelConfigNotice,
+      fingerprintChanged ? "prompt_model_config_error" : "prompt_model_config_repeat"
+    );
     writeHookTrace("hook.before_prompt_build.model_config_error", {
-      error: String(err?.message || err).slice(0, 240)
+      error: String(err?.message || err).slice(0, 240),
+      repeat: !fingerprintChanged
     });
     return promptModelConfigNotice;
   }
