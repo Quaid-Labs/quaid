@@ -842,6 +842,49 @@ describe("QuaidFacade", () => {
     expect(results.find((r) => r.text === "Alice --niece_of--> Bob")?.via).toBe("graph");
   });
 
+  it("recallWithDiagnostics materializes docs bundle rows from bridge recall payload", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return JSON.stringify({
+          contract: "quaid.recall.v1",
+          results: [],
+          docs: {
+            chunks: [
+              {
+                content: "- [2026-03-04T23:59:59] Initial build: Express + better-sqlite3, REST API, single-page HTML frontend",
+                source: "/Users/admin/clawd/projects/recipe-app/PROJECT.log",
+                section_header: null,
+                similarity: 1.0,
+                project: "recipe-app",
+                source_date: "2026-03-04",
+              },
+            ],
+            project: "recipe-app",
+          },
+        });
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+
+    const { results } = await facade.recallWithDiagnostics({
+      query: "As of 2026-03-04, what features did the recipe app have?",
+      limit: 8,
+      routeStores: false,
+      datastores: ["project"],
+      expandGraph: false,
+      project: "recipe-app",
+      dateTo: "2026-03-04",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].via).toBe("project");
+    expect(results[0].sourceType).toBe("docs");
+    expect(results[0].createdAt).toBe("2026-03-04");
+    expect(results[0].text).toContain("PROJECT.log");
+    expect(results[0].text).toContain("Initial build");
+  });
+
   it("recallWithDiagnostics rethrows provider errors from bridge recall", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {

@@ -1735,6 +1735,29 @@ Consider running: docs staleness updater (update-stale --apply)`;
     const k = Math.round(11.5 * Math.log(nodeCount) - 61.7);
     return Math.max(5, Math.min(k, 40));
   }
+  function bridgeDocsBundleRows(bundle) {
+    if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) return [];
+    const chunks = Array.isArray(bundle.chunks) ? bundle.chunks : [];
+    const rows = [];
+    for (const chunk of chunks) {
+      if (!chunk || typeof chunk !== "object") continue;
+      const content = String(chunk.content || "").trim().replace(/\s+/g, " ");
+      if (!content) continue;
+      const source = String(chunk.source || "").trim();
+      const section = String(chunk.section_header || "").trim();
+      const prefix = section ? `[docs] ${source} > ${section}` : `[docs] ${source}`;
+      rows.push({
+        text: `${prefix}: ${content}`,
+        category: "docs",
+        similarity: Number(chunk.similarity) || 0.5,
+        sourceType: "docs",
+        sourceName: source || void 0,
+        createdAt: chunk.source_date || void 0,
+        via: "project"
+      });
+    }
+    return rows;
+  }
   function parseMemoryBridgePayload(output, expandGraph) {
     const results = [];
     let meta = null;
@@ -1774,6 +1797,16 @@ Consider running: docs staleness updater (update-stale --apply)`;
           via: item.via || (expandGraph ? void 0 : "vector"),
           speaker: item.speaker || void 0
         });
+      }
+      const docsRows = bridgeDocsBundleRows(parsed?.docs);
+      if (docsRows.length > 0) {
+        const seen = new Set(results.map((row) => String(row.text || "").trim()));
+        for (const row of docsRows) {
+          const key = String(row.text || "").trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          results.push(row);
+        }
       }
       if (expandGraph) {
         const rels = parsed?.relationships || parsed?.graph_results || [];
@@ -1843,7 +1876,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
     const rawStores = opts.stores || ["vector"];
     const expandGraph = rawStores.includes("graph");
     const normalizedStores = [...new Set(rawStores.map(
-      (s) => s === "vector_basic" || s === "vector_technical" ? "vector" : s
+      (s) => s === "vector_basic" || s === "vector_technical" ? "vector" : s === "project" ? "docs" : s
     ))];
     let domain = opts.domain;
     if (!domain) {
@@ -1871,9 +1904,14 @@ Consider running: docs staleness updater (update-stale --apply)`;
       const args = [query, JSON.stringify(cfg), "--json"];
       const output = await datastoreBridge.recall(args);
       const payload = parseMemoryBridgePayload(output, expandGraph);
-      const results = !expandGraph ? payload.results.map((r) => ({ ...r, via: "vector" })) : payload.results.map((r) => {
+      const results = payload.results.map((r) => {
         if (r.via) return r;
-        if (r.category === "graph" || r.relation || r.graphPath) {
+        const category = String(r.category || "").trim().toLowerCase();
+        const sourceType = String(r.sourceType || r.source_type || "").trim().toLowerCase();
+        if (category === "docs" || sourceType === "docs") {
+          return { ...r, via: "project" };
+        }
+        if (expandGraph && (category === "graph" || r.relation || r.graphPath)) {
           return { ...r, via: "graph" };
         }
         return { ...r, via: "vector" };
@@ -2282,7 +2320,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph"]);
+    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph", "project"]);
     if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {
       const { results: results2, meta } = await recallMemoryFromBridgeDetailed(query, limit, {
         stores: selectedStores,

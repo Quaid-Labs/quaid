@@ -2440,6 +2440,30 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   // Bridge recall helper (calls datastoreBridge.recall with JSON config)
   // -------------------------------------------------------------------------
 
+  function bridgeDocsBundleRows(bundle: unknown): MemoryResult[] {
+    if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) return [];
+    const chunks = Array.isArray((bundle as any).chunks) ? (bundle as any).chunks : [];
+    const rows: MemoryResult[] = [];
+    for (const chunk of chunks) {
+      if (!chunk || typeof chunk !== "object") continue;
+      const content = String((chunk as any).content || "").trim().replace(/\s+/g, " ");
+      if (!content) continue;
+      const source = String((chunk as any).source || "").trim();
+      const section = String((chunk as any).section_header || "").trim();
+      const prefix = section ? `[docs] ${source} > ${section}` : `[docs] ${source}`;
+      rows.push({
+        text: `${prefix}: ${content}`,
+        category: "docs",
+        similarity: Number((chunk as any).similarity) || 0.5,
+        sourceType: "docs",
+        sourceName: source || undefined,
+        createdAt: (chunk as any).source_date || undefined,
+        via: "project",
+      });
+    }
+    return rows;
+  }
+
   function parseMemoryBridgePayload(output: string, expandGraph: boolean): {
     results: MemoryResult[];
     meta: Record<string, unknown> | null;
@@ -2483,6 +2507,17 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           via: item.via || (expandGraph ? undefined : "vector"),
           speaker: item.speaker || undefined,
         });
+      }
+
+      const docsRows = bridgeDocsBundleRows(parsed?.docs);
+      if (docsRows.length > 0) {
+        const seen = new Set(results.map((row) => String(row.text || "").trim()));
+        for (const row of docsRows) {
+          const key = String(row.text || "").trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          results.push(row);
+        }
       }
 
       if (expandGraph) {
@@ -2586,9 +2621,12 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const expandGraph = rawStores.includes("graph");
 
     // Normalize legacy vector_basic/vector_technical → vector + domain_filter.
-    // These are internal routing names; the CLI only knows "vector" and "graph".
+    // Internal project recall maps to bridge-side docs recall so mixed-store
+    // auto-inject can use the same recall engine as the user-facing CLI/tool path.
     const normalizedStores = [...new Set(rawStores.map((s) =>
-      (s === "vector_basic" || s === "vector_technical") ? "vector" : s
+      (s === "vector_basic" || s === "vector_technical")
+        ? "vector"
+        : (s === "project" ? "docs" : s)
     ))];
 
     let domain = opts.domain;
@@ -2620,15 +2658,18 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const args: string[] = [query, JSON.stringify(cfg), "--json"];
       const output = await datastoreBridge.recall(args);
       const payload = parseMemoryBridgePayload(output, expandGraph);
-      const results = !expandGraph
-        ? payload.results.map((r) => ({ ...r, via: "vector" as const }))
-        : payload.results.map((r) => {
-          if (r.via) return r;
-          if (r.category === "graph" || r.relation || r.graphPath) {
-            return { ...r, via: "graph" as const };
-          }
-          return { ...r, via: "vector" as const };
-        });
+      const results = payload.results.map((r) => {
+        if (r.via) return r;
+        const category = String(r.category || "").trim().toLowerCase();
+        const sourceType = String(r.sourceType || (r as MemoryResult & { source_type?: string }).source_type || "").trim().toLowerCase();
+        if (category === "docs" || sourceType === "docs") {
+          return { ...r, via: "project" as const };
+        }
+        if (expandGraph && (category === "graph" || r.relation || r.graphPath)) {
+          return { ...r, via: "graph" as const };
+        }
+        return { ...r, via: "vector" as const };
+      });
       return { results, meta: payload.meta };
     } catch (err: unknown) {
       if (shouldSurfaceBridgeRecallError(err)) throw err;
@@ -3049,10 +3090,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph"]);
+    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph", "project"]);
     if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {
       const { results, meta } = await recallMemoryFromBridgeDetailed(query, limit, {
-        stores: selectedStores,
+        stores: selectedStores as RecallMemoryOpts["stores"],
         domain,
         domainBoost,
         project,
