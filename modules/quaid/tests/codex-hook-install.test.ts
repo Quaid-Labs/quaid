@@ -87,5 +87,18 @@ describe("codex postinstall hook registration", () => {
     expect(configToml).toContain('model = "gpt-5.2"');
     expect(configToml).toContain("[features]");
     expect(configToml).toContain("codex_hooks = true");
+    expect(configToml).not.toMatch(/^hooks\s*=/m);
+    expect(configToml).toContain("[hooks]");
+    expect(configToml).toContain("[[hooks.SessionStart]]");
+    expect(configToml).toContain("[[hooks.SessionStart.hooks]]");
+    expect(configToml).toContain("[[hooks.UserPromptSubmit]]");
+    expect(configToml).toContain("[[hooks.UserPromptSubmit.hooks]]");
+    expect(configToml).toContain("[[hooks.Stop]]");
+    expect(configToml).toContain("[[hooks.Stop.hooks]]");
+    expect(configToml.match(/hook-session-init/g) || []).toHaveLength(1);
+    expect(configToml.match(/hook-inject/g) || []).toHaveLength(1);
+    expect(configToml.match(/hook-codex-stop/g) || []).toHaveLength(1);
+    expect(configToml.match(/timeout = 30/g) || []).toHaveLength(3);
+    expect(configToml.match(/async = false/g) || []).toHaveLength(3);
   });
 });

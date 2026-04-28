@@ -454,7 +454,9 @@ describe("install daemon policy", () => {
     expect(postinstallText).toContain('const configJsonPath = path.join(codexDir, "config.json");');
     expect(postinstallText).toContain("configJson.hooks = hooksConfig.hooks;");
     expect(postinstallText).toContain("configJson.features = {");
-    expect(postinstallText).toContain('updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));');
+    expect(postinstallText).toContain('updatedToml = removeTomlTopLevelKey(currentToml, "hooks");');
+    expect(postinstallText).toContain('updatedToml = stripManagedHookTomlBlocks(updatedToml, managedCommands);');
+    expect(postinstallText).toContain('updatedToml = `${updatedToml.replace(/\\n*$/, "\\n\\n")}${managedHookTomlBlocks(desiredHooks)}`;');
     expect(postinstallText).toContain('updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);');
     expect(postinstallText).toContain('updatedToml = upsertTomlStringInTable(');
     expect(postinstallText).toContain('"trust_level"');

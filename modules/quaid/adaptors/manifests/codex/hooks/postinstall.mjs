@@ -64,25 +64,18 @@ function pruneManagedHooks(groups, managedCommands) {
   return kept;
 }
 
-function upsertTomlTopLevel(text, key, quotedValue) {
-  // Insert or update a top-level (non-table) key=value line.
+function removeTomlTopLevelKey(text, key) {
   const normalized = String(text || "").replace(/\r\n/g, "\n");
   const lines = normalized ? normalized.split("\n") : [];
   const re = new RegExp(`^\\s*${key}\\s*=`);
-  const valueLine = `${key} = ${quotedValue}`;
-
-  for (let i = 0; i < lines.length; i++) {
-    if (re.test(lines[i]) && !lines[i].trim().startsWith("[")) {
-      lines[i] = valueLine;
-      return `${lines.join("\n").replace(/\n*$/, "\n")}`;
-    }
+  let inTable = false;
+  const kept = [];
+  for (const line of lines) {
+    if (/^\s*\[/.test(line)) inTable = true;
+    if (!inTable && re.test(line)) continue;
+    kept.push(line);
   }
-
-  // Not found; insert before first table header (or at end).
-  let insertBefore = lines.findIndex((l) => /^\s*\[/.test(l));
-  if (insertBefore === -1) insertBefore = lines.length;
-  lines.splice(insertBefore, 0, valueLine);
-  return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+  return `${kept.join("\n").replace(/\n*$/, "\n")}`;
 }
 
 function upsertTomlBool(text, tableName, key, value) {
@@ -123,6 +116,17 @@ function upsertTomlBool(text, tableName, key, value) {
   return `${lines.join("\n").replace(/\n*$/, "\n")}`;
 }
 
+function ensureTomlTable(text, tableName) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  const lines = normalized ? normalized.split("\n") : [];
+  const tableLine = `[${tableName}]`;
+  if (lines.some((line) => line.trim() === tableLine)) {
+    return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+  }
+  const prefix = normalized.trimEnd();
+  return `${prefix}${prefix ? "\n\n" : ""}${tableLine}\n`;
+}
+
 function upsertTomlStringInTable(text, tableName, key, quotedValue) {
   const normalized = String(text || "").replace(/\r\n/g, "\n");
   const lines = normalized ? normalized.split("\n") : [];
@@ -159,6 +163,67 @@ function upsertTomlStringInTable(text, tableName, key, quotedValue) {
 
   lines.splice(sectionEnd, 0, valueLine);
   return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+}
+
+function stripManagedHookTomlBlocks(text, managedCommands) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  const lines = normalized ? normalized.split("\n") : [];
+  const kept = [];
+  let block = null;
+  const hookEventRe = /^\s*\[\[hooks\.[A-Za-z0-9_-]+\]\]\s*$/;
+
+  const flushBlock = () => {
+    if (!block) return;
+    const body = block.join("\n");
+    if (!managedCommands.some((token) => body.includes(token))) {
+      kept.push(...block);
+    }
+    block = null;
+  };
+
+  for (const line of lines) {
+    if (hookEventRe.test(line)) {
+      flushBlock();
+      block = [line];
+      continue;
+    }
+    if (block) {
+      if (hookEventRe.test(line) || /^\s*\[[^\]]+\]\s*$/.test(line)) {
+        flushBlock();
+        kept.push(line);
+      } else {
+        block.push(line);
+      }
+      continue;
+    }
+    kept.push(line);
+  }
+  flushBlock();
+  return `${kept.join("\n").replace(/\n*$/, "\n")}`;
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value));
+}
+
+function managedHookTomlBlocks(desired) {
+  const blocks = [];
+  for (const [eventName, groups] of Object.entries(desired)) {
+    for (const group of groups) {
+      for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+        blocks.push(
+          `[[hooks.${eventName}]]`,
+          `[[hooks.${eventName}.hooks]]`,
+          `type = ${tomlString(hook.type || "command")}`,
+          `command = ${tomlString(hook.command || "")}`,
+          "timeout = 30",
+          "async = false",
+          "",
+        );
+      }
+    }
+  }
+  return blocks.join("\n");
 }
 
 const workspace = resolveWorkspace();
@@ -270,10 +335,14 @@ for (const candidate of trustCandidates) {
 writeJson(configJsonPath, configJson);
 
 let currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-// Point codex at the hooks file so it is loaded on startup.
-let updatedToml = upsertTomlTopLevel(currentToml, "hooks", JSON.stringify(hooksPath));
+// Codex 0.125+ expects inline HookEventsToml. Keep hooks.json for Quaid's own
+// introspection, but do not point config.toml at it with the legacy string key.
+let updatedToml = removeTomlTopLevelKey(currentToml, "hooks");
 // Enable the codex_hooks feature flag.
 updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);
+updatedToml = stripManagedHookTomlBlocks(updatedToml, managedCommands);
+updatedToml = ensureTomlTable(updatedToml, "hooks");
+updatedToml = `${updatedToml.replace(/\n*$/, "\n\n")}${managedHookTomlBlocks(desiredHooks)}`;
 for (const candidate of trustCandidates) {
   updatedToml = upsertTomlStringInTable(
     updatedToml,
