@@ -3701,6 +3701,49 @@ class TestCheckIdleSessions:
         assert cursor["internal"] is True
         assert cursor["line_offset"] == 4
 
+    def test_idle_scan_freezes_greeting_only_timeout_transcript(self, monkeypatch, tmp_path):
+        """OC may materialize only /new greeting turns before the real queued prompt."""
+        instance_id = "openclaw-main"
+        session_id = "8bdb7c01-2af3-41ae-9882-04324aa1d7f6"
+        transcript = tmp_path / f"{session_id}.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"Hello"}\n'
+            '{"role":"assistant","content":"Hey Solomon. How can I help?"}\n'
+            '{"role":"assistant","content":"NO_REPLY"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, session_id, 0, transcript)
+
+        now = 1_700_000_000.0
+        os.utime(transcript, (now - 120, now - 120))
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, _path):
+                return (
+                    "User: Hello\n\n"
+                    "Assistant: Hey Solomon. How can I help?\n\n"
+                    "Assistant: NO_REPLY"
+                )
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
+
+        try:
+            extraction_daemon.check_idle_sessions(timeout_minutes=1)
+        finally:
+            extraction_daemon._cursor_end_timeout_fired.discard(session_id)
+
+        cursor = extraction_daemon.read_cursor(session_id)
+        assert captured == []
+        assert cursor["internal"] is True
+        assert cursor["line_offset"] == 3
+
     def test_idle_scan_skips_daemon_owned_preserved_transcript_without_live_source(self, monkeypatch, tmp_path):
         """Preserved OC mirrors are lifecycle inputs, not active timeout candidates."""
         instance_id = "openclaw-main"
@@ -3772,6 +3815,57 @@ class TestCheckIdleSessions:
         extraction_daemon.process_signal(signal)
 
         assert not signal_path.exists()
+
+    def test_timeout_signal_marks_greeting_only_transcript_internal(self, monkeypatch, tmp_path):
+        """Queued timeout signals must not send /new greeting wrappers to extraction."""
+        instance_id = "openclaw-main"
+        session_id = "8bdb7c01-2af3-41ae-9882-04324aa1d7f6"
+        transcript = tmp_path / f"{session_id}.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"Hello"}\n'
+            '{"role":"assistant","content":"Hey Solomon. How can I help?"}\n'
+            '{"role":"assistant","content":"NO_REPLY"}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        extraction_daemon.write_cursor(session_id, 0, str(transcript))
+        signal_path = extraction_daemon.write_signal(
+            signal_type="timeout",
+            session_id=session_id,
+            transcript_path=str(transcript),
+            meta={"compact_on_timeout": True},
+        )
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, _path):
+                return (
+                    "User: Hello\n\n"
+                    "Assistant: Hey Solomon. How can I help?\n\n"
+                    "Assistant: NO_REPLY"
+                )
+
+        import ingest.extract as extract_mod
+
+        monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "write_context_refresh_timeout_marker", lambda _sid: None)
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("greeting-only timeout should not call extraction")
+            ),
+        )
+
+        signal = extraction_daemon.read_pending_signals()[0]
+        extraction_daemon.process_signal(signal)
+
+        cursor = extraction_daemon.read_cursor(session_id)
+        assert not signal_path.exists()
+        assert cursor["internal"] is True
+        assert cursor["line_offset"] == 3
 
     def test_recent_idle_sessions_timeout_before_stale_backlog(self, monkeypatch, tmp_path):
         """A fresh idle session must not wait behind old stale timeout work."""

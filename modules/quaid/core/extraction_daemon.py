@@ -3343,8 +3343,11 @@ def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> boo
         return not _is_timeout_startup_user_turn(transcript_text)
     saw_user = False
     saw_startup_wrapper = False
+    saw_no_reply_assistant = False
     non_startup_user_turns: List[str] = []
     for role, content in turns:
+        if role == "assistant" and str(content or "").strip().upper() == "NO_REPLY":
+            saw_no_reply_assistant = True
         if role != "user":
             continue
         saw_user = True
@@ -3358,6 +3361,15 @@ def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> boo
         _is_short_timeout_greeting_user_turn(turn)
         for turn in non_startup_user_turns
     ):
+        return False
+    if saw_no_reply_assistant and non_startup_user_turns and all(
+        _is_short_timeout_greeting_user_turn(turn)
+        for turn in non_startup_user_turns
+    ):
+        # OC can leave the post-/new greeting transcript as the only parsed
+        # content while the real Matrix prompt is still queued in the host.
+        # Do not let that wrapper consume the timeout cursor before the prompt
+        # materializes in the session file.
         return False
     if saw_startup_wrapper:
         return bool(non_startup_user_turns)
@@ -4243,6 +4255,36 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 transcript_text = buffered_text or tail_text
             else:
                 transcript_text = f"{buffered_text}\n\n{tail_text}" if buffered_text and tail_text else (buffered_text or tail_text)
+
+        if (
+            signal_type == "timeout"
+            and not rolling_mode
+            and not staged_payload_sweep_signal
+            and transcript_text.strip()
+            and not _rolling_state_has_pending_content(staged_state)
+            and not _transcript_has_meaningful_timeout_user_content(transcript_text)
+        ):
+            logger.info(
+                "[%s] session %s: timeout transcript contains only startup/greeting content; "
+                "marking cursor internal and waiting for real user content",
+                label,
+                session_id,
+            )
+            _advance_internal_session_cursor_to_end(
+                session_id,
+                transcript_path,
+                cursor_key=lock_owner_key,
+            )
+            _finalize_no_payload_signal(
+                session_id=session_id,
+                transcript_path=transcript_path,
+                signal_data=signal_data,
+                lock_owner_key=lock_owner_key,
+                lock_fd=lock_fd,
+                cursor_key=lock_owner_key,
+                emit_noop_metric=lambda: _emit_noop_flush_metric("internal_timeout"),
+            )
+            return
 
         if not rolling_mode and not transcript_text.strip():
             if staged_state_has_payload(staged_state):
