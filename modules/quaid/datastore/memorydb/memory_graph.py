@@ -3576,6 +3576,8 @@ def graph_aware_recall(
         # Get related nodes bidirectionally
         source_node = graph.get_node(node_id)
         source_name = source_node.name if source_node else "?"
+        chain_prefix_path = relation_chain_path_by_node.get(node_id)
+        chain_prefix_sequence = relation_chain_sequence_by_node.get(node_id, [])
         if source_node:
             results["graph_results"].extend(_graph_attached_fact_rows(
                 graph,
@@ -3596,14 +3598,23 @@ def graph_aware_recall(
                 seen_ids.add(node.id)
 
                 # Get source node name for display
-                graph_path = _render_bidirectional_graph_path(
+                hop_graph_path = _render_bidirectional_graph_path(
                     source_name,
                     node.name,
                     relation,
                     direction,
                     path,
                 )
-                relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
+                hop_relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
+                if chain_prefix_path:
+                    if hop_graph_path.startswith(source_name):
+                        graph_path = f"{chain_prefix_path}{hop_graph_path[len(source_name):]}"
+                    else:
+                        graph_path = f"{chain_prefix_path} | {hop_graph_path}"
+                    relation_sequence = list(chain_prefix_sequence) + list(hop_relation_sequence)
+                else:
+                    graph_path = hop_graph_path
+                    relation_sequence = hop_relation_sequence
 
                 graph_score = round(max(0.55, 0.92 - (0.08 * max(depth - 1, 0))), 3)
                 row = {
