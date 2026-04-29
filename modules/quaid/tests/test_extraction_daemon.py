@@ -5768,6 +5768,19 @@ class TestRollingExtraction:
             assert extraction_daemon.read_pending_signals() == []
 
             extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id="sess-roll-residual",
+                transcript_path=str(transcript_path),
+                meta={"reason": "continued_chunk_budget"},
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+            state_after_stale_rolling = extraction_daemon.read_rolling_state("sess-roll-residual")
+            assert seen_transcripts == [prior]
+            assert state_after_stale_rolling["semantic_buffer"] == tail
+            assert state_after_stale_rolling["raw_facts"] == []
+            assert extraction_daemon.read_pending_signals() == []
+
+            extraction_daemon.write_signal(
                 signal_type="session_end",
                 session_id="sess-roll-residual",
                 transcript_path=str(transcript_path),

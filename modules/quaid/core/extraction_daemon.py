@@ -4088,6 +4088,28 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 mark_signal_processed(signal_data)
                 _cleanup_daemon_transcript_snapshot_path(transcript_path)
                 return
+            semantic_tokens = int(staged_state.get("semantic_buffer_tokens", 0) or 0)
+            if semantic_tokens < _rolling_ready_threshold(chunk_budget):
+                logger.info(
+                    "[%s] session %s: rolling signal below semantic threshold (%d < %d); "
+                    "preserving buffer for lifecycle flush",
+                    label,
+                    session_id,
+                    semantic_tokens,
+                    _rolling_ready_threshold(chunk_budget),
+                )
+                staged_state["buffered_line_offset"] = buffered_line_offset
+                staged_state["processed_line_offset"] = buffered_line_offset
+                write_rolling_state(session_id, staged_state)
+                write_cursor(
+                    session_id,
+                    buffered_line_offset,
+                    transcript_path,
+                    source_key=lock_owner_key,
+                )
+                mark_signal_processed(signal_data)
+                _cleanup_daemon_transcript_snapshot_path(transcript_path)
+                return
             staged_state = _stage_semantic_buffer_payload(
                 session_id=session_id,
                 signal_type=signal_type,
